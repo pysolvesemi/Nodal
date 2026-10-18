@@ -1,5 +1,7 @@
 # Low-Power Architecture and Power Intent Track v0.1
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative deferred dependent-track roadmap  
 **Revision:** 0.1  
 **Defined:** 2026-09-02  
@@ -162,6 +164,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 ## Architecture and canonical intent
 
 - [ ] **Low-Power Increment 1 — Architecture, public API, capability and evidence design gate**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Accept a dedicated low-power ADR that refines ADR 0024 without moving implementation into Foundation.
   - Compile and compare concise public API candidates for supplies, domains, states, strategies, retained state, operating points, sequences, primitive selection, UPF profiles, imports, vendor escapes, reports and waivers.
   - Compare Chisel `RegEnable`, CIRCT `ClockGate`, clock scopes and `ExtModule` with SpinalHDL `ClockEnableArea`, `SlowArea`, clock domains, `BlackBox` and `ClockGating` as ergonomic and migration references; record adopted, rejected and strengthened semantics without making either implementation canonical.
@@ -170,12 +173,14 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Define positive and negative design-gate fixtures before accepting implementation.
 
 - [ ] **Low-Power Increment 2 — Canonical Power Intent IR, serialization and mandatory verifiers**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Implement target-neutral IR for supplies, supply sets, domains, switches, states, transitions, isolation, level shifting, combined strategies, retention, always-on intent, operating points, mappings and typed extensions.
   - Bind intent to canonical module/instance/port/signal/state/memory/interface/clock/reset identities and preserve bindings through hierarchy, generate expansion, specialization and optimization.
   - Implement deterministic textual and machine-readable serialization, source maps, semantic hashes and round-trip tests.
   - Reject duplicate or ambiguous identities, invalid ownership, supply cycles, overlapping domain membership, missing controls, illegal state references and unsupported target requirements at compiler boundaries.
 
 - [ ] **Low-Power Increment 3 — Supply network, power-domain hierarchy, legal states and refinement**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Implement supply connectivity, primary/switched/retention supplies, voltages, operating points, domain membership, hierarchy, exclusions, composition and IP-to-SoC refinement.
   - Implement legal power-state tables and explicit transitions with preconditions, acknowledgements, stability conditions and DVFS associations.
   - Define how reusable IP publishes abstract power intent and how an integrator binds or refines it without rewriting internal semantic identities.
@@ -184,6 +189,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 ## Crossings and reusable implementation intent
 
 - [ ] **Low-Power Increment 4 — Power-domain crossing analysis and strategy legality**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Build a semantic crossing graph for scalar, aggregate, interface, protocol, clock, reset, memory, hard-macro and supported mixed-signal boundaries.
   - Determine whether each crossing requires no action, isolation, level shifting, combined cells, always-on buffering, retention-aware handling, explicit waiver or rejection.
   - Verify clamp/hold legality, voltage direction, source/sink state combinations, placement intent, control polarity, control availability from a powered domain, reset interaction, clock behavior and test overrides.
@@ -191,6 +197,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Generate complete, source-correlated crossing and strategy-coverage reports with unmatched, multiply matched, stale and waived targets.
 
 - [ ] **Low-Power Increment 5 — Reusable primitive library and technology-mapping contract**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Implement the approved clock gate, glitchless clock mux, isolation, level-shifter, combined, retention, always-on, power-switch, power-aware memory and controller primitives.
   - Reuse Foundation clock/reset/CDC/RDC contracts rather than creating duplicate domain semantics.
   - Freeze and test the distinction among register enable, enable-area or rate control, semantic glitch-free clock gating, and technology-mapped ICG implementation, including reset priority, scan/test override, generated-clock/CDC effects, and rejection of direct clock-AND construction.
@@ -201,12 +208,14 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 ## UPF interoperability
 
 - [ ] **Low-Power Increment 6 — Deterministic IEEE 1801-2024 UPF generation profiles**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Implement the approved `IEEE1801_2024_Core` projection for supplies, sets, domains, switches, states, isolation, level shifting, retention, always-on intent and implementation mappings included in the frozen subset.
   - Emit deterministic command ordering, quoting, hierarchy selection, generated names, comments, source correlation and a Nodal-to-UPF identity manifest.
   - Implement a separately declared `OpenROAD_Supported` profile tied to a pinned capability matrix rather than approximating unsupported standard features.
   - Reparse generated collateral, compare canonical intent, exercise positive/negative fixtures, and fail on unsupported semantics or ambiguous object selection.
 
 - [ ] **Low-Power Increment 7 — Constrained UPF import, external attachment and semantic round-trip**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Parse a safe declarative subset without executing arbitrary Tcl, shell commands, file-system actions or tool extensions.
   - Normalize supported imported objects into the canonical Power Intent IR with stable imported identities, source locations, provenance and explicit refinement scope.
   - Support opaque attachment of external UPF when safe import is impossible, while clearly limiting the checks, transformations and equivalence claims Nodal can make.
@@ -215,6 +224,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 ## Sequencing and verification
 
 - [ ] **Low-Power Increment 8 — Power-management sequencing and reusable PMU/PPU/PDC library**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Implement typed request/acknowledge, quiesce, idle, wake, fault, timeout and current/target-state interfaces plus reusable controller/state-graph components.
   - Let designs explicitly order transaction blocking, quiescence, clock gating, retention save, isolation, reset, supply switching, stability wait, restore, de-isolation and clock release.
   - Verify sequence preconditions and controlling-domain availability rather than imposing one universal shutdown/wake-up order.
@@ -222,6 +232,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Provide parameterized examples for clock-only sleep, switchable non-retained domains, retained domains and multi-domain dependencies.
 
 - [ ] **Low-Power Increment 9 — Power-aware simulation, properties, coverage and equivalence evidence**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Model powered, off, corrupt, isolated, retained, restoring and invalid-transition behavior with explicit four-state/profile rules.
   - Check isolation-before-invalid-source, save-before-power-off, stable-supply-before-restore or de-isolation, restore-before-use, legal clock/reset ordering, quiescence, always-on control ownership and protocol safety.
   - Provide target-neutral properties, generated checks, state/transition/crossing/strategy coverage and normalized failures with source identities.
@@ -231,6 +242,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
 ## Open implementation, analysis and release
 
 - [ ] **Low-Power Increment 10 — OpenROAD and open-PDK implementation profile**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Qualify the exact supported OpenROAD UPF reader/writer, domain, switch, isolation, level-shifter, area, voltage and cell-mapping capabilities against pinned revisions and tests.
   - Bind semantic primitives and strategies to verified Liberty/LEF cell views and selected open-PDK profiles with exact port, function, polarity, voltage and placement checks.
   - Produce implementation scripts/collateral, inserted-cell and unmapped-intent reports, before/after netlist correlation, source maps, commands, tool versions, logs and artifact hashes.
@@ -238,6 +250,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Reject a selected open-PDK profile that lacks required cells or views rather than substituting unsafe logic.
 
 - [ ] **Low-Power Increment 11 — Activity, power estimation and explicitly bounded optimization**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Import or produce VCD/SAIF-class activity with stable signal/domain/state correlation and report dynamic, leakage, clock, memory and state-dependent power where the selected tools and libraries support it.
   - Report clock-gating effectiveness, residual activity in disabled/off domains, state residency, transition energy assumptions, unmapped activity and confidence/provenance.
   - Add optional automatic clock-gating evaluation as a structured target-IR optimization inspired by open-source work such as Lighter, but require explicit selection, eligible-region bounds, enable-equivalence proof, scan/test handling, timing/cell capability checks, profitability evidence and deterministic rollback.
@@ -245,6 +258,7 @@ Every checkbox below remains blocked until the Foundation completion barrier ope
   - Label estimates by tool, library, corner, voltage, temperature, activity source and modeling limits; an RTL estimate is not sign-off.
 
 - [ ] **Low-Power Increment 12 — Ecosystem qualification, documentation and v1.0 release closure**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Qualify representative witnesses for clock gating, two-domain power gating, multi-voltage level shifting, isolation, retained state, power-aware memory, hierarchical IP refinement, controller sequencing and unsupported-profile diagnostics.
   - Include at least one reproducible open-source implementation witness using a pinned OpenROAD/open-PDK combination whose required cells and capabilities have been verified.
   - Compare canonical IR, generated UPF, crossing reports, behavioral simulation, properties, implementation mappings, normalized power reports and source correlation across the matrix.

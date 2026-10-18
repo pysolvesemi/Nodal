@@ -19,7 +19,7 @@ private[nodal] object AnalogEventRuntime:
       name: String = ""
   ):
     def reads: Set[String] =
-      arguments.flatMap(_.value.reads.map(_.identity)).toSet ++ alternatives.flatMap(_.reads)
+      arguments.flatMap(_.value.allReads.map(_.identity)).toSet ++ alternatives.flatMap(_.reads)
 
     def hasMonitor: scala.Boolean =
       Set("analog_cross", "analog_above", "analog_timer").contains(operation) ||
@@ -32,15 +32,7 @@ private[nodal] object AnalogEventRuntime:
       copy(
         arguments = arguments.map: argument =>
           argument.copy(value =
-            argument.value.copy(
-              rendered = rendered(argument.value.rendered),
-              reads = argument.value.reads.map: variable =>
-                variable.copy(
-                  identity = path(variable.identity),
-                  owner = path(variable.owner),
-                  declarationScope = variable.declarationScope.map(path)
-                )
-            )
+            argument.value.remap(path, rendered)
           ),
         alternatives = alternatives.map(_.remap(path, rendered))
       )

@@ -1,5 +1,7 @@
 # Lightweight hierarchy, unified HDL iteration and frontend scalability
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Revision:** 0.2
 **Approved direction:** 2026-09-24
 **Updated:** 2026-09-28
@@ -198,9 +200,10 @@ without waiting for the whole later 159, digital backend or 96 study. Neither
 42 nor 160 waits for `hdlRange`, broader generation or Rust. Preserve 159's
 existing 55/58 and 153-157 prerequisites and 65-67/72 qualification owners.
 
-- [ ] **F-043.B.1.1 - Shared range capture and analog objects.** Implement/reuse the neutral typed iteration domain for literal/symbolic bounds and capture legal analog generated objects with stable index/owner identity. Make the shared checkpoint independently consumable by 159; no duplicate range engine or reverse parent dependency.
-- [ ] **F-043.B.2.1 - Analog iteration verification.** Verify bounds, shapes, generated lexical state, conservative terminal indexing and effects through bridge/native IR. Distinguish topology replication from procedural evaluation and reject unsupported analog operator placement or illegal flattening/memory inference.
-- [ ] **F-043.B.3.1 - Analog target lowering.** Lower each accepted iteration profile into legal target constructs with symbolic bounds, per-instance storage and source maps. Retain explicit unsupported diagnostics and actual scalar/generated counterpart witnesses; preserve 48/49/52 applicability limits.
+- [x] **F-043.B.1.1 - Shared range capture and analog objects.** Implement/reuse the neutral typed iteration domain for literal/symbolic bounds and capture legal analog generated objects with stable index/owner identity. Make the shared checkpoint independently consumable by 159; no duplicate range engine or reverse parent dependency.
+- [x] **F-043.B.2.1 - Analog iteration verification.** Verify bounds, shapes, generated lexical state, conservative terminal indexing and effects through bridge/native IR. Distinguish topology replication from procedural evaluation and reject unsupported analog operator placement or illegal flattening/memory inference.
+- [x] **F-043.B.3.1 - Analog target lowering.** Lower each accepted iteration profile into legal target constructs with symbolic bounds, per-instance storage and source maps. Retain explicit unsupported diagnostics and actual scalar/generated counterpart witnesses; preserve 48/49/52 applicability limits.
+  - F-043 focused acceptance: the [implemented scope and finite limits](../implementation/increment43-readiness.md#final-original-scope-reconciliation) and [actual source/IR/target witnesses and regressions](../implementation/increment43-shape-contract.md) cover the neutral domain, analog effect/ownership verification and supported symbolic target profiles. These children are complete; the F-043 parent awaits verified integration. No F-159 work is claimed.
 - [ ] **F-159.A.6 - Unified iteration contract and migration.** Replace the planned two-name-only/common-case requirement with `hdlRange`; retain existing `genRange`, `hwRange`, `generate` and `loop` contracts as explicit compatibility forms where already exposed. Audit actual APIs, ADRs, language references, surfaces and tests, record migration/versioning, and never remove an existing API or rewrite historical freeze evidence merely because this roadmap changes.
 - [ ] **F-159.B.4 - Typed mixed-effect iteration and partitioning.** Capture one source domain and lower its structural, combinational and sequential effects to existing canonical representations with explicit bindings. Derive processes from register/domain declarations, not a new user-required `clocked:` syntax. Prove legal cross-partition paths, stable source indices and no duplicated state/instances or hidden scheduling.
 - [ ] **F-159.B.5 - Process compatibility.** Group compatible state updates using event/edge, reset, update phase, guard/dependency and assignment semantics. Carry separate enables as guards when safe; split incompatible clock/reset groups and retain CDC/RDC and multiple-driver checks.
@@ -238,7 +241,7 @@ New descendants of the existing **F-096.B.2**:
 
 This is a documentation-only roadmap approval, not implementation, compilation,
 performance evidence, a generated-HDL demonstration or parent completion.
-Implement in the existing owning increments, keep actual source/IR/HDL witnesses,
-and retain targeted-first/full qualification, review, verified integration and
-separate accepted-evidence closure. `AGENTS.md` is unchanged. The user waived CI
-for this roadmap publication only; compiler changes still require qualification.
+Implement in the existing owning increments and keep the relevant actual
+source/IR/HDL witnesses. Apply the [prototype execution policy](README.md#prototype-execution-policy):
+focused local positive/negative checks and architecture review permit merge;
+CI, full qualification and separate accepted-evidence closure are not required.

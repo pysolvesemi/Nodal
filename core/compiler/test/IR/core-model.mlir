@@ -87,11 +87,35 @@ module {
       type = !nodal.shaped<"2,WIDTH", !nodal.uint<8>>
     }> : () -> ()
     "nodal.parameter"() <{
+      classification = "structural",
       default_value = 8 : i64,
       metadata = {target_visible = true},
       sym_name = "WIDTH",
       type = i64,
       variability = "symbolic"
+    }> : () -> ()
+    %width_shape_lower = "nodal.const_literal"() <{
+      metadata = {},
+      spelling = "1",
+      value = 1 : i64
+    }> : () -> i64
+    %width_shape_upper = "nodal.const_literal"() <{
+      metadata = {},
+      spelling = "16",
+      value = 16 : i64
+    }> : () -> i64
+    "nodal.parameter_constraint"(%width_shape_lower, %width_shape_upper) <{
+      constraint_kind = "range",
+      lower_inclusive = true,
+      metadata = {},
+      parameter = @WIDTH,
+      upper_inclusive = true
+    }> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{
+      effects = ["rank", "shape"],
+      metadata = {},
+      parameter = @WIDTH,
+      policy = "static_generate"
     }> : () -> ()
     "nodal.instance"() <{
       domain_bindings = {default = @core},

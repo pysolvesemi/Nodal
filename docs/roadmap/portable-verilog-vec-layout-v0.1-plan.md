@@ -1,5 +1,7 @@
 # Portable Verilog Vec layouts and constant-preserving emission
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Revision:** 0.1
 **Date:** 2026-10-02
 **Status:** Approved Foundation roadmap scope; configuration gate, implementation and qualification pending.
@@ -288,7 +290,7 @@ is subordinate to the named existing main-roadmap or unified-iteration child.
 - [ ] **F-066.D.2.1 - Independent layout behavior.** Execute packed/unpacked/scalarized and preserved/unrolled cases using independently specified packing maps, stimuli and expected state. Check both bridge directions, pack/unpack round trips, field/element reads and writes, static/dynamic indices, slices/reshape, signed arithmetic, resets and hierarchy; retain seeds, traces and applicable four-state cases.
 - [ ] **F-067.D.3.1 - Synthesis and storage audit.** Run pinned Yosys on actual portable output without enabling SystemVerilog as a workaround. Check processes, drivers, latches, combinational loops and inferred memories against the declared Vec/Mem policy for each qualified representation; retain netlists, constraints and resource observations without assuming identical mapping.
 - [ ] **F-067.D.4.1 - Independent representation equivalence.** Execute applicable packed/unpacked/scalarized, preserved/unrolled and optimized/netlist equivalence using an independent logical map and explicit legal parameter/clock/reset assumptions. Retain bounds and counterexamples plus applicable existing F-067.D.5 index/bridge proof and negative controls; inconclusive, vacuous or two-state-only evidence must not be relabeled as broader success.
-- [ ] **F-065.G.1 - Documentation and acceptance handoff.** Supply accepted API/configuration references, examples with actual generated HDL, bit-order and nested-field diagrams/formulas, tool limits, diagnostics and reproducible commands to existing F-092 documentation obligations. Document defaults and precedence, unchanged ports, unified `hdlRange`, signed elements and Vec/Mem distinctions. Keep parent acceptance subject to all original review, qualification and closure rules; this planning publication supplies no implementation or execution credit.
+- [ ] **F-065.G.1 - Documentation and acceptance handoff.** Supply accepted API/configuration references, examples with actual generated HDL, bit-order and nested-field diagrams/formulas, tool limits, diagnostics and reproducible commands to existing F-092 documentation obligations. Document defaults and precedence, unchanged ports, unified `hdlRange`, signed elements and Vec/Mem distinctions. Use the prototype execution policy for parent acceptance: focused local positive/negative checks and architecture review, with no CI or full-qualification prerequisite. This planning publication supplies no implementation or execution credit.
 
 All 18 additions remain unchecked. Existing tests, workflows, accepted APIs,
 parent states, Foundation 160 evidence and other tracks are unchanged. Local

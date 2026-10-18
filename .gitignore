@@ -19,3 +19,6 @@ out/
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Generated logs, evidence, reports, caches and scratch work
+/.work/

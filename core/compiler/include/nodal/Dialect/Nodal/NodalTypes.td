@@ -56,6 +56,16 @@ def Nodal_AnalogEventType : Nodal_Type<"AnalogEvent", "analog_event"> {
   let assemblyFormat = "";
 }
 
+def Nodal_AnalogDeferredType : Nodal_Type<"AnalogDeferred", "analog_deferred"> {
+  let summary = "Non-evaluating consumer-local Real fill capability";
+  let parameters = (ins
+    StringRefParameter<"real">:$kind,
+    StringRefParameter<"canonical physical dimension signature">:$dimension
+  );
+  let assemblyFormat = "`<` $kind `,` $dimension `>`";
+  let genVerifyDecl = 1;
+}
+
 def Nodal_VariableType : Nodal_Type<"Variable", "variable"> {
   let summary = "Typed component-local analog procedural variable handle";
   let description = [{

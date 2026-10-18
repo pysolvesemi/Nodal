@@ -166,7 +166,7 @@ def check_repository(root: Path) -> list[Problem]:
             problems.append(Problem("NODAL-INC9-023", f"pull-request template lacks: {section}"))
     for fragment in (
         "Increment <number> — <summary>",
-        "./nodal style check",
+        "focused local positive, negative and boundary checks",
         "approved design gate",
         "core/library boundary",
     ):

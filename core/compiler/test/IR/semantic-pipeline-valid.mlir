@@ -105,11 +105,35 @@ module attributes {
       sym_name = "async"
     }> : () -> ()
     "nodal.parameter"() <{
+      classification = "structural",
       default_value = 2 : i64,
       metadata = {target_visible = true},
       sym_name = "SIZE",
       type = i64,
       variability = "symbolic"
+    }> : () -> ()
+    %size_shape_lower = "nodal.const_literal"() <{
+      metadata = {},
+      spelling = "1",
+      value = 1 : i64
+    }> : () -> i64
+    %size_shape_upper = "nodal.const_literal"() <{
+      metadata = {},
+      spelling = "16",
+      value = 16 : i64
+    }> : () -> i64
+    "nodal.parameter_constraint"(%size_shape_lower, %size_shape_upper) <{
+      constraint_kind = "range",
+      lower_inclusive = true,
+      metadata = {},
+      parameter = @SIZE,
+      upper_inclusive = true
+    }> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{
+      effects = ["rank", "shape"],
+      metadata = {},
+      parameter = @SIZE,
+      policy = "static_generate"
     }> : () -> ()
     "nodal.port"() <{
       direction = "input",

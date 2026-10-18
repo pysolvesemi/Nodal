@@ -1,5 +1,7 @@
 # Formal Verification Public API and Execution Plan v0.1
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Deferred normative roadmap target  
 **Architecture:** [ADR 0014](../architecture/0014-target-neutral-formal-verification.md)  
 **Digital verification dependency:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md) and [`digital-verilog-open-source-verification-plan.md`](digital-verilog-open-source-verification-plan.md)  
@@ -632,7 +634,7 @@ Increment 109 may be checked only when:
 10. source maps, property IDs, traces, and reproducibility fields are frozen;
 11. external consumer fixtures use no compiler internals;
 12. no formal execution or hidden property inclusion occurs during the gate; and
-13. Core CI passes.
+13. focused local positive/negative checks and the owning increment's architecture review pass; no CI or full qualification is required.
 
 ## References
 

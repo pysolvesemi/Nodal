@@ -101,6 +101,16 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
+def Nodal_PortValueOp : Nodal_Op<"port_value", [HasParent<"ModuleOp">]> {
+  let summary = "Typed SSA use of one module port";
+  let arguments = (ins
+    FlatSymbolRefAttr:$port,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_ParameterOp : Nodal_Op<"parameter",
     [HasParent<"ModuleOp">, Symbol]> {
   let summary = "Typed target-visible ordinary or structural parameter";
@@ -124,20 +134,22 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
 }
 
 def Nodal_InstanceOp : Nodal_Op<"instance",
-    [HasParent<"ModuleOp">, Symbol]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>, Symbol]> {
   let summary = "Typed module instance with explicit bindings";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     FlatSymbolRefAttr:$module,
     DictionaryAttr:$parameter_bindings,
     DictionaryAttr:$domain_bindings,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
 }
 
 def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Typed immediate-child conservative terminal reference";
   let description = [{
     Resolves one declared boundary terminal of one direct child instance. The
@@ -151,9 +163,23 @@ def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
     StrAttr:$direction,
     StrAttr:$flow_orientation,
     StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_InstanceTerminalArrayOp : Nodal_Op<"instance_terminal_array",
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
+  let summary = "Whole immediate-child conservative array port reference";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port, StrAttr:$name,
+    StrAttr:$direction, StrAttr:$flow_orientation, StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -361,12 +387,14 @@ def Nodal_ParameterConstraintOp : Nodal_Op<"parameter_constraint",
 }
 
 def Nodal_ParameterOverrideOp : Nodal_Op<"parameter_override",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Lossless typed override of an instantiated module parameter";
   let arguments = (ins
     AnyType:$value,
     FlatSymbolRefAttr:$instance,
     FlatSymbolRefAttr:$parameter,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -410,7 +438,10 @@ def Nodal_ShapeIndexOp : Nodal_Op<"shape_index"> {
   let summary = "Canonical multidimensional shaped-value indexing";
   let arguments = (ins
     AnyType:$input,
-    Variadic<Index>:$indices,
+    Variadic<AnyType>:$indices,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -436,19 +467,45 @@ def Nodal_ShapeViewOp : Nodal_Op<"shape_view"> {
     StrAttr:$origin,
     StrAttr:$materialization,
     StrAttr:$observability,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
-def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
+def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice"> {
+  let summary = "Read-only half-open unit-stride structural shape slice";
+  let arguments = (ins
+    AnyType:$input,
+    I64:$lower,
+    I64:$upperExclusive,
+    I64:$length,
+    I64Attr:$axis,
+    StrAttr:$dimensions,
+    StrAttr:$origin,
+    StrAttr:$observability,
+    OptionalAttr<StrAttr>:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
   let summary = "Symbolic structural generation region";
   let arguments = (ins
+    Variadic<I64>:$bounds,
     StrAttr:$induction,
-    AnyAttr:$lower,
-    AnyAttr:$upper,
-    AnyAttr:$step,
+    OptionalAttr<AnyAttr>:$lower,
+    OptionalAttr<AnyAttr>:$upper,
+    OptionalAttr<AnyAttr>:$step,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
@@ -609,23 +666,53 @@ def Nodal_TerminalOp : Nodal_Op<"terminal", [HasParent<"ModuleOp">]> {
   let hasVerifier = 1;
 }
 
-def Nodal_NodeOp : Nodal_Op<"node", [HasParent<"ModuleOp">]> {
+def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Internal conservative node";
   let arguments = (ins
     StrAttr:$name,
     OptionalAttr<StrAttr>:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);
   let hasVerifier = 1;
 }
 
-def Nodal_ConnectOp : Nodal_Op<"connect", [HasParent<"ModuleOp">]> {
+def Nodal_NodeArrayOp : Nodal_Op<"node_array", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
+  let summary = "Owned structural array of internal electrical nodes";
+  let arguments = (ins StrAttr:$name, StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner, OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_TerminalArrayOp : Nodal_Op<"terminal_array", [HasParent<"ModuleOp">]> {
+  let summary = "Owned structural conservative boundary array";
+  let arguments = (ins StrAttr:$name, StrAttr:$direction, StrAttr:$flow_orientation,
+    StrAttr:$source_path, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConnectArrayOp : Nodal_Op<"connect_array", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
+  let summary = "Symmetric exact conservative endpoint relation";
+  let arguments = (ins AnyType:$left, AnyType:$right, StrAttr:$connection_id,
+    StrAttr:$source_path, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConnectOp : Nodal_Op<"connect", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Source-semantic conservative connection relation";
   let arguments = (ins
     Variadic<Nodal_TerminalType>:$members,
     StrAttr:$connection_id,
     StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -774,7 +861,7 @@ def Nodal_PortFlowAccessOp
   let hasVerifier = 1;
 }
 
-def Nodal_ProbeOp : Nodal_Op<"probe", [HasParent<"ModuleOp">]> {
+def Nodal_ProbeOp : Nodal_Op<"probe", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Compiler-owned source-free potential or flow probe intent";
   let arguments = (ins
     Variadic<AnyType>:$subject,
@@ -782,6 +869,8 @@ def Nodal_ProbeOp : Nodal_Op<"probe", [HasParent<"ModuleOp">]> {
     StrAttr:$kind,
     StrAttr:$constraint_intent,
     ArrayAttr:$provenance,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -804,9 +893,10 @@ def Nodal_BridgeOp : Nodal_Op<"bridge"> {
 // Minimal analog expressions and contributions
 //===----------------------------------------------------------------------===//
 
-def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
+def Nodal_AnalogOp : Nodal_Op<"analog", [ParentOneOf<["ModuleOp", "GenerateOp"]>, NoTerminator]> {
   let summary = "Continuous-time analog equation region";
-  let arguments = (ins DictionaryAttr:$metadata);
+  let arguments = (ins OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -814,7 +904,8 @@ def Nodal_AnalogOp : Nodal_Op<"analog", [HasParent<"ModuleOp">, NoTerminator]> {
 def Nodal_AnalogProcedureOp
     : Nodal_Op<"analog_procedure", [HasParent<"AnalogOp">, NoTerminator]> {
   let summary = "Ordered component-local analog procedural region";
-  let arguments = (ins StrAttr:$owner, DictionaryAttr:$metadata);
+  let arguments = (ins StrAttr:$owner, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -829,8 +920,11 @@ def Nodal_AnalogHeldReadOp : Nodal_Op<"analog_held_read", [HasParent<"AnalogOp">
 // No Pure trait: an unused monitor must retain timestep/history effects.
 class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
   let summary = "Source-semantic analog event monitor or analysis lifecycle event";
-  let arguments = (ins StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
-    StrAttr:$name, ArrayAttr:$arguments, ArrayAttr:$analyses,
+  let arguments = (ins Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
+    StrAttr:$name, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, ArrayAttr:$arguments, ArrayAttr:$analyses,
     ArrayAttr:$event_reads, DictionaryAttr:$metadata);
   let results = (outs Nodal_AnalogEventType:$result);
   let hasVerifier = 1;
@@ -845,7 +939,8 @@ def Nodal_AnalogEventOrOp : Nodal_Op<"analog_event_or"> {
   let summary = "Any-of event composition with one controlled body evaluation";
   let arguments = (ins Variadic<Nodal_AnalogEventType>:$events,
     StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract, StrAttr:$name,
-    DictionaryAttr:$metadata);
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let results = (outs Nodal_AnalogEventType:$result);
   let hasVerifier = 1;
 }
@@ -853,7 +948,8 @@ def Nodal_AnalogEventOrOp : Nodal_Op<"analog_event_or"> {
 def Nodal_AnalogOnOp : Nodal_Op<"analog_on", [NoTerminator]> {
   let summary = "Nonblocking analog event-controlled statement region";
   let arguments = (ins Nodal_AnalogEventType:$event,
-    StrAttr:$statement_id, StrAttr:$owner, DictionaryAttr:$metadata);
+    StrAttr:$statement_id, StrAttr:$owner, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -885,6 +981,10 @@ def Nodal_AnalogIfArmOp
     : Nodal_Op<"analog_if_arm", [HasParent<"AnalogIfOp">, NoTerminator]> {
   let summary = "One retained arm of a structured analog conditional";
   let arguments = (ins
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$arm_id,
     StrAttr:$owner,
     BoolAttr:$is_else,
@@ -904,6 +1004,10 @@ def Nodal_AnalogIfArmOp
 def Nodal_AnalogCaseOp : Nodal_Op<"analog_case", [NoTerminator]> {
   let summary = "Exact non-fall-through structured analog case selection";
   let arguments = (ins
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$statement_id,
     StrAttr:$owner,
     StrAttr:$selector_value,
@@ -935,6 +1039,10 @@ def Nodal_AnalogCaseArmOp
 def Nodal_AnalogLoopOp : Nodal_Op<"analog_loop", [NoTerminator]> {
   let summary = "Exact static or finite runtime-bounded analog loop";
   let arguments = (ins
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$statement_id,
     StrAttr:$owner,
     StrAttr:$stage,
@@ -975,26 +1083,32 @@ def Nodal_AnalogContinueOp : Nodal_Op<"analog_continue"> {
 def Nodal_AnalogVariableOp : Nodal_Op<"analog_variable"> {
   let summary = "Declaration of one typed analog procedural variable";
   let arguments = (ins
+    Variadic<AnyType>:$initializers,
     StrAttr:$identity,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     I64Attr:$declaration_order,
     BoolAttr:$initialized,
+    OptionalAttr<StrAttr>:$initializer_form,
     StrAttr:$initializer_value,
     StrAttr:$initializer_kind,
     StrAttr:$initializer_dimension,
     ArrayAttr:$initializer_reads,
     DictionaryAttr:$metadata
   );
-  let results = (outs Nodal_VariableType:$result);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
   let summary = "Read the current value of one analog procedural variable";
   let arguments = (ins
-    Nodal_VariableType:$variable,
+    AnyType:$variable,
     StrAttr:$read_id,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1004,11 +1118,14 @@ def Nodal_AnalogVariableReadOp : Nodal_Op<"analog_variable_read"> {
 def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
   let summary = "Authored ordered assignment to one analog procedural variable";
   let arguments = (ins
-    Nodal_VariableType:$variable,
+    AnyType:$variable,
     Variadic<AnyType>:$values,
+    OptionalAttr<StrAttr>:$value_form,
     StrAttr:$statement_id,
     I64Attr:$authored_order,
     StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$value_kind,
     StrAttr:$value_dimension,
     ArrayAttr:$analyses,
@@ -1019,6 +1136,35 @@ def Nodal_AnalogAssignOp : Nodal_Op<"analog_assign"> {
     ArrayAttr:$guard_reads,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogLiveFillOp : Nodal_Op<"analog_live_fill"> {
+  let summary = "Non-evaluating actual fill identity for one live consumer";
+  let arguments = (ins
+    Variadic<AnyTypeOf<[Nodal_VariableType, Nodal_AnalogDeferredType]>>:$references,
+    StrAttr:$identity,
+    StrAttr:$value,
+    StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs Nodal_AnalogDeferredType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AnalogArrayFillOp : Nodal_Op<"analog_array_fill"> {
+  let summary = "Ordered scalar evaluation producing a shaped immutable Real value";
+  let arguments = (ins
+    Variadic<AnyType>:$reads,
+    StrAttr:$value,
+    StrAttr:$owner,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -1058,7 +1204,10 @@ def Nodal_AnalogTransferOp : Nodal_Op<"analog_transfer", [HasParent<"AnalogOp">]
                        StrAttr:$contract_version, I64Attr:$numerator_size,
                        I64Attr:$denominator_size, StrAttr:$operator_id, StrAttr:$state_id,
                        StrAttr:$owner, StrAttr:$coefficient_order, StrAttr:$initialization,
-                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+                       StrAttr:$result_dimension,
+                       OptionalAttr<StrAttr>:$generated_owner,
+                       OptionalAttr<StrAttr>:$generated_induction,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -1068,7 +1217,10 @@ def Nodal_AnalogNoiseOp : Nodal_Op<"analog_noise", [HasParent<"AnalogOp">]> {
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$noise_kind,
                        StrAttr:$contract_version, StrAttr:$noise_name, StrAttr:$source_id,
                        StrAttr:$owner, StrAttr:$correlation, ArrayAttr:$analyses,
-                       StrAttr:$result_dimension, DictionaryAttr:$metadata);
+                       StrAttr:$result_dimension,
+                       OptionalAttr<StrAttr>:$generated_owner,
+                       OptionalAttr<StrAttr>:$generated_induction,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -1147,6 +1299,8 @@ def Nodal_AnalogDdtOp : Nodal_Op<"analog_ddt", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$result_dimension,
     OptionalAttr<StrAttr>:$initialization,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1167,6 +1321,8 @@ def Nodal_AnalogIdtOp : Nodal_Op<"analog_idt", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$initialization,
     OptionalAttr<StrAttr>:$initial_dimension,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1188,6 +1344,8 @@ def Nodal_AnalogTransitionOp : Nodal_Op<"analog_transition", [HasParent<"AnalogO
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1209,6 +1367,8 @@ def Nodal_AnalogSlewOp : Nodal_Op<"analog_slew", [HasParent<"AnalogOp">]> {
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1230,6 +1390,8 @@ def Nodal_AnalogAbsdelayOp : Nodal_Op<"analog_absdelay", [HasParent<"AnalogOp">]
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1251,6 +1413,8 @@ def Nodal_AnalogAbstimeOp : Nodal_Op<"analog_abstime", [HasParent<"AnalogOp">]> 
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
@@ -1272,6 +1436,8 @@ def Nodal_AnalogBoundStepOp : Nodal_Op<"analog_bound_step", [HasParent<"AnalogOp
     OptionalAttr<StrAttr>:$output_continuity,
     OptionalAttr<StrAttr>:$state_id,
     OptionalAttr<ArrayAttr>:$analyses,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -1283,6 +1449,8 @@ def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
     Nodal_BranchType:$branch,
     AnyType:$value,
     StrAttr:$kind,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;

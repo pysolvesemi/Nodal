@@ -85,7 +85,8 @@ final class Param[A <: Data] private[nodal] (
     private[nodal] val constructorName: Option[String] = None,
     private[nodal] val constructorActual: Option[Expr[A]] = None,
     private[nodal] val omittedConstructorDefault: Boolean = false,
-    private[nodal] val inertConstructorActual: Boolean = false
+    private[nodal] val inertConstructorActual: Boolean = false,
+    private[nodal] val integerRange: Option[(Int, Int)] = None
 ) extends Expr[A]:
   if constructorName.isEmpty && !omittedConstructorDefault && !inertConstructorActual then
     CandidateRuntime.declareParameter(this, default)
@@ -135,18 +136,141 @@ final class Variable[A <: Data] private[nodal] (
   infix def :=(value: Expr[A]): Unit =
     CandidateRuntime.assignAnalogVariable(this, value)
 
+  def writable: VariableSelection[A] = new VariableSelection(this)
+
+/** An explicit capability for an existing procedural variable or one of its views. */
+final class VariableSelection[A <: Data] private[nodal] (
+    private[nodal] val expression: Expr[A]
+):
+  def value: Expr[A] = expression
+
+  infix def :=(value: Expr[A]): Unit =
+    AnalogProceduralConstruction.assignSelection(
+      expression,
+      value,
+      ConstructionKernel.captureAnalogProceduralSource
+    )
+
+object VariableSelection:
+  extension (selection: VariableSelection[Vec[Real]])
+    def at(indices: Dimension*): VariableSelection[Real] =
+      new VariableSelection(CandidateRuntime.shapeIndex(selection.value, indices.toVector))
+    def row(index: Dimension): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeRow(selection.value, index))
+    def plane(index: Dimension): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapePlane(selection.value, index))
+    def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0)
+        : VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeSlice(
+        selection.value,
+        lower,
+        upperExclusive,
+        axis
+      ))
+    def flatten: VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeFlatten(selection.value))
+    def reshape(dimensions: Dimension*): VariableSelection[Vec[Real]] =
+      new VariableSelection(CandidateRuntime.shapeView(selection.value, dimensions.toVector))
+
 /** Candidate analog node or port. */
 final class Node[D <: Discipline] private[nodal] (
     val discipline: D,
-    kind: KernelSignalKind
+    kind: KernelSignalKind,
+    selection: Option[(NodeArray[D], Vector[Dimension])] = None
 ):
-  CandidateRuntime.declare(
-    this,
-    kind,
-    attributes = CandidateRuntime.conservativeAttributes(discipline)
-  )
+  private[nodal] val endpointReference: Option[ExpressionRef] = selection match
+    case Some((array, indices)) => Some(ConstructionKernel.selectNodeArray(this, array, indices))
+    case None =>
+      CandidateRuntime.declare(
+        this,
+        kind,
+        attributes = CandidateRuntime.conservativeAttributes(discipline)
+      )
+      None
 
   infix def <>(other: Node[?]): Unit = CandidateRuntime.connectNodes(this, other)
+
+/** Owned conservative node shape; selection returns a scalar endpoint reference. */
+final class NodeArray[D <: Discipline] private[nodal] (
+    val discipline: D,
+    private[nodal] val shapeIntent: NodeArrayShapeIntent,
+    private[nodal] val declarationKind: KernelSignalKind = KernelSignalKind.AnalogNodeArray
+):
+  shapeIntent match
+    case NodeArrayShapeIntent.Declared(dimensions) =>
+      AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
+      ConstructionKernel.declareNodeArray(this, discipline, dimensions, declarationKind)
+    case NodeArrayShapeIntent.InstancePort(instance, port) =>
+      ConstructionKernel.declareInstanceNodeArray(this, instance, port)
+    case NodeArrayShapeIntent.Transform(origin, _, _) =>
+      ConstructionKernel.projectNodeArray(this, origin)
+
+  private def qualified: NodeArray[D] = ConstructionKernel.nodeArrayUse(this)
+
+  infix def <>(other: NodeArray[?]): Unit = CandidateRuntime.connectNodeArrays(this, other)
+
+  def at(indices: Dimension*): Node[D] =
+    new Node(discipline, KernelSignalKind.AnalogNode, Some(qualified -> indices.toVector))
+
+  private def prefix(index: Dimension, rank: Int): NodeArray[D] =
+    val input = qualified
+    if input.shapeIntent.rank != rank then
+      throw new ConstructionException(KernelDiagnostic(
+        "NODAL-SHAPE-043-002",
+        "node-array prefix selection has the wrong rank"
+      ))
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, Vector(index)),
+        rank - 1,
+        input.shapeIntent.knownDimensions.map(_.tail)
+      )
+    )
+
+  def row(index: Dimension): NodeArray[D] = prefix(index, 2)
+  def plane(index: Dimension): NodeArray[D] = prefix(index, 3)
+  def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): NodeArray[D] =
+    val input = qualified
+    if axis < 0 || axis >= input.shapeIntent.rank then
+      throw new ConstructionException(KernelDiagnostic(
+        "NODAL-SHAPE-043-004",
+        "slice axis is outside the array rank"
+      ))
+    val result = input.shapeIntent.knownDimensions.map(
+      CandidateRuntime.sliceShapeDimensions(_, lower, upperExclusive, axis)
+    )
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, slice = Some(ShapeSliceSelection(axis, lower, upperExclusive))),
+        input.shapeIntent.rank,
+        result
+      )
+    )
+  def flatten: NodeArray[D] =
+    val input = qualified
+    val result = input.shapeIntent.knownDimensions.map(
+      CandidateRuntime.flattenShapeDimensions(_, signed64Literal = true)
+    )
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, flatten = true),
+        1,
+        result
+      )
+    )
+  def reshape(dimensions: Dimension*): NodeArray[D] =
+    val input = qualified
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Transform(
+        NodeArrayProjection(input, reshape = dimensions.toVector),
+        dimensions.size,
+        Option.when(input.shapeIntent.knownDimensions.nonEmpty)(dimensions.toVector)
+      )
+    )
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -267,7 +391,12 @@ object ClockDomain:
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
 
-  def apply[A](select: M => A): A = select(module)
+  def apply[A](select: M => A): A =
+    ConstructionKernel.withInstanceSelection(this):
+      val result = select(module)
+      result match
+        case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
+        case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
     val parameter = select(module)
@@ -288,6 +417,13 @@ abstract class Module:
 
   protected final def param[A <: Data](default: Expr[A]): Param[A] = new Param(default)
 
+  /** Bounded integer parameter candidate used by structural shape and generation contracts. */
+  protected final def param(
+      default: Expr[Integer],
+      range: Range.Inclusive
+  ): Param[Integer] =
+    CandidateRuntime.boundedIntegerParameter(default, range)
+
   protected final def in[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType, KernelSignalKind.Input)
 
@@ -303,8 +439,48 @@ abstract class Module:
   protected final def inout[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogInout)
 
+  protected final def in[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
+      declarationKind = KernelSignalKind.AnalogInput
+    )
+
+  protected final def out[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
+      declarationKind = KernelSignalKind.AnalogOutput
+    )
+
+  protected final def inout[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector),
+      declarationKind = KernelSignalKind.AnalogInout
+    )
+
   protected final def node[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogNode)
+
+  protected final def node[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(discipline, NodeArrayShapeIntent.Declared(dimension +: dimensions.toVector))
 
   protected final def wire[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType, KernelSignalKind.Wire)
@@ -325,6 +501,12 @@ abstract class Module:
 
   protected final def connect[D <: Discipline](left: Node[? <: D], right: Node[? <: D]): Unit =
     CandidateRuntime.connectNodes(left, right)
+
+  protected final def connect[D <: Discipline](
+      left: NodeArray[? <: D],
+      right: NodeArray[? <: D]
+  ): Unit =
+    CandidateRuntime.connectNodeArrays(left, right)
 
 /** Domain-owned state captured at its lexical construction point. */
 final class Register[A <: Data] private[nodal] (
@@ -430,7 +612,8 @@ object Rdc:
       reset: Expr[Reset],
       to: ClockDomain,
       stages: Int = 2
-  ): Expr[Reset] = CandidateRuntime.expr(reset, to, stages)
+  ): Expr[Reset] =
+    CandidateRuntime.expr(reset, to, stages)
 
 object ResetController:
   def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
@@ -469,6 +652,23 @@ enum Edge:
   case Either, Rising, Falling
 
 def analog(body: => Unit): Unit = CandidateRuntime.analogBlock(body)
+
+/** Target-visible half-open structural generation. Ordinary Scala ranges remain host-only. */
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer] = 1
+)(body: Expr[Integer] => Unit): Unit =
+  CandidateRuntime.hdlRange(lower, upperExclusive, step, None)(body)
+
+/** Structural generation with an explicit materialization-count envelope. */
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer],
+    maximum: Int
+)(body: Expr[Integer] => Unit): Unit =
+  CandidateRuntime.hdlRange(lower, upperExclusive, step, Some(maximum))(body)
 
 def initial(body: => Unit): Unit =
   AnalogProceduralConstruction.requireContinuousContext("initial block")
@@ -660,6 +860,22 @@ extension (left: Expr[Real])
     CandidateRuntime.booleanExpr("real_le", left, right)
   infix def <+(value: Expr[Real]): Unit =
     CandidateRuntime.analogContribution(left, value)
+
+extension (left: Expr[Integer])
+  @targetName("integerAddition")
+  def +(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_add", left, right)
+  @targetName("integerSubtraction")
+  def -(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_sub", left, right)
+  @targetName("integerMultiplication")
+  def *(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_mul", left, right)
+  @targetName("integerDivision")
+  def /(right: Expr[Integer]): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_div", left, right)
+  @targetName("integerNegation")
+  def unary_- : Expr[Integer] = CandidateRuntime.integerExpr("analog_neg", left)
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
@@ -898,20 +1114,49 @@ private[nodal] object CandidateRuntime:
     ConstructorCaptureRuntime.begin(module)
 
   private def constructorParameterAttributes[A <: Data](
+      parameter: Param[A],
       default: Expr[A]
   ): Vector[(String, Any)] =
     Vector(
       "default" -> default,
       "unit" -> expressionUnit(default).getOrElse("")
-    )
+    ) ++ parameter.integerRange.toVector.flatMap: (lower, upper) =>
+      Vector(
+        "integer_range_lower" -> lower,
+        "integer_range_upper" -> upper
+      )
 
   def declareParameter[A <: Data](parameter: Param[A], default: Expr[A]): Unit =
     declare(
       parameter,
       KernelSignalKind.Parameter,
       dataType = expressionDataType(default),
-      attributes = constructorParameterAttributes(default)
+      attributes = constructorParameterAttributes(parameter, default)
     )
+
+  def boundedIntegerParameter(
+      default: Expr[Integer],
+      range: Range.Inclusive
+  ): Param[Integer] =
+    if range.isEmpty || range.step != 1 then
+      scala.util.Failure[Nothing](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-PARAMETER-RANGE-043-001",
+            "bounded structural integer parameter range must be non-empty, ascending, and unit-step"
+          )
+        )
+      ).get
+    new Param(default, integerRange = Some(range.start -> range.end))
+
+  def hdlRange(
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => Unit): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("structural hdlRange")
+    ConstructionKernel.generatedRegion(lower, upperExclusive, step, maximum)(body)
 
   def constructorRealLiteral(value: Double): KernelExpr[Real] =
     new KernelExpr[Real](
@@ -1051,6 +1296,285 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.expression(expression)
     expression
 
+  def integerExpr(operation: String, values: Expr[Integer]*): Expr[Integer] =
+    val expression = new KernelExpr[Integer](
+      values.toVector,
+      resultType = Some(KernelTypeDescriptor("Integer")),
+      operation = Some(operation)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def proceduralShapeSource(value: Any, depth: Int = 0): Boolean =
+    if depth >= 512 then false
+    else
+      value match
+        case _: Variable[?] => true
+        case expression: KernelExpr[?] => expression.operation match
+            case Some("analog_array_fill") => true
+            case Some("shape_index" | "shape_view" | "shape_slice") =>
+              expression.operands.headOption.exists(proceduralShapeSource(_, depth + 1))
+            case _ => false
+        case _ => false
+
+  def shapeFill(dataType: DataType[Vec[Real]], value: Expr[Real]): Expr[Vec[Real]] =
+    val expression = new KernelExpr[Vec[Real]](
+      Vector(value),
+      resultType = Some(typeDescriptor(dataType)),
+      operation = Some("analog_array_fill")
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def shapeIndex[A <: Data](
+      value: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Expr[A] =
+    val element = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .flatMap(_.arguments.headOption.collect { case candidate: DataType[?] => candidate })
+      .getOrElse(
+        scala.util.Failure[DataType[?]](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-002", "shape indexing requires a Vec value")
+          )
+        ).get
+      )
+    val expression = new KernelExpr[A](
+      value +: indices,
+      resultType = Some(typeDescriptor(element)),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.shapeIndex(expression, value, indices)
+    expression
+
+  private def shapePrefix[A <: Data](
+      value: Expr[Vec[A]],
+      index: Dimension,
+      expectedRank: Int,
+      name: String
+  ): Expr[Vec[A]] =
+    val descriptor = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
+        scala.util.Failure[KernelTypeDescriptor](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-002", s"shape $name requires a Vec value")
+          )
+        ).get
+      )
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(
+      scala.util.Failure[DataType[?]](
+        new ConstructionException(
+          KernelDiagnostic("NODAL-SHAPE-043-002", s"shape $name requires a Vec element type")
+        )
+      ).get
+    )
+    val dimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case values: Seq[?] => values.toVector
+      case _ => Vector.empty
+    if dimensions.size != expectedRank then
+      scala.util.Failure[Expr[Vec[A]]](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-SHAPE-043-002",
+            s"shape $name requires rank $expectedRank"
+          )
+        )
+      ).get
+    val result = new KernelExpr[Vec[A]](
+      Vector(value, index),
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions.tail))),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.shapeIndex(result, value, Vector(index))
+    result
+
+  def shapeRow[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
+    shapePrefix(value, index, expectedRank = 2, name = "row")
+
+  def shapePlane[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
+    shapePrefix(value, index, expectedRank = 3, name = "plane")
+
+  private[nodal] def sliceShapeDimensions(
+      sourceDimensions: Vector[Dimension],
+      lower: Dimension,
+      upperExclusive: Dimension,
+      axis: Int
+  ): Vector[Dimension] =
+    def invalid(message: String): Nothing =
+      throw new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
+    if axis < 0 || axis >= sourceDimensions.size then
+      invalid("shape slice axis is outside the input rank")
+    def literalValue(dimension: Dimension): Option[Long] = dimension match
+      case value: Int => Some(value.toLong)
+      case expression: KernelExpr[?] =>
+        expression.literal.filter(_.kind == "integer").flatMap(_.value.toLongOption)
+      case _ => None
+    def integerValue(dimension: Dimension): Expr[Integer] = dimension match
+      case value: Int => literalInteger(value)
+      case expression: Expr[Integer] => expression
+    val length: Dimension = (literalValue(lower), literalValue(upperExclusive)) match
+      case (Some(start), Some(end)) =>
+        val count = BigInt(end) - BigInt(start)
+        if count <= 0 || !count.isValidLong then
+          invalid("shape slice requires a positive signed-64-bit length")
+        if count.isValidInt then count.toInt
+        else
+          literal[Integer](
+            KernelTypeDescriptor("Integer"),
+            "integer",
+            count.toString,
+            Vector(count.toLong)
+          )
+      case (Some(0L), _) => upperExclusive
+      case _ => integerExpr("analog_sub", integerValue(upperExclusive), integerValue(lower))
+    sourceDimensions.updated(axis, length)
+
+  def shapeSlice[A <: Data](
+      value: Expr[Vec[A]],
+      lower: Dimension,
+      upperExclusive: Dimension,
+      axis: Int
+  ): Expr[Vec[A]] =
+    def invalid(message: String): Nothing =
+      scala.util.Failure[Nothing](
+        new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
+      ).get
+    val descriptor = expressionDataType(value).map(typeDescriptor)
+      .filter(_.kind == "Vec").getOrElse(invalid("shape slice requires a Vec value"))
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(invalid("shape slice requires an element type"))
+    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case dimensions: Seq[?] => dimensions.toVector.map:
+          case dimension: Int => dimension: Dimension
+          case dimension: Expr[?] => dimension.asInstanceOf[Expr[Integer]]: Dimension
+          case _ => invalid("shape slice requires static Integer dimensions")
+      case _ => Vector.empty
+    val dimensions = sliceShapeDimensions(sourceDimensions, lower, upperExclusive, axis)
+    val result = new KernelExpr[Vec[A]](
+      Vector(value, lower, upperExclusive, dimensions(axis), axis),
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
+      operation = Some("shape_slice")
+    )
+    ConstructionKernel.shapeView(
+      result,
+      value,
+      dimensions,
+      Some(ShapeSliceSelection(axis, lower, upperExclusive))
+    )
+    result
+
+  def shapeFlatten[A <: Data](value: Expr[Vec[A]]): Expr[Vec[A]] =
+    val dimensions = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .flatMap(_.arguments.lift(1).collect { case values: Seq[?] => values.toVector })
+      .getOrElse(Vector.empty)
+    val structuralCarrier =
+      value.isInstanceOf[Signal[?]] || proceduralShapeSource(value) ||
+        (value match
+          case expression: KernelExpr[?] =>
+            expression.operation.exists(operation =>
+              operation == "shape_view" || operation == "shape_index" || operation == "shape_slice"
+            )
+          case _ => false)
+    if structuralCarrier then shapeView(value, flattenShapeDimensions(dimensions))
+    else expr(value, "flatten")
+
+  private[nodal] def flattenShapeDimensions(
+      dimensions: Vector[Any],
+      signed64Literal: Boolean = false
+  ): Vector[Dimension] =
+    val fixedDimensions = dimensions.map:
+      case literal: Int if literal > 0 => Some(BigInt(literal))
+      case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+        expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
+      case _ => None
+    if fixedDimensions.nonEmpty &&
+      fixedDimensions.forall(_.nonEmpty)
+    then
+      val count = fixedDimensions.flatten.product
+      if count <= BigInt(Int.MaxValue) then Vector(count.toInt)
+      else if signed64Literal && count.isValidLong then
+        Vector(literal[Integer](
+          KernelTypeDescriptor("Integer"),
+          "integer",
+          count.toString,
+          Vector(count.toLong)
+        ))
+      else
+        scala.util.Failure[Vector[Dimension]](
+          new ConstructionException(
+            KernelDiagnostic(
+              "NODAL-SHAPE-043-003",
+              s"fixed shape flattening exceeds the supported signed ${
+                  if signed64Literal then 64 else 32
+                }-bit result dimension"
+            )
+          )
+        ).get
+    else if dimensions.nonEmpty then
+      val factors = dimensions.map:
+        case literal: Int => literalInteger(literal)
+        case parameter: Param[?] => parameter.asInstanceOf[Expr[Integer]]
+        case expression: KernelExpr[?] => expression.asInstanceOf[Expr[Integer]]
+        case _ =>
+          scala.util.Failure[Expr[Integer]](
+            new ConstructionException(
+              KernelDiagnostic(
+                "NODAL-SHAPE-043-003",
+                "symbolic shape flattening requires static Integer dimensions"
+              )
+            )
+          ).get
+      // A literal unit axis contributes no static identity to a flattened extent.
+      val nonUnitFactors = factors.filterNot:
+        case expression: KernelExpr[?] =>
+          expression.literal.exists(value => value.kind == "integer" && value.value == "1")
+        case _ => false
+      val count =
+        nonUnitFactors.reduceOption((left, right) => integerExpr("analog_mul", left, right))
+          .getOrElse(literalInteger(1))
+      Vector(count)
+    else Vector.empty
+
+  def shapeView[A <: Data](
+      value: Expr[Vec[A]],
+      dimensions: Vector[Dimension]
+  ): Expr[Vec[A]] =
+    val descriptor = expressionDataType(value)
+      .map(typeDescriptor)
+      .filter(_.kind == "Vec")
+      .getOrElse(
+        scala.util.Failure[KernelTypeDescriptor](
+          new ConstructionException(
+            KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec value")
+          )
+        ).get
+      )
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(
+      scala.util.Failure[DataType[?]](
+        new ConstructionException(
+          KernelDiagnostic("NODAL-SHAPE-043-003", "shape view requires a Vec element type")
+        )
+      ).get
+    )
+    val result = new KernelExpr[Vec[A]](
+      value +: dimensions,
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
+      operation = Some("shape_view")
+    )
+    ConstructionKernel.shapeView(result, value, dimensions)
+    result
+
   def analogExpr(operation: String, values: Any*): Expr[Real] =
     val expression = new KernelExpr[Real](
       values.toVector,
@@ -1138,12 +1662,19 @@ private[nodal] object CandidateRuntime:
       left: Variable[A],
       right: Expr[A]
   ): Unit =
-    ConstructionKernel.operation("assignment", left, right)
-    AnalogProceduralConstruction.assign(
-      left,
-      right,
-      ConstructionKernel.captureAnalogProceduralSource
-    )
+    if AnalogProceduralConstruction.generatedProcedureActive then
+      AnalogProceduralConstruction.assign(
+        left,
+        right,
+        ConstructionKernel.captureAnalogProceduralSource
+      )
+    else
+      ConstructionKernel.operation("assignment", left, right)
+      AnalogProceduralConstruction.assign(
+        left,
+        right,
+        ConstructionKernel.captureAnalogProceduralSource
+      )
 
   def assign(left: AnyRef, right: Any): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital assignment")
@@ -1152,6 +1683,10 @@ private[nodal] object CandidateRuntime:
   def connectValues(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital connection")
     ConstructionKernel.operation("value-connect", left, right)
+
+  def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("conservative array binding")
+    ConstructionKernel.connectNodeArrays(left, right)
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("conservative connection")

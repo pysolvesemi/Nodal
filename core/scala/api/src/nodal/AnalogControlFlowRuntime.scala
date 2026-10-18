@@ -9,6 +9,8 @@ import scala.collection.mutable
   * without executing a solver or lowering control flow to a target HDL.
   */
 private[nodal] object AnalogControlFlowRuntime:
+  import AnalogProceduralRuntime.StorageReference
+  import AnalogStorageCoverage.State
   enum Stage:
     case Static, Runtime
 
@@ -40,7 +42,9 @@ private[nodal] object AnalogControlFlowRuntime:
       stage: Stage,
       staticValue: Option[scala.Boolean],
       valueType: AnalogProceduralRuntime.ValueType,
-      source: Option[AnalogProceduralRuntime.Source] = None
+      source: Option[AnalogProceduralRuntime.Source] = None,
+      selectedReads: Vector[StorageReference] = Vector.empty,
+      sourceValue: Option[AnalogProceduralRuntime.Value] = None
   )
 
   object Condition:
@@ -84,7 +88,9 @@ private[nodal] object AnalogControlFlowRuntime:
       kind: AnalogProceduralRuntime.ScalarKind,
       dimension: String,
       staticValue: Option[CaseLabel] = None,
-      source: Option[AnalogProceduralRuntime.Source] = None
+      source: Option[AnalogProceduralRuntime.Source] = None,
+      selectedReads: Vector[StorageReference] = Vector.empty,
+      sourceValue: Option[AnalogProceduralRuntime.Value] = None
   )
 
   object Selector:
@@ -170,20 +176,25 @@ private[nodal] object AnalogControlFlowRuntime:
         initialized: scala.Boolean,
         initializerReads: Set[String] = Set.empty,
         local: scala.Boolean = false,
-        source: Option[AnalogProceduralRuntime.Source] = None
+        source: Option[AnalogProceduralRuntime.Source] = None,
+        storageVariable: Option[AnalogProceduralRuntime.Variable] = None,
+        initializerSelectedReads: Vector[StorageReference] = Vector.empty
     ) extends Statement
 
     final case class Assign(
         identity: String,
         target: String,
         reads: Set[String] = Set.empty,
-        source: Option[AnalogProceduralRuntime.Source] = None
+        source: Option[AnalogProceduralRuntime.Source] = None,
+        storageTarget: Option[StorageReference] = None,
+        selectedReads: Vector[StorageReference] = Vector.empty
     ) extends Statement
 
     final case class Read(
         identity: String,
         variable: String,
-        source: Option[AnalogProceduralRuntime.Source] = None
+        source: Option[AnalogProceduralRuntime.Source] = None,
+        storageReference: Option[StorageReference] = None
     ) extends Statement
 
     final case class Scope(
@@ -220,7 +231,8 @@ private[nodal] object AnalogControlFlowRuntime:
             "dimensionless"
           ),
         staticTripCount: Option[Int] = None,
-        source: Option[AnalogProceduralRuntime.Source] = None
+        source: Option[AnalogProceduralRuntime.Source] = None,
+        boundSelectedReads: Vector[StorageReference] = Vector.empty
     ) extends Statement
 
     final case class Break(
@@ -240,9 +252,9 @@ private[nodal] object AnalogControlFlowRuntime:
   )
 
   private final case class Flow(
-      normal: Option[Set[String]],
-      breaks: Vector[Set[String]],
-      continues: Vector[Set[String]]
+      normal: Option[State],
+      breaks: Vector[State],
+      continues: Vector[State]
   )
 
   def analyze(
@@ -262,9 +274,9 @@ private[nodal] object AnalogControlFlowRuntime:
       Vector.empty,
       isRoot = true
     )
-    val flow = analyzeBlock(root, initiallyInitialized, 0, retainLocals = true)
+    val flow = analyzeBlock(root, State.whole(initiallyInitialized), 0, retainLocals = true)
     Result(
-      flow.normal.getOrElse(Set.empty),
+      flow.normal.map(_.wholeRoots).getOrElse(Set.empty),
       identities.size,
       flow.normal.nonEmpty
     )
@@ -343,7 +355,8 @@ private[nodal] object AnalogControlFlowRuntime:
       )
     condition.stage match
       case Stage.Static
-          if condition.staticValue.isEmpty || condition.reads.nonEmpty =>
+          if condition.staticValue.isEmpty || condition.reads.nonEmpty ||
+            condition.selectedReads.nonEmpty =>
         fail(
           "NODAL-ANALOG-034-003",
           "static condition requires a compile-time Boolean value without dynamic reads",
@@ -382,7 +395,7 @@ private[nodal] object AnalogControlFlowRuntime:
         Some(path)
       )
     selector.staticValue match
-      case Some(_) if selector.reads.nonEmpty =>
+      case Some(_) if selector.reads.nonEmpty || selector.selectedReads.nonEmpty =>
         fail(
           "NODAL-ANALOG-034-003",
           "static case selector cannot contain dynamic reads",
@@ -403,6 +416,18 @@ private[nodal] object AnalogControlFlowRuntime:
         s"$label must contain at least one statement",
         Some(path)
       )
+
+  private def referenceRoots(
+      legacy: Iterable[String],
+      selected: Iterable[StorageReference]
+  ): Set[String] =
+    val typed = selected.toVector
+    val represented =
+      typed.flatMap(reference => Vector(reference.identity, reference.root.identity)).toSet
+    legacy.toSet.diff(represented) ++ typed.map(_.root.identity)
+
+  private def eventReads(event: AnalogEventRuntime.Expression): Vector[StorageReference] =
+    event.arguments.flatMap(_.value.allReads).distinct ++ event.alternatives.flatMap(eventReads)
 
   private def requireVisibleReferences(
       references: Iterable[String],
@@ -434,8 +459,16 @@ private[nodal] object AnalogControlFlowRuntime:
       case declaration: Statement.Declare =>
         validateIdentity(declaration.identity, identities)
         validateVariable(declaration.variable, "declaration variable", declaration.identity)
+        declaration.storageVariable.foreach: variable =>
+          if variable.identity != declaration.variable then
+            fail(
+              "NODAL-ANALOG-034-014",
+              "typed declaration disagrees with its storage identity",
+              Some(declaration.identity)
+            )
+          AnalogStorageCoverage.normalize(variable)
         requireVisibleReferences(
-          declaration.initializerReads,
+          referenceRoots(declaration.initializerReads, declaration.initializerSelectedReads),
           visible,
           "declaration initializer",
           declaration.identity
@@ -462,8 +495,19 @@ private[nodal] object AnalogControlFlowRuntime:
         visible = visible + declaration.variable
       case assignment: Statement.Assign =>
         validateIdentity(assignment.identity, identities)
+        assignment.storageTarget.foreach: target =>
+          if target.root.identity != assignment.target then
+            fail(
+              "NODAL-ANALOG-034-014",
+              "typed assignment disagrees with its storage root",
+              Some(assignment.identity)
+            )
+          AnalogStorageCoverage.normalize(target)
         requireVisibleReferences(
-          Vector(assignment.target) ++ assignment.reads.toVector,
+          referenceRoots(
+            Vector(assignment.target) ++ assignment.reads.toVector,
+            assignment.storageTarget.toVector ++ assignment.selectedReads
+          ),
           visible,
           "control-flow assignment",
           assignment.identity
@@ -471,7 +515,7 @@ private[nodal] object AnalogControlFlowRuntime:
       case read: Statement.Read =>
         validateIdentity(read.identity, identities)
         requireVisibleReferences(
-          Vector(read.variable),
+          referenceRoots(Vector(read.variable), read.storageReference.toVector),
           visible,
           "control-flow read",
           read.identity
@@ -479,7 +523,12 @@ private[nodal] object AnalogControlFlowRuntime:
       case event: Statement.EventControl =>
         validateIdentity(event.identity, identities)
         event.event.validate()
-        requireVisibleReferences(event.event.reads, visible, "analog event", event.identity)
+        requireVisibleReferences(
+          referenceRoots(event.event.reads, eventReads(event.event)),
+          visible,
+          "analog event",
+          event.identity
+        )
         validateBlock(event.body, identities, declarations, visible, Vector.empty, isRoot = false)
       case scope: Statement.Scope =>
         validateIdentity(scope.identity, identities)
@@ -503,7 +552,7 @@ private[nodal] object AnalogControlFlowRuntime:
           val conditionPath = s"${conditional.identity}.condition_$index"
           validateCondition(branch.condition, conditionPath)
           requireVisibleReferences(
-            branch.condition.reads,
+            referenceRoots(branch.condition.reads, branch.condition.selectedReads),
             visible,
             "conditional condition",
             conditionPath
@@ -535,7 +584,7 @@ private[nodal] object AnalogControlFlowRuntime:
         validateIdentity(selection.identity, identities)
         validateSelector(selection.selector, selection.identity)
         requireVisibleReferences(
-          selection.selector.reads,
+          referenceRoots(selection.selector.reads, selection.selector.selectedReads),
           visible,
           "case selector",
           selection.identity
@@ -602,7 +651,7 @@ private[nodal] object AnalogControlFlowRuntime:
             Some(loop.identity)
           )
         requireVisibleReferences(
-          loop.boundReads,
+          referenceRoots(loop.boundReads, loop.boundSelectedReads),
           visible,
           "loop bound",
           loop.identity
@@ -619,7 +668,7 @@ private[nodal] object AnalogControlFlowRuntime:
         loop.stage match
           case LoopStage.Static
               if loop.minimumIterations != loop.maximumIterations ||
-                loop.boundReads.nonEmpty ||
+                loop.boundReads.nonEmpty || loop.boundSelectedReads.nonEmpty ||
                 !loop.staticTripCount.contains(loop.minimumIterations) =>
             fail(
               "NODAL-ANALOG-034-009",
@@ -659,8 +708,17 @@ private[nodal] object AnalogControlFlowRuntime:
             Some(next.identity)
           )
 
-  private def checkReads(reads: Set[String], state: Set[String], path: String): Unit =
-    val missing = reads.filterNot(state.contains).toVector.sorted
+  private def checkReads(
+      reads: Set[String],
+      state: State,
+      path: String,
+      selected: Vector[StorageReference]
+  ): Unit =
+    val represented =
+      selected.flatMap(reference => Vector(reference.identity, reference.root.identity)).toSet
+    val missing =
+      (reads.diff(represented).filterNot(state.contains).toVector ++
+        selected.filterNot(state.contains).map(_.identity)).distinct.sorted
     if missing.nonEmpty then
       fail(
         "NODAL-ANALOG-034-004",
@@ -669,10 +727,10 @@ private[nodal] object AnalogControlFlowRuntime:
         Some(path)
       )
 
-  private def intersectAll(states: Vector[Set[String]]): Set[String] =
+  private def intersectAll(states: Vector[State]): State =
     states.headOption match
-      case None => Set.empty
-      case Some(first) => states.tail.foldLeft(first)(_ intersect _)
+      case None => State.empty
+      case Some(first) => states.tail.foldLeft(first)((left, right) => left.intersect(right))
 
   private def mergeAlternatives(flows: Vector[Flow]): Flow =
     val normalStates = flows.flatMap(_.normal)
@@ -693,13 +751,13 @@ private[nodal] object AnalogControlFlowRuntime:
 
   private def analyzeBlock(
       block: Block,
-      input: Set[String],
+      input: State,
       loopDepth: Int,
       retainLocals: scala.Boolean = false
   ): Flow =
-    var normal: Option[Set[String]] = Some(input)
-    val breaks = mutable.ArrayBuffer.empty[Set[String]]
-    val continues = mutable.ArrayBuffer.empty[Set[String]]
+    var normal: Option[State] = Some(input)
+    val breaks = mutable.ArrayBuffer.empty[State]
+    val continues = mutable.ArrayBuffer.empty[State]
     val locals = mutable.HashSet.empty[String]
     block.statements.foreach: statement =>
       statement match
@@ -716,7 +774,7 @@ private[nodal] object AnalogControlFlowRuntime:
 
   private def analyzeConditional(
       conditional: Statement.IfThenElse,
-      input: Set[String],
+      input: State,
       loopDepth: Int
   ): Flow =
     val alternatives = mutable.ArrayBuffer.empty[Flow]
@@ -726,7 +784,8 @@ private[nodal] object AnalogControlFlowRuntime:
         checkReads(
           branch.condition.reads,
           input,
-          s"${conditional.identity}.condition_$index"
+          s"${conditional.identity}.condition_$index",
+          branch.condition.selectedReads
         )
         branch.condition.stage match
           case Stage.Static =>
@@ -744,10 +803,15 @@ private[nodal] object AnalogControlFlowRuntime:
 
   private def analyzeCase(
       selection: Statement.CaseStatement,
-      input: Set[String],
+      input: State,
       loopDepth: Int
   ): Flow =
-    checkReads(selection.selector.reads, input, selection.identity)
+    checkReads(
+      selection.selector.reads,
+      input,
+      selection.identity,
+      selection.selector.selectedReads
+    )
     selection.selector.staticValue match
       case Some(value) =>
         selection.arms
@@ -766,15 +830,15 @@ private[nodal] object AnalogControlFlowRuntime:
 
   private def analyzeLoop(
       loop: Statement.Loop,
-      input: Set[String],
+      input: State,
       loopDepth: Int
   ): Flow =
-    checkReads(loop.boundReads, input, loop.identity)
+    checkReads(loop.boundReads, input, loop.identity, loop.boundSelectedReads)
     if loop.maximumIterations == 0 then
       Flow(Some(input), Vector.empty, Vector.empty)
     else
       val body = analyzeBlock(loop.body, input, loopDepth + 1)
-      val exits = mutable.ArrayBuffer.empty[Set[String]]
+      val exits = mutable.ArrayBuffer.empty[State]
       if loop.minimumIterations == 0 then exits += input
       body.normal.foreach(exits += _)
       exits ++= body.breaks
@@ -787,23 +851,31 @@ private[nodal] object AnalogControlFlowRuntime:
 
   private def analyzeStatement(
       statement: Statement,
-      input: Set[String],
+      input: State,
       loopDepth: Int
   ): Flow = statement match
     case declaration: Statement.Declare =>
-      checkReads(declaration.initializerReads, input, declaration.identity)
+      checkReads(
+        declaration.initializerReads,
+        input,
+        declaration.identity,
+        declaration.initializerSelectedReads
+      )
       val output =
         if declaration.initialized then input + declaration.variable
         else input - declaration.variable
       Flow(Some(output), Vector.empty, Vector.empty)
     case assignment: Statement.Assign =>
-      checkReads(assignment.reads, input, assignment.identity)
-      Flow(Some(input + assignment.target), Vector.empty, Vector.empty)
+      checkReads(assignment.reads, input, assignment.identity, assignment.selectedReads)
+      val output = assignment.storageTarget match
+        case Some(target) => input.write(target)
+        case None => input + assignment.target
+      Flow(Some(output), Vector.empty, Vector.empty)
     case read: Statement.Read =>
-      checkReads(Set(read.variable), input, read.identity)
+      checkReads(Set(read.variable), input, read.identity, read.storageReference.toVector)
       Flow(Some(input), Vector.empty, Vector.empty)
     case event: Statement.EventControl =>
-      checkReads(event.event.reads, input, event.identity)
+      checkReads(event.event.reads, input, event.identity, eventReads(event.event))
       val body = analyzeBlock(event.body, input, 0)
       if body.breaks.nonEmpty || body.continues.nonEmpty then
         AnalogEventRuntime.fail(7, "loop control cannot escape an analog event-controlled body")

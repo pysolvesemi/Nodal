@@ -11,38 +11,35 @@ Use the title form:
 Increment <number> — <summary>
 ```
 
-Complete every section in the repository pull-request template. A pull request
-into `dev` must pass the required Core CI gate before squash merge. Milestone
+Complete every section in the repository pull-request template. Milestone
 promotion pull requests into `main` may originate only from `dev`.
 
-## Staged CI, monitoring and merge verification
+## Prototype checks and merge
 
-[AGENTS.md](AGENTS.md) defines the standing targeted-first CI and browserless
-allowlisted-dispatch policy. Publish clean repair checkpoints with `[skip ci]`,
-qualify affected workflows on the exact head, then qualify the complete applicable
-CI set. Local checks do not replace remote qualification. Full-CI failures return
-to targeted repair; do not repeatedly restart successful independent workflows.
+The owner-approved 2026-10-18 [prototype policy](AGENTS.md#prototype-validation-and-merge)
+applies to every open/future increment and repair. Do not run any CI, targeted
+or full qualification, or hourly monitoring. Use `[skip ci]` on commits and the
+actual squash-merge message. Old plans, checklists and handoffs that require
+remote qualification or separate accepted-evidence closure are superseded for
+prototype acceptance; historical accepted results remain unchanged.
 
-Follow the [independent Codex review gate](AGENTS.md#independent-codex-review-before-merge)
-before full CI and merge. Link completed review coverage and finding
-dispositions in the PR checklist; a review request alone is not completion.
+Run focused local positive, negative and boundary checks for the changed logic,
+plus directly affected regressions. Record commands, results and limitations in
+the PR. Each increment needs an architecture/modularity/scalability checklist
+review covering shared owners, dependency boundaries and known future consumers.
+The implementer may complete this concise review; external Codex review and
+exhaustive performance or proof campaigns are not mandatory gates.
 
-Enable one hourly continuation immediately after the first targeted launch and
-keep it enabled through repairs, full CI, review, merge and accepted-evidence
-closure. Disable it only after the increment's closure obligations and completion
-report are satisfied, unless the user explicitly pauses or cancels it.
+Merge a completed scoped branch when those focused checks and architecture
+review pass and known in-scope failures are resolved. Use the expected head SHA
+and verify the actual squash merge/ref/tree. Respect repository protections;
+report a remaining required-status setting instead of fabricating a status or
+running forbidden CI. Broader qualification is not required. Fix bugs discovered
+later during subsequent increments or from user reports with focused regressions.
 
-After all required final-head CI and review pass, retain Nodal's squash-merge
-policy and include `[skip ci]` in the actual merge message. Verify the merged
-commit/ref and its equality to the qualified source tree instead of launching
-duplicate post-merge CI. Record suppression separately from executed validation;
-never label skipped CI as passed or invent post-merge run IDs. This policy applies
-to future merges/closures, not to rewriting historical accepted evidence.
-
-Separate accepted-evidence closure and the completion-demonstration requirements
-below remain mandatory. An evidence schema requiring new post-merge executions
-must be explicitly evolved and reviewed to represent qualified identical-tree
-merge verification; do not weaken its historical integrity checks.
+Keep concise acceptance evidence and the demonstration below in the same PR;
+a separate evidence-closure PR is optional. Do not mark unknown or unexecuted
+results as passing, or reopen historical acceptance merely to impose this policy.
 
 ## Increment and sub-checklist progress
 
@@ -52,8 +49,8 @@ trackable implementation, validation, and acceptance tasks. Give children stable
 identifiers when they need cross-references, such as `AC-001.a`.
 
 A child may be marked `[x]` once its own deliverable and applicable validation
-are complete. Record the supporting commit, artifact, or evidence reference in
-the item or its linked completion report. Keep the parent `[ ]` while any
+are complete. Add a brief note with the supporting source commit and focused check results
+in the existing checklist; keep generated evidence under ignored `.work/`. Keep the parent `[ ]` while any
 required child remains open, any dependency is incomplete, or the increment's
 acceptance/evidence gate is outstanding. Partial child completion must not be
 reported or counted as completion of the parent increment.
@@ -112,38 +109,17 @@ existing acceptance criteria, validation evidence, and merge requirements.
 
 ## Local validation
 
-Install both pinned toolchains once:
+Install the pinned toolchain needed by the changed layer (`./nodal bootstrap`
+for native tools, `./nodal style bootstrap` for formatters). Run the relevant
+formatter and select the affected positive/negative tests and checks. Use filtered
+Scala/native/Python tests and representative generated output where appropriate;
+record the exact selection in the PR so it is reproducible.
 
-```bash
-./nodal bootstrap
-./nodal style bootstrap
-```
-
-Apply deterministic formatting before review:
-
-```bash
-./nodal style fix
-```
-
-Run the style and policy gate against the integration branch:
-
-```bash
-./nodal style check --base-ref origin/dev
-```
-
-Run the complete gate before final acceptance:
-
-```bash
-./nodal check --online-toolchain --base-ref origin/dev
-```
-
-The same commands run in GitHub Actions. Do not replace them with private CI-only
-command sequences.
-
-Clean intermediate repair checkpoints may be published before the full gate so
-that remote targeted qualification can run first, as specified in AGENTS.md.
-They are not accepted increments. A user-authorized documentation-only update
-with CI explicitly waived remains separate from implementation/closure work.
+Do not run `./nodal check --online-toolchain --base-ref origin/dev`, all-workflow
+qualification, exhaustive matrices or unrelated full suites as routine increment
+acceptance. Existing broad commands remain available only for a later explicit
+request. Documentation-only edits need focused Markdown/link/checklist and diff
+checks. No CI launch or scheduled continuation is needed.
 
 ## Formatting and lint rules
 
@@ -171,7 +147,9 @@ applicable scope. See [the design-gate policy](docs/design-gates/README.md).
 
 ## Commit and review expectations
 
-Keep commits focused on the selected increment. Generated build outputs and
-local toolchain installations must not be committed. Explain validation,
+Keep commits focused on the selected increment. Put generated logs, evidence,
+reports, caches and scratch work under ignored root `.work/`; never commit them.
+Check Git status and the staged diff before each commit and handoff, stage only
+intended paths, and preserve unrelated changes. Explain validation,
 compatibility impact, and any approved design gate in the pull-request body.
 Resolve review conversations before merge.

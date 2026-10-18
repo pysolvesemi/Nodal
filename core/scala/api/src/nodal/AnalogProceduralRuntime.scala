@@ -14,7 +14,11 @@ private[nodal] object AnalogProceduralRuntime:
     case Real extends ScalarKind("real")
     case Boolean extends ScalarKind("boolean")
 
-  final case class ValueType(kind: ScalarKind, dimension: String):
+  final case class ValueType(
+      kind: ScalarKind,
+      dimension: String,
+      dimensions: Vector[String] = Vector.empty
+  ):
     require(dimension.nonEmpty, "procedural value dimension must be non-empty")
 
   final case class Source(file: String, line: Int, column: Int):
@@ -22,19 +26,539 @@ private[nodal] object AnalogProceduralRuntime:
     require(line >= 1, "procedural source line must be positive")
     require(column >= 1, "procedural source column must be positive")
 
+  sealed trait StorageReference:
+    def root: Variable
+    def identity: String
+    def valueType: ValueType
+    def owner: String = root.owner
+    def declarationScope: Vector[String] = root.declarationScope
+    def remap(path: String => String): StorageReference
+
+  type StorageProjection = KernelShapeIndexSnapshot | KernelShapeViewSnapshot
+
   final case class Variable(
       identity: String,
-      owner: String,
-      declarationScope: Vector[String],
+      override val owner: String,
+      override val declarationScope: Vector[String],
       valueType: ValueType
-  )
+  ) extends StorageReference:
+    def root: Variable = this
+    def remap(path: String => String): Variable = copy(
+      identity = path(identity),
+      owner = path(owner),
+      declarationScope = declarationScope.map(path),
+      valueType = valueType.copy(dimensions = valueType.dimensions.map(path))
+    )
+
+  final case class StorageSelection(root: Variable, projections: Vector[StorageProjection])
+      extends StorageReference:
+    require(projections.nonEmpty, "storage selection requires a projection")
+    def identity: String = projections.last match
+      case value: KernelShapeIndexSnapshot => value.path
+      case value: KernelShapeViewSnapshot => value.path
+    def valueType: ValueType = root.valueType.copy(dimensions = projections.last match
+      case value: KernelShapeIndexSnapshot => value.resultDimensions
+      case value: KernelShapeViewSnapshot => value.dimensions)
+    def remap(path: String => String): StorageSelection =
+      copy(root = root.remap(path), projections = projections.map(remapProjection(_, path)))
+
+  private[nodal] def remapProjection(
+      projection: StorageProjection,
+      path: String => String
+  ): StorageProjection = projection match
+    case value: KernelShapeIndexSnapshot => value.copy(
+        path = path(value.path),
+        owner = path(value.owner),
+        input = path(value.input),
+        indices = value.indices.map(path),
+        resultDimensions = value.resultDimensions.map(path),
+        sourceUses = value.sourceUses.map(path)
+      )
+    case value: KernelShapeViewSnapshot => value.copy(
+        path = path(value.path),
+        owner = path(value.owner),
+        input = path(value.input),
+        dimensions = value.dimensions.map(path),
+        slice = value.slice.map(slice =>
+          slice.copy(
+            lower = path(slice.lower),
+            upperExclusive = path(slice.upperExclusive)
+          )
+        )
+      )
+
+  sealed trait ShapedSource
+  object ShapedSource:
+    final case class Fill(scalar: Value) extends ShapedSource
+    final case class Read(reference: StorageReference) extends ShapedSource
+    final case class View(value: Value, projection: StorageProjection) extends ShapedSource
 
   final case class Value(
       rendered: String,
       valueType: ValueType,
-      reads: Vector[Variable] = Vector.empty
+      reads: Vector[StorageReference] = Vector.empty,
+      source: Option[ShapedSource] = None,
+      scalarSources: Vector[Value] = Vector.empty
   ):
     require(rendered.nonEmpty, "procedural value spelling must be non-empty")
+
+    /** Typed leaves supplement the flattened list, preserving first occurrence order without
+      * re-expanding shared source DAGs. Read multiplicity is not evaluation multiplicity.
+      */
+    def allReads: Vector[StorageReference] =
+      val result = mutable.LinkedHashSet.empty[StorageReference]
+      val heights = new java.util.IdentityHashMap[Value, java.lang.Integer]()
+      val active = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+      def invalid(): Nothing = reject(Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "retained value is cyclic or exceeds the supported dependency depth"
+      ))
+      def visit(value: Value, depth: Int): Int =
+        if depth >= 512 || active.containsKey(value) then invalid()
+        Option(heights.get(value)) match
+          case Some(height) =>
+            if depth + height.intValue >= 512 then invalid()
+            height.intValue
+          case None =>
+            active.put(value, java.lang.Boolean.TRUE)
+            try
+              result ++= value.reads
+              var height = 0
+              def child(value: Value): Unit =
+                height = height.max(visit(value, depth + 1) + 1)
+              value.scalarSources.foreach(child)
+              value.source.foreach:
+                case ShapedSource.Fill(scalar) => child(scalar)
+                case ShapedSource.Read(reference) => result += reference
+                case ShapedSource.View(input, _) => child(input)
+              heights.put(value, java.lang.Integer.valueOf(height))
+              height
+            finally active.remove(value)
+      visit(this, 0)
+      result.toVector
+
+    def remap(path: String => String, spelling: String => String): Value =
+      val memo = new java.util.IdentityHashMap[Value, (Value, Int)]()
+      val active = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+      def invalid(): Nothing = reject(Diagnostic(
+        "NODAL-SHAPE-043-007",
+        "retained value is cyclic or exceeds the supported dependency depth"
+      ))
+      def visit(value: Value, depth: Int): (Value, Int) =
+        if depth >= 512 || active.containsKey(value) then invalid()
+        Option(memo.get(value)) match
+          case Some(result) =>
+            if depth + result._2 >= 512 then invalid()
+            result
+          case None =>
+            active.put(value, java.lang.Boolean.TRUE)
+            try
+              var height = 0
+              def child(value: Value): Value =
+                val (mapped, childHeight) = visit(value, depth + 1)
+                height = height.max(childHeight + 1)
+                mapped
+              val mapped = value.copy(
+                rendered = spelling(value.rendered),
+                valueType = value.valueType.copy(dimensions = value.valueType.dimensions.map(path)),
+                reads = value.reads.map(_.remap(path)),
+                source = value.source.map {
+                  case ShapedSource.Fill(scalar) => ShapedSource.Fill(child(scalar))
+                  case ShapedSource.Read(reference) => ShapedSource.Read(reference.remap(path))
+                  case ShapedSource.View(input, projection) =>
+                    ShapedSource.View(child(input), remapProjection(projection, path))
+                },
+                scalarSources = value.scalarSources.map(child)
+              )
+              val result = mapped -> height
+              memo.put(value, result)
+              result
+            finally active.remove(value)
+      visit(this, 0)._1
+
+  /** Derived serialization only. Callers must first validate the retained shape graph, including
+    * owned static indices, bounds and units. Occurrences deliberately retain repeated fill
+    * identities so live consumers can enforce their once-only evaluation contract across a complete
+    * expression.
+    */
+  final case class ScalarDerivation(value: Value, fillOccurrences: Vector[String])
+
+  private def scalarLeafPattern(leaves: Vector[String]): scala.util.matching.Regex =
+    val boundary = "[A-Za-z0-9_.$#@]"
+    ("(?<!" + boundary + ")(?:" +
+      leaves.distinct.sortBy(value => (-value.length, value))
+        .map(java.util.regex.Pattern.quote).mkString("|") + ")(?!" + boundary + ")").r
+
+  /** Canonical-source leaf matching shared with capture emission; this does not parse scalar
+    * syntax.
+    */
+  def scalarLeafOccurrences(text: String, leaves: Vector[String]): Vector[String] =
+    if leaves.isEmpty then Vector.empty
+    else scalarLeafPattern(leaves).findAllIn(text).toVector
+
+  /** Replace exact source leaves in one pass, never a prefix or a newly inserted expression. */
+  def replaceScalarLeaves(text: String, bindings: Vector[(String, String)]): String =
+    val grouped = bindings.groupBy(_._1)
+    require(
+      grouped.values.forall(_.map(_._2).distinct.size == 1),
+      "one captured source leaf cannot bind different storage accesses"
+    )
+    if bindings.isEmpty then text
+    else
+      val replacements = grouped.view.mapValues(_.head._2).toMap
+      scalarLeafPattern(replacements.keys.toVector).replaceAllIn(
+        text,
+        matched => java.util.regex.Matcher.quoteReplacement(replacements(matched.matched))
+      )
+
+  def deriveUniformScalar(input: Value): ScalarDerivation =
+    val active = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+    val memo = new java.util.IdentityHashMap[Value, ScalarDerivation]()
+    val sources = mutable.HashMap.empty[String, Value]
+    val activeSources = mutable.HashSet.empty[String]
+    val equalities = new java.util.IdentityHashMap[
+      Value,
+      java.util.IdentityHashMap[Value, java.lang.Boolean]
+    ]()
+    // Values form a retained DAG. Compare exact payloads without recursive case-class equality,
+    // which re-expands every shared child when the same authored fill has rebuilt wrappers.
+    def sameSource(left: Value, right: Value): Boolean =
+      val pending = mutable.ArrayBuffer(left -> right)
+      val visited = new java.util.IdentityHashMap[
+        Value,
+        java.util.IdentityHashMap[Value, java.lang.Boolean]
+      ]()
+      val pairs = mutable.ArrayBuffer.empty[(Value, Value)]
+      def lookup(
+          table: java.util.IdentityHashMap[
+            Value,
+            java.util.IdentityHashMap[Value, java.lang.Boolean]
+          ],
+          first: Value,
+          second: Value
+      ): Option[Boolean] = Option(table.get(first)).flatMap(values =>
+        Option(values.get(second)).map(_.booleanValue)
+      )
+      def save(
+          table: java.util.IdentityHashMap[
+            Value,
+            java.util.IdentityHashMap[Value, java.lang.Boolean]
+          ],
+          first: Value,
+          second: Value,
+          result: Boolean
+      ): Unit =
+        val values = Option(table.get(first)).getOrElse:
+          val created = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+          table.put(first, created)
+          created
+        values.put(second, java.lang.Boolean.valueOf(result))
+      var equal = true
+      while pending.nonEmpty && equal do
+        val (first, second) = pending.remove(pending.size - 1)
+        if (first ne second) && lookup(visited, first, second).isEmpty then
+          lookup(equalities, first, second) match
+            case Some(result) => equal = result
+            case None =>
+              save(visited, first, second, true)
+              pairs += first -> second
+              equal = first.rendered == second.rendered && first.valueType == second.valueType &&
+                first.reads == second.reads && first.scalarSources.size == second.scalarSources.size
+              if equal then
+                pending ++= first.scalarSources.zip(second.scalarSources)
+                (first.source, second.source) match
+                  case (None, None) => ()
+                  case (Some(ShapedSource.Read(a)), Some(ShapedSource.Read(b))) => equal = a == b
+                  case (Some(ShapedSource.Fill(a)), Some(ShapedSource.Fill(b))) => pending += a -> b
+                  case (Some(ShapedSource.View(a, x)), Some(ShapedSource.View(b, y))) =>
+                    equal = x == y
+                    pending += a -> b
+                  case _ => equal = false
+      if equal then pairs.foreach((first, second) => save(equalities, first, second, true))
+      else save(equalities, left, right, false)
+      equal
+    def invalid(message: String): Nothing = reject(Diagnostic("NODAL-SHAPE-043-007", message))
+    def enter(value: Value, depth: Int): Unit =
+      if depth >= 512 || active.containsKey(value) then
+        invalid("scalar source is cyclic or exceeds the supported dependency depth")
+      active.put(value, java.lang.Boolean.TRUE)
+      if value.source.nonEmpty then
+        if activeSources.contains(value.rendered) then
+          invalid("retained scalar source identities form a cycle")
+        sources.get(value.rendered).foreach: existing =>
+          if !sameSource(existing, value) then
+            invalid("one retained source identity describes conflicting values")
+        sources.update(value.rendered, value)
+        activeSources += value.rendered
+    def leave(value: Value): Unit =
+      active.remove(value)
+      if value.source.nonEmpty then activeSources -= value.rendered
+    def uniform(value: Value, depth: Int): ScalarDerivation =
+      enter(value, depth)
+      try
+        if value.scalarSources.nonEmpty then
+          invalid("a retained shape node cannot carry independent scalar source attachments")
+        value.source match
+          case Some(ShapedSource.Fill(scalar)) =>
+            if value.valueType.dimensions.isEmpty || scalar.valueType.dimensions.nonEmpty ||
+              value.valueType.kind != ScalarKind.Real || scalar.valueType.kind != ScalarKind.Real ||
+              value.valueType.dimension != scalar.valueType.dimension
+            then invalid("uniform scalar derivation requires an exact typed Real fill")
+            val derived = scalarValue(scalar, depth + 1)
+            derived.copy(fillOccurrences = value.rendered +: derived.fillOccurrences)
+          case Some(ShapedSource.View(parent, projection)) =>
+            val (path, inputPath) = projection match
+              case selected: KernelShapeIndexSnapshot => selected.path -> selected.input
+              case selected: KernelShapeViewSnapshot => selected.path -> selected.input
+            if inputPath != parent.rendered || path != value.rendered || path == inputPath ||
+              value.valueType.kind != parent.valueType.kind ||
+              value.valueType.dimension != parent.valueType.dimension
+            then
+              invalid(
+                "uniform scalar derivation requires the actual retained view input and result"
+              )
+            uniform(parent, depth + 1)
+          case _ => invalid("a deferred scalar projection must descend from an actual uniform fill")
+      finally leave(value)
+    def scalarValue(value: Value, depth: Int): ScalarDerivation =
+      if depth >= 512 then invalid("scalar source exceeds the supported dependency depth")
+      Option(memo.get(value)) match
+        case Some(derived) => derived
+        case None =>
+          if value.valueType.dimensions.nonEmpty then
+            invalid("uniform scalar derivation requires a scalar consumer")
+          val derived = value.source match
+            case Some(_: ShapedSource.View) =>
+              val result = uniform(value, depth)
+              if result.value.valueType != value.valueType then
+                invalid("derived scalar disagrees with its retained projection type")
+              result
+            case Some(_: ShapedSource.Fill) =>
+              invalid("a scalar consumer cannot directly contain a shaped fill")
+            case _ =>
+              enter(value, depth)
+              try
+                if value.source.nonEmpty && value.scalarSources.nonEmpty then
+                  invalid(
+                    "a retained scalar read cannot carry independent scalar source attachments"
+                  )
+                val grouped = value.scalarSources.groupBy(_.rendered)
+                if grouped.values.exists(_.size != 1) then
+                  invalid("scalar source attachments must have distinct source identities")
+                val occurrences = scalarLeafOccurrences(value.rendered, grouped.keys.toVector)
+                if occurrences.toSet != grouped.keySet then
+                  invalid(
+                    "scalar source attachment is not used by its complete consumer expression"
+                  )
+                val leaves = value.scalarSources.map: source =>
+                  if !source.source.exists(_.isInstanceOf[ShapedSource.View]) then
+                    invalid("a scalar source attachment must retain its actual projection chain")
+                  source.rendered -> scalarValue(source, depth + 1)
+                val byToken = leaves.toMap
+                val reads = value.reads ++ leaves.flatMap(_._2.value.reads) ++
+                  value.source.toVector.collect { case ShapedSource.Read(reference) => reference }
+                ScalarDerivation(
+                  value.copy(
+                    rendered = replaceScalarLeaves(
+                      value.rendered,
+                      leaves.map((token, result) => token -> result.value.rendered)
+                    ),
+                    reads = reads.distinct,
+                    source = None,
+                    scalarSources = Vector.empty
+                  ),
+                  occurrences.flatMap(token => byToken(token).fillOccurrences)
+                )
+              finally leave(value)
+          memo.put(value, derived)
+          derived
+    scalarValue(input, 0)
+
+  /** Compact derived live graph. Fill labels are the actual retained source identities, never
+    * scalar text. Each body is retained once and direct demand edges remain unexpanded. Original
+    * shape/ownership/effect validation must precede bridge use of this representation.
+    */
+  final case class LiveFill(identity: String, body: Value)
+  final case class EventResource(wrappers: Long, bytes: Long):
+    def +(other: EventResource): EventResource = EventResource(
+      saturatingAdd(wrappers, other.wrappers, EventModuleWrappers),
+      saturatingAdd(bytes, other.bytes, EventModuleBytes)
+    )
+  val EventConsumerWrappers: Long = 4096L
+  val EventConsumerBytes: Long = 1024L * 1024L
+  val EventModuleWrappers: Long = 65536L
+  val EventModuleBytes: Long = 16L * 1024L * 1024L
+
+  private def saturatingAdd(left: Long, right: Long, limit: Long): Long =
+    if left > limit || right > limit || left > limit - right then limit + 1L
+    else left + right
+
+  private def saturatingMultiply(left: Long, right: Long, limit: Long): Long =
+    if left == 0L || right == 0L then 0L
+    else if left > limit || right > limit || left > limit / right then limit + 1L
+    else left * right
+
+  final case class LiveScalarProgram(roots: Vector[Value], fills: Vector[LiveFill]):
+    private lazy val identities = fills.map(_.identity)
+    def demands(value: Value): Vector[String] = scalarLeafOccurrences(value.rendered, identities)
+
+    /** Multiplicity is saturated at two; a diamond never creates an occurrence vector. */
+    lazy val requiresSharing: Boolean =
+      val counts = mutable.HashMap.empty[String, Int].withDefaultValue(0)
+      def count(identity: String, amount: Int): Unit =
+        counts.update(identity, (counts(identity) + amount).min(2))
+      roots.foreach(root => demands(root).foreach(count(_, 1)))
+      fills.reverseIterator.foreach(fill =>
+        demands(fill.body).foreach(count(_, counts(fill.identity)))
+      )
+      counts.values.exists(_ > 1)
+
+    /** Conservative target-text preflight over the unexpanded DAG. The native boundary repeats
+      * admission using its allocated target names; the target parser has an independent byte/depth
+      * bound. Both multiplicity and byte addition saturate before any output allocation.
+      */
+    def eventResource(owner: String): EventResource =
+      if !requiresSharing then EventResource(0L, 0L)
+      else
+        val costs = mutable.HashMap.empty[String, EventResource]
+        val privateNameBytes =
+          owner.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong +
+            64L
+        def expression(value: Value): EventResource =
+          val base = value.rendered.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
+          demands(value).foldLeft(EventResource(0L, base)): (cost, identity) =>
+            val dependency = costs(identity)
+            EventResource(
+              saturatingAdd(cost.wrappers, dependency.wrappers, EventConsumerWrappers),
+              saturatingAdd(cost.bytes, dependency.bytes, EventConsumerBytes)
+            )
+        fills.foreach: fill =>
+          val body = expression(fill.body)
+          costs.update(
+            fill.identity,
+            EventResource(
+              saturatingAdd(1L, body.wrappers, EventConsumerWrappers),
+              saturatingAdd(body.bytes, 96L + 4L * privateNameBytes, EventConsumerBytes)
+            )
+          )
+        val expanded = roots.foldLeft(EventResource(0L, 0L)): (cost, root) =>
+          val body = expression(root)
+          EventResource(
+            saturatingAdd(cost.wrappers, body.wrappers, EventConsumerWrappers),
+            saturatingAdd(cost.bytes, body.bytes, EventConsumerBytes)
+          )
+        val declarations = saturatingMultiply(
+          fills.size.toLong,
+          64L + 2L * privateNameBytes,
+          EventConsumerBytes
+        )
+        EventResource(
+          expanded.wrappers,
+          saturatingAdd(expanded.bytes, declarations, EventConsumerBytes)
+        )
+
+  def requireEventResource(resource: EventResource, module: Boolean = false): Unit =
+    val wrappers = if module then EventModuleWrappers else EventConsumerWrappers
+    val bytes = if module then EventModuleBytes else EventConsumerBytes
+    if resource.wrappers > wrappers || resource.bytes > bytes then
+      reject(Diagnostic(
+        "NODAL-SHAPE-043-010",
+        s"live event ${
+            if module then "module" else "consumer"
+          } resource limit exceeded before expansion " +
+          s"(maximum $wrappers demand wrappers and $bytes expression bytes)"
+      ))
+
+  def deriveLiveScalars(inputs: Vector[Value]): LiveScalarProgram =
+    val memo = new java.util.IdentityHashMap[Value, (Value, Int)]()
+    val active = new java.util.IdentityHashMap[Value, java.lang.Boolean]()
+    val activeSources = mutable.HashSet.empty[String]
+    val fills = mutable.LinkedHashMap.empty[String, LiveFill]
+    def invalid(message: String): Nothing = reject(Diagnostic("NODAL-SHAPE-043-007", message))
+    def visit(input: Value, depth: Int): (Value, Int) =
+      if depth >= 512 || active.containsKey(input) then
+        invalid("live scalar source is cyclic or exceeds the supported dependency depth")
+      Option(memo.get(input)) match
+        case Some(result) =>
+          if depth + result._2 >= 512 then
+            invalid("live scalar source exceeds supported dependency depth")
+          result
+        case None =>
+          active.put(input, java.lang.Boolean.TRUE)
+          var height = 0
+          def child(value: Value): Value =
+            val (derived, childHeight) = visit(value, depth + 1)
+            height = height.max(childHeight + 1)
+            derived
+          try
+            val result = input.source match
+              case Some(ShapedSource.Fill(scalar)) =>
+                if input.valueType.dimensions.isEmpty || scalar.valueType.dimensions.nonEmpty ||
+                  input.valueType.kind != ScalarKind.Real ||
+                  scalar.valueType.kind != ScalarKind.Real ||
+                  input.valueType.dimension != scalar.valueType.dimension ||
+                  input.scalarSources.nonEmpty
+                then invalid("live scalar derivation requires an exact typed Real fill")
+                if !activeSources.add(input.rendered) then
+                  invalid("retained fill identities form a cycle")
+                val body = try child(scalar)
+                finally activeSources -= input.rendered
+                fills.get(input.rendered).foreach: existing =>
+                  if existing.body != body then
+                    invalid("one retained fill identity describes conflicting values")
+                fills.getOrElseUpdate(input.rendered, LiveFill(input.rendered, body))
+                Value(input.rendered, scalar.valueType, body.allReads)
+              case Some(ShapedSource.View(parent, projection)) =>
+                val (path, inputPath) = projection match
+                  case selected: KernelShapeIndexSnapshot => selected.path -> selected.input
+                  case selected: KernelShapeViewSnapshot => selected.path -> selected.input
+                if inputPath != parent.rendered || path != input.rendered || path == inputPath ||
+                  input.valueType.kind != parent.valueType.kind ||
+                  input.valueType.dimension != parent.valueType.dimension ||
+                  input.scalarSources.nonEmpty
+                then
+                  invalid(
+                    "live scalar derivation requires the actual retained view input and result"
+                  )
+                val derived = child(parent)
+                derived.copy(valueType = input.valueType.copy(dimensions = Vector.empty))
+              case _ =>
+                if input.valueType.dimensions.nonEmpty then
+                  invalid("live consumer requires a scalar result")
+                if input.source.nonEmpty && input.scalarSources.nonEmpty then
+                  invalid(
+                    "a retained scalar read cannot carry independent scalar source attachments"
+                  )
+                val tokens = input.scalarSources.map(_.rendered)
+                if tokens.distinct.size != tokens.size then
+                  invalid("duplicate retained scalar source identity")
+                if scalarLeafOccurrences(input.rendered, tokens).toSet != tokens.toSet then
+                  invalid("unused retained scalar source attachment")
+                val leaves = input.scalarSources.map: source =>
+                  if !source.source.exists(_.isInstanceOf[ShapedSource.View]) then
+                    invalid("a scalar source attachment must retain its actual projection chain")
+                  source.rendered -> child(source)
+                input.copy(
+                  rendered = replaceScalarLeaves(
+                    input.rendered,
+                    leaves.map((token, value) => token -> value.rendered)
+                  ),
+                  reads =
+                    (input.reads ++ leaves.flatMap(_._2.reads) ++ input.source.toVector.collect {
+                      case ShapedSource.Read(reference) => reference
+                    }).distinct,
+                  source = None,
+                  scalarSources = Vector.empty
+                )
+            val derived = result -> height
+            memo.put(input, derived)
+            derived
+          finally active.remove(input)
+    val roots = inputs.map(input =>
+      if input.valueType.dimensions.nonEmpty then invalid("live consumer requires a scalar result")
+      visit(input, 0)._1
+    )
+    LiveScalarProgram(roots, fills.values.toVector)
 
   final case class VariableRecord(
       variable: Variable,
@@ -47,7 +571,7 @@ private[nodal] object AnalogProceduralRuntime:
 
   final case class AssignmentRecord(
       identity: String,
-      target: Variable,
+      target: StorageReference,
       value: Value,
       authoredOrder: Int,
       scope: Vector[String],
@@ -83,7 +607,10 @@ private[nodal] object AnalogProceduralRuntime:
       variables: Vector[VariableRecord],
       assignments: Vector[AssignmentRecord],
       controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None,
-      controlExpressions: Vector[ControlExpressionRecord] = Vector.empty
+      controlExpressions: Vector[ControlExpressionRecord] = Vector.empty,
+      generatedOwner: Option[String] = None,
+      generatedInduction: Option[String] = None,
+      identityPrefix: Option[String] = None
   )
 
   final case class Diagnostic(code: String, message: String, path: Option[String] = None):
@@ -97,12 +624,14 @@ private[nodal] object AnalogProceduralRuntime:
   private[nodal] def reject(diagnostic: Diagnostic): Nothing =
     scala.util.Failure[Nothing](new Failure(diagnostic)).get
 
-  private final case class MutableVariable(record: VariableRecord, var initialized: Boolean)
+  private final case class MutableVariable(record: VariableRecord)
 
-  final class Recorder(val owner: String):
+  final class Recorder(val owner: String, identityPrefix: Option[String] = None):
+    private val identityOwner = identityPrefix.getOrElse(owner)
     require(owner.nonEmpty, "procedural owner must be non-empty")
 
     private val variables = mutable.LinkedHashMap.empty[String, MutableVariable]
+    private var coverage = AnalogStorageCoverage.State.empty
     private val assignments = mutable.ArrayBuffer.empty[AssignmentRecord]
     private val statements = mutable.HashSet.empty[String]
     private var procedureActive = false
@@ -133,7 +662,8 @@ private[nodal] object AnalogProceduralRuntime:
     private def isVisible(variable: Variable): Boolean =
       scopeStack.startsWith(variable.declarationScope)
 
-    private def resolve(variable: Variable): MutableVariable =
+    private def resolve(reference: StorageReference): MutableVariable =
+      val variable = reference.root
       if variable.owner != owner then
         fail(
           "NODAL-ANALOG-033-009",
@@ -148,6 +678,13 @@ private[nodal] object AnalogProceduralRuntime:
           Some(variable.identity)
         )
       )
+      if state.record.variable != variable then
+        fail(
+          "NODAL-ANALOG-033-017",
+          "procedural storage reference disagrees with its declaration",
+          Some(reference.identity)
+        )
+      AnalogStorageCoverage.normalize(reference)
       if !isVisible(variable) then
         fail(
           "NODAL-ANALOG-033-010",
@@ -167,6 +704,20 @@ private[nodal] object AnalogProceduralRuntime:
           s"initializer kind '${initializer.valueType.kind.label}' is incompatible with '${variable.valueType.kind.label}'",
           Some(variable.identity)
         )
+      if initializer.valueType.dimensions != variable.valueType.dimensions then
+        fail(
+          "NODAL-ANALOG-033-004",
+          "initializer shape must exactly match the procedural variable",
+          Some(variable.identity)
+        )
+      if variable.valueType.dimensions.nonEmpty &&
+        initializer.valueType.kind != variable.valueType.kind
+      then
+        fail(
+          "NODAL-ANALOG-033-004",
+          "shaped initialization requires exact element kind",
+          Some(variable.identity)
+        )
       if initializer.valueType.dimension != variable.valueType.dimension then
         fail(
           "NODAL-ANALOG-033-005",
@@ -174,14 +725,45 @@ private[nodal] object AnalogProceduralRuntime:
           Some(variable.identity)
         )
 
-    private def validateReads(value: Value): Unit = value.reads.foreach: read =>
-      val state = resolve(read)
-      if !state.initialized then
-        fail(
-          "NODAL-ANALOG-033-011",
-          s"procedural variable '${read.identity}' is read before initialization or an earlier assignment",
-          Some(read.identity)
-        )
+    private def validateValueSource(value: Value): Unit =
+      def invalid(): Nothing = fail(
+        "NODAL-ANALOG-033-004",
+        "procedural shaped source disagrees with its exact shape, kind, or physical dimension"
+      )
+      value.scalarSources.foreach(validateValueSource)
+      value.source match
+        case None => if value.valueType.dimensions.nonEmpty then invalid()
+        case Some(ShapedSource.Fill(scalar)) =>
+          validateValueSource(scalar)
+          if value.valueType.dimensions.isEmpty || scalar.valueType.dimensions.nonEmpty ||
+            value.valueType.kind != ScalarKind.Real || scalar.valueType.kind != ScalarKind.Real ||
+            value.valueType.dimension != scalar.valueType.dimension
+          then invalid()
+        case Some(ShapedSource.Read(reference)) =>
+          if value.valueType != reference.valueType then invalid()
+        case Some(ShapedSource.View(input, projection)) =>
+          validateValueSource(input)
+          val (owner, parent) = projection match
+            case index: KernelShapeIndexSnapshot => (index.owner, index.input)
+            case view: KernelShapeViewSnapshot => (view.owner, view.input)
+          val selected = StorageSelection(
+            Variable(parent, owner, Vector.empty, input.valueType),
+            Vector(projection)
+          )
+          if input.valueType.dimensions.isEmpty || value.valueType != selected.valueType then
+            invalid()
+          AnalogStorageCoverage.normalize(selected)
+
+    private def validateReads(value: Value): Unit =
+      validateValueSource(value)
+      value.allReads.distinct.foreach: read =>
+        resolve(read)
+        if !coverage.contains(read) then
+          fail(
+            "NODAL-ANALOG-033-011",
+            s"procedural variable '${read.identity}' is read before initialization or an earlier assignment",
+            Some(read.identity)
+          )
 
     def procedure[A](body: => A): A =
       if procedureActive then
@@ -218,7 +800,7 @@ private[nodal] object AnalogProceduralRuntime:
       requireProcedure(Option(identity).filter(_.nonEmpty))
       if identity.trim.isEmpty then
         fail("NODAL-ANALOG-033-001", "procedural variable identity must be non-empty")
-      val canonical = s"$owner.${scopeStack.mkString(".")}.${identity.trim}"
+      val canonical = s"$identityOwner.${scopeStack.mkString(".")}.${identity.trim}"
       if variables.contains(canonical) then
         fail(
           "NODAL-ANALOG-033-002",
@@ -231,7 +813,14 @@ private[nodal] object AnalogProceduralRuntime:
           "Boolean procedural variables must be dimensionless",
           Some(canonical)
         )
+      if valueType.dimensions.nonEmpty && valueType.kind != ScalarKind.Real then
+        fail(
+          "NODAL-ANALOG-033-004",
+          "shaped procedural storage requires Real elements",
+          Some(canonical)
+        )
       val variable = Variable(canonical, owner, scopeStack, valueType)
+      AnalogStorageCoverage.normalize(variable)
       initializer.foreach(validateInitializer(variable, _))
       initializer.foreach(validateReads)
       val record = VariableRecord(
@@ -241,26 +830,37 @@ private[nodal] object AnalogProceduralRuntime:
         variables.size,
         variables.size + assignments.size
       )
-      variables += canonical -> MutableVariable(record, initializer.nonEmpty)
+      variables += canonical -> MutableVariable(record)
+      coverage = if initializer.nonEmpty then coverage + canonical else coverage - canonical
       variable
 
-    def read(variable: Variable): Value =
+    def read(variable: StorageReference): Value =
       requireProcedure(Some(variable.identity))
-      val state = resolve(variable)
-      if !state.initialized then
+      resolve(variable)
+      if !coverage.contains(variable) then
         fail(
           "NODAL-ANALOG-033-011",
           s"procedural variable '${variable.identity}' is read before initialization or an earlier assignment",
           Some(variable.identity)
         )
-      Value(variable.identity, variable.valueType, Vector(variable))
+      Value(
+        variable.identity,
+        variable.valueType,
+        Vector(variable),
+        Some(ShapedSource.Read(variable))
+      )
 
-    def reference(variable: Variable): Value =
-      Value(variable.identity, variable.valueType, Vector(variable))
+    def reference(variable: StorageReference): Value =
+      Value(
+        variable.identity,
+        variable.valueType,
+        Vector(variable),
+        Some(ShapedSource.Read(variable))
+      )
 
     def assign(
         identity: String,
-        target: Variable,
+        target: StorageReference,
         value: Value,
         guard: Option[Value] = None,
         analyses: Set[String] = Set("dc", "transient"),
@@ -269,19 +869,27 @@ private[nodal] object AnalogProceduralRuntime:
       requireProcedure(Option(identity).filter(_.nonEmpty))
       if identity.trim.isEmpty then
         fail("NODAL-ANALOG-033-006", "procedural statement identity must be non-empty")
-      val canonicalStatement = s"$owner.${identity.trim}"
+      val canonicalStatement = s"$identityOwner.${identity.trim}"
       if statements.contains(canonicalStatement) then
         fail(
           "NODAL-ANALOG-033-007",
           s"duplicate procedural statement identity '$canonicalStatement'",
           Some(canonicalStatement)
         )
-      val targetState = resolve(target)
+      resolve(target)
       validateReads(value)
       if !compatible(value.valueType.kind, target.valueType.kind) then
         fail(
           "NODAL-ANALOG-033-012",
           s"assigned kind '${value.valueType.kind.label}' is incompatible with '${target.valueType.kind.label}'",
+          Some(canonicalStatement)
+        )
+      if value.valueType.dimensions != target.valueType.dimensions ||
+        target.valueType.dimensions.nonEmpty && value.valueType.kind != target.valueType.kind
+      then
+        fail(
+          "NODAL-ANALOG-033-012",
+          "assignment requires exact shape and element kind",
           Some(canonicalStatement)
         )
       if value.valueType.dimension != target.valueType.dimension then
@@ -317,7 +925,7 @@ private[nodal] object AnalogProceduralRuntime:
         variables.size + assignments.size
       )
       statements += canonicalStatement
-      targetState.initialized = true
+      coverage = coverage.write(target)
 
     def snapshot: Snapshot = Snapshot(
       owner,

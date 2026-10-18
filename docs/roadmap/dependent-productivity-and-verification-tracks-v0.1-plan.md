@@ -1,5 +1,7 @@
 # Foundation-gated FPGA and verification tracks v0.1 plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative roadmap target
 **Revision:** 0.6
 **Updated:** 2026-09-29
@@ -249,7 +251,7 @@ simulation, synthesis or formal obligations solely for comment syntax.
 
 ## Foundation completion barrier
 
-The barrier opens only when every checkbox in the Foundation track is complete with required CI/evidence, including Increments 143-149, architecture-only Increments 150-151 defined by the ASIC/memory extension plan, Foundation Increment 152, and any later Foundation item added before release.
+The barrier opens only when every checkbox in the Foundation track is complete with focused local checks and architecture review under the prototype execution policy, including Increments 143-149, architecture-only Increments 150-151 defined by the ASIC/memory extension plan, Foundation Increment 152, and any later Foundation item added before release.
 
 The three dependent tracks are then independently schedulable unless they declare additional track-local prerequisites. Within verification, [`nodal-hvl-simulation-v0.1-plan.md`](nodal-hvl-simulation-v0.1-plan.md) defines the shared LIVE workstream and independent analog-live, mixed-signal-live, portable-projection and commercial-profile release gates.
 
@@ -260,42 +262,52 @@ The three dependent tracks are then independently schedulable unless they declar
 Numbering restarts for this track.
 
 - [ ] **FPGA Increment 1 — FPGA public platform/resource/constraint API gate**
+  - Architecture review: record completion once under **FPGA-001.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Freeze board/device/resource/project APIs against Foundation Constraint IR and Interface identities.
   - Compile positive/negative candidates for clocks, pins/banks, connectors, protocol resources, implementation intent, vendor extensions, and stable semantic constraint targets.
 
 - [ ] **FPGA Increment 2 — Board/device/resource database and binding**
+  - Architecture review: record completion once under **FPGA-002.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement versioned device/package/board schemas, oscillators, pins/banks/voltages, connectors, common peripherals, capability matching, project resource binding, and reproducible board provenance.
 
 - [ ] **FPGA Increment 3 — Portable timing and I/O constraint engine**
+  - Architecture review: record completion once under **FPGA-003.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement primary/generated clocks, declared relationships, asynchronous groups, I/O delays, explicit max/min/multicycle/false-path constraints, interface timing contracts, I/O electrical intent, stable target resolution, and constraint manifests.
   - Never infer unsafe timing exceptions heuristically.
 
 - [ ] **FPGA Increment 4 — AMD Vivado constraint/build backend**
+  - Architecture review: record completion once under **FPGA-004.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Generate ordered XDC/Tcl for timing, I/O, clocking, supported physical intent, build, report, and programming flows.
   - Validate semantic targets before/after synthesis and retain Vivado version/options/checkpoints/reports.
 
 - [ ] **FPGA Increment 5 — Intel Quartus and open-source FPGA backends**
+  - Architecture review: record completion once under **FPGA-005.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Generate SDC/QSF and Quartus build/report flows.
   - Add Yosys/nextpnr architecture-appropriate PCF/LPF/PDC/CST/clock configuration as supported by selected families.
   - Keep unsupported physical constraints explicit rather than approximated.
 
 - [ ] **FPGA Increment 6 — Additional vendor profiles and constraint coverage**
+  - Architecture review: record completion once under **FPGA-006.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Add Microchip and selected Lattice/vendor flows according to demand.
   - Implement unmatched/multi-match/stale-target, unconstrained-clock/path, exception-audit, bank-voltage, pin-conflict, generated-clock, and CDC-constraint coverage reports across all backends.
 
 - [ ] **FPGA Increment 7 — Reproducible build, program, artifact, and normalized reporting**
+  - Architecture review: record completion once under **FPGA-007.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement `nodal fpga build/program/report`-style flows, tool lock/provenance, cache keys, checkpoints/bitstreams, normalized timing/resource/power/clock/I-O reports, and source-correlated diagnostics.
 
 - [ ] **FPGA Increment 8 — Timing-closure feedback and bounded design-space exploration**
+  - Architecture review: record completion once under **FPGA-008.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Map critical paths and failures back to Nodal expressions, pipelines, interfaces, memories, FSMs, domains, and generated instances.
   - Produce explicit pipeline/ready-path/memory/DSP/fanout/placement recommendations with latency/protocol/evidence impact.
   - Support bounded strategy/seed exploration under user budgets and produce Pareto timing/resource/power reports; never silently mutate the accepted design.
 
 - [ ] **FPGA Increment 9 — Vendor primitive/IP abstraction and debug instrumentation**
+  - Architecture review: record completion once under **FPGA-009.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Qualify target-neutral memory/DSP/PLL/clock-buffer/I-O-delay/SERDES/FIFO/ECC/transceiver abstractions where portable contracts are possible.
   - Add typed probes/triggers and adapters for ILA, Signal Tap, and open-source analyzers with source/waveform correlation.
 
 - [ ] **FPGA Increment 10 — Board bring-up, IP packaging, HIL, and ecosystem qualification**
+  - Architecture review: record completion once under **FPGA-010.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Generate reusable IP packaging metadata, software collateral, memory/interrupt/register integration artifacts, board self-tests, programming/HIL flows, and a supported board/vendor/tool capability matrix.
   - Qualify representative complex FPGA subsystem builds across at least one commercial and one open-source flow.
 
@@ -306,6 +318,7 @@ Numbering restarts for this track.
 Numbering restarts for this track. Live Nodal HVL is the primary execution path. Increments 1-5 implement live capability; Increments 6-10 add portable/capturable generated projections and parity without restricting live tests.
 
 - [ ] **Digital Verification Increment 1 — Nodal HVL native digital simulation vertical slice**
+  - Architecture review: record completion once under **DV-001.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement one live Verification runtime vertical slice for tests, deterministic processes/time, clocks/resets, typed transactions, direct logical Interface access, failures, waveforms, seeds, replay, and normalized results.
   - Permit ordinary Scala host control and reference-model logic around typed Nodal operations; do not require generated UVM or standalone HDL representability.
   - Implement Verilator as the primary fast native adapter by compiling generated Verilog to a C++ DUT model, generating a stable C ABI wrapper, compiling/linking a cached native shared library, and binding it through the approved JVM native mechanism. Use direct batched model access; keep Nodal HVL on the JVM/runtime side.
@@ -314,27 +327,33 @@ Numbering restarts for this track. Live Nodal HVL is the primary execution path.
   - Add differential smoke tests across native Verilator and native Icarus for combinational settle, sequential/nonblocking updates, clocks/resets, waits, multiple clocks, inout/high-Z where supported, timeout, finish, waves, replay, and source-level failures. Generated UVM and generated standalone HDL testbenches are not involved.
 
 - [ ] **Digital Verification Increment 2 — Scenarios, sequences, constrained stimulus, and replay**
+  - Architecture review: record completion once under **DV-002.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement reusable scenarios/sequence graphs, random variables/constraints/distributions, deterministic seed hierarchy, value-stream capture, exact replay, parallel stimulus, cancellation, timeout, and capability diagnostics.
   - Permit richer live-only host scenarios while identifying explicitly portable scenarios and deterministic sidecar boundaries.
 
 - [ ] **Digital Verification Increment 3 — Agents, drivers, monitors, scoreboards, and reference models**
+  - Architecture review: record completion once under **DV-003.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement active/passive agents, typed drivers/monitors bound to logical Interfaces, analysis streams, transaction correlation, protocol timing policies, scoreboards, reference-model calls, and reusable BFM/VIP base classes.
   - Support both live components using ordinary Scala/reference models and portable components whose complete selected semantics can be captured.
 
 - [ ] **Digital Verification Increment 4 — Functional coverage and verification reporting**
+  - Architecture review: record completion once under **DV-004.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement canonical coverpoints/bins/crosses/transition coverage where meaningful, coverage groups/sampling, stable IDs, merge/report, source mapping, exclusions/waivers, and optional UCIS interchange.
 
 - [ ] **Digital Verification Increment 5 — Properties, protocol checks, and register-model verification**
+  - Architecture review: record completion once under **DV-005.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Integrate the Foundation property layer with simulation checks and formal hooks.
   - Generate register frontdoor/backdoor operations, predictors, access-policy checks, reset/side-effect/collision coverage, and register scoreboards from canonical Register IR.
 
 - [ ] **Digital Verification Increment 6 — Portable Verilog testbench generation**
+  - Architecture review: record completion once under **DV-006.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Lower the supported **portable/capturable** Verification IR subset through Procedural HDL Testbench IR and render standalone Verilog-2005 testbenches for generated portable Verilog RTL.
   - Generate deterministic DUT wrappers, clocks/resets, flattened Interface helpers, tasks/functions, monitors/checks, error counters, wave controls, source maps, manifests, and vector/expected-result replay files where required.
   - Reject operations that are neither directly representable nor legally precomputable; do not silently reduce test intent. Rejection of this projection does not invalidate live execution.
   - Ownership: CAP-01 through CAP-05 and VTB-01 through VTB-03; use the independent VTB capability set, library and generated-language IR. No UVM implementation prerequisite.
 
 - [ ] **Digital Verification Increment 7 — Standalone open-source Verilog testbench execution and qualification**
+  - Architecture review: record completion once under **DV-007.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Qualify Icarus as the required standalone event-driven profile for DUT plus generated `tb.v`, file I/O, timing/events, four-state behavior, inout, waveforms, timeouts, plusargs, and deterministic pass/fail.
   - Qualify a declared standalone Verilator testbench/timing subset separately with differential fixtures for timing, event ordering, two-state/four-state differences, inout, file I/O, waves, timeout, and termination.
   - Keep this mode independent of the native JVM-to-Verilator and JVM-to-Icarus adapters: no live Nodal runtime is required, and profile IDs, cache keys, manifests, and failure classes remain distinct.
@@ -342,17 +361,20 @@ Numbering restarts for this track. Live Nodal HVL is the primary execution path.
   - Ownership: VTB-04 through VTB-07. Close the VTB release independently of UVM, AMSP and aggregate XPAR completion.
 
 - [ ] **Digital Verification Increment 8 — Verification SystemVerilog and digital UVM generation**
+  - Architecture review: record completion once under **DV-008.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Render standards-oriented SystemVerilog/UVM from the portable/capturable Verification IR subset: test/env/agent/driver/monitor/sequencer/sequence/item/scoreboard/TLM/factory/config/phases/objections/coverage/reporting and UVM RAL.
   - Generate reusable packages/VIP with deterministic hierarchy/names and source maps.
   - Diagnose live-only host operations at their source locations rather than removing them or weakening the live component API.
   - Ownership: UVM-01 through UVM-06 after CAP-05, not after VTB. Capture explicit UVM-only extensions with separate typed operations and library boundaries.
 
 - [ ] **Digital Verification Increment 9 — Commercial simulator profiles**
+  - Architecture review: record completion once under **DV-009.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Qualify thin VCS-family, Questa-family, and Xcelium-family live and generated-flow profiles for compile/elaboration/run, direct runtime access or DPI/VPI as applicable, UVM library selection, waves, coverage, reporting, and known compatibility workarounds.
   - Keep common Nodal HVL and generated UVM source identical wherever standards support it; confine unavoidable vendor `ifdef`s to adapter packages/includes.
   - Ownership: UVM-07 for generated methodology qualification; direct commercial live adapters remain separate. Require an actual qualified simulator for an executable UVM claim, not every vendor family.
 
 - [ ] **Digital Verification Increment 10 — Native Verilator, native Icarus, Verilog-testbench, and UVM semantic parity**
+  - Architecture review: record completion once under **DV-010.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Run each common-subset test only through its explicitly qualified modes: native Verilator, native Icarus, generated Verilog-TB, and/or generated UVM. Capturability does not require eligibility for all four; UVM-only and VTB-only extensions stay in their own conformance suites.
   - Keep live-only tests in the live qualification matrix and record why generated projection does not apply; non-portability is not a live failure.
   - Compare canonical deterministic stimulus/value streams, transaction ordering, protocol behavior, checks, scoreboards, register behavior, coverage intent/results, timeout/cancellation/termination, replay artifacts, and source-level failure identities.
@@ -360,11 +382,13 @@ Numbering restarts for this track. Live Nodal HVL is the primary execution path.
   - Ownership: XPAR-01 through XPAR-03 and XPAR-05. Compare only qualified common semantic intersections; generated-only methodology behavior is not a live or sibling-profile parity requirement.
 
 - [ ] **Digital Verification Increment 11 — Reusable digital VIP qualification**
+  - Architecture review: record completion once under **DV-011.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Author representative shared protocol intent in Nodal HVL—at minimum `Valid`/`Stream`, APB, and AXI4-Lite or another approved protocol—with explicit live, VTB, and UVM packages or wrappers. Reuse common intent without requiring every package or extension to support every profile.
   - Qualify active/passive modes, protocol assertions, constrained traffic, coverage, scoreboards, configuration, errors, reset, backpressure, live-only extensions, portable subsets, and reuse in an external consumer project.
   - Ownership: VTB-06 and UVM-08 in their independent lanes. Common semantic VIP must not import either profile library; profile-specific wrappers and single-profile packages are valid.
 
 - [ ] **Digital Verification Increment 12 — Scale, performance, compatibility, and verification release gate**
+  - Architecture review: record completion once under **DV-012.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Exercise large testbench hierarchies, many agents, long regressions, parallel tests, deterministic caching, value/replay volume, coverage merge, procedural-Verilog generation/runtime, UVM compile/runtime scale, source-map performance, ordinary Scala reference models, and declared host effects.
   - Benchmark Verilator code generation/C++ compilation/link, cold and warm model-cache behavior, native-call batching, evaluation throughput, and memory separately from Icarus compile/VVP startup, VPI/shared-memory-or-IPC latency, event throughput, four-state transport, process cleanup, and memory.
   - Exercise many tests reusing one compiled Verilator model and many concurrent external Icarus processes; prove cache invalidation over RTL, parameters, wrapper ABI, tool versions/options, native toolchain/platform, plugins, timing, trace, coverage, and optimization settings.
@@ -381,61 +405,73 @@ Numbering restarts for this track and remains separate from Digital Verification
 The analog-live gate must be independently releasable before mixed-signal, generated Verilog-AMS, UVM-MS, or commercial-profile completion. The mixed-signal-live gate may also release before portable/generated and commercial profiles. Live Nodal HVL remains the primary user experience throughout.
 
 - [ ] **AMS Verification Increment 1 — Nodal HVL native mixed-signal simulation vertical slice**
+  - Architecture review: record completion once under **AMS-001.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - First close an analog-only live Nodal HVL vertical slice through a qualified open Verilog-A/OSDI compiler and solver: compile, start, drive, run, sample, check, waveform and normalized result.
   - Then extend the live Verification runtime to typed physical quantities, analog terminals/signal-flow values, measurements, tolerances, crossings/events, waveform stimulus, PVT/environment context, and mixed digital/analog synchronization.
   - Execute through available open Verilog-A/solver and digital adapters without requiring generated Verilog-AMS testbenches or UVM-MS.
   - Permit ordinary Scala host control and reference models; portable projection is a separately selected capability.
 
 - [ ] **AMS Verification Increment 2 — Analog/mixed-signal agents, drivers, monitors, and scoreboards**
+  - Architecture review: record completion once under **AMS-002.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement mixed-signal transaction schemas, analog stimulus sources, samplers/monitors, tolerance-aware scoreboards/reference models, event correlation, mixed interface bindings, and reusable active/passive agent patterns.
   - Distinguish live components from portable/capturable components without creating separate semantic types or weakening live behavior.
 
 - [ ] **AMS Verification Increment 3 — PVT, sweeps, stochastic stimulus, and deterministic replay**
+  - Architecture review: record completion once under **AMS-003.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Integrate Foundation environment/PVT/noise/variation semantics with constrained verification scenarios, corner matrices, Monte Carlo/mismatch seeds, deterministic run manifests, failure reduction, and replay.
   - Retain declared host inputs and simulator random-engine provenance; do not claim exact replay when evidence is insufficient.
 
 - [ ] **AMS Verification Increment 4 — Analog measurements and functional coverage**
+  - Architecture review: record completion once under **AMS-004.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Implement reusable measurements for amplitude/range, threshold/crossing, settling, overshoot, frequency/period/duty, jitter, gain, phase, integrated noise, SNR/ENOB-like metrics where mathematically defined, plus tolerance-aware bins and cross coverage.
   - Keep measurement definitions target neutral and retain waveform/source evidence.
   - Use this increment with the ANA detailed lane to close an analog-live release that does not wait for mixed-signal or generated projections.
 
 - [ ] **AMS Verification Increment 5 — Mixed-signal properties and register/control interaction**
+  - Architecture review: record completion once under **AMS-005.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Add bridge/event/control-loop checks, analog envelope assertions, initialization/settling checks, mode transition verification, mixed register/control sequences, and source-level failure correlation using Foundation property and Register IR identities.
   - Complete the MS detailed lane's bridge, synchronization, open-source co-simulation and feedback qualification before claiming mixed-signal-live release.
 
 - [ ] **AMS Verification Increment 6 — Standards-oriented Verilog-AMS testbench generation**
+  - Architecture review: record completion once under **AMS-006.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Lower the supported **portable/capturable** Verification IR subset through Procedural HDL Testbench IR and generate a capability-declared Verilog-AMS top-level testbench for a generated Verilog-AMS DUT.
   - Generate mixed hierarchy, analog stimulus sources/contributions, digital control, bridge/connect metadata, events, measurements, tolerances, checks, termination, source maps, manifests, and deterministic sidecar data where legal.
   - Rendering a Verilog-AMS file does not claim open-source executability; the selected simulator profile must prove every required digital, analog, event, analysis, connect, and solver capability.
   - A live-only test rejected by this projection remains valid for a supported live simulator profile.
 
 - [ ] **AMS Verification Increment 7 — Open-source AMS harness generation and capability-qualified execution**
+  - Architecture review: record completion once under **AMS-007.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Generate the practical open harness bundle from the portable/capturable Verification IR subset using supported Verilog-A/OSDI models, SPICE/XSPICE stimulus and analyses, digital Verilog/co-simulation collateral, replay data, and normalized results.
   - Qualify OpenVAF/ngspice and selected digital/co-simulation adapters by exact feature profile.
   - Keep this generated harness separate from the primary live runtime adapters and from full Verilog-AMS testbench execution.
   - Permit direct generated Verilog-AMS-testbench execution only for an open adapter that passes the required conformance suite; never infer full support from parsing alone.
 
 - [ ] **AMS Verification Increment 8 — UVM-MS generation from Verification IR**
+  - Architecture review: record completion once under **AMS-008.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Generate UVM-MS 1.0-oriented class and structural verification collateral from the portable/capturable Nodal HVL subset, including mixed-signal agents, analog stimulus/monitor bridges, scoreboards, transactions, coverage, configuration, and reuse of generated digital UVM components where appropriate.
   - Keep live simulation and direct HDL/open-harness projections independent of UVM-MS.
 
 - [ ] **AMS Verification Increment 9 — Commercial mixed-signal simulator profiles**
+  - Architecture review: record completion once under **AMS-009.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Qualify thin VCS-family, Questa-family, and Xcelium-family profiles for direct live Nodal HVL control according to available licensed environments and supported standards.
   - Also qualify generated Verilog-AMS and UVM-MS profiles where supported, but do not require those projections for the live adapter.
   - Isolate compile/elaboration/binding/connect-rule/real-net/waveform/license/vendor workarounds in adapter units and manifests.
   - Commercial profile availability does not block analog-live or open mixed-signal-live release.
 
 - [ ] **AMS Verification Increment 10 — Native, open-harness, Verilog-AMS-testbench, and UVM-MS semantic parity**
+  - Architecture review: record completion once under **AMS-010.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Compare only the explicitly shared semantic intersection for each qualified pair among live open execution, open AMS harness, Verilog-AMS testbench, and UVM-MS. A profile-specific environment has no parity obligation to an unsupported mode.
   - Keep live-only tests in a separate live qualification matrix with explicit non-portability reasons.
   - Compare transactions, analog stimulus, event timing within declared tolerances, measurements, scoreboards, register/control behavior, coverage intent, termination, deterministic replay artifacts, and failure IDs.
   - Classify solver, scheduling, tolerance, connect, host-effect, and unsupported-feature differences explicitly.
 
 - [ ] **AMS Verification Increment 11 — Reusable mixed-signal VIP qualification**
+  - Architecture review: record completion once under **AMS-011.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Share representative mixed-signal VIP intent in Nodal HVL and supply explicitly qualified live, open-harness, Verilog-AMS, and/or UVM-MS packages. Profile-specific wrappers are permitted; no package must support all profiles.
   - Qualify at least one converter/control-loop-oriented VIP with digital control plus analog terminals/measurements, reusable configuration, active/passive modes, scoreboards, coverage, PVT scenarios, live-only extensions, portable components, and external consumer reuse.
 
 - [ ] **AMS Verification Increment 12 — Scale, portability, and mixed-signal verification release gate**
+  - Architecture review: record completion once under **AMS-012.A** in the [main roadmap](nodal-development-todo.md); review modularity, reuse, dependency direction and scalability for later consumers.
   - Exercise multiple analog islands, many digital agents, ordinary Scala reference models, long regressions, PVT/Monte Carlo matrices, waveform/result volume, replay artifacts, generated Verilog-AMS and open-harness scale, coverage merge, UVM-MS compile/runtime scale, source maps, cancellation, crash recovery and failure reduction.
   - Publish separate analog-live, mixed-signal-live, portable/open-harness, Verilog-AMS-testbench, UVM-MS, commercial-simulator, analysis, real-net and connect-rule capability and limitations matrices plus reusable conformance kits.
   - Permit analog-live and mixed-signal-live release gates to close independently according to the detailed plan; this final umbrella gate covers the complete track rather than delaying those earlier usable releases.

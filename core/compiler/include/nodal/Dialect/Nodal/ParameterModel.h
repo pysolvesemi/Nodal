@@ -6,9 +6,14 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace nodal {
 
@@ -19,6 +24,97 @@ mlir::LogicalResult verifyParameterDeclaration(mlir::Operation *operation);
 /// Verify cross-operation constant folding, constraints, overrides,
 /// structural envelopes, and dynamic-value exclusion for the whole design.
 mlir::LogicalResult verifyParameterModel(mlir::ModuleOp module);
+
+/// Check the exclusive legacy-attribute or three-SSA-value generate bound form.
+mlir::LogicalResult verifyGeneratedBoundForm(mlir::Operation *operation);
+
+/// Conservative closed bounds over every legal parameter setting. These are
+/// mathematical integers, not evaluated defaults or a wrapping target value.
+struct ParameterIntegerBounds {
+  int64_t lower;
+  int64_t upper;
+};
+
+/// Analyze the canonical integer constant-expression DAG without substituting
+/// overridable defaults. Requires explicit finite ranges for symbolic parameters;
+/// fixed parameters retain the variability of their default expression. Unknown,
+/// cyclic, non-integer, overflowing or unsupported proofs fail closed. This
+/// bounded profile represents endpoints in signed 64-bit host metadata only.
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value value);
+
+/// Query the same conservative analysis for a canonical parameter declaration.
+/// Symbolic ranges, exclusive endpoints and intersecting constraints are retained;
+/// an overridable default alone is never a bound.
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter);
+
+/// Immutable, query-local proof DAG. Parent parameters retain declaration identity;
+/// a singleton range or equal default never converts such an atom to a literal.
+struct InstantiatedIntegerNode {
+  enum class Kind { Literal, ParentParameter, Apply, OpaqueValue };
+  Kind kind;
+  int64_t literal = 0;
+  mlir::Operation *parameter = nullptr;
+  mlir::Operation *origin = nullptr;
+  mlir::Value identity;
+  std::string opcode;
+  std::vector<std::shared_ptr<const InstantiatedIntegerNode>> operands;
+  ParameterIntegerBounds bounds;
+};
+struct InstantiatedIntegerExpression {
+  std::shared_ptr<const InstantiatedIntegerNode> root;
+  ParameterIntegerBounds bounds;
+};
+
+/// Resolve a finalized immediate instance environment, substituting actual SSA
+/// overrides, literal bindings and recursively dependent defaults. Every used
+/// formal is checked against its effective constraints over the whole actual
+/// envelope. Unknown correlation, cycles and overflow fail closed.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerParameter(mlir::Operation *instance, mlir::Operation *childParameter);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerExpression(mlir::Operation *instance, mlir::Value childExpression);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
+InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
+/// Query-only identity atom. The caller must independently prove the value's
+/// ownership and bounds; ordinary parameter interpretation never creates these.
+InstantiatedIntegerExpression makeOpaqueIntegerExpression(mlir::Value identity,
+                                                          ParameterIntegerBounds bounds);
+/// Checked composition of already proved immutable expressions. Reuses the
+/// parameter arithmetic policy and retains opaque identities through arithmetic.
+mlir::FailureOr<InstantiatedIntegerExpression>
+composeIntegerExpression(llvm::StringRef opcode,
+                         llvm::ArrayRef<InstantiatedIntegerExpression> operands);
+/// Conservative all-legal ordering, using exact identity and checked bounds.
+bool proveIntegerExpressionLess(const InstantiatedIntegerExpression &left,
+                                const InstantiatedIntegerExpression &right, bool inclusive = false);
+bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,
+                                              const InstantiatedIntegerExpression &right);
+
+/// Resolve only a direct instance in the use's immediate Module/Generate scope.
+/// Module definitions and parameter declarations have separate owner namespaces.
+mlir::LogicalResult verifyGeneratedStructuralOwnership(mlir::Operation *operation);
+mlir::Operation *resolveStructuralInstance(mlir::Operation *use, mlir::FlatSymbolRefAttr reference);
+mlir::Operation *resolveInstanceModuleDefinition(mlir::Operation *instance);
+
+/// Read-only facts from the existing checked positive generated-domain proof.
+/// No attained bounds means that the entire domain is proven empty. Otherwise
+/// the closed interval conservatively contains every attained source induction.
+struct GeneratedDomain {
+  mlir::Operation *module = nullptr;
+  mlir::Value induction;
+  InstantiatedIntegerExpression lower, upperExclusive, step;
+  uint64_t maximumTripCount = 0;
+  std::optional<ParameterIntegerBounds> attainedInductionBounds;
+};
+mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation);
+
+/// Activity facts from the same checked bound/direction/count contract. Legacy
+/// no-induction negative-step loops are retained; no lanes are enumerated.
+enum class GeneratedScopeActivity { AlwaysEmpty, AlwaysNonempty, MaybeEmpty };
+mlir::FailureOr<GeneratedScopeActivity> analyzeGeneratedScopeActivity(mlir::Operation *operation);
 
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);

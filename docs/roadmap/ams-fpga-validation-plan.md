@@ -1,5 +1,7 @@
 # AMS-to-FPGA Approximation and Validation Plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative post-preview roadmap target
 
 **Architecture:** [ADR 0011](../architecture/0011-ams-fpga-approximation-validation.md)
@@ -399,7 +401,7 @@ The FPGA validation capability is not complete until:
 7. at least one open FPGA target completes synthesis, place/route, timing, bitstream, and hardware trace validation;
 8. deadline, overflow, and hardware transport failures are visible;
 9. reports clearly state that the result validates an approximation rather than physical analog behavior;
-10. CI and retained artifacts pass for all required vertical slices.
+10. focused local positive/negative checks and the owning increment's architecture review pass; broader tool and hardware claims remain limited to actual evidence, without a CI or full-qualification merge gate.
 
 ## References
 

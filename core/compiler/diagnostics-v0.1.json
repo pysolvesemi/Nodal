@@ -9,6 +9,17 @@
     "source-range"
   ],
   "families": {
+    "iteration-bounds": [
+      "NODAL-ITERATION-043-001",
+      "NODAL-ITERATION-043-002",
+      "NODAL-ITERATION-043-003",
+      "NODAL-ITERATION-043-004"
+    ],
+    "shaped-values": [
+      "NODAL-SHAPE-043-001",
+      "NODAL-SHAPE-043-002",
+      "NODAL-SHAPE-043-010"
+    ],
     "interface": [
       "NODAL-INTERFACE-STORAGE-001",
       "NODAL-INTERFACE-ROLE-001",
@@ -149,7 +160,8 @@
       "NODAL-ACCESS-REFERENCE-001",
       "NODAL-ACCESS-PORT-001",
       "NODAL-PROBE-KIND-001",
-      "NODAL-PROBE-PROVENANCE-001"
+      "NODAL-PROBE-PROVENANCE-001",
+      "NODAL-PROBE-SCOPE-001"
     ],
     "analog-procedural-assignment": [
       "NODAL-ANALOG-033-001",
@@ -214,6 +226,8 @@
     ]
   },
   "preserved_prefixes": [
+    "NODAL-SHAPE-",
+    "NODAL-ITERATION-",
     "NODAL-BRIDGE-",
     "NODAL-BRIDGE-PROCESS-",
     "NODAL-CONSTRUCT-",

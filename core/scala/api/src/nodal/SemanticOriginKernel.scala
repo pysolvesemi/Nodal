@@ -255,10 +255,15 @@ private[nodal] final class SemanticOriginBuilder:
       Option(frame.getFileName)
         .flatMap(fileName => locateSource(fileName, frame.getClassName))
         .nonEmpty
-    val userCandidate = userFrames
-      .find: candidate =>
-        locatedConstructor(candidate)
-      .orElse(userFrames.headOption)
+    val userCandidate = userFrames.find(locatedConstructor).map: constructor =>
+      // A lexical body executes before its owning constructor returns. Its nearest
+      // same-class frame carries the authored statement location; the constructor
+      // frame only identifies the call that entered the body.
+      userFrames.find: candidate =>
+        candidate._2 < constructor._2 &&
+          candidate._1.getClassName == constructor._1.getClassName
+      .getOrElse(constructor)
+    .orElse(userFrames.headOption)
     val userIndex = userCandidate.map(_._2).getOrElse(-1)
     val user = userCandidate.map(_._1)
     val api =
@@ -658,7 +663,7 @@ private[nodal] final class SemanticOriginBuilder:
       case "input" | "analog-input" => Vector("in(")
       case "output" | "analog-output" => Vector("out(")
       case "analog-inout" => Vector("inout(")
-      case "analog-node" => Vector("node(")
+      case "analog-node" | "analog-node-array" => Vector("node(")
       case "wire" => Vector("wire(")
       case "variable" => Vector("variable(")
       case "memory" => Vector("Mem(")
@@ -743,7 +748,7 @@ private[nodal] final class SemanticOriginBuilder:
       localNames: IdentityHashMap[AnyRef, String]
   ): Option[String] =
     val operation = generatedStem(capture.site.apiOperation)
-    val shaped = Set("at", "flatten", "reshape", "map", "zip", "reduce")
+    val shaped = Set("at", "row", "plane", "flatten", "reshape", "map", "zip", "reduce")
     if !shaped.contains(operation) then None
     else
       capture.operands.headOption.flatMap:

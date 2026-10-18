@@ -4,6 +4,7 @@
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -68,17 +69,22 @@ LogicalResult verifyAnalogNoiseOperation(Operation *op) {
     return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise owner requires one body block");
   // Identity is independent of the reporting label. Reject duplicates even in a
   // bare dialect parse, not only when the optional compiler pipeline is run.
-  for (Operation &region : module->getRegion(0).front()) {
-    if (name(&region) != "nodal.analog")
-      continue;
-    if (region.getNumRegions() != 1 || !llvm::hasSingleElement(region.getRegion(0)))
-      return emitMappedFailure(op, "NODAL-ANALOG-039-002",
-                               "noise inventory contains a malformed analog region");
-    for (Operation &other : region.getRegion(0).front())
+  bool malformedInventory = false;
+  bool duplicateIdentity = false;
+  module->walk([&](nodal::AnalogOp region) {
+    if (region->getNumRegions() != 1 || !llvm::hasSingleElement(region->getRegion(0))) {
+      malformedInventory = true;
+      return;
+    }
+    for (Operation &other : region->getRegion(0).front())
       if (&other != op && name(&other) == "nodal.analog_noise" && text(&other, "source_id") == id)
-        return emitMappedFailure(op, "NODAL-ANALOG-039-002",
-                                 "noise source identity must be unique");
-  }
+        duplicateIdentity = true;
+  });
+  if (malformedInventory)
+    return emitMappedFailure(op, "NODAL-ANALOG-039-002",
+                             "noise inventory contains a malformed analog region");
+  if (duplicateIdentity)
+    return emitMappedFailure(op, "NODAL-ANALOG-039-002", "noise source identity must be unique");
   auto label = text(op, "noise_name");
   if (label.empty() ||
       llvm::any_of(label, [](char c) { return c < ' ' || c > '~' || c == '"' || c == '\\'; }))

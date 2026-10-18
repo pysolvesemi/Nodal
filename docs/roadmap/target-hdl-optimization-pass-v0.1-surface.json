@@ -210,7 +210,7 @@
     "native and process crash isolation",
     "cache and provenance integration",
     "out of tree conformance plugin",
-    "green CI"
+    "focused local positive and negative checks plus architecture review; no CI or full qualification"
   ],
   "signed_loop_preservation": {
     "signed_type_width_cast_shift_and_literal": true,

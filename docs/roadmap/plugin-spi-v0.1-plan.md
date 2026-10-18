@@ -1,5 +1,7 @@
 # Nodal Plugin SPI v0.1 Plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative roadmap target
 
 **Architecture:** [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md)
@@ -687,7 +689,7 @@ Increment 79 may be checked only when:
 8. native ABI and process-protocol compatibility policies are documented;
 9. positive and negative fixtures have stable diagnostics and source locations where applicable;
 10. external consumer fixtures use no core internals; and
-11. Core CI passes.
+11. focused local positive/negative checks and the owning increment's architecture review pass; no CI or full qualification is required.
 
 ## References
 

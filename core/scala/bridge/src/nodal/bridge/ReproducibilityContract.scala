@@ -243,15 +243,28 @@ private[nodal] object ReproducibilityContract:
       .flatMap(module => module.declarations.map(module.path -> _))
       .sortBy(_._2.path)
       .map: (modulePath, declaration) =>
-        obj(
+        obj((Vector(
           "module" -> string(modulePath),
           "semantic_path" -> string(declaration.path),
           "declaration_kind" -> string(declaration.kind),
           "data_type" -> optionalString(declaration.dataType),
-          "shape" -> string(shapeOf(declaration.dataType)),
-          "layout" -> string(layoutOf(declaration.dataType, backendProfile)),
-          "storage" -> string(storageOf(declaration.kind))
-        )
+          "shape" -> string(if declaration.conservativeDimensions.nonEmpty then
+            declaration.conservativeDimensions.mkString("x")
+          else shapeOf(declaration.dataType)),
+          "layout" -> string(if declaration.conservativeDimensions.nonEmpty then
+            "conservative-vector-row-major"
+          else if declaration.kind == "variable" &&
+            declaration.dataType.exists(_.startsWith("Vec(Real;"))
+          then
+            "procedural-real-flat-row-major"
+          else layoutOf(declaration.dataType, backendProfile)),
+          "storage" -> string(if declaration.conservativeDimensions.nonEmpty then "structural"
+          else if declaration.kind == "variable" &&
+            declaration.dataType.exists(_.startsWith("Vec(Real;"))
+          then
+            "procedural"
+          else storageOf(declaration.kind))
+        ) ++ generatedScopeFields(declaration.generatedScope))*)
     array(declarations)
 
   private def shapeOf(dataType: Option[String]): String = dataType match
@@ -274,6 +287,7 @@ private[nodal] object ReproducibilityContract:
 
   private def storageOf(kind: String): String = kind match
     case "parameter" => "symbolic-parameter"
+    case "analog-node-array" => "structural"
     case "register" => "register"
     case "memory" => "memory"
     case "wire" | "variable" | "analog-signal" => "signal"
@@ -433,8 +447,114 @@ private[nodal] object ReproducibilityContract:
         )
     array(originEntries ++ waiverEntries ++ generatedEntries)
 
+  /** Artifact projection of the authoritative snapshot graph; these fields are provenance, never an
+    * additional binding or shape proof owner.
+    */
+  private def generatedScopeFields(scope: Option[KernelGeneratedScope])
+      : Vector[(String, JsonValue)] =
+    scope.toVector.map(value =>
+      "generated_scope" -> obj(
+        "owner" -> string(value.owner),
+        "induction" -> string(value.induction)
+      )
+    )
+
+  private def conservativeBindingGraph(snapshot: ConstructionSnapshot)
+      : Vector[(String, JsonValue)] =
+    if snapshot.conservativeArrayBindings.isEmpty && snapshot.instanceArrayRoots.isEmpty then
+      Vector.empty
+    else
+      val declarations =
+        snapshot.modules.flatMap(_.declarations).map(value => value.path -> value).toMap
+      val roots = snapshot.instanceArrayRoots.map(value => value.path -> value).toMap
+      val indices = snapshot.shapeIndices.map(value => value.path -> value).toMap
+      val views = snapshot.shapeViews.map(value => value.path -> value).toMap
+      def dimensions(path: String): Vector[String] =
+        declarations.get(path).map(_.conservativeDimensions)
+          .orElse(roots.get(path).map(_.dimensions))
+          .orElse(indices.get(path).map(_.resultDimensions))
+          .orElse(views.get(path).map(_.dimensions)).getOrElse(Vector.empty)
+      def chain(path: String): Vector[String] =
+        val result = scala.collection.mutable.ArrayBuffer.empty[String]
+        val seen = scala.collection.mutable.HashSet.empty[String]
+        var next = Option(path)
+        while next.nonEmpty do
+          val current = next.get
+          if !seen.add(current) then
+            throw new IllegalArgumentException("cyclic conservative binding artifact graph")
+          result += current
+          next = indices.get(current).map(_.input).orElse(views.get(current).map(_.input))
+        result.reverse.toVector
+      def endpoint(path: String): JsonValue =
+        val projections = chain(path)
+        val root = roots.get(projections.head)
+        obj(
+          "reference" -> string(path),
+          "root" -> string(projections.head),
+          "projection_chain" -> array(projections.tail.map(string)),
+          "root_dimensions" -> array(dimensions(projections.head).map(string)),
+          "effective_dimensions" -> array(dimensions(path).map(string)),
+          "instance" -> optionalString(root.map(_.instance)),
+          "port" -> optionalString(root.map(_.port)),
+          "source" -> source(snapshot.sourceMap.find(_.semanticPath == path).map(_.source))
+        )
+      Vector(
+        "instance_array_roots" -> array(snapshot.instanceArrayRoots.sortBy(_.path).map: root =>
+          obj((Vector(
+            "path" -> string(root.path),
+            "owner" -> string(root.owner),
+            "instance" -> string(root.instance),
+            "port" -> string(root.port),
+            "dimensions" -> array(root.dimensions.map(string))
+          ) ++ generatedScopeFields(root.generatedScope))*)),
+        "conservative_array_bindings" ->
+          array(snapshot.conservativeArrayBindings.sortBy(_.path).map: binding =>
+            obj((Vector(
+              "path" -> string(binding.path),
+              "owner" -> string(binding.owner),
+              "left" -> endpoint(binding.left),
+              "right" -> endpoint(binding.right),
+              "vector_orientation" -> string("ascending"),
+              "source" ->
+                source(snapshot.sourceMap.find(_.semanticPath == binding.path).map(_.source))
+            ) ++ generatedScopeFields(binding.generatedScope))*)),
+        "structural_shape_indices" -> array(snapshot.shapeIndices.sortBy(_.path).map: value =>
+          obj((Vector(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "input" -> string(value.input),
+            "indices" -> array(value.indices.map(string)),
+            "result_dimensions" -> array(value.resultDimensions.map(string))
+          ) ++ generatedScopeFields(value.generatedScope))*)),
+        "structural_shape_views" -> array(snapshot.shapeViews.sortBy(_.path).map: value =>
+          obj((Vector(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "input" -> string(value.input),
+            "dimensions" -> array(value.dimensions.map(string)),
+            "slice" -> value.slice.map(slice =>
+              obj(
+                "axis" -> number(slice.axis),
+                "lower" -> string(slice.lower),
+                "upper_exclusive" -> string(slice.upperExclusive)
+              )
+            ).getOrElse(JNull)
+          ) ++ generatedScopeFields(value.generatedScope))*)),
+        "parameter_expressions" -> array(snapshot.parameterExpressions.sortBy(_.path).map: value =>
+          obj(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "operation" -> string(value.operation),
+            "operands" -> array(value.operands.map(string)),
+            "data_type" -> string(value.dataType),
+            "literal" -> optionalString(value.literal),
+            "unit" -> optionalString(value.unit)
+          ))
+      )
+
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
-    obj(
+    val nodeSelections = snapshot.shapeIndices.filter(_.sourceUses.nonEmpty).sortBy(_.path)
+    JObject(Vector(
       "root" -> string(snapshot.root),
       "modules" -> array(
         snapshot.modules.sortBy(_.path).map: module =>
@@ -455,24 +575,26 @@ private[nodal] object ReproducibilityContract:
             ),
             "declarations" -> array(
               module.declarations.sortBy(_.path).map: declaration =>
-                obj(
+                obj((Vector(
                   "path" -> string(declaration.path),
                   "kind" -> string(declaration.kind),
                   "name" -> string(declaration.name),
                   "data_type" -> optionalString(declaration.dataType),
                   "domain" -> optionalString(declaration.domain),
                   "attributes" -> attributes(declaration.attributes)
-                )
+                ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
+                  "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
+                ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
             ),
             "instances" -> array(
               module.instances.sortBy(_.path).map: instance =>
-                obj(
+                obj((Vector(
                   "path" -> string(instance.path),
                   "child_module" -> string(instance.childModule),
                   "lexical_domain" -> optionalString(instance.lexicalDomain),
                   "bindings" -> attributes(instance.bindings),
                   "parameter_bindings" -> attributes(instance.parameterBindings)
-                )
+                ) ++ generatedScopeFields(instance.generatedScope))*)
             )
           )
       ),
@@ -500,11 +622,12 @@ private[nodal] object ReproducibilityContract:
       ),
       "topology" -> array(
         snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map: edge =>
-          obj(
+          obj((Vector(
             "kind" -> string(edge.kind),
             "left" -> string(edge.left),
             "right" -> string(edge.right)
-          )
+          ) ++ generatedScopeFields(edge.generatedScope) ++
+            edge.path.toVector.map(path => "path" -> string(path)))*)
       ),
       "names" -> semanticNames(snapshot),
       "origins" -> array(
@@ -560,7 +683,34 @@ private[nodal] object ReproducibilityContract:
           )
       ),
       "waivers" -> waiverInventory(snapshot)
-    )
+    ) ++ Option.when(nodeSelections.nonEmpty)(
+      "node_array_selections" -> array(nodeSelections.map: selection =>
+        obj((Vector(
+          "path" -> string(selection.path),
+          "owner" -> string(selection.owner),
+          "input" -> string(selection.input),
+          "indices" -> array(selection.indices.map(string)),
+          "source_uses" -> array(selection.sourceUses.sorted.map(string))
+        ) ++ generatedScopeFields(selection.generatedScope))*))
+    ).toVector ++
+      Option.when(snapshot.modules.exists(_.instances.exists(_.generatedScope.nonEmpty)) ||
+        snapshot.topology.exists(_.generatedScope.nonEmpty) ||
+        nodeSelections.exists(_.generatedScope.nonEmpty) ||
+        snapshot.modules.exists(_.declarations.exists(_.generatedScope.nonEmpty)))(
+        "generated_topology_scopes" -> array(snapshot.generatedRegions.sortBy(_.path).map(region =>
+          obj(
+            "path" -> string(region.path),
+            "owner" -> string(region.owner),
+            "parent" -> optionalString(region.parent),
+            "induction" -> string(region.induction),
+            "lower" -> string(region.lower),
+            "upper_exclusive" -> string(region.upperExclusive),
+            "step" -> string(region.step),
+            "maximum_trip_count" -> number(region.maximumTripCount),
+            "declarations" -> array(region.declarations.map(string))
+          )
+        ))
+      ).toVector ++ conservativeBindingGraph(snapshot))
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

@@ -2,9 +2,11 @@
 
 #include "circt/Dialect/HW/HWDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -78,6 +80,921 @@ module attributes {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kGeneratedContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedContribution.generate_0", induction_path = "GeneratedContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        %flow = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %flow) <{kind = "flow", generated_owner = "GeneratedContribution.generate_0", generated_induction = "GeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedNodeArrayModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeArray"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "GeneratedNodeArray.generate_0", induction_path = "GeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeArray.tap", generated_owner = "GeneratedNodeArray.generate_0", generated_induction = "GeneratedNodeArray.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeArray.generate_0", induction = "GeneratedNodeArray.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kNestedGeneratedNodeArrayModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeArray"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 8 : i64, step = 2 : i64, region_id = "NestedGeneratedNodeArray.generate_0", induction_path = "NestedGeneratedNodeArray.generate_0.index", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0:
+      "nodal.generate"() <{induction = "generate_1_index", lower = 2 : i64, upper = 11 : i64, step = 3 : i64, region_id = "NestedGeneratedNodeArray.generate_0.generate_1", induction_path = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      ^bb0:
+        %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeArray.nestedTap", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", generated_induction = "NestedGeneratedNodeArray.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeArray.generate_0.generate_1", induction = "NestedGeneratedNodeArray.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kNestedGeneratedNodeEquationModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeEquation"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 8 : i64, step = 2 : i64, region_id = "NestedGeneratedNodeEquation.generate_0", induction_path = "NestedGeneratedNodeEquation.generate_0.index", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0:
+      "nodal.generate"() <{induction = "generate_1_index", lower = 2 : i64, upper = 11 : i64, step = 3 : i64, region_id = "NestedGeneratedNodeEquation.generate_0.generate_1", induction_path = "NestedGeneratedNodeEquation.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      ^bb0:
+        %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeEquation.nestedTap", generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", generated_induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+        %branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", generated_induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+        "nodal.analog"() <{generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", generated_induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index", metadata = {}}> ({
+        ^bb0:
+          %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", generated_induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index"}}> : (!nodal.branch<"electrical">) -> f64
+          %resistance = "nodal.real_literal"() <{value = 1000.0 : f64, metadata = {}}> : () -> f64
+          %current = "nodal.analog_div"(%voltage, %resistance) <{metadata = {}}> : (f64, f64) -> f64
+          "nodal.contribute"(%branch, %current) <{kind = "flow", generated_owner = "NestedGeneratedNodeEquation.generate_0.generate_1", generated_induction = "NestedGeneratedNodeEquation.generate_0.generate_1.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kNestedGeneratedNodeGroupEquationsModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "NestedGeneratedNodeGroupEquations"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 8 : i64, step = 2 : i64, region_id = "NestedGeneratedNodeGroupEquations.generate_0", induction_path = "NestedGeneratedNodeGroupEquations.generate_0.index", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0:
+      "nodal.generate"() <{induction = "generate_1_index", lower = 2 : i64, upper = 11 : i64, step = 3 : i64, region_id = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction_path = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+      ^bb0:
+        %tap = "nodal.node"() <{name = "nestedTap", source_path = "NestedGeneratedNodeGroupEquations.nestedTap", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+        %return = "nodal.node"() <{name = "nestedReturn", source_path = "NestedGeneratedNodeGroupEquations.nestedReturn", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : () -> !nodal.terminal<"electrical">
+        %tap_branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+        %return_branch = "nodal.branch"(%return, %n) <{metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+        "nodal.analog"() <{generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> ({
+        ^bb0:
+          %tap_voltage = "nodal.access"(%tap_branch) <{kind = "potential", metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.branch<"electrical">) -> f64
+          %tap_resistance = "nodal.real_literal"() <{value = 1000.0 : f64, metadata = {}}> : () -> f64
+          %tap_current = "nodal.analog_div"(%tap_voltage, %tap_resistance) <{metadata = {}}> : (f64, f64) -> f64
+          "nodal.contribute"(%tap_branch, %tap_current) <{kind = "flow", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+          %return_voltage = "nodal.access"(%return_branch) <{kind = "potential", metadata = {generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index"}}> : (!nodal.branch<"electrical">) -> f64
+          %return_resistance = "nodal.real_literal"() <{value = 2000.0 : f64, metadata = {}}> : () -> f64
+          %return_current = "nodal.analog_div"(%return_voltage, %return_resistance) <{metadata = {}}> : (f64, f64) -> f64
+          "nodal.contribute"(%return_branch, %return_current) <{kind = "flow", generated_owner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1", generated_induction = "NestedGeneratedNodeGroupEquations.generate_0.generate_1.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedNodeContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "GeneratedNodeContribution.generate_0", induction_path = "GeneratedNodeContribution.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeContribution.tap", generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeContribution.generate_0", induction = "GeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "GeneratedNodeContribution.generate_0", generated_induction = "GeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedNodeDdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedNodeDdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 1 : i64, upper = 4 : i64, step = 1 : i64, region_id = "GeneratedNodeDdtContribution.generate_0", induction_path = "GeneratedNodeDdtContribution.generate_0.index", metadata = {maximum_trip_count = 3 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "GeneratedNodeDdtContribution.tap", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "GeneratedNodeDdtContribution.generate_0", induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index"}}> : (!nodal.branch<"electrical">) -> f64
+        %derivative = "nodal.analog_ddt"(%voltage) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedNodeDdtContribution.derivative", owner = "GeneratedNodeDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %derivative) <{kind = "flow", generated_owner = "GeneratedNodeDdtContribution.generate_0", generated_induction = "GeneratedNodeDdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedDdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedDdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedDdtContribution.generate_0", induction_path = "GeneratedDdtContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %derivative = "nodal.analog_ddt"(%voltage) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", initialization = "none", input_dimension = "1", metadata = {identity = "derivative"}, operator_contract = "increment35", operator_id = "GeneratedDdtContribution.derivative", owner = "GeneratedDdtContribution", result_dimension = "time^-1"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %derivative) <{kind = "potential", generated_owner = "GeneratedDdtContribution.generate_0", generated_induction = "GeneratedDdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedIdtContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedIdtContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedIdtContribution.generate_0", induction_path = "GeneratedIdtContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %rate = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %integral = "nodal.analog_idt"(%rate) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", initialization = "solver-selected", input_dimension = "time^-1*voltage", metadata = {identity = "integral"}, operator_contract = "increment35", operator_id = "GeneratedIdtContribution.integral", owner = "GeneratedIdtContribution", result_dimension = "voltage", state_id = "GeneratedIdtContribution.integral.state"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %integral) <{kind = "potential", generated_owner = "GeneratedIdtContribution.generate_0", generated_induction = "GeneratedIdtContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedTransitionContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedTransitionContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedTransitionContribution.generate_0", induction_path = "GeneratedTransitionContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %smoothed = "nodal.analog_transition"(%input) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "smoothed"}, operand_dimensions = ["voltage"], operator_contract = "increment36", operator_id = "GeneratedTransitionContribution.smoothed", output_continuity = "continuous", owner = "GeneratedTransitionContribution", result_dimension = "voltage", state_id = "GeneratedTransitionContribution.smoothed.state"}> : (!nodal.quantity<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %smoothed) <{kind = "potential", generated_owner = "GeneratedTransitionContribution.generate_0", generated_induction = "GeneratedTransitionContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedSlewContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedSlewContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedSlewContribution.generate_0", induction_path = "GeneratedSlewContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %limited = "nodal.analog_slew"(%input) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "limited"}, operand_dimensions = ["voltage"], operator_contract = "increment36", operator_id = "GeneratedSlewContribution.limited", output_continuity = "constant", owner = "GeneratedSlewContribution", result_dimension = "voltage", state_id = "GeneratedSlewContribution.limited.state"}> : (!nodal.quantity<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %limited) <{kind = "potential", generated_owner = "GeneratedSlewContribution.generate_0", generated_induction = "GeneratedSlewContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedAbsdelayContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "voltage", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Volt", symbol = "V"}> : () -> ()
+  "nodal.unit"() <{dimension = "time", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Second", symbol = "s"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedAbsdelayContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "LEVEL", type = f64, unit = @Volt, variability = "fixed"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e-9 : f64, metadata = {}, parameter_kind = "real", sym_name = "DELAY", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedAbsdelayContribution.generate_0", induction_path = "GeneratedAbsdelayContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.parameter_ref"() <{metadata = {}, parameter = @LEVEL}> : () -> !nodal.quantity<"real", "voltage">
+        %delay = "nodal.parameter_ref"() <{metadata = {}, parameter = @DELAY}> : () -> !nodal.quantity<"real", "time">
+        %delayed = "nodal.analog_absdelay"(%input, %delay) <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", input_continuity = "constant", metadata = {identity = "delayed"}, operand_dimensions = ["voltage", "time"], operator_contract = "increment36", operator_id = "GeneratedAbsdelayContribution.delayed", output_continuity = "unknown", owner = "GeneratedAbsdelayContribution", result_dimension = "voltage", state_id = "GeneratedAbsdelayContribution.delayed.state"}> : (!nodal.quantity<"real", "voltage">, !nodal.quantity<"real", "time">) -> !nodal.quantity<"real", "voltage">
+        "nodal.contribute"(%branch, %delayed) <{kind = "potential", generated_owner = "GeneratedAbsdelayContribution.generate_0", generated_induction = "GeneratedAbsdelayContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, !nodal.quantity<"real", "voltage">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedAbstimeContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedAbstimeContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedAbstimeContribution.generate_0", induction_path = "GeneratedAbstimeContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedAbstimeContribution.generate_0", generated_induction = "GeneratedAbstimeContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %now = "nodal.analog_abstime"() <{analyses = ["ac", "dc", "initialization", "noise", "operating-point", "transient"], context = "contribution", generated_owner = "GeneratedAbstimeContribution.generate_0", generated_induction = "GeneratedAbstimeContribution.generate_0.index", input_continuity = "none", metadata = {identity = "now"}, operand_dimensions = [], operator_contract = "increment36", operator_id = "GeneratedAbstimeContribution.now", output_continuity = "continuous", owner = "GeneratedAbstimeContribution", result_dimension = "time"}> : () -> f64
+        %scale = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %value = "nodal.analog_mul"(%now, %scale) <{metadata = {}}> : (f64, f64) -> f64
+        "nodal.contribute"(%branch, %value) <{kind = "potential", generated_owner = "GeneratedAbstimeContribution.generate_0", generated_induction = "GeneratedAbstimeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedBoundStepModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.unit"() <{dimension = "time", metadata = {}, native_suffix = "", scale = 1.0 : f64, sym_name = "Second", symbol = "s"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedBoundStep"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0e-9 : f64, metadata = {}, parameter_kind = "real", sym_name = "LIMIT", type = f64, unit = @Second, variability = "fixed"}> : () -> ()
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedBoundStep.generate_0", induction_path = "GeneratedBoundStep.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedBoundStep.generate_0", generated_induction = "GeneratedBoundStep.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %limit = "nodal.parameter_ref"() <{metadata = {}, parameter = @LIMIT}> : () -> !nodal.quantity<"real", "time">
+        "nodal.analog_bound_step"(%limit) <{analyses = ["transient"], context = "legacy-analog", generated_owner = "GeneratedBoundStep.generate_0", generated_induction = "GeneratedBoundStep.generate_0.index", input_continuity = "none", metadata = {identity = "step"}, operand_dimensions = ["time"], operator_contract = "increment36", operator_id = "GeneratedBoundStep.step", output_continuity = "none", owner = "GeneratedBoundStep", result_dimension = "none"}> : (!nodal.quantity<"real", "time">) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedLaplaceContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedLaplaceContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLaplaceContribution.generate_0", induction_path = "GeneratedLaplaceContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %filtered = "nodal.analog_transfer"(%input, %one, %one) <{coefficient_order = "ascending_s", contract_version = "1", denominator_size = 1 : i64, generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", initialization = "simulator-default", metadata = {semantic_path = "GeneratedLaplaceContribution.filtered"}, numerator_size = 1 : i64, operator_id = "GeneratedLaplaceContribution.filtered", owner = "GeneratedLaplaceContribution", result_dimension = "voltage", state_id = "GeneratedLaplaceContribution.filtered.state", transfer_kind = "laplace_nd"}> : (f64, f64, f64) -> f64
+        "nodal.contribute"(%branch, %filtered) <{kind = "potential", generated_owner = "GeneratedLaplaceContribution.generate_0", generated_induction = "GeneratedLaplaceContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedZiContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedZiContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedZiContribution.generate_0", induction_path = "GeneratedZiContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %input = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %interval = "nodal.real_literal"() <{value = 1.0e-9 : f64, metadata = {unit = "s"}}> : () -> f64
+        %filtered = "nodal.analog_transfer"(%input, %one, %one, %interval) <{coefficient_order = "ascending_z_inverse", contract_version = "1", denominator_size = 1 : i64, generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", initialization = "simulator-default", metadata = {semantic_path = "GeneratedZiContribution.filtered"}, numerator_size = 1 : i64, operator_id = "GeneratedZiContribution.filtered", owner = "GeneratedZiContribution", result_dimension = "voltage", state_id = "GeneratedZiContribution.filtered.state", transfer_kind = "zi_nd"}> : (f64, f64, f64, f64) -> f64
+        "nodal.contribute"(%branch, %filtered) <{kind = "potential", generated_owner = "GeneratedZiContribution.generate_0", generated_induction = "GeneratedZiContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedWhiteNoiseContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedWhiteNoiseContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedWhiteNoiseContribution.generate_0", induction_path = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %amp = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "A"}}> : () -> f64
+        %second = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "s"}}> : () -> f64
+        %squared = "nodal.analog_mul"(%amp, %amp) <{metadata = {}}> : (f64, f64) -> f64
+        %density = "nodal.analog_mul"(%squared, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %noise = "nodal.analog_noise"(%density) <{analyses = ["noise"], contract_version = "1", correlation = "independent", generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {semantic_path = "GeneratedWhiteNoiseContribution.noise"}, noise_kind = "white", noise_name = "generated white", owner = "GeneratedWhiteNoiseContribution", result_dimension = "current", source_id = "GeneratedWhiteNoiseContribution.noise"}> : (f64) -> f64
+        "nodal.contribute"(%branch, %noise) <{kind = "flow", generated_owner = "GeneratedWhiteNoiseContribution.generate_0", generated_induction = "GeneratedWhiteNoiseContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedFlickerNoiseContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedFlickerNoiseContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedFlickerNoiseContribution.generate_0", induction_path = "GeneratedFlickerNoiseContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedFlickerNoiseContribution.generate_0", generated_induction = "GeneratedFlickerNoiseContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %amp = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "A"}}> : () -> f64
+        %second = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "s"}}> : () -> f64
+        %squared = "nodal.analog_mul"(%amp, %amp) <{metadata = {}}> : (f64, f64) -> f64
+        %density = "nodal.analog_mul"(%squared, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %exponent = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %noise = "nodal.analog_noise"(%density, %exponent) <{analyses = ["noise"], contract_version = "1", correlation = "independent", generated_owner = "GeneratedFlickerNoiseContribution.generate_0", generated_induction = "GeneratedFlickerNoiseContribution.generate_0.index", metadata = {semantic_path = "GeneratedFlickerNoiseContribution.noise"}, noise_kind = "flicker", noise_name = "generated flicker", owner = "GeneratedFlickerNoiseContribution", result_dimension = "current", source_id = "GeneratedFlickerNoiseContribution.noise"}> : (f64, f64) -> f64
+        "nodal.contribute"(%branch, %noise) <{kind = "flow", generated_owner = "GeneratedFlickerNoiseContribution.generate_0", generated_induction = "GeneratedFlickerNoiseContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedTableNoiseContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "GeneratedTableNoiseContribution"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedTableNoiseContribution.generate_0", induction_path = "GeneratedTableNoiseContribution.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %amp = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "A"}}> : () -> f64
+        %second = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {unit = "s"}}> : () -> f64
+        %one = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        %squared = "nodal.analog_mul"(%amp, %amp) <{metadata = {}}> : (f64, f64) -> f64
+        %density = "nodal.analog_mul"(%squared, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %frequency = "nodal.analog_div"(%one, %second) <{metadata = {}}> : (f64, f64) -> f64
+        %noise = "nodal.analog_noise"(%frequency, %density) <{analyses = ["noise"], contract_version = "1", correlation = "independent", generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {semantic_path = "GeneratedTableNoiseContribution.noise"}, noise_kind = "table", noise_name = "generated table", owner = "GeneratedTableNoiseContribution", result_dimension = "current", source_id = "GeneratedTableNoiseContribution.noise"}> : (f64, f64) -> f64
+        "nodal.contribute"(%branch, %noise) <{kind = "flow", generated_owner = "GeneratedTableNoiseContribution.generate_0", generated_induction = "GeneratedTableNoiseContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLexicalStorage"}, sym_name = "GeneratedLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLexicalStorage.generate_0", induction_path = "GeneratedLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLexicalStorage", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLexicalStorage.state", owner = "GeneratedLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "0.0 V", initializer_kind = "real", initializer_dimension = "voltage", initializer_reads = [], generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLexicalStorage.state"}}> : () -> !nodal.variable<"real", "voltage">
+          %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLexicalStorage.assignment.read_0", owner = "GeneratedLexicalStorage", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.assignment.read_0"}}> : (!nodal.variable<"real", "voltage">) -> !nodal.quantity<"real", "voltage">
+          "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLexicalStorage.generate_0", generated_induction = "GeneratedLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLexicalStorage.assignment", value = "analog_add(GeneratedLexicalStorage.state,1.0 V)"}, owner = "GeneratedLexicalStorage", statement_id = "GeneratedLexicalStorage.assignment", value_dimension = "voltage", value_kind = "real"}> : (!nodal.variable<"real", "voltage">, !nodal.quantity<"real", "voltage">) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedConditionalLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedConditionalLexicalStorage"}, sym_name = "GeneratedConditionalLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedConditionalLexicalStorage.generate_0", induction_path = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %select = "nodal.analog_variable"() <{identity = "GeneratedConditionalLexicalStorage.select", owner = "GeneratedConditionalLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "false", initializer_kind = "boolean", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedConditionalLexicalStorage.select"}}> : () -> !nodal.variable<"boolean", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedConditionalLexicalStorage.state", owner = "GeneratedConditionalLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedConditionalLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_if"() <{metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.if_0"}> ({
+          ^bb0:
+            "nodal.analog_if_arm"() <{arm_id = "GeneratedConditionalLexicalStorage.if_0.branch_0", condition_dimension = "1", condition_kind = "boolean", condition_reads = ["GeneratedConditionalLexicalStorage.select"], condition_value = "GeneratedConditionalLexicalStorage.select", is_else = false, metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0.condition_0"}, owner = "GeneratedConditionalLexicalStorage", stage = "runtime", static_value = false, static_value_present = false}> ({
+            ^bb0:
+              %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedConditionalLexicalStorage.assignment.read_0", owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment", value = "analog_add(GeneratedConditionalLexicalStorage.state,1.0)"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+            "nodal.analog_if_arm"() <{arm_id = "GeneratedConditionalLexicalStorage.if_0.otherwise", condition_dimension = "", condition_kind = "", condition_reads = [], condition_value = "", is_else = true, metadata = {semantic_path = "GeneratedConditionalLexicalStorage.if_0.otherwise"}, owner = "GeneratedConditionalLexicalStorage", stage = "else", static_value = false, static_value_present = false}> ({
+            ^bb0:
+              %state_read_else = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedConditionalLexicalStorage.assignment_else.read_0", owner = "GeneratedConditionalLexicalStorage", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment_else.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read_else) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedConditionalLexicalStorage.generate_0", generated_induction = "GeneratedConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedConditionalLexicalStorage.assignment_else", value = "analog_add(GeneratedConditionalLexicalStorage.state,2.0)"}, owner = "GeneratedConditionalLexicalStorage", statement_id = "GeneratedConditionalLexicalStorage.assignment_else", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedCaseLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedCaseLexicalStorage"}, sym_name = "GeneratedCaseLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedCaseLexicalStorage.generate_0", induction_path = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedCaseLexicalStorage", generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedCaseLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %mode = "nodal.analog_variable"() <{identity = "GeneratedCaseLexicalStorage.mode", owner = "GeneratedCaseLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "0", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedCaseLexicalStorage.mode"}}> : () -> !nodal.variable<"integer", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedCaseLexicalStorage.state", owner = "GeneratedCaseLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedCaseLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_case"() <{metadata = {semantic_path = "GeneratedCaseLexicalStorage.case_0.selector"}, owner = "GeneratedCaseLexicalStorage", selector_dimension = "1", selector_kind = "integer", selector_reads = ["GeneratedCaseLexicalStorage.mode"], selector_value = "GeneratedCaseLexicalStorage.mode", statement_id = "GeneratedCaseLexicalStorage.case_0", static_value = "", static_value_present = false}> ({
+          ^bb0:
+            "nodal.analog_case_arm"() <{arm_id = "GeneratedCaseLexicalStorage.case_0.arm_0", is_default = false, labels = ["integer:0"], metadata = {semantic_path = "GeneratedCaseLexicalStorage.case_0.arm_0"}, owner = "GeneratedCaseLexicalStorage"}> ({
+            ^bb0:
+              %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedCaseLexicalStorage.assignment.read_0", owner = "GeneratedCaseLexicalStorage", generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedCaseLexicalStorage.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedCaseLexicalStorage.assignment", value = "analog_add(GeneratedCaseLexicalStorage.state,3.0)"}, owner = "GeneratedCaseLexicalStorage", statement_id = "GeneratedCaseLexicalStorage.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+            "nodal.analog_case_arm"() <{arm_id = "GeneratedCaseLexicalStorage.case_0.default", is_default = true, labels = [], metadata = {semantic_path = "GeneratedCaseLexicalStorage.case_0.default"}, owner = "GeneratedCaseLexicalStorage"}> ({
+            ^bb0:
+              %state_read_default = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedCaseLexicalStorage.assignment_default.read_0", owner = "GeneratedCaseLexicalStorage", generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedCaseLexicalStorage.assignment_default.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+              "nodal.analog_assign"(%state, %state_read_default) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedCaseLexicalStorage.generate_0", generated_induction = "GeneratedCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedCaseLexicalStorage.assignment_default", value = "analog_add(GeneratedCaseLexicalStorage.state,4.0)"}, owner = "GeneratedCaseLexicalStorage", statement_id = "GeneratedCaseLexicalStorage.assignment_default", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedLoopLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLoopLexicalStorage"}, sym_name = "GeneratedLoopLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLoopLexicalStorage.generate_0", induction_path = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLoopLexicalStorage", generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %iterations = "nodal.analog_variable"() <{identity = "GeneratedLoopLexicalStorage.iterations", owner = "GeneratedLoopLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "1", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopLexicalStorage.iterations"}}> : () -> !nodal.variable<"integer", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLoopLexicalStorage.state", owner = "GeneratedLoopLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_loop"() <{bound_dimension = "1", bound_kind = "integer", bound_reads = ["GeneratedLoopLexicalStorage.iterations"], bound_value = "GeneratedLoopLexicalStorage.iterations", maximum_iterations = 2 : i64, metadata = {semantic_path = "GeneratedLoopLexicalStorage.loop_0"}, minimum_iterations = 1 : i64, owner = "GeneratedLoopLexicalStorage", stage = "runtime", statement_id = "GeneratedLoopLexicalStorage.loop_0", static_trip_count = 0 : i64, static_trip_count_present = false}> ({
+          ^bb0:
+            %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopLexicalStorage.loop_0.assignment.read_0", owner = "GeneratedLoopLexicalStorage", generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopLexicalStorage.loop_0.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+            "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopLexicalStorage.generate_0", generated_induction = "GeneratedLoopLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopLexicalStorage.loop_0.assignment", value = "analog_add(GeneratedLoopLexicalStorage.state,5.0)"}, owner = "GeneratedLoopLexicalStorage", statement_id = "GeneratedLoopLexicalStorage.loop_0.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedLoopConditionalLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLoopConditionalLexicalStorage"}, sym_name = "GeneratedLoopConditionalLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLoopConditionalLexicalStorage.generate_0", induction_path = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLoopConditionalLexicalStorage", generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %iterations = "nodal.analog_variable"() <{identity = "GeneratedLoopConditionalLexicalStorage.iterations", owner = "GeneratedLoopConditionalLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "1", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopConditionalLexicalStorage.iterations"}}> : () -> !nodal.variable<"integer", "1">
+          %select = "nodal.analog_variable"() <{identity = "GeneratedLoopConditionalLexicalStorage.select", owner = "GeneratedLoopConditionalLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "false", initializer_kind = "boolean", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopConditionalLexicalStorage.select"}}> : () -> !nodal.variable<"boolean", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLoopConditionalLexicalStorage.state", owner = "GeneratedLoopConditionalLexicalStorage", declaration_order = 2 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopConditionalLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_loop"() <{bound_dimension = "1", bound_kind = "integer", bound_reads = ["GeneratedLoopConditionalLexicalStorage.iterations"], bound_value = "GeneratedLoopConditionalLexicalStorage.iterations", maximum_iterations = 2 : i64, metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0"}, minimum_iterations = 1 : i64, owner = "GeneratedLoopConditionalLexicalStorage", stage = "runtime", statement_id = "GeneratedLoopConditionalLexicalStorage.loop_0", static_trip_count = 0 : i64, static_trip_count_present = false}> ({
+          ^bb0:
+            "nodal.analog_if"() <{metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0"}, owner = "GeneratedLoopConditionalLexicalStorage", statement_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0"}> ({
+            ^bb0:
+              "nodal.analog_if_arm"() <{arm_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.branch_0", condition_dimension = "1", condition_kind = "boolean", condition_reads = ["GeneratedLoopConditionalLexicalStorage.select"], condition_value = "GeneratedLoopConditionalLexicalStorage.select", is_else = false, metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.condition_0"}, owner = "GeneratedLoopConditionalLexicalStorage", stage = "runtime", static_value = false, static_value_present = false}> ({
+              ^bb0:
+                %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment.read_0", owner = "GeneratedLoopConditionalLexicalStorage", generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment", value = "analog_add(GeneratedLoopConditionalLexicalStorage.state,6.0)"}, owner = "GeneratedLoopConditionalLexicalStorage", statement_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+              "nodal.analog_if_arm"() <{arm_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.otherwise", condition_dimension = "", condition_kind = "", condition_reads = [], condition_value = "", is_else = true, metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.otherwise"}, owner = "GeneratedLoopConditionalLexicalStorage", stage = "else", static_value = false, static_value_present = false}> ({
+              ^bb0:
+                %state_read_else = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment_else.read_0", owner = "GeneratedLoopConditionalLexicalStorage", generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment_else.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read_else) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopConditionalLexicalStorage.generate_0", generated_induction = "GeneratedLoopConditionalLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment_else", value = "analog_add(GeneratedLoopConditionalLexicalStorage.state,7.0)"}, owner = "GeneratedLoopConditionalLexicalStorage", statement_id = "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.assignment_else", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedLoopCaseLexicalStorageModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedLoopCaseLexicalStorage"}, sym_name = "GeneratedLoopCaseLexicalStorage"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedLoopCaseLexicalStorage.generate_0", induction_path = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.analogProcedure"}}> ({
+        ^bb0:
+          %iterations = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.iterations", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 0 : i64, initialized = true, initializer_value = "1", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.iterations"}}> : () -> !nodal.variable<"integer", "1">
+          %mode = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.mode", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 1 : i64, initialized = true, initializer_value = "0", initializer_kind = "integer", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.mode"}}> : () -> !nodal.variable<"integer", "1">
+          %state = "nodal.analog_variable"() <{identity = "GeneratedLoopCaseLexicalStorage.state", owner = "GeneratedLoopCaseLexicalStorage", declaration_order = 2 : i64, initialized = true, initializer_value = "0.0", initializer_kind = "real", initializer_dimension = "1", initializer_reads = [], generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {authored_path = "GeneratedLoopCaseLexicalStorage.state"}}> : () -> !nodal.variable<"real", "1">
+          "nodal.analog_loop"() <{bound_dimension = "1", bound_kind = "integer", bound_reads = ["GeneratedLoopCaseLexicalStorage.iterations"], bound_value = "GeneratedLoopCaseLexicalStorage.iterations", maximum_iterations = 2 : i64, metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0"}, minimum_iterations = 1 : i64, owner = "GeneratedLoopCaseLexicalStorage", stage = "runtime", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0", static_trip_count = 0 : i64, static_trip_count_present = false}> ({
+          ^bb0:
+            "nodal.analog_case"() <{metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.selector"}, owner = "GeneratedLoopCaseLexicalStorage", selector_dimension = "1", selector_kind = "integer", selector_reads = ["GeneratedLoopCaseLexicalStorage.mode"], selector_value = "GeneratedLoopCaseLexicalStorage.mode", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0", static_value = "", static_value_present = false}> ({
+            ^bb0:
+              "nodal.analog_case_arm"() <{arm_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.arm_0", is_default = false, labels = ["integer:0"], metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.arm_0"}, owner = "GeneratedLoopCaseLexicalStorage"}> ({
+              ^bb0:
+                %state_read = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment.read_0", owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read) <{analyses = ["dc", "transient"], authored_order = 0 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment", value = "analog_add(GeneratedLoopCaseLexicalStorage.state,8.0)"}, owner = "GeneratedLoopCaseLexicalStorage", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+              "nodal.analog_case_arm"() <{arm_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.default", is_default = true, labels = [], metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.default"}, owner = "GeneratedLoopCaseLexicalStorage"}> ({
+              ^bb0:
+                %state_read_default = "nodal.analog_variable_read"(%state) <{read_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default.read_0", owner = "GeneratedLoopCaseLexicalStorage", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default.read_0"}}> : (!nodal.variable<"real", "1">) -> !nodal.quantity<"real", "1">
+                "nodal.analog_assign"(%state, %state_read_default) <{analyses = ["dc", "transient"], authored_order = 1 : i64, guard_dimension = "", guard_kind = "", guard_present = false, guard_reads = [], guard_value = "", generated_owner = "GeneratedLoopCaseLexicalStorage.generate_0", generated_induction = "GeneratedLoopCaseLexicalStorage.generate_0.index", metadata = {semantic_path = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default", value = "analog_add(GeneratedLoopCaseLexicalStorage.state,9.0)"}, owner = "GeneratedLoopCaseLexicalStorage", statement_id = "GeneratedLoopCaseLexicalStorage.loop_0.case_0.assignment_default", value_dimension = "1", value_kind = "real"}> : (!nodal.variable<"real", "1">, !nodal.quantity<"real", "1">) -> ()
+              }) : () -> ()
+            }) : () -> ()
+          }) : () -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kGeneratedEventModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true, semantic_path = "GeneratedEvent"}, sym_name = "GeneratedEvent"}> ({
+  ^bb0:
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "GeneratedEvent.generate_0", induction_path = "GeneratedEvent.generate_0.index", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        "nodal.analog_procedure"() <{owner = "GeneratedEvent", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {semantic_path = "GeneratedEvent.analogProcedure"}}> ({
+        ^bb0:
+          %cross = "nodal.analog_cross"() <{event_id = "GeneratedEvent.event_0.event", owner = "GeneratedEvent", contract = "increment37", name = "", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", arguments = [{slot = 0 : i64, value = "1.0 V", kind = "real", dimension = "voltage", reads = []}], analyses = [], event_reads = [], metadata = {}}> : () -> !nodal.analog_event
+          "nodal.analog_on"(%cross) <{statement_id = "GeneratedEvent.event_0", owner = "GeneratedEvent", generated_owner = "GeneratedEvent.generate_0", generated_induction = "GeneratedEvent.generate_0.index", metadata = {}}> ({
+          ^bb0:
+          }) : (!nodal.analog_event) -> ()
+        }) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kSymbolicGeneratedContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "SymbolicGeneratedContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "structural", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %default = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %maximum = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"() <{induction = "generate_0_index", lower = 0 : i64, upper = @COUNT, step = 1 : i64, region_id = "SymbolicGeneratedContribution.generate_0", induction_path = "SymbolicGeneratedContribution.generate_0.index", metadata = {maximum_trip_count = 8 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "SymbolicGeneratedContribution.generate_0", generated_induction = "SymbolicGeneratedContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "SymbolicGeneratedContribution.generate_0", generated_induction = "SymbolicGeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kCompoundGeneratedContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "CompoundGeneratedContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "structural", default_value = 3 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %count_default = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    "nodal.parameter_value"(%count_default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %count_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %count_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%count_minimum, %count_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    "nodal.parameter"() <{classification = "structural", default_value = 1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "EXTRA", type = i64, variability = "symbolic"}> : () -> ()
+    %extra_default = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.parameter_value"(%extra_default) <{metadata = {}, parameter = @EXTRA}> : (i64) -> ()
+    %extra_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %extra_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%extra_minimum, %extra_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @EXTRA, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @EXTRA, policy = "static_generate"}> : () -> ()
+    %zero = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedContribution.generate_0.lower"}, spelling = "0", value = 0 : i64}> : () -> i64
+    %count = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedContribution.count"}, parameter = @COUNT}> : () -> i64
+    %extra = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedContribution.extra"}, parameter = @EXTRA}> : () -> i64
+    %upper = "nodal.const_expr"(%count, %extra) <{metadata = {source_path = "CompoundGeneratedContribution.generate_0.upper"}, operator_name = "add"}> : (i64, i64) -> i64
+    %one = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedContribution.generate_0.step"}, spelling = "1", value = 1 : i64}> : () -> i64
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    %n = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "n"}> : () -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%p, %n) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.generate"(%zero, %upper, %one) <{induction = "generate_0_index", region_id = "CompoundGeneratedContribution.generate_0", induction_path = "CompoundGeneratedContribution.generate_0.index", metadata = {maximum_trip_count = 6 : i64}}> ({
+    ^bb0:
+      "nodal.analog"() <{generated_owner = "CompoundGeneratedContribution.generate_0", generated_induction = "CompoundGeneratedContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%branch, %potential) <{kind = "potential", generated_owner = "CompoundGeneratedContribution.generate_0", generated_induction = "CompoundGeneratedContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kCompoundGeneratedNodeContributionModule = R"mlir(
+module attributes {
+  nodal.backend.check_profile = "release",
+  nodal.backend.materialization = "safe-inline",
+  nodal.backend.naming = "semantic",
+  nodal.backend.profile = "verilog-a",
+  nodal.backend.shaped_layout = "scalar-or-flat",
+  nodal.target.profile = "analog"
+} {
+  "nodal.module"() <{metadata = {root = true}, sym_name = "CompoundGeneratedNodeContribution"}> ({
+  ^bb0:
+    "nodal.parameter"() <{classification = "structural", default_value = 3 : i64, metadata = {}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %count_default = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    "nodal.parameter_value"(%count_default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %count_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %count_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%count_minimum, %count_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+    "nodal.parameter"() <{classification = "structural", default_value = 1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "EXTRA", type = i64, variability = "symbolic"}> : () -> ()
+    %extra_default = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.parameter_value"(%extra_default) <{metadata = {}, parameter = @EXTRA}> : (i64) -> ()
+    %extra_minimum = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %extra_maximum = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%extra_minimum, %extra_maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @EXTRA, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["topology"], metadata = {}, parameter = @EXTRA, policy = "static_generate"}> : () -> ()
+    %zero = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.lower"}, spelling = "0", value = 0 : i64}> : () -> i64
+    %count = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.count"}, parameter = @COUNT}> : () -> i64
+    %extra = "nodal.const_parameter_ref"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.extra"}, parameter = @EXTRA}> : () -> i64
+    %upper = "nodal.const_expr"(%count, %extra) <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.upper"}, operator_name = "add"}> : (i64, i64) -> i64
+    %one = "nodal.const_literal"() <{metadata = {source_path = "CompoundGeneratedNodeContribution.generate_0.step"}, spelling = "1", value = 1 : i64}> : () -> i64
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p"}> : () -> !nodal.terminal<"electrical">
+    "nodal.generate"(%zero, %upper, %one) <{induction = "generate_0_index", region_id = "CompoundGeneratedNodeContribution.generate_0", induction_path = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {maximum_trip_count = 6 : i64}}> ({
+    ^bb0:
+      %tap = "nodal.node"() <{name = "tap", source_path = "CompoundGeneratedNodeContribution.tap", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "CompoundGeneratedNodeContribution.generate_0", induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %return_tap = "nodal.node"() <{name = "returnTap", source_path = "CompoundGeneratedNodeContribution.returnTap", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {allow_floating = true, declaration_kind = "analog-node", generated_owner = "CompoundGeneratedNodeContribution.generate_0", induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : () -> !nodal.terminal<"electrical">
+      %tap_branch = "nodal.branch"(%tap, %p) <{metadata = {generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      %return_tap_branch = "nodal.branch"(%return_tap, %p) <{metadata = {generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index"}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+      "nodal.analog"() <{generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> ({
+      ^bb0:
+        %one_volt = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%tap_branch, %one_volt) <{kind = "potential", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+        %two_volts = "nodal.real_literal"() <{value = 2.0 : f64, metadata = {}}> : () -> f64
+        "nodal.contribute"(%return_tap_branch, %two_volts) <{kind = "potential", generated_owner = "CompoundGeneratedNodeContribution.generate_0", generated_induction = "CompoundGeneratedNodeContribution.generate_0.index", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      }) : () -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
 constexpr llvm::StringLiteral kHierarchyModule = R"mlir(
 module attributes {
   nodal.backend.check_profile = "release",
@@ -117,6 +1034,91 @@ module attributes {
   }) : () -> ()
 }
 )mlir";
+
+constexpr llvm::StringLiteral kStaticNodeArrayModule = R"mlir(
+module attributes {nodal.backend.profile = "verilog-a", nodal.target.profile = "analog"} {
+  "nodal.nature"() <{abstol = 1.0e-6 : f64, access = "V", metadata = {}, sym_name = "Voltage", units = "V"}> : () -> ()
+  "nodal.nature"() <{abstol = 1.0e-12 : f64, access = "I", metadata = {}, sym_name = "Current", units = "A"}> : () -> ()
+  "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true, semantic_path = "ArrayNodes"}, sym_name = "ArrayNodes"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p", source_path = "ArrayNodes.p"}> : () -> !nodal.terminal<"electrical">
+    %array = "nodal.node_array"() <{name = "tap", source_path = "ArrayNodes.tap", metadata = {semantic_path = "ArrayNodes.tap", storage = "structural"}}> : () -> !nodal.shaped<"2,3", !nodal.terminal<"electrical">>
+    %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %selected = "nodal.shape_index"(%array, %one, %one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:1,literal:1)", source_uses = ["ArrayNodes.selection"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, i64, i64) -> !nodal.terminal<"electrical">
+    %other = "nodal.shape_index"(%array, %zero, %one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:0,literal:1)", source_uses = ["ArrayNodes.other"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, i64, i64) -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%selected, %p) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    %named = "nodal.branch"(%other, %p) <{name = "probeBranch", metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.analog"() <{metadata = {}}> ({
+    ^bb0:
+      %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+      %resistance = "nodal.real_literal"() <{value = 1000.0 : f64, metadata = {}}> : () -> f64
+      %current = "nodal.analog_div"(%voltage, %resistance) <{metadata = {}}> : (f64, f64) -> f64
+      "nodal.contribute"(%branch, %current) <{kind = "flow", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+      "nodal.contribute"(%named, %potential) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kStaticNodeArrayParameter = R"mlir(
+    "nodal.parameter"() <{classification = "structural", default_value = 4 : i64, metadata = {semantic_path = "ArrayNodes.COUNT"}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %default = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %minimum = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %maximum = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["shape"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
+)mlir";
+
+std::string nodeShape(const std::string &dimensions) {
+  return "!nodal.shaped<\"" + dimensions + "\", !nodal.terminal<\"electrical\">>";
+}
+std::string nodePath(const std::string &value) {
+  return "ArrayNodes." + (value == "array" ? "tap" : value);
+}
+std::string nodeViewMetadata(const std::string &name, const std::string &input) {
+  return "metadata = {semantic_path = \"" + nodePath(name) + "\", input_path = \"" +
+         nodePath(input) + "\", storage = \"structural\", access = \"read_only\"}";
+}
+std::string nodeIndex(const std::string &name, const std::string &input,
+                      const std::string &dimensions, const std::string &indices,
+                      const std::string &tokens, const std::string &result = "") {
+  std::string types = nodeShape(dimensions);
+  for (char c : indices)
+    if (c == '%')
+      types += ", i64";
+  std::string metadata = nodeViewMetadata(name, input);
+  if (result.empty())
+    metadata = "metadata = {semantic_path = \"" + nodePath(input) + ".at(" + tokens +
+               ")\", input_path = \"" + nodePath(input) +
+               "\", storage = \"structural\", selection_kind = \"node_array\", "
+               "source_uses = [\"ArrayNodes.use_" +
+               name + "\"]}";
+  return "%" + name + " = \"nodal.shape_index\"(%" + input + ", " + indices + ") <{" + metadata +
+         "}> : (" + types + ") -> " +
+         (result.empty() ? "!nodal.terminal<\"electrical\">" : nodeShape(result)) + "\n";
+}
+std::string nodeView(const std::string &name, const std::string &input,
+                     const std::string &dimensions, const std::string &result) {
+  return "%" + name + " = \"nodal.shape_view\"(%" + input + ") <{dimensions = \"" + result +
+         "\", origin = \"" + nodePath(input) +
+         "\", materialization = \"view\", observability = \"source_mapped\", " +
+         nodeViewMetadata(name, input) + "}> : (" + nodeShape(dimensions) + ") -> " +
+         nodeShape(result) + "\n";
+}
+std::string nodeSlice(const std::string &name, const std::string &input,
+                      const std::string &dimensions, const std::string &result,
+                      const std::string &lower, const std::string &upper, const std::string &length,
+                      unsigned axis = 1) {
+  return "%" + name + " = \"nodal.shape_slice\"(%" + input + ", %" + lower + ", %" + upper + ", %" +
+         length + ") <{axis = " + std::to_string(axis) + " : i64, dimensions = \"" + result +
+         "\", origin = \"" + nodePath(input) + "\", observability = \"source_mapped\", " +
+         nodeViewMetadata(name, input) + "}> : (" + nodeShape(dimensions) + ", i64, i64, i64) -> " +
+         nodeShape(result) + "\n";
+}
 
 class RejectingReparseHooks final : public nodal::TargetVerificationHooks {
 public:
@@ -286,7 +1288,7 @@ int main() {
   }
 
   const std::string eventTarget =
-      "module E;\nreal event_held = 0.0;\ninteger event_select = 1;\n"
+      "module E;\nelectrical p, n;\nreal event_held = 0.0;\ninteger event_select = 1;\n"
       "analog begin\nbegin : event_procedure\n"
       "@(initial_step or cross(V(p, n), 1, 0, 0.01) or timer(0, 1e-9)) begin\n"
       "if (event_select) begin\nevent_held = V(p, n);\nend else begin\n"
@@ -400,6 +1402,6425 @@ int main() {
   unsupportedStream.flush();
   if (unchanged != "sentinel")
     return fail("failed capability checking published partial output");
+
+  auto generated = parse(context, kGeneratedContributionModule);
+  if (!generated)
+    return fail("could not parse the fixed generated contribution fixture");
+  std::string generatedOutput;
+  llvm::raw_string_ostream generatedStream(generatedOutput);
+  if (mlir::failed(nodal::emitBackend(*generated, nodal::BackendKind::VerilogA, generatedStream)))
+    return fail("fixed generated contribution emission failed");
+  generatedStream.flush();
+  if (generatedOutput.find("  genvar generate_0_index;\n") == std::string::npos ||
+      generatedOutput.find("    for (generate_0_index = 0; generate_0_index < 2; "
+                           "generate_0_index = generate_0_index + 1) begin : generate_0\n") ==
+          std::string::npos ||
+      generatedOutput.find("    V(p, n) <+ 1;\n") == std::string::npos ||
+      generatedOutput.find("    I(p, n) <+ 1;\n") == std::string::npos)
+    return fail("fixed generated contribution target lost its loop, owner, or equations");
+  if (generatedOutput.find("V(p, n) <+ 1;\n    V(p, n) <+ 1;") != std::string::npos)
+    return fail("fixed generated contribution was eagerly unrolled");
+  for (const auto &mutation :
+       {std::make_pair("  genvar generate_0_index;\n", ""),
+        std::make_pair("generate_0_index + 1) begin", "generate_0_index + 0) begin"),
+        std::make_pair("generate_0_index < 2", "generate_0_index <= 2"),
+        std::make_pair("begin : generate_0", "begin : for")}) {
+    std::string invalid = generatedOutput;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated target mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed generated target passed independent reparse");
+  }
+
+  auto generatedNodeArray = parse(context, kGeneratedNodeArrayModule);
+  if (!generatedNodeArray)
+    return fail("could not parse the generated analog-node array fixture");
+  std::string generatedNodeArrayOutput;
+  llvm::raw_string_ostream generatedNodeArrayStream(generatedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeArray, nodal::BackendKind::VerilogA,
+                                      generatedNodeArrayStream)))
+    return fail("generated analog-node array emission failed");
+  generatedNodeArrayStream.flush();
+  if (generatedNodeArrayOutput.find("  electrical [0:(3 - 1)] tap;\n") == std::string::npos ||
+      generatedNodeArrayOutput.find("genvar generate_0_index") != std::string::npos ||
+      generatedNodeArrayOutput.find("analog begin") != std::string::npos)
+    return fail("generated analog node was not retained as one legal electrical array");
+  if (mlir::failed(nodal::reparseBackendTarget(generatedNodeArrayOutput, *configuration)))
+    return fail("generated analog-node array failed independent target reparse");
+  for (const auto &mutation :
+       {std::make_pair("electrical [0:(3 - 1)] tap;", "electrical [0:(3 && 1)] tap;"),
+        std::make_pair("electrical [0:(3 - 1)] tap;", "electrical [0:MISSING] tap;")}) {
+    std::string invalid = generatedNodeArrayOutput;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated analog-node array mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed generated analog-node array passed independent reparse");
+  }
+  auto forgedGeneratedNodeArray = parse(context, kGeneratedNodeArrayModule);
+  if (!forgedGeneratedNodeArray)
+    return fail("could not parse the generated analog-node owner mutation fixture");
+  mlir::Operation *forgedGeneratedNode = nullptr;
+  forgedGeneratedNodeArray->walk([&](mlir::Operation *operation) {
+    if (!forgedGeneratedNode && operation->getName().getStringRef() == "nodal.node")
+      forgedGeneratedNode = operation;
+  });
+  if (!forgedGeneratedNode)
+    return fail("generated analog-node owner mutation fixture has no node");
+  forgedGeneratedNode->setAttr(
+      "generated_owner", mlir::StringAttr::get(&context, "GeneratedNodeArray.generate_forged"));
+  std::string forgedGeneratedNodeOutput = "sentinel";
+  llvm::raw_string_ostream forgedGeneratedNodeStream(forgedGeneratedNodeOutput);
+  if (mlir::succeeded(nodal::emitBackend(*forgedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                         forgedGeneratedNodeStream)))
+    return fail("forged generated analog-node owner passed backend verification");
+  forgedGeneratedNodeStream.flush();
+  if (forgedGeneratedNodeOutput != "sentinel")
+    return fail("forged generated analog-node owner published partial output");
+
+  auto nestedGeneratedNodeArray = parse(context, kNestedGeneratedNodeArrayModule);
+  if (!nestedGeneratedNodeArray)
+    return fail("could not parse the nested generated analog-node array fixture");
+  std::string nestedGeneratedNodeArrayOutput;
+  llvm::raw_string_ostream nestedGeneratedNodeArrayStream(nestedGeneratedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                      nestedGeneratedNodeArrayStream)))
+    return fail("nested generated analog-node array emission failed");
+  nestedGeneratedNodeArrayStream.flush();
+  if (nestedGeneratedNodeArrayOutput.find("  electrical [0:((((((8 - 1) + 2) - 1) / 2) * "
+                                          "((((11 - 2) + 3) - 1) / 3)) - 1)] nestedTap;\n") ==
+          std::string::npos ||
+      nestedGeneratedNodeArrayOutput.find("genvar") != std::string::npos ||
+      nestedGeneratedNodeArrayOutput.find("analog begin") != std::string::npos)
+    return fail("nested generated analog node lost its explicit row-major topology layout");
+  if (mlir::failed(nodal::reparseBackendTarget(nestedGeneratedNodeArrayOutput, *configuration)))
+    return fail("nested generated analog-node array failed independent target reparse");
+  std::string repeatedNestedGeneratedNodeArrayOutput;
+  llvm::raw_string_ostream repeatedNestedGeneratedNodeArrayStream(
+      repeatedNestedGeneratedNodeArrayOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeArray, nodal::BackendKind::VerilogA,
+                                      repeatedNestedGeneratedNodeArrayStream)))
+    return fail("nested generated analog-node array repeated emission failed");
+  repeatedNestedGeneratedNodeArrayStream.flush();
+  if (nestedGeneratedNodeArrayOutput != repeatedNestedGeneratedNodeArrayOutput)
+    return fail("nested generated analog-node array emission is nondeterministic");
+
+  auto forgedNestedGeneratedNodeArray = parse(context, kNestedGeneratedNodeArrayModule);
+  if (!forgedNestedGeneratedNodeArray)
+    return fail("could not parse the nested generated analog-node owner mutation fixture");
+  mlir::Operation *forgedNestedGeneratedNode = nullptr;
+  forgedNestedGeneratedNodeArray->walk([&](mlir::Operation *operation) {
+    if (!forgedNestedGeneratedNode && operation->getName().getStringRef() == "nodal.node")
+      forgedNestedGeneratedNode = operation;
+  });
+  if (!forgedNestedGeneratedNode)
+    return fail("nested generated analog-node owner mutation fixture has no node");
+  forgedNestedGeneratedNode->setAttr(
+      "generated_owner", mlir::StringAttr::get(&context, "NestedGeneratedNodeArray.generate_0"));
+  std::string forgedNestedGeneratedNodeOutput = "sentinel";
+  llvm::raw_string_ostream forgedNestedGeneratedNodeStream(forgedNestedGeneratedNodeOutput);
+  if (mlir::succeeded(nodal::emitBackend(*forgedNestedGeneratedNodeArray,
+                                         nodal::BackendKind::VerilogA,
+                                         forgedNestedGeneratedNodeStream)))
+    return fail("forged nested generated analog-node owner passed backend verification");
+  forgedNestedGeneratedNodeStream.flush();
+  if (forgedNestedGeneratedNodeOutput != "sentinel")
+    return fail("forged nested generated analog-node owner published partial output");
+
+  auto nestedGeneratedNodeEquation = parse(context, kNestedGeneratedNodeEquationModule);
+  if (!nestedGeneratedNodeEquation)
+    return fail("could not parse the nested generated analog-node equation fixture");
+  std::string nestedGeneratedNodeEquationOutput;
+  llvm::raw_string_ostream nestedGeneratedNodeEquationStream(nestedGeneratedNodeEquationOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeEquation, nodal::BackendKind::VerilogA,
+                                      nestedGeneratedNodeEquationStream)))
+    return fail("nested generated analog-node equation emission failed");
+  nestedGeneratedNodeEquationStream.flush();
+  const std::string nestedFlatIndex =
+      "((((generate_0_index - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) + "
+      "((generate_1_index - 2) / 3))";
+  if (nestedGeneratedNodeEquationOutput.find("  electrical [0:((((((8 - 1) + 2) - 1) / 2) * "
+                                             "((((11 - 2) + 3) - 1) / 3)) - 1)] nestedTap;\n") ==
+          std::string::npos ||
+      nestedGeneratedNodeEquationOutput.find("I(nestedTap[" + nestedFlatIndex + "], p) <+ ") ==
+          std::string::npos ||
+      nestedGeneratedNodeEquationOutput.find("V(nestedTap[" + nestedFlatIndex + "], p)") ==
+          std::string::npos ||
+      llvm::StringRef(nestedGeneratedNodeEquationOutput).count("  genvar ") != 2 ||
+      llvm::StringRef(nestedGeneratedNodeEquationOutput).count("    for (") != 2)
+    return fail("nested generated analog-node equation lost its row-major target mapping");
+  if (mlir::failed(nodal::reparseBackendTarget(nestedGeneratedNodeEquationOutput, *configuration)))
+    return fail("nested generated analog-node equation failed independent target reparse");
+  std::string repeatedNestedGeneratedNodeEquationOutput;
+  llvm::raw_string_ostream repeatedNestedGeneratedNodeEquationStream(
+      repeatedNestedGeneratedNodeEquationOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeEquation, nodal::BackendKind::VerilogA,
+                                      repeatedNestedGeneratedNodeEquationStream)))
+    return fail("nested generated analog-node equation repeated emission failed");
+  repeatedNestedGeneratedNodeEquationStream.flush();
+  if (nestedGeneratedNodeEquationOutput != repeatedNestedGeneratedNodeEquationOutput)
+    return fail("nested generated analog-node equation emission is nondeterministic");
+
+  // Nested arrays are zero-based even when an authored unit-step range is not.
+  // Keep literal expected expressions independent of the production layout helper.
+  struct NestedOriginCase {
+    int64_t outerLower, outerUpper, outerStep, innerLower, innerUpper, innerStep;
+    const char *outerCount;
+    const char *innerCount;
+    const char *index;
+  };
+  const NestedOriginCase nestedOrigins[] = {
+      {1, 8, 1, 2, 11, 3, "(8 - 1)", "((((11 - 2) + 3) - 1) / 3)",
+       "(((generate_0_index - 1) * ((((11 - 2) + 3) - 1) / 3)) + "
+       "((generate_1_index - 2) / 3))"},
+      {1, 8, 2, 2, 11, 1, "((((8 - 1) + 2) - 1) / 2)", "(11 - 2)",
+       "((((generate_0_index - 1) / 2) * (11 - 2)) + (generate_1_index - 2))"},
+      {1, 8, 1, 2, 11, 1, "(8 - 1)", "(11 - 2)",
+       "(((generate_0_index - 1) * (11 - 2)) + (generate_1_index - 2))"},
+      {-2, 2, 1, -3, 1, 1, "(2 - -2)", "(1 - -3)",
+       "(((generate_0_index - -2) * (1 - -3)) + (generate_1_index - -3))"},
+      {0, 3, 1, 0, 2, 1, "(3 - 0)", "(2 - 0)", "((generate_0_index * (2 - 0)) + generate_1_index)"},
+      {3, 4, 1, 5, 6, 1, "(4 - 3)", "(6 - 5)",
+       "(((generate_0_index - 3) * (6 - 5)) + (generate_1_index - 5))"},
+  };
+  for (const NestedOriginCase &test : nestedOrigins) {
+    auto candidate = parse(context, kNestedGeneratedNodeEquationModule);
+    if (!candidate)
+      return fail("could not parse nested unit-step origin fixture");
+    llvm::SmallVector<mlir::Operation *, 2> ranges;
+    candidate->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.generate")
+        ranges.push_back(operation);
+    });
+    if (ranges.size() != 2)
+      return fail("nested unit-step fixture lost its two ranges");
+    auto setRange = [&](mlir::Operation *range, int64_t lower, int64_t upper, int64_t step) {
+      auto integer = [&](int64_t value) {
+        return mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), value);
+      };
+      range->setAttr("lower", integer(lower));
+      range->setAttr("upper", integer(upper));
+      range->setAttr("step", integer(step));
+      int64_t count = 0;
+      for (int64_t index = lower; index < upper; index += step)
+        ++count;
+      mlir::NamedAttrList metadata(range->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("maximum_trip_count", integer(count));
+      range->setAttr("metadata", metadata.getDictionary(&context));
+    };
+    setRange(ranges[0], test.outerLower, test.outerUpper, test.outerStep);
+    setRange(ranges[1], test.innerLower, test.innerUpper, test.innerStep);
+    std::string output;
+    llvm::raw_string_ostream stream(output);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
+      return fail("nested unit-step origin emission failed");
+    stream.flush();
+    const std::string index = test.index;
+    const std::string extent = std::string("(") + test.outerCount + " * " + test.innerCount + ")";
+    if (output.find("electrical [0:(" + extent + " - 1)] nestedTap;") == std::string::npos ||
+        output.find("I(nestedTap[" + index + "], p) <+ ") == std::string::npos ||
+        output.find("V(nestedTap[" + index + "], p)") == std::string::npos)
+      return fail("nested unit-step origins did not map to zero-based occurrence ordinals");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested unit-step origin target reparse failed");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested unit-step origin repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested unit-step origin emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"owner", "induction"}) {
+    auto invalid = parse(context, kNestedGeneratedNodeEquationModule);
+    if (!invalid)
+      return fail("could not parse nested generated analog-node equation mutation fixture");
+    mlir::Operation *branch = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!branch)
+      return fail("nested generated analog-node equation mutation lost its branch");
+    mlir::NamedAttrList metadata(branch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+    metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                 mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    branch->setAttr("metadata", metadata.getDictionary(&context));
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, stream)))
+      return fail("forged nested generated analog-node branch passed backend verification");
+    stream.flush();
+    if (output != "sentinel")
+      return fail("forged nested generated analog-node branch published partial output");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "second-owner", "second-induction", "second-source"}) {
+    auto candidate = parse(context, kNestedGeneratedNodeEquationModule);
+    if (!candidate)
+      return fail("could not parse nested peer generated analog-node equation fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!firstNode || !branch)
+      return fail("nested peer generated analog-node equation lost its direct topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node equation retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "second-owner")
+      secondNode->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "second-induction")
+      secondNode->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested peer generated analog-node ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested peer generated analog-node published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested peer generated analog-node equation emission failed");
+    const std::string nestedExtent =
+        "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
+    if (output.find("  electrical [" + nestedExtent +
+                    "] nestedTap;\n"
+                    "  electrical [" +
+                    nestedExtent + "] nestedReturn;\n") == std::string::npos ||
+        output.find("I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "]) <+ ") == std::string::npos ||
+        output.find("V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "])") == std::string::npos ||
+        llvm::StringRef(output).count("  genvar ") != 2 ||
+        llvm::StringRef(output).count("    for (") != 2)
+      return fail("nested peer generated analog-node equation lost its row-major endpoints");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested peer generated analog-node equation failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer generated analog-node equation repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested peer generated analog-node equation emission is nondeterministic");
+  }
+
+  auto nestedGeneratedNodeGroupEquations = parse(context, kNestedGeneratedNodeGroupEquationsModule);
+  if (!nestedGeneratedNodeGroupEquations)
+    return fail("could not parse nested generated analog-node group equations fixture");
+  std::string nestedGeneratedNodeGroupEquationsOutput;
+  llvm::raw_string_ostream nestedGeneratedNodeGroupEquationsStream(
+      nestedGeneratedNodeGroupEquationsOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeGroupEquations,
+                                      nodal::BackendKind::VerilogA,
+                                      nestedGeneratedNodeGroupEquationsStream)))
+    return fail("nested generated analog-node group equations emission failed");
+  nestedGeneratedNodeGroupEquationsStream.flush();
+  const std::string nestedGroupExtent =
+      "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
+  if (nestedGeneratedNodeGroupEquationsOutput.find("  electrical [" + nestedGroupExtent +
+                                                   "] nestedTap;\n"
+                                                   "  electrical [" +
+                                                   nestedGroupExtent + "] nestedReturn;\n") ==
+          std::string::npos ||
+      nestedGeneratedNodeGroupEquationsOutput.find(
+          "I(nestedTap[" + nestedFlatIndex + "], p) <+ (V(nestedTap[" + nestedFlatIndex + "]") ==
+          std::string::npos ||
+      nestedGeneratedNodeGroupEquationsOutput.find("I(nestedReturn[" + nestedFlatIndex +
+                                                   "], n) <+ (V(nestedReturn[" + nestedFlatIndex +
+                                                   "]") == std::string::npos ||
+      llvm::StringRef(nestedGeneratedNodeGroupEquationsOutput).count("  genvar ") != 2 ||
+      llvm::StringRef(nestedGeneratedNodeGroupEquationsOutput).count("    for (") != 2)
+    return fail("nested generated analog-node group equations lost row-major target ownership");
+  if (mlir::failed(
+          nodal::reparseBackendTarget(nestedGeneratedNodeGroupEquationsOutput, *configuration)))
+    return fail("nested generated analog-node group equations failed independent target reparse");
+  std::string repeatedNestedGeneratedNodeGroupEquationsOutput;
+  llvm::raw_string_ostream repeatedNestedGeneratedNodeGroupEquationsStream(
+      repeatedNestedGeneratedNodeGroupEquationsOutput);
+  if (mlir::failed(nodal::emitBackend(*nestedGeneratedNodeGroupEquations,
+                                      nodal::BackendKind::VerilogA,
+                                      repeatedNestedGeneratedNodeGroupEquationsStream)))
+    return fail("nested generated analog-node group equations repeated emission failed");
+  repeatedNestedGeneratedNodeGroupEquationsStream.flush();
+  if (nestedGeneratedNodeGroupEquationsOutput != repeatedNestedGeneratedNodeGroupEquationsOutput)
+    return fail("nested generated analog-node group equations emission is nondeterministic");
+
+  // Deeper authored chains retain one leaf body and compose occurrence ordinals.
+  // Build the witness from the accepted two-dimensional source without unrolling.
+  for (unsigned depth : {3u, 6u}) {
+    std::string source = kNestedGeneratedNodeGroupEquationsModule.str();
+    const std::string oldLeaf = "NestedGeneratedNodeGroupEquations.generate_0.generate_1";
+    std::string parent = "NestedGeneratedNodeGroupEquations.generate_0";
+    std::string opens, closes;
+    std::string expectedCount = "((((8 - 1) + 2) - 1) / 2)";
+    std::string expectedOrdinal = "((generate_0_index - 1) / 2)";
+    for (unsigned level = 1; level + 1 < depth; ++level) {
+      parent += ".middle_" + std::to_string(level);
+      const std::string induction = "middle_" + std::to_string(level) + "_index";
+      opens += "      \"nodal.generate\"() <{induction = \"" + induction +
+               "\", lower = -2 : i64, upper = 3 : i64, step = 2 : i64, region_id = \"" + parent +
+               "\", induction_path = \"" + parent +
+               ".index\", metadata = {maximum_trip_count = 3 : i64}}> ({\n";
+      closes += "      }) : () -> ()\n";
+      const std::string count = "((((3 - -2) + 2) - 1) / 2)";
+      expectedCount = "(" + expectedCount + " * " + count + ")";
+      expectedOrdinal =
+          "((" + expectedOrdinal + " * " + count + ") + ((" + induction + " - -2) / 2))";
+    }
+    const std::string newLeaf = parent + ".generate_1";
+    size_t position = 0;
+    while ((position = source.find(oldLeaf, position)) != std::string::npos) {
+      source.replace(position, oldLeaf.size(), newLeaf);
+      position += newLeaf.size();
+    }
+    const auto begin = source.find("      \"nodal.generate\"");
+    const auto end = source.find("    }) : () -> ()\n  })", begin);
+    if (begin == std::string::npos || end == std::string::npos)
+      return fail("deep generated witness lost lexical wrapping anchors");
+    source.insert(end, closes);
+    source.insert(begin, opens);
+    expectedCount = "(" + expectedCount + " * ((((11 - 2) + 3) - 1) / 3))";
+    expectedOrdinal =
+        "((" + expectedOrdinal + " * ((((11 - 2) + 3) - 1) / 3)) + ((generate_1_index - 2) / 3))";
+    auto candidate = parse(context, source);
+    if (!candidate || mlir::failed(mlir::verify(*candidate)))
+      return fail("deep generated witness must pass native lexical verification");
+    std::string output;
+    llvm::raw_string_ostream stream(output);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
+      return fail("deep generated equation chain failed emission");
+    stream.flush();
+    if (output.find("electrical [0:(" + expectedCount + " - 1)] nestedTap;") == std::string::npos ||
+        output.find("I(nestedTap[" + expectedOrdinal + "], p) <+ (V(nestedTap[" + expectedOrdinal +
+                    "], p) / 1000);") == std::string::npos ||
+        llvm::StringRef(output).count("    for (") != depth ||
+        llvm::StringRef(output).count("  genvar ") != depth ||
+        llvm::StringRef(output).count(" <+ ") != 2 ||
+        mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("deep generated equation chain lost compact exact row-major mapping");
+    std::string unmatched = output;
+    const size_t loopEnd = unmatched.find("    end\n");
+    if (loopEnd == std::string::npos)
+      return fail("deep generated reparse control lost loop terminator");
+    unmatched.erase(loopEnd, std::string("    end\n").size());
+    if (mlir::succeeded(nodal::reparseBackendTarget(unmatched, *configuration)))
+      return fail("deep generated reparse accepted unmatched lexical loops");
+    std::string invalidStep = output;
+    const std::string update = "middle_1_index = middle_1_index + 2";
+    const size_t updatePosition = invalidStep.find(update);
+    if (updatePosition == std::string::npos)
+      return fail("deep generated reparse control lost middle loop update");
+    invalidStep.replace(updatePosition, update.size(), "middle_1_index = middle_1_index + 0");
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidStep, *configuration)))
+      return fail("deep generated reparse accepted zero-step middle loop");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("deep generated equation repeat failed");
+    repeatedStream.flush();
+    if (repeated != output)
+      return fail("deep generated equation output is nondeterministic");
+
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() != "nodal.generate")
+        return;
+      operation->setAttr("lower", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0));
+      operation->setAttr("upper",
+                         mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2097152));
+      operation->setAttr("step", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 1));
+      mlir::NamedAttrList metadata(operation->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("maximum_trip_count",
+                   mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2097152));
+      operation->setAttr("metadata", metadata.getDictionary(&context));
+    });
+    if (mlir::failed(mlir::verify(*candidate)))
+      return fail("overflow witness must reach backend product validation");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("deep generated product overflow was accepted");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deep generated product overflow published partial output");
+  }
+
+  for (llvm::StringRef mutation :
+       {"second-branch-owner", "second-access-owner", "second-contribution-destination"}) {
+    auto invalid = parse(context, kNestedGeneratedNodeGroupEquationsModule);
+    if (!invalid)
+      return fail("could not parse nested generated analog-node group mutation fixture");
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> accesses;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    invalid->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.access")
+        accesses.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (branches.size() != 2 || accesses.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node group mutation lost its direct equations");
+    if (mutation == "second-branch-owner") {
+      mlir::NamedAttrList metadata(branches[1]->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner",
+                   mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+      branches[1]->setAttr("metadata", metadata.getDictionary(&context));
+    } else if (mutation == "second-access-owner") {
+      mlir::NamedAttrList metadata(accesses[1]->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner",
+                   mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+      accesses[1]->setAttr("metadata", metadata.getDictionary(&context));
+    } else {
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, stream)))
+      return fail("forged nested generated analog-node group equation passed verification");
+    stream.flush();
+    if (output != "sentinel")
+      return fail("forged nested generated analog-node group equation published partial output");
+  }
+
+  // Group width is independent of ownership: extend the same canonical source
+  // with disjoint branches, rather than adding a special three-node profile.
+  for (unsigned width : {3u, 16u}) {
+    std::string source = kNestedGeneratedNodeGroupEquationsModule.str();
+    auto copyLine = [&](llvm::StringRef anchor) {
+      const size_t begin = source.find(anchor.str());
+      const size_t end = source.find('\n', begin);
+      return source.substr(begin, end - begin + 1);
+    };
+    const std::string node = copyLine("        %tap =");
+    const std::string branch = copyLine("        %tap_branch =");
+    const size_t expressionBegin = source.find("          %tap_voltage =");
+    const size_t expressionEnd = source.find("          %return_voltage =");
+    const std::string expression = source.substr(expressionBegin, expressionEnd - expressionBegin);
+    auto rename = [](std::string text, unsigned index) {
+      for (const auto &replacement :
+           {std::make_pair(std::string("nestedTap"), "extraNode" + std::to_string(index)),
+            std::make_pair(std::string("tap"), "extra" + std::to_string(index))}) {
+        size_t position = 0;
+        while ((position = text.find(replacement.first, position)) != std::string::npos) {
+          text.replace(position, replacement.first.size(), replacement.second);
+          position += replacement.second.size();
+        }
+      }
+      return text;
+    };
+    for (unsigned index = 2; index < width; ++index) {
+      source.insert(source.find("        %tap_branch ="), rename(node, index));
+      source.insert(source.find("        \"nodal.analog\""), rename(branch, index));
+      source.insert(source.find("          %return_voltage ="), rename(expression, index));
+    }
+    for (unsigned variant : {0u, 1u, 2u, 3u}) {
+      const bool forged = variant == 1 || variant == 3;
+      auto candidate = parse(context, source);
+      if (!candidate)
+        return fail("could not parse widened generated branch group");
+      mlir::Operation *lastNode = nullptr;
+      unsigned nodes = 0;
+      candidate->walk([&](mlir::Operation *operation) {
+        if (operation->getName().getStringRef() == "nodal.node") {
+          lastNode = operation;
+          ++nodes;
+        }
+      });
+      if (nodes != width || !lastNode)
+        return fail("widened generated branch group lost nodes");
+      if (variant >= 2) {
+        llvm::SmallVector<mlir::Operation *> accesses;
+        candidate->walk([&](mlir::Operation *operation) {
+          if (operation->getName().getStringRef() == "nodal.access")
+            accesses.push_back(operation);
+        });
+        for (mlir::Operation *access : accesses) {
+          mlir::Operation *unused = access->clone();
+          access->getBlock()->getOperations().insert(access->getIterator(), unused);
+          unused->setAttr("kind", mlir::StringAttr::get(&context, "flow"));
+          if (forged) {
+            mlir::NamedAttrList metadata(unused->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+            metadata.set("generated_owner", mlir::StringAttr::get(&context, "wrong-owner"));
+            unused->setAttr("metadata", metadata.getDictionary(&context));
+          }
+        }
+      } else if (forged)
+        lastNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "wrong-owner"));
+      std::string output = forged ? "sentinel" : "";
+      llvm::raw_string_ostream stream(output);
+      const bool emitted =
+          mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+      stream.flush();
+      if (forged) {
+        if (emitted || output != "sentinel")
+          return fail("widened generated group accepted forged ownership or published output");
+        continue;
+      }
+      if (!emitted || output.find("  electrical n, p;\n") == std::string::npos ||
+          llvm::StringRef(output).count("  electrical ") != width + 1 ||
+          llvm::StringRef(output).count(" <+ ") != width ||
+          llvm::StringRef(output).count("    for (") != 2)
+        return fail("widened generated branch group lost compact topology");
+      for (unsigned index = 2; index < width; ++index) {
+        const std::string name = "extraNode" + std::to_string(index);
+        if (output.find("electrical [" + nestedGroupExtent + "] " + name) == std::string::npos ||
+            output.find("I(" + name + "[" + nestedFlatIndex + "], p) <+ (V(" + name + "[" +
+                        nestedFlatIndex + "], p) / 1000)") == std::string::npos)
+          return fail("widened generated group changed per-branch row-major mapping");
+      }
+      if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+        return fail("widened generated group failed target reparse");
+      std::string repeated;
+      llvm::raw_string_ostream repeatedStream(repeated);
+      if (mlir::failed(
+              nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+        return fail("widened generated group repeat emission failed");
+      repeatedStream.flush();
+      if (repeated != output)
+        return fail("widened generated group target is nondeterministic");
+    }
+  }
+
+  std::string nestedGeneratedNodeGroupIdtSource = kNestedGeneratedNodeGroupEquationsModule.str();
+  auto nestedGroupIdtExpression =
+      nestedGeneratedNodeGroupIdtSource.find("          %tap_resistance =");
+  auto nestedGroupIdtContribution = nestedGeneratedNodeGroupIdtSource.find(
+      "          \"nodal.contribute\"", nestedGroupIdtExpression);
+  if (nestedGroupIdtExpression == std::string::npos ||
+      nestedGroupIdtContribution == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its expression anchors");
+  nestedGeneratedNodeGroupIdtSource.replace(
+      nestedGroupIdtExpression, nestedGroupIdtContribution - nestedGroupIdtExpression,
+      "          %tap_second = \"nodal.real_literal\"() <{value = 1.0 : f64, metadata = {}}> "
+      ": () -> f64\n"
+      "          %tap_rate = \"nodal.analog_div\"(%tap_voltage, %tap_second) <{metadata = {}}> "
+      ": (f64, f64) -> f64\n"
+      "          %tap_initial = \"nodal.real_literal\"() <{value = 0.0 : f64, metadata = {}}> "
+      ": () -> f64\n"
+      "          %tap_integral = \"nodal.analog_idt\"(%tap_rate, %tap_initial) <{analyses = "
+      "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+      "\"transient\"], context = \"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", initial_dimension = "
+      "\"voltage\", initialization = \"fixed\", input_dimension = \"time^-1*voltage\", "
+      "metadata = {identity = \"tap_integral\"}, operator_contract = \"increment35\", "
+      "operator_id = \"NestedGeneratedNodeGroupEquations.tap_integral\", owner = "
+      "\"NestedGeneratedNodeGroupEquations\", result_dimension = \"voltage\", state_id = "
+      "\"NestedGeneratedNodeGroupEquations.tap_integral.state\"}> : (f64, f64) -> f64\n");
+  nestedGroupIdtContribution = nestedGeneratedNodeGroupIdtSource.find("%tap_branch, %tap_current");
+  if (nestedGroupIdtContribution == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its contribution operand");
+  nestedGeneratedNodeGroupIdtSource.replace(nestedGroupIdtContribution,
+                                            std::string("%tap_branch, %tap_current").size(),
+                                            "%tap_branch, %tap_integral");
+  auto nestedGroupIdtKind =
+      nestedGeneratedNodeGroupIdtSource.find("kind = \"flow\"", nestedGroupIdtContribution);
+  if (nestedGroupIdtKind == std::string::npos)
+    return fail("nested generated analog-node group idt fixture lost its contribution kind");
+  nestedGeneratedNodeGroupIdtSource.replace(
+      nestedGroupIdtKind, std::string("kind = \"flow\"").size(), "kind = \"potential\"");
+
+  for (llvm::StringRef mutation :
+       {"valid", "operator-owner", "operator-induction", "state", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeGroupIdtSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node group idt fixture");
+    mlir::Operation *integral = nullptr;
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.analog_idt")
+        integral = operation;
+      else if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (!integral || branches.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node group idt fixture lost its owned topology");
+    if (mutation == "operator-owner")
+      integral->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    if (mutation == "operator-induction")
+      integral->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0.index"));
+    if (mutation == "state")
+      integral->setAttr(
+          "state_id",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.tap_integral.forged"));
+    if (mutation == "wrong-branch")
+      contributions[0]->setOperand(0, branches[1]->getResult(0));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node group idt ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node group idt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node group idt emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "] , p)") != std::string::npos)
+      return fail("nested generated analog-node group idt introduced unstable target spacing");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], p) <+ idt((V(nestedTap[" +
+                    nestedFlatIndex + "], p) / 1), 0)") == std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "], n) <+ (V(nestedReturn[" +
+                    nestedFlatIndex + "], n) / 2000)") == std::string::npos)
+      return fail("nested generated analog-node group idt lost its independent owned equations");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node group idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node group idt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node group idt emission is nondeterministic");
+  }
+
+  std::string nestedGeneratedNodeGroupDdtSource = kNestedGeneratedNodeGroupEquationsModule.str();
+  auto nestedGroupDdtExpression =
+      nestedGeneratedNodeGroupDdtSource.find("          %tap_resistance =");
+  auto nestedGroupDdtContribution = nestedGeneratedNodeGroupDdtSource.find(
+      "          \"nodal.contribute\"", nestedGroupDdtExpression);
+  if (nestedGroupDdtExpression == std::string::npos ||
+      nestedGroupDdtContribution == std::string::npos)
+    return fail("nested generated analog-node group ddt fixture lost its expression anchors");
+  nestedGeneratedNodeGroupDdtSource.replace(
+      nestedGroupDdtExpression, nestedGroupDdtContribution - nestedGroupDdtExpression,
+      "          %tap_derivative = \"nodal.analog_ddt\"(%tap_voltage) <{analyses = "
+      "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+      "\"transient\"], context = \"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", initialization = "
+      "\"none\", input_dimension = \"voltage\", metadata = {identity = \"tap_derivative\"}, "
+      "operator_contract = "
+      "\"increment35\", operator_id = \"NestedGeneratedNodeGroupEquations.tap_derivative\", "
+      "owner = \"NestedGeneratedNodeGroupEquations\", result_dimension = "
+      "\"time^-1*voltage\"}> : (f64) -> f64\n");
+  nestedGroupDdtContribution = nestedGeneratedNodeGroupDdtSource.find("%tap_branch, %tap_current");
+  if (nestedGroupDdtContribution == std::string::npos)
+    return fail("nested generated analog-node group ddt fixture lost its contribution operand");
+  nestedGeneratedNodeGroupDdtSource.replace(nestedGroupDdtContribution,
+                                            std::string("%tap_branch, %tap_current").size(),
+                                            "%tap_branch, %tap_derivative");
+
+  for (llvm::StringRef mutation : {"valid", "operator-owner", "operator-induction", "wrong-branch",
+                                   "second-operator", "swapped-branches", "second-operator-owner",
+                                   "direct-second-operator", "direct-swapped-branches"}) {
+    std::string source = nestedGeneratedNodeGroupDdtSource;
+    const bool direct = mutation.starts_with("direct-");
+    if (mutation == "second-operator" || mutation == "swapped-branches" ||
+        mutation == "second-operator-owner" || direct) {
+      auto secondExpression = source.find("          %return_resistance =");
+      auto secondContribution = source.find("          \"nodal.contribute\"", secondExpression);
+      if (secondExpression == std::string::npos || secondContribution == std::string::npos)
+        return fail("nested generated analog-node group second ddt lost its expression anchors");
+      source.replace(
+          secondExpression, secondContribution - secondExpression,
+          "          %return_derivative = \"nodal.analog_ddt\"(%return_voltage) <{analyses = "
+          "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+          "\"transient\"], context = \"contribution\", generated_owner = "
+          "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", "
+          "generated_induction = "
+          "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", "
+          "initialization = \"none\", input_dimension = \"voltage\", metadata = {identity = "
+          "\"return_derivative\"}, "
+          "operator_contract = \"increment35\", operator_id = "
+          "\"NestedGeneratedNodeGroupEquations.return_derivative\", owner = "
+          "\"NestedGeneratedNodeGroupEquations\", result_dimension = "
+          "\"time^-1*voltage\"}> : (f64) -> f64\n");
+      secondContribution = source.find("%return_branch, %return_current");
+      if (secondContribution == std::string::npos)
+        return fail("nested generated analog-node group second ddt lost its contribution operand");
+      source.replace(secondContribution, std::string("%return_branch, %return_current").size(),
+                     "%return_branch, %return_derivative");
+    }
+
+    if (direct) {
+      const size_t outer = source.find("    \"nodal.generate\"");
+      const size_t inner = source.find("      \"nodal.generate\"", outer + 1);
+      const std::string outerClose = "    }) : () -> ()\n";
+      if (outer == std::string::npos || inner == std::string::npos)
+        return fail("direct generated group lost its range anchors");
+      source.erase(outer, inner - outer);
+      const size_t close = source.find(outerClose);
+      if (close == std::string::npos)
+        return fail("direct generated group lost its outer closing anchor");
+      source.erase(close, outerClose.size());
+      const std::string oldOwner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1";
+      const std::string newOwner = "NestedGeneratedNodeGroupEquations.generate_1";
+      size_t position = 0;
+      while ((position = source.find(oldOwner, position)) != std::string::npos) {
+        source.replace(position, oldOwner.size(), newOwner);
+        position += newOwner.size();
+      }
+    }
+
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node group ddt fixture");
+    llvm::SmallVector<mlir::Operation *, 2> derivatives;
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.analog_ddt")
+        derivatives.push_back(operation);
+      else if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    const bool multipleOperators = mutation == "second-operator" ||
+                                   mutation == "swapped-branches" ||
+                                   mutation == "second-operator-owner" || direct;
+    const size_t expectedDerivatives = multipleOperators ? 2 : 1;
+    if (derivatives.size() != expectedDerivatives || branches.size() != 2 ||
+        contributions.size() != 2)
+      return fail("nested generated analog-node group ddt fixture lost its owned topology");
+    if (mutation == "operator-owner")
+      derivatives.front()->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    if (mutation == "operator-induction")
+      derivatives.front()->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0.index"));
+    if (mutation == "wrong-branch")
+      contributions.front()->setOperand(0, branches[1]->getResult(0));
+
+    if (mutation == "swapped-branches" || mutation == "direct-swapped-branches") {
+      contributions[0]->setOperand(0, branches[1]->getResult(0));
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+    }
+    if (mutation == "second-operator-owner")
+      derivatives.back()->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    const bool valid = mutation == "valid" || mutation == "second-operator" ||
+                       mutation == "direct-second-operator";
+    std::string output = valid ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (!valid) {
+      if (emitted)
+        return fail("forged nested generated analog-node group ddt ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node group ddt published partial output");
+      continue;
+    }
+    const std::string expectedIndex = direct ? "((generate_1_index - 2) / 3)" : nestedFlatIndex;
+    if (!emitted)
+      return fail("nested generated analog-node group ddt emission failed");
+    if (output.find("I(nestedTap[" + expectedIndex + "] , p)") != std::string::npos)
+      return fail("nested generated analog-node group ddt introduced unstable target spacing");
+    if (output.find("I(nestedTap[" + expectedIndex + "], p) <+ ddt(V(nestedTap[" + expectedIndex +
+                    "], p))") == std::string::npos ||
+        output.find("I(nestedReturn[" + expectedIndex + "], n) <+ " +
+                    (multipleOperators ? "ddt(V(nestedReturn[" : "(V(nestedReturn[") +
+                    expectedIndex + (multipleOperators ? "], n))" : "], n) / 2000)")) ==
+            std::string::npos)
+      return fail("nested generated analog-node group ddt lost its independent owned equations");
+    if (llvm::StringRef(output).count("    for (") != (direct ? 1u : 2u))
+      return fail("generated group changed authored dimension count");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node group ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node group ddt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node group ddt emission is nondeterministic");
+  }
+
+  std::string nestedGeneratedNodeGroupMixedSource = nestedGeneratedNodeGroupIdtSource;
+  auto nestedGroupMixedExpression =
+      nestedGeneratedNodeGroupMixedSource.find("          %return_resistance =");
+  auto nestedGroupMixedContribution = nestedGeneratedNodeGroupMixedSource.find(
+      "          \"nodal.contribute\"", nestedGroupMixedExpression);
+  if (nestedGroupMixedExpression == std::string::npos ||
+      nestedGroupMixedContribution == std::string::npos)
+    return fail("nested generated analog-node mixed fixture lost its expression anchors");
+  nestedGeneratedNodeGroupMixedSource.replace(
+      nestedGroupMixedExpression, nestedGroupMixedContribution - nestedGroupMixedExpression,
+      "          %return_derivative = \"nodal.analog_ddt\"(%return_voltage) <{analyses = "
+      "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+      "\"transient\"], context = \"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", initialization = "
+      "\"none\", input_dimension = \"voltage\", metadata = {identity = "
+      "\"return_derivative\"}, operator_contract = \"increment35\", operator_id = "
+      "\"NestedGeneratedNodeGroupEquations.return_derivative\", owner = "
+      "\"NestedGeneratedNodeGroupEquations\", result_dimension = \"time^-1*voltage\"}> : "
+      "(f64) -> f64\n");
+  nestedGroupMixedContribution =
+      nestedGeneratedNodeGroupMixedSource.find("%return_branch, %return_current");
+  if (nestedGroupMixedContribution == std::string::npos)
+    return fail("nested generated analog-node mixed fixture lost its contribution operand");
+  nestedGeneratedNodeGroupMixedSource.replace(nestedGroupMixedContribution,
+                                              std::string("%return_branch, %return_current").size(),
+                                              "%return_branch, %return_derivative");
+
+  for (llvm::StringRef mutation :
+       {"valid", "derivative-owner", "derivative-induction", "integral-state", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeGroupMixedSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node mixed fixture");
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *integral = nullptr;
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.analog_ddt")
+        derivative = operation;
+      else if (name == "nodal.analog_idt")
+        integral = operation;
+      else if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (!derivative || !integral || branches.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node mixed fixture lost its owned topology");
+    if (mutation == "derivative-owner")
+      derivative->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    if (mutation == "derivative-induction")
+      derivative->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0.index"));
+    if (mutation == "integral-state")
+      integral->setAttr(
+          "state_id",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.mixed.forged"));
+    if (mutation == "wrong-branch")
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node mixed ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node mixed ownership published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node mixed emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "] , p)") != std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "] , n)") != std::string::npos)
+      return fail("nested generated analog-node mixed output introduced unstable spacing");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], p) <+ idt((V(nestedTap[" +
+                    nestedFlatIndex + "], p) / 1), 0)") == std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "], n) <+ ddt(V(nestedReturn[" +
+                    nestedFlatIndex + "], n))") == std::string::npos)
+      return fail("nested generated analog-node mixed output lost its distinct operators");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node mixed output failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node mixed repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node mixed emission is nondeterministic");
+  }
+
+  std::string nestedGeneratedNodeDdtSource = kNestedGeneratedNodeEquationModule.str();
+  auto nestedDdtResistance = nestedGeneratedNodeDdtSource.find("          %resistance =");
+  auto nestedDdtContribution =
+      nestedGeneratedNodeDdtSource.find("          \"nodal.contribute\"", nestedDdtResistance);
+  if (nestedDdtResistance == std::string::npos || nestedDdtContribution == std::string::npos)
+    return fail("nested generated analog-node ddt fixture lost its expression anchors");
+  nestedGeneratedNodeDdtSource.replace(
+      nestedDdtResistance, nestedDdtContribution - nestedDdtResistance,
+      "          %derivative = \"nodal.analog_ddt\"(%voltage) <{analyses = [\"ac\", \"dc\", "
+      "\"initialization\", \"noise\", \"operating-point\", \"transient\"], context = "
+      "\"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeEquation.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeEquation.generate_0.generate_1.index\", initialization = \"none\", "
+      "input_dimension = \"voltage\", metadata = {identity = \"derivative\"}, operator_contract = "
+      "\"increment35\", operator_id = \"NestedGeneratedNodeEquation.derivative\", owner = "
+      "\"NestedGeneratedNodeEquation\", result_dimension = \"time^-1*voltage\"}> : (f64) -> "
+      "f64\n");
+  nestedDdtContribution = nestedGeneratedNodeDdtSource.find("%branch, %current");
+  if (nestedDdtContribution == std::string::npos)
+    return fail("nested generated analog-node ddt fixture lost its contribution operand");
+  nestedGeneratedNodeDdtSource.replace(
+      nestedDdtContribution, std::string("%branch, %current").size(), "%branch, %derivative");
+
+  for (llvm::StringRef mutation : {"valid", "operator-owner", "operator-induction"}) {
+    auto candidate = parse(context, nestedGeneratedNodeDdtSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node ddt fixture");
+    mlir::Operation *derivative = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_ddt")
+        derivative = operation;
+    });
+    if (!derivative)
+      return fail("nested generated analog-node ddt fixture lost its operator");
+    if (mutation == "operator-owner")
+      derivative->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "operator-induction")
+      derivative->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node ddt ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node ddt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node ddt emission failed");
+    if (output.find("I(nestedTap[" + nestedFlatIndex + "], p) <+ ddt(V(nestedTap[" +
+                    nestedFlatIndex + "], p))") == std::string::npos)
+      return fail("nested generated analog-node ddt lost its row-major owned operator path");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node ddt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node ddt emission is nondeterministic");
+  }
+
+  std::string nestedGeneratedNodeIdtSource = kNestedGeneratedNodeEquationModule.str();
+  auto nestedIdtResistance = nestedGeneratedNodeIdtSource.find("          %resistance =");
+  auto nestedIdtContribution =
+      nestedGeneratedNodeIdtSource.find("          \"nodal.contribute\"", nestedIdtResistance);
+  if (nestedIdtResistance == std::string::npos || nestedIdtContribution == std::string::npos)
+    return fail("nested generated analog-node idt fixture lost its expression anchors");
+  nestedGeneratedNodeIdtSource.replace(
+      nestedIdtResistance, nestedIdtContribution - nestedIdtResistance,
+      "          %second = \"nodal.real_literal\"() <{value = 1.0 : f64, metadata = {}}> : () "
+      "-> f64\n"
+      "          %rate = \"nodal.analog_div\"(%voltage, %second) <{metadata = {}}> : (f64, "
+      "f64) -> f64\n"
+      "          %initial = \"nodal.real_literal\"() <{value = 0.0 : f64, metadata = {}}> : () "
+      "-> f64\n"
+      "          %integral = \"nodal.analog_idt\"(%rate, %initial) <{analyses = [\"ac\", "
+      "\"dc\", \"initialization\", \"noise\", \"operating-point\", \"transient\"], context = "
+      "\"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeEquation.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeEquation.generate_0.generate_1.index\", initial_dimension = "
+      "\"voltage\", initialization = \"fixed\", input_dimension = \"time^-1*voltage\", metadata "
+      "= {identity = \"integral\"}, operator_contract = \"increment35\", operator_id = "
+      "\"NestedGeneratedNodeEquation.integral\", owner = \"NestedGeneratedNodeEquation\", "
+      "result_dimension = \"voltage\", state_id = "
+      "\"NestedGeneratedNodeEquation.integral.state\"}> : (f64, f64) -> f64\n");
+  nestedIdtContribution = nestedGeneratedNodeIdtSource.find("%branch, %current");
+  if (nestedIdtContribution == std::string::npos)
+    return fail("nested generated analog-node idt fixture lost its contribution operand");
+  nestedGeneratedNodeIdtSource.replace(
+      nestedIdtContribution, std::string("%branch, %current").size(), "%branch, %integral");
+  auto nestedIdtKind = nestedGeneratedNodeIdtSource.find("kind = \"flow\"", nestedIdtContribution);
+  if (nestedIdtKind == std::string::npos)
+    return fail("nested generated analog-node idt fixture lost its contribution kind");
+  nestedGeneratedNodeIdtSource.replace(nestedIdtKind, std::string("kind = \"flow\"").size(),
+                                       "kind = \"potential\"");
+
+  for (llvm::StringRef mutation : {"valid", "operator-owner", "operator-induction", "state"}) {
+    auto candidate = parse(context, nestedGeneratedNodeIdtSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node idt fixture");
+    mlir::Operation *integral = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_idt")
+        integral = operation;
+    });
+    if (!integral)
+      return fail("nested generated analog-node idt fixture lost its stateful operator");
+    if (mutation == "operator-owner")
+      integral->setAttr("generated_owner",
+                        mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "operator-induction")
+      integral->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "state")
+      integral->setAttr("state_id", mlir::StringAttr::get(
+                                        &context, "NestedGeneratedNodeEquation.integral.forged"));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node idt ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node idt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node idt emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], p) <+ idt((V(nestedTap[" +
+                    nestedFlatIndex + "], p) / 1), 0)") == std::string::npos)
+      return fail("nested generated analog-node idt lost its row-major owned stateful path");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node idt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node idt emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "second-owner", "second-induction", "second-source",
+                                   "operator-owner", "operator-induction", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeDdtSource);
+    if (!candidate)
+      return fail("could not parse nested peer generated analog-node ddt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_ddt")
+        derivative = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !derivative || !contribution)
+      return fail("nested peer generated analog-node ddt fixture lost its topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node ddt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "second-owner")
+      secondNode->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "second-induction")
+      secondNode->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "operator-owner")
+      derivative->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "operator-induction")
+      derivative->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "wrong-branch") {
+      mlir::Operation *forgedBranch = branch->clone();
+      branch->getBlock()->getOperations().insert(std::next(branch->getIterator()), forgedBranch);
+      contribution->setOperand(0, forgedBranch->getResult(0));
+    }
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested peer generated analog-node ddt passed backend verification");
+      if (output != "sentinel")
+        return fail("forged nested peer generated analog-node ddt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested peer generated analog-node ddt emission failed");
+    if (output.find("I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "]) <+ ddt(V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
+                    nestedFlatIndex + "]))") == std::string::npos)
+      return fail("nested peer generated analog-node ddt lost its row-major endpoints");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested peer generated analog-node ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer generated analog-node ddt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested peer generated analog-node ddt emission is nondeterministic");
+  }
+
+  std::string nestedPeerScaledDdtSource = nestedGeneratedNodeDdtSource;
+  auto nestedPeerScaledDdtContribution =
+      nestedPeerScaledDdtSource.find("          \"nodal.contribute\"");
+  auto nestedPeerScaledDdtOperand =
+      nestedPeerScaledDdtSource.find("%branch, %derivative", nestedPeerScaledDdtContribution);
+  if (nestedPeerScaledDdtContribution == std::string::npos ||
+      nestedPeerScaledDdtOperand == std::string::npos)
+    return fail("nested peer scaled ddt fixture lost its contribution anchor");
+  nestedPeerScaledDdtSource.insert(
+      nestedPeerScaledDdtContribution,
+      "          %capacitance = \"nodal.real_literal\"() <{value = 1.0e-12 : f64, metadata = "
+      "{}}> : () -> f64\n"
+      "          %scaled = \"nodal.analog_mul\"(%capacitance, %derivative) <{metadata = {}}> : "
+      "(f64, f64) -> f64\n");
+  nestedPeerScaledDdtOperand =
+      nestedPeerScaledDdtSource.find("%branch, %derivative", nestedPeerScaledDdtContribution);
+  nestedPeerScaledDdtSource.replace(nestedPeerScaledDdtOperand,
+                                    std::string("%branch, %derivative").size(), "%branch, %scaled");
+
+  for (llvm::StringRef mutation : {"valid", "fanout"}) {
+    auto candidate = parse(context, nestedPeerScaledDdtSource);
+    if (!candidate)
+      return fail("could not parse nested peer scaled ddt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *scaled = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_mul" &&
+          operation->getOperand(1).getDefiningOp() &&
+          operation->getOperand(1).getDefiningOp()->getName().getStringRef() == "nodal.analog_ddt")
+        scaled = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !scaled || !contribution)
+      return fail("nested peer scaled ddt fixture lost its result path or topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer scaled ddt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "fanout") {
+      mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
+      state.addOperands(scaled->getResult(0));
+      state.addTypes(scaled->getResult(0).getType());
+      state.addAttribute("metadata", mlir::DictionaryAttr::get(&context));
+      mlir::Operation *escape = mlir::Operation::create(state);
+      contribution->getBlock()->getOperations().insert(contribution->getIterator(), escape);
+    }
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("nested peer scaled ddt fanout escaped or published partial output");
+      continue;
+    }
+    const std::string equation = "I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
+                                 nestedFlatIndex + "]) <+ (1e-12 * ddt(V(nestedTap[" +
+                                 nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex + "])));";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("nested peer scaled ddt lost its owned row-major result path");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("nested peer scaled ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer scaled ddt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("nested peer scaled ddt emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation :
+       {"valid", "second-owner", "second-induction", "second-source", "operator-owner",
+        "operator-induction", "state", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeIdtSource);
+    if (!candidate)
+      return fail("could not parse nested peer generated analog-node idt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *integral = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_idt")
+        integral = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !integral || !contribution)
+      return fail("nested peer generated analog-node idt fixture lost its topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node idt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "second-owner")
+      secondNode->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "second-induction")
+      secondNode->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "operator-owner")
+      integral->setAttr("generated_owner",
+                        mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "operator-induction")
+      integral->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "state")
+      integral->setAttr("state_id", mlir::StringAttr::get(
+                                        &context, "NestedGeneratedNodeEquation.integral.forged"));
+    if (mutation == "wrong-branch") {
+      mlir::Operation *forgedBranch = branch->clone();
+      branch->getBlock()->getOperations().insert(std::next(branch->getIterator()), forgedBranch);
+      contribution->setOperand(0, forgedBranch->getResult(0));
+    }
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested peer generated analog-node idt passed backend verification");
+      if (output != "sentinel")
+        return fail("forged nested peer generated analog-node idt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested peer generated analog-node idt emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "]) <+ idt((V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
+                    nestedFlatIndex + "]) / 1), 0)") == std::string::npos)
+      return fail("nested peer generated analog-node idt lost its row-major endpoints");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested peer generated analog-node idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer generated analog-node idt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested peer generated analog-node idt emission is nondeterministic");
+  }
+
+  std::string nestedPeerScaledIdtSource = nestedGeneratedNodeIdtSource;
+  auto nestedPeerScaledContribution =
+      nestedPeerScaledIdtSource.find("          \"nodal.contribute\"");
+  auto nestedPeerScaledOperand =
+      nestedPeerScaledIdtSource.find("%branch, %integral", nestedPeerScaledContribution);
+  if (nestedPeerScaledContribution == std::string::npos ||
+      nestedPeerScaledOperand == std::string::npos)
+    return fail("nested peer scaled idt fixture lost its contribution anchor");
+  nestedPeerScaledIdtSource.insert(
+      nestedPeerScaledContribution,
+      "          %scale = \"nodal.real_literal\"() <{value = 2.0 : f64, metadata = {}}> : () "
+      "-> f64\n"
+      "          %scaled = \"nodal.analog_div\"(%integral, %scale) <{metadata = {}}> : (f64, "
+      "f64) -> f64\n");
+  nestedPeerScaledOperand =
+      nestedPeerScaledIdtSource.find("%branch, %integral", nestedPeerScaledContribution);
+  nestedPeerScaledIdtSource.replace(nestedPeerScaledOperand,
+                                    std::string("%branch, %integral").size(), "%branch, %scaled");
+
+  for (llvm::StringRef mutation : {"valid", "fanout", "negative-origin"}) {
+    auto candidate = parse(context, nestedPeerScaledIdtSource);
+    if (!candidate)
+      return fail("could not parse nested peer scaled idt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *scaled = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_div" &&
+          operation->getOperand(0).getDefiningOp() &&
+          operation->getOperand(0).getDefiningOp()->getName().getStringRef() == "nodal.analog_idt")
+        scaled = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !scaled || !contribution)
+      return fail("nested peer scaled idt fixture lost its result path or topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer scaled idt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "negative-origin") {
+      llvm::SmallVector<mlir::Operation *, 2> ranges;
+      candidate->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *operation) {
+        if (operation->getName().getStringRef() == "nodal.generate")
+          ranges.push_back(operation);
+      });
+      if (ranges.size() != 2)
+        return fail("negative-origin nested peer scaled idt lost its two ranges");
+      auto integer = [&](int64_t value) {
+        return mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), value);
+      };
+      auto setUnitRange = [&](mlir::Operation *range, int64_t lower, int64_t upper) {
+        range->setAttr("lower", integer(lower));
+        range->setAttr("upper", integer(upper));
+        range->setAttr("step", integer(1));
+        mlir::NamedAttrList metadata(range->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+        metadata.set("maximum_trip_count", integer(upper - lower));
+        range->setAttr("metadata", metadata.getDictionary(&context));
+      };
+      setUnitRange(ranges[0], -2, 2);
+      setUnitRange(ranges[1], -3, 1);
+    }
+    if (mutation == "fanout") {
+      mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
+      state.addOperands(scaled->getResult(0));
+      state.addTypes(scaled->getResult(0).getType());
+      state.addAttribute("metadata", mlir::DictionaryAttr::get(&context));
+      mlir::Operation *escape = mlir::Operation::create(state);
+      contribution->getBlock()->getOperations().insert(contribution->getIterator(), escape);
+    }
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation == "fanout") {
+      if (accepted || output != "sentinel")
+        return fail("nested peer scaled idt fanout escaped or published partial output");
+      continue;
+    }
+    const std::string index =
+        mutation == "negative-origin"
+            ? "(((generate_0_index - -2) * (1 - -3)) + (generate_1_index - -3))"
+            : nestedFlatIndex;
+    const std::string equation = "V(nestedTap[" + index + "], nestedReturn[" + index +
+                                 "]) <+ (idt((V(nestedTap[" + index + "], nestedReturn[" + index +
+                                 "]) / 1), 0) / 2);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("nested peer scaled idt lost its owned row-major result path");
+    if (mutation == "negative-origin" &&
+        (output.find("electrical [0:(((2 - -2) * (1 - -3)) - 1)] nestedTap;") ==
+             std::string::npos ||
+         output.find("electrical [0:(((2 - -2) * (1 - -3)) - 1)] nestedReturn;") ==
+             std::string::npos))
+      return fail("negative-origin nested peer scaled idt lost its zero-based extent");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("nested peer scaled idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer scaled idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("nested peer scaled idt emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "owner", "induction", "name", "source"}) {
+    auto group = parse(context, kGeneratedNodeArrayModule);
+    if (!group)
+      return fail("could not parse generated node group fixture");
+    mlir::Operation *firstNode = nullptr;
+    group->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+    });
+    if (!firstNode)
+      return fail("generated node group fixture has no first node");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->push_back(secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    secondNode->setAttr("source_path",
+                        mlir::StringAttr::get(&context, "GeneratedNodeArray.returnTap"));
+    if (mutation == "owner")
+      secondNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "induction")
+      secondNode->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "name")
+      secondNode->setAttr("name", firstNode->getAttr("name"));
+    if (mutation == "source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*group, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted || output != "sentinel")
+        return fail("invalid second generated node was accepted or published partial output");
+      continue;
+    }
+    if (!emitted ||
+        output.find("  electrical [0:(3 - 1)] tap;\n"
+                    "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos ||
+        output.find("genvar") != std::string::npos ||
+        output.find("analog begin") != std::string::npos)
+      return fail("generated node group did not preserve separate arrays and declaration order");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node group failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*group, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node group repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node group emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation :
+       {"valid-single", "valid-group", "valid-multi", "branch-owner", "source", "second-owner",
+        "second-induction", "second-name", "second-source", "second-source-duplicate",
+        "second-branch-owner", "shared-selection", "missing-second-contribution",
+        "duplicate-contribution-target", "generated-pair", "generated-self-branch", "body-shape"}) {
+    auto mixed = parse(context, kGeneratedNodeContributionModule);
+    if (!mixed)
+      return fail("could not parse generated node contribution fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *analog = nullptr;
+    mlir::Operation *contribution = nullptr;
+    mixed->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node")
+        node = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog")
+        analog = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!node || !branch || !analog || !contribution)
+      return fail("generated node contribution fixture lost its direct topology");
+    mlir::Operation *secondNode = nullptr;
+    if (mutation != "valid-single" && mutation != "branch-owner" && mutation != "source") {
+      secondNode = node->clone();
+      node->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+      secondNode->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+      secondNode->setAttr("source_path",
+                          mlir::StringAttr::get(&context, "GeneratedNodeContribution.returnTap"));
+    }
+    if (mutation == "branch-owner") {
+      mlir::NamedAttrList metadata(branch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
+      branch->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "source")
+      node->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "second-owner")
+      secondNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "second-induction")
+      secondNode->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "second-name")
+      secondNode->setAttr("name", node->getAttr("name"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "second-source-duplicate")
+      secondNode->setAttr("source_path", node->getAttr("source_path"));
+    mlir::Operation *secondBranch = nullptr;
+    const bool multi = mutation == "valid-multi" || mutation == "second-branch-owner" ||
+                       mutation == "shared-selection" ||
+                       mutation == "missing-second-contribution" ||
+                       mutation == "duplicate-contribution-target" || mutation == "generated-pair";
+    if (multi) {
+      secondBranch = branch->clone();
+      node->getBlock()->getOperations().insert(analog->getIterator(), secondBranch);
+      secondBranch->setOperand(0, secondNode->getResult(0));
+      if (mutation == "second-branch-owner") {
+        mlir::NamedAttrList metadata(secondBranch->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+        metadata.set("generated_owner", mlir::StringAttr::get(&context, "forged"));
+        secondBranch->setAttr("metadata", metadata.getDictionary(&context));
+      }
+      if (mutation == "shared-selection")
+        secondBranch->setOperand(0, node->getResult(0));
+      if (mutation == "generated-pair")
+        secondBranch->setOperand(1, node->getResult(0));
+      if (mutation != "missing-second-contribution") {
+        mlir::Operation *secondContribution = contribution->clone();
+        analog->getRegion(0).front().push_back(secondContribution);
+        secondContribution->setOperand(0, mutation == "duplicate-contribution-target"
+                                              ? branch->getResult(0)
+                                              : secondBranch->getResult(0));
+      }
+    }
+    if (mutation == "generated-self-branch")
+      branch->setOperand(1, node->getResult(0));
+    if (mutation == "body-shape")
+      node->getBlock()->getOperations().insert(analog->getIterator(), branch->clone());
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid-single" && mutation != "valid-group" && mutation != "valid-multi" &&
+        mutation != "shared-selection" && mutation != "generated-pair") {
+      if (emitted || output != "sentinel")
+        return fail("invalid generated node contribution was accepted or published output");
+      continue;
+    }
+    if (!emitted || output.find("  electrical [0:(3 - 1)] tap;\n") == std::string::npos ||
+        output.find("  genvar generate_0_index;\n") == std::string::npos ||
+        output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos)
+      return fail("generated node contribution lost its array, index, or equation");
+    if (mutation == "valid-group" &&
+        output.find("  electrical [0:(3 - 1)] tap;\n"
+                    "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos)
+      return fail("generated node-group contribution lost declaration order or array bounds");
+    if (mutation == "valid-multi" &&
+        (output.find("  electrical [0:(3 - 1)] tap;\n"
+                     "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos ||
+         output.find("V(returnTap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
+         output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos))
+      return fail("generated node-group contributions lost declaration or equation order");
+    if (mutation == "shared-selection") {
+      const std::string equation = "V(tap[generate_0_index], p) <+ 1;\n";
+      const auto first = output.find(equation);
+      if (first == std::string::npos ||
+          output.find(equation, first + equation.size()) == std::string::npos)
+        return fail("shared generated node did not retain both direct branch contributions");
+    }
+    if (mutation == "generated-pair" &&
+        output.find("V(returnTap[generate_0_index], tap[generate_0_index]) <+ 1;\n") ==
+            std::string::npos)
+      return fail("generated node pair lost its two indexed branch terminals");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node contribution failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*mixed, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node contribution repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node contribution emission is nondeterministic");
+  }
+
+  auto generatedNodeDdt = parse(context, kGeneratedNodeDdtContributionModule);
+  if (!generatedNodeDdt)
+    return fail("could not parse generated node ddt contribution fixture");
+  std::string generatedNodeDdtOutput;
+  llvm::raw_string_ostream generatedNodeDdtStream(generatedNodeDdtOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeDdt, nodal::BackendKind::VerilogA,
+                                      generatedNodeDdtStream)))
+    return fail("generated node ddt contribution emission failed");
+  generatedNodeDdtStream.flush();
+  if (generatedNodeDdtOutput.find("  electrical [1:(4 - 1)] tap;\n") == std::string::npos ||
+      generatedNodeDdtOutput.find(
+          "I(tap[generate_0_index], p) <+ ddt(V(tap[generate_0_index], p));\n") ==
+          std::string::npos)
+    return fail("generated node ddt lost its indexed access or owned operator expression");
+  if (mlir::failed(nodal::reparseBackendTarget(generatedNodeDdtOutput, *configuration)))
+    return fail("generated node ddt target failed independent reparse");
+  std::string repeatedGeneratedNodeDdtOutput;
+  llvm::raw_string_ostream repeatedGeneratedNodeDdtStream(repeatedGeneratedNodeDdtOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedNodeDdt, nodal::BackendKind::VerilogA,
+                                      repeatedGeneratedNodeDdtStream)))
+    return fail("generated node ddt repeated emission failed");
+  repeatedGeneratedNodeDdtStream.flush();
+  if (generatedNodeDdtOutput != repeatedGeneratedNodeDdtOutput)
+    return fail("generated node ddt emission is nondeterministic");
+
+  for (llvm::StringRef mutation : {"owner", "induction", "escape"}) {
+    auto invalid = parse(context, kGeneratedNodeDdtContributionModule);
+    if (!invalid)
+      return fail("could not parse generated node ddt rejection fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *contribution = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.access")
+        access = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !contribution)
+      return fail("generated node ddt rejection fixture lost its access or contribution");
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated node ddt access passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated node ddt access published partial output");
+  }
+
+  std::string generatedNodeIdtSource = kGeneratedNodeDdtContributionModule.str();
+  auto generatedNodeIdtStart = generatedNodeIdtSource.find("        %derivative =");
+  auto generatedNodeIdtEnd = generatedNodeIdtSource.find('\n', generatedNodeIdtStart);
+  if (generatedNodeIdtStart == std::string::npos || generatedNodeIdtEnd == std::string::npos)
+    return fail("generated node idt fixture lost its derivative anchor");
+  generatedNodeIdtSource.replace(
+      generatedNodeIdtStart, generatedNodeIdtEnd - generatedNodeIdtStart,
+      "        %second = \"nodal.real_literal\"() <{value = 1.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %rate = \"nodal.analog_div\"(%voltage, %second) <{metadata = {}}> : (f64, f64) "
+      "-> f64\n"
+      "        %initial = \"nodal.real_literal\"() <{value = 0.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %integral = \"nodal.analog_idt\"(%rate, %initial) <{analyses = [\"ac\", \"dc\", "
+      "\"initialization\", \"noise\", \"operating-point\", \"transient\"], context = "
+      "\"contribution\", generated_owner = \"GeneratedNodeDdtContribution.generate_0\", "
+      "generated_induction = \"GeneratedNodeDdtContribution.generate_0.index\", initial_dimension "
+      "= \"voltage\", initialization = \"fixed\", input_dimension = \"time^-1*voltage\", metadata "
+      "= {identity = \"integral\"}, operator_contract = \"increment35\", operator_id = "
+      "\"GeneratedNodeDdtContribution.integral\", owner = \"GeneratedNodeDdtContribution\", "
+      "result_dimension = \"voltage\", state_id = "
+      "\"GeneratedNodeDdtContribution.integral.state\"}> : (f64, f64) -> f64");
+  auto generatedNodeIdtContribution = generatedNodeIdtSource.find("%branch, %derivative");
+  if (generatedNodeIdtContribution == std::string::npos)
+    return fail("generated node idt fixture lost its contribution anchor");
+  generatedNodeIdtSource.replace(generatedNodeIdtContribution,
+                                 std::string("%branch, %derivative").size(), "%branch, %integral");
+  auto generatedNodeIdtKind =
+      generatedNodeIdtSource.find("kind = \"flow\"", generatedNodeIdtContribution);
+  if (generatedNodeIdtKind == std::string::npos)
+    return fail("generated node idt fixture lost its contribution kind");
+  generatedNodeIdtSource.replace(generatedNodeIdtKind, std::string("kind = \"flow\"").size(),
+                                 "kind = \"potential\"");
+
+  for (llvm::StringRef mutation :
+       {"valid", "access-owner", "access-induction", "operator-owner", "operator-induction",
+        "state", "direct-idt", "escape", "second-access", "second-live-access"}) {
+    std::string source = generatedNodeIdtSource;
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse generated node idt fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *integral = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_idt")
+        integral = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !integral || !contribution)
+      return fail("generated node idt fixture lost its access, state or contribution");
+    if (mutation == "access-owner" || mutation == "access-induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "access-owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "operator-owner")
+      integral->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "operator-induction")
+      integral->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "state")
+      integral->setAttr("state_id", mlir::StringAttr::get(&context, "forged.state"));
+    if (mutation == "direct-idt")
+      integral->setOperand(0, access->getResult(0));
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    if (mutation == "second-access" || mutation == "second-live-access") {
+      mlir::Operation *extraAccess = access->clone();
+      access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access")
+        integral->getOperand(0).getDefiningOp()->setOperand(1, extraAccess->getResult(0));
+    }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "second-access") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated node idt escaped or published partial output");
+      continue;
+    }
+    const std::string equation =
+        "V(tap[generate_0_index], p) <+ idt((V(tap[generate_0_index], p) / 1), 0);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated node idt lost its indexed access or owned stateful expression");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node idt emission is nondeterministic");
+  }
+
+  std::string generatedNodeScaledIdtSource = generatedNodeIdtSource;
+  auto scaledIdtContribution = generatedNodeScaledIdtSource.find("        \"nodal.contribute\"");
+  auto scaledIdtOperand =
+      generatedNodeScaledIdtSource.find("%branch, %integral", scaledIdtContribution);
+  if (scaledIdtContribution == std::string::npos || scaledIdtOperand == std::string::npos)
+    return fail("generated node scaled idt fixture lost its contribution anchor");
+  generatedNodeScaledIdtSource.insert(
+      scaledIdtContribution,
+      "        %scale = \"nodal.real_literal\"() <{value = 2.0 : f64, metadata = {}}> : () -> "
+      "f64\n"
+      "        %scaled = \"nodal.analog_div\"(%integral, %scale) <{metadata = {}}> : (f64, "
+      "f64) -> f64\n");
+  scaledIdtOperand = generatedNodeScaledIdtSource.find("%branch, %integral", scaledIdtContribution);
+  generatedNodeScaledIdtSource.replace(scaledIdtOperand, std::string("%branch, %integral").size(),
+                                       "%branch, %scaled");
+
+  for (llvm::StringRef mutation : {"valid", "fanout"}) {
+    auto candidate = parse(context, generatedNodeScaledIdtSource);
+    if (!candidate)
+      return fail("could not parse generated node scaled idt fixture");
+    mlir::Operation *scaled = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_div" &&
+          operation->getOperand(0).getDefiningOp() &&
+          operation->getOperand(0).getDefiningOp()->getName().getStringRef() == "nodal.analog_idt")
+        scaled = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!scaled || !contribution)
+      return fail("generated node scaled idt fixture lost its result path or contribution");
+    if (mutation == "fanout") {
+      mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
+      state.addOperands(scaled->getResult(0));
+      state.addTypes(scaled->getResult(0).getType());
+      state.addAttribute("metadata", mlir::DictionaryAttr::get(&context));
+      mlir::Operation *escape = mlir::Operation::create(state);
+      contribution->getBlock()->getOperations().insert(contribution->getIterator(), escape);
+    }
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("generated node scaled idt fanout escaped or published partial output");
+      continue;
+    }
+    const std::string equation =
+        "V(tap[generate_0_index], p) <+ (idt((V(tap[generate_0_index], p) / 1), 0) / 2);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated node scaled idt lost its owned memoryless result path");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node scaled idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node scaled idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node scaled idt emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "peer-owner", "peer-induction", "peer-source"}) {
+    auto candidate = parse(context, generatedNodeIdtSource);
+    if (!candidate)
+      return fail("could not parse generated peer-node idt fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node")
+        node = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+    });
+    if (!node || !branch)
+      return fail("generated peer-node idt fixture lost its node or branch");
+    mlir::Operation *peer = node->clone();
+    node->getBlock()->getOperations().insert(branch->getIterator(), peer);
+    peer->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    peer->setAttr("source_path",
+                  mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.returnTap"));
+    mlir::Operation *root = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, peer->getResult(0));
+    if (!root || !root->use_empty())
+      return fail("generated peer-node idt fixture could not release its replaced root terminal");
+    root->erase();
+    if (mutation == "peer-owner")
+      peer->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "peer-induction")
+      peer->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "peer-source")
+      peer->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated peer-node idt escaped or published partial output");
+      continue;
+    }
+    const std::string equation =
+        "V(tap[generate_0_index], returnTap[generate_0_index]) <+ "
+        "idt((V(tap[generate_0_index], returnTap[generate_0_index]) / 1), 0);";
+    if (!accepted ||
+        output.find("  electrical [1:(4 - 1)] tap;\n"
+                    "  electrical [1:(4 - 1)] returnTap;\n") == std::string::npos ||
+        output.find(equation) == std::string::npos)
+      return fail("generated peer-node idt lost its arrays or indexed stateful expression");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated peer-node idt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated peer-node idt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated peer-node idt emission is nondeterministic");
+  }
+
+  std::string generatedNodeAlgebraSource = kGeneratedNodeDdtContributionModule.str();
+  auto derivativeStart = generatedNodeAlgebraSource.find("        %derivative =");
+  auto derivativeEnd = generatedNodeAlgebraSource.find('\n', derivativeStart);
+  if (derivativeStart == std::string::npos || derivativeEnd == std::string::npos)
+    return fail("generated node algebra fixture lost its derivative anchor");
+  const std::string derivativeLine =
+      generatedNodeAlgebraSource.substr(derivativeStart, derivativeEnd - derivativeStart);
+  generatedNodeAlgebraSource.replace(
+      derivativeStart, derivativeEnd - derivativeStart,
+      "        %resistance = \"nodal.real_literal\"() <{value = 1000.0 : f64, metadata = {}}> : "
+      "() -> f64\n"
+      "        %derivative = \"nodal.analog_div\"(%voltage, %resistance) <{metadata = {}}> : "
+      "(f64, f64) -> f64");
+  for (llvm::StringRef mutation : {"valid", "direct", "owner", "induction", "escape", "operator"}) {
+    std::string source = generatedNodeAlgebraSource;
+    if (mutation == "operator") {
+      auto result = source.find("%derivative =");
+      source.replace(result, std::string("%derivative").size(), "%current");
+      std::string nestedDerivative = derivativeLine;
+      nestedDerivative.replace(nestedDerivative.find("%voltage"), std::string("%voltage").size(),
+                               "%current");
+      source.insert(source.find("        \"nodal.contribute\""), nestedDerivative + "\n");
+    }
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse generated node algebra fixture");
+    mlir::Operation *access = nullptr;
+    mlir::Operation *division = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.access")
+        access = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_div")
+        division = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!access || !division || !contribution)
+      return fail("generated node algebra fixture lost its expression path");
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "direct" || mutation == "escape") {
+      contribution->setOperand(1, access->getResult(0));
+      if (mutation == "direct")
+        division->erase();
+    }
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "direct") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated node algebra escaped or published partial output");
+      continue;
+    }
+    const std::string expected = mutation == "direct" ? "V(tap[generate_0_index], p)"
+                                                      : "(V(tap[generate_0_index], p) / 1000)";
+    if (!accepted ||
+        output.find("I(tap[generate_0_index], p) <+ " + expected + ";") == std::string::npos)
+      return fail("generated node algebra lost its indexed access or expression");
+    const std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated node algebra failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated node algebra repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated node algebra emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation : {"valid", "swapped-destinations", "duplicate-access", "owner",
+                                   "induction", "stateful", "stateful-swapped-destinations"}) {
+    const bool stateful = mutation.starts_with("stateful");
+    auto candidate = parse(context, stateful ? llvm::StringRef(kGeneratedNodeDdtContributionModule)
+                                             : llvm::StringRef(generatedNodeAlgebraSource));
+    if (!candidate)
+      return fail("could not parse independent generated-node equations");
+    mlir::Operation *terminal = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *access = nullptr;
+    mlir::Operation *expression = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.terminal")
+        terminal = operation;
+      if (name == "nodal.branch")
+        branch = operation;
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_div" || name == "nodal.analog_ddt")
+        expression = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!terminal || !branch || !access || !expression || !contribution)
+      return fail("independent generated-node equations lost their topology");
+    auto insertAfter = [](mlir::Operation *anchor, mlir::Operation *copy) {
+      anchor->getBlock()->getOperations().insert(std::next(anchor->getIterator()), copy);
+    };
+    mlir::Operation *secondTerminal = terminal->clone();
+    insertAfter(terminal, secondTerminal);
+    secondTerminal->setAttr("name", mlir::StringAttr::get(&context, "n"));
+    mlir::Operation *secondBranch = branch->clone();
+    insertAfter(branch, secondBranch);
+    secondBranch->setOperand(1, secondTerminal->getResult(0));
+    mlir::Operation *secondAccess = access->clone();
+    insertAfter(contribution, secondAccess);
+    secondAccess->setOperand(0, secondBranch->getResult(0));
+    mlir::Operation *secondExpression = expression->clone();
+    insertAfter(secondAccess, secondExpression);
+    secondExpression->setOperand(0, secondAccess->getResult(0));
+    mlir::Operation *secondContribution = contribution->clone();
+    insertAfter(secondExpression, secondContribution);
+    secondContribution->setOperand(0, secondBranch->getResult(0));
+    secondContribution->setOperand(1, secondExpression->getResult(0));
+    if (mutation == "swapped-destinations" || mutation == "stateful-swapped-destinations") {
+      contribution->setOperand(0, secondBranch->getResult(0));
+      secondContribution->setOperand(0, branch->getResult(0));
+    }
+    if (mutation == "duplicate-access") {
+      secondAccess->setOperand(0, branch->getResult(0));
+      mlir::Operation *joined = expression->clone();
+      insertAfter(secondExpression, joined);
+      joined->setOperand(0, expression->getResult(0));
+      joined->setOperand(1, secondExpression->getResult(0));
+      contribution->moveAfter(joined);
+      contribution->setOperand(1, joined->getResult(0));
+      secondContribution->setOperand(1, expression->getOperand(1));
+    }
+    if (mutation == "owner" || mutation == "induction") {
+      mlir::NamedAttrList metadata(secondAccess->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      secondAccess->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (stateful)
+      secondExpression->setAttr(
+          "operator_id", mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.second"));
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "stateful") {
+      if (accepted || output != "sentinel")
+        return fail("invalid independent generated-node equations published partial output");
+      continue;
+    }
+    const std::string first =
+        stateful ? "I(tap[generate_0_index], p) <+ ddt(V(tap[generate_0_index], p));"
+                 : "I(tap[generate_0_index], p) <+ (V(tap[generate_0_index], p) / 1000);";
+    const std::string second =
+        stateful ? "I(tap[generate_0_index], n) <+ ddt(V(tap[generate_0_index], n));"
+                 : "I(tap[generate_0_index], n) <+ (V(tap[generate_0_index], n) / 1000);";
+    if (!accepted || output.find(first) == std::string::npos ||
+        output.find(second) == std::string::npos || output.find(first) >= output.find(second))
+      return fail("independent generated-node equations lost their indexed branches or order");
+    const std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("independent generated-node equations failed target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("independent generated-node equations repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("independent generated-node equations are nondeterministic");
+  }
+
+  for (llvm::StringRef mutation :
+       {"valid", "peer-owner", "peer-induction", "second-access", "second-live-access"}) {
+    auto candidate = parse(context, generatedNodeAlgebraSource);
+    if (!candidate)
+      return fail("could not parse generated peer-node algebra fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *access = nullptr;
+    mlir::Operation *rootTerminal = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.terminal")
+        rootTerminal = operation;
+      if (name == "nodal.node")
+        node = operation;
+      if (name == "nodal.branch")
+        branch = operation;
+      if (name == "nodal.access")
+        access = operation;
+    });
+    if (!node || !branch || !access || !rootTerminal)
+      return fail("generated peer-node algebra fixture lost its topology");
+    mlir::Operation *peer = node->clone();
+    node->getBlock()->getOperations().insert(branch->getIterator(), peer);
+    peer->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    peer->setAttr("source_path",
+                  mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.returnTap"));
+    branch->setOperand(1, peer->getResult(0));
+    if (!rootTerminal->getResult(0).use_empty())
+      return fail("generated peer-node algebra fixture retained its root terminal use");
+    rootTerminal->erase();
+    if (mutation == "peer-owner")
+      peer->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "peer-induction")
+      peer->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "second-access" || mutation == "second-live-access") {
+      mlir::Operation *extraAccess = access->clone();
+      access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access") {
+        mlir::Operation *originalUser = *access->getResult(0).getUsers().begin();
+        mlir::OperationState deadEndState(access->getLoc(), "nodal.analog_neg");
+        deadEndState.addOperands(extraAccess->getResult(0));
+        deadEndState.addTypes(extraAccess->getResult(0).getType());
+        deadEndState.addAttribute("metadata", access->getAttr("metadata"));
+        mlir::Operation *deadEnd = mlir::Operation::create(deadEndState);
+        access->getBlock()->getOperations().insert(std::next(originalUser->getIterator()), deadEnd);
+      }
+    }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "second-access") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated peer-node algebra escaped or published partial output");
+      continue;
+    }
+    const std::string equation = "I(tap[generate_0_index], returnTap[generate_0_index]) <+ "
+                                 "(V(tap[generate_0_index], returnTap[generate_0_index]) / 1000);";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated peer-node algebra lost an indexed endpoint or expression");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated peer-node algebra failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated peer-node algebra repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated peer-node algebra emission is nondeterministic");
+  }
+
+  for (llvm::StringRef mutation :
+       {"valid", "peer-owner", "peer-induction", "peer-source", "access-owner", "access-induction",
+        "operator-owner", "operator-induction", "escape", "second-access", "second-live-access"}) {
+    std::string source = kGeneratedNodeDdtContributionModule.str();
+    auto range = source.find("lower = 1 : i64, upper = 4 : i64, step = 1 : i64");
+    if (range == std::string::npos)
+      return fail("strided generated peer-node ddt range mutation anchor missing");
+    source.replace(range, std::string("lower = 1 : i64, upper = 4 : i64, step = 1 : i64").size(),
+                   "lower = 1 : i64, upper = 7 : i64, step = 2 : i64");
+    auto candidate = parse(context, source);
+    if (!candidate)
+      return fail("could not parse generated peer-node ddt fixture");
+    mlir::Operation *node = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *access = nullptr;
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *contribution = nullptr;
+    mlir::Operation *rootTerminal = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.terminal")
+        rootTerminal = operation;
+      if (name == "nodal.node")
+        node = operation;
+      if (name == "nodal.branch")
+        branch = operation;
+      if (name == "nodal.access")
+        access = operation;
+      if (name == "nodal.analog_ddt")
+        derivative = operation;
+      if (name == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!node || !branch || !access || !derivative || !contribution || !rootTerminal)
+      return fail("generated peer-node ddt fixture lost its topology or expression");
+    mlir::Operation *peer = node->clone();
+    node->getBlock()->getOperations().insert(branch->getIterator(), peer);
+    peer->setAttr("name", mlir::StringAttr::get(&context, "returnTap"));
+    peer->setAttr("source_path",
+                  mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.returnTap"));
+    branch->setOperand(1, peer->getResult(0));
+    if (!rootTerminal->getResult(0).use_empty())
+      return fail("generated peer-node ddt fixture retained its root terminal use");
+    rootTerminal->erase();
+    if (mutation == "peer-owner")
+      peer->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "peer-induction")
+      peer->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "peer-source")
+      peer->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "access-owner" || mutation == "access-induction") {
+      mlir::NamedAttrList metadata(access->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set(mutation == "access-owner" ? "generated_owner" : "generated_induction",
+                   mlir::StringAttr::get(&context, "forged"));
+      access->setAttr("metadata", metadata.getDictionary(&context));
+    }
+    if (mutation == "operator-owner")
+      derivative->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
+    if (mutation == "operator-induction")
+      derivative->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
+    if (mutation == "escape")
+      contribution->setOperand(1, access->getResult(0));
+    if (mutation == "second-access" || mutation == "second-live-access") {
+      mlir::Operation *extraAccess = access->clone();
+      access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access") {
+        mlir::Operation *originalUser = *access->getResult(0).getUsers().begin();
+        mlir::OperationState deadEndState(access->getLoc(), "nodal.analog_neg");
+        deadEndState.addOperands(extraAccess->getResult(0));
+        deadEndState.addTypes(extraAccess->getResult(0).getType());
+        deadEndState.addAttribute("metadata", access->getAttr("metadata"));
+        mlir::Operation *deadEnd = mlir::Operation::create(deadEndState);
+        access->getBlock()->getOperations().insert(std::next(originalUser->getIterator()), deadEnd);
+      }
+    }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid" && mutation != "second-access") {
+      if (accepted || output != "sentinel")
+        return fail("invalid generated peer-node ddt escaped or published partial output");
+      continue;
+    }
+    const std::string index = "((generate_0_index - 1) / 2)";
+    const std::string equation = "I(tap[" + index + "], returnTap[" + index +
+                                 "]) <+ "
+                                 "ddt(V(tap[" +
+                                 index + "], returnTap[" + index + "]));";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("generated peer-node ddt lost an indexed endpoint or owned derivative");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("generated peer-node ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("generated peer-node ddt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("generated peer-node ddt emission is nondeterministic");
+  }
+
+  std::string stridedGeneratedNodeSource = kGeneratedNodeContributionModule.str();
+  auto stridedRange =
+      stridedGeneratedNodeSource.find("lower = 0 : i64, upper = 3 : i64, step = 1 : i64");
+  if (stridedRange == std::string::npos)
+    return fail("strided generated node range mutation anchor missing");
+  stridedGeneratedNodeSource.replace(
+      stridedRange, std::string("lower = 0 : i64, upper = 3 : i64, step = 1 : i64").size(),
+      "lower = 1 : i64, upper = 7 : i64, step = 2 : i64");
+  auto stridedGeneratedNode = parse(context, stridedGeneratedNodeSource);
+  if (!stridedGeneratedNode)
+    return fail("could not parse the strided generated analog-node fixture");
+  std::string stridedGeneratedNodeOutput;
+  llvm::raw_string_ostream stridedGeneratedNodeStream(stridedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*stridedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      stridedGeneratedNodeStream)))
+    return fail("strided generated analog-node emission failed");
+  stridedGeneratedNodeStream.flush();
+  if (stridedGeneratedNodeOutput.find("  electrical [0:(((((7 - 1) + 2) - 1) / 2) - 1)] tap;\n") ==
+          std::string::npos ||
+      stridedGeneratedNodeOutput.find("for (generate_0_index = 1; generate_0_index < 7; "
+                                      "generate_0_index = generate_0_index + 2)") ==
+          std::string::npos ||
+      stridedGeneratedNodeOutput.find("V(tap[((generate_0_index - 1) / 2)], p) <+ 1;\n") ==
+          std::string::npos)
+    return fail("strided generated node lost compact array or source-index selection");
+  if (mlir::failed(nodal::reparseBackendTarget(stridedGeneratedNodeOutput, *configuration)))
+    return fail("strided generated analog-node target failed independent reparse");
+  std::string repeatedStridedGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedStridedGeneratedNodeStream(repeatedStridedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*stridedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      repeatedStridedGeneratedNodeStream)))
+    return fail("strided generated analog-node repeated emission failed");
+  repeatedStridedGeneratedNodeStream.flush();
+  if (stridedGeneratedNodeOutput != repeatedStridedGeneratedNodeOutput)
+    return fail("strided generated analog-node emission is nondeterministic");
+
+  std::string zeroStepGeneratedNodeSource = stridedGeneratedNodeSource;
+  auto zeroStep = zeroStepGeneratedNodeSource.find("step = 2 : i64");
+  if (zeroStep == std::string::npos)
+    return fail("zero-step generated node mutation anchor missing");
+  zeroStepGeneratedNodeSource.replace(zeroStep, std::string("step = 2 : i64").size(),
+                                      "step = 0 : i64");
+  auto zeroStepGeneratedNode = parse(context, zeroStepGeneratedNodeSource);
+  if (zeroStepGeneratedNode) {
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*zeroStepGeneratedNode, nodal::BackendKind::VerilogA,
+                                           rejectedStream)))
+      return fail("zero-step generated analog-node source passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("zero-step generated analog-node source published partial output");
+  }
+
+  auto generatedDdt = parse(context, kGeneratedDdtContributionModule);
+  if (!generatedDdt)
+    return fail("could not parse the generated ddt contribution fixture");
+  std::string generatedDdtOutput;
+  llvm::raw_string_ostream generatedDdtStream(generatedDdtOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedDdt, nodal::BackendKind::VerilogA, generatedDdtStream)))
+    return fail("generated ddt contribution emission failed");
+  generatedDdtStream.flush();
+  if (generatedDdtOutput.find("V(p, n) <+ ddt(V(p, n));\n") == std::string::npos)
+    return fail("generated ddt contribution lost its owned operator expression");
+  auto forgedDdtOwner = parse(context, kGeneratedDdtContributionModule);
+  if (!forgedDdtOwner)
+    return fail("could not parse the generated ddt owner-mutation fixture");
+  mlir::Operation *forgedDdt = nullptr;
+  forgedDdtOwner->walk([&](mlir::Operation *operation) {
+    if (!forgedDdt && operation->getName().getStringRef() == "nodal.analog_ddt")
+      forgedDdt = operation;
+  });
+  if (!forgedDdt)
+    return fail("generated ddt owner-mutation anchor missing");
+  forgedDdt->setAttr("generated_owner",
+                     mlir::StringAttr::get(&context, "GeneratedDdtContribution.forged"));
+  std::string forgedOwnerOutput = "sentinel";
+  llvm::raw_string_ostream forgedOwnerStream(forgedOwnerOutput);
+  if (mlir::succeeded(
+          nodal::emitBackend(*forgedDdtOwner, nodal::BackendKind::VerilogA, forgedOwnerStream)))
+    return fail("forged generated ddt owner passed backend verification");
+  forgedOwnerStream.flush();
+  if (forgedOwnerOutput != "sentinel")
+    return fail("forged generated ddt owner published partial output");
+
+  for (const auto &mutation : {std::make_pair("%branch, %derivative", "%branch, %voltage")}) {
+    std::string invalidSource = kGeneratedDdtContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated ddt source mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated ddt source mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated ddt source passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated ddt source published partial output");
+  }
+
+  auto generatedIdt = parse(context, kGeneratedIdtContributionModule);
+  if (!generatedIdt)
+    return fail("could not parse the generated idt contribution fixture");
+  std::string generatedIdtOutput;
+  llvm::raw_string_ostream generatedIdtStream(generatedIdtOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedIdt, nodal::BackendKind::VerilogA, generatedIdtStream)))
+    return fail("generated idt contribution emission failed");
+  generatedIdtStream.flush();
+  if (generatedIdtOutput.find("V(p, n) <+ idt(1);\n") == std::string::npos)
+    return fail("generated idt contribution lost its owned stateful expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedIdtContribution.forged"),
+        std::make_pair("state_id", "GeneratedIdtContribution.integral.forged")}) {
+    auto forged = parse(context, kGeneratedIdtContributionModule);
+    if (!forged)
+      return fail("could not parse the generated idt mutation fixture");
+    mlir::Operation *integral = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!integral && operation->getName().getStringRef() == "nodal.analog_idt")
+        integral = operation;
+    });
+    if (!integral)
+      return fail("generated idt mutation anchor missing");
+    integral->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated idt ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated idt ownership published partial output");
+  }
+
+  {
+    std::string invalidSource = kGeneratedIdtContributionModule.str();
+    auto position = invalidSource.find("%branch, %integral");
+    if (position == std::string::npos)
+      return fail("generated idt source mutation anchor missing");
+    invalidSource.replace(position, std::string("%branch, %integral").size(), "%branch, %rate");
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated idt source mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unused generated idt state passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unused generated idt state published partial output");
+  }
+
+  auto generatedTransition = parse(context, kGeneratedTransitionContributionModule);
+  if (!generatedTransition)
+    return fail("could not parse the generated transition contribution fixture");
+  std::string generatedTransitionOutput;
+  llvm::raw_string_ostream generatedTransitionStream(generatedTransitionOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedTransition, nodal::BackendKind::VerilogA,
+                                      generatedTransitionStream)))
+    return fail("generated transition contribution emission failed");
+  generatedTransitionStream.flush();
+  if (generatedTransitionOutput.find("V(p, n) <+ transition(LEVEL);\n") == std::string::npos ||
+      generatedTransitionOutput.find("real waveform_") != std::string::npos)
+    return fail("generated transition lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedTransitionContribution.forged"),
+        std::make_pair("state_id", "GeneratedTransitionContribution.smoothed.forged")}) {
+    auto forged = parse(context, kGeneratedTransitionContributionModule);
+    if (!forged)
+      return fail("could not parse the generated transition mutation fixture");
+    mlir::Operation *transition = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!transition && operation->getName().getStringRef() == "nodal.analog_transition")
+        transition = operation;
+    });
+    if (!transition)
+      return fail("generated transition mutation anchor missing");
+    transition->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated transition ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated transition ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %smoothed", "%branch, %input"),
+        std::make_pair(
+            "        \"nodal.contribute\"(%branch, %smoothed)",
+            "        \"nodal.contribute\"(%branch, %smoothed) <{kind = \"potential\", "
+            "generated_owner = \"GeneratedTransitionContribution.generate_0\", "
+            "generated_induction = \"GeneratedTransitionContribution.generate_0.index\", "
+            "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+            "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+            "        \"nodal.contribute\"(%branch, %smoothed)")}) {
+    std::string invalidSource = kGeneratedTransitionContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated transition consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated transition consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated transition consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated transition consumer published partial output");
+  }
+
+  auto generatedSlew = parse(context, kGeneratedSlewContributionModule);
+  if (!generatedSlew)
+    return fail("could not parse the generated slew contribution fixture");
+  std::string generatedSlewOutput;
+  llvm::raw_string_ostream generatedSlewStream(generatedSlewOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedSlew, nodal::BackendKind::VerilogA, generatedSlewStream)))
+    return fail("generated slew contribution emission failed");
+  generatedSlewStream.flush();
+  if (generatedSlewOutput.find("V(p, n) <+ slew(LEVEL);\n") == std::string::npos ||
+      generatedSlewOutput.find("real waveform_") != std::string::npos)
+    return fail("generated slew lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedSlewContribution.forged"),
+        std::make_pair("state_id", "GeneratedSlewContribution.limited.forged")}) {
+    auto forged = parse(context, kGeneratedSlewContributionModule);
+    if (!forged)
+      return fail("could not parse the generated slew mutation fixture");
+    mlir::Operation *slew = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!slew && operation->getName().getStringRef() == "nodal.analog_slew")
+        slew = operation;
+    });
+    if (!slew)
+      return fail("generated slew mutation anchor missing");
+    slew->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated slew ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated slew ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %limited", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %limited)",
+                       "        \"nodal.contribute\"(%branch, %limited) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedSlewContribution.generate_0\", "
+                       "generated_induction = \"GeneratedSlewContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+                       "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %limited)")}) {
+    std::string invalidSource = kGeneratedSlewContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated slew consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated slew consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated slew consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated slew consumer published partial output");
+  }
+
+  auto generatedAbsdelay = parse(context, kGeneratedAbsdelayContributionModule);
+  if (!generatedAbsdelay)
+    return fail("could not parse the generated absdelay contribution fixture");
+  std::string generatedAbsdelayOutput;
+  llvm::raw_string_ostream generatedAbsdelayStream(generatedAbsdelayOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedAbsdelay, nodal::BackendKind::VerilogA,
+                                      generatedAbsdelayStream)))
+    return fail("generated absdelay contribution emission failed");
+  generatedAbsdelayStream.flush();
+  if (generatedAbsdelayOutput.find("V(p, n) <+ absdelay(LEVEL, DELAY);\n") == std::string::npos ||
+      generatedAbsdelayOutput.find("real waveform_") != std::string::npos)
+    return fail("generated absdelay lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedAbsdelayContribution.forged"),
+        std::make_pair("state_id", "GeneratedAbsdelayContribution.delayed.forged")}) {
+    auto forged = parse(context, kGeneratedAbsdelayContributionModule);
+    if (!forged)
+      return fail("could not parse the generated absdelay mutation fixture");
+    mlir::Operation *absdelay = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!absdelay && operation->getName().getStringRef() == "nodal.analog_absdelay")
+        absdelay = operation;
+    });
+    if (!absdelay)
+      return fail("generated absdelay mutation anchor missing");
+    absdelay->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated absdelay ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated absdelay ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %delayed", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %delayed)",
+                       "        \"nodal.contribute\"(%branch, %delayed) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedAbsdelayContribution.generate_0\", "
+                       "generated_induction = \"GeneratedAbsdelayContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, "
+                       "!nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %delayed)")}) {
+    std::string invalidSource = kGeneratedAbsdelayContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated absdelay consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated absdelay consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated absdelay consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated absdelay consumer published partial output");
+  }
+
+  auto generatedAbstime = parse(context, kGeneratedAbstimeContributionModule);
+  if (!generatedAbstime)
+    return fail("could not parse the generated abstime contribution fixture");
+  std::string generatedAbstimeOutput;
+  llvm::raw_string_ostream generatedAbstimeStream(generatedAbstimeOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedAbstime, nodal::BackendKind::VerilogA,
+                                      generatedAbstimeStream)))
+    return fail("generated abstime contribution emission failed");
+  generatedAbstimeStream.flush();
+  if (generatedAbstimeOutput.find("V(p, n) <+ ($abstime * 1);\n") == std::string::npos ||
+      generatedAbstimeOutput.find("real waveform_") != std::string::npos)
+    return fail("generated abstime lost its single owned per-occurrence expression");
+
+  {
+    auto forged = parse(context, kGeneratedAbstimeContributionModule);
+    if (!forged)
+      return fail("could not parse the generated abstime mutation fixture");
+    mlir::Operation *abstime = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!abstime && operation->getName().getStringRef() == "nodal.analog_abstime")
+        abstime = operation;
+    });
+    if (!abstime)
+      return fail("generated abstime mutation anchor missing");
+    abstime->setAttr("generated_owner",
+                     mlir::StringAttr::get(&context, "GeneratedAbstimeContribution.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated abstime ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated abstime ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %value", "%branch, %scale"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %value)",
+                       "        \"nodal.contribute\"(%branch, %value) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedAbstimeContribution.generate_0\", "
+                       "generated_induction = \"GeneratedAbstimeContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %value)")}) {
+    std::string invalidSource = kGeneratedAbstimeContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated abstime consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated abstime consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated abstime consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated abstime consumer published partial output");
+  }
+
+  auto generatedBoundStep = parse(context, kGeneratedBoundStepModule);
+  if (!generatedBoundStep)
+    return fail("could not parse the generated boundStep fixture");
+  std::string generatedBoundStepOutput;
+  llvm::raw_string_ostream generatedBoundStepStream(generatedBoundStepOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedBoundStep, nodal::BackendKind::VerilogA,
+                                      generatedBoundStepStream)))
+    return fail("generated boundStep emission failed");
+  generatedBoundStepStream.flush();
+  if (generatedBoundStepOutput.find("$bound_step(LIMIT);\n") == std::string::npos ||
+      generatedBoundStepOutput.find("real waveform_") != std::string::npos)
+    return fail("generated boundStep lost its single owned per-occurrence effect");
+
+  for (bool duplicate : {false, true}) {
+    auto forged = parse(context, kGeneratedBoundStepModule);
+    if (!forged)
+      return fail("could not parse the generated boundStep mutation fixture");
+    mlir::Operation *boundStep = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!boundStep && operation->getName().getStringRef() == "nodal.analog_bound_step")
+        boundStep = operation;
+    });
+    if (!boundStep)
+      return fail("generated boundStep mutation anchor missing");
+    if (duplicate) {
+      mlir::Operation *second = boundStep->clone();
+      second->setAttr("operator_id", mlir::StringAttr::get(&context, "GeneratedBoundStep.second"));
+      auto insertionPoint = mlir::Block::iterator(boundStep);
+      ++insertionPoint;
+      boundStep->getBlock()->getOperations().insert(insertionPoint, second);
+    } else {
+      boundStep->setAttr("generated_owner",
+                         mlir::StringAttr::get(&context, "GeneratedBoundStep.forged"));
+    }
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail(duplicate ? "multiple generated boundStep effects passed backend verification"
+                            : "forged generated boundStep ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated boundStep published partial output");
+  }
+
+  auto generatedLaplace = parse(context, kGeneratedLaplaceContributionModule);
+  if (!generatedLaplace)
+    return fail("could not parse the generated laplaceNd contribution fixture");
+  std::string generatedLaplaceOutput;
+  llvm::raw_string_ostream generatedLaplaceStream(generatedLaplaceOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLaplace, nodal::BackendKind::VerilogA,
+                                      generatedLaplaceStream)))
+    return fail("generated laplaceNd contribution emission failed");
+  generatedLaplaceStream.flush();
+  if (generatedLaplaceOutput.find("V(p, n) <+ laplace_nd(V(p, n), '{1}, '{1});\n") ==
+          std::string::npos ||
+      generatedLaplaceOutput.find("real transfer_") != std::string::npos)
+    return fail("generated laplaceNd lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedLaplaceContribution.forged"),
+        std::make_pair("state_id", "GeneratedLaplaceContribution.filtered.forged")}) {
+    auto forged = parse(context, kGeneratedLaplaceContributionModule);
+    if (!forged)
+      return fail("could not parse the generated laplaceNd mutation fixture");
+    mlir::Operation *laplace = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!laplace && operation->getName().getStringRef() == "nodal.analog_transfer")
+        laplace = operation;
+    });
+    if (!laplace)
+      return fail("generated laplaceNd mutation anchor missing");
+    laplace->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated laplaceNd ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated laplaceNd ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %filtered", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %filtered)",
+                       "        \"nodal.contribute\"(%branch, %filtered) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedLaplaceContribution.generate_0\", "
+                       "generated_induction = \"GeneratedLaplaceContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %filtered)")}) {
+    std::string invalidSource = kGeneratedLaplaceContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated laplaceNd consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated laplaceNd consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated laplaceNd consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated laplaceNd consumer published partial output");
+  }
+
+  auto generatedZi = parse(context, kGeneratedZiContributionModule);
+  if (!generatedZi)
+    return fail("could not parse the generated ziNd contribution fixture");
+  std::string generatedZiOutput;
+  llvm::raw_string_ostream generatedZiStream(generatedZiOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedZi, nodal::BackendKind::VerilogA, generatedZiStream)))
+    return fail("generated ziNd contribution emission failed");
+  generatedZiStream.flush();
+  if (generatedZiOutput.find("V(p, n) <+ zi_nd(V(p, n), '{1}, '{1}, 1e-09);\n") ==
+          std::string::npos ||
+      generatedZiOutput.find("real transfer_") != std::string::npos)
+    return fail("generated ziNd lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedZiContribution.forged"),
+        std::make_pair("state_id", "GeneratedZiContribution.filtered.forged")}) {
+    auto forged = parse(context, kGeneratedZiContributionModule);
+    if (!forged)
+      return fail("could not parse the generated ziNd mutation fixture");
+    mlir::Operation *zi = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!zi && operation->getName().getStringRef() == "nodal.analog_transfer")
+        zi = operation;
+    });
+    if (!zi)
+      return fail("generated ziNd mutation anchor missing");
+    zi->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated ziNd ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated ziNd ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %filtered", "%branch, %input"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %filtered)",
+                       "        \"nodal.contribute\"(%branch, %filtered) <{kind = \"potential\", "
+                       "generated_owner = \"GeneratedZiContribution.generate_0\", "
+                       "generated_induction = \"GeneratedZiContribution.generate_0.index\", "
+                       "metadata = {}}> : (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %filtered)")}) {
+    std::string invalidSource = kGeneratedZiContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated ziNd consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated ziNd consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated ziNd consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated ziNd consumer published partial output");
+  }
+
+  auto generatedWhiteNoise = parse(context, kGeneratedWhiteNoiseContributionModule);
+  if (!generatedWhiteNoise)
+    return fail("could not parse the generated whiteNoise contribution fixture");
+  std::string generatedWhiteNoiseOutput;
+  llvm::raw_string_ostream generatedWhiteNoiseStream(generatedWhiteNoiseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedWhiteNoise, nodal::BackendKind::VerilogA,
+                                      generatedWhiteNoiseStream)))
+    return fail("generated whiteNoise contribution emission failed");
+  generatedWhiteNoiseStream.flush();
+  if (generatedWhiteNoiseOutput.find("I(p, n) <+ white_noise(1, \"generated white\");\n") ==
+          std::string::npos ||
+      generatedWhiteNoiseOutput.find("real noise_") != std::string::npos)
+    return fail("generated whiteNoise lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedWhiteNoiseContribution.forged"),
+        std::make_pair("source_id", "GeneratedWhiteNoiseContribution.forged")}) {
+    auto forged = parse(context, kGeneratedWhiteNoiseContributionModule);
+    if (!forged)
+      return fail("could not parse the generated whiteNoise mutation fixture");
+    mlir::Operation *noise = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!noise && operation->getName().getStringRef() == "nodal.analog_noise")
+        noise = operation;
+    });
+    if (!noise)
+      return fail("generated whiteNoise mutation anchor missing");
+    noise->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated whiteNoise ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated whiteNoise ownership published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %noise", "%branch, %amp"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %noise)",
+                       "        \"nodal.contribute\"(%branch, %noise) <{kind = \"flow\", "
+                       "generated_owner = \"GeneratedWhiteNoiseContribution.generate_0\", "
+                       "generated_induction = "
+                       "\"GeneratedWhiteNoiseContribution.generate_0.index\", metadata = {}}> : "
+                       "(!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %noise)")}) {
+    std::string invalidSource = kGeneratedWhiteNoiseContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated whiteNoise consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated whiteNoise consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated whiteNoise consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated whiteNoise consumer published partial output");
+  }
+
+  auto generatedFlickerNoise = parse(context, kGeneratedFlickerNoiseContributionModule);
+  if (!generatedFlickerNoise)
+    return fail("could not parse the generated flickerNoise contribution fixture");
+  std::string generatedFlickerNoiseOutput;
+  llvm::raw_string_ostream generatedFlickerNoiseStream(generatedFlickerNoiseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedFlickerNoise, nodal::BackendKind::VerilogA,
+                                      generatedFlickerNoiseStream)))
+    return fail("generated flickerNoise contribution emission failed");
+  generatedFlickerNoiseStream.flush();
+  if (generatedFlickerNoiseOutput.find(
+          "I(p, n) <+ flicker_noise(1, 1, \"generated flicker\");\n") == std::string::npos ||
+      generatedFlickerNoiseOutput.find("real noise_") != std::string::npos)
+    return fail("generated flickerNoise lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedFlickerNoiseContribution.forged"),
+        std::make_pair("source_id", "GeneratedFlickerNoiseContribution.forged"),
+        std::make_pair("noise_kind", "table")}) {
+    auto forged = parse(context, kGeneratedFlickerNoiseContributionModule);
+    if (!forged)
+      return fail("could not parse the generated flickerNoise mutation fixture");
+    mlir::Operation *noise = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!noise && operation->getName().getStringRef() == "nodal.analog_noise")
+        noise = operation;
+    });
+    if (!noise)
+      return fail("generated flickerNoise mutation anchor missing");
+    noise->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated flickerNoise metadata passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated flickerNoise metadata published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %noise", "%branch, %amp"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %noise)",
+                       "        \"nodal.contribute\"(%branch, %noise) <{kind = \"flow\", "
+                       "generated_owner = \"GeneratedFlickerNoiseContribution.generate_0\", "
+                       "generated_induction = "
+                       "\"GeneratedFlickerNoiseContribution.generate_0.index\", metadata = {}}> "
+                       ": (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %noise)")}) {
+    std::string invalidSource = kGeneratedFlickerNoiseContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated flickerNoise consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated flickerNoise consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated flickerNoise consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated flickerNoise consumer published partial output");
+  }
+
+  auto generatedTableNoise = parse(context, kGeneratedTableNoiseContributionModule);
+  if (!generatedTableNoise)
+    return fail("could not parse the generated tableNoise contribution fixture");
+  std::string generatedTableNoiseOutput;
+  llvm::raw_string_ostream generatedTableNoiseStream(generatedTableNoiseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedTableNoise, nodal::BackendKind::VerilogA,
+                                      generatedTableNoiseStream)))
+    return fail("generated tableNoise contribution emission failed");
+  generatedTableNoiseStream.flush();
+  if (generatedTableNoiseOutput.find("I(p, n) <+ noise_table('{1, 1}, \"generated table\");\n") ==
+          std::string::npos ||
+      generatedTableNoiseOutput.find("real noise_") != std::string::npos)
+    return fail("generated tableNoise lost its single owned per-occurrence expression");
+
+  for (const auto &[attribute, value] :
+       {std::make_pair("generated_owner", "GeneratedTableNoiseContribution.forged"),
+        std::make_pair("source_id", "GeneratedTableNoiseContribution.forged"),
+        std::make_pair("noise_kind", "white")}) {
+    auto forged = parse(context, kGeneratedTableNoiseContributionModule);
+    if (!forged)
+      return fail("could not parse the generated tableNoise mutation fixture");
+    mlir::Operation *noise = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!noise && operation->getName().getStringRef() == "nodal.analog_noise")
+        noise = operation;
+    });
+    if (!noise)
+      return fail("generated tableNoise mutation anchor missing");
+    noise->setAttr(attribute, mlir::StringAttr::get(&context, value));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated tableNoise metadata passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated tableNoise metadata published partial output");
+  }
+
+  for (const auto &mutation :
+       {std::make_pair("%branch, %noise", "%branch, %amp"),
+        std::make_pair("        \"nodal.contribute\"(%branch, %noise)",
+                       "        \"nodal.contribute\"(%branch, %noise) <{kind = \"flow\", "
+                       "generated_owner = \"GeneratedTableNoiseContribution.generate_0\", "
+                       "generated_induction = "
+                       "\"GeneratedTableNoiseContribution.generate_0.index\", metadata = {}}> "
+                       ": (!nodal.branch<\"electrical\">, f64) -> ()\n"
+                       "        \"nodal.contribute\"(%branch, %noise)")}) {
+    std::string invalidSource = kGeneratedTableNoiseContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("generated tableNoise consumer mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("generated tableNoise consumer mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid generated tableNoise consumer passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated tableNoise consumer published partial output");
+  }
+
+  auto generatedLexicalStorage = parse(context, kGeneratedLexicalStorageModule);
+  if (!generatedLexicalStorage)
+    return fail("could not parse the generated lexical-storage fixture");
+  std::string generatedLexicalStorageOutput;
+  llvm::raw_string_ostream generatedLexicalStorageStream(generatedLexicalStorageOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLexicalStorage, nodal::BackendKind::VerilogA,
+                                      generatedLexicalStorageStream)))
+    return fail("generated lexical-storage emission failed");
+  generatedLexicalStorageStream.flush();
+  auto lexicalLoop = generatedLexicalStorageOutput.find("for (generate_0_index");
+  auto lexicalDeclaration =
+      generatedLexicalStorageOutput.find("real event_GeneratedLexicalStorage_state = 0.0;");
+  auto lexicalProcedure =
+      generatedLexicalStorageOutput.find("begin : event_GeneratedLexicalStorage_procedure");
+  auto lexicalRead =
+      generatedLexicalStorageOutput.find("event_GeneratedLexicalStorage_assignment_read_0 = "
+                                         "event_GeneratedLexicalStorage_state;");
+  auto lexicalAssignment = generatedLexicalStorageOutput.find(
+      "event_GeneratedLexicalStorage_state = "
+      "(event_GeneratedLexicalStorage_assignment_read_0 + 1.0);");
+  if (lexicalLoop == std::string::npos || lexicalDeclaration == std::string::npos ||
+      lexicalProcedure == std::string::npos || lexicalRead == std::string::npos ||
+      lexicalAssignment == std::string::npos ||
+      !(lexicalLoop < lexicalDeclaration && lexicalDeclaration < lexicalProcedure &&
+        lexicalProcedure < lexicalRead && lexicalRead < lexicalAssignment) ||
+      generatedLexicalStorageOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLexicalStorageOutput, *configuration)))
+    return fail("generated lexical storage lost its per-occurrence target layout");
+
+  {
+    auto invalid = parse(context, kGeneratedLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated lexical-storage mutation fixture");
+    mlir::Operation *variable = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!variable && operation->getName().getStringRef() == "nodal.analog_variable")
+        variable = operation;
+    });
+    if (!variable)
+      return fail("generated lexical-storage mutation anchor missing");
+    variable->setAttr("generated_owner",
+                      mlir::StringAttr::get(&context, "GeneratedLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated lexical ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid generated lexical storage published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedLexicalStorageModule.str();
+    const std::string anchor = "        }) : () -> ()\n      }) : () -> ()";
+    const std::string unsupportedScope =
+        "          \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLexicalStorage.scope_0\"}, owner = \"GeneratedLexicalStorage\", "
+        "scope_id = \"GeneratedLexicalStorage.scope_0\"}> ({\n"
+        "          ^bb0:\n"
+        "          }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated lexical-storage scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated lexical-storage scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported generated lexical scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported generated lexical scope published partial output");
+  }
+
+  auto generatedConditionalStorage = parse(context, kGeneratedConditionalLexicalStorageModule);
+  if (!generatedConditionalStorage)
+    return fail("could not parse the generated conditional lexical-storage fixture");
+  std::string generatedConditionalOutput;
+  llvm::raw_string_ostream generatedConditionalStream(generatedConditionalOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedConditionalStorage, nodal::BackendKind::VerilogA,
+                                      generatedConditionalStream)))
+    return fail("generated conditional lexical-storage emission failed");
+  generatedConditionalStream.flush();
+  auto conditionalLoop = generatedConditionalOutput.find("for (generate_0_index");
+  auto conditionalDeclaration = generatedConditionalOutput.find(
+      "integer event_GeneratedConditionalLexicalStorage_select = 0;");
+  auto conditionalIf =
+      generatedConditionalOutput.find("if (event_GeneratedConditionalLexicalStorage_select) begin");
+  auto conditionalFirst = generatedConditionalOutput.find(
+      "event_GeneratedConditionalLexicalStorage_state = "
+      "(event_GeneratedConditionalLexicalStorage_assignment_read_0 + 1.0);");
+  auto conditionalElse = generatedConditionalOutput.find("else begin", conditionalIf);
+  auto conditionalSecond = generatedConditionalOutput.find(
+      "event_GeneratedConditionalLexicalStorage_state = "
+      "(event_GeneratedConditionalLexicalStorage_assignment_else_read_0 + 2.0);");
+  if (conditionalLoop == std::string::npos || conditionalDeclaration == std::string::npos ||
+      conditionalIf == std::string::npos || conditionalFirst == std::string::npos ||
+      conditionalElse == std::string::npos || conditionalSecond == std::string::npos ||
+      !(conditionalLoop < conditionalDeclaration && conditionalDeclaration < conditionalIf &&
+        conditionalIf < conditionalFirst && conditionalFirst < conditionalElse &&
+        conditionalElse < conditionalSecond) ||
+      generatedConditionalOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedConditionalOutput, *configuration)))
+    return fail("generated conditional lexical storage lost its authored target layout");
+
+  {
+    auto invalid = parse(context, kGeneratedConditionalLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated conditional ownership mutation fixture");
+    mlir::Operation *assignment = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!assignment && operation->getName().getStringRef() == "nodal.analog_assign")
+        assignment = operation;
+    });
+    if (!assignment)
+      return fail("generated conditional ownership mutation anchor missing");
+    assignment->setAttr(
+        "generated_owner",
+        mlir::StringAttr::get(&context, "GeneratedConditionalLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated conditional storage ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated conditional storage published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedConditionalLexicalStorageModule.str();
+    const std::string anchor = "              %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string unsupportedScope =
+        "              \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedConditionalLexicalStorage.scope_0\"}, owner = "
+        "\"GeneratedConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedConditionalLexicalStorage.scope_0\"}> ({\n"
+        "              ^bb0:\n"
+        "              }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated conditional lexical scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated conditional lexical scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported nested generated conditional scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported nested generated conditional scope published partial output");
+  }
+
+  auto generatedCaseStorage = parse(context, kGeneratedCaseLexicalStorageModule);
+  if (!generatedCaseStorage)
+    return fail("could not parse the generated case lexical-storage fixture");
+  std::string generatedCaseOutput;
+  llvm::raw_string_ostream generatedCaseStream(generatedCaseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedCaseStorage, nodal::BackendKind::VerilogA,
+                                      generatedCaseStream)))
+    return fail("generated case lexical-storage emission failed");
+  generatedCaseStream.flush();
+  auto caseLoop = generatedCaseOutput.find("for (generate_0_index");
+  auto caseDeclaration =
+      generatedCaseOutput.find("integer event_GeneratedCaseLexicalStorage_mode = 0;");
+  auto caseTree = generatedCaseOutput.find("case (event_GeneratedCaseLexicalStorage_mode)");
+  auto caseArm = generatedCaseOutput.find("0: begin", caseTree);
+  auto caseFirst =
+      generatedCaseOutput.find("event_GeneratedCaseLexicalStorage_state = "
+                               "(event_GeneratedCaseLexicalStorage_assignment_read_0 + 3.0);");
+  auto caseDefault = generatedCaseOutput.find("default: begin", caseTree);
+  auto caseSecond = generatedCaseOutput.find(
+      "event_GeneratedCaseLexicalStorage_state = "
+      "(event_GeneratedCaseLexicalStorage_assignment_default_read_0 + 4.0);");
+  if (caseLoop == std::string::npos || caseDeclaration == std::string::npos ||
+      caseTree == std::string::npos || caseArm == std::string::npos ||
+      caseFirst == std::string::npos || caseDefault == std::string::npos ||
+      caseSecond == std::string::npos ||
+      !(caseLoop < caseDeclaration && caseDeclaration < caseTree && caseTree < caseArm &&
+        caseArm < caseFirst && caseFirst < caseDefault && caseDefault < caseSecond) ||
+      generatedCaseOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedCaseOutput, *configuration)))
+    return fail("generated case lexical storage lost its authored target layout");
+
+  {
+    auto invalid = parse(context, kGeneratedCaseLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated case ownership mutation fixture");
+    mlir::Operation *assignment = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!assignment && operation->getName().getStringRef() == "nodal.analog_assign")
+        assignment = operation;
+    });
+    if (!assignment)
+      return fail("generated case ownership mutation anchor missing");
+    assignment->setAttr("generated_owner",
+                        mlir::StringAttr::get(&context, "GeneratedCaseLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated case storage ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated case storage published partial output");
+  }
+
+  {
+    std::string unsupportedSource = kGeneratedCaseLexicalStorageModule.str();
+    const std::string anchor = "              %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string unsupportedScope =
+        "              \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedCaseLexicalStorage.scope_0\"}, owner = \"GeneratedCaseLexicalStorage\", "
+        "scope_id = \"GeneratedCaseLexicalStorage.scope_0\"}> ({\n"
+        "              ^bb0:\n"
+        "              }) : () -> ()\n";
+    auto position = unsupportedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated case lexical scope mutation anchor missing");
+    unsupportedSource.insert(position, unsupportedScope);
+    auto unsupported = parse(context, unsupportedSource);
+    if (!unsupported)
+      return fail("generated case lexical scope mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*unsupported, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("unsupported nested generated case scope passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("unsupported nested generated case scope published partial output");
+  }
+
+  auto generatedLoopStorage = parse(context, kGeneratedLoopLexicalStorageModule);
+  if (!generatedLoopStorage)
+    return fail("could not parse the generated loop lexical-storage fixture");
+  std::string generatedLoopOutput;
+  llvm::raw_string_ostream generatedLoopStream(generatedLoopOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLoopStorage, nodal::BackendKind::VerilogA,
+                                      generatedLoopStream)))
+    return fail("generated loop lexical-storage emission failed");
+  generatedLoopStream.flush();
+  auto generatedOuterLoop = generatedLoopOutput.find("for (generate_0_index");
+  auto generatedIterations =
+      generatedLoopOutput.find("integer event_GeneratedLoopLexicalStorage_iterations = 1;");
+  auto generatedState =
+      generatedLoopOutput.find("real event_GeneratedLoopLexicalStorage_state = 0.0;");
+  auto generatedRuntimeLoop =
+      generatedLoopOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+  auto generatedAssignment = generatedLoopOutput.find(
+      "event_GeneratedLoopLexicalStorage_state = "
+      "(event_GeneratedLoopLexicalStorage_loop_0_assignment_read_0 + 5.0);");
+  if (generatedOuterLoop == std::string::npos || generatedIterations == std::string::npos ||
+      generatedState == std::string::npos || generatedRuntimeLoop == std::string::npos ||
+      generatedAssignment == std::string::npos ||
+      !(generatedOuterLoop < generatedIterations && generatedIterations < generatedState &&
+        generatedState < generatedRuntimeLoop && generatedRuntimeLoop < generatedAssignment) ||
+      generatedLoopOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLoopOutput, *configuration)))
+    return fail("generated loop lexical storage lost its per-occurrence target layout");
+
+  {
+    std::string exitSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    auto assignmentPosition = exitSource.find(assignmentAnchor);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop exit assignment anchor missing");
+    auto assignmentEnd = exitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop exit assignment terminator missing");
+    const std::string exits =
+        "            \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.continue_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.continue_0\"}> : () -> ()\n"
+        "            \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.break_1\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.break_1\"}> : () -> ()\n";
+    exitSource.insert(assignmentEnd + 1, exits);
+
+    auto exitModule = parse(context, exitSource);
+    if (!exitModule)
+      return fail("generated loop exit fixture did not parse");
+    std::string exitOutput;
+    llvm::raw_string_ostream exitStream(exitOutput);
+    if (mlir::failed(nodal::emitBackend(*exitModule, nodal::BackendKind::VerilogA, exitStream)))
+      return fail("generated loop exit emission failed");
+    exitStream.flush();
+    auto exitRuntimeLoop =
+        exitOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto exitAssignment = exitOutput.find(" + 5.0);", exitRuntimeLoop);
+    auto continueFlag = exitOutput.find("_continue = 1;", exitAssignment);
+    auto breakFlag = exitOutput.find("_break = 1;", continueFlag);
+    if (exitRuntimeLoop == std::string::npos || exitAssignment == std::string::npos ||
+        continueFlag == std::string::npos || breakFlag == std::string::npos ||
+        !(exitRuntimeLoop < exitAssignment && exitAssignment < continueFlag &&
+          continueFlag < breakFlag) ||
+        mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
+      return fail("generated loop exits lost their per-occurrence target layout");
+
+    auto forged = parse(context, exitSource);
+    if (!forged)
+      return fail("generated loop exit ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop exit ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop exit ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop exit published partial output");
+
+    std::string duplicateSource = exitSource;
+    auto duplicatePosition =
+        duplicateSource.find("            \"nodal.analog_break\"()", assignmentEnd + 1);
+    if (duplicatePosition == std::string::npos)
+      return fail("generated loop duplicate-exit mutation anchor missing");
+    std::string duplicateBreak = exits.substr(exits.find("            \"nodal.analog_break\"()"));
+    for (auto position = duplicateBreak.find("break_1"); position != std::string::npos;
+         position = duplicateBreak.find("break_1", position + 7))
+      duplicateBreak.replace(position, 7, "break_2");
+    duplicateSource.insert(duplicatePosition, duplicateBreak);
+    auto duplicate = parse(context, duplicateSource);
+    if (!duplicate)
+      return fail("generated loop duplicate-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream duplicateRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicate, nodal::BackendKind::VerilogA, duplicateRejectedStream)))
+      return fail("duplicate generated loop exit passed backend verification");
+    duplicateRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("duplicate generated loop exit published partial output");
+
+    std::string deeperSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string readAnchor =
+        "            %state_read = \"nodal.analog_variable_read\"(%state)";
+    auto deeperPosition = deeperSource.find(readAnchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop deeper-exit mutation anchor missing");
+    const std::string deeperExits =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
+        "            ^bb0:\n" +
+        exits + "            }) : () -> ()\n";
+    deeperSource.insert(deeperPosition, deeperExits);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop deeper-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("scope-contained generated loop exits passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("scope-contained generated loop exits published partial output");
+  }
+
+  {
+    auto invalid = parse(context, kGeneratedLoopLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated loop ownership mutation fixture");
+    mlir::Operation *assignment = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!assignment && operation->getName().getStringRef() == "nodal.analog_assign")
+        assignment = operation;
+    });
+    if (!assignment)
+      return fail("generated loop ownership mutation anchor missing");
+    assignment->setAttr("generated_owner",
+                        mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop storage ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop storage published partial output");
+  }
+
+  {
+    std::string scopedSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string anchor = "            %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string scopeHeader =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
+        "            ^bb0:\n";
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    auto position = scopedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated loop lexical scope mutation anchor missing");
+    scopedSource.insert(position, scopeHeader);
+    auto assignmentPosition = scopedSource.find(assignmentAnchor, position + scopeHeader.size());
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop lexical scope assignment anchor missing");
+    auto assignmentEnd = scopedSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop lexical scope assignment terminator missing");
+    scopedSource.insert(assignmentEnd + 1, "            }) : () -> ()\n");
+
+    auto scoped = parse(context, scopedSource);
+    if (!scoped)
+      return fail("generated loop lexical scope fixture did not parse");
+    std::string scopedOutput;
+    llvm::raw_string_ostream scopedStream(scopedOutput);
+    if (mlir::failed(nodal::emitBackend(*scoped, nodal::BackendKind::VerilogA, scopedStream)))
+      return fail("generated loop lexical scope emission failed");
+    scopedStream.flush();
+    auto scopedOuter = scopedOutput.find("for (generate_0_index");
+    auto scopedRuntime =
+        scopedOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto scopedLoopBegin = scopedOutput.find("begin", scopedRuntime);
+    auto scopedBegin = scopedOutput.find("begin", scopedLoopBegin + 5);
+    auto scopedAssignment =
+        scopedOutput.find("event_GeneratedLoopLexicalStorage_state = "
+                          "(event_GeneratedLoopLexicalStorage_loop_0_assignment_read_0 + 5.0);");
+    if (scopedOuter == std::string::npos || scopedRuntime == std::string::npos ||
+        scopedLoopBegin == std::string::npos || scopedBegin == std::string::npos ||
+        scopedAssignment == std::string::npos ||
+        !(scopedOuter < scopedRuntime && scopedRuntime < scopedLoopBegin &&
+          scopedLoopBegin < scopedBegin && scopedBegin < scopedAssignment) ||
+        scopedOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
+      return fail("generated loop lexical scope lost its per-occurrence target layout");
+
+    auto forged = parse(context, scopedSource);
+    if (!forged)
+      return fail("could not parse the generated loop lexical scope ownership fixture");
+    mlir::Operation *scope = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!scope && operation->getName().getStringRef() == "nodal.analog_scope")
+        scope = operation;
+    });
+    if (!scope)
+      return fail("generated loop lexical scope ownership mutation anchor missing");
+    scope->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop lexical scope ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop lexical scope published partial output");
+
+    std::string deeperSource = scopedSource;
+    const std::string deeperScope =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.scope_0\"}> ({\n"
+        "            ^bb0:\n"
+        "            }) : () -> ()\n";
+    auto deeperPosition = deeperSource.find(anchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop deeper lexical scope mutation anchor missing");
+    deeperSource.insert(deeperPosition, deeperScope);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop deeper lexical scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("deeper generated loop lexical scope passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deeper generated loop lexical scope published partial output");
+  }
+
+  {
+    std::string scopedExitSource = kGeneratedLoopLexicalStorageModule.str();
+    const std::string readAnchor =
+        "            %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string assignmentAnchor = "            \"nodal.analog_assign\"(%state, %state_read)";
+    const std::string scopeHeader =
+        "            \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", scope_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0\"}> ({\n"
+        "            ^bb0:\n";
+    const std::string scopedExits =
+        "            \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.continue_0\"}> : () -> ()\n"
+        "            \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.break_0\"}, owner = "
+        "\"GeneratedLoopLexicalStorage\", statement_id = "
+        "\"GeneratedLoopLexicalStorage.loop_0.scope_0.break_0\"}> : () -> ()\n";
+    auto readPosition = scopedExitSource.find(readAnchor);
+    if (readPosition == std::string::npos)
+      return fail("generated loop lexical scope-exit read anchor missing");
+    scopedExitSource.insert(readPosition, scopeHeader);
+    auto assignmentPosition = scopedExitSource.find(assignmentAnchor, readPosition);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop lexical scope-exit assignment anchor missing");
+    auto assignmentEnd = scopedExitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop lexical scope-exit assignment terminator missing");
+    scopedExitSource.insert(assignmentEnd + 1, scopedExits + "            }) : () -> ()\n");
+
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop lexical scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop lexical scope-exit emission failed");
+    scopedExitStream.flush();
+    auto runtimeLoop =
+        scopedExitOutput.find("for (event_GeneratedLoopLexicalStorage_loop_0_index = 0;");
+    auto loopBegin = scopedExitOutput.find("begin", runtimeLoop);
+    auto scopeBegin = scopedExitOutput.find("begin", loopBegin + 5);
+    auto assignment = scopedExitOutput.find(" + 5.0);", scopeBegin);
+    auto loopContinue = scopedExitOutput.find("_continue = 1;", assignment);
+    auto loopBreak = scopedExitOutput.find("_break = 1;", loopContinue);
+    if (runtimeLoop == std::string::npos || loopBegin == std::string::npos ||
+        scopeBegin == std::string::npos || assignment == std::string::npos ||
+        loopContinue == std::string::npos || loopBreak == std::string::npos ||
+        !(runtimeLoop < loopBegin && loopBegin < scopeBegin && scopeBegin < assignment &&
+          assignment < loopContinue && loopContinue < loopBreak) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop lexical scope exits lost their direct target topology");
+
+    auto forged = parse(context, scopedExitSource);
+    if (!forged)
+      return fail("generated loop lexical scope-exit ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop lexical scope-exit ownership anchor missing");
+    breakOperation->setAttr("owner",
+                            mlir::StringAttr::get(&context, "GeneratedLoopLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop lexical scope exit passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop lexical scope exit published partial output");
+
+    std::string duplicateSource = scopedExitSource;
+    auto duplicatePosition = duplicateSource.find("            }) : () -> ()", assignmentEnd + 1);
+    if (duplicatePosition == std::string::npos)
+      return fail("generated loop lexical scope duplicate-exit anchor missing");
+    std::string duplicateBreak =
+        scopedExits.substr(scopedExits.find("            \"nodal.analog_break\"()"));
+    for (auto position = duplicateBreak.find("break_0"); position != std::string::npos;
+         position = duplicateBreak.find("break_0", position + 7))
+      duplicateBreak.replace(position, 7, "break_1");
+    duplicateSource.insert(duplicatePosition, duplicateBreak);
+    auto duplicate = parse(context, duplicateSource);
+    if (!duplicate)
+      return fail("generated loop lexical scope duplicate-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream duplicateRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicate, nodal::BackendKind::VerilogA, duplicateRejectedStream)))
+      return fail("duplicate generated loop lexical scope exit passed backend verification");
+    duplicateRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("duplicate generated loop lexical scope exit published partial output");
+  }
+
+  auto generatedLoopConditionalStorage =
+      parse(context, kGeneratedLoopConditionalLexicalStorageModule);
+  if (!generatedLoopConditionalStorage)
+    return fail("could not parse the generated loop-conditional lexical-storage fixture");
+  std::string generatedLoopConditionalOutput;
+  llvm::raw_string_ostream generatedLoopConditionalStream(generatedLoopConditionalOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLoopConditionalStorage,
+                                      nodal::BackendKind::VerilogA,
+                                      generatedLoopConditionalStream)))
+    return fail("generated loop-conditional lexical-storage emission failed");
+  generatedLoopConditionalStream.flush();
+  auto loopConditionalOuter = generatedLoopConditionalOutput.find("for (generate_0_index");
+  auto loopConditionalRuntime = generatedLoopConditionalOutput.find(
+      "for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+  auto loopConditionalIf = generatedLoopConditionalOutput.find(
+      "if (event_GeneratedLoopConditionalLexicalStorage_select) begin");
+  auto loopConditionalWhen = generatedLoopConditionalOutput.find(
+      "event_GeneratedLoopConditionalLexicalStorage_state = "
+      "(event_GeneratedLoopConditionalLexicalStorage_loop_0_if_0_assignment_read_0 + 6.0);");
+  auto loopConditionalOtherwise = generatedLoopConditionalOutput.find(
+      "event_GeneratedLoopConditionalLexicalStorage_state = "
+      "(event_GeneratedLoopConditionalLexicalStorage_loop_0_if_0_assignment_else_read_0 + "
+      "7.0);");
+  if (loopConditionalOuter == std::string::npos || loopConditionalRuntime == std::string::npos ||
+      loopConditionalIf == std::string::npos || loopConditionalWhen == std::string::npos ||
+      loopConditionalOtherwise == std::string::npos ||
+      !(loopConditionalOuter < loopConditionalRuntime &&
+        loopConditionalRuntime < loopConditionalIf && loopConditionalIf < loopConditionalWhen &&
+        loopConditionalWhen < loopConditionalOtherwise) ||
+      generatedLoopConditionalOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLoopConditionalOutput, *configuration)))
+    return fail("generated loop-conditional lexical storage lost its direct target topology");
+
+  {
+    std::string exitSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    const std::string assignmentAnchor =
+        "                \"nodal.analog_assign\"(%state, %state_read)";
+    auto assignmentPosition = exitSource.find(assignmentAnchor);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop conditional-arm exit assignment anchor missing");
+    auto assignmentEnd = exitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop conditional-arm exit assignment terminator missing");
+    const std::string loopContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.continue_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", statement_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.continue_0\"}> : () -> ()\n";
+    exitSource.insert(assignmentEnd + 1, loopContinue);
+
+    auto exitModule = parse(context, exitSource);
+    if (!exitModule)
+      return fail("generated loop conditional-arm exit fixture did not parse");
+    std::string exitOutput;
+    llvm::raw_string_ostream exitStream(exitOutput);
+    if (mlir::failed(nodal::emitBackend(*exitModule, nodal::BackendKind::VerilogA, exitStream)))
+      return fail("generated loop conditional-arm exit emission failed");
+    exitStream.flush();
+    auto exitRuntime =
+        exitOutput.find("for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto exitConditional = exitOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", exitRuntime);
+    auto exitAssignment = exitOutput.find(" + 6.0);", exitConditional);
+    auto exitContinue = exitOutput.find("_continue = 1;", exitAssignment);
+    auto exitOtherwise = exitOutput.find("else begin", exitContinue);
+    if (exitRuntime == std::string::npos || exitConditional == std::string::npos ||
+        exitAssignment == std::string::npos || exitContinue == std::string::npos ||
+        exitOtherwise == std::string::npos ||
+        !(exitRuntime < exitConditional && exitConditional < exitAssignment &&
+          exitAssignment < exitContinue && exitContinue < exitOtherwise) ||
+        mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
+      return fail("generated loop conditional-arm exit lost its direct target topology");
+
+    std::string breakSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    auto breakAssignmentPosition = breakSource.find(assignmentAnchor);
+    auto breakAssignmentEnd = breakSource.find('\n', breakAssignmentPosition);
+    if (breakAssignmentPosition == std::string::npos || breakAssignmentEnd == std::string::npos)
+      return fail("generated loop conditional-arm break assignment anchor missing");
+    const std::string loopBreak =
+        "                \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.break_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", statement_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.break_0\"}> : () -> ()\n";
+    breakSource.insert(breakAssignmentEnd + 1, loopBreak);
+    auto breakModule = parse(context, breakSource);
+    if (!breakModule)
+      return fail("generated loop conditional-arm break fixture did not parse");
+    std::string breakOutput;
+    llvm::raw_string_ostream breakStream(breakOutput);
+    if (mlir::failed(nodal::emitBackend(*breakModule, nodal::BackendKind::VerilogA, breakStream)))
+      return fail("generated loop conditional-arm break emission failed");
+    breakStream.flush();
+    auto breakRuntime =
+        breakOutput.find("for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto breakConditional = breakOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", breakRuntime);
+    auto breakAssignment = breakOutput.find(" + 6.0);", breakConditional);
+    auto breakExit = breakOutput.find("_break = 1;", breakAssignment);
+    auto breakOtherwise = breakOutput.find("else begin", breakExit);
+    if (breakRuntime == std::string::npos || breakConditional == std::string::npos ||
+        breakAssignment == std::string::npos || breakExit == std::string::npos ||
+        breakOtherwise == std::string::npos ||
+        !(breakRuntime < breakConditional && breakConditional < breakAssignment &&
+          breakAssignment < breakExit && breakExit < breakOtherwise) ||
+        breakOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(breakOutput, *configuration)))
+      return fail("generated loop conditional-arm break lost its direct target topology");
+
+    auto forgedBreak = parse(context, breakSource);
+    if (!forgedBreak)
+      return fail("generated loop conditional-arm break ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forgedBreak->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop conditional-arm break ownership anchor missing");
+    breakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string breakRejected = "sentinel";
+    llvm::raw_string_ostream forgedBreakStream(breakRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedBreak, nodal::BackendKind::VerilogA, forgedBreakStream)))
+      return fail("forged generated loop conditional-arm break passed backend verification");
+    forgedBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("forged generated loop conditional-arm break published partial output");
+
+    std::string duplicateBreakSource = breakSource;
+    std::string secondBreak = loopBreak;
+    for (auto duplicateId = secondBreak.find("break_0"); duplicateId != std::string::npos;
+         duplicateId = secondBreak.find("break_0", duplicateId + 7))
+      secondBreak.replace(duplicateId, 7, "break_1");
+    duplicateBreakSource.insert(breakAssignmentEnd + 1, secondBreak);
+    auto duplicateBreak = parse(context, duplicateBreakSource);
+    if (!duplicateBreak)
+      return fail("generated loop conditional-arm duplicate-break mutation did not parse");
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateBreak, nodal::BackendKind::VerilogA,
+                                           duplicateBreakStream)))
+      return fail("duplicate generated loop conditional-arm break passed backend verification");
+    duplicateBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm break published partial output");
+
+    auto forged = parse(context, exitSource);
+    if (!forged)
+      return fail("generated loop conditional-arm exit ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop conditional-arm exit ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop conditional-arm exit passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop conditional-arm exit published partial output");
+
+    std::string deeperSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    const std::string readAnchor =
+        "                %state_read = \"nodal.analog_variable_read\"(%state)";
+    auto deeperPosition = deeperSource.find(readAnchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop conditional-arm deeper-exit mutation anchor missing");
+    const std::string deeperExit =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}> ({\n"
+        "                ^bb0:\n" +
+        loopContinue + "                }) : () -> ()\n";
+    deeperSource.insert(deeperPosition, deeperExit);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop conditional-arm deeper-exit mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("scope-contained generated loop conditional-arm exit passed verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("scope-contained generated loop conditional-arm exit published partial output");
+  }
+
+  {
+    auto invalid = parse(context, kGeneratedLoopConditionalLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated loop-conditional owner mutation fixture");
+    mlir::Operation *conditional = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!conditional && operation->getName().getStringRef() == "nodal.analog_if")
+        conditional = operation;
+    });
+    if (!conditional)
+      return fail("generated loop-conditional owner mutation anchor missing");
+    conditional->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-conditional owner passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop-conditional owner published partial output");
+  }
+
+  {
+    std::string scopedSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    const std::string anchor =
+        "                %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string scopeHeader =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0\"}> ({\n"
+        "                ^bb0:\n";
+    const std::string assignmentAnchor =
+        "                \"nodal.analog_assign\"(%state, %state_read)";
+    auto position = scopedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated loop-conditional scope mutation anchor missing");
+    scopedSource.insert(position, scopeHeader);
+    auto assignmentPosition = scopedSource.find(assignmentAnchor, position + scopeHeader.size());
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop-conditional scope assignment anchor missing");
+    auto assignmentEnd = scopedSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop-conditional scope assignment terminator missing");
+    scopedSource.insert(assignmentEnd + 1, "                }) : () -> ()\n");
+
+    auto scoped = parse(context, scopedSource);
+    if (!scoped)
+      return fail("generated loop-conditional scope fixture did not parse");
+    std::string scopedOutput;
+    llvm::raw_string_ostream scopedStream(scopedOutput);
+    if (mlir::failed(nodal::emitBackend(*scoped, nodal::BackendKind::VerilogA, scopedStream)))
+      return fail("generated loop-conditional scope emission failed");
+    scopedStream.flush();
+    auto scopedRuntime =
+        scopedOutput.find("for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto scopedConditional = scopedOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", scopedRuntime);
+    auto scopedConditionalBegin = scopedOutput.find("begin", scopedConditional);
+    auto scopedArmBegin = scopedOutput.find("begin", scopedConditionalBegin + 5);
+    auto scopedAssignment = scopedOutput.find(
+        "event_GeneratedLoopConditionalLexicalStorage_state = "
+        "(event_GeneratedLoopConditionalLexicalStorage_loop_0_if_0_assignment_read_0 + 6.0);",
+        scopedArmBegin);
+    auto scopedOtherwise = scopedOutput.find("else begin", scopedAssignment);
+    if (scopedRuntime == std::string::npos || scopedConditional == std::string::npos ||
+        scopedConditionalBegin == std::string::npos || scopedArmBegin == std::string::npos ||
+        scopedAssignment == std::string::npos || scopedOtherwise == std::string::npos ||
+        !(scopedRuntime < scopedConditional && scopedConditional < scopedConditionalBegin &&
+          scopedConditionalBegin < scopedArmBegin && scopedArmBegin < scopedAssignment &&
+          scopedAssignment < scopedOtherwise) ||
+        scopedOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
+      return fail("generated loop-conditional scope lost its direct target topology");
+
+    std::string scopedExitSource = scopedSource;
+    auto scopedExitAssignment = scopedExitSource.find(assignmentAnchor);
+    auto scopedExitAssignmentEnd = scopedExitSource.find('\n', scopedExitAssignment);
+    if (scopedExitAssignment == std::string::npos || scopedExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-conditional scope-exit assignment anchor missing");
+    const std::string scopedContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", statement_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.continue_0\"}> : () -> "
+        "()\n";
+    scopedExitSource.insert(scopedExitAssignmentEnd + 1, scopedContinue);
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop-conditional scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop-conditional scope-exit emission failed");
+    scopedExitStream.flush();
+    auto scopedExitRuntime = scopedExitOutput.find(
+        "for (event_GeneratedLoopConditionalLexicalStorage_loop_0_index = 0;");
+    auto scopedExitConditional = scopedExitOutput.find(
+        "if (event_GeneratedLoopConditionalLexicalStorage_select) begin", scopedExitRuntime);
+    auto scopedExitConditionalBegin = scopedExitOutput.find("begin", scopedExitConditional);
+    auto scopedExitScopeBegin = scopedExitOutput.find("begin", scopedExitConditionalBegin + 5);
+    auto scopedExitAssignmentOutput = scopedExitOutput.find(" + 6.0);", scopedExitScopeBegin);
+    auto scopedExitContinue = scopedExitOutput.find("_continue = 1;", scopedExitAssignmentOutput);
+    auto scopedExitOtherwise = scopedExitOutput.find("else begin", scopedExitContinue);
+    if (scopedExitRuntime == std::string::npos || scopedExitConditional == std::string::npos ||
+        scopedExitConditionalBegin == std::string::npos ||
+        scopedExitScopeBegin == std::string::npos ||
+        scopedExitAssignmentOutput == std::string::npos ||
+        scopedExitContinue == std::string::npos || scopedExitOtherwise == std::string::npos ||
+        !(scopedExitRuntime < scopedExitConditional &&
+          scopedExitConditional < scopedExitConditionalBegin &&
+          scopedExitConditionalBegin < scopedExitScopeBegin &&
+          scopedExitScopeBegin < scopedExitAssignmentOutput &&
+          scopedExitAssignmentOutput < scopedExitContinue &&
+          scopedExitContinue < scopedExitOtherwise) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop-conditional scope exit lost its direct target topology");
+
+    std::string scopedBreakSource = scopedExitSource;
+    auto scopedBreakName = scopedBreakSource.find("nodal.analog_continue");
+    if (scopedBreakName == std::string::npos)
+      return fail("generated loop-conditional scope-break operation anchor missing");
+    scopedBreakSource.replace(scopedBreakName, std::string("nodal.analog_continue").size(),
+                              "nodal.analog_break");
+    for (auto breakId = scopedBreakSource.find("continue_0"); breakId != std::string::npos;
+         breakId = scopedBreakSource.find("continue_0", breakId + 7))
+      scopedBreakSource.replace(breakId, std::string("continue_0").size(), "break_0");
+    auto scopedBreakModule = parse(context, scopedBreakSource);
+    if (!scopedBreakModule)
+      return fail("generated loop-conditional scope-break fixture did not parse");
+    std::string scopedBreakOutput;
+    llvm::raw_string_ostream scopedBreakStream(scopedBreakOutput);
+    if (mlir::failed(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                        scopedBreakStream)))
+      return fail("generated loop-conditional scope-break emission failed");
+    scopedBreakStream.flush();
+    auto scopedBreakAssignment = scopedBreakOutput.find(" + 6.0);");
+    auto scopedBreakExit = scopedBreakOutput.find("_break = 1;", scopedBreakAssignment);
+    auto scopedBreakOtherwise = scopedBreakOutput.find("else begin", scopedBreakExit);
+    if (scopedBreakAssignment == std::string::npos || scopedBreakExit == std::string::npos ||
+        scopedBreakOtherwise == std::string::npos ||
+        !(scopedBreakAssignment < scopedBreakExit && scopedBreakExit < scopedBreakOtherwise) ||
+        scopedBreakOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedBreakOutput, *configuration)))
+      return fail("generated loop-conditional scope break lost its direct target topology");
+
+    mlir::Operation *scopedBreakOperation = nullptr;
+    scopedBreakModule->walk([&](mlir::Operation *operation) {
+      if (!scopedBreakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        scopedBreakOperation = operation;
+    });
+    if (!scopedBreakOperation)
+      return fail("generated loop-conditional scope-break ownership anchor missing");
+    scopedBreakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string breakRejected = "sentinel";
+    llvm::raw_string_ostream forgedBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           forgedBreakStream)))
+      return fail("forged generated loop-conditional scope break passed backend verification");
+    forgedBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("forged generated loop-conditional scope break published partial output");
+    scopedBreakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage"));
+
+    mlir::Operation *duplicateScopedBreak = scopedBreakOperation->clone();
+    duplicateScopedBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.break_1"));
+    scopedBreakOperation->getBlock()->push_back(duplicateScopedBreak);
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           duplicateBreakStream)))
+      return fail("duplicate generated loop-conditional scope break passed backend verification");
+    duplicateBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("duplicate generated loop-conditional scope break published partial output");
+    duplicateScopedBreak->erase();
+
+    mlir::Operation *scopedBreakScope = scopedBreakOperation->getParentOp();
+    mlir::Operation *deeperBreakScope = scopedBreakScope->clone();
+    scopedBreakScope->getRegion(0).front().push_back(deeperBreakScope);
+    breakRejected = "sentinel";
+    llvm::raw_string_ostream deeperBreakStream(breakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*scopedBreakModule, nodal::BackendKind::VerilogA,
+                                           deeperBreakStream)))
+      return fail("deeper generated loop-conditional scope break passed backend verification");
+    deeperBreakStream.flush();
+    if (breakRejected != "sentinel")
+      return fail("deeper generated loop-conditional scope break published partial output");
+    deeperBreakScope->erase();
+
+    auto forgedExit = parse(context, scopedExitSource);
+    if (!forgedExit)
+      return fail("generated loop-conditional scope-exit ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedExit->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop-conditional scope-exit ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string exitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedExit, nodal::BackendKind::VerilogA, forgedExitStream)))
+      return fail("forged generated loop-conditional scope exit passed backend verification");
+    forgedExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("forged generated loop-conditional scope exit published partial output");
+
+    std::string duplicateExitSource = scopedExitSource;
+    auto duplicateExitPosition =
+        duplicateExitSource.find("                }) : () -> ()", scopedExitAssignmentEnd + 1);
+    if (duplicateExitPosition == std::string::npos)
+      return fail("generated loop-conditional scope duplicate-exit anchor missing");
+    std::string duplicateContinue = scopedContinue;
+    for (auto duplicateId = duplicateContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = duplicateContinue.find("continue_0", duplicateId + 10))
+      duplicateContinue.replace(duplicateId, 10, "continue_1");
+    duplicateExitSource.insert(duplicateExitPosition, duplicateContinue);
+    auto duplicateExit = parse(context, duplicateExitSource);
+    if (!duplicateExit)
+      return fail("generated loop-conditional scope duplicate-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicateExit, nodal::BackendKind::VerilogA, duplicateExitStream)))
+      return fail("duplicate generated loop-conditional scope exit passed backend verification");
+    duplicateExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("duplicate generated loop-conditional scope exit published partial output");
+
+    std::string deeperExitSource = scopedSource;
+    auto deeperExitAssignment = deeperExitSource.find(assignmentAnchor);
+    auto deeperExitAssignmentEnd = deeperExitSource.find('\n', deeperExitAssignment);
+    if (deeperExitAssignment == std::string::npos || deeperExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-conditional deeper scope-exit assignment anchor missing");
+    const std::string deeperScopedContinue =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n" +
+        scopedContinue + "                }) : () -> ()\n";
+    deeperExitSource.insert(deeperExitAssignmentEnd + 1, deeperScopedContinue);
+    auto deeperExit = parse(context, deeperExitSource);
+    if (!deeperExit)
+      return fail("generated loop-conditional deeper scope-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeperExit, nodal::BackendKind::VerilogA, deeperExitStream)))
+      return fail("deeper generated loop-conditional scope exit passed backend verification");
+    deeperExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("deeper generated loop-conditional scope exit published partial output");
+
+    auto forged = parse(context, scopedSource);
+    if (!forged)
+      return fail("could not parse the generated loop-conditional scope ownership fixture");
+    mlir::Operation *scope = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!scope && operation->getName().getStringRef() == "nodal.analog_scope")
+        scope = operation;
+    });
+    if (!scope)
+      return fail("generated loop-conditional scope ownership mutation anchor missing");
+    scope->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopConditionalLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-conditional scope ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop-conditional scope published partial output");
+
+    std::string emptyScopeSource = kGeneratedLoopConditionalLexicalStorageModule.str();
+    const std::string emptyScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.empty_scope\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.empty_scope\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto emptyPosition = emptyScopeSource.find(anchor);
+    if (emptyPosition == std::string::npos)
+      return fail("generated loop-conditional empty scope mutation anchor missing");
+    emptyScopeSource.insert(emptyPosition, emptyScope);
+    auto empty = parse(context, emptyScopeSource);
+    if (!empty)
+      return fail("generated loop-conditional empty scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream emptyRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*empty, nodal::BackendKind::VerilogA, emptyRejectedStream)))
+      return fail("empty generated loop-conditional scope passed backend verification");
+    emptyRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("empty generated loop-conditional scope published partial output");
+
+    std::string deeperSource = scopedSource;
+    const std::string deeperScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopConditionalLexicalStorage\", scope_id = "
+        "\"GeneratedLoopConditionalLexicalStorage.loop_0.if_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto deeperPosition = deeperSource.find(anchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop-conditional deeper scope mutation anchor missing");
+    deeperSource.insert(deeperPosition, deeperScope);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop-conditional deeper scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("deeper generated loop-conditional scope passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deeper generated loop-conditional scope published partial output");
+  }
+
+  auto generatedLoopCaseStorage = parse(context, kGeneratedLoopCaseLexicalStorageModule);
+  if (!generatedLoopCaseStorage)
+    return fail("could not parse the generated loop-case lexical-storage fixture");
+  std::string generatedLoopCaseOutput;
+  llvm::raw_string_ostream generatedLoopCaseStream(generatedLoopCaseOutput);
+  if (mlir::failed(nodal::emitBackend(*generatedLoopCaseStorage, nodal::BackendKind::VerilogA,
+                                      generatedLoopCaseStream)))
+    return fail("generated loop-case lexical-storage emission failed");
+  generatedLoopCaseStream.flush();
+  auto loopCaseOuter = generatedLoopCaseOutput.find("for (generate_0_index");
+  auto loopCaseRuntime =
+      generatedLoopCaseOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+  auto loopCaseTree = generatedLoopCaseOutput.find(
+      "case (event_GeneratedLoopCaseLexicalStorage_mode)", loopCaseRuntime);
+  auto loopCaseArm = generatedLoopCaseOutput.find("0: begin", loopCaseTree);
+  auto loopCaseAssignment = generatedLoopCaseOutput.find(
+      "event_GeneratedLoopCaseLexicalStorage_state = "
+      "(event_GeneratedLoopCaseLexicalStorage_loop_0_case_0_assignment_read_0 + 8.0);",
+      loopCaseArm);
+  auto loopCaseDefault = generatedLoopCaseOutput.find("default: begin", loopCaseTree);
+  auto loopCaseDefaultAssignment = generatedLoopCaseOutput.find(
+      "event_GeneratedLoopCaseLexicalStorage_state = "
+      "(event_GeneratedLoopCaseLexicalStorage_loop_0_case_0_assignment_default_read_0 + 9.0);",
+      loopCaseDefault);
+  if (loopCaseOuter == std::string::npos || loopCaseRuntime == std::string::npos ||
+      loopCaseTree == std::string::npos || loopCaseArm == std::string::npos ||
+      loopCaseAssignment == std::string::npos || loopCaseDefault == std::string::npos ||
+      loopCaseDefaultAssignment == std::string::npos ||
+      !(loopCaseOuter < loopCaseRuntime && loopCaseRuntime < loopCaseTree &&
+        loopCaseTree < loopCaseArm && loopCaseArm < loopCaseAssignment &&
+        loopCaseAssignment < loopCaseDefault && loopCaseDefault < loopCaseDefaultAssignment) ||
+      generatedLoopCaseOutput.find("@(") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedLoopCaseOutput, *configuration)))
+    return fail("generated loop-case lexical storage lost its direct target topology");
+
+  {
+    std::string exitSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string assignmentAnchor =
+        "                \"nodal.analog_assign\"(%state, %state_read_default)";
+    auto assignmentPosition = exitSource.find(assignmentAnchor);
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop case-arm exit assignment anchor missing");
+    auto assignmentEnd = exitSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop case-arm exit assignment terminator missing");
+    const std::string loopBreak =
+        "                \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.break_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.break_0\"}> : () -> ()\n";
+    exitSource.insert(assignmentEnd + 1, loopBreak);
+
+    auto exitModule = parse(context, exitSource);
+    if (!exitModule)
+      return fail("generated loop case-arm exit fixture did not parse");
+    std::string exitOutput;
+    llvm::raw_string_ostream exitStream(exitOutput);
+    if (mlir::failed(nodal::emitBackend(*exitModule, nodal::BackendKind::VerilogA, exitStream)))
+      return fail("generated loop case-arm exit emission failed");
+    exitStream.flush();
+    auto exitRuntime =
+        exitOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto exitCase =
+        exitOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)", exitRuntime);
+    auto exitDefault = exitOutput.find("default: begin", exitCase);
+    auto exitAssignment = exitOutput.find(" + 9.0);", exitDefault);
+    auto exitBreak = exitOutput.find("_break = 1;", exitAssignment);
+    if (exitRuntime == std::string::npos || exitCase == std::string::npos ||
+        exitDefault == std::string::npos || exitAssignment == std::string::npos ||
+        exitBreak == std::string::npos ||
+        !(exitRuntime < exitCase && exitCase < exitDefault && exitDefault < exitAssignment &&
+          exitAssignment < exitBreak) ||
+        mlir::failed(nodal::reparseBackendTarget(exitOutput, *configuration)))
+      return fail("generated loop case-arm exit lost its direct target topology");
+
+    std::string continueSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string loopContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.continue_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.continue_0\"}> : () -> ()\n";
+    continueSource.insert(assignmentEnd + 1, loopContinue);
+    auto continueModule = parse(context, continueSource);
+    if (!continueModule)
+      return fail("generated loop case-arm continue fixture did not parse");
+    std::string continueOutput;
+    llvm::raw_string_ostream continueStream(continueOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*continueModule, nodal::BackendKind::VerilogA, continueStream)))
+      return fail("generated loop case-arm continue emission failed");
+    continueStream.flush();
+    auto continueRuntime =
+        continueOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto continueCase =
+        continueOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)", continueRuntime);
+    auto continueDefault = continueOutput.find("default: begin", continueCase);
+    auto continueAssignment = continueOutput.find(" + 9.0);", continueDefault);
+    auto continueExit = continueOutput.find("_continue = 1;", continueAssignment);
+    if (continueRuntime == std::string::npos || continueCase == std::string::npos ||
+        continueDefault == std::string::npos || continueAssignment == std::string::npos ||
+        continueExit == std::string::npos ||
+        !(continueRuntime < continueCase && continueCase < continueDefault &&
+          continueDefault < continueAssignment && continueAssignment < continueExit) ||
+        mlir::failed(nodal::reparseBackendTarget(continueOutput, *configuration)))
+      return fail("generated loop case-arm continue lost its direct target topology");
+
+    auto forgedContinue = parse(context, continueSource);
+    if (!forgedContinue)
+      return fail("generated loop case-arm continue ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedContinue->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop case-arm continue ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string continueRejected = "sentinel";
+    llvm::raw_string_ostream forgedContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*forgedContinue, nodal::BackendKind::VerilogA,
+                                           forgedContinueStream)))
+      return fail("forged generated loop case-arm continue passed backend verification");
+    forgedContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("forged generated loop case-arm continue published partial output");
+
+    std::string duplicateContinueSource = continueSource;
+    std::string secondContinue = loopContinue;
+    for (auto duplicateId = secondContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = secondContinue.find("continue_0", duplicateId + 10))
+      secondContinue.replace(duplicateId, 10, "continue_1");
+    duplicateContinueSource.insert(assignmentEnd + 1, secondContinue);
+    auto duplicateContinue = parse(context, duplicateContinueSource);
+    if (!duplicateContinue)
+      return fail("generated loop case-arm duplicate-continue mutation did not parse");
+    continueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateContinue, nodal::BackendKind::VerilogA,
+                                           duplicateContinueStream)))
+      return fail("duplicate generated loop case-arm continue passed backend verification");
+    duplicateContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("duplicate generated loop case-arm continue published partial output");
+  }
+
+  {
+    auto invalid = parse(context, kGeneratedLoopCaseLexicalStorageModule);
+    if (!invalid)
+      return fail("could not parse the generated loop-case owner mutation fixture");
+    mlir::Operation *caseOperation = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!caseOperation && operation->getName().getStringRef() == "nodal.analog_case")
+        caseOperation = operation;
+    });
+    if (!caseOperation)
+      return fail("generated loop-case owner mutation anchor missing");
+    caseOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-case owner passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop-case owner published partial output");
+  }
+
+  {
+    std::string scopedSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string anchor =
+        "                %state_read = \"nodal.analog_variable_read\"(%state)";
+    const std::string scopeHeader =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0\"}> ({\n"
+        "                ^bb0:\n";
+    const std::string assignmentAnchor =
+        "                \"nodal.analog_assign\"(%state, %state_read)";
+    auto position = scopedSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated loop-case scope mutation anchor missing");
+    scopedSource.insert(position, scopeHeader);
+    auto assignmentPosition = scopedSource.find(assignmentAnchor, position + scopeHeader.size());
+    if (assignmentPosition == std::string::npos)
+      return fail("generated loop-case scope assignment anchor missing");
+    auto assignmentEnd = scopedSource.find('\n', assignmentPosition);
+    if (assignmentEnd == std::string::npos)
+      return fail("generated loop-case scope assignment terminator missing");
+    scopedSource.insert(assignmentEnd + 1, "                }) : () -> ()\n");
+
+    auto scoped = parse(context, scopedSource);
+    if (!scoped)
+      return fail("generated loop-case scope fixture did not parse");
+    std::string scopedOutput;
+    llvm::raw_string_ostream scopedStream(scopedOutput);
+    if (mlir::failed(nodal::emitBackend(*scoped, nodal::BackendKind::VerilogA, scopedStream)))
+      return fail("generated loop-case scope emission failed");
+    scopedStream.flush();
+    auto scopedRuntime =
+        scopedOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto scopedCase =
+        scopedOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)", scopedRuntime);
+    auto scopedArm = scopedOutput.find("0: begin", scopedCase);
+    auto scopedArmBegin = scopedOutput.find("begin", scopedArm);
+    auto scopedScopeBegin = scopedOutput.find("begin", scopedArmBegin + 5);
+    auto scopedAssignment = scopedOutput.find(
+        "event_GeneratedLoopCaseLexicalStorage_state = "
+        "(event_GeneratedLoopCaseLexicalStorage_loop_0_case_0_assignment_read_0 + 8.0);",
+        scopedScopeBegin);
+    auto scopedDefault = scopedOutput.find("default: begin", scopedAssignment);
+    if (scopedRuntime == std::string::npos || scopedCase == std::string::npos ||
+        scopedArm == std::string::npos || scopedArmBegin == std::string::npos ||
+        scopedScopeBegin == std::string::npos || scopedAssignment == std::string::npos ||
+        scopedDefault == std::string::npos ||
+        !(scopedRuntime < scopedCase && scopedCase < scopedArm && scopedArm < scopedArmBegin &&
+          scopedArmBegin < scopedScopeBegin && scopedScopeBegin < scopedAssignment &&
+          scopedAssignment < scopedDefault) ||
+        scopedOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedOutput, *configuration)))
+      return fail("generated loop-case scope lost its direct target topology");
+
+    std::string scopedExitSource = scopedSource;
+    auto scopedExitAssignment = scopedExitSource.find(assignmentAnchor);
+    auto scopedExitAssignmentEnd = scopedExitSource.find('\n', scopedExitAssignment);
+    if (scopedExitAssignment == std::string::npos || scopedExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-case scope-exit assignment anchor missing");
+    const std::string scopedBreak =
+        "                \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.break_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.break_0\"}> : () -> ()\n";
+    scopedExitSource.insert(scopedExitAssignmentEnd + 1, scopedBreak);
+    auto scopedExit = parse(context, scopedExitSource);
+    if (!scopedExit)
+      return fail("generated loop-case scope-exit fixture did not parse");
+    std::string scopedExitOutput;
+    llvm::raw_string_ostream scopedExitStream(scopedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*scopedExit, nodal::BackendKind::VerilogA, scopedExitStream)))
+      return fail("generated loop-case scope-exit emission failed");
+    scopedExitStream.flush();
+    auto scopedExitRuntime =
+        scopedExitOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto scopedExitCase = scopedExitOutput.find("case (event_GeneratedLoopCaseLexicalStorage_mode)",
+                                                scopedExitRuntime);
+    auto scopedExitArm = scopedExitOutput.find("0: begin", scopedExitCase);
+    auto scopedExitArmBegin = scopedExitOutput.find("begin", scopedExitArm);
+    auto scopedExitScopeBegin = scopedExitOutput.find("begin", scopedExitArmBegin + 5);
+    auto scopedExitAssignmentOutput = scopedExitOutput.find(" + 8.0);", scopedExitScopeBegin);
+    auto scopedExitBreak = scopedExitOutput.find("_break = 1;", scopedExitAssignmentOutput);
+    auto scopedExitDefault = scopedExitOutput.find("default: begin", scopedExitBreak);
+    if (scopedExitRuntime == std::string::npos || scopedExitCase == std::string::npos ||
+        scopedExitArm == std::string::npos || scopedExitArmBegin == std::string::npos ||
+        scopedExitScopeBegin == std::string::npos ||
+        scopedExitAssignmentOutput == std::string::npos || scopedExitBreak == std::string::npos ||
+        scopedExitDefault == std::string::npos ||
+        !(scopedExitRuntime < scopedExitCase && scopedExitCase < scopedExitArm &&
+          scopedExitArm < scopedExitArmBegin && scopedExitArmBegin < scopedExitScopeBegin &&
+          scopedExitScopeBegin < scopedExitAssignmentOutput &&
+          scopedExitAssignmentOutput < scopedExitBreak && scopedExitBreak < scopedExitDefault) ||
+        scopedExitOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedExitOutput, *configuration)))
+      return fail("generated loop-case scope exit lost its direct target topology");
+
+    std::string scopedContinueSource = scopedSource;
+    auto scopedContinueAssignment = scopedContinueSource.find(assignmentAnchor);
+    auto scopedContinueAssignmentEnd = scopedContinueSource.find('\n', scopedContinueAssignment);
+    if (scopedContinueAssignment == std::string::npos ||
+        scopedContinueAssignmentEnd == std::string::npos)
+      return fail("generated loop-case scope-continue assignment anchor missing");
+    const std::string scopedContinue =
+        "                \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.continue_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", statement_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.continue_0\"}> : () -> ()\n";
+    scopedContinueSource.insert(scopedContinueAssignmentEnd + 1, scopedContinue);
+    auto scopedContinueModule = parse(context, scopedContinueSource);
+    if (!scopedContinueModule)
+      return fail("generated loop-case scope-continue fixture did not parse");
+    std::string scopedContinueOutput;
+    llvm::raw_string_ostream scopedContinueStream(scopedContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*scopedContinueModule, nodal::BackendKind::VerilogA,
+                                        scopedContinueStream)))
+      return fail("generated loop-case scope-continue emission failed");
+    scopedContinueStream.flush();
+    auto scopedContinueRuntime =
+        scopedContinueOutput.find("for (event_GeneratedLoopCaseLexicalStorage_loop_0_index = 0;");
+    auto scopedContinueCase = scopedContinueOutput.find(
+        "case (event_GeneratedLoopCaseLexicalStorage_mode)", scopedContinueRuntime);
+    auto scopedContinueArm = scopedContinueOutput.find("0: begin", scopedContinueCase);
+    auto scopedContinueArmBegin = scopedContinueOutput.find("begin", scopedContinueArm);
+    auto scopedContinueScopeBegin = scopedContinueOutput.find("begin", scopedContinueArmBegin + 5);
+    auto scopedContinueAssignmentOutput =
+        scopedContinueOutput.find(" + 8.0);", scopedContinueScopeBegin);
+    auto scopedContinueExit =
+        scopedContinueOutput.find("_continue = 1;", scopedContinueAssignmentOutput);
+    auto scopedContinueDefault = scopedContinueOutput.find("default: begin", scopedContinueExit);
+    if (scopedContinueRuntime == std::string::npos || scopedContinueCase == std::string::npos ||
+        scopedContinueArm == std::string::npos || scopedContinueArmBegin == std::string::npos ||
+        scopedContinueScopeBegin == std::string::npos ||
+        scopedContinueAssignmentOutput == std::string::npos ||
+        scopedContinueExit == std::string::npos || scopedContinueDefault == std::string::npos ||
+        !(scopedContinueRuntime < scopedContinueCase && scopedContinueCase < scopedContinueArm &&
+          scopedContinueArm < scopedContinueArmBegin &&
+          scopedContinueArmBegin < scopedContinueScopeBegin &&
+          scopedContinueScopeBegin < scopedContinueAssignmentOutput &&
+          scopedContinueAssignmentOutput < scopedContinueExit &&
+          scopedContinueExit < scopedContinueDefault) ||
+        scopedContinueOutput.find("@(") != std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(scopedContinueOutput, *configuration)))
+      return fail("generated loop-case scope continue lost its direct target topology");
+
+    auto forgedContinue = parse(context, scopedContinueSource);
+    if (!forgedContinue)
+      return fail("generated loop-case scope-continue ownership fixture did not parse");
+    mlir::Operation *continueOperation = nullptr;
+    forgedContinue->walk([&](mlir::Operation *operation) {
+      if (!continueOperation && operation->getName().getStringRef() == "nodal.analog_continue")
+        continueOperation = operation;
+    });
+    if (!continueOperation)
+      return fail("generated loop-case scope-continue ownership anchor missing");
+    continueOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string continueRejected = "sentinel";
+    llvm::raw_string_ostream forgedContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*forgedContinue, nodal::BackendKind::VerilogA,
+                                           forgedContinueStream)))
+      return fail("forged generated loop-case scope continue passed backend verification");
+    forgedContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("forged generated loop-case scope continue published partial output");
+
+    std::string duplicateContinueSource = scopedContinueSource;
+    auto duplicateContinuePosition = duplicateContinueSource.find("                }) : () -> ()",
+                                                                  scopedContinueAssignmentEnd + 1);
+    if (duplicateContinuePosition == std::string::npos)
+      return fail("generated loop-case scope duplicate-continue anchor missing");
+    std::string secondContinue = scopedContinue;
+    for (auto duplicateId = secondContinue.find("continue_0"); duplicateId != std::string::npos;
+         duplicateId = secondContinue.find("continue_0", duplicateId + 10))
+      secondContinue.replace(duplicateId, 10, "continue_1");
+    duplicateContinueSource.insert(duplicateContinuePosition, secondContinue);
+    auto duplicateContinue = parse(context, duplicateContinueSource);
+    if (!duplicateContinue)
+      return fail("generated loop-case scope duplicate-continue mutation did not parse");
+    continueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateContinueStream(continueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*duplicateContinue, nodal::BackendKind::VerilogA,
+                                           duplicateContinueStream)))
+      return fail("duplicate generated loop-case scope continue passed backend verification");
+    duplicateContinueStream.flush();
+    if (continueRejected != "sentinel")
+      return fail("duplicate generated loop-case scope continue published partial output");
+
+    auto forgedExit = parse(context, scopedExitSource);
+    if (!forgedExit)
+      return fail("generated loop-case scope-exit ownership fixture did not parse");
+    mlir::Operation *breakOperation = nullptr;
+    forgedExit->walk([&](mlir::Operation *operation) {
+      if (!breakOperation && operation->getName().getStringRef() == "nodal.analog_break")
+        breakOperation = operation;
+    });
+    if (!breakOperation)
+      return fail("generated loop-case scope-exit ownership anchor missing");
+    breakOperation->setAttr(
+        "owner", mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string exitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*forgedExit, nodal::BackendKind::VerilogA, forgedExitStream)))
+      return fail("forged generated loop-case scope exit passed backend verification");
+    forgedExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("forged generated loop-case scope exit published partial output");
+
+    std::string duplicateExitSource = scopedExitSource;
+    auto duplicateExitPosition =
+        duplicateExitSource.find("                }) : () -> ()", scopedExitAssignmentEnd + 1);
+    if (duplicateExitPosition == std::string::npos)
+      return fail("generated loop-case scope duplicate-exit anchor missing");
+    std::string duplicateBreak = scopedBreak;
+    for (auto duplicateId = duplicateBreak.find("break_0"); duplicateId != std::string::npos;
+         duplicateId = duplicateBreak.find("break_0", duplicateId + 7))
+      duplicateBreak.replace(duplicateId, 7, "break_1");
+    duplicateExitSource.insert(duplicateExitPosition, duplicateBreak);
+    auto duplicateExit = parse(context, duplicateExitSource);
+    if (!duplicateExit)
+      return fail("generated loop-case scope duplicate-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*duplicateExit, nodal::BackendKind::VerilogA, duplicateExitStream)))
+      return fail("duplicate generated loop-case scope exit passed backend verification");
+    duplicateExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("duplicate generated loop-case scope exit published partial output");
+
+    std::string deeperExitSource = scopedSource;
+    auto deeperExitAssignment = deeperExitSource.find(assignmentAnchor);
+    auto deeperExitAssignmentEnd = deeperExitSource.find('\n', deeperExitAssignment);
+    if (deeperExitAssignment == std::string::npos || deeperExitAssignmentEnd == std::string::npos)
+      return fail("generated loop-case deeper scope-exit assignment anchor missing");
+    const std::string deeperScopedBreak =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n" +
+        scopedBreak + "                }) : () -> ()\n";
+    deeperExitSource.insert(deeperExitAssignmentEnd + 1, deeperScopedBreak);
+    auto deeperExit = parse(context, deeperExitSource);
+    if (!deeperExit)
+      return fail("generated loop-case deeper scope-exit mutation did not parse");
+    exitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitStream(exitRejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeperExit, nodal::BackendKind::VerilogA, deeperExitStream)))
+      return fail("deeper generated loop-case scope exit passed backend verification");
+    deeperExitStream.flush();
+    if (exitRejected != "sentinel")
+      return fail("deeper generated loop-case scope exit published partial output");
+
+    auto forged = parse(context, scopedSource);
+    if (!forged)
+      return fail("could not parse the generated loop-case scope ownership fixture");
+    mlir::Operation *scope = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!scope && operation->getName().getStringRef() == "nodal.analog_scope")
+        scope = operation;
+    });
+    if (!scope)
+      return fail("generated loop-case scope ownership mutation anchor missing");
+    scope->setAttr("owner",
+                   mlir::StringAttr::get(&context, "GeneratedLoopCaseLexicalStorage.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated loop-case scope ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated loop-case scope published partial output");
+
+    std::string emptyScopeSource = kGeneratedLoopCaseLexicalStorageModule.str();
+    const std::string emptyScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.empty_scope\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.empty_scope\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto emptyPosition = emptyScopeSource.find(anchor);
+    if (emptyPosition == std::string::npos)
+      return fail("generated loop-case empty scope mutation anchor missing");
+    emptyScopeSource.insert(emptyPosition, emptyScope);
+    auto empty = parse(context, emptyScopeSource);
+    if (!empty)
+      return fail("generated loop-case empty scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream emptyRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*empty, nodal::BackendKind::VerilogA, emptyRejectedStream)))
+      return fail("empty generated loop-case scope passed backend verification");
+    emptyRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("empty generated loop-case scope published partial output");
+
+    std::string deeperSource = scopedSource;
+    const std::string deeperScope =
+        "                \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}, owner = "
+        "\"GeneratedLoopCaseLexicalStorage\", scope_id = "
+        "\"GeneratedLoopCaseLexicalStorage.loop_0.case_0.scope_0.scope_0\"}> ({\n"
+        "                ^bb0:\n"
+        "                }) : () -> ()\n";
+    auto deeperPosition = deeperSource.find(anchor);
+    if (deeperPosition == std::string::npos)
+      return fail("generated loop-case deeper scope mutation anchor missing");
+    deeperSource.insert(deeperPosition, deeperScope);
+    auto deeper = parse(context, deeperSource);
+    if (!deeper)
+      return fail("generated loop-case deeper scope mutation did not parse");
+    rejected = "sentinel";
+    llvm::raw_string_ostream deeperRejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*deeper, nodal::BackendKind::VerilogA, deeperRejectedStream)))
+      return fail("deeper generated loop-case scope passed backend verification");
+    deeperRejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deeper generated loop-case scope published partial output");
+  }
+
+  auto generatedEvent = parse(context, kGeneratedEventModule);
+  if (!generatedEvent)
+    return fail("could not parse the generated event fixture");
+  std::string generatedEventOutput;
+  llvm::raw_string_ostream generatedEventStream(generatedEventOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*generatedEvent, nodal::BackendKind::VerilogA, generatedEventStream)))
+    return fail("generated event emission failed");
+  generatedEventStream.flush();
+  if (generatedEventOutput.find(
+          "for (generate_0_index = 0; generate_0_index < 2; generate_0_index = "
+          "generate_0_index + 1) begin : generate_0\n") == std::string::npos ||
+      generatedEventOutput.find("@(cross(1.0)) begin\n") == std::string::npos ||
+      generatedEventOutput.find("real event_") != std::string::npos ||
+      generatedEventOutput.find("integer event_") != std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(generatedEventOutput, *configuration)))
+    return fail("generated event lost its single owned target occurrence");
+
+  {
+    auto forged = parse(context, kGeneratedEventModule);
+    if (!forged)
+      return fail("could not parse the generated event mutation fixture");
+    mlir::Operation *procedure = nullptr;
+    forged->walk([&](mlir::Operation *operation) {
+      if (!procedure && operation->getName().getStringRef() == "nodal.analog_procedure")
+        procedure = operation;
+    });
+    if (!procedure)
+      return fail("generated event procedure mutation anchor missing");
+    procedure->setAttr("generated_owner", mlir::StringAttr::get(&context, "GeneratedEvent.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*forged, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated event ownership passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated event ownership published partial output");
+  }
+
+  {
+    const std::string anchor = "          %cross = \"nodal.analog_cross\"()";
+    const std::string storage =
+        "          %select = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.select\", owner = \"GeneratedEvent\", declaration_order = 0 : "
+        "i64, initialized = true, initializer_value = \"false\", initializer_kind = "
+        "\"boolean\", initializer_dimension = \"1\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"boolean\", \"1\">\n"
+        "          %mode = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.mode\", owner = \"GeneratedEvent\", declaration_order = 1 : "
+        "i64, initialized = true, initializer_value = \"0\", initializer_kind = "
+        "\"integer\", initializer_dimension = \"1\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"integer\", \"1\">\n"
+        "          %iterations = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.iterations\", owner = \"GeneratedEvent\", declaration_order = 2 : "
+        "i64, initialized = true, initializer_value = \"1\", initializer_kind = "
+        "\"integer\", initializer_dimension = \"1\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"integer\", \"1\">\n"
+        "          %state = \"nodal.analog_variable\"() <{identity = "
+        "\"GeneratedEvent.state\", owner = \"GeneratedEvent\", declaration_order = 3 : "
+        "i64, initialized = true, initializer_value = \"0.0 V\", initializer_kind = "
+        "\"real\", initializer_dimension = \"voltage\", initializer_reads = [], "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {}}> : () -> "
+        "!nodal.variable<\"real\", \"voltage\">\n";
+    const std::string bodyAnchor = "          ^bb0:\n          }) : (!nodal.analog_event) -> ()";
+    const std::string conditionalAssignment =
+        "          ^bb0:\n"
+        "            \"nodal.analog_if\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.if_0\"}, owner = \"GeneratedEvent\", statement_id = "
+        "\"GeneratedEvent.event_0.if_0\"}> ({\n"
+        "            ^bb0:\n"
+        "              \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.if_0.branch_0\", condition_dimension = \"1\", "
+        "condition_kind = \"boolean\", condition_reads = [\"GeneratedEvent.select\"], "
+        "condition_value = \"GeneratedEvent.select\", is_else = false, metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.if_0.condition_0\"}, owner = "
+        "\"GeneratedEvent\", stage = \"runtime\", static_value = false, "
+        "static_value_present = false}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 0 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,1.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.assignment\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "              \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.if_0.otherwise\", condition_dimension = \"\", "
+        "condition_kind = \"\", condition_reads = [], condition_value = \"\", "
+        "is_else = true, metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.if_0.otherwise\"}, owner = \"GeneratedEvent\", "
+        "stage = \"else\", static_value = false, static_value_present = false}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_else = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.assignment_else.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment_else.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_else) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 1 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.assignment_else\", value = "
+        "\"analog_add(GeneratedEvent.state,2.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.assignment_else\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "            }) : () -> ()\n"
+        "            \"nodal.analog_case\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.case_1.selector\"}, owner = \"GeneratedEvent\", "
+        "selector_dimension = \"1\", selector_kind = \"integer\", selector_reads = "
+        "[\"GeneratedEvent.mode\"], selector_value = \"GeneratedEvent.mode\", "
+        "statement_id = \"GeneratedEvent.event_0.case_1\", static_value = \"\", "
+        "static_value_present = false}> ({\n"
+        "            ^bb0:\n"
+        "              \"nodal.analog_case_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.case_1.arm_0\", is_default = false, labels = "
+        "[\"integer:0\"], metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.case_1.arm_0\"}, owner = \"GeneratedEvent\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_case = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.case_assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_case) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 2 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,3.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.case_assignment\", value_dimension = "
+        "\"voltage\", value_kind = \"real\"}> : (!nodal.variable<\"real\", "
+        "\"voltage\">, !nodal.quantity<\"real\", \"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "              \"nodal.analog_case_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.case_1.default\", is_default = true, labels = [], "
+        "metadata = {semantic_path = \"GeneratedEvent.event_0.case_1.default\"}, "
+        "owner = \"GeneratedEvent\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_default = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.case_default_assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_default_assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_default) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 3 : i64, guard_dimension = "
+        "\"\", guard_kind = \"\", guard_present = false, guard_reads = [], "
+        "guard_value = \"\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.case_default_assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,4.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.case_default_assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "            }) : () -> ()\n"
+        "            \"nodal.analog_loop\"() <{bound_dimension = \"1\", "
+        "bound_kind = \"integer\", bound_reads = [\"GeneratedEvent.iterations\"], "
+        "bound_value = \"GeneratedEvent.iterations\", maximum_iterations = 2 : i64, "
+        "metadata = {semantic_path = \"GeneratedEvent.event_0.loop_2\"}, "
+        "minimum_iterations = 1 : i64, owner = \"GeneratedEvent\", stage = \"runtime\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2\", static_trip_count = 0 : i64, "
+        "static_trip_count_present = false}> ({\n"
+        "            ^bb0:\n"
+        "              \"nodal.analog_if\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0\"}> ({\n"
+        "              ^bb0:\n"
+        "                \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.branch_0\", condition_dimension = \"1\", "
+        "condition_kind = \"boolean\", condition_reads = [\"GeneratedEvent.select\"], "
+        "condition_value = \"GeneratedEvent.select\", is_else = false, metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.if_0.condition_0\"}, owner = "
+        "\"GeneratedEvent\", stage = \"runtime\", static_value = false, "
+        "static_value_present = false}> ({\n"
+        "                ^bb0:\n"
+        "                  %state_read_loop = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.if_0.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                  \"nodal.analog_assign\"(%state, %state_read_loop) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 4 : i64, guard_dimension = \"\", "
+        "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = \"\", "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,5.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "                }) : () -> ()\n"
+        "                \"nodal.analog_if_arm\"() <{arm_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.otherwise\", condition_dimension = \"\", "
+        "condition_kind = \"\", condition_reads = [], condition_value = \"\", "
+        "is_else = true, metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.otherwise\"}, owner = \"GeneratedEvent\", "
+        "stage = \"else\", static_value = false, static_value_present = false}> ({\n"
+        "                ^bb0:\n"
+        "                  %state_read_loop_else = "
+        "\"nodal.analog_variable_read\"(%state) <{read_id = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                  \"nodal.analog_assign\"(%state, %state_read_loop_else) "
+        "<{analyses = [\"dc\", \"transient\"], authored_order = 5 : i64, "
+        "guard_dimension = \"\", guard_kind = \"\", guard_present = false, "
+        "guard_reads = [], guard_value = \"\", generated_owner = "
+        "\"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.if_0.assignment_else\", value = "
+        "\"analog_add(GeneratedEvent.state,6.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.if_0.assignment_else\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "                }) : () -> ()\n"
+        "              }) : () -> ()\n"
+        "              \"nodal.analog_scope\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0\"}, owner = \"GeneratedEvent\", scope_id = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0\"}> ({\n"
+        "              ^bb0:\n"
+        "                %state_read_scope = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.scope_0.assignment.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.scope_0.assignment.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "                \"nodal.analog_assign\"(%state, %state_read_scope) <{analyses = "
+        "[\"dc\", \"transient\"], authored_order = 6 : i64, guard_dimension = \"\", "
+        "guard_kind = \"\", guard_present = false, guard_reads = [], guard_value = \"\", "
+        "generated_owner = \"GeneratedEvent.generate_0\", generated_induction = "
+        "\"GeneratedEvent.generate_0.index\", metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.scope_0.assignment\", value = "
+        "\"analog_add(GeneratedEvent.state,9.0 V)\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.scope_0.assignment\", "
+        "value_dimension = \"voltage\", value_kind = \"real\"}> : "
+        "(!nodal.variable<\"real\", \"voltage\">, !nodal.quantity<\"real\", "
+        "\"voltage\">) -> ()\n"
+        "              }) : () -> ()\n"
+        "              \"nodal.analog_continue\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.continue_0\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.continue_0\"}> : () -> ()\n"
+        "              \"nodal.analog_break\"() <{metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.break_1\"}, owner = \"GeneratedEvent\", "
+        "statement_id = \"GeneratedEvent.event_0.loop_2.break_1\"}> : () -> ()\n"
+        "            }) : () -> ()\n"
+        "          }) : (!nodal.analog_event) -> ()";
+    std::string generatedStorageSource = kGeneratedEventModule.str();
+    auto position = generatedStorageSource.find(anchor);
+    if (position == std::string::npos)
+      return fail("generated event storage mutation anchor missing");
+    generatedStorageSource.insert(position, storage);
+    position = generatedStorageSource.find(bodyAnchor);
+    if (position == std::string::npos)
+      return fail("generated event assignment mutation anchor missing");
+    generatedStorageSource.replace(position, bodyAnchor.size(), conditionalAssignment);
+    auto generatedStorage = parse(context, generatedStorageSource);
+    if (!generatedStorage)
+      return fail("generated event storage fixture did not parse");
+    std::string generatedStorageOutput;
+    llvm::raw_string_ostream generatedStorageStream(generatedStorageOutput);
+    if (mlir::failed(nodal::emitBackend(*generatedStorage, nodal::BackendKind::VerilogA,
+                                        generatedStorageStream)))
+      return fail("generated event storage emission failed");
+    generatedStorageStream.flush();
+    auto loop = generatedStorageOutput.find("for (generate_0_index");
+    auto select = generatedStorageOutput.find("integer event_GeneratedEvent_select = 0;");
+    auto mode = generatedStorageOutput.find("integer event_GeneratedEvent_mode = 0;");
+    auto iterations = generatedStorageOutput.find("integer event_GeneratedEvent_iterations = 1;");
+    auto state = generatedStorageOutput.find("real event_GeneratedEvent_state = 0.0;");
+    auto read = generatedStorageOutput.find("real event_GeneratedEvent_event_0_assignment_read_0;");
+    auto caseRead =
+        generatedStorageOutput.find("real event_GeneratedEvent_event_0_case_assignment_read_0;");
+    auto loopIndex =
+        generatedStorageOutput.find("integer event_GeneratedEvent_event_0_loop_2_index;");
+    auto loopRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_read_0;");
+    auto loopElseRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0;");
+    auto loopScopeRead = generatedStorageOutput.find(
+        "real event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0;");
+    auto procedure = generatedStorageOutput.find("begin : event_GeneratedEvent_procedure");
+    if (loop == std::string::npos || select == std::string::npos || mode == std::string::npos ||
+        iterations == std::string::npos || state == std::string::npos ||
+        read == std::string::npos || caseRead == std::string::npos ||
+        loopIndex == std::string::npos || loopRead == std::string::npos ||
+        loopElseRead == std::string::npos || loopScopeRead == std::string::npos ||
+        procedure == std::string::npos ||
+        !(loop < select && select < mode && mode < iterations && iterations < state &&
+          state < read && read < caseRead && caseRead < loopRead && loopRead < loopElseRead &&
+          loopElseRead < loopScopeRead && loopScopeRead < loopIndex && loopIndex < procedure) ||
+        generatedStorageOutput.find("if (event_GeneratedEvent_select) begin") ==
+            std::string::npos ||
+        generatedStorageOutput.find("else begin") == std::string::npos ||
+        generatedStorageOutput.find("case (event_GeneratedEvent_mode)") == std::string::npos ||
+        generatedStorageOutput.find("0: begin") == std::string::npos ||
+        generatedStorageOutput.find("default: begin") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_event_0_assignment_read_0 = event_GeneratedEvent_state;") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = (event_GeneratedEvent_event_0_assignment_read_0 + "
+            "1.0);") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_assignment_else_read_0 + 2.0);") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_case_assignment_read_0 + 3.0);") == std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_case_default_assignment_read_0 + 4.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_event_0_loop_2_limit = event_GeneratedEvent_iterations;") ==
+            std::string::npos ||
+        generatedStorageOutput.find("for (event_GeneratedEvent_event_0_loop_2_index = 0; "
+                                    "(event_GeneratedEvent_event_0_loop_2_index < "
+                                    "event_GeneratedEvent_event_0_loop_2_limit) && "
+                                    "!event_GeneratedEvent_event_0_loop_2_break") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_read_0 + 5.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_if_0_assignment_else_read_0 + 6.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find(
+            "event_GeneratedEvent_state = "
+            "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);") ==
+            std::string::npos ||
+        generatedStorageOutput.find("event_GeneratedEvent_event_0_loop_2_continue = 1;") ==
+            std::string::npos ||
+        generatedStorageOutput.find("event_GeneratedEvent_event_0_loop_2_break = 1;") ==
+            std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(generatedStorageOutput, *configuration)))
+      return fail("generated event storage lost its per-occurrence target layout");
+
+    std::string misplacedStorage = generatedStorageOutput;
+    auto declarationStart = misplacedStorage.rfind('\n', state);
+    declarationStart = declarationStart == std::string::npos ? 0 : declarationStart + 1;
+    auto declarationEnd = misplacedStorage.find('\n', state);
+    if (declarationEnd == std::string::npos)
+      return fail("generated event storage target declaration anchor missing");
+    std::string declaration =
+        misplacedStorage.substr(declarationStart, declarationEnd - declarationStart + 1);
+    misplacedStorage.erase(declarationStart, declaration.size());
+    auto procedureClose = misplacedStorage.find(
+        "    end\n    end\n", misplacedStorage.find("begin : event_GeneratedEvent_procedure"));
+    if (procedureClose == std::string::npos)
+      return fail("generated event storage target procedure anchor missing");
+    misplacedStorage.insert(procedureClose + std::string("    end\n").size(), declaration);
+    if (mlir::succeeded(nodal::reparseBackendTarget(misplacedStorage, *configuration)))
+      return fail("late generated event storage declaration passed target reparse");
+
+    auto invalid = parse(context, generatedStorageSource);
+    if (!invalid)
+      return fail("generated event storage mutation fixture did not parse");
+    mlir::Operation *variable = nullptr;
+    invalid->walk([&](mlir::Operation *operation) {
+      if (!variable && operation->getName().getStringRef() == "nodal.analog_variable")
+        variable = operation;
+    });
+    if (!variable)
+      return fail("generated event storage ownership mutation anchor missing");
+    variable->setAttr("generated_owner", mlir::StringAttr::get(&context, "GeneratedEvent.forged"));
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(nodal::emitBackend(*invalid, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("forged generated event storage passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("forged generated event storage published partial output");
+
+    std::string nestedLoopSource = generatedStorageSource;
+    const std::string nestedLoopAnchor = "            ^bb0:\n"
+                                         "              \"nodal.analog_if\"()";
+    const std::string nestedLoop =
+        "            \"nodal.analog_loop\"() <{bound_dimension = \"1\", "
+        "bound_kind = \"integer\", bound_reads = [], bound_value = \"1\", "
+        "maximum_iterations = 1 : i64, metadata = {semantic_path = "
+        "\"GeneratedEvent.event_0.loop_2.loop_0\"}, minimum_iterations = 1 : i64, owner = "
+        "\"GeneratedEvent\", stage = \"runtime\", statement_id = "
+        "\"GeneratedEvent.event_0.loop_2.loop_0\", static_trip_count = 0 : i64, "
+        "static_trip_count_present = false}> ({\n"
+        "            ^bb0:\n"
+        "              %nested_read = \"nodal.analog_variable_read\"(%state) "
+        "<{read_id = \"GeneratedEvent.event_0.loop_2.loop_0.read_0\", owner = "
+        "\"GeneratedEvent\", generated_owner = \"GeneratedEvent.generate_0\", "
+        "generated_induction = \"GeneratedEvent.generate_0.index\", metadata = "
+        "{semantic_path = \"GeneratedEvent.event_0.loop_2.loop_0.read_0\"}}> : "
+        "(!nodal.variable<\"real\", \"voltage\">) -> "
+        "!nodal.quantity<\"real\", \"voltage\">\n"
+        "            }) : () -> ()\n";
+    position = nestedLoopSource.find(nestedLoopAnchor);
+    if (position == std::string::npos)
+      return fail("generated event nested-loop mutation anchor missing");
+    position += std::string("            ^bb0:\n").size();
+    nestedLoopSource.insert(position, nestedLoop);
+    auto nestedLoopModule = parse(context, nestedLoopSource);
+    if (!nestedLoopModule)
+      return fail("generated event nested-loop mutation did not parse");
+    std::string nestedLoopRejected = "sentinel";
+    llvm::raw_string_ostream nestedLoopRejectedStream(nestedLoopRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedLoopModule, nodal::BackendKind::VerilogA,
+                                           nestedLoopRejectedStream)))
+      return fail("unsupported generated event nested loop passed backend verification");
+    nestedLoopRejectedStream.flush();
+    if (nestedLoopRejected != "sentinel")
+      return fail("unsupported generated event nested loop published partial output");
+
+    auto loopCaseModule = parse(context, generatedStorageSource);
+    if (!loopCaseModule)
+      return fail("generated event loop-case mutation fixture did not parse");
+    mlir::Operation *runtimeLoop = nullptr;
+    mlir::Operation *eventCase = nullptr;
+    loopCaseModule->walk([&](mlir::Operation *operation) {
+      if (!runtimeLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        runtimeLoop = operation;
+      if (!eventCase && operation->getName().getStringRef() == "nodal.analog_case")
+        eventCase = operation;
+    });
+    if (!runtimeLoop || !eventCase)
+      return fail("generated event loop-case mutation anchor missing");
+    auto retagStructuredClone = [&](mlir::Operation *clone, llvm::StringRef suffix,
+                                    int64_t assignmentOrder) {
+      clone->walk([&](mlir::Operation *nested) {
+        for (llvm::StringRef key : {"statement_id", "arm_id", "read_id"})
+          if (auto identity = nested->getAttrOfType<mlir::StringAttr>(key))
+            nested->setAttr(key,
+                            mlir::StringAttr::get(&context, (identity.getValue() + suffix).str()));
+        if (nested->hasAttr("authored_order"))
+          nested->setAttr(
+              "authored_order",
+              mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), assignmentOrder++));
+      });
+    };
+    mlir::Operation *loopCase = eventCase->clone();
+    retagStructuredClone(loopCase, ".loop_case_mutation", 7);
+    runtimeLoop->getRegion(0).front().push_back(loopCase);
+    std::string loopCaseOutput;
+    llvm::raw_string_ostream loopCaseStream(loopCaseOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*loopCaseModule, nodal::BackendKind::VerilogA, loopCaseStream)))
+      return fail("generated event loop case failed backend verification");
+    loopCaseStream.flush();
+    auto loopCaseStart = loopCaseOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto nestedCaseStart = loopCaseOutput.find("case (event_GeneratedEvent_mode)", loopCaseStart);
+    if (loopCaseStart == std::string::npos || nestedCaseStart == std::string::npos ||
+        nestedCaseStart < loopCaseStart ||
+        mlir::failed(nodal::reparseBackendTarget(loopCaseOutput, *configuration)))
+      return fail("generated event loop case lost its direct target topology");
+
+    auto &loopCaseBlock = loopCase->getRegion(0).front();
+    mlir::Operation &lastCaseArm = loopCaseBlock.back();
+    mlir::Operation *nestedCase = loopCase->clone();
+    retagStructuredClone(nestedCase, ".nested_case_mutation", 9);
+    lastCaseArm.getRegion(0).front().push_back(nestedCase);
+    std::string nestedCaseRejected = "sentinel";
+    llvm::raw_string_ostream nestedCaseRejectedStream(nestedCaseRejected);
+    if (mlir::succeeded(nodal::emitBackend(*loopCaseModule, nodal::BackendKind::VerilogA,
+                                           nestedCaseRejectedStream)))
+      return fail("unsupported nested generated loop case passed backend verification");
+    nestedCaseRejectedStream.flush();
+    if (nestedCaseRejected != "sentinel")
+      return fail("unsupported nested generated loop case published partial output");
+
+    auto nestedConditionalModule = parse(context, generatedStorageSource);
+    if (!nestedConditionalModule)
+      return fail("generated event nested-conditional mutation fixture did not parse");
+    mlir::Operation *loopConditional = nullptr;
+    nestedConditionalModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        loopConditional = operation;
+    });
+    if (!loopConditional)
+      return fail("generated event nested-conditional mutation anchor missing");
+    auto &conditionalBlock = loopConditional->getRegion(0).front();
+    mlir::Operation &lastArm = conditionalBlock.back();
+    mlir::Operation *nestedConditional = loopConditional->clone();
+    retagStructuredClone(nestedConditional, ".nested_conditional_mutation", 7);
+    lastArm.getRegion(0).front().push_back(nestedConditional);
+    std::string nestedConditionalRejected = "sentinel";
+    llvm::raw_string_ostream nestedConditionalRejectedStream(nestedConditionalRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedConditionalModule, nodal::BackendKind::VerilogA,
+                                           nestedConditionalRejectedStream)))
+      return fail("unsupported nested generated loop conditional passed backend verification");
+    nestedConditionalRejectedStream.flush();
+    if (nestedConditionalRejected != "sentinel")
+      return fail("unsupported nested generated loop conditional published partial output");
+
+    auto nestedExitModule = parse(context, generatedStorageSource);
+    if (!nestedExitModule)
+      return fail("generated event nested-exit mutation fixture did not parse");
+    mlir::Operation *nestedExitConditional = nullptr;
+    mlir::Operation *nestedExitLoopOp = nullptr;
+    mlir::Operation *nestedExitRootCase = nullptr;
+    mlir::Operation *directBreak = nullptr;
+    mlir::Operation *directContinue = nullptr;
+    nestedExitModule->walk([&](mlir::Operation *operation) {
+      if (!nestedExitLoopOp && operation->getName().getStringRef() == "nodal.analog_loop")
+        nestedExitLoopOp = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        nestedExitConditional = operation;
+      if (!nestedExitRootCase && operation->getName().getStringRef() == "nodal.analog_case")
+        nestedExitRootCase = operation;
+      if (!directBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        directBreak = operation;
+      if (!directContinue && operation->getName().getStringRef() == "nodal.analog_continue")
+        directContinue = operation;
+    });
+    if (!nestedExitConditional || !nestedExitLoopOp || !nestedExitRootCase || !directBreak ||
+        !directContinue)
+      return fail("generated event nested-exit mutation anchor missing");
+    mlir::Operation *nestedExitCase = nestedExitRootCase->clone();
+    retagStructuredClone(nestedExitCase, ".arm_exit_mutation", 7);
+    nestedExitLoopOp->getRegion(0).front().push_back(nestedExitCase);
+    mlir::Operation *conditionalExit = directContinue->clone();
+    conditionalExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.arm_continue_mutation"));
+    nestedExitConditional->getRegion(0).front().front().getRegion(0).front().push_back(
+        conditionalExit);
+    mlir::Operation *caseExit = directBreak->clone();
+    caseExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.arm_break_mutation"));
+    nestedExitCase->getRegion(0).front().back().getRegion(0).front().push_back(caseExit);
+    std::string nestedExitOutput;
+    llvm::raw_string_ostream nestedExitStream(nestedExitOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*nestedExitModule, nodal::BackendKind::VerilogA, nestedExitStream)))
+      return fail("generated event loop-arm exit failed backend verification");
+    nestedExitStream.flush();
+    auto nestedExitLoop = nestedExitOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto nestedExitIf = nestedExitOutput.find("if (event_GeneratedEvent_select)", nestedExitLoop);
+    auto nestedExitContinue = nestedExitOutput.find("_continue = 1;", nestedExitIf);
+    auto nestedExitCaseStart =
+        nestedExitOutput.find("case (event_GeneratedEvent_mode)", nestedExitLoop);
+    auto nestedExitDefault = nestedExitOutput.find("default: begin", nestedExitCaseStart);
+    auto nestedExitBreak = nestedExitOutput.find("_break = 1;", nestedExitDefault);
+    if (nestedExitLoop == std::string::npos || nestedExitIf == std::string::npos ||
+        nestedExitContinue == std::string::npos || nestedExitCaseStart == std::string::npos ||
+        nestedExitDefault == std::string::npos || nestedExitBreak == std::string::npos ||
+        mlir::failed(nodal::reparseBackendTarget(nestedExitOutput, *configuration)))
+      return fail("generated event loop-arm exit lost its direct target topology");
+    conditionalExit->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedExitRejectedStream(forgedExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedExitModule, nodal::BackendKind::VerilogA,
+                                           forgedExitRejectedStream)))
+      return fail("forged generated loop-arm exit passed backend verification");
+    forgedExitRejectedStream.flush();
+    if (forgedExitRejected != "sentinel")
+      return fail("forged generated loop-arm exit published partial output");
+
+    auto caseContinueModule = parse(context, generatedStorageSource);
+    if (!caseContinueModule)
+      return fail("generated event case-arm continue mutation fixture did not parse");
+    mlir::Operation *caseContinueLoop = nullptr;
+    mlir::Operation *caseContinueRootCase = nullptr;
+    mlir::Operation *caseContinueTemplate = nullptr;
+    mlir::Operation *caseContinueRootBreak = nullptr;
+    caseContinueModule->walk([&](mlir::Operation *operation) {
+      if (!caseContinueLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        caseContinueLoop = operation;
+      if (!caseContinueRootCase && operation->getName().getStringRef() == "nodal.analog_case" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_on")
+        caseContinueRootCase = operation;
+      if (!caseContinueTemplate && operation->getName().getStringRef() == "nodal.analog_continue")
+        caseContinueTemplate = operation;
+      if (!caseContinueRootBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        caseContinueRootBreak = operation;
+    });
+    if (!caseContinueLoop || !caseContinueRootCase || !caseContinueTemplate ||
+        !caseContinueRootBreak)
+      return fail("generated event case-arm continue mutation anchor missing");
+    mlir::Operation *caseContinue = caseContinueRootCase->clone();
+    retagStructuredClone(caseContinue, ".case_continue_mutation", 7);
+    mlir::Operation *caseContinueExit = caseContinueTemplate->clone();
+    caseContinueExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.case_continue_mutation"));
+    caseContinueTemplate->erase();
+    caseContinueRootBreak->erase();
+    caseContinue->getRegion(0).front().back().getRegion(0).front().push_back(caseContinueExit);
+    caseContinueLoop->getRegion(0).front().push_back(caseContinue);
+    std::string caseContinueOutput;
+    llvm::raw_string_ostream caseContinueStream(caseContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*caseContinueModule, nodal::BackendKind::VerilogA,
+                                        caseContinueStream)))
+      return fail("generated event case-arm continue failed backend verification");
+    caseContinueStream.flush();
+    auto caseContinueLoopStart =
+        caseContinueOutput.find("for (event_GeneratedEvent_event_0_loop_2_index");
+    auto caseContinueCase =
+        caseContinueOutput.find("case (event_GeneratedEvent_mode)", caseContinueLoopStart);
+    auto caseContinueDefault = caseContinueOutput.find("default: begin", caseContinueCase);
+    auto caseContinueTarget = caseContinueOutput.find("_continue = 1;", caseContinueDefault);
+    if (caseContinueLoopStart == std::string::npos || caseContinueCase == std::string::npos ||
+        caseContinueDefault == std::string::npos || caseContinueTarget == std::string::npos ||
+        !(caseContinueLoopStart < caseContinueCase && caseContinueCase < caseContinueDefault &&
+          caseContinueDefault < caseContinueTarget) ||
+        mlir::failed(nodal::reparseBackendTarget(caseContinueOutput, *configuration)))
+      return fail("generated event case-arm continue lost its direct target topology");
+    caseContinueExit->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string caseContinueRejected = "sentinel";
+    llvm::raw_string_ostream caseContinueRejectedStream(caseContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*caseContinueModule, nodal::BackendKind::VerilogA,
+                                           caseContinueRejectedStream)))
+      return fail("forged generated event case-arm continue passed backend verification");
+    caseContinueRejectedStream.flush();
+    if (caseContinueRejected != "sentinel")
+      return fail("forged generated event case-arm continue published partial output");
+
+    auto deeperExitModule = parse(context, generatedStorageSource);
+    if (!deeperExitModule)
+      return fail("generated event deeper-exit mutation fixture did not parse");
+    mlir::Operation *deeperExitScope = nullptr;
+    mlir::Operation *deeperBreak = nullptr;
+    deeperExitModule->walk([&](mlir::Operation *operation) {
+      if (!deeperExitScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        deeperExitScope = operation;
+      if (!deeperBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        deeperBreak = operation;
+    });
+    if (!deeperExitScope || !deeperBreak)
+      return fail("generated event deeper-exit mutation anchor missing");
+    mlir::Operation *scopeExit = deeperBreak->clone();
+    scopeExit->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.scope_break_mutation"));
+    deeperExitScope->getRegion(0).front().push_back(scopeExit);
+    std::string deeperExitRejected = "sentinel";
+    llvm::raw_string_ostream deeperExitRejectedStream(deeperExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*deeperExitModule, nodal::BackendKind::VerilogA,
+                                           deeperExitRejectedStream)))
+      return fail("unsupported deeper generated loop exit passed backend verification");
+    deeperExitRejectedStream.flush();
+    if (deeperExitRejected != "sentinel")
+      return fail("unsupported deeper generated loop exit published partial output");
+
+    auto conditionalScopeBreakModule = parse(context, generatedStorageSource);
+    if (!conditionalScopeBreakModule)
+      return fail("generated event conditional-scope break mutation fixture did not parse");
+    mlir::Operation *conditionalScopeBreakConditional = nullptr;
+    mlir::Operation *conditionalScopeBreakDirectScope = nullptr;
+    mlir::Operation *conditionalScopeBreakOp = nullptr;
+    conditionalScopeBreakModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        conditionalScopeBreakConditional = operation;
+      if (!conditionalScopeBreakDirectScope &&
+          operation->getName().getStringRef() == "nodal.analog_scope" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        conditionalScopeBreakDirectScope = operation;
+      if (!conditionalScopeBreakOp && operation->getName().getStringRef() == "nodal.analog_break")
+        conditionalScopeBreakOp = operation;
+    });
+    if (!conditionalScopeBreakConditional || !conditionalScopeBreakDirectScope ||
+        !conditionalScopeBreakOp)
+      return fail("generated event conditional-scope break mutation anchor missing");
+    mlir::Operation *conditionalBreakScope = conditionalScopeBreakDirectScope->clone();
+    conditionalBreakScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.conditional_break_scope_mutation"));
+    conditionalScopeBreakConditional->getRegion(0).front().back().getRegion(0).front().push_back(
+        conditionalBreakScope);
+    conditionalScopeBreakOp->moveBefore(&conditionalBreakScope->getRegion(0).front(),
+                                        conditionalBreakScope->getRegion(0).front().end());
+    conditionalScopeBreakDirectScope->erase();
+    std::string conditionalScopeBreakOutput;
+    llvm::raw_string_ostream conditionalScopeBreakStream(conditionalScopeBreakOutput);
+    if (mlir::failed(nodal::emitBackend(*conditionalScopeBreakModule, nodal::BackendKind::VerilogA,
+                                        conditionalScopeBreakStream)))
+      return fail("generated event conditional-arm scope break failed backend verification");
+    conditionalScopeBreakStream.flush();
+    auto conditionalBreakElse = conditionalScopeBreakOutput.find("else begin");
+    auto conditionalBreakAssignment = conditionalScopeBreakOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);",
+        conditionalBreakElse);
+    auto conditionalBreakExit =
+        conditionalScopeBreakOutput.find("_break = 1;", conditionalBreakAssignment);
+    auto conditionalBreakContinue =
+        conditionalScopeBreakOutput.find("_continue = 1;", conditionalBreakExit);
+    if (conditionalBreakElse == std::string::npos ||
+        conditionalBreakAssignment == std::string::npos ||
+        conditionalBreakExit == std::string::npos ||
+        conditionalBreakContinue == std::string::npos ||
+        conditionalBreakAssignment < conditionalBreakElse ||
+        conditionalBreakExit < conditionalBreakAssignment ||
+        conditionalBreakExit > conditionalBreakContinue ||
+        mlir::failed(nodal::reparseBackendTarget(conditionalScopeBreakOutput, *configuration)))
+      return fail("generated event conditional-arm scope break lost its direct target topology");
+
+    conditionalScopeBreakOp->setAttr("owner",
+                                     mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedConditionalScopeBreakRejected = "sentinel";
+    llvm::raw_string_ostream forgedConditionalScopeBreakRejectedStream(
+        forgedConditionalScopeBreakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           forgedConditionalScopeBreakRejectedStream)))
+      return fail("forged generated loop conditional-arm scope break passed backend "
+                  "verification");
+    forgedConditionalScopeBreakRejectedStream.flush();
+    if (forgedConditionalScopeBreakRejected != "sentinel")
+      return fail("forged generated loop conditional-arm scope break published partial output");
+    conditionalScopeBreakOp->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateConditionalScopeBreak = conditionalScopeBreakOp->clone();
+    duplicateConditionalScopeBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.duplicate_conditional_scope_break_mutation"));
+    conditionalBreakScope->getRegion(0).front().push_back(duplicateConditionalScopeBreak);
+    std::string duplicateConditionalScopeBreakRejected = "sentinel";
+    llvm::raw_string_ostream duplicateConditionalScopeBreakRejectedStream(
+        duplicateConditionalScopeBreakRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           duplicateConditionalScopeBreakRejectedStream)))
+      return fail("duplicate generated loop conditional-arm scope break passed backend "
+                  "verification");
+    duplicateConditionalScopeBreakRejectedStream.flush();
+    if (duplicateConditionalScopeBreakRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm scope break published partial output");
+    duplicateConditionalScopeBreak->erase();
+
+    mlir::Operation *deeperConditionalBreakScope = conditionalBreakScope->clone();
+    deeperConditionalBreakScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.deeper_conditional_break_scope_mutation"));
+    deeperConditionalBreakScope->getRegion(0).front().clear();
+    conditionalBreakScope->getBlock()->getOperations().insert(
+        mlir::Block::iterator(conditionalBreakScope), deeperConditionalBreakScope);
+    conditionalBreakScope->moveBefore(&deeperConditionalBreakScope->getRegion(0).front(),
+                                      deeperConditionalBreakScope->getRegion(0).front().end());
+    std::string deeperConditionalBreakScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperConditionalBreakScopeRejectedStream(
+        deeperConditionalBreakScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*conditionalScopeBreakModule,
+                                           nodal::BackendKind::VerilogA,
+                                           deeperConditionalBreakScopeRejectedStream)))
+      return fail("unsupported deeper generated loop conditional-arm break scope passed backend "
+                  "verification");
+    deeperConditionalBreakScopeRejectedStream.flush();
+    if (deeperConditionalBreakScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop conditional-arm break scope published "
+                  "partial output");
+
+    auto nestedScopeModule = parse(context, generatedStorageSource);
+    if (!nestedScopeModule)
+      return fail("generated event nested-scope mutation fixture did not parse");
+    mlir::Operation *scopeConditional = nullptr;
+    mlir::Operation *directScope = nullptr;
+    mlir::Operation *scopeLoop = nullptr;
+    mlir::Operation *scopeCasePrototype = nullptr;
+    mlir::Operation *scopeBreak = nullptr;
+    mlir::Operation *scopeContinue = nullptr;
+    nestedScopeModule->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.analog_if" && operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        scopeConditional = operation;
+      if (!scopeLoop && operation->getName().getStringRef() == "nodal.analog_loop")
+        scopeLoop = operation;
+      if (!scopeCasePrototype && operation->getName().getStringRef() == "nodal.analog_case")
+        scopeCasePrototype = operation;
+      if (!scopeBreak && operation->getName().getStringRef() == "nodal.analog_break")
+        scopeBreak = operation;
+      if (!scopeContinue && operation->getName().getStringRef() == "nodal.analog_continue")
+        scopeContinue = operation;
+      if (!directScope && operation->getName().getStringRef() == "nodal.analog_scope" &&
+          operation->getParentOp() &&
+          operation->getParentOp()->getName().getStringRef() == "nodal.analog_loop")
+        directScope = operation;
+    });
+    if (!scopeConditional || !scopeLoop || !scopeCasePrototype || !directScope || !scopeBreak ||
+        !scopeContinue)
+      return fail("generated event nested-scope mutation anchor missing");
+    mlir::Operation *nestedScope = directScope->clone();
+    nestedScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context, "GeneratedEvent.event_0.loop_2.nested_scope_mutation"));
+    scopeConditional->getRegion(0).front().back().getRegion(0).front().push_back(nestedScope);
+    scopeContinue->moveBefore(&nestedScope->getRegion(0).front(),
+                              nestedScope->getRegion(0).front().end());
+    directScope->erase();
+    std::string nestedScopeOutput;
+    llvm::raw_string_ostream nestedScopeStream(nestedScopeOutput);
+    if (mlir::failed(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                        nestedScopeStream)))
+      return fail("generated event conditional-arm scope failed backend verification");
+    nestedScopeStream.flush();
+    auto conditionalScopeStart = nestedScopeOutput.find("else begin");
+    auto conditionalScopeAssignment = nestedScopeOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0 + 9.0);");
+    auto conditionalScopeContinue =
+        nestedScopeOutput.find("_continue = 1;", conditionalScopeAssignment);
+    auto conditionalScopeBreak = nestedScopeOutput.find("_break = 1;", conditionalScopeContinue);
+    if (conditionalScopeStart == std::string::npos ||
+        conditionalScopeAssignment == std::string::npos ||
+        conditionalScopeContinue == std::string::npos ||
+        conditionalScopeBreak == std::string::npos ||
+        conditionalScopeAssignment < conditionalScopeStart ||
+        conditionalScopeContinue < conditionalScopeAssignment ||
+        conditionalScopeContinue > conditionalScopeBreak ||
+        mlir::failed(nodal::reparseBackendTarget(nestedScopeOutput, *configuration)))
+      return fail("generated event conditional-arm scope continue lost its direct target topology");
+
+    scopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedConditionalScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedConditionalScopeExitRejectedStream(
+        forgedConditionalScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedConditionalScopeExitRejectedStream)))
+      return fail("forged generated loop conditional-arm scope continue passed backend "
+                  "verification");
+    forgedConditionalScopeExitRejectedStream.flush();
+    if (forgedConditionalScopeExitRejected != "sentinel")
+      return fail("forged generated loop conditional-arm scope continue published partial "
+                  "output");
+    scopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateScopeContinue = scopeContinue->clone();
+    duplicateScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.duplicate_scope_continue_mutation"));
+    nestedScope->getRegion(0).front().push_back(duplicateScopeContinue);
+    std::string duplicateConditionalScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateConditionalScopeExitRejectedStream(
+        duplicateConditionalScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateConditionalScopeExitRejectedStream)))
+      return fail("duplicate generated loop conditional-arm scope continue passed backend "
+                  "verification");
+    duplicateConditionalScopeExitRejectedStream.flush();
+    if (duplicateConditionalScopeExitRejected != "sentinel")
+      return fail("duplicate generated loop conditional-arm scope continue published partial "
+                  "output");
+    duplicateScopeContinue->erase();
+
+    mlir::Operation *deeperConditionalScope = nestedScope->clone();
+    deeperConditionalScope->setAttr(
+        "scope_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.deeper_conditional_scope_mutation"));
+    deeperConditionalScope->getRegion(0).front().clear();
+    nestedScope->getBlock()->getOperations().insert(mlir::Block::iterator(nestedScope),
+                                                    deeperConditionalScope);
+    nestedScope->moveBefore(&deeperConditionalScope->getRegion(0).front(),
+                            deeperConditionalScope->getRegion(0).front().end());
+    std::string deeperConditionalScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperConditionalScopeRejectedStream(deeperConditionalScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           deeperConditionalScopeRejectedStream)))
+      return fail("unsupported deeper generated loop conditional-arm scope passed backend "
+                  "verification");
+    deeperConditionalScopeRejectedStream.flush();
+    if (deeperConditionalScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop conditional-arm scope published partial "
+                  "output");
+    nestedScope->moveBefore(deeperConditionalScope);
+    deeperConditionalScope->erase();
+    scopeContinue->moveBefore(scopeBreak);
+
+    mlir::Operation *scopeCase = scopeCasePrototype->clone();
+    retagStructuredClone(scopeCase, ".scope_case_mutation", 6);
+    scopeLoop->getRegion(0).front().push_back(scopeCase);
+    mlir::Operation *caseScope = nestedScope->clone();
+    retagStructuredClone(caseScope, ".case_scope_mutation", 8);
+    scopeCase->getRegion(0).front().back().getRegion(0).front().push_back(caseScope);
+    scopeBreak->moveBefore(&caseScope->getRegion(0).front(), caseScope->getRegion(0).front().end());
+    nestedScope->erase();
+    std::string caseScopeOutput;
+    llvm::raw_string_ostream caseScopeStream(caseScopeOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA, caseScopeStream)))
+      return fail("generated event case-arm scope failed backend verification");
+    caseScopeStream.flush();
+    auto caseScopeAssignment = caseScopeOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0_case_scope_mutation + "
+        "9.0);");
+    auto caseScopeStart = caseScopeOutput.rfind("default: begin", caseScopeAssignment);
+    auto caseScopeBreak = caseScopeOutput.find("_break = 1;", caseScopeAssignment);
+    auto caseScopeEnd = caseScopeOutput.find("endcase", caseScopeAssignment);
+    if (caseScopeStart == std::string::npos || caseScopeEnd == std::string::npos ||
+        caseScopeAssignment == std::string::npos || caseScopeBreak == std::string::npos ||
+        caseScopeAssignment < caseScopeStart || caseScopeBreak < caseScopeAssignment ||
+        caseScopeBreak > caseScopeEnd ||
+        mlir::failed(nodal::reparseBackendTarget(caseScopeOutput, *configuration)))
+      return fail("generated event case-arm scope break lost its direct target topology");
+
+    scopeBreak->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream forgedScopeExitRejectedStream(forgedScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedScopeExitRejectedStream)))
+      return fail("forged generated loop case-arm scope break passed backend verification");
+    forgedScopeExitRejectedStream.flush();
+    if (forgedScopeExitRejected != "sentinel")
+      return fail("forged generated loop case-arm scope break published partial output");
+    scopeBreak->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateScopeBreak = scopeBreak->clone();
+    duplicateScopeBreak->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.duplicate_scope_break_mutation"));
+    caseScope->getRegion(0).front().push_back(duplicateScopeBreak);
+    std::string duplicateScopeExitRejected = "sentinel";
+    llvm::raw_string_ostream duplicateScopeExitRejectedStream(duplicateScopeExitRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateScopeExitRejectedStream)))
+      return fail("duplicate generated loop case-arm scope break passed backend verification");
+    duplicateScopeExitRejectedStream.flush();
+    if (duplicateScopeExitRejected != "sentinel")
+      return fail("duplicate generated loop case-arm scope break published partial output");
+    duplicateScopeBreak->erase();
+
+    mlir::Operation *caseScopeContinue = scopeContinue->clone();
+    caseScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(&context,
+                              "GeneratedEvent.event_0.loop_2.case_scope_continue_mutation"));
+    scopeBreak->erase();
+    caseScope->getRegion(0).front().push_back(caseScopeContinue);
+    std::string caseScopeContinueOutput;
+    llvm::raw_string_ostream caseScopeContinueStream(caseScopeContinueOutput);
+    if (mlir::failed(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                        caseScopeContinueStream)))
+      return fail("generated event case-arm scope continue failed backend verification");
+    caseScopeContinueStream.flush();
+    auto caseScopeContinueAssignment = caseScopeContinueOutput.find(
+        "event_GeneratedEvent_state = "
+        "(event_GeneratedEvent_event_0_loop_2_scope_0_assignment_read_0_case_scope_mutation + "
+        "9.0);");
+    auto caseScopeContinueStart =
+        caseScopeContinueOutput.rfind("default: begin", caseScopeContinueAssignment);
+    auto caseScopeContinueExit =
+        caseScopeContinueOutput.find("_continue = 1;", caseScopeContinueAssignment);
+    auto caseScopeContinueEnd =
+        caseScopeContinueOutput.find("endcase", caseScopeContinueAssignment);
+    if (caseScopeContinueStart == std::string::npos || caseScopeContinueEnd == std::string::npos ||
+        caseScopeContinueAssignment == std::string::npos ||
+        caseScopeContinueExit == std::string::npos ||
+        caseScopeContinueAssignment < caseScopeContinueStart ||
+        caseScopeContinueExit < caseScopeContinueAssignment ||
+        caseScopeContinueExit > caseScopeContinueEnd ||
+        mlir::failed(nodal::reparseBackendTarget(caseScopeContinueOutput, *configuration)))
+      return fail("generated event case-arm scope continue lost its direct target topology");
+
+    caseScopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "ForgedGeneratedEvent"));
+    std::string forgedCaseScopeContinueRejected = "sentinel";
+    llvm::raw_string_ostream forgedCaseScopeContinueRejectedStream(forgedCaseScopeContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           forgedCaseScopeContinueRejectedStream)))
+      return fail("forged generated loop case-arm scope continue passed backend verification");
+    forgedCaseScopeContinueRejectedStream.flush();
+    if (forgedCaseScopeContinueRejected != "sentinel")
+      return fail("forged generated loop case-arm scope continue published partial output");
+    caseScopeContinue->setAttr("owner", mlir::StringAttr::get(&context, "GeneratedEvent"));
+
+    mlir::Operation *duplicateCaseScopeContinue = caseScopeContinue->clone();
+    duplicateCaseScopeContinue->setAttr(
+        "statement_id",
+        mlir::StringAttr::get(
+            &context, "GeneratedEvent.event_0.loop_2.duplicate_case_scope_continue_mutation"));
+    caseScope->getRegion(0).front().push_back(duplicateCaseScopeContinue);
+    std::string duplicateCaseScopeContinueRejected = "sentinel";
+    llvm::raw_string_ostream duplicateCaseScopeContinueRejectedStream(
+        duplicateCaseScopeContinueRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           duplicateCaseScopeContinueRejectedStream)))
+      return fail("duplicate generated loop case-arm scope continue passed backend verification");
+    duplicateCaseScopeContinueRejectedStream.flush();
+    if (duplicateCaseScopeContinueRejected != "sentinel")
+      return fail("duplicate generated loop case-arm scope continue published partial output");
+    duplicateCaseScopeContinue->erase();
+
+    mlir::Operation *deeperCaseScope = caseScope->clone();
+    deeperCaseScope->setAttr(
+        "scope_id", mlir::StringAttr::get(
+                        &context, "GeneratedEvent.event_0.loop_2.deeper_case_scope_mutation"));
+    deeperCaseScope->getRegion(0).front().clear();
+    caseScope->getBlock()->getOperations().insert(mlir::Block::iterator(caseScope),
+                                                  deeperCaseScope);
+    caseScope->moveBefore(&deeperCaseScope->getRegion(0).front(),
+                          deeperCaseScope->getRegion(0).front().end());
+    std::string deeperCaseScopeRejected = "sentinel";
+    llvm::raw_string_ostream deeperCaseScopeRejectedStream(deeperCaseScopeRejected);
+    if (mlir::succeeded(nodal::emitBackend(*nestedScopeModule, nodal::BackendKind::VerilogA,
+                                           deeperCaseScopeRejectedStream)))
+      return fail("unsupported deeper generated loop case-arm scope passed backend verification");
+    deeperCaseScopeRejectedStream.flush();
+    if (deeperCaseScopeRejected != "sentinel")
+      return fail("unsupported deeper generated loop case-arm scope published partial output");
+  }
+
+  auto symbolicGenerated = parse(context, kSymbolicGeneratedContributionModule);
+  if (!symbolicGenerated)
+    return fail("could not parse the symbolic generated contribution fixture");
+  std::string symbolicGeneratedOutput;
+  llvm::raw_string_ostream symbolicGeneratedStream(symbolicGeneratedOutput);
+  if (mlir::failed(nodal::emitBackend(*symbolicGenerated, nodal::BackendKind::VerilogA,
+                                      symbolicGeneratedStream)))
+    return fail("symbolic generated contribution emission failed");
+  symbolicGeneratedStream.flush();
+  if (symbolicGeneratedOutput.find("parameter integer COUNT = 4 from [1:8];\n") ==
+          std::string::npos ||
+      symbolicGeneratedOutput.find("generate_0_index < COUNT") == std::string::npos ||
+      symbolicGeneratedOutput.find("V(p, n) <+ 1;\n") == std::string::npos)
+    return fail("symbolic generated contribution lost its parameterized target loop");
+  std::string unknownGeneratedBound = symbolicGeneratedOutput;
+  auto symbolicPosition = unknownGeneratedBound.find("generate_0_index < COUNT");
+  if (symbolicPosition == std::string::npos)
+    return fail("symbolic generated bound mutation anchor missing");
+  unknownGeneratedBound.replace(symbolicPosition, std::string("generate_0_index < COUNT").size(),
+                                "generate_0_index < MISSING");
+  if (mlir::succeeded(nodal::reparseBackendTarget(unknownGeneratedBound, *configuration)))
+    return fail("undeclared symbolic generated bound passed independent reparse");
+
+  auto compoundGenerated = parse(context, kCompoundGeneratedContributionModule);
+  if (!compoundGenerated)
+    return fail("could not parse the compound generated contribution fixture");
+  std::string compoundGeneratedOutput;
+  llvm::raw_string_ostream compoundGeneratedStream(compoundGeneratedOutput);
+  if (mlir::failed(nodal::emitBackend(*compoundGenerated, nodal::BackendKind::VerilogA,
+                                      compoundGeneratedStream)))
+    return fail("compound generated contribution emission failed");
+  compoundGeneratedStream.flush();
+  if (compoundGeneratedOutput.find("parameter integer COUNT = 3 from [1:4];\n") ==
+          std::string::npos ||
+      compoundGeneratedOutput.find("parameter integer EXTRA = 1 from [1:2];\n") ==
+          std::string::npos ||
+      compoundGeneratedOutput.find("generate_0_index < (COUNT + EXTRA)") == std::string::npos ||
+      compoundGeneratedOutput.find("V(p, n) <+ 1;\n") == std::string::npos)
+    return fail("compound generated contribution lost its structural expression target loop");
+  for (const auto &mutation :
+       {std::make_pair("classification = \"structural\"", "classification = \"ordinary\""),
+        std::make_pair("operator_name = \"add\"}>",
+                       "operator_name = \"add\"}> {unit = @forged}")}) {
+    std::string invalidSource = kCompoundGeneratedContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("compound generated source mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      return fail("compound generated source mutation did not parse");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("invalid compound generated source passed backend verification");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("invalid compound generated source published partial output");
+  }
+  for (const auto &mutation : {std::make_pair("(COUNT + EXTRA)", "(COUNT + MISSING)"),
+                               std::make_pair("(COUNT + EXTRA)", "(COUNT && EXTRA)"),
+                               std::make_pair("(COUNT + EXTRA)", "(COUNT + EXTRA")}) {
+    std::string invalid = compoundGeneratedOutput;
+    auto position = invalid.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("compound generated target mutation anchor missing");
+    invalid.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalid, *configuration)))
+      return fail("malformed compound generated target passed independent reparse");
+  }
+
+  auto compoundGeneratedNodes = parse(context, kCompoundGeneratedNodeContributionModule);
+  if (!compoundGeneratedNodes)
+    return fail("could not parse the compound generated node contribution fixture");
+  std::string compoundGeneratedNodeOutput;
+  llvm::raw_string_ostream compoundGeneratedNodeStream(compoundGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*compoundGeneratedNodes, nodal::BackendKind::VerilogA,
+                                      compoundGeneratedNodeStream)))
+    return fail("compound generated node contribution emission failed");
+  compoundGeneratedNodeStream.flush();
+  if (compoundGeneratedNodeOutput.find("  electrical [0:((COUNT + EXTRA) - 1)] tap;\n"
+                                       "  electrical [0:((COUNT + EXTRA) - 1)] returnTap;\n") ==
+          std::string::npos ||
+      compoundGeneratedNodeOutput.find("generate_0_index < (COUNT + EXTRA)") == std::string::npos ||
+      compoundGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 1;\n") ==
+          std::string::npos ||
+      compoundGeneratedNodeOutput.find("V(returnTap[generate_0_index], p) <+ 2;\n") ==
+          std::string::npos)
+    return fail("compound generated node group lost symbolic arrays, loop, or equation order");
+  if (mlir::failed(nodal::reparseBackendTarget(compoundGeneratedNodeOutput, *configuration)))
+    return fail("compound generated node contribution failed independent target reparse");
+  std::string repeatedCompoundGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedCompoundGeneratedNodeStream(repeatedCompoundGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*compoundGeneratedNodes, nodal::BackendKind::VerilogA,
+                                      repeatedCompoundGeneratedNodeStream)))
+    return fail("compound generated node contribution repeated emission failed");
+  repeatedCompoundGeneratedNodeStream.flush();
+  if (compoundGeneratedNodeOutput != repeatedCompoundGeneratedNodeOutput)
+    return fail("compound generated node contribution emission is nondeterministic");
+  for (const auto &mutation :
+       {std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\"",
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"forged\""),
+        std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\", "
+            "generated_induction = \"CompoundGeneratedNodeContribution.generate_0.index\"",
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\", "
+            "generated_owner = \"CompoundGeneratedNodeContribution.generate_0\", "
+            "generated_induction = \"forged.index\""),
+        std::make_pair(
+            "name = \"returnTap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\"",
+            "name = \"tap\", source_path = \"CompoundGeneratedNodeContribution.returnTap\""),
+        std::make_pair("source_path = \"CompoundGeneratedNodeContribution.returnTap\"",
+                       "source_path = \"\""),
+        std::make_pair("source_path = \"CompoundGeneratedNodeContribution.generate_0.step\"}, "
+                       "spelling = \"1\", value = 1 : i64",
+                       "source_path = \"CompoundGeneratedNodeContribution.generate_0.step\"}, "
+                       "spelling = \"2\", value = 2 : i64")}) {
+    std::string invalidSource = kCompoundGeneratedNodeContributionModule.str();
+    auto position = invalidSource.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("compound generated node source mutation anchor missing");
+    invalidSource.replace(position, std::string(mutation.first).size(), mutation.second);
+    auto invalidModule = parse(context, invalidSource);
+    if (!invalidModule)
+      continue;
+    std::string rejectedCompoundNode = "sentinel";
+    llvm::raw_string_ostream rejectedCompoundNodeStream(rejectedCompoundNode);
+    if (mlir::succeeded(nodal::emitBackend(*invalidModule, nodal::BackendKind::VerilogA,
+                                           rejectedCompoundNodeStream)))
+      return fail("invalid compound generated node source passed backend verification");
+    rejectedCompoundNodeStream.flush();
+    if (rejectedCompoundNode != "sentinel")
+      return fail("invalid compound generated node source published partial output");
+  }
+  std::string invalidCompoundNodeTarget = compoundGeneratedNodeOutput;
+  auto compoundNodeBound = invalidCompoundNodeTarget.find("((COUNT + EXTRA) - 1)");
+  if (compoundNodeBound == std::string::npos)
+    return fail("compound generated node target mutation anchor missing");
+  invalidCompoundNodeTarget.replace(compoundNodeBound, std::string("((COUNT + EXTRA) - 1)").size(),
+                                    "((COUNT + MISSING) - 1)");
+  if (mlir::succeeded(nodal::reparseBackendTarget(invalidCompoundNodeTarget, *configuration)))
+    return fail("undeclared compound generated node bound passed independent reparse");
+
+  std::string sharedGeneratedNodeSource = kCompoundGeneratedNodeContributionModule.str();
+  auto sharedBranch =
+      sharedGeneratedNodeSource.find("%return_tap_branch = \"nodal.branch\"(%return_tap, %p)");
+  if (sharedBranch == std::string::npos)
+    return fail("shared generated node branch mutation anchor missing");
+  sharedGeneratedNodeSource.replace(
+      sharedBranch, std::string("%return_tap_branch = \"nodal.branch\"(%return_tap, %p)").size(),
+      "%return_tap_branch = \"nodal.branch\"(%tap, %p)");
+  auto sharedGeneratedNode = parse(context, sharedGeneratedNodeSource);
+  if (!sharedGeneratedNode)
+    return fail("shared generated node branch fixture did not parse");
+  std::string sharedGeneratedNodeOutput;
+  llvm::raw_string_ostream sharedGeneratedNodeStream(sharedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*sharedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      sharedGeneratedNodeStream)))
+    return fail("shared generated node branch emission failed");
+  sharedGeneratedNodeStream.flush();
+  if (sharedGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
+      sharedGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 2;\n") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(sharedGeneratedNodeOutput, *configuration)))
+    return fail("shared generated node branches lost their ordered target equations");
+  std::string repeatedSharedGeneratedNodeOutput;
+  llvm::raw_string_ostream repeatedSharedGeneratedNodeStream(repeatedSharedGeneratedNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*sharedGeneratedNode, nodal::BackendKind::VerilogA,
+                                      repeatedSharedGeneratedNodeStream)))
+    return fail("shared generated node branch repeated emission failed");
+  repeatedSharedGeneratedNodeStream.flush();
+  if (sharedGeneratedNodeOutput != repeatedSharedGeneratedNodeOutput)
+    return fail("shared generated node branch emission is nondeterministic");
+
+  auto escapedGeneratedNode = parse(context, sharedGeneratedNodeSource);
+  if (!escapedGeneratedNode)
+    return fail("generated node escape mutation fixture did not parse");
+  mlir::Operation *escapedBranchTemplate = nullptr;
+  mlir::Operation *escapedNodeAnalog = nullptr;
+  escapedGeneratedNode->walk([&](mlir::Operation *operation) {
+    if (!escapedBranchTemplate && operation->getName().getStringRef() == "nodal.branch")
+      escapedBranchTemplate = operation;
+    if (!escapedNodeAnalog && operation->getName().getStringRef() == "nodal.analog")
+      escapedNodeAnalog = operation;
+  });
+  if (!escapedBranchTemplate || !escapedNodeAnalog)
+    return fail("generated node escape mutation anchor missing");
+  escapedNodeAnalog->getRegion(0).front().push_back(escapedBranchTemplate->clone());
+  std::string rejectedEscapedNode = "sentinel";
+  llvm::raw_string_ostream rejectedEscapedNodeStream(rejectedEscapedNode);
+  if (mlir::succeeded(nodal::emitBackend(*escapedGeneratedNode, nodal::BackendKind::VerilogA,
+                                         rejectedEscapedNodeStream)))
+    return fail("generated node non-branch escape passed backend verification");
+  rejectedEscapedNodeStream.flush();
+  if (rejectedEscapedNode != "sentinel")
+    return fail("generated node non-branch escape published partial output");
+
+  // Required Foundation 43 profile: one compact declaration and selected scalar
+  // endpoints through the existing branch/access/contribution renderer.
+  auto staticNodes = parse(context, kStaticNodeArrayModule);
+  if (!staticNodes)
+    return fail("could not parse static electrical node-array fixture");
+  std::string staticNodeOutput;
+  llvm::raw_string_ostream staticNodeStream(staticNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*staticNodes, nodal::BackendKind::VerilogA, staticNodeStream)))
+    return fail("static electrical node-array emission failed");
+  staticNodeStream.flush();
+  const std::string expectedStaticNodeBody = "module ArrayNodes(p);\n"
+                                             "  inout p;\n"
+                                             "  electrical p;\n"
+                                             "  electrical [0:5] tap;\n"
+                                             "  branch (tap[1], p) probeBranch;\n"
+                                             "\n"
+                                             "  analog begin\n"
+                                             "    I(tap[4], p) <+ (V(tap[4], p) / 1000);\n"
+                                             "    V(probeBranch) <+ 1;\n"
+                                             "  end\n"
+                                             "endmodule\n";
+  if (!llvm::StringRef(staticNodeOutput).ends_with(expectedStaticNodeBody) ||
+      mlir::failed(nodal::reparseBackendTarget(staticNodeOutput, *configuration)))
+    return fail("static electrical node-array row-major target differs or cannot reparse");
+  std::string repeatedStaticNodeOutput;
+  llvm::raw_string_ostream repeatedStaticNodeStream(repeatedStaticNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*staticNodes, nodal::BackendKind::VerilogA, repeatedStaticNodeStream)))
+    return fail("static node-array repeated emission failed");
+  repeatedStaticNodeStream.flush();
+  if (repeatedStaticNodeOutput != staticNodeOutput)
+    return fail("static node-array repeated emission changed output");
+  for (const auto &mutation :
+       {std::make_pair("tap[4]", "missing[4]"), std::make_pair("tap[4]", "tap[6]"),
+        std::make_pair("tap[4]", "tap[-1]"), std::make_pair("tap[4]", "tap[(3 + 3)]"),
+        std::make_pair("tap[4]", "tap[(1 / 0)]"),
+        std::make_pair("tap[4]", "tap[(9223372036854775807 + 1)]"),
+        std::make_pair("tap[4]", "tap[MISSING]"), std::make_pair("tap[4]", "tap[1][1]"),
+        std::make_pair("tap[4]", "tap[]"), std::make_pair("tap[4]", "p[1]"),
+        std::make_pair("tap[4]", "tap"), std::make_pair("tap[1]", "tap[6]"),
+        std::make_pair("[0:5] tap", "[5:0] tap")}) {
+    std::string malformedTarget = staticNodeOutput;
+    const size_t position = malformedTarget.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("static node-array target mutation anchor missing");
+    malformedTarget.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedTarget, *configuration)))
+      return fail("malformed static node-array target passed independent structural reparse");
+  }
+  for (const auto &replacement :
+       {"V(tap, p)", "V(missing, p)", "V(tap[6], p)", "V(p[1], p)", "V(tap[4], missing)"}) {
+    std::string malformedRead = staticNodeOutput;
+    const std::string original = "V(tap[4], p)";
+    const size_t position = malformedRead.find(original);
+    if (position == std::string::npos)
+      return fail("node-array RHS-only mutation anchor missing");
+    malformedRead.replace(position, original.size(), replacement);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedRead, *configuration)))
+      return fail("malformed node-array RHS access passed structural reparse");
+  }
+  auto replaceAll = [](std::string &text, llvm::StringRef before, llvm::StringRef after) {
+    size_t position = 0;
+    while ((position = text.find(before.str(), position)) != std::string::npos) {
+      text.replace(position, before.size(), after.str());
+      position += after.size();
+    }
+  };
+  std::string symbolicNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(symbolicNodeSource, "2,3", "2,COUNT");
+  symbolicNodeSource.insert(symbolicNodeSource.find("    %p ="), kStaticNodeArrayParameter.str());
+  auto symbolicNodes = parse(context, symbolicNodeSource);
+  if (!symbolicNodes)
+    return fail("could not parse symbolic static node-array fixture");
+  std::string symbolicNodeOutput;
+  llvm::raw_string_ostream symbolicNodeStream(symbolicNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*symbolicNodes, nodal::BackendKind::VerilogA, symbolicNodeStream)))
+    return fail("symbolic static node-array emission failed");
+  symbolicNodeStream.flush();
+  if (symbolicNodeOutput.find("  parameter integer COUNT = 4 from [2:8];\n"
+                              "  electrical [0:((2 * COUNT) - 1)] tap;\n") == std::string::npos ||
+      symbolicNodeOutput.find("I(tap[(COUNT + 1)], p) <+ (V(tap[(COUNT + 1)], p) / 1000);") ==
+          std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(symbolicNodeOutput, *configuration)))
+    return fail("symbolic node-array target lost extents or row-major scalar selection");
+  for (const auto &mutation : {std::make_pair("(COUNT + 1)", "(UNKNOWN + 1)"),
+                               std::make_pair("(COUNT + 1)", "(COUNT && 1)"),
+                               std::make_pair("(COUNT + 1)", "(COUNT + )")}) {
+    std::string malformedTarget = symbolicNodeOutput;
+    replaceAll(malformedTarget, mutation.first, mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedTarget, *configuration)))
+      return fail("malformed symbolic node selection passed structural reparse");
+  }
+  std::string expressionNodeSource = symbolicNodeSource;
+  expressionNodeSource.insert(
+      expressionNodeSource.find("    %selected ="),
+      "    %expression = \"nodal.const_expr\"(%one, %zero) <{metadata = {semantic_path = "
+      "\"ArrayNodes.indexExpr\"}, operator_name = \"add\"}> : (i64, i64) -> i64\n");
+  replaceAll(expressionNodeSource, "%array, %one, %one", "%array, %expression, %one");
+  replaceAll(expressionNodeSource, "at(literal:1,literal:1)",
+             "at(expression:ArrayNodes.indexExpr,literal:1)");
+  auto expressionNodes = parse(context, expressionNodeSource);
+  if (!expressionNodes)
+    return fail("could not parse expression-indexed node-array fixture");
+  std::string expressionNodeOutput;
+  llvm::raw_string_ostream expressionNodeStream(expressionNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*expressionNodes, nodal::BackendKind::VerilogA, expressionNodeStream)))
+    return fail("canonical static expression node-array index emission failed");
+  expressionNodeStream.flush();
+  if (expressionNodeOutput.find("tap[(((1 + 0) * COUNT) + 1)]") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(expressionNodeOutput, *configuration)))
+    return fail("canonical static index expression lost its retained target identity");
+  std::string namedExpressionSource = expressionNodeSource;
+  replaceAll(
+      namedExpressionSource, "%branch = \"nodal.branch\"(%selected, %p) <{metadata = {}}>",
+      "%branch = \"nodal.branch\"(%selected, %p) <{name = \"indexedBranch\", metadata = {}}>");
+  auto namedExpressionNodes = parse(context, namedExpressionSource);
+  if (!namedExpressionNodes)
+    return fail("named expression-indexed node-array fixture did not parse");
+  std::string namedExpressionOutput;
+  llvm::raw_string_ostream namedExpressionStream(namedExpressionOutput);
+  if (mlir::failed(nodal::emitBackend(*namedExpressionNodes, nodal::BackendKind::VerilogA,
+                                      namedExpressionStream)))
+    return fail("named expression-indexed node-array emission failed");
+  namedExpressionStream.flush();
+  if (namedExpressionOutput.find("branch (tap[(((1 + 0) * COUNT) + 1)], p) indexedBranch;") ==
+          std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(namedExpressionOutput, *configuration)))
+    return fail("nested symbolic named-branch endpoint failed structural reparse");
+
+  std::string duplicateNodeSource = kStaticNodeArrayModule.str();
+  duplicateNodeSource.insert(duplicateNodeSource.find("    %other ="), R"mlir(
+    %legacy_one = "nodal.constant"() <{value = 1 : index, metadata = {}}> : () -> index
+    %duplicate = "nodal.shape_index"(%array, %legacy_one, %legacy_one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:1,literal:1)", source_uses = ["ArrayNodes.duplicate"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, index, index) -> !nodal.terminal<"electrical">
+)mlir");
+  replaceAll(duplicateNodeSource, "\"nodal.branch\"(%selected, %p)",
+             "\"nodal.branch\"(%duplicate, %p)");
+  auto duplicateNodes = parse(context, duplicateNodeSource);
+  if (!duplicateNodes)
+    return fail("duplicate legacy-indexed node-array fixture did not parse");
+  for (unsigned repetition = 0; repetition != 2; ++repetition) {
+    std::string duplicateOutput;
+    llvm::raw_string_ostream duplicateStream(duplicateOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*duplicateNodes, nodal::BackendKind::VerilogA, duplicateStream)))
+      return fail("duplicate selectors with separate legacy index literals did not emit");
+    duplicateStream.flush();
+    if (duplicateOutput != staticNodeOutput)
+      return fail("equivalent selectors changed canonical row-major target output");
+  }
+
+  std::string largeNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(largeNodeSource, "2,3", "1000000,1000000");
+  auto largeNodes = parse(context, largeNodeSource);
+  if (!largeNodes)
+    return fail("compact large node-array fixture did not parse");
+  std::string largeNodeOutput;
+  llvm::raw_string_ostream largeNodeStream(largeNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*largeNodes, nodal::BackendKind::VerilogA, largeNodeStream)))
+    return fail("compact large node-array emission failed");
+  largeNodeStream.flush();
+  if (largeNodeOutput.size() > 4096 ||
+      largeNodeOutput.find("electrical [0:999999999999] tap;") == std::string::npos ||
+      largeNodeOutput.find("I(tap[1000001], p)") == std::string::npos)
+    return fail("large node-array target lost compact checked row-major arithmetic");
+
+  std::string renamedNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(renamedNodeSource, "sym_name = \"ArrayNodes\"", "sym_name = \"RenamedArrayNodes\"");
+  auto renamedNodes = parse(context, renamedNodeSource);
+  if (!renamedNodes)
+    return fail("renamed target node-array fixture did not parse");
+  std::string renamedNodeOutput;
+  llvm::raw_string_ostream renamedNodeStream(renamedNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*renamedNodes, nodal::BackendKind::VerilogA, renamedNodeStream)))
+    return fail("renamed target module lost node-array semantic source ownership");
+  renamedNodeStream.flush();
+  if (renamedNodeOutput.find("module RenamedArrayNodes(p);") == std::string::npos)
+    return fail("node-array target module rename was not retained");
+
+  std::string arrayHierarchySource = kHierarchyModule.str();
+  const size_t arrayHierarchyPortStart = arrayHierarchySource.find("    %top_vin =");
+  const size_t arrayHierarchyPortEnd = arrayHierarchySource.find('\n', arrayHierarchyPortStart);
+  if (arrayHierarchyPortStart == std::string::npos || arrayHierarchyPortEnd == std::string::npos)
+    return fail("selected hierarchy fixture source anchor missing");
+  arrayHierarchySource.replace(arrayHierarchyPortStart,
+                               arrayHierarchyPortEnd - arrayHierarchyPortStart, R"mlir(
+    %taps = "nodal.node_array"() <{name = "taps", source_path = "Top.taps", metadata = {semantic_path = "Top.taps", storage = "structural"}}> : () -> !nodal.shaped<"3", !nodal.terminal<"electrical">>
+    %lane = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %top_vin = "nodal.shape_index"(%taps, %lane) <{metadata = {input_path = "Top.taps", selection_kind = "node_array", semantic_path = "Top.taps.at(literal:1)", source_uses = ["Top.selected"], storage = "structural"}}> : (!nodal.shaped<"3", !nodal.terminal<"electrical">>, i64) -> !nodal.terminal<"electrical">
+)mlir");
+  auto arrayHierarchy = parse(context, arrayHierarchySource);
+  if (!arrayHierarchy)
+    return fail("selected scalar hierarchy fixture did not parse");
+  std::string arrayHierarchyOutput;
+  llvm::raw_string_ostream arrayHierarchyStream(arrayHierarchyOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*arrayHierarchy, nodal::BackendKind::VerilogA, arrayHierarchyStream)))
+    return fail("selected node-array scalar hierarchy binding failed emission");
+  arrayHierarchyStream.flush();
+  if (arrayHierarchyOutput.find("child(.vin(taps[1]), .vout(vout));") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(arrayHierarchyOutput, *configuration)))
+    return fail("selected node-array scalar hierarchy binding lost target endpoint identity");
+  for (const auto &replacement : {"taps[3]", "taps[MISSING]", "vout[1]", "taps", "unknown[1]"}) {
+    std::string invalidHierarchy = arrayHierarchyOutput;
+    replaceAll(invalidHierarchy, "taps[1]", replacement);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidHierarchy, *configuration)))
+      return fail("malformed selected hierarchy endpoint passed structural reparse");
+  }
+
+  // Local conservative views retain the same physical selected endpoint. The
+  // root declaration/layout and every scalar consumer stay on the old path.
+  auto replaceNodeSelection = [](std::string source, const std::string &name,
+                                 const std::string &replacement) {
+    const size_t start = source.find("%" + name + " =");
+    const size_t end = source.find('\n', start);
+    if (start == std::string::npos || end == std::string::npos)
+      return std::string();
+    source.replace(start, end - start + 1, replacement);
+    return source;
+  };
+  auto emitNodeView = [&](const std::string &source, std::string &target,
+                          nodal::BackendKind kind = nodal::BackendKind::VerilogA) {
+    auto module = parse(context, source);
+    if (!module || mlir::failed(mlir::verify(*module)))
+      return false;
+    llvm::raw_string_ostream stream(target);
+    if (mlir::failed(nodal::emitBackend(*module, kind, stream)))
+      return false;
+    stream.flush();
+    std::string repeated;
+    llvm::raw_string_ostream repeatStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*module, kind, repeatStream)))
+      return false;
+    repeatStream.flush();
+    return repeated == target &&
+           mlir::succeeded(nodal::reparseBackendTarget(target, *configuration));
+  };
+  const std::string rowSelection = nodeIndex("row", "array", "2,3", "%one", "literal:1", "3") +
+                                   nodeIndex("selected", "row", "3", "%one", "literal:1");
+  std::string rowNodeOutput;
+  if (!emitNodeView(replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", rowSelection),
+                    rowNodeOutput) ||
+      rowNodeOutput != staticNodeOutput)
+    return fail("row selection changed its direct physical endpoint or scalar target");
+  const std::string twoLiteral =
+      "%two = \"nodal.const_literal\"() <{metadata = {}, spelling = \"2\", value = 2 : i64}> : "
+      "() -> i64\n";
+  const std::string sliceSelection =
+      twoLiteral + nodeSlice("columns", "array", "2,3", "2,1", "one", "two", "one") +
+      nodeView("flat", "columns", "2,1", "2") +
+      nodeIndex("selected", "flat", "2", "%one", "literal:1");
+  std::string sliceNodeOutput;
+  if (!emitNodeView(replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", sliceSelection),
+                    sliceNodeOutput) ||
+      sliceNodeOutput != staticNodeOutput)
+    return fail("noncontiguous slice/flatten selection changed its fixed root ordinal");
+  const std::string reshapeSelection =
+      twoLiteral + nodeView("reshaped", "array", "2,3", "3,2") +
+      nodeIndex("selected", "reshaped", "3,2", "%two, %zero", "literal:2,literal:0");
+  std::string reshapeNodeOutput;
+  if (!emitNodeView(
+          replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", reshapeSelection),
+          reshapeNodeOutput) ||
+      reshapeNodeOutput != staticNodeOutput)
+    return fail("reshape scalar selection lost exact fixed row-major identity");
+  std::string planeSource = kStaticNodeArrayModule.str();
+  replaceAll(planeSource, "2,3", "2,2,3");
+  planeSource = replaceNodeSelection(
+      planeSource, "selected",
+      nodeIndex("plane", "array", "2,2,3", "%one", "literal:1", "2,3") +
+          nodeIndex("selected", "plane", "2,3", "%one, %one", "literal:1,literal:1"));
+  planeSource = replaceNodeSelection(
+      planeSource, "other",
+      nodeIndex("other", "array", "2,2,3", "%zero, %zero, %one", "literal:0,literal:0,literal:1"));
+  std::string planeNodeOutput;
+  if (!emitNodeView(planeSource, planeNodeOutput) ||
+      planeNodeOutput.find("I(tap[10], p) <+ (V(tap[10], p) / 1000);") == std::string::npos)
+    return fail("plane selection lost its fixed multidimensional physical ordinal");
+  std::string equivalentSource = kStaticNodeArrayModule.str();
+  equivalentSource.insert(equivalentSource.find("    %other ="),
+                          nodeIndex("row", "array", "2,3", "%one", "literal:1", "3") +
+                              nodeIndex("throughRow", "row", "3", "%one", "literal:1"));
+  replaceAll(equivalentSource, "\"nodal.branch\"(%selected, %p)",
+             "\"nodal.branch\"(%throughRow, %p)");
+  std::string equivalentOutput;
+  if (!emitNodeView(equivalentSource, equivalentOutput) || equivalentOutput != staticNodeOutput)
+    return fail("direct and prefix aliases did not share their normalized physical endpoint");
+  std::string largeViewSource = replaceNodeSelection(
+      largeNodeSource, "selected",
+      nodeIndex("row", "array", "1000000,1000000", "%one", "literal:1", "1000000") +
+          nodeIndex("selected", "row", "1000000", "%one", "literal:1"));
+  std::string largeViewOutput;
+  if (!emitNodeView(largeViewSource, largeViewOutput) || largeViewOutput != largeNodeOutput)
+    return fail("proved fixed view narrowed the published compact signed64 direct profile");
+
+  std::string symbolicViewSelection = sliceSelection;
+  replaceAll(symbolicViewSelection, "2,3", "2,COUNT");
+  const std::string symbolicViewSource =
+      replaceNodeSelection(symbolicNodeSource, "selected", symbolicViewSelection);
+  std::string symbolicViewOutput;
+  if (!emitNodeView(symbolicViewSource, symbolicViewOutput) ||
+      llvm::StringRef(symbolicViewOutput).count("localparam integer node_map_") != 2 ||
+      symbolicViewOutput.find("localparam integer node_map_tap_0_0 = 1;") == std::string::npos ||
+      symbolicViewOutput.find(
+          "I(tap[node_map_tap_0_1], p) <+ (V(tap[node_map_tap_0_1], p) / 1000);") ==
+          std::string::npos ||
+      symbolicViewOutput.find("localparam integer node_map_") >
+          symbolicViewOutput.find("branch (") ||
+      symbolicViewOutput.find("localparam integer node_map_",
+                              symbolicViewOutput.find("analog begin")) != std::string::npos)
+    return fail("symbolic conservative map lost ordered immutable stages or live net endpoints");
+  std::string symbolicAMS = symbolicViewSource;
+  replaceAll(symbolicAMS, "\"verilog-a\"", "\"verilog-ams\"");
+  std::string symbolicAMSOutput;
+  if (!emitNodeView(symbolicAMS, symbolicAMSOutput, nodal::BackendKind::VerilogAMS))
+    return fail("symbolic local node views failed Verilog-AMS emission/reparse");
+  std::string collisionSource = symbolicViewSource;
+  collisionSource.insert(
+      collisionSource.find("    %p ="),
+      "\"nodal.parameter\"() <{classification = \"ordinary\", default_value = 1 : i64, "
+      "metadata = {}, parameter_kind = \"integer\", sym_name = \"node_map_tap_0_0\", type = i64, "
+      "variability = \"symbolic\"}> : () -> ()\n");
+  std::string collisionOutput;
+  if (!emitNodeView(collisionSource, collisionOutput) ||
+      collisionOutput.find("localparam integer node_map_tap_0_0_1 = 1;") == std::string::npos)
+    return fail("private structural map collided with an authored declaration");
+
+  std::string deepViews = "%count = \"nodal.const_parameter_ref\"() <{metadata = {}, parameter = "
+                          "@COUNT}> : () -> i64\n";
+  std::string prior = "array";
+  for (unsigned depth = 0; depth != 48; ++depth) {
+    const std::string next = "view" + std::to_string(depth);
+    deepViews += nodeSlice(next, prior, "2,COUNT", "2,COUNT", "zero", "count", "count");
+    prior = next;
+  }
+  deepViews += nodeIndex("selected", prior, "2,COUNT", "%one, %one", "literal:1,literal:1");
+  std::string deepViewOutput;
+  if (!emitNodeView(replaceNodeSelection(symbolicNodeSource, "selected", deepViews),
+                    deepViewOutput) ||
+      llvm::StringRef(deepViewOutput).count("localparam integer node_map_") != 49 ||
+      deepViewOutput.size() > 30000 || llvm::StringRef(deepViewOutput).count("] tap;") != 1)
+    return fail("deep conservative views expanded previous expressions or physical lanes");
+
+  for (const std::string replacement :
+       {"MISSING", "node_map_tap_0_1", "REAL_INDEX", "event_mutable", "(1 / 0)", "(2147483647 + 1)",
+        "(65536 * 65536)", "1.0", "V(p)", "(1 + )"}) {
+    std::string invalidMap = symbolicViewOutput;
+    const std::string original = "localparam integer node_map_tap_0_0 = 1;";
+    replaceAll(invalidMap, original, "localparam integer node_map_tap_0_0 = " + replacement + ";");
+    invalidMap.insert(invalidMap.find("  localparam integer node_map_"),
+                      "  parameter real REAL_INDEX = 1.0;\n  integer event_mutable;\n");
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidMap, *configuration)))
+      return fail("malformed structural map dependency or checked Integer arithmetic reparsed");
+  }
+  for (const std::string value : {"-1", "6", "(3 + 3)"}) {
+    std::string outOfBounds = staticNodeOutput;
+    outOfBounds.insert(outOfBounds.find("  branch ("),
+                       "  localparam integer selected_lane = " + value + ";\n");
+    replaceAll(outOfBounds, "tap[4]", "tap[selected_lane]");
+    if (mlir::succeeded(nodal::reparseBackendTarget(outOfBounds, *configuration)))
+      return fail("concrete structural localparam endpoint escaped independent array bounds");
+  }
+  std::string realIndex = symbolicNodeOutput;
+  realIndex.insert(realIndex.find("  electrical ["), "  parameter real REAL_INDEX = 1.0;\n");
+  replaceAll(realIndex, "(COUNT + 1)", "(REAL_INDEX + 1)");
+  if (mlir::succeeded(nodal::reparseBackendTarget(realIndex, *configuration)))
+    return fail("Real parameter was accepted as a structural endpoint index");
+  std::string overflowingViewSource = symbolicViewSource;
+  replaceAll(overflowingViewSource, "spelling = \"8\", value = 8 : i64",
+             "spelling = \"2147483647\", value = 2147483647 : i64");
+  auto overflowingView = parse(context, overflowingViewSource);
+  if (!overflowingView || mlir::failed(mlir::verify(*overflowingView)))
+    return fail(
+        "composed Integer-stage target boundary fixture was not independently native-valid");
+  std::string rejectedView = "sentinel";
+  llvm::raw_string_ostream rejectedViewStream(rejectedView);
+  if (mlir::succeeded(
+          nodal::emitBackend(*overflowingView, nodal::BackendKind::VerilogA, rejectedViewStream)))
+    return fail("composed structural target accepted a signed32 map intermediate overflow");
+  rejectedViewStream.flush();
+  if (rejectedView != "sentinel")
+    return fail("composed structural target failure published partial output");
+  std::string hierarchyViewSource = arrayHierarchySource;
+  std::string hierarchyView =
+      "%hzero = \"nodal.const_literal\"() <{metadata = {}, spelling = \"0\", value = 0 : i64}> : "
+      "() -> i64\n" +
+      nodeView("hier", "taps", "3", "1,3") +
+      nodeIndex("top_vin", "hier", "1,3", "%hzero, %lane", "literal:0,literal:1");
+  replaceAll(hierarchyView, "ArrayNodes", "Top");
+  hierarchyViewSource = replaceNodeSelection(hierarchyViewSource, "top_vin", hierarchyView);
+  std::string hierarchyViewOutput;
+  auto physicalHierarchyText = [](std::string text) {
+    // Relations retain distinct authored projection provenance even when the
+    // complete emitted electrical/instance statements are physically identical.
+    const std::string marker = "  // nodal.array_binding ";
+    size_t start = 0;
+    while ((start = text.find(marker, start)) != std::string::npos)
+      text.erase(start, text.find('\n', start) - start + 1);
+    return text;
+  };
+  if (!emitNodeView(hierarchyViewSource, hierarchyViewOutput) ||
+      physicalHierarchyText(hierarchyViewOutput) != physicalHierarchyText(arrayHierarchyOutput) ||
+      llvm::StringRef(arrayHierarchyOutput).count("// nodal.array_binding ") != 1 ||
+      llvm::StringRef(hierarchyViewOutput).count("// nodal.array_binding ") != 1 ||
+      arrayHierarchyOutput.find("\"root_reference\":\"Top.taps\"") == std::string::npos ||
+      arrayHierarchyOutput.find("\"reference\":\"Top.taps.at(literal:1)\"") == std::string::npos ||
+      hierarchyViewOutput.find("\"reference\":\"Top.hier.at(literal:0,literal:1)\"") ==
+          std::string::npos ||
+      hierarchyViewOutput.find("\"operation\":\"nodal.shape_view\"") == std::string::npos ||
+      hierarchyViewOutput.find("\"root_reference\":\"Top.taps\"") == std::string::npos)
+    return fail(
+        "composed local view changed the existing scalar child actual binding or lost provenance");
+
+  // Mutate after successful parsing so backend verification cannot rely on the
+  // parser's verifier. Failed emission must leave the caller's output untouched.
+  for (unsigned mutation = 0; mutation != 4; ++mutation) {
+    auto invalidNodes = parse(context, kStaticNodeArrayModule);
+    if (!invalidNodes)
+      return fail("static node-array invalid fixture did not parse");
+    mlir::Operation *array = nullptr;
+    mlir::Operation *selector = nullptr;
+    invalidNodes->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node_array")
+        array = operation;
+      if (!selector && operation->getName().getStringRef() == "nodal.shape_index")
+        selector = operation;
+    });
+    if (!array || !selector)
+      return fail("static node-array source mutation anchor missing");
+    if (mutation == 0) {
+      auto index = selector->getOperand(1).getDefiningOp();
+      index->setAttr("value", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2));
+      index->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+    } else if (mutation == 1) {
+      array->setAttr("source_path", mlir::StringAttr::get(&context, "Foreign.tap"));
+    } else if (mutation == 2) {
+      array->getResult(0).setType(
+          nodal::ShapedType::get(&context, "2,3", mlir::Float64Type::get(&context)));
+    } else {
+      selector->getResult(0).setType(mlir::Float64Type::get(&context));
+    }
+    std::string rejectedNodeOutput = "sentinel";
+    llvm::raw_string_ostream rejectedNodeStream(rejectedNodeOutput);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidNodes, nodal::BackendKind::VerilogA, rejectedNodeStream)))
+      return fail("invalid static node-array source passed backend verification");
+    rejectedNodeStream.flush();
+    if (rejectedNodeOutput != "sentinel")
+      return fail("invalid static node-array source published partial output");
+  }
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

@@ -251,3 +251,225 @@ add_test(
     --work-dir "${CMAKE_BINARY_DIR}/increment42-hierarchy-evidence"
 )
 set_tests_properties(nodal.native.hierarchy-integration PROPERTIES TIMEOUT 180)
+
+add_executable(nodal-parameter-integer-bounds-unit-tests ParameterIntegerBoundsTest.cpp)
+llvm_update_compile_flags(nodal-parameter-integer-bounds-unit-tests)
+target_link_libraries(nodal-parameter-integer-bounds-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport
+)
+add_test(NAME nodal.native.parameter-integer-bounds
+  COMMAND nodal-parameter-integer-bounds-unit-tests
+)
+add_test(NAME nodal.native.iteration-envelope-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_integer_bounds_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-integer-bounds-evidence"
+)
+set_tests_properties(nodal.native.iteration-envelope-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-count-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_count_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-count-evidence"
+)
+set_tests_properties(nodal.native.generate-count-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ssa-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ssa_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ssa-evidence"
+)
+set_tests_properties(nodal.native.generate-ssa-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.generate-ownership-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generate_ownership_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generate-ownership-evidence"
+)
+set_tests_properties(nodal.native.generate-ownership-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-contract-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_contract_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-contract-evidence"
+)
+set_tests_properties(nodal.native.shape-contract-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-index-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_index_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-index-evidence"
+)
+set_tests_properties(nodal.native.shape-index-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-view-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_view_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-view-evidence"
+)
+set_tests_properties(nodal.native.shape-view-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.shape-slice-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_shape_slice_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-slice-evidence"
+)
+set_tests_properties(nodal.native.shape-slice-integration PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-node-array-unit-tests NodeArrayTest.cpp)
+llvm_update_compile_flags(nodal-node-array-unit-tests)
+target_link_libraries(nodal-node-array-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.node-array-unit COMMAND nodal-node-array-unit-tests)
+
+add_executable(nodal-event-reparse-unit-tests AnalogEventReparseTest.cpp)
+llvm_update_compile_flags(nodal-event-reparse-unit-tests)
+target_link_libraries(nodal-event-reparse-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.event-reparse-unit COMMAND nodal-event-reparse-unit-tests)
+
+add_executable(nodal-storage-model-unit-tests AnalogStorageModelTest.cpp)
+llvm_update_compile_flags(nodal-storage-model-unit-tests)
+target_link_libraries(nodal-storage-model-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.storage-model-unit COMMAND nodal-storage-model-unit-tests)
+
+add_executable(nodal-writable-array-backend-unit-tests WritableArrayBackendTest.cpp)
+llvm_update_compile_flags(nodal-writable-array-backend-unit-tests)
+target_link_libraries(nodal-writable-array-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.writable-array-backend-unit COMMAND nodal-writable-array-backend-unit-tests)
+
+add_test(NAME nodal.native.writable-array-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_writable_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-writable-array-evidence"
+)
+set_tests_properties(nodal.native.writable-array-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_test(NAME nodal.native.typed-control-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_typed_control_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-typed-control-evidence"
+)
+set_tests_properties(nodal.native.typed-control-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_test(NAME nodal.native.boundary-array-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_boundary_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-boundary-array-evidence"
+)
+set_tests_properties(nodal.native.boundary-array-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_executable(nodal-boundary-array-backend-unit-tests BoundaryArrayBackendTest.cpp)
+llvm_update_compile_flags(nodal-boundary-array-backend-unit-tests)
+target_link_libraries(nodal-boundary-array-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.boundary-array-backend-unit COMMAND nodal-boundary-array-backend-unit-tests)
+
+add_executable(nodal-generated-topology-backend-unit-tests GeneratedTopologyBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-topology-backend-unit-tests)
+target_link_libraries(nodal-generated-topology-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-topology-backend-unit COMMAND nodal-generated-topology-backend-unit-tests)
+
+add_executable(nodal-generated-persistent-backend-unit-tests GeneratedPersistentBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-persistent-backend-unit-tests)
+target_link_libraries(nodal-generated-persistent-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-persistent-backend-unit COMMAND nodal-generated-persistent-backend-unit-tests)
+
+add_test(NAME nodal.native.generated-topology-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_topology_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generated-topology-evidence"
+)
+set_tests_properties(nodal.native.generated-topology-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_executable(nodal-conservative-relation-backend-unit-tests ConservativeRelationBackendTest.cpp)
+llvm_update_compile_flags(nodal-conservative-relation-backend-unit-tests)
+target_link_libraries(nodal-conservative-relation-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.conservative-relation-backend-unit COMMAND nodal-conservative-relation-backend-unit-tests)
+
+add_executable(nodal-shape-region-unit-tests ShapeRegionTest.cpp)
+llvm_update_compile_flags(nodal-shape-region-unit-tests)
+target_link_libraries(nodal-shape-region-unit-tests
+  PRIVATE NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.shape-region-unit COMMAND nodal-shape-region-unit-tests)
+
+add_test(NAME nodal.native.conservative-relation-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_conservative_relation_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-conservative-relation-evidence"
+)
+set_tests_properties(nodal.native.conservative-relation-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_executable(nodal-generated-probe-backend-unit-tests GeneratedProbeBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-probe-backend-unit-tests)
+target_link_libraries(nodal-generated-probe-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-probe-backend-unit COMMAND nodal-generated-probe-backend-unit-tests)
+
+add_test(NAME nodal.native.generated-probe-placement
+  COMMAND "${Python3_EXECUTABLE}" -B
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_probe_placement_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --output-root "${NODAL_REPOSITORY_ROOT}/.work/generated-probe-placement-native"
+)
+set_tests_properties(nodal.native.generated-probe-placement PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_test(NAME nodal.native.generated-local-array-integration
+  COMMAND "${Python3_EXECUTABLE}" -B
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_local_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${NODAL_REPOSITORY_ROOT}/.work/generated-local-array-native"
+)
+set_tests_properties(nodal.native.generated-local-array-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_executable(nodal-live-fill-unit-tests AnalogLiveFillTest.cpp)
+llvm_update_compile_flags(nodal-live-fill-unit-tests)
+target_link_libraries(nodal-live-fill-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.live-fill-unit COMMAND nodal-live-fill-unit-tests)
+
+add_executable(nodal-analog-live-control-plan-unit-tests AnalogLiveControlPlanTest.cpp)
+llvm_update_compile_flags(nodal-analog-live-control-plan-unit-tests)
+target_link_libraries(nodal-analog-live-control-plan-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.analog-live-control-plan-unit
+  COMMAND nodal-analog-live-control-plan-unit-tests)

@@ -4,6 +4,7 @@ add_mlir_library(NodalBackend
   AnalogUserFunctionBackend.cpp
   AnalogVerticalSlice.cpp
   Backend.cpp
+  ShapedValueBackend.cpp
 
   ADDITIONAL_HEADER_DIRS
     "${NODAL_REPOSITORY_ROOT}/core/compiler/include/nodal/Backend"

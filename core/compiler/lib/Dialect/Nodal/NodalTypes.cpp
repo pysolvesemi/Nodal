@@ -102,6 +102,13 @@ LogicalResult nodal::QuantityType::verify(llvm::function_ref<InFlightDiagnostic(
   return success();
 }
 
+LogicalResult nodal::AnalogDeferredType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                                StringRef kind, StringRef dimension) {
+  if (kind != "real" || !nodal::isCanonicalDimensionSignature(dimension))
+    return emitError() << "deferred fill requires Real kind and a canonical physical dimension";
+  return success();
+}
+
 LogicalResult nodal::VariableType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                                           llvm::StringRef kind, llvm::StringRef dimension) {
   if (kind != "integer" && kind != "real" && kind != "boolean")
@@ -119,6 +126,8 @@ LogicalResult nodal::ShapedType::verify(llvm::function_ref<InFlightDiagnostic()>
                                         llvm::StringRef dimensions, Type elementType) {
   if (!elementType)
     return emitError() << "shaped element type must be present";
+  if (llvm::isa<nodal::AnalogDeferredType>(elementType))
+    return emitError() << "deferred fill capability cannot be a shaped element";
   llvm::StringRef remaining = dimensions.trim();
   if (remaining.empty())
     return emitError() << "shaped dimensions must not be empty";

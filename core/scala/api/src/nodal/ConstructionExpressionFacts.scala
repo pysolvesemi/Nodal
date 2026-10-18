@@ -84,40 +84,81 @@ private object AnalogDimension:
   val Temperature: AnalogDimension = AnalogDimension(Map("temperature" -> 1))
 
 private object ConstructionExpressionFacts:
+  /** One fact query follows actual expression identity, including shared fill dependencies. Results
+    * never survive the query: variable registration and parameter environments may change between
+    * calls. Heights preserve the existing retained-source depth bound on memoized paths.
+    */
+  private def memoizedFact[A](input: Any)(evaluate: (Any, Any => A) => A): A =
+    val memo = new java.util.IdentityHashMap[AnyRef, (A, Int)]()
+    val active = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+    def invalid(): Nothing = AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
+      "NODAL-SHAPE-043-007",
+      "expression fact dependency is cyclic or exceeds the supported dependency depth"
+    ))
+    def visit(input: Any, depth: Int): (A, Int) =
+      if depth >= 512 then invalid()
+      val reference = input match
+        case value: AnyRef => Some(value)
+        case _ => None
+      if reference.exists(active.containsKey) then invalid()
+      reference.flatMap(value => Option(memo.get(value))) match
+        case Some(result) =>
+          if depth + result._2 >= 512 then invalid()
+          result
+        case None =>
+          reference.foreach(value => active.put(value, java.lang.Boolean.TRUE))
+          try
+            var height = 0
+            val result = evaluate(
+              input,
+              value =>
+                val (result, childHeight) = visit(value, depth + 1)
+                height = height.max(childHeight + 1)
+                result
+            ) -> height
+            reference.foreach(value => memo.put(value, result))
+            result
+          finally reference.foreach(active.remove)
+    visit(input, 0)._1
+
   // This check is deliberately structural: parameter defaults are not substituted for
   // symbolic overrides, and time-dependent operators are never classified as constants.
-  def waveformStatic(value: Any): Boolean = value match
-    case _: Param[?] => true
-    case expression: KernelExpr[?] =>
-      expression.literal.nonEmpty ||
-      ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
-        .contains(expression.operation.getOrElse("")) || expression.operation.exists(
-        _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
-      )) &&
-        expression.operands.forall(waveformStatic))
-    case _ => false
+  def waveformStatic(value: Any): Boolean =
+    memoizedFact[Boolean](value): (value, visit) =>
+      value match
+        case _: Param[?] => true
+        case expression: KernelExpr[?] =>
+          expression.literal.nonEmpty ||
+          ((Set("analog_add", "analog_sub", "analog_mul", "analog_div", "analog_neg")
+            .contains(expression.operation.getOrElse("")) || expression.operation.exists(
+            _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+          )) &&
+            expression.operands.forall(visit))
+        case _ => false
 
-  def waveformConstant(value: Any): Option[Double] = value match
-    case expression: KernelExpr[?]
-        if expression.operation.exists(
-          _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
-        ) =>
-      AnalogFunctionContract.constant(
-        expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix),
-        expression.operands.map(waveformConstant)
-      )
-    case expression: KernelExpr[?] =>
-      expression.literal.filter(_.kind == "real").flatMap(_.value.toDoubleOption).orElse:
-        expression.operands.map(waveformConstant) match
-          case Vector(Some(a), Some(b)) => expression.operation match
-              case Some("analog_add") => Some(a + b)
-              case Some("analog_sub") => Some(a - b)
-              case Some("analog_mul") => Some(a * b)
-              case Some("analog_div") => Some(a / b)
+  def waveformConstant(value: Any): Option[Double] =
+    memoizedFact[Option[Double]](value): (value, visit) =>
+      value match
+        case expression: KernelExpr[?]
+            if expression.operation.exists(
+              _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+            ) =>
+          AnalogFunctionContract.constant(
+            expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix),
+            expression.operands.map(visit)
+          )
+        case expression: KernelExpr[?] =>
+          expression.literal.filter(_.kind == "real").flatMap(_.value.toDoubleOption).orElse:
+            expression.operands.map(visit) match
+              case Vector(Some(a), Some(b)) => expression.operation match
+                  case Some("analog_add") => Some(a + b)
+                  case Some("analog_sub") => Some(a - b)
+                  case Some("analog_mul") => Some(a * b)
+                  case Some("analog_div") => Some(a / b)
+                  case _ => None
+              case Vector(Some(a)) if expression.operation.contains("analog_neg") => Some(-a)
               case _ => None
-          case Vector(Some(a)) if expression.operation.contains("analog_neg") => Some(-a)
-          case _ => None
-    case _ => None
+        case _ => None
 
   def waveformContinuity(value: Any): String =
     if waveformStatic(value) then "constant"
@@ -138,7 +179,8 @@ private object ConstructionExpressionFacts:
         case _ => "unknown"
 
   private def inferBooleanExpressionDimension(
-      expression: KernelExpr[?]
+      expression: KernelExpr[?],
+      inferAnalogDimension: Any => AnalogDimension
   ): AnalogDimension =
     expression.operation match
       case Some("real_gt") | Some("real_ge") | Some("real_lt") |
@@ -166,109 +208,114 @@ private object ConstructionExpressionFacts:
   private def isDimensionlessBoolean(dimension: AnalogDimension): Boolean =
     !dimension.isUnknown && dimension.powers.isEmpty
 
-  def inferAnalogDimension(value: Any): AnalogDimension = value match
-    case expression: KernelExpr[?]
-        if expression.literal.exists(value =>
-          value.kind == "integer" && value.dataType.kind == "Integer"
-        ) =>
-      AnalogDimension.Dimensionless
-    case expression: KernelExpr[?]
-        if expression.operation.exists(_.startsWith(AnalogUserFunctionRuntime.CallPrefix)) =>
-      expression.resultType.flatMap(_.arguments.headOption).collect { case units: String =>
-        namedAnalogDimension(units)
-      }.getOrElse(AnalogDimension.Unknown)
-    case expression: KernelExpr[?]
-        if expression.operation.exists(_.startsWith(AnalogTransferContract.Prefix)) =>
-      expression.operands.headOption.map(inferAnalogDimension).getOrElse(AnalogDimension.Unknown)
-    case expression: KernelExpr[?]
-        if expression.operation.exists(_.startsWith(AnalogNoiseContract.Prefix)) =>
-      val index =
-        if expression.operation.contains(AnalogNoiseContract.Prefix + "table") then 1 else 0
-      val density = expression.operands.lift(index).map(inferAnalogDimension)
-        .getOrElse(AnalogDimension.Unknown)
-      namedAnalogDimension(AnalogNoiseContract.resultDimension(density.signature))
-    case expression: KernelExpr[?]
-        if expression.operation.exists(
-          _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
-        ) =>
-      val id = expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
-      val dimensions = expression.operands.map: operand =>
-        operand match
-          case value: Expr[?] if !CandidateRuntime.expressionDataType(value).exists(_ != Real) =>
-            inferAnalogDimension(value).signature
-          case _ => "unknown"
-      namedAnalogDimension(AnalogFunctionContract.dimension(id, dimensions))
-    case parameter: Param[?] => inferAnalogDimension(parameter.default)
-    case state: AnalogState => physicalDimension(state.dimension)
+  def inferAnalogDimension(value: Any): AnalogDimension =
+    memoizedFact[AnalogDimension](value): (value, visit) =>
+      value match
+        case expression: KernelExpr[?]
+            if expression.literal.exists(value =>
+              value.kind == "integer" && value.dataType.kind == "Integer"
+            ) =>
+          AnalogDimension.Dimensionless
+        case expression: KernelExpr[?]
+            if expression.operation.exists(_.startsWith(AnalogUserFunctionRuntime.CallPrefix)) =>
+          expression.resultType.flatMap(_.arguments.headOption).collect { case units: String =>
+            namedAnalogDimension(units)
+          }.getOrElse(AnalogDimension.Unknown)
+        case expression: KernelExpr[?]
+            if expression.operation.exists(_.startsWith(AnalogTransferContract.Prefix)) =>
+          expression.operands.headOption.map(visit).getOrElse(AnalogDimension.Unknown)
+        case expression: KernelExpr[?]
+            if expression.operation.exists(_.startsWith(AnalogNoiseContract.Prefix)) =>
+          val index =
+            if expression.operation.contains(AnalogNoiseContract.Prefix + "table") then 1 else 0
+          val density = expression.operands.lift(index).map(visit)
+            .getOrElse(AnalogDimension.Unknown)
+          namedAnalogDimension(AnalogNoiseContract.resultDimension(density.signature))
+        case expression: KernelExpr[?]
+            if expression.operation.exists(
+              _.startsWith(AnalogFunctionRegistry.FunctionPrefix)
+            ) =>
+          val id = expression.operation.get.stripPrefix(AnalogFunctionRegistry.FunctionPrefix)
+          val dimensions = expression.operands.map: operand =>
+            operand match
+              case value: Expr[?]
+                  if !CandidateRuntime.expressionDataType(value).exists(_ != Real) =>
+                visit(value).signature
+              case _ => "unknown"
+          namedAnalogDimension(AnalogFunctionContract.dimension(id, dimensions))
+        case parameter: Param[?] => visit(parameter.default)
+        case state: AnalogState => physicalDimension(state.dimension)
 
-    case variable: Variable[?] =>
-      AnalogProceduralConstruction
-        .registeredDimension(variable)
-        .map(namedAnalogDimension)
-        .getOrElse(AnalogDimension.Unknown)
-    case expression: KernelExpr[?]
-        if expression.resultType.exists(_.kind == "Bool") =>
-      inferBooleanExpressionDimension(expression)
-    case expression: KernelExpr[?] =>
-      expression.literal match
-        case Some(literal) if literal.kind == "real" =>
-          val unit =
-            expression.operands.lift(1).collect { case value: String => value }.getOrElse("")
-          val zero = literal.value.toDoubleOption.contains(0.0)
-          unitDimension(unit, zero)
-        case Some(_) => AnalogDimension.Dimensionless
-        case None =>
-          expression.operation match
-            case Some("analog_add") | Some("analog_sub") =>
-              expression.operands.map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
-                .getOrElse(AnalogDimension.Unknown)
-            case Some("analog_mul") =>
-              expression.operands.map(inferAnalogDimension).reduceOption(_.multiply(_))
-                .getOrElse(AnalogDimension.Unknown)
-            case Some("analog_div") =>
-              expression.operands match
-                case Vector(left, right) =>
-                  inferAnalogDimension(left).divide(inferAnalogDimension(right))
-                case _ => AnalogDimension.Unknown
-            case Some("analog_neg") =>
-              expression.operands.headOption.map(
-                inferAnalogDimension
-              ).getOrElse(AnalogDimension.Unknown)
-            case Some("analog_select") =>
-              expression.operands.drop(1).map(inferAnalogDimension).reduceOption(_.compatibleAdd(_))
-                .getOrElse(AnalogDimension.Unknown)
-            case Some("analog_ddt") =>
-              expression.operands.headOption.map(inferAnalogDimension)
-                .map(_.divide(AnalogDimension.Time))
-                .getOrElse(AnalogDimension.Unknown)
-            case Some("analog_idt") =>
-              expression.operands.headOption.map(inferAnalogDimension)
-                .map(_.multiply(AnalogDimension.Time))
-                .getOrElse(AnalogDimension.Unknown)
-            case Some("potential_access") | Some("candidate-branch-potential") =>
-              accessDimension(expression.operands, potential = true)
-            case Some("flow_access") | Some("candidate-branch-flow") =>
-              accessDimension(expression.operands, potential = false)
-            case Some("candidate-analog-state") =>
-              expression.operands.collectFirst { case state: AnalogState =>
-                physicalDimension(state.dimension)
-              }.getOrElse(AnalogDimension.Unknown)
-            case Some("analog_abstime") => AnalogDimension.Time
-            case Some("candidate-analysis-time") => AnalogDimension.Time
-            case Some("candidate-analysis-frequency") =>
-              AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
-            case Some("candidate-environment-temperature") |
-                Some("candidate-environment-nominal-temperature") =>
-              AnalogDimension.Temperature
-            case Some("candidate-operating-condition") | Some("candidate-sweep-coordinate") =>
-              expression.operands.collectFirst { case dimension: PhysicalDimension =>
-                physicalDimension(dimension)
-              }.getOrElse(AnalogDimension.Unknown)
-            case _ =>
-              expression.operands.headOption.map(inferAnalogDimension)
-                .getOrElse(AnalogDimension.Unknown)
-    case dimension: PhysicalDimension => physicalDimension(dimension)
-    case _ => AnalogDimension.Unknown
+        case variable: Variable[?] =>
+          AnalogProceduralConstruction
+            .registeredDimension(variable)
+            .map(namedAnalogDimension)
+            .getOrElse(AnalogDimension.Unknown)
+        case expression: KernelExpr[?]
+            if expression.resultType.exists(_.kind == "Bool") =>
+          inferBooleanExpressionDimension(expression, visit)
+        case expression: KernelExpr[?] =>
+          expression.literal match
+            case Some(literal) if literal.kind == "real" =>
+              val unit =
+                expression.operands.lift(1).collect { case value: String => value }.getOrElse("")
+              val zero = literal.value.toDoubleOption.contains(0.0)
+              unitDimension(unit, zero)
+            case Some(_) => AnalogDimension.Dimensionless
+            case None =>
+              expression.operation match
+                case Some("analog_add") | Some("analog_sub") =>
+                  expression.operands.map(visit).reduceOption(_.compatibleAdd(_))
+                    .getOrElse(AnalogDimension.Unknown)
+                case Some("analog_mul") =>
+                  expression.operands.map(visit).reduceOption(_.multiply(_))
+                    .getOrElse(AnalogDimension.Unknown)
+                case Some("analog_div") =>
+                  expression.operands match
+                    case Vector(left, right) =>
+                      visit(left).divide(visit(right))
+                    case _ => AnalogDimension.Unknown
+                case Some(
+                      "analog_neg" | "shape_index" | "shape_view" | "shape_slice" | "analog_array_fill"
+                    ) =>
+                  expression.operands.headOption.map(
+                    visit
+                  ).getOrElse(AnalogDimension.Unknown)
+                case Some("analog_select") =>
+                  expression.operands.drop(1).map(visit).reduceOption(_.compatibleAdd(_))
+                    .getOrElse(AnalogDimension.Unknown)
+                case Some("analog_ddt") =>
+                  expression.operands.headOption.map(visit)
+                    .map(_.divide(AnalogDimension.Time))
+                    .getOrElse(AnalogDimension.Unknown)
+                case Some("analog_idt") =>
+                  expression.operands.headOption.map(visit)
+                    .map(_.multiply(AnalogDimension.Time))
+                    .getOrElse(AnalogDimension.Unknown)
+                case Some("potential_access") | Some("candidate-branch-potential") =>
+                  accessDimension(expression.operands, potential = true)
+                case Some("flow_access") | Some("candidate-branch-flow") =>
+                  accessDimension(expression.operands, potential = false)
+                case Some("candidate-analog-state") =>
+                  expression.operands.collectFirst { case state: AnalogState =>
+                    physicalDimension(state.dimension)
+                  }.getOrElse(AnalogDimension.Unknown)
+                case Some("analog_abstime") => AnalogDimension.Time
+                case Some("candidate-analysis-time") => AnalogDimension.Time
+                case Some("candidate-analysis-frequency") =>
+                  AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
+                case Some("candidate-environment-temperature") |
+                    Some("candidate-environment-nominal-temperature") =>
+                  AnalogDimension.Temperature
+                case Some("candidate-operating-condition") | Some("candidate-sweep-coordinate") =>
+                  expression.operands.collectFirst { case dimension: PhysicalDimension =>
+                    physicalDimension(dimension)
+                  }.getOrElse(AnalogDimension.Unknown)
+                case _ =>
+                  expression.operands.headOption.map(visit)
+                    .getOrElse(AnalogDimension.Unknown)
+        case dimension: PhysicalDimension => physicalDimension(dimension)
+        case _ => AnalogDimension.Unknown
 
   private def accessDimension(values: Vector[Any], potential: Boolean): AnalogDimension =
     val discipline = values.collectFirst:

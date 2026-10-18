@@ -1,5 +1,7 @@
 # Source-Level and Transaction-Aware Debugging v0.1 plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Track ID:** `source-level-debugging`
 **Increment prefix:** `DBG`
 **Revision:** 0.1
@@ -133,6 +135,7 @@ All checkboxes below are open. Dependency names are prerequisites, not claims of
 current implementation or qualification.
 
 - [ ] **DBG-001 — Debug semantics, scope and reuse design gate**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Freeze source/value/instance/time identities, the manifest schema, visibility
     states, debug profiles, pure watch-expression rules and capability reporting.
   - Evaluate an hgdb adapter against the existing simulator/HVL boundary. Record
@@ -143,6 +146,7 @@ current implementation or qualification.
   - **Depends on:** complete Foundation only.
 
 - [ ] **DBG-002 — Compiler origin capture and versioned debug metadata**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Carry source spans, stable operation/value identities, lexical helper names,
     aliases, logical types, field paths and domain context through the Scala
     bridge into authoritative MLIR; reuse Foundation metadata.
@@ -153,6 +157,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-001`.
 
 - [ ] **DBG-003 — Transformation-aware mappings and honest value recovery**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Update origin relations for inlining, common-subexpression sharing, folding,
     elimination, aggregate lowering, reduction trees and register materialization.
     Preserve one-to-many and many-to-one mappings with explicit reasons.
@@ -164,6 +169,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-002`.
 
 - [ ] **DBG-004 — Parameterized hierarchy binding and artifact integrity**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Bind manifests to actual simulator parameter values, nested generate indices,
     logical aggregates, memories where observable, and selected hardware instances.
     Preserve Nodal's parameterized module policy without debug-driven cloning.
@@ -174,6 +180,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-003`.
 
 - [ ] **DBG-005 — Source-aware recorded waveforms and value inspection**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Add one qualified recorded-trace format first, with format/version/time-unit
     metadata and an adapter boundary for others. Map logical field/index paths,
     enum values and source operations onto captured signals and bit ranges.
@@ -185,6 +192,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-004`.
 
 - [ ] **DBG-006 — Source-linked failure reports and Release A qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Connect existing assertion/property/failure IDs to source span, selected
     instance, run/seed/build identity and the matching trace window. Import only
     qualified existing failure formats; do not build a verification runtime here.
@@ -197,6 +205,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-005`. **Release A exit.**
 
 - [ ] **DBG-007 — Existing-runtime adapter and one-simulator feasibility gate**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Prototype the Nodal-manifest-to-hgdb route selected at `DBG-001`. Validate
     signal visibility, pause/resume, callbacks, safe observation phases and
     process lifecycle on the exact pinned digital simulator build.
@@ -209,6 +218,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-006` and the qualified read-only digital adapter.
 
 - [ ] **DBG-008 — Read-only live breakpoints, watches and hardware stepping**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Add instance-scoped source breakpoints and restricted pure conditional
     expressions, watches, continue/pause, source-debug-point stepping and
     selected-domain clock stepping. Present every stop's exact time/phase.
@@ -221,6 +231,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-007` with an accepted reuse/integration decision.
 
 - [ ] **DBG-009 — Thin console/editor integration and Release B qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Reuse the selected runtime's frontend/protocol where practical. Supply a
     minimal console and one supported editor path; keep mappings and simulation
     semantics out of editor-specific code.
@@ -233,6 +244,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-008`. **Release B exit.**
 
 - [ ] **DBG-010 — Scheduled source-to-stage and state mapping**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Consume the qualified `SQ` SSA/value versions, schedule anchors, stage cuts,
     liveness, inserted storage, predicates and protocol metadata. Explain which
     hardware implements an operation and which local values are not registers.
@@ -243,6 +255,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-006` and `SQ-010`. Live UI additionally needs `DBG-009`.
 
 - [ ] **DBG-011 — Transaction lifecycle tracking and Release C qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Follow accepted transactions through fixed, valid-only and elastic profiles;
     account for bubbles, stalls, ready/valid acceptance, backpressure, reset/flush
     and configuration/reset epochs supported by the qualified `SQ` profile.
@@ -256,6 +269,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-010` and `SQ-010`. **Release C exit.**
 
 - [ ] **DBG-012 — Advanced scheduled loops, tasks, memory and ordered effects**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Observe qualified iterations, partial unrolling, recurrences, memory accesses,
     shared operators, variable-latency external operations, task/channel joins,
     cancellation and committed effects using their authoritative `SQ` identities.
@@ -267,6 +281,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-011` and `SQ-024`.
 
 - [ ] **DBG-013 — Additional simulator and bounded recorded replay profiles**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Qualify a second digital adapter only after the first live release; evaluate
     the independent event-driven Icarus profile with its own four-state and
     scheduling evidence. Keep other commercial backends optional.
@@ -279,6 +294,7 @@ current implementation or qualification.
   - **Depends on:** `DBG-009` and qualified additional adapter/trace capabilities.
 
 - [ ] **DBG-014 — Full-track evidence, cost limits and release documentation**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Qualify all declared profiles using source/actual generated HDL/run/trace
     manifests, deterministic mappings and mismatch/availability negative tests.
     Keep the initial digital boundary explicit; no analog solver, on-chip probe,

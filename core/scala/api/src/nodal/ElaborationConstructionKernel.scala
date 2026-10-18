@@ -105,13 +105,40 @@ private[nodal] object ConstructionKernel:
       ).get
     )
 
+  def requireNoGeneratedEffect(role: String): Unit =
+    active.foreach(_.requireNoGeneratedEffect(role))
+
+  def generatedRegionOwnership: Option[(String, String)] =
+    active.flatMap(_.generatedRegionOwnership)
+
+  def generatedRegion(
+      lower: Int | Expr[Integer],
+      upperExclusive: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => Unit): Unit =
+    active match
+      case Some(session) =>
+        session.withGeneratedRegion(lower, upperExclusive, step, maximum)(body)
+      case None =>
+        scala.util.Failure[Unit](
+          new IllegalStateException("hdlRange requires an active Module")
+        ).get
+
   def captureAnalogProceduralSource: Option[AnalogProceduralRuntime.Source] =
     active.flatMap(_.captureAnalogProceduralSource)
 
   def analogDimension(value: Any): Option[String] =
     active.map(_.inferAnalogDimension(value).canonical)
 
+  def requireProceduralSources(expressions: Vector[KernelExpr[?]]): Unit =
+    active.foreach(_.requireProceduralSources(expressions))
+
   def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+
+  def proceduralShapeDimension(value: Any): String =
+    active.getOrElse(throw new IllegalStateException("shape requires active construction"))
+      .proceduralShapeDimension(value)
 
   def analogEventConstant(value: Any): Option[Double] = value match
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
@@ -134,25 +161,71 @@ private[nodal] object ConstructionKernel:
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
 
+  def declareNodeArray(
+      value: NodeArray[?],
+      discipline: Discipline,
+      dimensions: Vector[Dimension],
+      kind: KernelSignalKind
+  ): Unit =
+    active.getOrElse(throw new IllegalStateException("node array requires an active Module"))
+      .registerNodeArray(value, discipline, dimensions, kind)
+
+  def projectNodeArray(value: NodeArray[?], origin: NodeArrayProjection): Unit =
+    active.getOrElse(throw new IllegalStateException("node array view requires an active Module"))
+      .registerNodeArrayProjection(value, origin)
+
+  def selectNodeArray(
+      value: Node[?],
+      array: NodeArray[?],
+      indices: Vector[Dimension]
+  ): ExpressionRef =
+    active.getOrElse(
+      throw new IllegalStateException("node array selection requires an active Module")
+    )
+      .registerNodeSelection(value, array, indices)
+
+  def shapeIndex[A <: Data, B <: Data](
+      expression: KernelExpr[B],
+      input: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Unit = active match
+    case Some(session) => session.registerShapeIndex(expression, input, indices)
+    case None => ()
+
+  def shapeView[A <: Data](
+      expression: KernelExpr[Vec[A]],
+      input: Expr[Vec[A]],
+      dimensions: Vector[Dimension],
+      slice: Option[ShapeSliceSelection] = None
+  ): Unit = active match
+    case Some(session) => session.registerShapeView(expression, input, dimensions, slice)
+    case None => ()
+
   def defineUserFunction[A <: Data](
       name: String,
       resultType: DataType[A],
       dimension: PhysicalDimension,
       body: AnalogFunctionBody => Expr[A]
   ): AnalogFunction[A] = active match
-    case Some(session) => session.defineUserFunction(name, resultType, dimension, body)
+    case Some(session) =>
+      session.requireNoGeneratedEffect("analog function definition")
+      session.defineUserFunction(name, resultType, dimension, body)
     case None => AnalogUserFunctionRuntime.fail(1, "analog function requires an active Module")
 
   def callUserFunction[A <: Data](
       function: AnalogFunction[A],
       arguments: Vector[Expr[?]]
   ): Expr[A] = active match
-    case Some(session) => session.callUserFunction(function, arguments)
+    case Some(session) =>
+      session.requireNoGeneratedEffect("analog function call")
+      session.callUserFunction(function, arguments)
     case None => AnalogUserFunctionRuntime.fail(1, "analog function call requires an active Module")
 
   def analogFunction(value: KernelExpr[Real], id: String): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then
-      active.foreach(_.registerAnalogFunction(value, id))
+      active.foreach: session =>
+        session.requireNoGeneratedEffect("analog function expression")
+        session.registerAnalogFunction(value, id)
 
   def continuousOperator(
       value: KernelExpr[Real],
@@ -160,9 +233,10 @@ private[nodal] object ConstructionKernel:
       input: Expr[Real],
       initialValue: Option[Expr[Real]]
   ): Unit =
-    active.foreach(
-      _.registerContinuousOperator(value, operation, input, initialValue)
-    )
+    active.foreach: session =>
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"continuous-time operator '$operation'")
+      session.registerContinuousOperator(value, operation, input, initialValue)
 
   def transferOperator(
       value: KernelExpr[Real],
@@ -172,6 +246,8 @@ private[nodal] object ConstructionKernel:
       inputs: Vector[Expr[Real]]
   ): Unit = active match
     case Some(session) =>
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"analog transfer operator '$kind'")
       session.registerTransferOperator(value, kind, numeratorSize, denominatorSize, inputs)
     case None => AnalogTransferContract.fail(1, "transfer state requires an active Module")
 
@@ -181,7 +257,10 @@ private[nodal] object ConstructionKernel:
       label: String,
       inputs: Vector[Expr[Real]]
   ): Unit = active match
-    case Some(session) => session.registerNoiseOperator(value, kind, label, inputs)
+    case Some(session) =>
+      if !session.generatedContinuousRegionActive then
+        session.requireNoGeneratedEffect(s"analog noise operator '$kind'")
+      session.registerNoiseOperator(value, kind, label, inputs)
     case None => AnalogNoiseContract.fail(1, "noise sources require an active Module construction")
 
   def waveformOperator(
@@ -189,11 +268,44 @@ private[nodal] object ConstructionKernel:
       operation: String,
       inputs: Vector[Expr[Real]]
   ): Unit =
-    active.foreach(_.registerWaveformOperator(value, operation, inputs))
+    active.foreach: session =>
+      val ownedGeneratedWaveform =
+        session.generatedContinuousRegionActive &&
+          Set(
+            "analog_transition",
+            "analog_slew",
+            "analog_absdelay",
+            "analog_abstime",
+            "analog_bound_step"
+          ).contains(operation)
+      if !ownedGeneratedWaveform then
+        session.requireNoGeneratedEffect(s"analog waveform operator '$operation'")
+      session.registerWaveformOperator(value, operation, inputs)
 
   def waveformForbidden[A](body: => A): A = active match
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
+
+  def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    )
+      .withInstanceSelection(instance)(body)
+
+  def nodeArrayUse[D <: Discipline](value: NodeArray[D]): NodeArray[D] =
+    active.getOrElse(throw new IllegalStateException("node array requires active construction"))
+      .nodeArrayUse(value)
+
+  def declareInstanceNodeArray(
+      value: NodeArray[?],
+      instance: Instance[?],
+      port: NodeArray[?]
+  ): Unit =
+    active.getOrElse(throw new IllegalStateException("instance array requires active construction"))
+      .registerInstanceNodeArray(value, instance, port)
+
+  def validateInstanceSelection(instance: Instance[?]): Unit =
+    active.foreach(_.validateInstanceSelection(instance))
 
   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
     active.foreach(_.attachInstance(instance, child))
@@ -203,6 +315,10 @@ private[nodal] object ConstructionKernel:
 
   def bindNamed(instance: Instance[?], requirement: ClockDomain, domain: ClockDomain): Unit =
     active.foreach(_.bindNamed(instance, requirement, domain))
+
+  def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
+    active.getOrElse(throw new IllegalStateException("array binding requires an active Module"))
+      .connectNodeArrays(left, right)
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     active.foreach(_.connectNodes(left, right))
@@ -217,13 +333,22 @@ private[nodal] object ConstructionKernel:
   def block[A](body: => A): A = body
 
   def analogBlock[A](body: => A): A = active match
-    case Some(session) => session.withAnalogRegion(body)
+    case Some(session) =>
+      if !session.generatedRegionActive then
+        session.requireNoGeneratedEffect("analog continuous region")
+      session.withAnalogRegion(body)
     case None => body
 
   def analogSemanticBlock[A](
       kind: AnalogEquationRuntime.RegionKind
   )(body: => A): A = active match
-    case Some(session) => session.withAnalogSemanticRegion(kind)(body)
+    case Some(session) =>
+      val ownedGeneratedProcedure =
+        kind == AnalogEquationRuntime.RegionKind.Procedural &&
+          AnalogProceduralConstruction.generatedProcedureActive
+      if !ownedGeneratedProcedure then
+        session.requireNoGeneratedEffect(s"analog ${kind.toString.toLowerCase} region")
+      session.withAnalogSemanticRegion(kind)(body)
     case None => body
 
   def analogEquation(

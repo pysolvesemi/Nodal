@@ -1,5 +1,7 @@
 # Sequential Scheduled Hardware v0.1 roadmap
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Track ID:** `sequential-scheduled-hardware`  
 **Increment prefix:** `SQ`, starting independently at `SQ-001`  
 **Revision:** 0.1  
@@ -472,9 +474,10 @@ values, order, cardinality and effects. Stuttering equivalence alone does not
 prove performance or eventual progress; liveness claims state fairness and bound
 assumptions explicitly.
 
-Every implementation increment requires relevant positive and negative fixtures,
-source-correlated diagnostics, retained IR/RTL/report artifacts and existing
-repository gates. Use Foundation's direct internal verification infrastructure;
+Every implementation increment uses focused local positive and negative fixtures,
+source-correlated diagnostics, concise relevant IR/RTL evidence and a lightweight
+architecture review under the prototype execution policy. No CI, full-track
+qualification or exhaustive proof matrix is an increment merge gate. Use Foundation's direct internal verification infrastructure;
 SQ does not require the complete dependent HVL/UVM track merely to test hardware.
 A later optional HVL integration must not create a circular dependency.
 
@@ -496,9 +499,10 @@ Required fixture families include:
 - public-library-only consumers, deterministic readable names, one symbolic
   module per structure, source/report correlation and target capability failures.
 
-For supported digital profiles retain independent Verilator/Icarus simulation,
-Yosys synthesis and applicable bounded/unbounded formal evidence through the
-repository's pinned flows. Declare two-/four-state scope; do not count unsupported,
+Use an appropriate focused digital-profile check from the available
+Verilator/Icarus simulation, Yosys synthesis or bounded formal fixtures when it
+resolves a concrete risk in the affected logic; do not require every tool or
+full proof matrix before prototype merge. Declare two-/four-state scope; do not count unsupported,
 unknown, skipped or timed-out work as passed. Large-state formal limitations must
 be reported honestly alongside the tested/proven subset.
 
@@ -512,6 +516,7 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
 ### Release A — ordered pure computation and flexible pipelines
 
 - [ ] **SQ-001 — Semantic/API gate and capture feasibility**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on complete Foundation, including SQF-001–004.
   - Freeze versioned semantic rules, minimal spellings, Scala capture/fallback,
     diagnostics, positive/negative compile prototypes and external-library usage.
@@ -519,18 +524,21 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
     unsupported and supported syntax; no claim that all Scala is synthesizable.
 
 - [ ] **SQ-002 — Sequential locals and authoritative SSA lowering**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-001. Capture local binds/reassignments/snapshots, definite
     assignment, explicit conversions and source identities into Nodal MLIR.
   - Exit: independent reference parity for pure combinational kernels, no accidental
     persistent state, and negative host-effect/escaping-local fixtures.
 
 - [ ] **SQ-003 — Branches, aggregate updates and joins**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-002. Implement supported typed conditions/matches, branch result
     merges and value-semantic Struct/Vec updates; preserve arithmetic and shape.
   - Exit: exhaustive/incomplete branch cases, old/new aggregate snapshots and
     signed/width/alias diagnostics, including unsupported native Scala forms.
 
 - [ ] **SQ-004 — Hard cuts, liveness and fixed/valid alignment**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-003. Lower whole-frontier cuts and existing value/same-stage
     anchors through Foundation pipeline infrastructure, with field-sensitive
     liveness and all late data/control/sideband inputs aligned.
@@ -538,24 +546,28 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
     examples; reports account for every inserted transport register.
 
 - [ ] **SQ-005 — Elastic sequential regions and lifecycle**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-004. Integrate existing elastic stages, readiness, capacity,
     bubbles, reset, flush and drain without an independent protocol engine.
   - Exit: stalled-output stability, conservation/order, no duplicate tokens and
     simultaneous reset/stall/flush corner cases pass the applicable checks.
 
 - [ ] **SQ-006 — Helpers, higher-order kernels and nested scopes**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-004. Capture certified helper/callback bodies and explicit
     captures; schedule across transparent calls while preserving local names.
   - Exit: nested constraints and opaque/latency/domain barriers compose correctly;
     helper abstraction does not force registers or lose source provenance.
 
 - [ ] **SQ-007 — Declarative schedule policies and stable anchors**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-006. Add immutable scheduling views, validated decisions,
     semantic selectors, hard/soft precedence and reproducibility metadata.
   - Exit: illegal mutation, unmatched required anchors, symbolic-width ambiguity
     and conflicting nested constraints produce stable diagnostics.
 
 - [ ] **SQ-008 — Symbolic bounded loops, folds and scans**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-003, SQ-004 and SQ-006. Support strict loop carries and nested
     static/symbolic hardware iteration; integrate qualified balanced reductions
     and per-level hooks rather than a duplicate reduction framework.
@@ -563,12 +575,14 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
     semantics and parameter identity; illegal reassociation is rejected.
 
 - [ ] **SQ-009 — Timing/envelope-aware scheduling and bounded retiming**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-007 and SQ-008. Reuse timing models and register ownership;
     schedule within exact/ranged latency and parameter-envelope contracts.
   - Exit: infeasible indivisible operators, absent models and forbidden boundary
     movement fail explicitly; all estimated timing claims retain model provenance.
 
 - [ ] **SQ-010 — Release A qualification and user documentation**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-005 and SQ-009. Qualify independent semantics/RTL comparison,
     backpressure/formal fixtures, portable Verilog and readable deterministic
     parameterized output. Publish small examples and a capability matrix.
@@ -578,54 +592,63 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
 ### Release B — explicit iteration, state and hardware services
 
 - [ ] **SQ-011 — Explicit temporal iteration and bounded FSM lowering**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-010. Gate the iterative API, invocation lifecycle, loop counters,
     loop-carried storage, completion and exact/bounded latency terminology.
   - Exit: rolled versus spatial implementations match the same logical algorithm;
     `hwRange` outside explicit temporal execution retains its original meaning.
 
 - [ ] **SQ-012 — Persistent state, recurrence and visibility**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-011. Implement owned state contexts, state snapshot/update,
     declared linearization, reset and serialized state transitions first.
   - Exit: running-sum/CRC fixtures and cancellation cases show exactly when state
     changes; unsafe overlapping state use or implicit captured Reg writes fail.
 
 - [ ] **SQ-013 — Pipelined loops and partial unrolling**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-012 and SQ-009. Implement recurrence/resource bounds, prologue,
     steady-state/epilogue, iteration tags, explicit partial unroll and tails.
   - Exit: achieved versus requested II is reported; impossible hard II fails;
     no hidden reassociation or independent-context substitution occurs.
 
 - [ ] **SQ-014 — Memory ports, aliases and scratchpad scheduling**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-011 and SQ-012. Bind the existing memory model; implement typed
     requests, latency/order, bounds, alias checking and conservative port use.
   - Exit: read/write hazards and stall behavior match the memory contract;
     unknown aliasing cannot be waved away to achieve throughput.
 
 - [ ] **SQ-015 — Fixed and variable-latency ExternalOp integration**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-005 and SQ-011. Bind explicit ExternalModule implementations,
     operator latency/II, non-stallable response capacity and request identity.
   - Exit: delayed/outstanding results, reset/cancel and missing model failures are
     covered; a declared module alone is not counted as an executing model.
 
 - [ ] **SQ-016 — Structured parallel regions and bounded channels**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-005, SQ-006 and SQ-011. Add bounded fork/join, explicit channel
     ownership, lockstep/tagged joins, merge/arbitration and progress contracts.
   - Exit: no cross-invocation pairing, bounded storage and useful cycle/deadlock
     diagnostics; arbitrary HVL or host concurrency is not accepted implicitly.
 
 - [ ] **SQ-017 — Explicit resource sharing and binding**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-013, SQ-014 and SQ-015. Add resource budgets, operator occupancy,
     deterministic arbitration/binding and spill/storage cost reporting.
   - Exit: one-versus-many-unit examples preserve semantics and report changed
     latency/II; an unmet resource budget is never silently exceeded.
 
 - [ ] **SQ-018 — Bounded dynamic loops and structured exits**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-011 and SQ-012. Gate runtime predicates, break/continue/early
     return, maximum iterations, limit results and in-flight drain behavior.
   - Exit: all exits conserve transactions/effects; wall-clock timeouts and loop
     bounds remain distinct; unbounded synthesizable execution remains rejected.
 
 - [ ] **SQ-019 — Ordered effects, cancellation and configuration epochs**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-012, SQ-014, SQ-015 and SQ-018. Add explicit commit barriers,
     effect ordering, exactly-once acceptance and configuration snapshot epochs.
   - Exit: stalls/retries/flush never duplicate writes; irrevocable operations and
@@ -634,12 +657,14 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
 ### Release C — reusable algorithm families and scalable optimization
 
 - [ ] **SQ-020 — Streaming algebra, windows and cardinality contracts**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-013, SQ-016, SQ-018 and SQ-019. Compose map/scan/window/batch,
     strict/qualified reductions, filter and bounded expansion on explicit channels.
   - Exit: packet/frame metadata, completion and backpressure remain correct through
     rate changes; examples use only public core contracts.
 
 - [ ] **SQ-021 — Schedule-polymorphic libraries and interface contracts**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-006, SQ-007, SQ-009 and SQ-010. Package reusable kernels with
     transparent/opaque boundaries, caller policies, stable ABI/latency and symbolic
     parameter contracts; gate any symbolic-latency/structural schedule extension.
@@ -647,6 +672,7 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
     module cloning; optional libraries remain independent of compiler internals.
 
 - [ ] **SQ-022 — Verified loop/dataflow transformations**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-008, SQ-013, SQ-014 and SQ-017. Add individually gated fusion,
     fission, interchange, tiling, banking, explicit context interleaving and lawful
     reassociation only where dependence/numeric/effect proofs allow them.
@@ -654,16 +680,19 @@ not prerequisites for using the pure sequential layer after SQ-010 qualifies.
     unsupported cases fail or remain unchanged under an explicitly soft policy.
 
 - [ ] **SQ-023 — Schedule explanation, locking and exploration**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-007, SQ-009 and SQ-010. Extend baseline reports with source-level
     register/latency/II explanations, constraint conflict sets, schedule diffs,
     explicit locked schedules and optional reproducible design-space sweeps.
   - Exit: repeated builds reproduce schedules; changed tool/model/policy/envelope
     invalidates the correct evidence; no synthesis estimate is called sign-off.
 
-- [ ] **SQ-024 — Full-track qualification and capability release**
+- [ ] **SQ-024 — Prototype capability summary and release**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Depends on SQ-010, SQ-017, SQ-019, SQ-020, SQ-021, SQ-022 and SQ-023.
-  - Qualify representative pixel arithmetic, FIR/reduction, CRC/scan, iterative
-    arithmetic, memory processing and task networks through supported tool profiles.
+  - Summarize implemented pixel arithmetic, FIR/reduction, CRC/scan, iterative
+    arithmetic, memory processing and task-network capabilities. Run only focused
+    positive/negative regressions for newly affected logic; no full-track rerun.
   - Exit: publish evidence and performance/resource tradeoffs, known limitations,
     migration policy and traceability; unsupported targets/features are not passed.
 

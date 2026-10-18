@@ -56,11 +56,18 @@ object Vec:
   def apply[A <: Data](element: DataType[A], dimensions: Dimension*): DataType[Vec[A]] =
     CandidateRuntime.dataType[Vec[A]]("Vec", element, dimensions.toSeq)
 
+  def fill(dataType: DataType[Vec[Real]])(value: Expr[Real]): Expr[Vec[Real]] =
+    CandidateRuntime.shapeFill(dataType, value)
+
 extension [A <: Data](value: Expr[Vec[A]])
-  def at(indices: Dimension*): Expr[A] = CandidateRuntime.expr(value, indices)
-  def flatten: Expr[Vec[A]] = CandidateRuntime.expr(value, "flatten")
+  def at(indices: Dimension*): Expr[A] = CandidateRuntime.shapeIndex(value, indices.toVector)
+  def row(index: Dimension): Expr[Vec[A]] = CandidateRuntime.shapeRow(value, index)
+  def plane(index: Dimension): Expr[Vec[A]] = CandidateRuntime.shapePlane(value, index)
+  def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): Expr[Vec[A]] =
+    CandidateRuntime.shapeSlice(value, lower, upperExclusive, axis)
+  def flatten: Expr[Vec[A]] = CandidateRuntime.shapeFlatten(value)
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
-    CandidateRuntime.expr(value, dimensions, "reshape")
+    CandidateRuntime.shapeView(value, dimensions.toVector)
   def map[B <: Data](function: Expr[A] => Expr[B]): Expr[Vec[B]] =
     CandidateRuntime.expr(value, function, "map")
   def zip[B <: Data](other: Expr[Vec[B]]): Expr[Vec[A]] =

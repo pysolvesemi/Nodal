@@ -5,6 +5,36 @@ retains existing increment IDs, parent/child progress and historical evidence.
 Read its forward plans together with the approved scoped amendments below.
 The main file is not rewritten by this index.
 
+## Prototype execution policy
+
+The owner approved this process on **2026-10-18** for every current and future
+Foundation and dependent-track increment. The canonical policy is
+[`AGENTS.md` — prototype validation and merge](../../AGENTS.md#prototype-validation-and-merge).
+It supersedes older execution and closure requirements in this index, every
+linked plan and its machine-readable surface, and historical readiness notes.
+
+- Do not run CI, full qualification, broad regression matrices or hourly monitors.
+- Run focused local positive and negative tests/checks for the affected increment
+  and logic, including a small directly affected regression when needed.
+- Record a lightweight architecture review of module boundaries, reuse,
+  dependency direction and scalability so later roadmap work is not obstructed.
+  A self-review is sufficient; independent review is optional.
+- A branch may merge once its focused checks and architecture review pass.
+  Keep verified `[x]` entries and brief notes in the existing checklists. Store
+  generated logs, evidence, reports, caches and scratch only in the ignored
+  repository-root `.work/` directory; do not commit them. Concise maintained
+  checklist/design/handoff notes remain source documentation. Separate accepted-evidence closure and exact-head CI
+  receipts are not prototype merge requirements.
+- Fix known failures in the changed logic. Undiscovered defects may be fixed in a
+  later increment or after a user report; exhaustive proof is not required first.
+
+Existing IDs, dependencies, product feature goals and accepted historical
+records remain intact. Tool-capability and sign-off claims still describe only
+what was actually exercised; unrun broad matrices and unavailable tools are
+recorded as unrun, not passing. Product validation facilities can be developed
+and checked on focused fixtures without making their full execution a gate for
+every prototype increment. Historical completed checkboxes stay completed.
+
 ## Current approved amendments
 
 ### Lightweight hierarchy and unified HDL iteration
@@ -73,13 +103,30 @@ without duplicate status or reverse parent dependencies. The bounded additive
 configuration gate is owned by 65. No new numbered increment, 43 prerequisite,
 SystemVerilog dependency, implementation start or completed checkbox is added.
 
+### Areas and symbolic structural conditionals
+
+[Areas and symbolic structural conditionals](areas-symbolic-conditionals-v0.1-plan.md)
+records the owner's 2026-10-10 approval of lightweight `new Area`, typed
+`hdlRange` Area collections, direct static member access, ordinary-looking
+symbolic parameter/index `if/else`, value-producing branches and parameter-aware
+behavioral `when`. It extends the older explicit-only conditional direction
+through a bounded future compiler-capture/API gate; host-only Scala control and
+ordinary ranges retain their meaning. No `staticIf` is required for common use.
+
+Its 11 new descendants belong to existing 55/56/58/153/159/65-67 obligations and
+live only in that plan. It includes the approved Scala/Verilog acceptance pair,
+ownership/driver/rejection requirements and independent qualification handoffs.
+It adds no numbered increment, F-043 prerequisite, SystemVerilog dependency or
+implementation claim. Historical API gates and acceptance remain unchanged.
+
 ## Ownership and status
 
 The main file owns its existing states, the lightweight amendment owns its
 previously added descendants, the modularization plan owns only F-160 and its
 descendants, the compact scalar declaration amendment owns only its listed
 new F-097 descendants, and the portable-Verilog Vec amendment owns only its
-listed new 54/58/65-67/159 descendants.
+listed new 54/58/65-67/159 descendants. The Area/conditional amendment solely
+owns its listed new 55/56/58/153/159/65-67 descendants.
 Parent completion requires all applicable children and explicit prerequisites
 across these linked documents. Planning updates do not complete checkboxes;
 existing IDs and accepted evidence remain unchanged.
@@ -90,6 +137,6 @@ shared capture), 55-58/159 (digital semantics and unified iteration), 96
 refinement). Portable-Verilog Vec work additionally belongs to 54/58/65-67/159,
 with 83-88 preservation and 92 documentation through their existing obligations.
 No new repository, mandatory Rust rewrite, semantic redesign or reverse
-prerequisite for 42 is introduced. `AGENTS.md` is unchanged.
-These planning amendments are not implementation or acceptance evidence;
-future implementation and closure still require their applicable qualification.
+prerequisite for 42 is introduced. These planning amendments are not
+implementation evidence. Future work follows the prototype execution policy
+above, including focused checks and architecture review.

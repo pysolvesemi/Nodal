@@ -1,5 +1,7 @@
 # Visualizer-Class Interactive Debug and Analysis v0.1 plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Track ID:** `visualizer-debug-extension`  
 **Increment prefix:** `DBGX`  
 **Revision:** 0.1  
@@ -169,6 +171,7 @@ All checkboxes are open. Every increment inherits the complete Foundation barrie
 and the local dependencies written below.
 
 - [ ] **DBGX-001 — Extension semantics, profiles and adapter design gate**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Freeze the user model for synchronized source/wave/schematic views, selected
     instance and time, graph layer labels, availability states and capability
     reporting.
@@ -182,6 +185,7 @@ and the local dependencies written below.
   - **Depends on:** complete Foundation and `DBG-001`.
 
 - [ ] **DBGX-002 — Versioned debug service and workspace protocol**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Define a backend-neutral query/event protocol for builds, manifests, source
     spans, hierarchy, logical values, simulator time/phases, waveform cursors,
     graph nodes/edges, capabilities and errors.
@@ -192,6 +196,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-001` and `DBG-006`.
 
 - [ ] **DBGX-003 — Embedded waveform integration and bidirectional navigation**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Integrate one qualified waveform viewer/adapter, with Surfer evaluated first,
     for recorded traces and later live windows.
   - Support source or logical-value selection to waveform signals, and waveform
@@ -201,6 +206,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-002`, `DBG-005` and `DBG-006`.
 
 - [ ] **DBGX-004 — Driver/load graph and selected-instance connectivity**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Build a lazy debug graph from authoritative Nodal IR and transformation maps.
     Represent drivers, consumers, aliases, ports, instances, registers, memories,
     operations and qualified cross-domain boundaries.
@@ -211,6 +217,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-002`, `DBG-004` and `DBG-006`.
 
 - [ ] **DBGX-005 — Interactive schematic and logic-cone exploration**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Render bounded, expandable schematics from `DBGX-004`; avoid unreadable
     whole-chip graphs by default.
   - Add upstream/downstream cone, boundary collapse/expand, hierarchy navigation,
@@ -220,6 +227,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-004`.
 
 - [ ] **DBGX-006 — Live synchronized workspace and Release A qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Combine source, hierarchy, watches, waveform, connectivity and schematic views
     with the read-only live controls qualified by `DBG-009`.
   - Keep time/phase, selected clock domain and pre-update/settled value semantics
@@ -231,6 +239,7 @@ and the local dependencies written below.
     **Release A exit.**
 
 - [ ] **DBGX-007 — Bounded reverse and replay navigation**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Add backward/forward movement through recorded source points, clock edges and
     events inside an explicit capture window. Evaluate CXXRTL/CDSP or the qualified
     `DBG-013` replay transport without making either semantic authority.
@@ -241,6 +250,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-006` and `DBG-013`.
 
 - [ ] **DBGX-008 — Pipeline and transaction timeline with Release B qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Visualize accepted transactions, stages, bubbles, stalls, backpressure,
     reset/flush epochs and output association using `DBG-010`/`DBG-011` identities.
   - Support source-operation, stage and transaction selection across source,
@@ -252,6 +262,7 @@ and the local dependencies written below.
     **Release B exit.**
 
 - [ ] **DBGX-009 — Temporal causal graph and “why this value” analysis**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Combine static dependencies with qualified waveform history, register update
     rules, clock/reset domains, predicates and transaction identity.
   - Explain a selected value/event through bounded combinational and sequential
@@ -262,6 +273,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-005`, `DBGX-007`, `DBG-010` and `DBG-011`.
 
 - [ ] **DBGX-010 — Four-state X root-cause tracing and Release C qualification**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Trace X/Z introduction and propagation through supported operations, resets,
     uninitialized storage, mux controls and declared cross-domain boundaries.
   - Require a qualified four-state simulator/trace profile. A two-state backend
@@ -272,6 +284,7 @@ and the local dependencies written below.
     **Release C exit.**
 
 - [ ] **DBGX-011 — Imported RTL/SystemVerilog structural adapters**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Add optional Yosys/UHDM-style adapters for hierarchy/connectivity when Nodal IR
     is unavailable. Keep imported nodes clearly separated from Nodal semantic
     nodes and preserve source/file/module identities where the adapter provides
@@ -283,6 +296,7 @@ and the local dependencies written below.
   - **Depends on:** `DBGX-005` and an independently qualified structural adapter.
 
 - [ ] **DBGX-012 — Full-track evidence, budgets and Release D documentation**
+  - [ ] **Architecture review:** Check modular boundaries, reuse, dependency direction and scalability for later increments; record a concise self-review.
   - Qualify every declared profile and adapter with reproducible Nodal source,
     actual generated Verilog-*, debug manifests, traces and workspace evidence.
   - Enforce approved `off` overhead, non-instrumented HDL identity, instrumented

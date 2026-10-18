@@ -1,5 +1,7 @@
 # Nodal register factory v0.1 plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Revision:** 0.1
 **Created:** 2026-08-22
 **Status:** Architecture accepted; API and implementation deferred
@@ -262,7 +264,7 @@ When register geometry depends on Nodal parameters:
 - symbolic exports are allowed only when the target format represents the formulas losslessly;
 - concrete software artifacts must state their resolved parameter values;
 - cache keys include register semantic hash and parameter configuration;
-- CI rejects RTL/artifact configuration mismatches.
+- Focused local negative checks reject RTL/artifact configuration mismatches.
 
 ## Canonical access endpoint
 

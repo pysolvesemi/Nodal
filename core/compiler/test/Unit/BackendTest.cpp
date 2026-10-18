@@ -2481,7 +2481,7 @@ int main() {
   nestedPeerScaledIdtSource.replace(nestedPeerScaledOperand,
                                     std::string("%branch, %integral").size(), "%branch, %scaled");
 
-  for (llvm::StringRef mutation : {"valid", "fanout"}) {
+  for (llvm::StringRef mutation : {"valid", "fanout", "negative-origin"}) {
     auto candidate = parse(context, nestedPeerScaledIdtSource);
     if (!candidate)
       return fail("could not parse nested peer scaled idt fixture");
@@ -2513,6 +2513,28 @@ int main() {
     if (!rootTerminal || !rootTerminal->use_empty())
       return fail("nested peer scaled idt retained its root endpoint");
     rootTerminal->erase();
+    if (mutation == "negative-origin") {
+      llvm::SmallVector<mlir::Operation *, 2> ranges;
+      candidate->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *operation) {
+        if (operation->getName().getStringRef() == "nodal.generate")
+          ranges.push_back(operation);
+      });
+      if (ranges.size() != 2)
+        return fail("negative-origin nested peer scaled idt lost its two ranges");
+      auto integer = [&](int64_t value) {
+        return mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), value);
+      };
+      auto setUnitRange = [&](mlir::Operation *range, int64_t lower, int64_t upper) {
+        range->setAttr("lower", integer(lower));
+        range->setAttr("upper", integer(upper));
+        range->setAttr("step", integer(1));
+        mlir::NamedAttrList metadata(range->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+        metadata.set("maximum_trip_count", integer(upper - lower));
+        range->setAttr("metadata", metadata.getDictionary(&context));
+      };
+      setUnitRange(ranges[0], -2, 2);
+      setUnitRange(ranges[1], -3, 1);
+    }
     if (mutation == "fanout") {
       mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
       state.addOperands(scaled->getResult(0));
@@ -2527,16 +2549,25 @@ int main() {
     const bool accepted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation == "fanout") {
       if (accepted || output != "sentinel")
         return fail("nested peer scaled idt fanout escaped or published partial output");
       continue;
     }
-    const std::string equation = "V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
-                                 nestedFlatIndex + "]) <+ (idt((V(nestedTap[" + nestedFlatIndex +
-                                 "], nestedReturn[" + nestedFlatIndex + "]) / 1), 0) / 2);";
+    const std::string index =
+        mutation == "negative-origin"
+            ? "(((generate_0_index - -2) * (1 - -3)) + (generate_1_index - -3))"
+            : nestedFlatIndex;
+    const std::string equation = "V(nestedTap[" + index + "], nestedReturn[" + index +
+                                 "]) <+ (idt((V(nestedTap[" + index + "], nestedReturn[" + index +
+                                 "]) / 1), 0) / 2);";
     if (!accepted || output.find(equation) == std::string::npos)
       return fail("nested peer scaled idt lost its owned row-major result path");
+    if (mutation == "negative-origin" &&
+        (output.find("electrical nestedTap[0:(((2 - -2) * (1 - -3)) - 1)];") == std::string::npos ||
+         output.find("electrical nestedReturn[0:(((2 - -2) * (1 - -3)) - 1)];") ==
+             std::string::npos))
+      return fail("negative-origin nested peer scaled idt lost its zero-based extent");
     std::string target = output.substr(std::string("sentinel").size());
     if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
       return fail("nested peer scaled idt failed independent target reparse");

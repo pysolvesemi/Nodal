@@ -1355,3 +1355,27 @@ An independent evaluation of the actual emitted expressions enumerated all
 non-overlapping coverage of each declared extent. The predecessor's first
 mixed-stride case instead selected indices 3 through 23 for a 21-element array.
 This is compiler/index evidence, not analog numerical simulation.
+
+## Negative-origin nested peer idt index checkpoint
+
+The corrected zero-based occurrence ordinal is also exercised through the
+already-qualified nested peer `idt` result path. Both authored dimensions use
+unit steps with negative lower bounds, both electrical arrays use the same
+zero-based product index, and the integral retains its exact generated owner,
+induction and operator-owned state identity before one memoryless division.
+
+The independent native regression mutates the accepted scaled-`idt` fixture to
+the literal ranges `[-2, 2)` and `[-3, 1)`, requires the exact 16-element array
+extent and row-major index, reparses the target and repeats emission byte for
+byte. Its existing result-fan-out rejection remains in the same matrix. The
+configured public witness keeps symbolic upper envelopes, requires unique
+region, induction and declaration source identities, rejects a forged state
+identity before target publication, and retains exact generated Verilog-A.
+
+This checkpoint composes existing bounds, peer-node, stateful-operator and
+single-scale contracts. It does not admit a second state or result use, wider
+or deeper generation, cross-range storage, general slices, shaped terminals,
+generated connections or instances, reverse ranges, default specialization or
+eager unrolling. It is compiler/index and storage-ownership evidence, not an
+independent simulator result or F-043 acceptance. Every F-043 parent and
+descendant obligation remains open.

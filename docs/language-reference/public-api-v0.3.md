@@ -101,7 +101,7 @@ Verilog-A array or target-layout support; unsupported targets reject explicitly.
 
 ## Additive conservative node arrays
 
-[Conservative node arrays v0.1](../design-gates/NodalConservativeNodeArrays-DG-v0.1.md)
+[Conservative node arrays v0.2](../design-gates/NodalConservativeNodeArrays-DG-v0.2.md)
 adds the module constructor
 `node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]`.
 The existing `node(Electrical): Node[Electrical.type]` scalar form is unchanged.
@@ -114,17 +114,27 @@ analog:
   I(taps.at(1, 2), ground) <+ V(taps.at(1, 2), ground) / 1000.0
 ```
 
+Local array references support `row(index)` on rank two, `plane(index)` on rank
+three, `slice(lower, upperExclusive, axis = 0)`, `flatten`, and
+`reshape(dimensions*)`. Views preserve the owned root and Electrical capability;
+they declare no additional nodes. NodeArray flatten preserves checked signed-64
+cardinality, including an Integer-expression literal when the extent exceeds Int.
+The existing Vec flatten limit is unchanged. Slices are zero-based, half-open and unit-stride,
+with bounds proved for every legal parameter value. A final full-rank `at` may
+follow any valid composition. Direct and composed selections share physical
+identity when the canonical maps prove equality; source occurrences remain distinct.
+
 The initial profile uses module-local Electrical declarations and static full-rank
 `at(indices: Dimension*): Node[D]` selections. Positive fixed/bounded symbolic
 shapes and every index must be valid over the complete legal parameter envelope.
 Zero indices are valid. Selections work inside or outside analog; repeated equal
-canonical index tuples reference the same physical node, with distinct source
+canonical root/map selections reference the same physical node, with distinct source
 occurrences retained. Independent symbolic tuples with unproved overlap reject,
 rather than silently becoming separate nets. Selected nodes retain existing
 scalar branch/access/connection semantics and immediate-child scalar connectivity.
 Arrays owned by another Module cannot be selected by bypassing that Module's
 boundary. This does not add conservative array ports, generated selections,
-array views or writable Real-array storage.
+bulk array connections or writable Real-array storage.
 
 ## Additive writable Real arrays
 

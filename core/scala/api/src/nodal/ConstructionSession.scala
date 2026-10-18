@@ -94,7 +94,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private val shapeViews = mutable.LinkedHashMap.empty[ExpressionRef, ShapeViewRecord]
   private val nodeSelectionLookup = mutable.HashMap.empty[
     DeclarationRef,
-    mutable.LinkedHashMap[Vector[Either[Long, DeclarationRef | ExpressionRef]], ExpressionRef]
+    mutable.LinkedHashMap[StructuralShapeCoordinates.Region, ExpressionRef]
   ]
   private var constructorFailure: Option[(Throwable, String)] = None
 
@@ -270,7 +270,12 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     requireNoGeneratedEffect("generated node-array declaration")
     val analysis =
-      new StructuralBoundAnalysis(module.handle, "NODAL-SHAPE-043-005", "node-array dimension")
+      new StructuralBoundAnalysis(
+        module.handle,
+        "NODAL-SHAPE-043-005",
+        "node-array dimension",
+        signed64Literals = true
+      )
     val bounds = dimensions.map(analysis(_))
     if bounds.exists(_.bounds.lower <= 0L) ||
       bounds.foldLeft(BigInt(1))((count, bound) => count * BigInt(bound.bounds.upper)) >
@@ -293,6 +298,152 @@ private final class ConstructionSession(val options: EmitOptions):
       markStructuralParameterEffect(parameter, "shape")
       markStructuralParameterEffect(parameter, "rank")
 
+  private def nodeArrayInput(array: NodeArray[?])
+      : (DeclarationRef | ExpressionRef, DeclarationRef) =
+    val module = currentModule.handle
+    val input: DeclarationRef | ExpressionRef = Option(declarationIds.get(array))
+      .orElse(Option(expressionIds.get(array))).getOrElse(
+        fail("NODAL-SHAPE-043-006", "node-array reference has no owned captured identity")
+      )
+    val seen = mutable.HashSet.empty[ExpressionRef]
+    def root(reference: DeclarationRef | ExpressionRef): DeclarationRef = reference match
+      case declaration: DeclarationRef =>
+        if declaration.module != module ||
+          records(declaration.module).declarations(declaration.index).kind !=
+            KernelSignalKind.AnalogNodeArray
+        then
+          fail("NODAL-SHAPE-043-006", "node-array reference must retain its local owned root")
+        declaration
+      case expression: ExpressionRef =>
+        if expression.module != module || !seen.add(expression) then
+          fail("NODAL-SHAPE-043-006", "node-array reference has a cyclic or foreign projection")
+        val parent = shapeViews.get(expression).map(_.input)
+          .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty).map(_.input))
+          .getOrElse(fail("NODAL-SHAPE-043-006", "node-array reference has no shaped projection"))
+        root(parent)
+    val owner = root(input)
+    val dimensions = input match
+      case declaration: DeclarationRef =>
+        records(declaration.module).declarations(declaration.index).conservativeDimensions
+      case expression: ExpressionRef => shapeViews.get(expression).map(_.dimensions)
+          .getOrElse(shapeIndices(expression).resultDimensions)
+    if array.discipline != Electrical || dimensions != array.dimensions then
+      fail("NODAL-SHAPE-043-006", "node-array reference changed discipline or captured dimensions")
+    (input, owner)
+
+  def registerNodeArrayProjection(value: NodeArray[?], origin: NodeArrayProjection): Unit =
+    requireNoGeneratedEffect("generated node-array view")
+    val (input, _) = nodeArrayInput(origin.input)
+    if value.discipline != origin.input.discipline then
+      fail("NODAL-SHAPE-043-006", "node-array view changed discipline")
+    val module = currentModule.handle
+    val source = origin.input.dimensions
+    val path = pathOf(origin.input).getOrElse(modulePath(module))
+    val code = if origin.slice.nonEmpty then "NODAL-SHAPE-043-004" else "NODAL-SHAPE-043-003"
+    val analysis =
+      new StructuralBoundAnalysis(module, code, "node-array view", signed64Literals = true)
+    val parameters = if origin.indices.nonEmpty then
+      if origin.indices.size >= source.size || value.dimensions != source.drop(origin.indices.size)
+      then
+        fail("NODAL-SHAPE-043-002", "node-array prefix result has incompatible dimensions")
+      val indices = origin.indices.map(analysis(_))
+      val dimensions = source.take(origin.indices.size).map(analysis(_))
+      if indices.zip(dimensions).exists((index, extent) =>
+          index.bounds.lower < 0 || index.bounds.upper >= extent.bounds.lower
+        )
+      then
+        fail("NODAL-SHAPE-043-002", "node-array prefix is not valid for every legal extent")
+      indices.flatMap(_.parameters)
+    else validateShapeViewDimensions(source, value.dimensions, origin.slice, module, path, analysis)
+    val reference = captureExpression(
+      value,
+      Vector(origin.input) ++ origin.indices ++ value.dimensions
+    ).getOrElse(
+      fail(code, "node-array view requires an active Module")
+    )
+    if origin.indices.nonEmpty then
+      shapeIndices.update(
+        reference,
+        ShapeIndexRecord(reference, input, origin.indices, value.dimensions)
+      )
+    else
+      shapeViews.update(
+        reference,
+        ShapeViewRecord(reference, input, value.dimensions, origin.slice)
+      )
+    parameters.distinct.foreach(markStructuralParameterEffect(_, "shape"))
+
+  private def nodeSelectionMap(
+      input: DeclarationRef | ExpressionRef,
+      indices: Vector[Dimension]
+  ): (DeclarationRef, StructuralShapeCoordinates.Region, Vector[(BigInt, BigInt)]) =
+    val analysis = new StructuralBoundAnalysis(
+      currentModule.handle,
+      "NODAL-SHAPE-043-006",
+      "node-array physical map",
+      signed64Literals = true
+    )
+    val bounds = mutable.HashMap.empty[String, (BigInt, BigInt)]
+    def token(value: Any): String =
+      val dimension = value match
+        case literal: Int => literal: Dimension
+        case expression: Expr[?] => expression.asInstanceOf[Expr[Integer]]: Dimension
+        case _ => fail("NODAL-SHAPE-043-006", "node-array map requires static Integer dimensions")
+      val checked = analysis(dimension)
+      val identity = dimension match
+        case literal: Int => literal.toString
+        case parameter: Param[?] =>
+          val ref = declarationIds.get(parameter); s"declaration:${ref.module}:${ref.index}"
+        case expression: KernelExpr[?] => expression.literal match
+            case Some(literal) => literal.value.toLong.toString
+            case None =>
+              val ref = expressionIds.get(expression); s"expression:${ref.module}:${ref.index}"
+        case _ => fail("NODAL-SHAPE-043-006", "node-array map lacks canonical static identity")
+      bounds.update(identity, BigInt(checked.bounds.lower) -> BigInt(checked.bounds.upper))
+      identity
+    val chain = mutable.ArrayBuffer.empty[StructuralShapeCoordinates.Projection]
+    def collect(reference: DeclarationRef | ExpressionRef): DeclarationRef = reference match
+      case declaration: DeclarationRef => declaration
+      case expression: ExpressionRef =>
+        shapeIndices.get(expression) match
+          case Some(index) =>
+            val root = collect(index.input)
+            chain += StructuralShapeCoordinates.Projection.Index(
+              index.indices.map(token),
+              index.resultDimensions.map(token)
+            )
+            root
+          case None =>
+            val view = shapeViews(expression)
+            val root = collect(view.input)
+            chain += StructuralShapeCoordinates.Projection.View(
+              view.dimensions.map(token),
+              view.slice.map(selection =>
+                KernelShapeSliceSnapshot(
+                  selection.axis,
+                  token(selection.lower),
+                  token(selection.upperExclusive)
+                )
+              )
+            )
+            root
+    val root = collect(input)
+    val dimensions = records(root.module).declarations(root.index).conservativeDimensions.map(token)
+    chain += StructuralShapeCoordinates.Projection.Index(indices.map(token), Vector.empty)
+    try
+      val projections = chain.toVector
+      val region = StructuralShapeCoordinates.scalarRegion(dimensions, projections)
+      val axes = StructuralShapeCoordinates.rootCoordinates(dimensions, projections)
+        .map(StructuralShapeCoordinates.bounds(_, bounds.apply))
+      (root, region, axes)
+    catch
+      case error: StructuralShapeCoordinates.InvalidCoordinate =>
+        fail("NODAL-SHAPE-043-006", error.getMessage)
+
+  private def pathOfReference(reference: DeclarationRef | ExpressionRef): String = reference match
+    case declaration: DeclarationRef => declarationPath(declaration)
+    case expression: ExpressionRef => expressionPath(expression)
+
   def registerNodeSelection(
       value: Node[?],
       array: NodeArray[?],
@@ -300,49 +451,42 @@ private final class ConstructionSession(val options: EmitOptions):
   ): ExpressionRef =
     val module = currentModule
     requireNoGeneratedEffect("generated node-array selection")
-    val reference = Option(declarationIds.get(array)).getOrElse(
-      fail("NODAL-SHAPE-043-006", "node-array selection has no owned declaration")
-    )
-    val declaration = records(reference.module).declarations(reference.index)
-    if reference.module != module.handle || declaration.kind != KernelSignalKind.AnalogNodeArray ||
-      value.discipline != Electrical || array.discipline != Electrical
-    then
-      fail("NODAL-SHAPE-043-006", "node-array selection must retain its local Electrical owner")
-    if indices.size != declaration.conservativeDimensions.size then
+    val (input, reference) = nodeArrayInput(array)
+    if value.discipline != Electrical then
+      fail("NODAL-SHAPE-043-006", "node-array selection requires Electrical capability")
+    if indices.size != array.dimensions.size then
       fail("NODAL-SHAPE-043-002", "node-array selection requires the complete declared rank")
     val analysis =
-      new StructuralBoundAnalysis(module.handle, "NODAL-SHAPE-043-006", "node-array index")
+      new StructuralBoundAnalysis(
+        module.handle,
+        "NODAL-SHAPE-043-006",
+        "node-array index",
+        signed64Literals = true
+      )
     val indexBounds = indices.map(analysis(_))
-    val dimensionBounds = declaration.conservativeDimensions.map(analysis(_))
+    val dimensionBounds = array.dimensions.map(analysis(_))
     if indexBounds.zip(dimensionBounds).exists((index, dimension) =>
         index.bounds.lower < 0L || index.bounds.upper >= dimension.bounds.lower
       )
     then
       fail("NODAL-SHAPE-043-002", "node-array index is not valid for every legal extent")
-    def canonical(index: Dimension): Either[Long, DeclarationRef | ExpressionRef] = index match
-      case literal: Int => Left(literal.toLong)
-      case parameter: Param[?] => Right(declarationIds.get(parameter))
-      case expression: KernelExpr[?] => expression.literal match
-          case Some(literal) => Left(literal.value.toLong)
-          case None => Right(expressionIds.get(expression))
-      case _ => fail("NODAL-SHAPE-043-006", "node-array index lacks canonical static identity")
-    val key = indices.map(canonical)
+    val (_, key, axes) = nodeSelectionMap(input, indices)
     val existing = nodeSelectionLookup.get(reference)
     val canonicalReference = existing.flatMap(_.get(key))
     if canonicalReference.isEmpty then
       existing.foreach(_.valuesIterator.foreach: previous =>
-        val previousBounds = shapeIndices(previous).indices.map(analysis(_))
-        if !indexBounds.zip(previousBounds).exists((left, right) =>
-            left.bounds.upper < right.bounds.lower || right.bounds.upper < left.bounds.lower
-          )
+        val record = shapeIndices(previous)
+        val (_, _, otherAxes) = nodeSelectionMap(record.input, record.indices)
+        if !axes.zip(otherAxes).exists((left, right) => left._2 < right._1 || right._2 < left._1)
         then
           fail(
             "NODAL-SHAPE-043-006",
             "distinct node-array selectors may alias for a legal parameter setting"
           ))
-    val occurrence = captureExpression(value, Vector(array)).getOrElse(
-      fail("NODAL-SHAPE-043-006", "node-array selection requires an active Module")
-    )
+    val occurrence = captureExpression(
+      value,
+      Vector(array)
+    ).getOrElse(fail("NODAL-SHAPE-043-006", "node-array selection requires an active Module"))
     val endpoint = canonicalReference match
       case Some(previous) =>
         val record = shapeIndices(previous)
@@ -356,7 +500,7 @@ private final class ConstructionSession(val options: EmitOptions):
           occurrence,
           ShapeIndexRecord(
             occurrence,
-            reference,
+            input,
             indices,
             Vector.empty,
             Some(ConservativeSelectionKey(reference, key)),
@@ -371,12 +515,15 @@ private final class ConstructionSession(val options: EmitOptions):
     indexBounds.flatMap(_.parameters).distinct.foreach(markStructuralParameterEffect(_, "shape"))
     endpoint
 
-  private def conservativeEndpointPath(key: ConservativeSelectionKey): String =
-    val indices = key.indices.map:
-      case Left(value) => s"literal:$value"
-      case Right(reference: DeclarationRef) => s"parameter:${declarationPath(reference)}"
-      case Right(reference: ExpressionRef) => s"expression:${expressionPath(reference)}"
-    s"${declarationPath(key.array)}.at(${indices.mkString(",")})"
+  private def conservativeEndpointPath(index: ShapeIndexRecord): String =
+    val indices = index.indices.map:
+      case literal: Int => s"literal:$literal"
+      case parameter: Param[?] => s"parameter:${declarationPath(declarationIds.get(parameter))}"
+      case expression: KernelExpr[?] => expression.literal match
+          case Some(literal) => s"literal:${literal.value.toLong}"
+          case None => s"expression:${expressionPath(expressionIds.get(expression))}"
+      case _ => fail("NODAL-SHAPE-043-006", "node-array selector lacks canonical identity")
+    s"${pathOfReference(index.input)}.at(${indices.mkString(",")})"
 
   private def validateShapeType(
       dataType: DataType[?],
@@ -772,29 +919,47 @@ private final class ConstructionSession(val options: EmitOptions):
         code,
         "shape view"
       )
-      val parameters = slice match
-        case Some(selection) =>
-          validateShapeSlice(selection, sourceDimensions, dimensions, path, analysis)
-        case None =>
-          val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
-            shapeViewSignature(sourceDimensions, module.handle, path, analysis)
-          val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
-            shapeViewSignature(dimensions, module.handle, path, analysis)
-          if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
-            sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
-          then
-            fail(
-              code,
-              "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
-              Some(path)
-            )
-          sourceParameters ++ targetParameters
+      val parameters = validateShapeViewDimensions(
+        sourceDimensions,
+        dimensions,
+        slice,
+        module.handle,
+        path,
+        analysis
+      )
       parameters.distinct.foreach(markStructuralParameterEffect(_, "shape"))
       val reference = captureExpression(expression).getOrElse(
         fail(code, "shape view requires an active Module")
       )
       if !CandidateRuntime.proceduralShapeSource(input) then
         shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions, slice))
+
+  private def validateShapeViewDimensions(
+      source: Vector[Any],
+      dimensions: Vector[Dimension],
+      slice: Option[ShapeSliceSelection],
+      owner: Long,
+      path: String,
+      analysis: StructuralBoundAnalysis
+  ): Vector[DeclarationRef] =
+    val code = if slice.nonEmpty then "NODAL-SHAPE-043-004" else "NODAL-SHAPE-043-003"
+    slice match
+      case Some(selection) =>
+        validateShapeSlice(selection, source, dimensions, path, analysis)
+      case None =>
+        val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
+          shapeViewSignature(source, owner, path, analysis)
+        val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
+          shapeViewSignature(dimensions, owner, path, analysis)
+        if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
+          sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
+        then
+          fail(
+            code,
+            "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
+            Some(path)
+          )
+        sourceParameters ++ targetParameters
 
   private def validateShapeSlice(
       selection: ShapeSliceSelection,
@@ -1551,7 +1716,8 @@ private final class ConstructionSession(val options: EmitOptions):
   private final class StructuralBoundAnalysis(
       owner: Long,
       diagnosticCode: String = "NODAL-ITERATION-043-001",
-      subject: String = "hdlRange"
+      subject: String = "hdlRange",
+      signed64Literals: Boolean = false
   ):
     private val cache = mutable.HashMap.empty[ExpressionRef, StructuralBound]
     private val active = mutable.HashSet.empty[ExpressionRef]
@@ -1619,7 +1785,10 @@ private final class ConstructionSession(val options: EmitOptions):
           value.kind == "integer" && value.dataType == KernelTypeDescriptor("Integer") &&
             expression.resultType.contains(KernelTypeDescriptor("Integer"))
         )
-        .flatMap(_.value.toIntOption)
+        .flatMap(value =>
+          if signed64Literals then value.value.toLongOption
+          else value.value.toIntOption.map(_.toLong)
+        )
         .getOrElse(invalid("hdlRange literal must be a representable public Integer literal"))
       StructuralBound(expression, IterationDomain.Bounds(literal, literal), Vector.empty)
 
@@ -2369,7 +2538,7 @@ private final class ConstructionSession(val options: EmitOptions):
     case node: Node[?] if node.endpointReference.nonEmpty =>
       node.endpointReference.flatMap(
         shapeIndices.get
-      ).flatMap(_.conservative).map(conservativeEndpointPath)
+      ).map(conservativeEndpointPath)
     case reference: AnyRef =>
       Option(declarationIds.get(reference))
         .map(declarationPath)
@@ -2851,9 +3020,8 @@ private final class ConstructionSession(val options: EmitOptions):
         case reference: DeclarationRef => declarationPath(reference)
         case reference: ExpressionRef => expressionPath(reference)
       KernelShapeIndexSnapshot(
-        path = index.conservative.map(
-          conservativeEndpointPath
-        ).getOrElse(expressionPath(index.reference)),
+        path = if index.conservative.nonEmpty then conservativeEndpointPath(index)
+        else expressionPath(index.reference),
         owner = modulePath(index.reference.module),
         input = inputPath,
         indices = index.indices.map(generatedBound),
@@ -3059,12 +3227,21 @@ private final class ConstructionSession(val options: EmitOptions):
         )
     .sortBy(_.path)
 
+  private def structuralShapeExpressionRoots: Iterator[Any] =
+    shapeIndices.valuesIterator.flatMap(index =>
+      index.indices.iterator ++ index.resultDimensions.iterator ++
+        index.sourceUses.iterator.flatMap(_._2.iterator)
+    ) ++ shapeViews.valuesIterator.flatMap(view =>
+      view.dimensions.iterator ++ view.slice.iterator.flatMap(selection =>
+        Iterator(selection.lower, selection.upperExclusive)
+      )
+    )
+
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
     // Endpoint selectors are structural uses even when authored lexically inside analog.
     // Keep a shared expression in the runtime inventory if any runtime consumer needs it.
     val structural = capturedExpressionClosure(
-      shapeIndices.valuesIterator.filter(_.conservative.nonEmpty)
-        .flatMap(_.sourceUses.iterator.flatMap(_._2.iterator))
+      structuralShapeExpressionRoots
     )
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
@@ -3168,7 +3345,6 @@ private final class ConstructionSession(val options: EmitOptions):
         Iterator(region.lower, region.upperExclusive, region.step)
       )
     )
-    val shapeIndexRoots = shapeIndices.valuesIterator.flatMap(_.indices.iterator)
     def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] =
       val descriptor = CandidateRuntime.typeDescriptor(dataType)
       if descriptor.kind != "Vec" then Vector.empty
@@ -3186,11 +3362,6 @@ private final class ConstructionSession(val options: EmitOptions):
           declaration.conservativeDimensions.iterator
       )
     )
-    val shapeViewExpressionRoots = shapeViews.valuesIterator.flatMap(view =>
-      view.dimensions.iterator ++ view.slice.iterator.flatMap(selection =>
-        Iterator(selection.lower, selection.upperExclusive)
-      )
-    )
     val lexicalShapeRoots = expressionValues.valuesIterator
       .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
         val dimensions =
@@ -3199,9 +3370,8 @@ private final class ConstructionSession(val options: EmitOptions):
           (if expression.operation.contains("analog_array_fill") then Iterator.empty
            else expression.operands.drop(1).iterator)
     val reachable = capturedExpressionClosure(
-      (lexicalShapeRoots ++ roots ++ generatedRoots ++ shapeIndexRoots ++
-        shapeDimensionExpressionRoots ++
-        shapeViewExpressionRoots).collect:
+      (lexicalShapeRoots ++ roots ++ generatedRoots ++ structuralShapeExpressionRoots ++
+        shapeDimensionExpressionRoots).collect:
         case expression: KernelExpr[?] if expression.literal.isEmpty => expression
     )
 
@@ -3296,7 +3466,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val endpointSources = shapeIndices.valuesIterator.filter(_.conservative.nonEmpty).flatMap:
       index =>
         sourceByPath.get(expressionPath(index.sourceUses.head._1)).map(source =>
-          SourceMapEntry(conservativeEndpointPath(index.conservative.get), source)
+          SourceMapEntry(conservativeEndpointPath(index), source)
         )
     val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(

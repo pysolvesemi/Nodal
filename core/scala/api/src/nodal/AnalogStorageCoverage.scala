@@ -10,115 +10,12 @@ package nodal
 private[nodal] object AnalogStorageCoverage:
   import AnalogProceduralRuntime.*
 
-  enum Coordinate:
-    case Literal(value: Long)
-    case Static(identity: String)
-    case Ordinal
-    case Add(left: Coordinate, right: Coordinate)
-    case Multiply(left: Coordinate, right: Coordinate)
-    case Subtract(left: Coordinate, right: Coordinate)
-    case Divide(left: Coordinate, right: Coordinate)
-    case Remainder(left: Coordinate, right: Coordinate)
-
+  export StructuralShapeCoordinates.{Coordinate, Region}
+  import StructuralShapeCoordinates.{atom, checked, product}
   import Coordinate.*
-
-  // Exact postorder DAG encoding keeps shared coordinate subexpressions compact. The
-  // tables live only for this traversal; node equality includes the complete static token.
-  private def coordinateKey(value: Coordinate): Vector[(Int, String, Int, Int)] =
-    val visited = new java.util.IdentityHashMap[Coordinate, java.lang.Integer]()
-    val interned = scala.collection.mutable.HashMap.empty[(Int, String, Int, Int), Int]
-    val nodes = scala.collection.mutable.ArrayBuffer.empty[(Int, String, Int, Int)]
-    def visit(current: Coordinate): Int =
-      val known = visited.get(current)
-      if known != null then known.intValue
-      else
-        val node = current match
-          case Literal(number) => (0, number.toString, -1, -1)
-          case Static(identity) => (1, identity, -1, -1)
-          case Ordinal => (2, "", -1, -1)
-          case Add(left, right) => (3, "", visit(left), visit(right))
-          case Multiply(left, right) => (4, "", visit(left), visit(right))
-          case Subtract(left, right) => (5, "", visit(left), visit(right))
-          case Divide(left, right) => (6, "", visit(left), visit(right))
-          case Remainder(left, right) => (7, "", visit(left), visit(right))
-        val index = interned.getOrElseUpdate(
-          node, {
-            nodes += node
-            nodes.size - 1
-          }
-        )
-        visited.put(current, java.lang.Integer.valueOf(index))
-        index
-    visit(value)
-    nodes.toVector
-
-  private def ordered(values: Vector[Coordinate]): Vector[Coordinate] =
-    values.map(value => coordinateKey(value) -> value).sortWith: (left, right) =>
-      val difference = left._1.iterator.zip(right._1.iterator)
-        .map((a, b) => summon[Ordering[(Int, String, Int, Int)]].compare(a, b))
-        .find(_ != 0).getOrElse(left._1.size.compare(right._1.size))
-      difference < 0
-    .map(_._2)
 
   private def invalid(message: String, path: String): Nothing =
     reject(Diagnostic("NODAL-ANALOG-033-021", message, Some(path)))
-
-  private def checked(value: BigInt): Coordinate =
-    if !value.isValidLong then
-      invalid("storage coordinate arithmetic exceeds signed 64-bit range", "storage-coordinate")
-    Literal(value.toLong)
-
-  private def atom(value: String): Coordinate =
-    value.toLongOption match
-      case Some(number) => Literal(number)
-      case None if value.matches("-?[0-9]+") => checked(BigInt(value))
-      case None =>
-        if value.isEmpty || value.trim != value then
-          invalid("storage coordinate requires a canonical static identity", value)
-        Static(value)
-
-  // Associative literal folding also makes separately authored prefix/slice aliases equal.
-  // Exact static identities remain opaque; this does not infer symbolic algebraic equivalence.
-  private def add(left: Coordinate, right: Coordinate): Coordinate =
-    def terms(value: Coordinate): Vector[Coordinate] = value match
-      case Add(a, b) => terms(a) ++ terms(b)
-      case other => Vector(other)
-    val all = terms(left) ++ terms(right)
-    val constant = all.collect { case Literal(value) => BigInt(value) }.sum
-    val symbolic = ordered(all.filter { case Literal(_) => false; case _ => true })
-    val values = symbolic ++ Option.when(constant != 0)(checked(constant))
-    values.reduceOption(Add.apply).getOrElse(Literal(0))
-
-  private def multiply(left: Coordinate, right: Coordinate): Coordinate =
-    def factors(value: Coordinate): Vector[Coordinate] = value match
-      case Multiply(a, b) => factors(a) ++ factors(b)
-      case other => Vector(other)
-    val all = factors(left) ++ factors(right)
-    val constant = all.collect { case Literal(value) => BigInt(value) }.product
-    if constant == 0 then Literal(0)
-    else
-      val symbolic = ordered(all.filter { case Literal(_) => false; case _ => true })
-      val values = symbolic ++ Option.when(constant != 1)(checked(constant))
-      values.reduceOption(Multiply.apply).getOrElse(Literal(1))
-
-  private def subtract(left: Coordinate, right: Coordinate): Coordinate = (left, right) match
-    case (value, Literal(0)) => value
-    case _ if left == right => Literal(0)
-    case (Literal(a), Literal(b)) => checked(BigInt(a) - BigInt(b))
-    case _ => Subtract(left, right)
-
-  private def divide(left: Coordinate, right: Coordinate): Coordinate = (left, right) match
-    case (_, Literal(0)) => invalid("storage coordinate divides by zero", "storage-coordinate")
-    case (Literal(0), _) => Literal(0)
-    case (value, Literal(1)) => value
-    case (Literal(a), Literal(b)) => checked(BigInt(a) / BigInt(b))
-    case _ if left == right => Literal(1)
-    case _ => Divide(left, right)
-
-  private def product(dimensions: Vector[String]): Coordinate =
-    dimensions.foldLeft[Coordinate](Literal(1))((value, dimension) =>
-      multiply(value, atom(dimension))
-    )
 
   private def dimensions(projection: StorageProjection): Vector[String] = projection match
     case value: KernelShapeIndexSnapshot => value.resultDimensions
@@ -132,16 +29,6 @@ private[nodal] object AnalogStorageCoverage:
         case _ => ()
     product(values)
 
-  /** A canonical region is independent of authored path and logical rank. Its ordinal domain and
-    * root mapping preserve order, including a noncontiguous slice followed by reshape.
-    */
-  final case class Region(cardinality: Coordinate, rootOrdinal: Coordinate):
-    private lazy val key = (coordinateKey(cardinality), coordinateKey(rootOrdinal))
-    override def equals(other: Any): Boolean = other match
-      case that: Region => key == that.key
-      case _ => false
-    override def hashCode(): Int = key.hashCode()
-
   final case class Access(
       root: Variable,
       region: Region,
@@ -150,37 +37,18 @@ private[nodal] object AnalogStorageCoverage:
   )
 
   private def region(root: Variable, projections: Vector[StorageProjection]): Region =
-    val shapes = projections.scanLeft(root.valueType.dimensions)((_, projection) =>
-      dimensions(projection)
+    StructuralShapeCoordinates.region(
+      root.valueType.dimensions,
+      projections.map(StructuralShapeCoordinates.projection)
     )
-    val count = product(shapes.last)
-    var ordinal: Coordinate = if count == Literal(1) then Literal(0) else Ordinal
-    projections.indices.reverse.foreach: index =>
-      val inputShape = shapes(index)
-      val outputShape = shapes(index + 1)
-      projections(index) match
-        case selection: KernelShapeIndexSnapshot =>
-          var prefix: Coordinate = Literal(0)
-          selection.indices.zip(inputShape).foreach: (coordinate, extent) =>
-            prefix = add(multiply(prefix, atom(extent)), atom(coordinate))
-          ordinal = add(multiply(prefix, product(outputShape)), ordinal)
-        case view: KernelShapeViewSnapshot =>
-          view.slice.foreach: slice =>
-            val trailing = product(inputShape.drop(slice.axis + 1))
-            val outputStride = multiply(atom(outputShape(slice.axis)), trailing)
-            // Prefix groups are zero on the leading axis. This also avoids symbolic x / x.
-            val groups = if slice.axis == 0 then Literal(0) else divide(ordinal, outputStride)
-            val gap = multiply(
-              subtract(atom(inputShape(slice.axis)), atom(outputShape(slice.axis))),
-              trailing
-            )
-            ordinal = add(
-              add(ordinal, multiply(atom(slice.lower), trailing)),
-              multiply(groups, gap)
-            )
-    Region(count, ordinal)
 
   def normalize(reference: StorageReference): Access =
+    try normalizeReference(reference)
+    catch
+      case error: StructuralShapeCoordinates.InvalidCoordinate =>
+        invalid(error.getMessage, reference.root.identity)
+
+  private def normalizeReference(reference: StorageReference): Access =
     val root = reference.root
     validateDimensions(root.valueType.dimensions, root.identity)
     val projections = reference match

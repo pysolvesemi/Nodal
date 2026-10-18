@@ -1199,3 +1199,162 @@ whole-pipeline linearity or performance measurements. Repeated shared-fill live
 consumption remains explicitly rejected/open, and unused public event handles
 are not serialized, so no unused-monitor public witness is claimed. No CI or
 full qualification was run.
+
+### Language edition boundary for composed conservative views
+
+The next local conservative-view extension follows
+[NodalConservativeNodeArrays-DG-v0.2](../design-gates/NodalConservativeNodeArrays-DG-v0.2.md).
+Its shared coordinate derivation is being extracted from existing storage mapping
+without transferring storage rights/DA into conservative connectivity. Current
+local unpacked-net representation remains; ports and whole-array instance
+mapping need the subsequent explicit layout/binding extension.
+
+The generic repository language baseline is Verilog-AMS 2023, as stated in the
+README and original analog-event gate. Localparam/net syntax also found in the
+2.4 LRM is useful construct-level compatibility evidence, not a global language
+version selection. In particular, 2023 section 5.10.3 permits dynamic tolerance
+arguments, whereas 2.4 sections 4.5.14 and 5.10.3 treat those tolerance slots as
+analysis-start constants. No global event semantic change follows from the
+OpenVAF 2.4 compatibility subset. A future tool/edition capability profile must
+state this distinction explicitly rather than silently freezing live tolerances.
+See the authoritative [2023 LRM](https://www.accellera.org/images/downloads/standards/v-ams/VAMS-LRM-2023.pdf)
+and [2.4 LRM](https://accellera.org/images/downloads/standards/v-ams/VAMS-LRM-2-4.pdf).
+
+The native map extraction passes 178 focused node-array checks, the 21-case
+storage-descriptor suite and all 79 writable-storage predecessors. The neutral
+ShapeModel owner derives ordinal/coordinate facts; AnalogStorageModel retains
+Variable/procedure/generated rights and DA, while ConservativeConnectivity
+requires the actual local Electrical NodeArray and structural provenance.
+Conservative scalar identity retains actual symbolic atoms even when a singleton
+storage region may legitimately collapse to Whole. Direct root-axis disjointness
+proofs remain available when flat ordinal intervals are coarser.
+
+A 32-view native witness exercises composed mapping within the existing
+512-projection resource bound. Per-operation verification and literal-prefix
+resolution still revisit portions of the chain; no whole-pipeline linear-time or
+measured speedup claim follows from the shared extraction. Native logs are
+`.work/conservative-views-node-array-unit.log`,
+`.work/conservative-views-storage-unit.log` and
+`.work/conservative-views-writable-predecessor.log`. Backend/public target
+integration also passes as recorded below.
+
+Focused native review found no blocker in capability separation, actual-root
+physical keys, conservative possible-alias rejection or preservation of storage
+coverage. A follow-on symbolic slice/flatten witness exposed a precision gap at
+a fixed intermediate reshape. Checked re-radix recovery now handles actual
+literal intermediate coordinates before resuming symbolic root strides; opaque
+parameter/expression terms are not canceled from coincident bounds. The reviewer
+also inspected that fix without finding a concrete issue. Review was read-only,
+with no test execution or Scala/backend assurance implied.
+
+The shared target mapper preserves all 80 retained writable-unit MLIR/VA/AMS
+artifacts byte-for-byte against the preceding checkpoint. Its affected writable
+unit, event reparser (308 cases) and hierarchy syntax (62 cases) pass. The
+conservative BackendTest passes composed fixed/symbolic mapping, scalar child
+binding, a 48-view compact chain, constant dependency/overflow/range negatives
+and transactional target-width rejection. Final public integration and reproduction commands are recorded below.
+
+```sh
+source .work/nodal-toolchain-env.sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodalc nodal-translate nodal-node-array-unit-tests nodal-storage-model-unit-tests nodal-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-hierarchy-syntax-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-storage-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-backend-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/conservative-views-writable-backend
+.work/native-release/core/compiler/test/Unit/nodal-event-reparse-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-hierarchy-syntax-unit-tests
+bash .work/check-conservative-views-cli.sh
+python3 .work/check-conservative-views-writable-parity.py
+```
+
+The 48-slice target witness emits 49 constant map stages, one electrical array
+declaration and fewer than 30,000 output bytes. This is a measured fixture bound,
+not a universal complexity claim. Existing direct signed64 node-array emission,
+including a trillion-lane compact declaration, remains unchanged. New symbolic
+compositions that need Integer stages retain checked signed32 stage limits;
+proved fixed maps may bypass stages after native source verification.
+
+For root shape `[2,COUNT]`, slicing the final axis to `[1,2]`, flattening and
+selecting logical index 1 produces this actual Verilog-A map:
+
+```verilog
+parameter integer COUNT = 4 from [2:8];
+electrical tap[0:((2 * COUNT) - 1)];
+localparam integer node_map_tap_0_0 = 1;
+localparam integer node_map_tap_0_1 = ((node_map_tap_0_0 * COUNT) + ((node_map_tap_0_0 % 1) + 1));
+```
+
+The contribution then uses `tap[node_map_tap_0_1]`; the parameter remains
+symbolic. Actual normalized input and VA/AMS output are under
+`.work/conservative-views-symbolic*`. The strict parser checks all reachable
+structural Integer localparam dependencies with an iterative stack, declaration
+order, concrete bounds and overflow, while unrelated scalar initializer grammar
+remains unchanged. Ordinary Integer parameters remain symbolic regardless of
+defaults. Correlated all-parameter mapping remains a native proof obligation.
+
+The actual public `Increment43NoncontiguousNodeViews` witness in
+`Increment43NodeViewTests.scala` retains a symbolic final-axis slice:
+
+```scala
+val cols: Param[Integer] = param(5.integer, range = 4 to 6)
+val taps = node(Electrical, 3, cols)
+val selected = taps.slice(1, 3, axis = 1).flatten.at(3)
+val other = taps.at(0, 0)
+analog:
+  I(selected, p) <+ V(other, p) / 1.kOhm
+```
+
+Its actual generated Verilog-A contains:
+
+```verilog
+parameter integer cols = 5 from [4:6];
+electrical taps[0:((3 * cols) - 1)];
+localparam integer node_map_taps_0_0 = 3;
+localparam integer node_map_taps_0_1 = (((node_map_taps_0_0 / 2) * cols) + ((node_map_taps_0_0 % 2) + 1));
+analog begin
+  I(taps[node_map_taps_0_1], p) <+ (V(taps[0], p) / 1000);
+end
+```
+
+The source, normalized IR and actual VA/AMS files for nine public models are
+retained under `.work/node-view-public/`; this excerpt comes from
+`Increment43NoncontiguousNodeViews.va`, not a handwritten target example.
+
+The final public run passes seven new grouped methods and 13 directly affected
+predecessors with both native tools configured. The predecessors include direct
+node/scalar-child consumers, storage coverage/DAG keys, slice transport and the
+unchanged Vec flatten boundary. Nine public sources pass plain native verification
+and the actual default gate. All nine emit VA and AMS with exact repeated output
+in each profile (18 target/repeat pairs total).
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+bash .work/scala-validation/run-node-view-tests.sh
+bash .work/scala-validation/run-node-view-predecessors.sh
+python3 .work/scala-validation/write-node-view-witnesses.py --ams
+python3 .work/scala-validation/check-node-view-api.py
+```
+
+Exact leaf selectors remain in those two scripts. Logs are
+`.work/scala-validation/node-views-final.log`, `node-views-predecessors.log` and
+`node-views-witness-ams.log`; native public replay is recorded in
+`.work/conservative-views-public-native-final.log`. The API inventory/reference
+consistency check, pinned formatting for all eight changed Scala files, affected
+native formatting, changed Markdown/local links, JSON parsing and whitespace
+checks pass. No CI or independent consumer/simulator qualification was run.
+
+Actual integration exposed and repaired two bridge seams: synthetic index
+constants no longer impersonate their projection's unique semantic path (source
+locations remain), and inline prefix/view arithmetic is included in the existing
+static-dependency owner while shared live runtime uses remain retained. The
+neutral Scala helper recovers literal coordinates across fixed intermediate
+reshapes for physical-key parity; storage DA keys retain their own meaning.
+NodeArray's signed64 flatten uses an explicit capability parameter on the shared
+dimension builder; the pre-existing Vec limit remains unchanged. The public
+50,000-by-50,000 witness selects a fixed physical endpoint without map stages,
+and overflow remains a causal rejection.
+
+The shared view/selection profile is complete for this checkpoint. Boundary
+arrays, exact whole-array instance mappings, source-generated topology and other
+remaining F43 capabilities are still open; this does not close the increment.

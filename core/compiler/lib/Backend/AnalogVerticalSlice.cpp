@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/AnalogEvents.h"
 #include "nodal/Dialect/Nodal/AnalogFunctions.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -155,6 +156,8 @@ struct StaticNodeArrayLayout {
 
 struct ModuleRenderState {
   llvm::DenseMap<Value, StaticNodeArrayLayout> nodeArrays;
+  llvm::SmallVector<std::pair<std::string, std::string>> nodeMapConstants;
+  unsigned nodeMapOrdinal = 0;
   llvm::DenseMap<Value, std::string> terminals;
   llvm::DenseMap<Value, std::pair<std::string, std::string>> branches;
   llvm::DenseMap<Value, std::string> branchNames;
@@ -726,6 +729,40 @@ FailureOr<std::string> renderStaticNodeSelection(Operation *operation, Operation
   return array->second.name + "[" + ordinal + "]";
 }
 
+FailureOr<std::string> renderConservativeNodeSelection(Operation *operation, Operation *definition,
+                                                       ModuleRenderState &state) {
+  if (operation->getNumResults() != 1 || operation->getParentOp() != definition)
+    return failure();
+  auto selection = resolveConservativeSelection(operation->getResult(0), operation);
+  if (failed(selection))
+    return failure();
+  auto array = state.nodeArrays.find(selection->projection.root);
+  if (array == state.nodeArrays.end())
+    return failure();
+  // Keep the published direct signed64 spelling and capability. A composed map
+  // proven fully concrete also needs no target Integer intermediate at all.
+  if (operation->getOperand(0) == selection->projection.root)
+    return renderStaticNodeSelection(operation, definition, state);
+  if (selection->projection.literalRootFlatOffset)
+    return array->second.name + "[" + std::to_string(*selection->projection.literalRootFlatOffset) +
+           "]";
+  unsigned ordinal = state.nodeMapOrdinal++;
+  auto program = renderShapedProjectionProgram(selection->projection, "0", [&](unsigned stage) {
+    std::string base = "node_map_" + array->second.name + "_" + std::to_string(ordinal) + "_" +
+                       std::to_string(stage);
+    std::string name = base;
+    unsigned collision = 0;
+    while (!state.eventState.reserved.insert(name).second)
+      name = base + "_" + std::to_string(++collision);
+    return name;
+  });
+  if (failed(program))
+    return failure();
+  for (const auto &step : program->steps)
+    state.nodeMapConstants.emplace_back(step.destination, step.expression);
+  return array->second.name + "[" + program->result + "]";
+}
+
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
@@ -737,6 +774,11 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
   Region &region = definition->getRegion(0);
   if (!llvm::hasSingleElement(region))
     return failure();
+  definition->walk([&](Operation *operation) {
+    for (auto key : {"name", "sym_name", "induction"})
+      if (auto name = operation->getAttrOfType<StringAttr>(key))
+        state.eventState.reserved.insert(name.getValue());
+  });
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.parameter") {
@@ -764,13 +806,21 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
                                  "node array requires owned bounded electrical dimensions");
       nodeArrays.push_back(&operation);
       state.nodeArrays.try_emplace(operation.getResult(0), std::move(*layout));
-    } else if (name == "nodal.shape_index") {
-      auto endpoint = renderStaticNodeSelection(&operation, definition, state);
-      if (failed(endpoint))
+    } else if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation)) {
+      auto reference = operation.getNumResults() == 1
+                           ? resolveConservativeShape(operation.getResult(0), &operation)
+                           : FailureOr<ConservativeShape>(failure());
+      if (failed(reference))
         return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-002",
-                                 "node selection requires a direct array and bounded full-rank "
-                                 "static indices");
-      state.terminals.try_emplace(operation.getResult(0), *endpoint);
+                                 "structural view requires a verified owned node array map");
+      if (llvm::isa<TerminalType>(operation.getResult(0).getType())) {
+        auto endpoint = renderConservativeNodeSelection(&operation, definition, state);
+        if (failed(endpoint))
+          return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-002",
+                                   "node selection cannot be rendered within the static target "
+                                   "integer map profile");
+        state.terminals.try_emplace(operation.getResult(0), *endpoint);
+      }
     } else if (name == "nodal.branch") {
       if (operation.getNumOperands() != 2 || operation.getNumResults() != 1)
         return failure();
@@ -2624,6 +2674,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
                                   : "(" + layout.extent + " - 1)";
     output << "  electrical " << layout.name << "[0:" << upper << "];\n";
   }
+  for (const auto &[name, initializer] : state.nodeMapConstants)
+    output << "  localparam integer " << name << " = " << initializer << ";\n";
   if (!nodeArrays.empty() && failed(renderNamedBranches()))
     return failure();
 
@@ -2772,8 +2824,10 @@ bool validIdentifierList(llvm::StringRef value) {
 
 class GeneratedBoundExpressionParser {
 public:
-  GeneratedBoundExpressionParser(llvm::StringRef text, const std::set<std::string> &parameters)
-      : text(text), parameters(parameters) {}
+  using IdentifierResolver = std::function<bool(llvm::StringRef, std::optional<int64_t> &)>;
+  GeneratedBoundExpressionParser(llvm::StringRef text, const std::set<std::string> &parameters,
+                                 IdentifierResolver resolver = {}, bool signed32 = false)
+      : text(text), parameters(parameters), resolver(std::move(resolver)), signed32(signed32) {}
 
   bool parse() { return expression(0, value) && position == text.size(); }
   std::optional<int64_t> constantValue() const { return value; }
@@ -2805,6 +2859,8 @@ private:
               return false;
             computed = operation == '/' ? *left / *right : *left % *right;
           }
+          if (!fits(computed))
+            return false;
           result = computed;
           return true;
         }
@@ -2815,6 +2871,8 @@ private:
           if (*left == std::numeric_limits<int64_t>::min())
             return false;
           result = -*left;
+          if (!fits(*result))
+            return false;
         }
         return true;
       }
@@ -2830,7 +2888,7 @@ private:
     if (position != digits) {
       int64_t number = 0;
       auto parsed = std::from_chars(text.begin() + start, text.begin() + position, number);
-      if (parsed.ec != std::errc() || parsed.ptr != text.begin() + position)
+      if (parsed.ec != std::errc() || parsed.ptr != text.begin() + position || !fits(number))
         return false;
       result = number;
       return true;
@@ -2847,7 +2905,13 @@ private:
       break;
     }
     llvm::StringRef identifier = text.slice(start, position);
-    return isPortableVerilogIdentifier(identifier) && parameters.count(identifier.str()) != 0;
+    return isPortableVerilogIdentifier(identifier) && parameters.count(identifier.str()) != 0 &&
+           (!resolver || (resolver(identifier, result) && (!result || fits(*result))));
+  }
+
+  bool fits(int64_t value) const {
+    return !signed32 || (value >= std::numeric_limits<int32_t>::min() &&
+                         value <= std::numeric_limits<int32_t>::max());
   }
 
   bool consume(char expected) {
@@ -2859,6 +2923,8 @@ private:
 
   llvm::StringRef text;
   const std::set<std::string> &parameters;
+  IdentifierResolver resolver;
+  bool signed32;
   size_t position = 0;
   std::optional<int64_t> value;
 };
@@ -2888,15 +2954,15 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
         result = verifyAnalogProcedureTarget(procedure);
       return;
     }
-    if (name == "nodal.shape_index" && operation->getNumResults() == 1 &&
-        llvm::isa<nodal::TerminalType>(operation->getResult(0).getType()))
+    if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation) &&
+        operation->getNumResults() == 1 &&
+        succeeded(resolveConservativeShape(operation->getResult(0), operation)))
       return;
     if (name == "nodal.constant" && operation->getNumResults() == 1 &&
         operation->getResult(0).getType().isIndex() && !operation->use_empty() &&
         llvm::all_of(operation->getUsers(), [](Operation *user) {
-          return user->getName().getStringRef() == "nodal.shape_index" &&
-                 user->getNumResults() == 1 &&
-                 llvm::isa<nodal::TerminalType>(user->getResult(0).getType());
+          return llvm::isa<ShapeIndexOp, ShapeSliceOp>(user) && user->getNumResults() == 1 &&
+                 succeeded(resolveConservativeShape(user->getResult(0), user));
         }))
       return;
     if (llvm::is_contained(kSupportedOperations, name) || name == "nodal.analog_held_read")
@@ -3094,6 +3160,68 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   llvm::StringSet<> generatedNames;
   llvm::StringSet<> generatedLabels;
   llvm::StringSet<> namedBranchNames;
+  struct StructuralParameter {
+    bool integer;
+    bool fixed;
+    size_t order;
+    std::string initializer;
+  };
+  llvm::StringMap<StructuralParameter> structuralParameters;
+  llvm::StringMap<std::optional<int64_t>> structuralConstants;
+  std::set<std::string> structuralIntegerNames;
+  // Only an actual structural use opts a fixed parameter into this arithmetic
+  // subset. Other scalar parameter expressions retain their existing grammar.
+  // Ordinary parameter defaults are never values in this derived constant map.
+  auto structuralInteger = [&](llvm::StringRef name, size_t useOrder,
+                               std::optional<int64_t> &value) {
+    auto declaration = structuralParameters.find(name);
+    if (declaration == structuralParameters.end() || !declaration->second.integer ||
+        declaration->second.order >= useOrder)
+      return false;
+    value.reset();
+    if (!declaration->second.fixed)
+      return true;
+    // An explicit postorder stack keeps a deep stage chain linear without
+    // using C++ recursion or substituting an earlier expression's source.
+    llvm::SmallVector<std::pair<std::string, bool>> pending{{name.str(), false}};
+    while (!pending.empty()) {
+      auto [current, expanded] = pending.pop_back_val();
+      if (structuralConstants.contains(current))
+        continue;
+      const auto &record = structuralParameters.find(current)->second;
+      llvm::SmallVector<std::string> dependencies;
+      GeneratedBoundExpressionParser initializer(
+          record.initializer, structuralIntegerNames,
+          [&](llvm::StringRef dependency, std::optional<int64_t> &constant) {
+            auto input = structuralParameters.find(dependency);
+            if (input == structuralParameters.end() || !input->second.integer ||
+                input->second.order >= record.order)
+              return false;
+            constant.reset();
+            if (!input->second.fixed)
+              return true;
+            auto known = structuralConstants.find(dependency);
+            if (known != structuralConstants.end()) {
+              constant = known->second;
+              return true;
+            }
+            dependencies.push_back(dependency.str());
+            return !expanded;
+          },
+          true);
+      if (!initializer.parse())
+        return false;
+      if (dependencies.empty())
+        structuralConstants.try_emplace(current, initializer.constantValue());
+      else {
+        pending.emplace_back(current, true);
+        for (const auto &dependency : llvm::reverse(dependencies))
+          pending.emplace_back(dependency, false);
+      }
+    }
+    value = structuralConstants.find(name)->second;
+    return true;
+  };
   using ConcreteArrayBounds = std::pair<std::optional<int64_t>, std::optional<int64_t>>;
   llvm::StringMap<ConcreteArrayBounds> arrayBounds;
   std::vector<HierarchyModuleSyntax> hierarchyModules;
@@ -3119,7 +3247,14 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (allowGenerated)
       for (const auto &name : generatedNames)
         parameters.insert(name.getKey().str());
-    GeneratedBoundExpressionParser index(endpoint->index, parameters);
+    GeneratedBoundExpressionParser index(
+        endpoint->index, parameters, [&](llvm::StringRef name, std::optional<int64_t> &value) {
+          if (allowGenerated && generatedNames.contains(name)) {
+            value.reset();
+            return true;
+          }
+          return structuralInteger(name, structuralParameters.size(), value);
+        });
     if (!index.parse())
       return false;
     auto value = index.constantValue();
@@ -3250,6 +3385,9 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       generatedNames.clear();
       generatedLabels.clear();
       namedBranchNames.clear();
+      structuralParameters.clear();
+      structuralConstants.clear();
+      structuralIntegerNames.clear();
       arrayBounds.clear();
       userFunctions.clear();
       insideModule = true;
@@ -3460,8 +3598,11 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
                                          hierarchyModules[*currentHierarchyModule].parameters))
         return failure();
       const auto &parameters = hierarchyModules[*currentHierarchyModule].parameters;
-      GeneratedBoundExpressionParser lower(range.first.trim(), parameters);
-      GeneratedBoundExpressionParser upper(range.second.trim(), parameters);
+      auto resolveInteger = [&](llvm::StringRef name, std::optional<int64_t> &value) {
+        return structuralInteger(name, structuralParameters.size(), value);
+      };
+      GeneratedBoundExpressionParser lower(range.first.trim(), parameters, resolveInteger);
+      GeneratedBoundExpressionParser upper(range.second.trim(), parameters, resolveInteger);
       if (!lower.parse() || !upper.parse() ||
           (lower.constantValue() && upper.constantValue() &&
            *lower.constantValue() > *upper.constantValue()) ||
@@ -3494,6 +3635,19 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       auto parameter = parameterDeclarationName(line);
       if (!parameter)
         return failure();
+      auto initializer = line.drop_front(line.find(" = ") + 3);
+      initializer = initializer.take_front(initializer.find(';'));
+      initializer = initializer.take_front(initializer.find(" from "));
+      initializer = initializer.take_front(initializer.find(" exclude ")).trim();
+      const bool integer = line.contains(" integer ");
+      if (!structuralParameters
+               .try_emplace(parameter->first,
+                            StructuralParameter{integer, parameter->second,
+                                                structuralParameters.size(), initializer.str()})
+               .second)
+        return failure();
+      if (integer)
+        structuralIntegerNames.insert(parameter->first);
       hierarchyModules[*currentHierarchyModule].parameters.insert(parameter->first);
       eventSymbols.try_emplace(parameter->first,
                                AnalogEventSymbol{line.contains(" integer ")

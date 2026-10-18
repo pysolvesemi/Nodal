@@ -2,7 +2,9 @@
 #define NODAL_BACKEND_SHAPEDVALUEBACKEND_H
 
 #include "nodal/Dialect/Nodal/ParameterModel.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace nodal {
@@ -31,12 +33,19 @@ mlir::FailureOr<TargetShapeExpression> renderShapeStaticIndex(mlir::Operation *m
 struct ShapedProjectionStep {
   mlir::Operation *projection = nullptr;
   std::string expression;
+  std::string destination;
 };
 struct ShapedProjectionProgram {
   mlir::Value root;
   llvm::SmallVector<ShapedProjectionStep> steps;
   std::string result;
 };
+// The caller supplies an independently verified root capability. Naming each
+// stage permits immutable structural constants as well as a reused procedural
+// temporary, without expanding a previous stage's expression tree.
+mlir::FailureOr<ShapedProjectionProgram>
+renderShapedProjectionProgram(const StaticShapeProjection &projection, llvm::StringRef ordinal,
+                              llvm::function_ref<std::string(unsigned)> stageName);
 mlir::FailureOr<ShapedProjectionProgram> renderShapedProjectionProgram(mlir::Value value,
                                                                        llvm::StringRef ordinal,
                                                                        llvm::StringRef temporary);

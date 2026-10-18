@@ -3,6 +3,11 @@
 
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
+#include "llvm/ADT/SmallVector.h"
+
+#include <optional>
+#include <string>
+
 namespace nodal {
 
 /// One proved canonical dimension. Exactly one representation is populated:
@@ -37,6 +42,26 @@ struct StaticShapeIndexIdentity {
 };
 mlir::FailureOr<StaticShapeIndexIdentity> resolveStaticShapeIndexIdentity(mlir::Operation *module,
                                                                           mlir::Value value);
+
+/// Element-neutral facts derived from an actual acyclic SSA projection chain.
+/// These establish shape/ordinal mapping, never storage or conservative rights.
+struct StaticShapeProjection {
+  mlir::Value root;
+  llvm::SmallVector<mlir::Operation *, 4> projections;
+  std::string canonicalKey;
+  std::string canonicalScalarKey;
+  bool wholeRoot = false;
+  std::optional<int64_t> exactFixedCardinality;
+  std::optional<int64_t> literalRootFlatOffset;
+  llvm::SmallVector<std::string, 4> ancestorKeys;
+  std::optional<int64_t> literalFirstOffset;
+  std::optional<int64_t> literalLastOffset;
+  bool contiguousLiteralRegion = false;
+  std::optional<ParameterIntegerBounds> rootFlatBounds;
+  llvm::SmallVector<ParameterIntegerBounds, 4> rootCoordinateBounds;
+};
+mlir::FailureOr<StaticShapeProjection> resolveStaticShapeProjection(mlir::Value reference,
+                                                                    mlir::Operation *use);
 
 /// Local transformation proofs shared by operation and storage-map verification.
 /// These do not grant storage capability or establish initialization.

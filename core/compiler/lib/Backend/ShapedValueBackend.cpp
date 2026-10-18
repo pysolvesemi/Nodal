@@ -223,19 +223,21 @@ FailureOr<llvm::SmallVector<TargetShapeExpression>> unflatten(const TargetShapeE
 } // namespace
 
 FailureOr<ShapedProjectionProgram>
-renderShapedProjectionProgram(Value value, llvm::StringRef ordinal, llvm::StringRef temporary) {
-  Operation *operation = value.getDefiningOp();
+renderShapedProjectionProgram(const StaticShapeProjection &reference, llvm::StringRef ordinal,
+                              llvm::function_ref<std::string(unsigned)> stageName) {
+  Operation *operation = reference.root.getDefiningOp();
   auto module = operation ? operation->getParentOfType<ModuleOp>() : ModuleOp();
   if (!module)
     return failure();
   ShapedProjectionProgram program;
   program.result = ordinal.str();
   llvm::DenseSet<Value> visited;
-  Value cursor = value;
-  while (Operation *projection = cursor.getDefiningOp()) {
-    if (!llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(projection))
-      break;
-    if (!visited.insert(cursor).second || projection->getNumOperands() < 1)
+  Value cursor =
+      reference.projections.empty() ? reference.root : reference.projections.back()->getResult(0);
+  for (Operation *projection : llvm::reverse(reference.projections)) {
+    if (!llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(projection) ||
+        projection->getNumResults() != 1 || projection->getResult(0) != cursor ||
+        !visited.insert(cursor).second || projection->getNumOperands() < 1)
       return failure();
     auto input = llvm::dyn_cast<ShapedType>(projection->getOperand(0).getType());
     auto output = llvm::dyn_cast<ShapedType>(cursor.getType());
@@ -289,19 +291,29 @@ renderShapedProjectionProgram(Value value, llvm::StringRef ordinal, llvm::String
       coordinates[axis.getInt()] = *shifted;
     }
     auto flattened = flatten(coordinates, *inputShape);
+    std::string temporary = stageName(program.steps.size());
     if (failed(flattened) || temporary.empty())
       return failure();
-    program.steps.push_back({projection, flattened->text});
-    program.result = temporary.str();
+    program.steps.push_back({projection, flattened->text, temporary});
+    program.result = std::move(temporary);
     cursor = projection->getOperand(0);
   }
   auto rootShape = llvm::dyn_cast<ShapedType>(cursor.getType());
-  if (!rootShape ||
-      !llvm::isa_and_nonnull<AnalogVariableOp, AnalogVariableReadOp, AnalogArrayFillOp>(
-          cursor.getDefiningOp()) ||
+  if (cursor != reference.root || !rootShape ||
       failed(resolveTargetShapedLayout(module, rootShape.getDimensions())))
     return failure();
   program.root = cursor;
   return program;
+}
+
+FailureOr<ShapedProjectionProgram>
+renderShapedProjectionProgram(Value value, llvm::StringRef ordinal, llvm::StringRef temporary) {
+  auto reference = resolveStaticShapeProjection(value, value.getDefiningOp());
+  if (failed(reference) ||
+      !llvm::isa_and_nonnull<AnalogVariableOp, AnalogVariableReadOp, AnalogArrayFillOp>(
+          reference->root.getDefiningOp()))
+    return failure();
+  return renderShapedProjectionProgram(*reference, ordinal,
+                                       [&](unsigned) { return temporary.str(); });
 }
 } // namespace nodal

@@ -5,6 +5,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -14,21 +15,11 @@
 namespace nodal {
 /// Derived capability and mapping facts from an actual SSA storage root. This
 /// is not a declaration registry and does not establish definite initialization.
-struct AnalogStorageReference {
+struct AnalogStorageReference : StaticShapeProjection {
   mlir::Operation *declaration = nullptr;
-  mlir::Value root;
   VariableType elementType;
   mlir::Operation *procedure = nullptr;
   mlir::Operation *generatedOwner = nullptr;
-  llvm::SmallVector<mlir::Operation *, 4> projections;
-  std::string canonicalKey;
-  bool wholeRoot = false;
-  std::optional<int64_t> exactFixedCardinality;
-  std::optional<int64_t> literalRootFlatOffset;
-  llvm::SmallVector<std::string, 4> ancestorKeys;
-  std::optional<int64_t> literalFirstOffset;
-  std::optional<int64_t> literalLastOffset;
-  bool contiguousLiteralRegion = false;
 };
 
 struct AnalogArrayValue {

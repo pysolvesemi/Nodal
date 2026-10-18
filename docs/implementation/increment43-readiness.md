@@ -243,7 +243,9 @@ evaluation once per entry and event monitor lifetime are preserved. Eleven publi
 methods, nine affected predecessors and focused native/backend checks passed;
 commands and limits are recorded in the shape-contract note. Public loop
 composition uses existing scalar Integer storage; no new Real-to-Integer cast
-is introduced. The tested source-consumer extension follows
+is introduced. The source-consumer extension is published as
+`53d4767c21126c019eb2300ba1aba1d8866f1d7e` with exact tested-tree equality
+and no CI, under
 [v0.5](../design-gates/NodalWritableRealArrays-DG-v0.5.md): checked single-occurrence
 uniform-fill scalarization and compound selected local initialization, preserving
 once-only fill evaluation. Twelve new public groups, 18 affected predecessors,
@@ -251,6 +253,13 @@ native/backend checks and eight actual dual-target models pass; commands and
 limits are in the shape-contract note. Repeated shared-fill live/event consumption remains
 explicitly open until a correct lazy evaluation contract is implemented. Generated
 persistent initialization still needs per-occurrence declaration lifetime.
+The tested shared-layer extension follows
+[NodalConservativeNodeArrays-DG-v0.2](../design-gates/NodalConservativeNodeArrays-DG-v0.2.md):
+owned local conservative views and canonical scalar physical endpoint maps.
+Seven new public methods, 13 affected predecessors, nine actual dual-target
+models and focused native/backend checks pass. It preserves local unpacked-net
+layout; boundary vector layout and whole-array
+instance mappings remain subsequent required work.
 Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated
 connections/instances also remain open where not implemented. No required

@@ -169,6 +169,10 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(throw new IllegalStateException("node array requires an active Module"))
       .registerNodeArray(value, discipline, dimensions)
 
+  def projectNodeArray(value: NodeArray[?], origin: NodeArrayProjection): Unit =
+    active.getOrElse(throw new IllegalStateException("node array view requires an active Module"))
+      .registerNodeArrayProjection(value, origin)
+
   def selectNodeArray(
       value: Node[?],
       array: NodeArray[?],

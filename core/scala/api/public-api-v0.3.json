@@ -99,13 +99,20 @@
     ]
   },
   "conservative_node_arrays": {
-    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.1.md",
+    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.2.md",
     "type": "NodeArray[D <: Discipline]",
     "constructor": "Module.node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
     "selection": "NodeArray.at(indices: Dimension*): Node[D]",
     "initial_profile": "module-local Electrical; static full-rank selection",
     "is_data_or_expr": false,
-    "physical_identity": "owned declaration and canonical index tuple",
+    "physical_identity": "owned root declaration and canonical composed row-major map",
+    "views": [
+      "NodeArray.row(index: Dimension): NodeArray[D]",
+      "NodeArray.plane(index: Dimension): NodeArray[D]",
+      "NodeArray.slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): NodeArray[D]",
+      "NodeArray.flatten: NodeArray[D]",
+      "NodeArray.reshape(dimensions: Dimension*): NodeArray[D]"
+    ],
     "scalar_node_overload": "retained"
   },
   "values_and_connectivity": {

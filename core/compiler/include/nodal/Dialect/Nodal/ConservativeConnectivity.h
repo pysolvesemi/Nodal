@@ -3,6 +3,7 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 namespace nodal {
 
@@ -17,7 +18,17 @@ mlir::LogicalResult materializeConservativeConnectivity(mlir::ModuleOp module);
 /// do not claim a complete local equation boundary.
 bool isPartialPhysicalComponent(mlir::Operation *module);
 
-/// True only for a full-rank scalar selection of a directly owned node array.
+/// Actual conservative capability over the shared element-neutral map.
+struct ConservativeShape {
+  mlir::Operation *declaration = nullptr;
+  StaticShapeProjection projection;
+};
+mlir::FailureOr<ConservativeShape> resolveConservativeShape(mlir::Value value,
+                                                            mlir::Operation *use);
+mlir::FailureOr<ConservativeShape> resolveConservativeSelection(mlir::Value value,
+                                                                mlir::Operation *use);
+
+/// A scalar terminal selection candidate, independently verified by the resolver.
 bool isNodeArraySelection(mlir::Operation *operation);
 
 /// Independently validate actual SSA index identities and possible aliases.

@@ -337,8 +337,9 @@ using ArrayIndexIdentity = nodal::StaticShapeIndexIdentity;
 struct ArraySelectionInfo {
   Operation *operation;
   Value array;
-  std::vector<ArrayIndexIdentity> indices;
+  std::string canonicalKey;
   std::vector<nodal::ParameterIntegerBounds> bounds;
+  std::optional<nodal::ParameterIntegerBounds> flatBounds;
   std::string path;
   std::vector<std::string> uses;
 };
@@ -361,18 +362,25 @@ LogicalResult collectArraySelections(Operation *module,
     // The operation verifier owns rank, element and all-legal-index proofs.
     if (failed(mlir::verify(&operation)))
       return failure();
-    ArraySelectionInfo selection{&operation, operation.getOperand(0), {}, {}, {}, {}};
-    Operation *array = selection.array.getDefiningOp();
-    selection.path = textAttr(array, "source_path").str() + ".at(";
+    auto resolved = nodal::resolveConservativeSelection(operation.getResult(0), &operation);
+    if (failed(resolved))
+      return failure();
+    ArraySelectionInfo selection{
+        &operation, resolved->projection.root,           resolved->projection.canonicalScalarKey,
+        {},         resolved->projection.rootFlatBounds, {},
+        {}};
+    selection.bounds.assign(resolved->projection.rootCoordinateBounds.begin(),
+                            resolved->projection.rootCoordinateBounds.end());
+    Operation *input = operation.getOperand(0).getDefiningOp();
+    selection.path = metadataText(input, "semantic_path").str() + ".at(";
+    unsigned indexCount = 0;
     for (Value index : operation.getOperands().drop_front()) {
       auto bounds = nodal::inferStaticShapeIndexBounds(module, index);
       if (failed(bounds))
         return operation.emitOpError("NODAL-SHAPE-043-006: selection index proof is unavailable");
-      selection.bounds.push_back(*bounds);
       auto identity = nodal::resolveStaticShapeIndexIdentity(module, index);
       if (failed(identity))
         return operation.emitOpError("NODAL-SHAPE-043-006: static index identity is unavailable");
-      selection.indices.push_back(*identity);
       Operation *definition = index.getDefiningOp();
       std::string token;
       if (llvm::isa<nodal::ConstantOp, nodal::ConstLiteralOp>(definition)) {
@@ -405,7 +413,7 @@ LogicalResult collectArraySelections(Operation *module,
               "NODAL-SHAPE-043-006: compound index requires a unique owned root");
         token = "expression:" + path.str();
       }
-      if (selection.indices.size() > 1)
+      if (indexCount++ > 0)
         selection.path += ',';
       selection.path += token;
     }
@@ -413,7 +421,7 @@ LogicalResult collectArraySelections(Operation *module,
     auto metadata = operation.getAttrOfType<DictionaryAttr>("metadata");
     auto uses = metadata ? metadata.getAs<ArrayAttr>("source_uses") : ArrayAttr();
     if (metadataText(&operation, "semantic_path") != selection.path ||
-        metadataText(&operation, "input_path") != textAttr(array, "source_path") ||
+        metadataText(&operation, "input_path") != metadataText(input, "semantic_path") ||
         metadataText(&operation, "storage") != "structural" ||
         metadataText(&operation, "selection_kind") != "node_array" ||
         !isCanonicalStringArray(uses, true))
@@ -428,7 +436,12 @@ LogicalResult collectArraySelections(Operation *module,
       selection.uses.push_back(use.str());
     }
     for (const ArraySelectionInfo &previous : selections) {
-      const bool same = previous.array == selection.array && previous.indices == selection.indices;
+      if (llvm::is_contained(selection.uses, previous.path) ||
+          llvm::is_contained(previous.uses, selection.path))
+        return operation.emitOpError(
+            "NODAL-SHAPE-043-006: source uses cannot alias selected endpoint identities");
+      const bool same =
+          previous.array == selection.array && previous.canonicalKey == selection.canonicalKey;
       if (!same && previous.path == selection.path)
         return operation.emitOpError(
             "NODAL-SHAPE-043-006: distinct selected endpoints cannot share source identity");
@@ -441,9 +454,13 @@ LogicalResult collectArraySelections(Operation *module,
       if (same || previous.array != selection.array)
         continue;
       bool disjoint = false;
-      for (unsigned axis = 0; axis < selection.bounds.size(); ++axis)
-        disjoint |= selection.bounds[axis].upper < previous.bounds[axis].lower ||
-                    previous.bounds[axis].upper < selection.bounds[axis].lower;
+      if (selection.bounds.size() == previous.bounds.size())
+        for (unsigned axis = 0; axis < selection.bounds.size(); ++axis)
+          disjoint |= selection.bounds[axis].upper < previous.bounds[axis].lower ||
+                      previous.bounds[axis].upper < selection.bounds[axis].lower;
+      if (selection.flatBounds && previous.flatBounds)
+        disjoint |= selection.flatBounds->upper < previous.flatBounds->lower ||
+                    previous.flatBounds->upper < selection.flatBounds->lower;
       if (!disjoint)
         return operation.emitOpError(
             "NODAL-SHAPE-043-006: distinct node-array selectors may alias for legal parameters");
@@ -1202,11 +1219,67 @@ bool nodal::isPartialPhysicalComponent(Operation *module) {
   return contract && textAttr(contract, "kind") == "partial";
 }
 
+FailureOr<nodal::ConservativeShape> nodal::resolveConservativeShape(Value value, Operation *use) {
+  auto reject = [&](llvm::StringRef message) -> FailureOr<ConservativeShape> {
+    (void)(use->emitOpError("NODAL-SHAPE-043-006: ") << message);
+    return failure();
+  };
+  if (!value || !use)
+    return failure();
+  auto shaped = llvm::dyn_cast<ShapedType>(value.getType());
+  auto terminal = llvm::dyn_cast<TerminalType>(shaped ? shaped.getElementType() : value.getType());
+  auto module = use->getParentOfType<nodal::ModuleOp>();
+  if (!terminal || terminal.getDiscipline() != "electrical" || !module)
+    return reject("conservative view requires owned Electrical terminal elements");
+  auto projection = resolveStaticShapeProjection(value, use);
+  if (failed(projection))
+    return reject("conservative view requires an acyclic verified owned shape map");
+  Operation *root = projection->root.getDefiningOp();
+  if (!llvm::isa_and_nonnull<NodeArrayOp>(root) || root->getParentOp() != module ||
+      failed(llvm::cast<NodeArrayOp>(root).verify()))
+    return reject("conservative shape capability requires an actual local node-array root");
+  llvm::StringRef ownerPath = metadataText(module, "semantic_path");
+  if (ownerPath.empty())
+    ownerPath = textAttr(module, "sym_name");
+  const std::string prefix = (ownerPath + ".").str();
+  auto ownedPath = [&](llvm::StringRef path) {
+    return isCanonicalText(path) && path.starts_with(prefix) && path.size() > prefix.size();
+  };
+  for (Operation *operation : projection->projections) {
+    auto path = metadataText(operation, "semantic_path");
+    auto inputPath = metadataText(operation->getOperand(0).getDefiningOp(), "semantic_path");
+    bool scalar = llvm::isa<TerminalType>(operation->getResult(0).getType());
+    if (operation->getParentOp() != module || operation->hasAttr("generated_owner") ||
+        operation->hasAttr("generated_induction") ||
+        (!textAttr(operation, "owner").empty() &&
+         textAttr(operation, "owner") != textAttr(module, "sym_name")) ||
+        !ownedPath(path) || !ownedPath(inputPath) || path == inputPath ||
+        metadataText(operation, "input_path") != inputPath ||
+        (llvm::isa<ShapeViewOp, ShapeSliceOp>(operation) &&
+         textAttr(operation, "origin") != inputPath) ||
+        metadataText(operation, "storage") != "structural" ||
+        (!scalar && metadataText(operation, "access") != "read_only"))
+      return reject("conservative projection requires owned immediate-input structural provenance");
+    if (!scalar) {
+      for (Operation &candidate : module->getRegion(0).front())
+        if (&candidate != operation && metadataText(&candidate, "semantic_path") == path)
+          return reject("conservative view source identity must be unique");
+    }
+  }
+  return ConservativeShape{root, std::move(*projection)};
+}
+
+FailureOr<nodal::ConservativeShape> nodal::resolveConservativeSelection(Value value,
+                                                                        Operation *use) {
+  if (!value || !llvm::isa<TerminalType>(value.getType()))
+    return failure();
+  return resolveConservativeShape(value, use);
+}
+
 bool nodal::isNodeArraySelection(Operation *operation) {
   return llvm::isa_and_nonnull<nodal::ShapeIndexOp>(operation) && operation->getNumOperands() > 1 &&
          operation->getNumResults() == 1 &&
-         llvm::isa<nodal::TerminalType>(operation->getResult(0).getType()) &&
-         llvm::isa_and_nonnull<nodal::NodeArrayOp>(operation->getOperand(0).getDefiningOp());
+         llvm::isa<nodal::TerminalType>(operation->getResult(0).getType());
 }
 
 LogicalResult nodal::verifyNodeArraySelections(Operation *module) {
@@ -1231,7 +1304,8 @@ LogicalResult nodal::normalizeNodeArraySelections(mlir::ModuleOp module) {
     for (ArraySelectionInfo &selection : selections) {
       ArraySelectionInfo *representative = nullptr;
       for (ArraySelectionInfo *candidate : representatives)
-        if (candidate->array == selection.array && candidate->indices == selection.indices) {
+        if (candidate->array == selection.array &&
+            candidate->canonicalKey == selection.canonicalKey) {
           representative = candidate;
           break;
         }

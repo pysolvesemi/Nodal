@@ -303,9 +303,15 @@ private final class GeneratedRegionRecord(
 ):
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
 
+private final case class NodeArrayProjection(
+    input: NodeArray[?],
+    indices: Vector[Dimension] = Vector.empty,
+    slice: Option[ShapeSliceSelection] = None
+)
+
 private final case class ConservativeSelectionKey(
     array: DeclarationRef,
-    indices: Vector[Either[Long, DeclarationRef | ExpressionRef]]
+    region: StructuralShapeCoordinates.Region
 )
 
 private final case class ShapeIndexRecord(

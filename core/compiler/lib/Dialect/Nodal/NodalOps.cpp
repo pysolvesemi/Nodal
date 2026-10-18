@@ -2047,13 +2047,6 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
   const unsigned indices = operation->getNumOperands() - 1;
   const unsigned rank = shapedRank(shaped.getDimensions());
   const bool conservative = llvm::isa<nodal::TerminalType>(shaped.getElementType());
-  if (conservative &&
-      (!llvm::isa_and_nonnull<nodal::NodeArrayOp>(operation->getOperand(0).getDefiningOp()) ||
-       indices != rank ||
-       operation->getOperand(0).getDefiningOp()->getParentOp() != operation->getParentOp() ||
-       !llvm::isa_and_nonnull<nodal::ModuleOp>(operation->getParentOp())))
-    return operation->emitOpError("NODAL-SHAPE-043-006: conservative selection requires full-rank "
-                                  "direct-module node-array ownership");
   if (indices == 0 || indices > rank)
     return operation->emitOpError(
         "NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
@@ -2146,6 +2139,9 @@ LogicalResult nodal::ShapeIndexOp::verify() {
   Operation *operation = getOperation();
   if (failed(verifyShapeIndexMapping(operation)))
     return failure();
+  auto input = llvm::dyn_cast<ShapedType>(operation->getOperand(0).getType());
+  if (input && llvm::isa<TerminalType>(input.getElementType()))
+    return success(succeeded(resolveConservativeShape(operation->getResult(0), operation)));
   if (isStorageType(operation->getOperand(0).getType()))
     return verifyAnalogStorageProjection(operation);
   if (isProceduralShapeProjection(operation))
@@ -2337,6 +2333,9 @@ LogicalResult nodal::ShapeViewOp::verify() {
   Operation *operation = getOperation();
   if (failed(verifyShapeViewMapping(operation)))
     return failure();
+  auto input = llvm::dyn_cast<ShapedType>(operation->getOperand(0).getType());
+  if (input && llvm::isa<TerminalType>(input.getElementType()))
+    return success(succeeded(resolveConservativeShape(operation->getResult(0), operation)));
   if (isStorageType(operation->getOperand(0).getType()))
     return verifyAnalogStorageProjection(operation);
   if (isProceduralShapeProjection(operation))
@@ -2358,8 +2357,8 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
       return failure();
   } else if (!owner || operation->getParentOp() != owner || !source ||
              source->getParentOp() != owner ||
-             !llvm::isa<nodal::PortValueOp, nodal::ShapeIndexOp, nodal::ShapeViewOp,
-                        nodal::ShapeSliceOp>(source) ||
+             !llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::ShapeIndexOp,
+                        nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) ||
              (llvm::isa<nodal::ShapeViewOp>(source) &&
               textAttr(source, "materialization") != "view"))
     return operation->emitOpError(
@@ -2511,6 +2510,9 @@ LogicalResult nodal::ShapeSliceOp::verify() {
   Operation *operation = getOperation();
   if (failed(verifyShapeSliceMapping(operation)))
     return failure();
+  auto input = llvm::dyn_cast<ShapedType>(operation->getOperand(0).getType());
+  if (input && llvm::isa<TerminalType>(input.getElementType()))
+    return success(succeeded(resolveConservativeShape(operation->getResult(0), operation)));
   if (isStorageType(operation->getOperand(0).getType()))
     return verifyAnalogStorageProjection(operation);
   if (isProceduralShapeProjection(operation))

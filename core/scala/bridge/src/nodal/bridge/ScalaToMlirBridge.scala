@@ -837,9 +837,42 @@ ${indent(body, 2)}
               "only node arrays may carry conservative dimensions",
               Some(declaration.path)
             )
-      val nodeSelections = mutable.HashMap.empty[String, Vector[KernelShapeIndexSnapshot]]
+      val nodeSelections = mutable.HashMap.empty[String, Vector[(
+          StructuralShapeCoordinates.Region,
+          Vector[(BigInt, BigInt)]
+      )]]
       val nodeSelectionUses = mutable.HashSet.empty[String]
-      val validatedShapes = mutable.HashMap.empty[String, (String, Vector[String])]
+      val validatedShapes = mutable.HashMap.empty[
+        String,
+        (String, Vector[String], Option[String], Vector[StructuralShapeCoordinates.Projection])
+      ]
+      def mapToken(module: KernelModuleSnapshot, value: String, path: String): String =
+        value.toLongOption.map(_.toString).getOrElse(shapeDimensionStaticPath(
+          module,
+          value
+        ).getOrElse(
+          fail("NODAL-BRIDGE-048", "node-array map lacks an owned static identity", Some(path))
+        ))
+      def mapProjection(
+          module: KernelModuleSnapshot,
+          shape: StructuralShapeOperation
+      ): StructuralShapeCoordinates.Projection =
+        def token(value: String): String = mapToken(module, value, shape.path)
+        shape.record match
+          case index: KernelShapeIndexSnapshot => StructuralShapeCoordinates.Projection.Index(
+              index.indices.map(token),
+              index.resultDimensions.map(token)
+            )
+          case view: KernelShapeViewSnapshot => StructuralShapeCoordinates.Projection.View(
+              view.dimensions.map(token),
+              view.slice.map(slice =>
+                KernelShapeSliceSnapshot(
+                  slice.axis,
+                  token(slice.lower),
+                  token(slice.upperExclusive)
+                )
+              )
+            )
       structuralShapeOperations.foreach: shape =>
         val module = modulesByPath.getOrElse(
           shape.owner,
@@ -857,38 +890,43 @@ ${indent(body, 2)}
           fail(shape.code, "structural shape identity has no source-map entry", Some(shape.path))
         if module.declarations.exists(_.path == shape.path) then
           fail(shape.code, "structural shape identity aliases a declaration", Some(shape.path))
-        val dimensions = module.declarations.find(_.path == shape.input) match
-          case Some(declaration) if declaration.kind == "analog-node-array" =>
-            if !shape.isNodeSelection then
-              fail(
-                shape.code,
-                "node arrays require complete conservative endpoint selection",
-                Some(shape.path)
+        val (dimensions, nodeRoot, projections) =
+          module.declarations.find(_.path == shape.input) match
+            case Some(declaration) if declaration.kind == "analog-node-array" =>
+              (
+                declaration.conservativeDimensions,
+                Some(declaration.path),
+                Vector.empty[StructuralShapeCoordinates.Projection]
               )
-            declaration.conservativeDimensions
-          case Some(declaration) =>
-            if shape.isNodeSelection || (declaration.kind != "input" && declaration.kind != "output")
-            then
-              fail(shape.code, "structural shape input must be a module port", Some(shape.path))
-            val dataType = declaration.dataType.getOrElse(
-              fail(shape.code, "structural shape input type is absent", Some(shape.path))
-            )
-            vecTypeParts(dataType, shape.path)._2
-          case None =>
-            if shape.isNodeSelection then
-              fail(
+            case Some(declaration) =>
+              if shape.isNodeSelection || (declaration.kind != "input" && declaration.kind != "output")
+              then
+                fail(shape.code, "structural shape input must be a module port", Some(shape.path))
+              val dataType = declaration.dataType.getOrElse(fail(
                 shape.code,
-                "node selection requires its direct owned array declaration",
+                "structural shape input type is absent",
                 Some(shape.path)
+              ))
+              (
+                vecTypeParts(dataType, shape.path)._2,
+                None,
+                Vector.empty[StructuralShapeCoordinates.Projection]
               )
-            validatedShapes.get(shape.input) match
-              case Some((owner, dimensions)) if owner == shape.owner => dimensions
-              case _ =>
-                fail(
-                  shape.code,
-                  "shape input must be an earlier captured shaped result in the same Module",
-                  Some(shape.path)
-                )
+            case None =>
+              validatedShapes.get(shape.input) match
+                case Some((owner, dimensions, root, chain)) if owner == shape.owner =>
+                  (dimensions, root, chain)
+                case _ => fail(
+                    shape.code,
+                    "shape input must be an earlier captured shaped result in the same Module",
+                    Some(shape.path)
+                  )
+        if shape.isNodeSelection != (nodeRoot.nonEmpty && shape.dimensions.isEmpty) then
+          fail(
+            shape.code,
+            "scalar conservative selection must retain its node-array capability and source occurrences",
+            Some(shape.path)
+          )
         shape.record match
           case view: KernelShapeViewSnapshot if view.slice.nonEmpty =>
             validateShapeSlice(module, dimensions, view)
@@ -903,17 +941,7 @@ ${indent(body, 2)}
               )
           case index: KernelShapeIndexSnapshot =>
             if shape.isNodeSelection then
-              validateNodeSelection(
-                module,
-                dimensions,
-                index,
-                nodeSelections.getOrElse(index.input, Vector.empty),
-                nodeSelectionUses
-              )
-              nodeSelections.update(
-                index.input,
-                nodeSelections.getOrElse(index.input, Vector.empty) :+ index
-              )
+              validateNodeSelection(module, dimensions, index, nodeSelectionUses)
             if index.indices.isEmpty || index.indices.size > dimensions.size then
               fail(
                 shape.code,
@@ -937,8 +965,52 @@ ${indent(body, 2)}
                     s"shape index is not valid for every legal extent at axis $axis",
                     Some(shape.path)
                   )
+        val chain =
+          if nodeRoot.nonEmpty then projections :+ mapProjection(module, shape) else projections
+        if shape.isNodeSelection then
+          val root = nodeRoot.get
+          val rootShape =
+            module.declarations.find(_.path == root).get.conservativeDimensions.map(mapToken(
+              module,
+              _,
+              shape.path
+            ))
+          try
+            val region = StructuralShapeCoordinates.scalarRegion(rootShape, chain)
+            val axes = StructuralShapeCoordinates.rootCoordinates(rootShape, chain).map(
+              coordinate =>
+                StructuralShapeCoordinates.bounds(
+                  coordinate,
+                  identity =>
+                    val bound = shapeIndexBounds(module, identity, shape.path)
+                    BigInt(bound.lower) -> BigInt(bound.upper)
+                )
+            )
+            nodeSelections.getOrElse(root, Vector.empty).foreach: (other, otherAxes) =>
+              if region == other then
+                fail(
+                  "NODAL-BRIDGE-048",
+                  "duplicate canonical node-array physical endpoint",
+                  Some(shape.path)
+                )
+              if !axes.zip(otherAxes).exists((left, right) =>
+                  left._2 < right._1 || right._2 < left._1
+                )
+              then
+                fail(
+                  "NODAL-BRIDGE-048",
+                  "distinct node-array selectors may alias for a legal parameter setting",
+                  Some(shape.path)
+                )
+            nodeSelections.update(
+              root,
+              nodeSelections.getOrElse(root, Vector.empty) :+ (region -> axes)
+            )
+          catch
+            case error: StructuralShapeCoordinates.InvalidCoordinate =>
+              fail("NODAL-BRIDGE-048", error.getMessage, Some(shape.path))
         if shape.dimensions.nonEmpty then
-          validatedShapes.update(shape.path, shape.owner -> shape.dimensions)
+          validatedShapes.update(shape.path, (shape.owner, shape.dimensions, nodeRoot, chain))
       requireUnique(
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
@@ -1187,7 +1259,7 @@ ${indent(body, 2)}
               Some(dimensionPath)
             )
         val (inputValue, inputType, elementText) = declarationsByPath.get(shape.input) match
-          case Some(declaration) if shape.isNodeSelection =>
+          case Some(declaration) if declaration.kind == "analog-node-array" =>
             val (value, dataType) = values(declaration.path)
             (value, dataType, "!nodal.terminal<\"electrical\">")
           case Some(declaration) =>
@@ -1207,7 +1279,7 @@ ${indent(body, 2)}
               ),
               semanticPath = shape.input
             )
-            (portValue, shapedType, element)
+            (portValue, shapedType, parseType(element, shape.path))
           case None =>
             emittedShapes.getOrElse(
               shape.input,
@@ -1217,8 +1289,8 @@ ${indent(body, 2)}
                 Some(shape.path)
               )
             )
-        val elementType =
-          if shape.isNodeSelection then elementText else parseType(elementText, shape.path)
+        val elementType = elementText
+        val conservative = elementType == "!nodal.terminal<\"electrical\">"
         val resultType =
           if shape.dimensions.isEmpty then elementType
           else s"!nodal.shaped<${quoted(shape.dimensions.mkString(","))}, $elementType>"
@@ -1306,7 +1378,7 @@ ${indent(body, 2)}
                   Vector(
                     "input_path" -> quoted(view.input),
                     "storage" -> quoted("structural")
-                  )
+                  ) ++ Option.when(conservative)("access" -> quoted("read_only"))
                 )
               ),
               semanticPath = view.path
@@ -1322,7 +1394,7 @@ ${indent(body, 2)}
                     resultTypes = Vector("index"),
                     attributes = Vector(
                       "value" -> s"$literal : index",
-                      "metadata" -> bridgeMetadata(index.path, Vector("axis" -> integer(axis)))
+                      "metadata" -> s"{axis = ${integer(axis)}}"
                     ),
                     semanticPath = index.path
                   )
@@ -1359,6 +1431,10 @@ ${indent(body, 2)}
                       "selection_kind" -> quoted("node_array"),
                       "storage" -> quoted("structural"),
                       "source_uses" -> array(index.sourceUses.map(quoted))
+                    )).toVector.flatten ++
+                    Option.when(conservative && !shape.isNodeSelection)(Vector(
+                      "storage" -> quoted("structural"),
+                      "access" -> quoted("read_only")
                     )).toVector.flatten
                 )
               ),
@@ -3717,7 +3793,6 @@ ${indent(body, 2)}
         module: KernelModuleSnapshot,
         dimensions: Vector[String],
         index: KernelShapeIndexSnapshot,
-        previous: Vector[KernelShapeIndexSnapshot],
         usedSources: mutable.HashSet[String]
     ): Unit =
       def invalid(message: String): Nothing = fail("NODAL-BRIDGE-048", message, Some(index.path))
@@ -3754,15 +3829,6 @@ ${indent(body, 2)}
           !sourceByPath.contains(source) || !usedSources.add(source) ||
           module.declarations.exists(_.path == source) || expressions.contains(source)
         then invalid("node-array selection occurrence has no distinct owned source-map identity")
-      val bounds = index.indices.map(shapeIndexBounds(module, _, index.path))
-      previous.foreach: other =>
-        if other.indices.map(token) == tokens then
-          invalid("duplicate canonical node-array physical endpoint")
-        val otherBounds = other.indices.map(shapeIndexBounds(module, _, other.path))
-        if !bounds.zip(otherBounds).exists((left, right) =>
-            left.upper < right.lower || right.upper < left.lower
-          )
-        then invalid("distinct node-array selectors may alias for a legal parameter setting")
 
     private def shapeDimensionMinimum(
         module: KernelModuleSnapshot,

@@ -193,13 +193,42 @@ final class Node[D <: Discipline] private[nodal] (
 /** Owned conservative node shape; selection returns a scalar endpoint reference. */
 final class NodeArray[D <: Discipline] private[nodal] (
     val discipline: D,
-    private[nodal] val dimensions: Vector[Dimension]
+    private[nodal] val dimensions: Vector[Dimension],
+    private[nodal] val projection: Option[NodeArrayProjection] = None
 ):
-  AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
-  ConstructionKernel.declareNodeArray(this, discipline, dimensions)
+  projection match
+    case None =>
+      AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
+      ConstructionKernel.declareNodeArray(this, discipline, dimensions)
+    case Some(origin) => ConstructionKernel.projectNodeArray(this, origin)
 
   def at(indices: Dimension*): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogNode, Some(this -> indices.toVector))
+
+  private def prefix(index: Dimension, rank: Int): NodeArray[D] =
+    if dimensions.size != rank then
+      throw new ConstructionException(KernelDiagnostic(
+        "NODAL-SHAPE-043-002",
+        "node-array prefix selection has the wrong rank"
+      ))
+    new NodeArray(discipline, dimensions.tail, Some(NodeArrayProjection(this, Vector(index))))
+
+  def row(index: Dimension): NodeArray[D] = prefix(index, 2)
+  def plane(index: Dimension): NodeArray[D] = prefix(index, 3)
+  def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): NodeArray[D] =
+    val result = CandidateRuntime.sliceShapeDimensions(dimensions, lower, upperExclusive, axis)
+    new NodeArray(
+      discipline,
+      result,
+      Some(NodeArrayProjection(
+        this,
+        slice = Some(ShapeSliceSelection(axis, lower, upperExclusive))
+      ))
+    )
+  def flatten: NodeArray[D] =
+    reshape(CandidateRuntime.flattenShapeDimensions(dimensions, signed64Literal = true)*)
+  def reshape(dimensions: Dimension*): NodeArray[D] =
+    new NodeArray(discipline, dimensions.toVector, Some(NodeArrayProjection(this)))
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -1285,27 +1314,14 @@ private[nodal] object CandidateRuntime:
   def shapePlane[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
     shapePrefix(value, index, expectedRank = 3, name = "plane")
 
-  def shapeSlice[A <: Data](
-      value: Expr[Vec[A]],
+  private[nodal] def sliceShapeDimensions(
+      sourceDimensions: Vector[Dimension],
       lower: Dimension,
       upperExclusive: Dimension,
       axis: Int
-  ): Expr[Vec[A]] =
+  ): Vector[Dimension] =
     def invalid(message: String): Nothing =
-      scala.util.Failure[Nothing](
-        new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
-      ).get
-    val descriptor = expressionDataType(value).map(typeDescriptor)
-      .filter(_.kind == "Vec").getOrElse(invalid("shape slice requires a Vec value"))
-    val element = descriptor.arguments.headOption.collect:
-      case candidate: DataType[?] => candidate
-    .getOrElse(invalid("shape slice requires an element type"))
-    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
-      case dimensions: Seq[?] => dimensions.toVector.map:
-          case dimension: Int => dimension: Dimension
-          case dimension: Expr[?] => dimension.asInstanceOf[Expr[Integer]]: Dimension
-          case _ => invalid("shape slice requires static Integer dimensions")
-      case _ => Vector.empty
+      throw new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
     if axis < 0 || axis >= sourceDimensions.size then
       invalid("shape slice axis is outside the input rank")
     def literalValue(dimension: Dimension): Option[Long] = dimension match
@@ -1331,9 +1347,32 @@ private[nodal] object CandidateRuntime:
           )
       case (Some(0L), _) => upperExclusive
       case _ => integerExpr("analog_sub", integerValue(upperExclusive), integerValue(lower))
-    val dimensions = sourceDimensions.updated(axis, length)
+    sourceDimensions.updated(axis, length)
+
+  def shapeSlice[A <: Data](
+      value: Expr[Vec[A]],
+      lower: Dimension,
+      upperExclusive: Dimension,
+      axis: Int
+  ): Expr[Vec[A]] =
+    def invalid(message: String): Nothing =
+      scala.util.Failure[Nothing](
+        new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
+      ).get
+    val descriptor = expressionDataType(value).map(typeDescriptor)
+      .filter(_.kind == "Vec").getOrElse(invalid("shape slice requires a Vec value"))
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(invalid("shape slice requires an element type"))
+    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case dimensions: Seq[?] => dimensions.toVector.map:
+          case dimension: Int => dimension: Dimension
+          case dimension: Expr[?] => dimension.asInstanceOf[Expr[Integer]]: Dimension
+          case _ => invalid("shape slice requires static Integer dimensions")
+      case _ => Vector.empty
+    val dimensions = sliceShapeDimensions(sourceDimensions, lower, upperExclusive, axis)
     val result = new KernelExpr[Vec[A]](
-      Vector(value, lower, upperExclusive, length, axis),
+      Vector(value, lower, upperExclusive, dimensions(axis), axis),
       resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
       operation = Some("shape_slice")
     )
@@ -1351,11 +1390,6 @@ private[nodal] object CandidateRuntime:
       .filter(_.kind == "Vec")
       .flatMap(_.arguments.lift(1).collect { case values: Seq[?] => values.toVector })
       .getOrElse(Vector.empty)
-    val fixedDimensions = dimensions.map:
-      case literal: Int if literal > 0 => Some(BigInt(literal))
-      case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
-        expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
-      case _ => None
     val structuralCarrier =
       value.isInstanceOf[Signal[?]] || proceduralShapeSource(value) ||
         (value match
@@ -1364,21 +1398,42 @@ private[nodal] object CandidateRuntime:
               operation == "shape_view" || operation == "shape_index" || operation == "shape_slice"
             )
           case _ => false)
-    if structuralCarrier && fixedDimensions.nonEmpty &&
+    if structuralCarrier then shapeView(value, flattenShapeDimensions(dimensions))
+    else expr(value, "flatten")
+
+  private[nodal] def flattenShapeDimensions(
+      dimensions: Vector[Any],
+      signed64Literal: Boolean = false
+  ): Vector[Dimension] =
+    val fixedDimensions = dimensions.map:
+      case literal: Int if literal > 0 => Some(BigInt(literal))
+      case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
+        expression.literal.flatMap(_.value.toLongOption).filter(_ > 0).map(BigInt(_))
+      case _ => None
+    if fixedDimensions.nonEmpty &&
       fixedDimensions.forall(_.nonEmpty)
     then
       val count = fixedDimensions.flatten.product
-      if count <= BigInt(Int.MaxValue) then shapeView(value, Vector(count.toInt))
+      if count <= BigInt(Int.MaxValue) then Vector(count.toInt)
+      else if signed64Literal && count.isValidLong then
+        Vector(literal[Integer](
+          KernelTypeDescriptor("Integer"),
+          "integer",
+          count.toString,
+          Vector(count.toLong)
+        ))
       else
-        scala.util.Failure[Expr[Vec[A]]](
+        scala.util.Failure[Vector[Dimension]](
           new ConstructionException(
             KernelDiagnostic(
               "NODAL-SHAPE-043-003",
-              "fixed shape flattening exceeds the supported signed 32-bit result dimension"
+              s"fixed shape flattening exceeds the supported signed ${
+                  if signed64Literal then 64 else 32
+                }-bit result dimension"
             )
           )
         ).get
-    else if structuralCarrier && dimensions.nonEmpty then
+    else if dimensions.nonEmpty then
       val factors = dimensions.map:
         case literal: Int => literalInteger(literal)
         case parameter: Param[?] => parameter.asInstanceOf[Expr[Integer]]
@@ -1400,8 +1455,8 @@ private[nodal] object CandidateRuntime:
       val count =
         nonUnitFactors.reduceOption((left, right) => integerExpr("analog_mul", left, right))
           .getOrElse(literalInteger(1))
-      shapeView(value, Vector(count))
-    else expr(value, "flatten")
+      Vector(count)
+    else Vector.empty
 
   def shapeView[A <: Data](
       value: Expr[Vec[A]],

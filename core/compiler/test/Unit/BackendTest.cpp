@@ -1073,6 +1073,53 @@ constexpr llvm::StringLiteral kStaticNodeArrayParameter = R"mlir(
     "nodal.parameter_envelope"() <{effects = ["shape"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
 )mlir";
 
+std::string nodeShape(const std::string &dimensions) {
+  return "!nodal.shaped<\"" + dimensions + "\", !nodal.terminal<\"electrical\">>";
+}
+std::string nodePath(const std::string &value) {
+  return "ArrayNodes." + (value == "array" ? "tap" : value);
+}
+std::string nodeViewMetadata(const std::string &name, const std::string &input) {
+  return "metadata = {semantic_path = \"" + nodePath(name) + "\", input_path = \"" +
+         nodePath(input) + "\", storage = \"structural\", access = \"read_only\"}";
+}
+std::string nodeIndex(const std::string &name, const std::string &input,
+                      const std::string &dimensions, const std::string &indices,
+                      const std::string &tokens, const std::string &result = "") {
+  std::string types = nodeShape(dimensions);
+  for (char c : indices)
+    if (c == '%')
+      types += ", i64";
+  std::string metadata = nodeViewMetadata(name, input);
+  if (result.empty())
+    metadata = "metadata = {semantic_path = \"" + nodePath(input) + ".at(" + tokens +
+               ")\", input_path = \"" + nodePath(input) +
+               "\", storage = \"structural\", selection_kind = \"node_array\", "
+               "source_uses = [\"ArrayNodes.use_" +
+               name + "\"]}";
+  return "%" + name + " = \"nodal.shape_index\"(%" + input + ", " + indices + ") <{" + metadata +
+         "}> : (" + types + ") -> " +
+         (result.empty() ? "!nodal.terminal<\"electrical\">" : nodeShape(result)) + "\n";
+}
+std::string nodeView(const std::string &name, const std::string &input,
+                     const std::string &dimensions, const std::string &result) {
+  return "%" + name + " = \"nodal.shape_view\"(%" + input + ") <{dimensions = \"" + result +
+         "\", origin = \"" + nodePath(input) +
+         "\", materialization = \"view\", observability = \"source_mapped\", " +
+         nodeViewMetadata(name, input) + "}> : (" + nodeShape(dimensions) + ") -> " +
+         nodeShape(result) + "\n";
+}
+std::string nodeSlice(const std::string &name, const std::string &input,
+                      const std::string &dimensions, const std::string &result,
+                      const std::string &lower, const std::string &upper, const std::string &length,
+                      unsigned axis = 1) {
+  return "%" + name + " = \"nodal.shape_slice\"(%" + input + ", %" + lower + ", %" + upper + ", %" +
+         length + ") <{axis = " + std::to_string(axis) + " : i64, dimensions = \"" + result +
+         "\", origin = \"" + nodePath(input) + "\", observability = \"source_mapped\", " +
+         nodeViewMetadata(name, input) + "}> : (" + nodeShape(dimensions) + ", i64, i64, i64) -> " +
+         nodeShape(result) + "\n";
+}
+
 class RejectingReparseHooks final : public nodal::TargetVerificationHooks {
 public:
   mlir::LogicalResult verifyTarget(llvm::StringRef,
@@ -7532,6 +7579,193 @@ int main() {
     if (mlir::succeeded(nodal::reparseBackendTarget(invalidHierarchy, *configuration)))
       return fail("malformed selected hierarchy endpoint passed structural reparse");
   }
+
+  // Local conservative views retain the same physical selected endpoint. The
+  // root declaration/layout and every scalar consumer stay on the old path.
+  auto replaceNodeSelection = [](std::string source, const std::string &name,
+                                 const std::string &replacement) {
+    const size_t start = source.find("%" + name + " =");
+    const size_t end = source.find('\n', start);
+    if (start == std::string::npos || end == std::string::npos)
+      return std::string();
+    source.replace(start, end - start + 1, replacement);
+    return source;
+  };
+  auto emitNodeView = [&](const std::string &source, std::string &target,
+                          nodal::BackendKind kind = nodal::BackendKind::VerilogA) {
+    auto module = parse(context, source);
+    if (!module || mlir::failed(mlir::verify(*module)))
+      return false;
+    llvm::raw_string_ostream stream(target);
+    if (mlir::failed(nodal::emitBackend(*module, kind, stream)))
+      return false;
+    stream.flush();
+    std::string repeated;
+    llvm::raw_string_ostream repeatStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*module, kind, repeatStream)))
+      return false;
+    repeatStream.flush();
+    return repeated == target &&
+           mlir::succeeded(nodal::reparseBackendTarget(target, *configuration));
+  };
+  const std::string rowSelection = nodeIndex("row", "array", "2,3", "%one", "literal:1", "3") +
+                                   nodeIndex("selected", "row", "3", "%one", "literal:1");
+  std::string rowNodeOutput;
+  if (!emitNodeView(replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", rowSelection),
+                    rowNodeOutput) ||
+      rowNodeOutput != staticNodeOutput)
+    return fail("row selection changed its direct physical endpoint or scalar target");
+  const std::string twoLiteral =
+      "%two = \"nodal.const_literal\"() <{metadata = {}, spelling = \"2\", value = 2 : i64}> : "
+      "() -> i64\n";
+  const std::string sliceSelection =
+      twoLiteral + nodeSlice("columns", "array", "2,3", "2,1", "one", "two", "one") +
+      nodeView("flat", "columns", "2,1", "2") +
+      nodeIndex("selected", "flat", "2", "%one", "literal:1");
+  std::string sliceNodeOutput;
+  if (!emitNodeView(replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", sliceSelection),
+                    sliceNodeOutput) ||
+      sliceNodeOutput != staticNodeOutput)
+    return fail("noncontiguous slice/flatten selection changed its fixed root ordinal");
+  const std::string reshapeSelection =
+      twoLiteral + nodeView("reshaped", "array", "2,3", "3,2") +
+      nodeIndex("selected", "reshaped", "3,2", "%two, %zero", "literal:2,literal:0");
+  std::string reshapeNodeOutput;
+  if (!emitNodeView(
+          replaceNodeSelection(kStaticNodeArrayModule.str(), "selected", reshapeSelection),
+          reshapeNodeOutput) ||
+      reshapeNodeOutput != staticNodeOutput)
+    return fail("reshape scalar selection lost exact fixed row-major identity");
+  std::string planeSource = kStaticNodeArrayModule.str();
+  replaceAll(planeSource, "2,3", "2,2,3");
+  planeSource = replaceNodeSelection(
+      planeSource, "selected",
+      nodeIndex("plane", "array", "2,2,3", "%one", "literal:1", "2,3") +
+          nodeIndex("selected", "plane", "2,3", "%one, %one", "literal:1,literal:1"));
+  planeSource = replaceNodeSelection(
+      planeSource, "other",
+      nodeIndex("other", "array", "2,2,3", "%zero, %zero, %one", "literal:0,literal:0,literal:1"));
+  std::string planeNodeOutput;
+  if (!emitNodeView(planeSource, planeNodeOutput) ||
+      planeNodeOutput.find("I(tap[10], p) <+ (V(tap[10], p) / 1000);") == std::string::npos)
+    return fail("plane selection lost its fixed multidimensional physical ordinal");
+  std::string equivalentSource = kStaticNodeArrayModule.str();
+  equivalentSource.insert(equivalentSource.find("    %other ="),
+                          nodeIndex("row", "array", "2,3", "%one", "literal:1", "3") +
+                              nodeIndex("throughRow", "row", "3", "%one", "literal:1"));
+  replaceAll(equivalentSource, "\"nodal.branch\"(%selected, %p)",
+             "\"nodal.branch\"(%throughRow, %p)");
+  std::string equivalentOutput;
+  if (!emitNodeView(equivalentSource, equivalentOutput) || equivalentOutput != staticNodeOutput)
+    return fail("direct and prefix aliases did not share their normalized physical endpoint");
+  std::string largeViewSource = replaceNodeSelection(
+      largeNodeSource, "selected",
+      nodeIndex("row", "array", "1000000,1000000", "%one", "literal:1", "1000000") +
+          nodeIndex("selected", "row", "1000000", "%one", "literal:1"));
+  std::string largeViewOutput;
+  if (!emitNodeView(largeViewSource, largeViewOutput) || largeViewOutput != largeNodeOutput)
+    return fail("proved fixed view narrowed the published compact signed64 direct profile");
+
+  std::string symbolicViewSelection = sliceSelection;
+  replaceAll(symbolicViewSelection, "2,3", "2,COUNT");
+  const std::string symbolicViewSource =
+      replaceNodeSelection(symbolicNodeSource, "selected", symbolicViewSelection);
+  std::string symbolicViewOutput;
+  if (!emitNodeView(symbolicViewSource, symbolicViewOutput) ||
+      llvm::StringRef(symbolicViewOutput).count("localparam integer node_map_") != 2 ||
+      symbolicViewOutput.find("localparam integer node_map_tap_0_0 = 1;") == std::string::npos ||
+      symbolicViewOutput.find(
+          "I(tap[node_map_tap_0_1], p) <+ (V(tap[node_map_tap_0_1], p) / 1000);") ==
+          std::string::npos ||
+      symbolicViewOutput.find("localparam integer node_map_") >
+          symbolicViewOutput.find("branch (") ||
+      symbolicViewOutput.find("localparam integer node_map_",
+                              symbolicViewOutput.find("analog begin")) != std::string::npos)
+    return fail("symbolic conservative map lost ordered immutable stages or live net endpoints");
+  std::string symbolicAMS = symbolicViewSource;
+  replaceAll(symbolicAMS, "\"verilog-a\"", "\"verilog-ams\"");
+  std::string symbolicAMSOutput;
+  if (!emitNodeView(symbolicAMS, symbolicAMSOutput, nodal::BackendKind::VerilogAMS))
+    return fail("symbolic local node views failed Verilog-AMS emission/reparse");
+  std::string collisionSource = symbolicViewSource;
+  collisionSource.insert(
+      collisionSource.find("    %p ="),
+      "\"nodal.parameter\"() <{classification = \"ordinary\", default_value = 1 : i64, "
+      "metadata = {}, parameter_kind = \"integer\", sym_name = \"node_map_tap_0_0\", type = i64, "
+      "variability = \"symbolic\"}> : () -> ()\n");
+  std::string collisionOutput;
+  if (!emitNodeView(collisionSource, collisionOutput) ||
+      collisionOutput.find("localparam integer node_map_tap_0_0_1 = 1;") == std::string::npos)
+    return fail("private structural map collided with an authored declaration");
+
+  std::string deepViews = "%count = \"nodal.const_parameter_ref\"() <{metadata = {}, parameter = "
+                          "@COUNT}> : () -> i64\n";
+  std::string prior = "array";
+  for (unsigned depth = 0; depth != 48; ++depth) {
+    const std::string next = "view" + std::to_string(depth);
+    deepViews += nodeSlice(next, prior, "2,COUNT", "2,COUNT", "zero", "count", "count");
+    prior = next;
+  }
+  deepViews += nodeIndex("selected", prior, "2,COUNT", "%one, %one", "literal:1,literal:1");
+  std::string deepViewOutput;
+  if (!emitNodeView(replaceNodeSelection(symbolicNodeSource, "selected", deepViews),
+                    deepViewOutput) ||
+      llvm::StringRef(deepViewOutput).count("localparam integer node_map_") != 49 ||
+      deepViewOutput.size() > 30000 ||
+      llvm::StringRef(deepViewOutput).count("electrical tap[") != 1)
+    return fail("deep conservative views expanded previous expressions or physical lanes");
+
+  for (const std::string replacement :
+       {"MISSING", "node_map_tap_0_1", "REAL_INDEX", "event_mutable", "(1 / 0)", "(2147483647 + 1)",
+        "(65536 * 65536)", "1.0", "V(p)", "(1 + )"}) {
+    std::string invalidMap = symbolicViewOutput;
+    const std::string original = "localparam integer node_map_tap_0_0 = 1;";
+    replaceAll(invalidMap, original, "localparam integer node_map_tap_0_0 = " + replacement + ";");
+    invalidMap.insert(invalidMap.find("  localparam integer node_map_"),
+                      "  parameter real REAL_INDEX = 1.0;\n  integer event_mutable;\n");
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidMap, *configuration)))
+      return fail("malformed structural map dependency or checked Integer arithmetic reparsed");
+  }
+  for (const std::string value : {"-1", "6", "(3 + 3)"}) {
+    std::string outOfBounds = staticNodeOutput;
+    outOfBounds.insert(outOfBounds.find("  branch ("),
+                       "  localparam integer selected_lane = " + value + ";\n");
+    replaceAll(outOfBounds, "tap[4]", "tap[selected_lane]");
+    if (mlir::succeeded(nodal::reparseBackendTarget(outOfBounds, *configuration)))
+      return fail("concrete structural localparam endpoint escaped independent array bounds");
+  }
+  std::string realIndex = symbolicNodeOutput;
+  realIndex.insert(realIndex.find("  electrical tap["), "  parameter real REAL_INDEX = 1.0;\n");
+  replaceAll(realIndex, "(COUNT + 1)", "(REAL_INDEX + 1)");
+  if (mlir::succeeded(nodal::reparseBackendTarget(realIndex, *configuration)))
+    return fail("Real parameter was accepted as a structural endpoint index");
+  std::string overflowingViewSource = symbolicViewSource;
+  replaceAll(overflowingViewSource, "spelling = \"8\", value = 8 : i64",
+             "spelling = \"2147483647\", value = 2147483647 : i64");
+  auto overflowingView = parse(context, overflowingViewSource);
+  if (!overflowingView || mlir::failed(mlir::verify(*overflowingView)))
+    return fail(
+        "composed Integer-stage target boundary fixture was not independently native-valid");
+  std::string rejectedView = "sentinel";
+  llvm::raw_string_ostream rejectedViewStream(rejectedView);
+  if (mlir::succeeded(
+          nodal::emitBackend(*overflowingView, nodal::BackendKind::VerilogA, rejectedViewStream)))
+    return fail("composed structural target accepted a signed32 map intermediate overflow");
+  rejectedViewStream.flush();
+  if (rejectedView != "sentinel")
+    return fail("composed structural target failure published partial output");
+  std::string hierarchyViewSource = arrayHierarchySource;
+  std::string hierarchyView =
+      "%hzero = \"nodal.const_literal\"() <{metadata = {}, spelling = \"0\", value = 0 : i64}> : "
+      "() -> i64\n" +
+      nodeView("hier", "taps", "3", "1,3") +
+      nodeIndex("top_vin", "hier", "1,3", "%hzero, %lane", "literal:0,literal:1");
+  replaceAll(hierarchyView, "ArrayNodes", "Top");
+  hierarchyViewSource = replaceNodeSelection(hierarchyViewSource, "top_vin", hierarchyView);
+  std::string hierarchyViewOutput;
+  if (!emitNodeView(hierarchyViewSource, hierarchyViewOutput) ||
+      hierarchyViewOutput != arrayHierarchyOutput)
+    return fail("composed local view changed the existing scalar child actual binding");
 
   // Mutate after successful parsing so backend verification cannot rely on the
   // parser's verifier. Failed emission must leave the caller's output untouched.

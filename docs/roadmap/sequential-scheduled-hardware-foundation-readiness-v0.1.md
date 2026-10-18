@@ -1,5 +1,7 @@
 # Sequential scheduled hardware: Foundation readiness supplement v0.1
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Planned architecture-only Foundation extension; all checkpoints open  
 **Created:** 2026-09-06  
 **Foundation:** [`nodal-development-todo.md`](nodal-development-todo.md)  

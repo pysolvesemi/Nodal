@@ -1,5 +1,7 @@
 # Lightweight hierarchy, unified HDL iteration and frontend scalability
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Revision:** 0.2
 **Approved direction:** 2026-09-24
 **Updated:** 2026-09-28
@@ -238,7 +240,7 @@ New descendants of the existing **F-096.B.2**:
 
 This is a documentation-only roadmap approval, not implementation, compilation,
 performance evidence, a generated-HDL demonstration or parent completion.
-Implement in the existing owning increments, keep actual source/IR/HDL witnesses,
-and retain targeted-first/full qualification, review, verified integration and
-separate accepted-evidence closure. `AGENTS.md` is unchanged. The user waived CI
-for this roadmap publication only; compiler changes still require qualification.
+Implement in the existing owning increments and keep the relevant actual
+source/IR/HDL witnesses. Apply the [prototype execution policy](README.md#prototype-execution-policy):
+focused local positive/negative checks and architecture review permit merge;
+CI, full qualification and separate accepted-evidence closure are not required.

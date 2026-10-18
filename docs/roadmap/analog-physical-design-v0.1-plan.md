@@ -1,5 +1,7 @@
 # Analog and mixed-signal physical implementation roadmap v0.3
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative dependent-track roadmap; implementation not started  
 **Date:** 2026-09-13  
 **Revision scope:** Explicit circuit-export profiles and cross-view qualification; external-tool integration only  
@@ -155,7 +157,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-001.c** Define a versioned package/view manifest with purpose, profile, circuit/PDK revision, capabilities, hashes, migration policy, and opaque external-view references; keep simulation, layout-input and LVS-reference payloads distinct and do not bundle restricted IP.
   - [ ] **AC-001.d** Prototype the existing compiler exporter and an independent adapter reader in a tool-appropriate language; reject malformed, oversized, missing, incompatible, or untrusted package content without requiring Rust.
   - [ ] **AC-001.e** Preserve existing AMS semantics and make unsupported topology/model/physical capabilities explicit errors rather than silent lowering.
-  - [ ] **AC-001.f** Exit: approved design gate, deterministic round-trip fixtures, compatibility/negative evidence, and recorded public-API decisions; no physical synthesis claim.
+  - [ ] **AC-001.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: approved design gate, deterministic round-trip fixtures, compatibility/negative evidence, and recorded public-API decisions; no physical synthesis claim.
 
 - [ ] **AC-002 — Structural devices and reusable subcircuits**
   - Depends on: AC-001.
@@ -164,7 +166,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-002.c** Distinguish ideal simulation devices, realizable process devices, and imported hard macros; disallow simulation-only sources in a physical-release profile.
   - [ ] **AC-002.d** Validate connectivity, bulk/supply references, dimensions, hierarchy, parameter resolution, and deliberate connection exceptions with source diagnostics.
   - [ ] **AC-002.e** Add inverter, RC, current-mirror, and differential-pair circuit fixtures with independently specified expected device/connectivity graphs.
-  - [ ] **AC-002.f** Exit: structural positive/negative tests and semantic fixtures pass; source examples and actual IR/output evidence are retained.
+  - [ ] **AC-002.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: structural positive/negative tests and semantic fixtures pass; source examples and actual IR/output evidence are retained.
 
 - [ ] **AC-003 — Deterministic nodal-hdl to .nax export**
   - Depends on: AC-002.
@@ -173,7 +175,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-003.c** Include behavioral-view references and mixed-domain boundary metadata without treating Verilog-A equations as an inferred transistor implementation.
   - [ ] **AC-003.d** Implement a bounded adapter reader/validator and optional debug representation using existing project or selected-tool infrastructure; do not prescribe a Rust reader or a second compiler.
   - [ ] **AC-003.e** Exercise reproducibility, relocatable paths, dependency hashes, corrupted packages, and unsupported versions across independent processes.
-  - [ ] **AC-003.f** Exit: reproducible source-to-package-to-circuit fixtures and diagnostics pass; external tools consume exported data without depending on live MLIR objects or the compiler process.
+  - [ ] **AC-003.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: reproducible source-to-package-to-circuit fixtures and diagnostics pass; external tools consume exported data without depending on live MLIR objects or the compiler process.
 
 - [ ] **AC-004 — PDK device binding and legal operating envelopes**
   - Depends on: AC-003.
@@ -182,7 +184,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-004.c** Validate supply, temperature, geometry, device option, and operating-range requirements; reject unavailable models rather than substituting a generic transistor.
   - [ ] **AC-004.d** Qualify one named open PDK/device subset with pinned model hashes and a reproducible installation recipe; do not promise process portability from name mapping alone.
   - [ ] **AC-004.e** Keep unbound `.nax` separate from resolved implementation data and avoid redistributing restricted model decks or design-rule content.
-  - [ ] **AC-004.f** Exit: independent binding fixtures detect wrong terminals, units, geometry, parameter scope, model/view identity and legal ranges; publish the PDK/view capability and license matrix without assuming one name or netlist serves every purpose.
+  - [ ] **AC-004.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: independent binding fixtures detect wrong terminals, units, geometry, parameter scope, model/view identity and legal ranges; publish the PDK/view capability and license matrix without assuming one name or netlist serves every purpose.
 
 - [ ] **AC-005 — ngspice SPICE export and simulator contract**
   - Depends on: AC-004.
@@ -191,7 +193,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-005.c** Define the initial ngspice profile and out-of-process request/result protocol with exact tool/version/options, PDK/model subset, analyses, timeouts, output paths and cleanup.
   - [ ] **AC-005.d** Negotiate supported analyses/device models before execution and normalize process failure, unsupported, convergence failure, and valid-result states.
   - [ ] **AC-005.e** Independently reparse/compare emitted circuits and test terminal/bulk order, unit scales, fingers/multiplicity, parameters, ground/global nets, escaping and include resolution; reject unsupported constructs and path/injection defects.
-  - [ ] **AC-005.f** Exit: circuit-equivalent ngspice-export fixtures and protocol tests pass with recorded emission evidence and explicit unsupported cases; actual simulation qualification remains AC-006, not an inferred HSPICE/Spectre capability.
+  - [ ] **AC-005.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: circuit-equivalent ngspice-export fixtures and protocol tests pass with recorded emission evidence and explicit unsupported cases; actual simulation qualification remains AC-006, not an inferred HSPICE/Spectre capability.
 
 - [ ] **AC-006 — First open circuit-simulation vertical slice**
   - Depends on: AC-005.
@@ -200,7 +202,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-006.c** Add an explicitly qualified Verilog-A/OpenVAF/OSDI model adapter where supported; do not present this as full Verilog-AMS simulator support.
   - [ ] **AC-006.d** Preserve waveforms, measurements, seeds, model/tool hashes, convergence status, source IDs, and execution logs.
   - [ ] **AC-006.e** Exercise missing tools/models, timeout, non-convergence, invalid analysis requests, and deliberate circuit defects without false passes.
-  - [ ] **AC-006.f** Exit: the first useful circuit release is reproducible on a clean environment with an exact supported-profile matrix and actual source/netlist/result examples.
+  - [ ] **AC-006.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the first useful circuit release is reproducible on a clean environment with an exact supported-profile matrix and actual source/netlist/result examples.
 
 - [ ] **AC-007 — PVT, sweeps, and statistical variation**
   - Depends on: AC-006.
@@ -209,7 +211,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-007.c** Distinguish process variation, local mismatch, and user parameter variation; run Monte Carlo only with qualified statistical models and recorded seeds.
   - [ ] **AC-007.d** Aggregate measurements, tolerances, failed runs, and coverage of requested corners without dropping non-convergent cases.
   - [ ] **AC-007.e** Compare serial/parallel results and deliberately missing/corrupt corner evidence; keep confidence/yield claims tied to the actual sample/model assumptions.
-  - [ ] **AC-007.f** Exit: complete PVT/sweep matrices and variation capability reports reproduce; unsupported statistical support remains explicitly unsupported.
+  - [ ] **AC-007.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: complete PVT/sweep matrices and variation capability reports reproduce; unsupported statistical support remains explicitly unsupported.
 
 - [ ] **AC-008 — Measurements and bounded sizing/optimization loops**
   - Depends on: AC-007.
@@ -218,7 +220,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-008.c** Retain candidate lineage, simulations, rejected candidates, convergence outcomes, Pareto tradeoffs, and deterministic replay data.
   - [ ] **AC-008.d** Add reusable Nodal circuit templates and a capability boundary for external bounded topology-selection tools; do not schedule a native topology-search engine or claim arbitrary AMS synthesis.
   - [ ] **AC-008.e** Demonstrate a sized small amplifier/current-mirror family meeting declared pre-layout constraints; detect infeasible requests and budget exhaustion.
-  - [ ] **AC-008.f** Exit: independent measurement checks and replayable sizing results pass; post-layout closure is deferred to APV, not assumed from pre-layout success.
+  - [ ] **AC-008.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: independent measurement checks and replayable sizing results pass; post-layout closure is deferred to APV, not assumed from pre-layout success.
 
 - [ ] **AC-009 — HSPICE and Spectre export/qualification profiles**
   - Depends on: AC-006.
@@ -227,7 +229,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-009.c** Implement native Spectre circuit/analysis emission and qualify the declared subset with actual licensed Spectre, pinned tool/model/PDK versions, independent references and retained logs; Spectre accepting SPICE input does not qualify this native-syntax exporter.
   - [ ] **AC-009.d** Reuse the common runner for executable/license discovery, process isolation, protected includes/results, timeout and convergence/error normalization; record emission-tested and real-tool-qualified evidence separately for each profile.
   - [ ] **AC-009.e** Independently compare ngspice/HSPICE/Spectre circuit views and declared common measurements, checking terminal order, bulk/supplies, units, parameter scope, hierarchy, fingers/multiplicity and source identity; use explicit tolerances and explain model differences rather than silently accepting translation drift.
-  - [ ] **AC-009.f** Exit: both named commercial profiles and all children have exact tool/PDK/subset evidence, negative-case coverage and reproducible comparisons; missing access leaves affected children and this parent open. Optional Xyce/other adapters do not substitute; AC-006/APL-006/APV-005 remain independent.
+  - [ ] **AC-009.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: both named commercial profiles and all children have exact tool/PDK/subset evidence, negative-case coverage and reproducible comparisons; missing access leaves affected children and this parent open. Optional Xyce/other adapters do not substitute; AC-006/APL-006/APV-005 remain independent.
 
 - [ ] **AC-010 — Circuit-to-layout physical-intent handoff**
   - Depends on: AC-004, AC-008.
@@ -236,7 +238,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-010.c** Export a distinct `layout-input` view of resolved devices/geometry and physical intent for the selected tool; do not pass simulator controls or assume a simulation/SPICE/Spectre deck is a legal layout input, and do not force tool syntax or a geometry DB into `.nax`.
   - [ ] **AC-010.d** Preserve intent across hierarchy, generated instances, sizing changes, and parameter specialization; invalidate stale constraints when their targets change.
   - [ ] **AC-010.e** Test missing targets, incompatible dimensions, contradictory constraints, and binding revisions using independent expected mappings.
-  - [ ] **AC-010.f** Exit: a versioned circuit/physical-intent package is consumed by a thin external-tool adapter with complete identity and diagnostic coverage, without a new physical engine.
+  - [ ] **AC-010.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: a versioned circuit/physical-intent package is consumed by a thin external-tool adapter with complete identity and diagnostic coverage, without a new physical engine.
 
 - [ ] **AC-011 — Mixed-signal macro and multi-view consistency**
   - Depends on: AC-006, AC-010.
@@ -245,7 +247,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-011.c** Reuse existing AMS scheduling/verification contracts for threshold, sampling, hold, initialization, and time-resolution semantics; do not add a second scheduler.
   - [ ] **AC-011.d** Validate port/model/parameter/mode consistency and state each model's validity envelope and omitted physical effects.
   - [ ] **AC-011.e** Independently compare available circuit views and correlate behavioral/transistor results on a declared small mixed-signal fixture; preserve topology and physical geometry meaning, document permitted view differences, and detect swapped terminals, missing devices and stale hashes without requiring unfinished commercial/LVS profiles.
-  - [ ] **AC-011.f** Exit: multi-view mismatch negatives and correlation tolerances pass with actual models/results; no automatic analog-RTL-to-transistor claim.
+  - [ ] **AC-011.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: multi-view mismatch negatives and correlation tolerances pass with actual models/results; no automatic analog-RTL-to-transistor claim.
 
 - [ ] **AC-012 — Circuit/PDK portability and release qualification**
   - Depends on: AC-001 through AC-011.
@@ -254,7 +256,7 @@ Owner: existing Nodal compiler and tool-adapter modules. Scala/MLIR owns source/
   - [ ] **AC-012.c** Measure circuit-graph size, package size, import/export time, memory, run scheduling, and reproducibility on named small and large fixtures.
   - [ ] **AC-012.d** Publish install, debugging, failure recovery, compatibility, migration, and licensing instructions with frozen fixture/artifact hashes.
   - [ ] **AC-012.e** Audit dependency provenance, non-convergence handling, negative tests, and every earlier child/evidence link; record remaining capability gaps.
-  - [ ] **AC-012.f** Exit: all AC children and prerequisites are complete and the selected circuit release is reproducible; layout and tapeout qualification remain separate gates.
+  - [ ] **AC-012.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: all AC children and prerequisites are complete and the selected circuit release is reproducible; layout and tapeout qualification remain separate gates.
 
 ## Track APL — Analog Layout and Physical Implementation
 
@@ -267,7 +269,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-001.c** Preserve hierarchy, provenance, required-versus-preferred constraints, and unsupported/conflicting-constraint diagnostics.
   - [ ] **APL-001.d** Define a small versioned adapter manifest with circuit-to-tool mappings, units, capabilities, artifact hashes, and native-checkpoint references; detailed physical state stays in the external tool.
   - [ ] **APL-001.e** Define external-backend lowering contracts and conformance fixtures; do not equate a common constraint name with identical tool semantics.
-  - [ ] **APL-001.f** Exit: approved intent/adapter contract and positive/negative fixtures pass; no Rust subsystem, geometry kernel, or physical DB is an acceptance requirement.
+  - [ ] **APL-001.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: approved intent/adapter contract and positive/negative fixtures pass; no Rust subsystem, geometry kernel, or physical DB is an acceptance requirement.
 
 - [ ] **APL-002 — Physical technology and layout PDK binding**
   - Depends on: APL-001, AC-004.
@@ -276,7 +278,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-002.c** Match schematic device parameters to external layout-generator parameters, including fingers, multiplicity, orientation, contacts, and effective geometry.
   - [ ] **APL-002.d** Declare supported rule/layout features and reject missing process definitions, unsafe unit conversions, and out-of-range dimensions.
   - [ ] **APL-002.e** Create an auditable physical-tool binding for the initial AC PDK subset and independently check device terminal/layer maps.
-  - [ ] **APL-002.f** Exit: bound-device/layout fixtures and negative PDK tests pass; no DRC-clean or foundry-approved claim is made before verification.
+  - [ ] **APL-002.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: bound-device/layout fixtures and negative PDK tests pass; no DRC-clean or foundry-approved claim is made before verification.
 
 - [ ] **APL-003 — External device, passive, and guard-ring generator adapters**
   - Depends on: APL-002.
@@ -285,7 +287,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-003.c** Map selected matched groups and reusable small circuit templates to supported generators; preserve intentional dummy and bulk connections.
   - [ ] **APL-003.d** Evaluate GLayout/BAG-class generators only through declared adapter and license/tool profiles; their presence is not automatic PDK or sign-off support.
   - [ ] **APL-003.e** Sweep supported geometries and compare generated topology/terminal maps independently, retaining representative layouts for later DRC/LVS qualification.
-  - [ ] **APL-003.f** Exit: deterministic external-generator outputs and unsupported-case diagnostics pass; physical correctness still requires APV evidence.
+  - [ ] **APL-003.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: deterministic external-generator outputs and unsupported-case diagnostics pass; physical correctness still requires APV evidence.
 
 - [ ] **APL-004 — External layout artifacts and GDSII/OASIS interchange**
   - Depends on: APL-003.
@@ -294,7 +296,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-004.c** Verify units, layer maps, transforms, cell names, and macro references through external APIs/reports; reject lossy unsupported conversions.
   - [ ] **APL-004.d** Use immutable artifact/checkpoint references and dependency hashes for restart, bounded loading, and invalidation; preserve the original tool-native files.
   - [ ] **APL-004.e** Compare hierarchy/geometry/port meaning using independent existing readers where available; require byte reproducibility only where the selected writer guarantees it.
-  - [ ] **APL-004.f** Exit: external-tool round-trip, corruption, unit/overflow, and scale fixtures pass with an explicit supported-format matrix and no custom layout database dependency.
+  - [ ] **APL-004.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: external-tool round-trip, corruption, unit/overflow, and scale fixtures pass with an explicit supported-format matrix and no custom layout database dependency.
 
 - [ ] **APL-005 — Imported layouts and hard-macro reuse**
   - Depends on: APL-004, AC-011.
@@ -303,7 +305,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-005.c** Validate bounding boxes, legal transforms, placement obstructions, layer units, keepouts, model versions, and pin consistency through supported APIs.
   - [ ] **APL-005.d** Use the external tool to compose imported and generated blocks; do not imply imported IP has been requalified for another process or operating envelope.
   - [ ] **APL-005.e** Exercise port swaps, missing views, wrong process, incompatible units, unavailable internals, and changed macro revisions.
-  - [ ] **APL-005.f** Exit: a declared mixed imported/generated layout fixture is reproducible with explicit opaque-view and verification limitations.
+  - [ ] **APL-005.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: a declared mixed imported/generated layout fixture is reproducible with explicit opaque-view and verification limitations.
 
 - [ ] **APL-006 — First ALIGN automated-layout vertical slice**
   - Depends on: APL-005, AC-006.
@@ -312,7 +314,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-006.c** Run the external engine on a small transistor-level benchmark through primitive generation, placement, routing, and stream-out with retained stage artifacts.
   - [ ] **APL-006.d** Collect tool-native checkpoints, layouts, logs, constraint reports, and circuit/device/net mappings into the artifact manifest; do not import geometry into a new Nodal physical DB.
   - [ ] **APL-006.e** Reproduce successful and intentionally infeasible/unroutable runs; distinguish complete, partial, failed, and unsupported results.
-  - [ ] **APL-006.f** Exit: the first external automatic-layout profile produces inspectable reproducible GDS/layout evidence; DRC/LVS/PEX closure is APV-005, not assumed here.
+  - [ ] **APL-006.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the first external automatic-layout profile produces inspectable reproducible GDS/layout evidence; DRC/LVS/PEX closure is APV-005, not assumed here.
 
 - [ ] **APL-007 — Hierarchical placement through external tools**
   - Depends on: APL-006.
@@ -321,7 +323,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-007.c** Separate hard constraints from cost objectives and record every accepted explicit relaxation with affected source IDs.
   - [ ] **APL-007.d** Reuse tool-native incremental placement/checkpoints where supported and invalidate stale downstream extraction/verification after changes.
   - [ ] **APL-007.e** Benchmark adapter overhead and external-tool quality/runtime/memory; test contradictory, impossible, and unsupported constraints.
-  - [ ] **APL-007.f** Exit: selected hierarchical cases meet declared placement constraints with evidence; developing a Nodal-native placer is outside this track.
+  - [ ] **APL-007.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: selected hierarchical cases meet declared placement constraints with evidence; developing a Nodal-native placer is outside this track.
 
 - [ ] **APL-008 — Analog routing through external tools**
   - Depends on: APL-007.
@@ -330,7 +332,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-008.c** Track tool-reported routed-net/circuit correspondence and invalidate extraction, DRC, and performance evidence whenever relevant geometry changes.
   - [ ] **APL-008.d** Report unsupported or infeasible routing intent and explicit overrides; do not silently replace analog constraints with ordinary shortest-path routing.
   - [ ] **APL-008.e** Qualify focused sensitive/differential/current-carrying examples and inject opens, shorts, shield defects, and wrong-layer routes through existing tool fixtures.
-  - [ ] **APL-008.f** Exit: externally routed examples pass connectivity/intent checks with replayable logs; electrical performance and reliability claims require APV checks.
+  - [ ] **APL-008.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: externally routed examples pass connectivity/intent checks with replayable logs; electrical performance and reliability claims require APV checks.
 
 - [ ] **APL-009 — Mixed-signal macro boundary and integration views**
   - Depends on: APL-008, AC-011.
@@ -339,7 +341,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-009.c** Support separately synthesized digital wrappers around the analog macro with a reproducible black-box and port-mapping contract.
   - [ ] **APL-009.d** Preserve isolation, power sequencing, reference-clock, reset/lock, and mode constraints as interface requirements rather than hidden tool assumptions.
   - [ ] **APL-009.e** Exercise a small mixed-signal macro shell and deliberate digital/analog port, supply, clock, or view-version mismatches.
-  - [ ] **APL-009.f** Exit: internally consistent integration views and a checked consumer handoff are retained; full-chip ASIC implementation remains separately governed.
+  - [ ] **APL-009.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: internally consistent integration views and a checked consumer handoff are retained; full-chip ASIC implementation remains separately governed.
 
 - [ ] **APL-010 — External layout inspection and source correlation**
   - Depends on: APL-006, AC-003.
@@ -348,7 +350,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-010.c** Correlate placement/routing failures and physical-verification markers to semantic sources and exact tool-native layout revisions.
   - [ ] **APL-010.d** Bound adapter metadata and query costs using external APIs and artifact references rather than eagerly copying all geometry.
   - [ ] **APL-010.e** Test mapping across hierarchy, imported macros, transformed arrays, flattened projections, and missing source information.
-  - [ ] **APL-010.f** Exit: a reviewer can trace selected source devices/nets to actual geometry and back through the selected tool, with explicit unavailable/opaque results.
+  - [ ] **APL-010.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: a reviewer can trace selected source devices/nets to actual geometry and back through the selected tool, with explicit unavailable/opaque results.
 
 - [ ] **APL-011 — Commercial and custom-layout adapter seam**
   - Depends on: APL-006.
@@ -357,7 +359,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-011.c** Translate canonical physical intent without changing language semantics or hiding unsupported constraint differences.
   - [ ] **APL-011.d** Preserve imported/generated IP rights and keep confidential process data, commands, and result artifacts in authorized storage.
   - [ ] **APL-011.e** Independently compare equivalent declared circuit/layout-input views and resulting tool mappings across adapters; test wrong-view inputs, unavailable licenses, missing views and failed executions.
-  - [ ] **APL-011.f** Exit: the selected adapter contract is demonstrated and untested profiles remain explicitly unqualified; commercial availability does not block APL-006.
+  - [ ] **APL-011.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the selected adapter contract is demonstrated and untested profiles remain explicitly unqualified; commercial availability does not block APL-006.
 
 - [ ] **APL-012 — Layout-adapter scale and release qualification**
   - Depends on: APL-001 through APL-011, APV-005.
@@ -366,7 +368,7 @@ Owner: thin layout integration modules and qualified external layout tools. The 
   - [ ] **APL-012.c** Measure external-engine costs separately from adapter metadata, artifact transfer, query, checkpoint reuse, and invalidation costs at increasing named scales.
   - [ ] **APL-012.d** Publish reproducible tool-native layout packages, capability gaps, adapter installation/licensing requirements, and compatibility/migration guidance.
   - [ ] **APL-012.e** Audit all earlier APL children and APV-005 evidence, including unit/geometry/connectivity negatives and stale-evidence rejection.
-  - [ ] **APL-012.f** Exit: all declared integration cases and dependencies pass with retained evidence; no new repository, Rust subsystem, native geometry DB, placer, or router is required.
+  - [ ] **APL-012.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: all declared integration cases and dependencies pass with retained evidence; no new repository, Rust subsystem, native geometry DB, placer, or router is required.
 
 ## Track APV — Analog Physical Verification and Sign-off
 
@@ -379,7 +381,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-001.c** Bind every result to exact input/tool/deck hashes, options, environment, and capability profile with immutable artifact references.
   - [ ] **APV-001.d** Define explicit waiver authority/scope/expiry and invalidation after circuit, layout, process, or tool changes.
   - [ ] **APV-001.e** Add independent report-parser/normalizer fixtures including truncated logs, zero-check runs, stale artifacts, and mismatched revisions; reuse existing geometry readers.
-  - [ ] **APV-001.f** Exit: reviewed evidence schema and failure-state tests pass; model infrastructure alone does not mark any physical check complete.
+  - [ ] **APV-001.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: reviewed evidence schema and failure-state tests pass; model infrastructure alone does not mark any physical check complete.
 
 - [ ] **APV-002 — Open DRC baseline**
   - Depends on: APV-001, APL-004.
@@ -388,7 +390,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-002.c** Normalize violations and correlate markers to layout/source IDs without treating a tool exit code alone as a clean result.
   - [ ] **APV-002.d** Inject width/spacing/enclosure and other supported violations and verify expected rule IDs and geometry using existing tools.
   - [ ] **APV-002.e** Report unavailable rules and explicit waivers; never rename an open-deck result as foundry sign-off.
-  - [ ] **APV-002.f** Exit: declared DRC-positive/negative fixtures pass with complete executed-rule and deck/tool evidence.
+  - [ ] **APV-002.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: declared DRC-positive/negative fixtures pass with complete executed-rule and deck/tool evidence.
 
 - [ ] **APV-003 — Open LVS baseline and CDL/reference-SPICE exports**
   - Depends on: APV-002, AC-005.
@@ -397,7 +399,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-003.c** Preserve hierarchy/source identity, terminal and bulk/supply meaning, units, fingers/multiplicity and parameter tolerances; document permitted pin equivalences, dummy devices and reductions rather than forcing textual equality between simulation and LVS views.
   - [ ] **APV-003.d** Detect injected opens, shorts, terminal/bulk swaps, missing devices, unit/geometry errors, incorrect model/class mappings and unapproved reductions using independent references; test that stale or wrong-purpose exports cannot pass.
   - [ ] **APV-003.e** Handle opaque imported macros, unavailable models/rules, missing simulation parameters and incomplete extraction without guessing data or declaring whole-design LVS clean; commercial CDL flavors/decks require APV-008 qualification and do not block this declared open subset.
-  - [ ] **APV-003.f** Exit: both reference-SPICE/CDL export subsets preserve the intended circuit under independently checked view mappings, and correct/faulty layouts receive the expected external LVS outcomes with exact circuit/layout/consumer/PDK/deck evidence; no blanket commercial-CDL or simulation claim.
+  - [ ] **APV-003.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: both reference-SPICE/CDL export subsets preserve the intended circuit under independently checked view mappings, and correct/faulty layouts receive the expected external LVS outcomes with exact circuit/layout/consumer/PDK/deck evidence; no blanket commercial-CDL or simulation claim.
 
 - [ ] **APV-004 — Parasitic extraction and extracted-circuit identity**
   - Depends on: APV-003.
@@ -406,7 +408,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-004.c** Distinguish schematic parasitics, extracted parasitics, and reduced models; prevent double-counting or silently missing unsupported effects.
   - [ ] **APV-004.d** Collect extracted simulation netlists for the selected qualified ngspice/HSPICE/Spectre profile, with explicit base-device/model bindings, parasitic units and source mapping; do not use a CDL/LVS view as a complete simulation model or require every simulator for the open baseline.
   - [ ] **APV-004.e** Validate known RC structures and extraction-corner changes independently; inject incorrect units, disconnected parasitics, and stale results.
-  - [ ] **APV-004.f** Exit: supported extraction cases reproduce within declared tolerances; RF, substrate, and advanced effects remain unsupported unless explicitly qualified.
+  - [ ] **APV-004.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: supported extraction cases reproduce within declared tolerances; RF, substrate, and advanced effects remain unsupported unless explicitly qualified.
 
 - [ ] **APV-005 — First post-layout simulation and correlation loop**
   - Depends on: APV-004, APL-006, AC-007.
@@ -415,7 +417,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-005.c** Check post-layout specifications and permitted degradation, not merely waveform similarity or successful simulator completion.
   - [ ] **APV-005.d** Retain every circuit/layout/check/measurement artifact and invalidate results after any upstream change.
   - [ ] **APV-005.e** Demonstrate failures caused by parasitics, circuit/layout mismatch, non-convergence, missing checks, and incomplete corner coverage.
-  - [ ] **APV-005.f** Exit: the first complete open physical loop passes for a declared small circuit/profile, with reproducible limits and no automatic tapeout-signoff claim.
+  - [ ] **APV-005.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the first complete open physical loop passes for a declared small circuit/profile, with reproducible limits and no automatic tapeout-signoff claim.
 
 - [ ] **APV-006 — Post-layout PVT, variation, and closure loops**
   - Depends on: APV-005, AC-008.
@@ -424,7 +426,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-006.c** Feed failed measurements into bounded external sizing/layout iterations with explicit budgets and complete candidate lineage; do not implement a native solver or physical optimizer.
   - [ ] **APV-006.d** Require fresh layout/DRC/LVS/PEX evidence after physical changes and fresh measurement evidence after model or specification changes.
   - [ ] **APV-006.e** Report infeasible specifications, budget exhaustion, convergence failures, and unsupported yield estimates rather than choosing only passing samples.
-  - [ ] **APV-006.f** Exit: a bounded circuit family demonstrates repeatable extracted-performance closure with complete matrices and independent measurement checks.
+  - [ ] **APV-006.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: a bounded circuit family demonstrates repeatable extracted-performance closure with complete matrices and independent measurement checks.
 
 - [ ] **APV-007 — Reliability and additional physical-rule capabilities**
   - Depends on: APV-006, APL-008.
@@ -433,7 +435,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-007.c** Preserve activity, supply, current, temperature, lifetime, mode, and package assumptions required by each analysis.
   - [ ] **APV-007.d** Correlate violations and margins with circuit/layout/source identities and approved waiver records.
   - [ ] **APV-007.e** Inject supported electrical/reliability-rule defects and reject incomplete or invalid check coverage.
-  - [ ] **APV-007.f** Exit: capability-specific reliability evidence passes for the declared profile; unsupported checks block any release profile that requires them.
+  - [ ] **APV-007.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: capability-specific reliability evidence passes for the declared profile; unsupported checks block any release profile that requires them.
 
 - [ ] **APV-008 — Commercial sign-off and extraction adapters**
   - Depends on: APV-005.
@@ -442,7 +444,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-008.c** Preserve native reports alongside normalized evidence and prevent an adapter stub, mock, or open-deck run from claiming commercial sign-off.
   - [ ] **APV-008.d** Compare declared common DRC/LVS/extraction fixtures against the qualified reference with documented tolerances and capability differences.
   - [ ] **APV-008.e** Test license/tool/deck failures, confidentiality boundaries, result corruption, and wrong-process or wrong-version requests.
-  - [ ] **APV-008.f** Exit: actual approved-tool evidence exists for every claimed sign-off profile; unavailable access leaves the corresponding task open and does not block APV-005.
+  - [ ] **APV-008.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: actual approved-tool evidence exists for every claimed sign-off profile; unavailable access leaves the corresponding task open and does not block APV-005.
 
 - [ ] **APV-009 — Final stream-out and archive qualification**
   - Depends on: APV-006, APL-004.
@@ -451,7 +453,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-009.c** Reject mismatched, stale, partial, or unverified final files even when an earlier tool-native checkpoint revision passed.
   - [ ] **APV-009.d** Build a reproducible release archive with checksums, tool/deck provenance, logs, waivers, instructions, and access/license classifications.
   - [ ] **APV-009.e** Exercise clean-machine restoration and deliberate file/version corruption without needing hidden local tool state.
-  - [ ] **APV-009.f** Exit: the exact delivered stream and archive are traceable to valid checks; stream-out success alone is not tapeout approval.
+  - [ ] **APV-009.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the exact delivered stream and archive are traceable to valid checks; stream-out success alone is not tapeout approval.
 
 - [ ] **APV-010 — Analog hard-macro release package**
   - Depends on: APV-009, APL-009, AC-011.
@@ -460,7 +462,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-010.c** Include characterization data, unsupported effects, release profile, checks/waivers, license restrictions, and immutable source/tool evidence.
   - [ ] **APV-010.d** Validate consistency across all applicable views and state why a view is not applicable rather than fabricating timing or analog characterization.
   - [ ] **APV-010.e** Demonstrate an independent macro consumer can load the package and diagnose incompatible process, interface, or evidence revisions.
-  - [ ] **APV-010.f** Exit: a reproducible, internally consistent macro package is published for its declared qualification profile, not silently promoted to foundry sign-off.
+  - [ ] **APV-010.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: a reproducible, internally consistent macro package is published for its declared qualification profile, not silently promoted to foundry sign-off.
 
 - [ ] **APV-011 — Mixed-signal and full-chip handoff closure**
   - Depends on: APV-010, APV-007.
@@ -469,7 +471,7 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-011.c** Integrate relevant existing AMS Verification capabilities for a small macro-plus-digital-shell fixture without blocking on unrelated verification features.
   - [ ] **APV-011.d** Make missing top-level coupling, substrate, package, power, clock-jitter, reliability, or DFT qualification explicit handoff obligations.
   - [ ] **APV-011.e** Exercise deliberate view, domain, connectivity, and configuration mismatches and retain consumer-side acceptance evidence.
-  - [ ] **APV-011.f** Exit: the macro handoff is validated with all remaining full-chip responsibilities named; this does not create or complete a reserved ASIC implementation track.
+  - [ ] **APV-011.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: the macro handoff is validated with all remaining full-chip responsibilities named; this does not create or complete a reserved ASIC implementation track.
 
 - [ ] **APV-012 — Tapeout-oriented analog macro qualification**
   - Depends on: APV-001 through APV-011, AC-012, APL-012.
@@ -478,13 +480,13 @@ Owner: Nodal tool-adapter/evidence modules using process-qualified external veri
   - [ ] **APV-012.c** Retain actual approved process/tool/deck evidence before using a foundry-sign-off label; otherwise release only under the accurately named open/research or Nodal-qualified profile.
   - [ ] **APV-012.d** Freeze a reviewable macro release dossier, integration responsibilities, characterization/test plan, archive, provenance, and authorized release approval.
   - [ ] **APV-012.e** Reproduce the release from clean inputs and audit negative/failure paths, reproducibility limits, confidentiality, and license compliance.
-  - [ ] **APV-012.f** Exit: all required children/dependencies and selected-profile checks are complete with explicit approval; chip-level tapeout and manufactured-silicon validation remain separate evidence.
+  - [ ] **APV-012.f** Architecture review: confirm modular boundaries, reuse, dependency direction and scalability for future increments. Exit: all required children/dependencies and selected-profile checks are complete with explicit approval; chip-level tapeout and manufactured-silicon validation remain separate evidence.
 
-## Implementation and CI strategy after the Foundation barrier
+## Prototype implementation strategy after the Foundation barrier
 
 Use contract/serialization/diagnostic and small circuit checks on ordinary implementation changes; use scheduled or explicitly requested integration jobs for supported SPICE and layout profiles; use separate authorized infrastructure for licensed tools and confidential PDKs. Preserve exact versions, input hashes, seeds, numerical tolerances, and convergence states. Static graph/type checks and formal checks of digital wrappers do not prove arbitrary continuous-time analog behavior. Simulation, independent netlist/geometry checks, DRC/LVS/PEX, and post-layout measurement each provide different evidence.
 
-Reuse existing project process-adapter infrastructure and the common runner, with future `nodal-eda` integration optional. Require clean failures, bounded resource use, resumable run matrices, cache invalidation, independent reference fixtures, and distinct unsupported/not-run/passed states. Open CI must not require proprietary PDKs or silently treat unavailable commercial checks as passing. Each release selects and documents its mandatory capabilities. A commercial sign-off release remains blocked until its actual required tools/decks execute. No new analog-native engine, repository, Rust runtime, or duplicate workflow framework is a CI prerequisite.
+Reuse existing project process-adapter infrastructure and the common runner, with future `nodal-eda` integration optional. Require clean failures, bounded resource use, resumable run matrices, cache invalidation, independent reference fixtures, and distinct unsupported/not-run/passed states. Focused local prototype checks must not require proprietary PDKs or silently treat unavailable commercial checks as passing. Each release selects and documents its mandatory capabilities. A commercial sign-off release remains blocked until its actual required tools/decks execute. No new analog-native engine, repository, Rust runtime, or duplicate workflow framework is a prototype prerequisite. Increment merges use focused local checks and architecture review, with no CI or full qualification; commercial sign-off remains a separate product claim.
 
 Maintain separate emission and actual-tool qualification evidence per export profile. Open jobs cover ngspice and the selected open layout/LVS subsets; licensed HSPICE, Spectre and commercial-CDL/sign-off jobs run only in authorized environments. A missing licensed job is not a pass and cannot close a task requiring that evidence. Preserve the current early-open-release dependency graph and all parent/child completion rules.
 

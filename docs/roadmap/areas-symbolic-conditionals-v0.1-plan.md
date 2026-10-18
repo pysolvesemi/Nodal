@@ -1,5 +1,7 @@
 # Areas and symbolic structural conditionals
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Revision:** 0.1
 **Date:** 2026-10-10
 **Status:** Approved Foundation roadmap direction; compile prototypes, implementation and qualification pending.

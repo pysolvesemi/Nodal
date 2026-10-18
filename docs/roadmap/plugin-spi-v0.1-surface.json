@@ -251,6 +251,6 @@
     "out-of-tree design/pass/dialect/backend/tool plugins",
     "external library plus separately enabled plugin fixture",
     "plugin provenance and cache-key evidence",
-    "green CI"
+    "focused local positive and negative checks plus architecture review; no CI or full qualification"
   ]
 }

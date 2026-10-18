@@ -168,7 +168,7 @@
     "resource and timing reports",
     "bitstream and board manifest",
     "claims and limitations report",
-    "green CI"
+    "focused local positive and negative checks plus architecture review; no CI or full qualification"
   ],
   "plugin_boundary": {
     "core_semantics": [

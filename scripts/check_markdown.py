@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_PARTS = {
+    ".work",
     ".git",
     ".toolchains",
     ".validation",
@@ -43,7 +44,7 @@ def markdown_files(root: Path) -> list[Path]:
     return sorted(
         path
         for path in root.rglob("*.md")
-        if path.is_file() and not any(part in EXCLUDED_PARTS for part in path.parts)
+        if path.is_file() and not any(part in EXCLUDED_PARTS for part in path.relative_to(root).parts)
     )
 
 

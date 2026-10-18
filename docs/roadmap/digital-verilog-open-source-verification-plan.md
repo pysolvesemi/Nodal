@@ -1,5 +1,7 @@
 # Pure-digital Verilog and open-source verification plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative roadmap target
 **Architecture:** [ADR 0010](../architecture/0010-digital-verilog-open-source-verification.md)
 **Digital HDL standards:** [digital-hdl-language-standards.md](digital-hdl-language-standards.md)
@@ -338,9 +340,14 @@ Representative designs run through a tool matrix:
 
 Expected tool limitations are versioned and source-located. A test is not silently skipped because one tool fails.
 
-## CI tiers
+## Focused prototype checks
 
-### Pull-request required
+Choose only the positive/negative cases and directly affected regressions needed
+for the current increment. The options below are a fixture inventory, not a
+mandatory per-PR matrix. Follow the [prototype execution policy](README.md#prototype-execution-policy);
+do not launch CI or scheduled qualification.
+
+### Select from affected checks
 
 - design classification and `Backend.Auto` selection;
 - deterministic IEEE 1364-2005 Verilog emission;
@@ -349,7 +356,7 @@ Expected tool limitations are versioned and source-located. A test is not silent
 - Yosys synthesis/check/stat;
 - short SBY proofs for core register, stream, FIFO, pipeline, and reset primitives.
 
-### Scheduled/extended
+### Broader validation inventory (not an increment merge gate)
 
 - randomized differential simulation;
 - deep pipeline stalls, bubbles, flushes, and reset races;

@@ -1,64 +1,55 @@
 # Nodal project instructions
 
 These instructions apply to the whole repository. A more specific `AGENTS.md`
-may narrow them for its subtree. A direct user instruction for the current task
-takes precedence. Read [CONTRIBUTING.md](CONTRIBUTING.md) before implementing or
-completing an increment.
+may narrow them for its subtree. A direct user instruction takes precedence.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before implementing an increment.
 
-## Pre-implementation increment readiness gate
+## Prototype execution policy — 2026-10-18
 
-Before modifying implementation source for an increment or sub-increment, audit
-the proposed work against the live integration target. This gate establishes a
-coherent scope and acceptance boundary before implementation; it is not
-permission to weaken an increment or rewrite historical acceptance.
+The owner has approved faster prototype development for every current and future
+increment and sub-increment, across Foundation and dependent tracks. This
+supersedes the former targeted/full CI, hourly continuation, mandatory independent
+Codex review, exhaustive qualification and separate evidence-closure process.
+Apply it to open work, including Foundation 43. Historical accepted checkboxes,
+results, hashes and evidence remain historical facts; do not rewrite them.
 
-1. Refresh the integration target and read the applicable `AGENTS.md`,
-   `CONTRIBUTING.md`, complete parent/child checklist, linked plans and ADRs,
-   predecessor evidence, open PR discussion, and live branch/ref state.
-2. Inspect the relevant public API, frontend, bridge, native IR/verifiers,
-   lowering, backend, tools, tests, workflows, fixtures and known limitations.
-   Determine what already exists, what is reusable, and which claimed
-   dependencies or validation owners are real.
-3. Classify every existing child obligation as required now, blocked by a named
-   dependency, owned by a named later increment, explicitly optional, or
-   genuinely non-applicable to the selected feature/profile. Record the
-   rationale and the resulting acceptance limit; applicability review is not
-   execution evidence.
-4. Preserve stable IDs, original intent, parent state, historical evidence and
-   required acceptance strength. Prefer correcting or clarifying an item under
-   its existing ID. A genuinely non-applicable item should normally become an
-   explicit applicability result with its rationale instead of disappearing.
-   Never silently delete, waive, check, or defer required work merely to reduce
-   the increment. Removing or narrowing an obligation requires an explicitly
-   documented and approved scope change under `CONTRIBUTING.md`.
-5. Add missing feature-specific obligations and correct inaccurate, duplicated
-   or misplaced wording. Reuse established representations, infrastructure and
-   validation owners; avoid fixture-specific exceptions, copied generic
-   checklists, circular dependencies and unbounded interaction matrices.
-6. For a new increment, create exactly one
-   `increment/<number>-<slug>` branch from the refreshed integration target
-   and one draft PR. For existing work, reuse its current branch and PR; do not
-   create a replacement branch or parallel increment implicitly.
-7. If the audit requires a checklist correction, publish that focused
-   documentation update as the first branch commit with `[skip ci]`, create or
-   update the draft PR/checkpoint, and verify the changed-file scope before
-   implementation.
-   Do not run CI merely for this authorized documentation-only scope commit. If
-   no checklist edit is required, record the audit conclusion in the draft PR
-   or durable checkpoint without creating an empty commit.
-8. Start implementation only after the checklist, dependencies, implementation
-   layers, rejection coverage, independent validation ownership and acceptance
-   boundary are coherent. Keep the parent open until all required descendants
-   and closure obligations are complete.
+Do not run or dispatch any CI, create a CI launch controller, or enable hourly
+monitoring for prototype development. Publish source and documentation commits
+with `[skip ci]`, and include it in the actual squash-merge message. Do not
+resume an old controller or monitor because an older handoff asks for it.
+Existing workflows and qualification harnesses may remain for a future explicit
+request; their presence is not an instruction to execute them. A later explicit
+owner request is needed to restore CI or full qualification.
 
-After the first durable increment commit and draft PR exist, create, re-enable
-or update exactly one hourly continuation for that increment. Before targeted
-CI, it tracks live refs, implementation progress, blockers and the durable
-checkpoint, and may resume already-authorized work only when it will not compete
-with an active worker. The same continuation transitions to CI monitoring after
-the first targeted launch; never create a second monitor for the CI phase.
+Prototype acceptance means the selected implementation has passed its focused
+local checks and architecture review. It is not exhaustive certification of
+Nodal, every parameter combination or every downstream tool. Fix newly found
+bugs when a later increment or user report exposes them, with a focused
+regression. Do not delay every increment to prove the absence of future bugs.
+
+## Increment readiness and scope
+
+Before implementation, refresh the integration target, current feature branch,
+PR discussion and handoff. Read the applicable checklist, linked design records
+and affected production paths. Reuse the existing increment branch and PR;
+start a new increment from current `dev` only when starting that increment.
+Do not replace branches or compete with another active worker.
+
+Identify the selected feature, affected owners and consumers, positive and
+negative cases, and explicit unsupported cases. Preserve stable checklist IDs,
+feature semantics, scope and parent/child states. A child is complete when its
+own deliverable and focused validation are complete; keep a parent open while
+required implementation children remain unfinished. Record a scope change
+explicitly instead of silently deleting work. This dated prototype process
+change is owner-authorized and applies to older qualification wording in plans,
+design gates and implementation handoffs.
+
+Keep public API/core-library boundary design decisions concise and explicit in
+the existing design-gate record. No new framework, speculative rewrite or large
+qualification matrix is required just to satisfy the readiness review.
 
 ## Shared infrastructure and maintainable implementation
+
 
 For every new or in-progress implementation increment, sub-increment and repair,
 apply this rule during the readiness review and verify it again against the
@@ -84,7 +75,8 @@ workarounds around a missing or incorrect base implementation.
    parallel registries and example-only success do not establish implementation.
    Preserve supported old and new consumers with applicable positive, negative,
    predecessor and source/output-parity tests. Remove superseded internal paths
-   only with evidence; do not weaken tests to accommodate the new design.
+   only with evidence; do not weaken assertions or disable failing affected cases to accommodate
+   the new design.
 4. Review relevant time/memory growth, repeated traversals, copies, recursion,
    graph expansion and coupling. Use proportionate representative measurements
    when performance or scale may change; distinguish measured results from
@@ -98,8 +90,8 @@ workarounds around a missing or incorrect base implementation.
    owners without reverse dependencies or silently deferring required work.
 6. Retain one concise decision and outcome record in the existing PR/readiness
    or implementation document, linked to the relevant code and validation. Use
-   existing architecture, implementation, review and scale obligations rather
-   than copying a generic checkbox into every increment or creating a second
+   existing architecture, implementation, review and scale children; add a
+   stable architecture-review child only where missing. Do not create a second
    progress ledger. Before completion, confirm that the actual implementation
    still satisfies the recorded decision and applicable evidence requirements;
    a design proposal alone is not completion evidence.
@@ -107,306 +99,117 @@ workarounds around a missing or incorrect base implementation.
 Apply this prospectively; do not reopen historically accepted increments merely
 to impose the new process. Documentation-only and architecture-only changes
 record proportionate applicability, not artificial production or benchmark work.
-This rule does not replace approved design gates, qualification, scope controls
-or existing feature-specific acceptance requirements.
+Apply the focused prototype validation and merge policy below to all of this
+work; this architecture review is not an exhaustive qualification program.
 
-## Independent Codex review before merge
+## Architecture review for every increment
 
-Apply this prospectively to implementation, sub-increment, repair and
-accepted-evidence closure PRs. Do not reopen historically accepted increments
-or copy a generic Codex checkbox into every roadmap increment. This section
-owns the policy; the PR template links the review evidence.
+Every increment and sub-increment must have an explicit checklist item covering
+architecture, modularity and scalability. Reuse and strengthen its existing
+architecture child where present. For new work without one, add a stable child
+ID in that increment's authoritative roadmap; do not create a second ledger.
+Completed historical increments are not reopened to add a new checkbox.
 
-1. Request an independent Codex review once implementation is coherent,
-   preferably alongside targeted CI and before the expensive full-CI phase.
-   Complete the review, address confirmed findings and qualify resulting
-   repairs with targeted CI before starting full CI.
-2. Record the review reference, reviewed head/tree, base/diff context and
-   finding dispositions in the existing PR or durable checkpoint. A request,
-   reaction, pending or failed review, reviewer unavailability or silence is not
-   completed review evidence. Report an unavailable review as a blocker; do not
-   invent approval or silently substitute self-review.
-3. Validate findings against the actual production path and acceptance contract.
-   Fix genuine correctness, compatibility, safety and material scalability
-   defects. Explain false positives or optional suggestions with evidence and
-   retain their disposition. Do not weaken tests or expand scope indefinitely
-   to implement every suggestion; use the existing scope controls. Resolve
-   actionable threads only after the fix and applicable validation are complete.
-4. Subsequent substantive source, test, workflow, manifest or review-contract
-   changes require review of the changed scope and affected interactions plus
-   applicable CI. Preserve completed independent review of unchanged scope; do
-   not request another identical review merely because CI finished.
-5. Before merge, verify completed review covers the final candidate, its
-   integration context and all substantive changes, with no unresolved
-   actionable findings. A tree-identical successor may reuse completed review
-   only after verifying tree equality and unchanged base, effective diff and
-   relevant review context. Link the original reviewed SHA, final SHA, tree
-   proof and rationale; never claim a new review ran. Changed integration
-   context needs reconciliation and renewed review as appropriate. This
-   review-only reuse does not relabel CI, waive required protection contexts
-   or override stricter feature-specific acceptance gates.
+Review before implementation and again against the actual result:
 
-Codex review complements tests, design gates and required human approvals; it
-does not replace them. The existing explicit user-authorized documentation-only
-direct-update exception still applies: do not create a PR, run CI or reopen an
-accepted increment solely to apply this prospective policy.
+- canonical ownership, reuse and module boundaries;
+- dependency direction and interfaces for known later roadmap consumers;
+- avoidable duplication, special cases and coupling;
+- time/memory growth, repeated traversals, recursion and generated expansion;
+- concrete future bottlenecks and a focused remedy or documented follow-up.
 
-## Targeted CI before full CI
+A concise implementer review in the PR or implementation note is sufficient.
+Use independent review when useful or requested, but do not block the prototype
+on an external Codex review service or an expensive benchmark program. Measure
+only when a specific affected scaling concern needs evidence. Do not claim a
+performance improvement that was not measured.
 
-For every increment, sub-increment, repair and accepted-evidence closure, qualify
-newly affected or repaired source with targeted CI before starting full CI.
-Local tests are useful repair evidence, not a substitute for remote qualification.
-Use the existing increment branch and PR against `dev` unless the task specifies
-otherwise; do not start another increment or touch `main` implicitly.
+## Prototype validation and merge
 
-1. Inspect the live target, candidate, PR and repository instructions. Publish a
-   clean candidate with `[skip ci]` to prevent automatic broad push/PR CI during
-   the targeted phase. Record the full candidate SHA, tree SHA and target SHA.
-2. Determine the affected workflow set from changed source, tests, generated
-   artifacts, manifests, toolchain pins, formal registries, source-review
-   contracts and prior CI failures. Record workflow IDs, paths, definition
-   hashes, required inputs, jobs and matrix lanes; names alone are not stable
-   workflow identities. Include shared gates and affected predecessor coverage.
-3. Confirm each workflow supports `workflow_dispatch`, is registered/dispatchable
-   under GitHub's rules, and executes the intended checks for that event/ref.
-   A successful dispatch cannot compensate for PR-only jobs silently skipping.
-   Do not change the default branch or modify `main` to make dispatch available.
-4. Launch each affected workflow on the exact candidate branch using the
-   browserless route below. Do not duplicate queued, running or successful runs
-   for the same workflow, head, inputs and qualification context. Verify the
-   resulting workflow ID, event, ref, head and actual checkout/tree identity.
-5. Treat a workflow as passing only after every applicable job and matrix lane
-   succeeds. Enumerate all run, latest-attempt job, check and status pages, and
-   inspect actual logs/artifacts. Missing lanes, zero-job greens, pending work,
-   cancellations, timeouts, skipped applicable jobs and old-head successes are
-   not passing evidence. Record legitimate non-applicable skips without giving
-   them test credit. A prospective test-merge SHA is not an actual merge.
-6. After the first targeted launch, confirm the increment's single hourly
-   continuation is enabled and transition it to CI monitoring as specified
-   below. If it was genuinely unavailable during implementation, enable it now.
-   Do not create a duplicate monitor. Repair failures and repeat only the
-   affected targeted set until all targeted requirements pass on the intended
-   candidate.
-7. Only then start one applicable full-CI qualification on that exact candidate.
-   Inventory the complete required workflow/job set, including Core CI and
-   applicable increment/compatibility workflows; Core CI alone is not the full
-   set when other gates apply. Reuse qualifying same-head targeted runs and
-   launch only missing full-phase requirements through approved repository
-   triggers. Verify branch-protection-required contexts as well as test results.
-8. If full CI fails, return to failed-first diagnosis and targeted repair rather
-   than repeatedly relaunching the full matrix. After repair targeting is green,
-   complete full qualification for the repaired head. Keep successful independent
-   same-head runs; results from a preceding SHA do not qualify a new source head.
+1. Run focused local positive, negative and boundary-case tests/checks for the
+   affected increment and changed logic. Include directly affected predecessor
+   regressions when a shared layer changes. Prefer existing filtered suites and
+   representative compiler/target witnesses; do not run unrelated repository-wide
+   suites, full qualification, exhaustive matrices, numerical/formal campaigns
+   or any CI as a routine per-increment gate.
+2. Retain runtime semantic verifiers and useful negative tests. This policy
+   reduces validation breadth and ceremony, not the meaning of the implemented
+   feature. Never turn a known failure into a pass by disabling its check. Fix
+   a confirmed in-scope bug and add a small regression; record unsupported
+   behavior and unrelated follow-up work honestly.
+3. Record the commands, selected cases, outcome, source revision and limitations
+   in the existing PR/implementation note. A missing tool or unexecuted test is
+   not a pass. Use an equivalent focused check where possible and state any
+   remaining limitation. Large logs, sealed full-matrix receipts, separate
+   accepted-evidence PRs and remote CI run IDs are not required for prototype
+   acceptance. Preserve existing historical evidence without relabeling it.
+4. An increment branch may be squash-merged into `dev` once its scoped feature
+   work, focused positive/negative checks and architecture review are complete,
+   with no known unresolved in-scope failure. Broader testing is not a merge
+   prerequisite. No mandatory independent Codex review, full suite, simulator
+   certification or CI status is imposed by the prototype process.
+5. Before an authorized merge, refresh head/base, preserve concurrent changes,
+   use the expected head SHA, and include `[skip ci]` in the squash message.
+   Verify the actual merged flag, commit parent, target ref and merged tree
+   against the reviewed source. Record `ci: not-run (prototype policy)`; never
+   report skipped checks as passed. If GitHub protection still requires a CI
+   status, report that concrete repository-setting blocker; do not fabricate
+   statuses, bypass protections or launch CI against the owner's instruction.
+6. Update roadmap children and the completion report in the same increment PR
+   when their deliverables are ready. A separate evidence-closure PR is optional,
+   not a gate. Include the actual generation demonstration described below.
+   Unknown bugs discovered later are repaired in the then-current development
+   work or a focused bugfix, with a regression for the reported behavior.
 
-Rerunning an existing job preserves the original run's source SHA/ref. Use a
-specific-job or failed-job rerun only for a diagnosed unchanged-source transient
-failure. After any source, test, workflow, manifest, registry or review-contract
-repair, publish the corrected commit and dispatch fresh runs on the new head.
-New job IDs can represent copied successes from an earlier attempt; verify step
-execution times and checkout identities instead of assuming a fresh rebuild.
+Documentation-only policy or handoff updates need only affected document/link,
+checklist consistency and diff checks. Do not run compiler suites for them.
 
-Skip annotations suppress push/PR triggers, not explicit dispatches, and can
-leave required PR contexts pending. They never authorize bypassing protection,
-posting fabricated success statuses or counting absent checks as passed. Plan
-an approved full-CI route that supplies every required context. If a required
-workflow/context cannot be qualified through available authorized mechanisms,
-record the precise blocker; do not silently run broad CI during targeted repair.
+## Handoff and monitoring
 
-## Browserless targeted dispatch
+Keep hourly continuations disabled. Work resumes when the owner or destination
+agent asks, not through scheduled polling. At handoff, publish all substantive
+source work append-only, record branch/PR/head, focused results, known failures,
+remaining feature work and next steps, and release any worker lease. Preserve
+other workers' changes. An older handoff cannot override this process or restart
+CI. Do not recreate duplicate local commits already published under equivalent
+remote commits.
 
-Do not require the user to run GitHub CLI commands. Do not depend on a browser,
-devbox or external MCP server when an authorized repository route is available.
-Use this launch order:
+## Repository hygiene
 
-1. Use a connected GitHub `workflow_dispatch` operation when it is exposed.
-2. Otherwise use the standing authorization below for a narrowly scoped,
-   increment-specific repository dispatcher. Tool unavailability is not a reason
-   to ask again for this permission. This does not override a safety denial,
-   repository restriction or genuinely missing access.
+Keep generated logs, evidence, reports, caches and scratch work under the ignored
+repository-root `.work/` directory. Never commit those generated artifacts or
+force-add ignored files. Configure temporary/output/cache paths there for new
+work; preserve existing ignored tool/build directories until a safe migration
+is appropriate. Do not remove tracked historical fixtures/evidence or unrelated
+files as part of cleanup.
 
-### Standing authorization for a repository dispatcher
+Record verified completion with `[x]` and brief notes in the existing authoritative
+checklists: what changed, the focused checks/results and relevant source commit.
+Keep a parent open until its required children are complete. Do not create a
+second progress ledger or commit generated evidence bundles/reports in place of
+these notes. Source tests and maintained fixtures remain normal source files;
+new raw outputs and run receipts belong in `.work/`.
 
-The agent may publish and trigger a controller on a dedicated non-target,
-non-feature control branch, starting from the current integration target. This
-is a targeted-CI mechanism, not a source publisher or a separate increment.
-The controller may use the runner's automatic `${{ github.token }}` to call the
-Actions workflow-dispatch REST endpoint. No personal token is required.
+Run `git status --short` before starting edits, before each commit, and before
+handoff. Review the staged diff, stage only intended paths and preserve unrelated
+changes. Never use broad cleanup/reset/staging to hide another worker's changes.
+Confirm no `.work/` artifact is staged and report any remaining worktree changes
+at handoff.
 
-The controller must:
+## Publication and completion demonstration
 
-- Have a unique branch and controller identity bound to the increment, PR,
-  target and candidate SHA. Never repurpose one pinned to different work.
-- Have an exact `push` branch filter and path filters limited to its own workflow
-  and reviewed controller files. Request only `contents: read` and
-  `actions: write`; no personal token, extracted credentials, browser session,
-  default-branch change, feature-trigger modification or unrelated workflow edit.
-- Carry an explicit allowlist for repository, PR, base ref/SHA, candidate
-  ref/SHA/tree, workflow IDs/definition hashes and exact dispatch payloads/inputs.
-  Validate live identities, original failure evidence when applicable and
-  workflow definitions before dispatch; recheck identities between dispatches.
-- Use reads for validation and permit only the allowlisted write operation
-  `POST /repos/OWNER/REPO/actions/workflows/WORKFLOW_ID/dispatches`, normally
-  with `{"ref":"CANDIDATE_BRANCH"}`. Reject unexpected inputs or destinations.
-- Enumerate existing same-workflow, same-head dispatch runs, with matching
-  inputs/context, and retain queued, running or successful runs. Record intent
-  before POST, reconcile an uncertain response before retrying, and retain an
-  auditable ledger of requested and observed runs without logging tokens.
-- Fail closed on ref movement or unexpected data, use bounded timeouts and
-  serialize dispatch attempts. Do not execute candidate-controlled source or
-  arbitrary scripts in the controller's privileged job.
-- Dispatch only the affected workflow set. It must not update source refs,
-  rerun old heads, launch full CI, merge, cancel unrelated work, broaden triggers
-  or alter protections. Keep controller commits off feature/integration branches.
+Preserve source ancestry: no force-push, rebase or rewrite of published feature
+history. Nodal's final squash merge into `dev` remains the integration policy.
+Do not commit build outputs, downloaded toolchains or large temporary logs.
 
-Before publication, inspect every workflow that can match the controller push.
-That push must launch only the intended controller; otherwise select a safe
-isolated route or stop without dispatching. In Nodal, Core CI matches
-`increment/**`, so a controller branch must not use that prefix. An isolated
-`ci-control/...` name is only a candidate until all live trigger filters have
-been checked. The controller-launch commit must NOT contain `[skip ci]`.
-
-After launch, verify each resulting run has the allowlisted workflow ID, event
-`workflow_dispatch`, candidate branch and exact head SHA. An actor such as
-`github-actions[bot]` is expected with the job token; neither that actor nor a
-green controller job is qualification evidence. Only the dispatched checks count.
-
-## Hourly monitoring from increment start through closure
-
-After the first durable increment commit and draft PR exist, create, re-enable
-or update one hourly continuation for that increment using the available
-scheduling tool (`RRULE:FREQ=HOURLY`). Do not create it before there is a durable
-branch/PR state to inspect. Reuse the same task throughout implementation,
-targeted repair, full CI, review, merge and accepted-evidence closure instead of
-creating competing monitors. Confirm scheduling actually succeeded before
-reporting it as enabled; report an unavailable scheduler without claiming
-background work.
-
-Before the first targeted launch, each execution must:
-
-1. Read the live target, feature ref, draft PR, checklist and durable checkpoint.
-   If another worker has an active, current checkpoint or is publishing, avoid
-   competing writes and end quietly unless coordination is required.
-2. Continue only the already-authorized increment scope. Work from the audited
-   checklist, run proportional local checks, preserve clean ancestry, and
-   publish focused `[skip ci]` checkpoints when remote evidence or handoff is
-   needed. Do not launch targeted or full CI before a clean candidate and
-   affected-workflow inventory are ready.
-3. Record completed children only with their own deliverables and applicable
-   validation. Keep blocked, deferred and non-applicable classifications
-   explicit, preserve parent state, and report real blockers rather than
-   deleting work or manufacturing progress.
-4. Update the durable checkpoint with the current phase, refs, completed work,
-   local evidence, remaining checklist items, blockers and next safe action.
-   Stay quiet when nothing actionable changed.
-
-After the first targeted launch, each execution must:
-
-1. Read live refs, PR/review state, the durable increment checkpoint and every
-   applicable latest-attempt workflow/job/check/status page. Avoid competing
-   writes with another resume; recheck refs before publishing or merging.
-2. Inspect actual failed logs and artifacts. Repair generic causes within the
-   authorized increment, run proportional local checks, publish a clean
-   `[skip ci]` checkpoint, and dispatch only failed/newly affected targeting on
-   the repaired head. Diagnose infrastructure failures, including rate limits,
-   before bounded retries; never disable provenance or tests to make them pass.
-3. Advance from targeted to full CI only when all targeted requirements pass;
-   return full-CI failures to the same repair loop. Leave unrelated and
-   still-running jobs intact, and do not restart successful independent checks.
-4. Once all required full-CI checks and review pass on the exact final head,
-   perform the already-authorized verified merge with post-merge CI suppressed
-   as described below. Continue monitoring until acceptance records, roadmap
-   and any required closure PR are complete, not merely until code is merged.
-5. Update the durable checkpoint with the current phase, repo/increment/PR,
-   candidate/base/tree SHAs, affected/full workflow inventories, run/attempt IDs,
-   failures, fixes, evidence, merge identity and remaining closure obligations.
-   Stay quiet for unchanged queued/running work; report meaningful failures,
-   published repairs, blockers, merge verification and accepted completion.
-
-Disable the hourly task only after the increment is legitimately closed:
-required final-head qualification and review are complete, the actual merge is
-verified, required evidence/closure records are integrated, the authoritative
-roadmap and manifest agree, and the completion demonstration/report is delivered.
-Keep it enabled while any of these remain outstanding, unless the user explicitly
-pauses/cancels it. A persistent blocker must be reported, not treated as closure;
-do not hammer failing services or repeatedly publish the same checkpoint.
-
-## Verified merge with post-merge CI suppressed
-
-Effective 2026-09-21, suppress duplicate post-merge CI for fully qualified,
-identical-tree increment and closure merges. This replaces older generic
-instructions to rerun the same suite after every merge; it does not remove
-pre-merge qualification, review, source integrity or accepted-evidence closure.
-
-- Require all applicable targeted/full-CI checks and review on the final head.
-  Re-read candidate and target SHAs, required contexts and mergeability just
-  before merging. Target movement, unresolved review or a different prospective
-  tree requires reconciliation and qualification, not an unchecked merge.
-- Preserve Nodal's documented **squash merge into `dev`** policy. Supply the
-  verified `expected_head_sha` and put `[skip ci]` in the actual squash-merge
-  commit message. Do not add an untested feature commit merely to carry the
-  annotation, rewrite feature history or bypass protected-branch requirements.
-- Verify GitHub's actual merged flag, merge commit, parent/target relationship,
-  final target ref, commit message and tree. The merge tree must equal the
-  qualified candidate tree. Retain these identities with pre-merge CI evidence;
-  a prospective PR test-merge SHA or a successful merge request is insufficient.
-- Check that the intended post-merge push workflows were suppressed. Do not
-  dispatch duplicate post-merge CI. `[skip ci]` does not suppress every event
-  type; inspect live `pull_request_target`, `workflow_run` and other relevant
-  triggers before relying on it. Do not globally disable workflows or cancel
-  unrelated runs to manufacture suppression. Report unexpected triggered runs
-  and inspect them without counting a failed applicable check as success.
-- Record `post_merge_ci: skipped` with reason `qualified-identical-tree-merge`,
-  actual merge/tree identities and references to the executed qualification.
-  Never invent a post-merge run ID, report skipped checks as executed/passed, or
-  reuse old-head results as if they ran on the merge commit.
-- Preserve historical accepted-evidence records, hashes and genuine post-merge
-  results. Do not rewrite them for this policy. New records must distinguish
-  executed qualification from merge verification and suppression; an old schema
-  that requires a new post-merge run needs an explicit reviewed schema evolution,
-  not dummy run IDs or weakened historical guards.
-- Keep any required separate evidence-closure PR in scope. Validate its changed
-  checks/docs using targeted-first/full-CI qualification, review and the same
-  verified merge/suppression rule. Complete the roadmap and manifest according
-  to CONTRIBUTING; do not delete unfinished acceptance tasks to claim closure.
-
-If merge-tree verification fails or a mandatory check remains unsatisfied, keep
-the increment open and monitoring active. Diagnose and qualify the discrepancy;
-never classify it as a successful CI-skipped merge.
-
-## Failure handling and publication
-
-Preserve authoritative source ancestry and evidence. Do not rebase, force-push
-or rewrite published candidate history; the final reviewed squash merge above
-is the Nodal integration policy, not permission to relabel tests from other
-commits. Never weaken tests, simulations, formal proofs, mutation controls,
-source reviews, timeouts or workflow matrices merely to obtain a pass.
-
-For a user-authorized documentation-only instruction/roadmap update with CI
-explicitly waived, use the existing requested branch and `[skip ci]`; do not
-create a new branch, PR, controller or monitor merely to exercise these rules.
-That exception is not a waiver for compiler changes or increment-closure gates.
-
-## Standing increment completion rule
-
-Whenever an increment or sub-increment in any roadmap track is completed and
-marked `[x]`, follow
-[Increment completion demonstrations](CONTRIBUTING.md#increment-completion-demonstrations)
-in the user-facing completion report: show a concrete Nodal Scala example and
-its corresponding actual generated Verilog-* output when applicable. Identify
-the backend, relevant source/output paths, and what the example demonstrates.
-Do not substitute hypothetical output or a test-status summary for the demo.
+Whenever an increment is completed and marked `[x]`, follow
+[Increment completion demonstrations](CONTRIBUTING.md#increment-completion-demonstrations).
+Show a concrete Nodal Scala example and corresponding actual generated Verilog-*
+when applicable, identify the backend and relevant paths, and explain the result.
+Do not substitute hypothetical output for actual generation.
 
 When the increment does not affect generated Verilog-*, explicitly state:
 
 > The current increment does not affect generated Verilog-*.
 
-Add a brief reason, and show a Scala example only when it is useful and
-applicable. This includes documentation-only increments; it does not waive any
-existing acceptance, validation, or merge requirements for implementation work.
-
-## GitHub CI mechanics references
-
-- [Workflow dispatch and job-token triggers](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
-- [Dispatch event requirements](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
-- [Rerun source identity](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
-- [Commit-message skip annotations](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)
+Add a brief reason and a Scala example only when useful and applicable.

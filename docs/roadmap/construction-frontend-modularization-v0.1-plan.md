@@ -1,5 +1,7 @@
 # Construction frontend modularization and scalability baseline
 
+**Historical acceptance:** F-160 is complete; its checked architecture, maintainability, scalability and qualification evidence below is preserved. Later work follows the [prototype execution policy](README.md#prototype-execution-policy), with no CI or full-qualification merge gate.
+
 **Revision:** 0.1
 **Approved scheduling and scope:** 2026-09-24
 **Status:** Accepted 2026-09-29; implementation, qualification, verified integration and separate evidence closure complete.

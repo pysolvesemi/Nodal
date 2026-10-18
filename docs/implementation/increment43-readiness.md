@@ -1,10 +1,11 @@
 # Foundation 43 readiness and implementation checkpoint
 
-**Date:** 2026-10-01
+**Initial readiness date:** 2026-10-01
+**Latest process/handoff update:** 2026-10-18
 **Status:** In progress; no F-043 acceptance or completed child is claimed.
 **Branch:** `increment/43-analog-arrays-generation`
-**Integration target:** `dev` at `e34d17ba2c9adb9e765ee4f0c97699128c224340`
-**Integration tree:** `57d402aada6561e1c51ef9b60c49fff193219d8e`
+**Initial integration target:** `dev` at `e34d17ba2c9adb9e765ee4f0c97699128c224340`
+**Initial integration tree:** `57d402aada6561e1c51ef9b60c49fff193219d8e`
 
 ## Authority and predecessor verification
 
@@ -76,10 +77,10 @@ is preferable to an unneeded framework or wholesale frontend rewrite.
 | F-043.B.3.1 | Required now: actual scalar/generated target counterpart witnesses; no illegal flattening, shared state or accidental memory inference. |
 | F-043.C | Required now: positive, negative, empty/singleton, invalid dimension/rank/bound, event-state and predecessor regressions. |
 | F-043.D / D.1 | Required now: actual public Scala to normalized IR to Verilog-A compiler witnesses. Internal reparse is not independent OpenVAF compilation. |
-| F-043.D.2 | Required now: a concrete handoff of cases, analyses, references and tolerances to F-048 compile and F-049/F-052 numerical owners. Their later executions are not claimed here. Any execution actually required by this increment remains a blocker until available. |
+| F-043.D.2 | Required now: a concrete handoff of cases, analyses, references and tolerances to F-048 compile and F-049/F-052 numerical owners. Their later executions are not claimed here. Use focused compiler witnesses now; later numerical/tool execution does not block prototype acceptance. |
 | F-043.E | Required now: proportionate expansion/traversal/output review, preserved symbolic bounds and instance-local state. Optional improvements require measured justification, not a new reverse prerequisite. |
 | F-043.F | Required now: nested dimensions, repeated generation, parameter envelopes, deterministic source/index identities and compatibility. |
-| F-043.G | Required now: retained evidence, documentation/demonstration, review, final-head qualification, verified integration and any separate closure. |
+| F-043.G | Required now: brief checklist notes, actual generation demonstration, architecture review, focused local checks and verified integration; no full qualification or separate closure gate. |
 
 No existing requirement is removed, narrowed, waived, checked or reclassified
 as non-applicable. No checklist correction is necessary for the initial work;
@@ -114,23 +115,90 @@ The exact scalar/array capability matrix and emitted target witnesses must be
 completed as the implementation becomes coherent. No universal Verilog-AMS,
 independent simulator, numerical accuracy, synthesis or speedup claim is made.
 
-## Qualification and continuation
+## Prototype process and handoff to dot — 2026-10-18
 
-The initial documentation commit uses `[skip ci]`; it does not launch CI.
-Publish source checkpoints with the same suppression, run proportional local
-checks, and inventory the affected remote workflow IDs/definitions/jobs before
-any targeted dispatch. Retain successful exact-head runs and never duplicate
-active work. Full CI waits for coherent implementation, successful targeting
-and the required completed review. The owner exception in PR #138 was scoped
-to that closure; it is not a general review waiver for F-043.
+The owner explicitly replaced the old qualification/continuation process with
+[focused prototype development](../../AGENTS.md#prototype-validation-and-merge).
+Do not run any CI, full qualification or hourly monitoring. The old independent
+Codex/full-CI/Increment34-PR-witness/push-only-status/separate-closure gates in
+historical PR comments do not govern new prototype acceptance. Preserve feature
+semantics and existing tests; use affected positive/negative/boundary regressions
+and a concise architecture/modularity/scalability review. Fix later-discovered
+bugs when found. Store new generated outputs and logs in ignored root `.work/`;
+record verified `[x]` completion with brief notes in the existing checklists.
 
-Create exactly one hourly F-043 continuation after the durable branch and draft
-PR exist. Reuse it through implementation, targeted repair, review, full CI,
-merge and closure. Check the latest PR checkpoint for an active worker before
-publishing. The live PR checkpoint owns current head/tree, validation/run IDs,
-worker coordination and the next safe action; this file records the stable
-readiness decision. Do not reopen or restart completed F-160 work.
+### Published source and coordination
 
-All F-043 parent/child checkboxes remain open at this checkpoint. No generated
-output or test receipt is fabricated. Later completion requires an actual
-Scala/normalized-IR/generated-Verilog-A demonstration and verified acceptance.
+- Repository: `pysolvesemi/Nodal`; branch:
+  `increment/43-analog-arrays-generation`; draft [PR 139](https://github.com/pysolvesemi/Nodal/pull/139).
+- Latest implementation source: `9850d0928d8e5c7ad1a0c639e2870ca3f45a3c29`,
+  tree `13bf4c2b783cbd64e4a5ce541cf3a40b5b9fe7e1`, parent
+  `6bfec16088934a93ff81ceaa06c170d1882efc9f`.
+- Integration target remains `dev` at
+  `3d5a6f259505ea5084cf7606c0cfeb92e5843e41`.
+- This policy/handoff commit is an append-only child of that source. Refresh
+  the live branch before starting; do not reset it to the implementation SHA.
+- All substantive local work is already present remotely. Old local commits
+  with different hashes have identical published trees/patches and must not be
+  pushed again. No unpublished compiler source or generated evidence is needed.
+- The latest worker lease was released in PR comment 6246843976. Hourly task
+  `6abe9447b0508191bff0f81af632a8e6` is disabled by the owner's migration request.
+  Do not re-enable it or launch/replay an old CI controller.
+
+### What is implemented and checked
+
+Consult [shape contract](increment43-shape-contract.md),
+[integer bounds](increment43-integer-bounds.md),
+[generate count](increment43-generate-count.md), and especially the latest
+sections of [compound bounds and generated target transport](increment43-compound-bound-transport.md)
+for the exact supported profile and source/test owners. Shared shape/range
+contracts, symbolic bound transport and generated ownership feed the real
+frontend/bridge/native/backend path. Generated node arrays, bounded nested
+peer-node operator/result-scale paths, source maps and zero-based nested
+occurrence indexing are implemented within the recorded capability limits.
+
+The latest source adds a negative-origin nested peer `idt` witness with exact
+state/induction ownership, target/index checks, deterministic re-emission,
+source maps and forged-state/fan-out negatives. It adds no production admission
+rule. The preceding source fixed nonzero unit-step origins in nested row-major
+indexing while preserving direct one-dimensional bounds and indices.
+
+Historical local results on 9850d092: native 145/145, Python 474/474,
+ClangFormat 64 and document/policy checks passed. Local Mill/Scalafmt was blocked
+by Maven DNS; do not relabel that as a local pass. These broad old results are
+retained history, not a requirement to repeat them under the new process.
+
+At migration, the already-launched Core run
+[39105880444](https://github.com/pysolvesemi/Nodal/actions/runs/39105880444)
+reported success. Bridge run
+[39105893537](https://github.com/pysolvesemi/Nodal/actions/runs/39105893537)
+failed in online toolchain provenance lookup: job 117611535922 reported
+NODAL-TOOLCHAIN-101/103/106, GitHub HTTP 403 rate-limit errors for CIRCT/LLVM.
+This is an infrastructure failure, not a confirmed compiler regression or a
+passing Bridge result. No retry or new CI is needed under the new policy.
+
+### Next implementation work
+
+Reconcile the existing F-043 main and amendment children against actual code,
+then mark only completed child deliverables with short verified notes. They
+remain open at migration; this process update does not claim F-043 completion.
+Finish required fixed/symbolic shape/index/slice behavior, generated storage and
+operator ownership, supported target layouts and source/index maps within the
+approved scope. Current bounded generated profiles still reject wider/deeper
+groups, extra operator/state/result fan-out, cross-range storage, general slices,
+shaped terminals and generated connections/instances where not implemented.
+Do not silently treat an intentional current rejection as the final feature.
+
+Use the existing shared owners, unified `hdlRange`, approved design gates and
+public witnesses. Add only affected positive/negative checks for each changed
+path; no exhaustive matrix or broad predecessor rerun. Keep F-048/F-049/F-052
+handoff notes concise; later simulator/numerical work is not a reverse dependency.
+Once the scoped implementation, focused checks and architecture review are
+complete, use the normal verified squash merge with `[skip ci]` and show an
+actual Scala/IR/generated-Verilog-A example. A separate evidence-closure PR is
+not required. Keep the branch and PR for dot; do not merge during this handoff.
+
+Handoff policy checks: six focused positive/negative document/contribution tests,
+changed Markdown links/structure, JSON parsing, ignored `.work/` handling and
+Git diff checks passed. Existing checklist states and accepted records were
+preserved. No CI or compiler suite was run for this policy-only update.

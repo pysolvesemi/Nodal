@@ -7,11 +7,15 @@
 
 ## Validation
 
-- [ ] `./nodal style check --base-ref origin/dev`
-- [ ] `./nodal check --online-toolchain --base-ref origin/dev`
-- [ ] Required Core CI is green
-- [ ] Codex review completed under AGENTS.md; final candidate coverage
-      and finding dispositions are linked.
+- [ ] Focused local positive, negative and boundary tests for affected logic pass.
+- [ ] Directly affected regressions and formatting/document checks pass.
+- Commands, source revision, outcomes and limitations:
+- CI: not run under the prototype policy; commits/merge use `[skip ci]`.
+
+## Architecture review
+
+- [ ] Modularity, canonical owners, dependency direction and reuse reviewed.
+- [ ] Scaling risks and known future roadmap consumers reviewed; findings recorded.
 
 ## Design gate
 

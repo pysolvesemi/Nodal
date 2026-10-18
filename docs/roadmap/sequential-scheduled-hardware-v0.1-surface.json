@@ -83,7 +83,7 @@
     {"id": "SQ-021", "title": "Schedule-polymorphic libraries and interface contracts", "release": "C", "depends_on": ["SQ-006", "SQ-007", "SQ-009", "SQ-010"]},
     {"id": "SQ-022", "title": "Verified loop/dataflow transformations", "release": "C", "depends_on": ["SQ-008", "SQ-013", "SQ-014", "SQ-017"]},
     {"id": "SQ-023", "title": "Schedule explanation, locking and exploration", "release": "C", "depends_on": ["SQ-007", "SQ-009", "SQ-010"]},
-    {"id": "SQ-024", "title": "Full-track qualification and capability release", "release": "C", "depends_on": ["SQ-010", "SQ-017", "SQ-019", "SQ-020", "SQ-021", "SQ-022", "SQ-023"]}
+    {"id": "SQ-024", "title": "Prototype capability summary and release", "release": "C", "depends_on": ["SQ-010", "SQ-017", "SQ-019", "SQ-020", "SQ-021", "SQ-022", "SQ-023"]}
   ],
   "increment_defaults": {
     "status": "planned",

@@ -1,5 +1,7 @@
 # Parameter requirements: Foundation readiness supplement v0.1
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative roadmap extension; architecture checkpoints open  
 **Created:** 2026-09-14  
 **Foundation:** [Nodal development TODO](nodal-development-todo.md)  

@@ -1,5 +1,7 @@
 # Automatic parameter-dependent `require` lowering plan v0.1
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative Foundation roadmap target; all new implementation and qualification work open  
 **Created:** 2026-09-14  
 **Architecture readiness:** [PRF supplement](parameter-requirements-foundation-readiness-v0.1.md)  

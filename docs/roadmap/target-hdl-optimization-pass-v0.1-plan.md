@@ -1,5 +1,7 @@
 # Target-HDL Optimization Pass SPI v0.1 Plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative roadmap target  
 **Architecture:** [ADR 0013](../architecture/0013-structured-hdl-optimization-pass-architecture.md)  
 **General plugin dependency:** [ADR 0012](../architecture/0012-versioned-capability-plugin-architecture.md) and [`plugin-spi-v0.1-plan.md`](plugin-spi-v0.1-plan.md)  
@@ -534,7 +536,7 @@ The pass architecture is complete only when:
 - native/process crashes cannot leave partially accepted state;
 - cache/provenance records fully identify the pass pipeline;
 - external fixtures use only frozen public SPI;
-- Core CI and conformance suites are green.
+- Focused local positive/negative conformance checks and the owning increment's architecture review pass; no CI or full qualification is required.
 
 ## References
 

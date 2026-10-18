@@ -1,5 +1,7 @@
 # Nodal HVL live simulation and projection capability v0.3 plan
 
+**Execution policy (2026-10-18):** Future work follows the [prototype execution policy](README.md#prototype-execution-policy): focused local positive/negative checks and architecture review; no CI, hourly monitoring or full-qualification merge gate. Historical accepted evidence remains unchanged.
+
 **Status:** Normative dependent-track roadmap target
 **Revision:** 0.3
 **Updated:** 2026-09-05
@@ -253,7 +255,7 @@ Every accepted run or generated artifact retains design, test, capability-set, p
 
 ## Detailed dependent workstreams
 
-The workstreams below refine the existing Digital Verification and Analog/Mixed-Signal Verification umbrella increments. They do not bypass or weaken the Foundation barrier. An umbrella increment cannot close until its mapped detailed items and evidence are complete.
+The workstreams below refine the existing Digital Verification and Analog/Mixed-Signal Verification umbrella increments. They do not bypass or weaken the Foundation barrier. An umbrella increment cannot close until its mapped detailed items and evidence are complete. Each umbrella increment owns an architecture-review checkbox in the dependent-track roadmap; review modularity and scalability of these detailed workstreams there, without a second review ledger.
 
 For compatibility with roadmap revision 0.1, the old label `PORT` is an umbrella alias for `CAP + VTB + UVM + AMSP + XPAR`. `PORT` is not a capability class, generated profile, implementation library, or release gate, and new closure evidence must use the refined workstream IDs.
 

@@ -5,6 +5,36 @@ retains existing increment IDs, parent/child progress and historical evidence.
 Read its forward plans together with the approved scoped amendments below.
 The main file is not rewritten by this index.
 
+## Prototype execution policy
+
+The owner approved this process on **2026-10-18** for every current and future
+Foundation and dependent-track increment. The canonical policy is
+[`AGENTS.md` — prototype validation and merge](../../AGENTS.md#prototype-validation-and-merge).
+It supersedes older execution and closure requirements in this index, every
+linked plan and its machine-readable surface, and historical readiness notes.
+
+- Do not run CI, full qualification, broad regression matrices or hourly monitors.
+- Run focused local positive and negative tests/checks for the affected increment
+  and logic, including a small directly affected regression when needed.
+- Record a lightweight architecture review of module boundaries, reuse,
+  dependency direction and scalability so later roadmap work is not obstructed.
+  A self-review is sufficient; independent review is optional.
+- A branch may merge once its focused checks and architecture review pass.
+  Keep verified `[x]` entries and brief notes in the existing checklists. Store
+  generated logs, evidence, reports, caches and scratch only in the ignored
+  repository-root `.work/` directory; do not commit them. Concise maintained
+  checklist/design/handoff notes remain source documentation. Separate accepted-evidence closure and exact-head CI
+  receipts are not prototype merge requirements.
+- Fix known failures in the changed logic. Undiscovered defects may be fixed in a
+  later increment or after a user report; exhaustive proof is not required first.
+
+Existing IDs, dependencies, product feature goals and accepted historical
+records remain intact. Tool-capability and sign-off claims still describe only
+what was actually exercised; unrun broad matrices and unavailable tools are
+recorded as unrun, not passing. Product validation facilities can be developed
+and checked on focused fixtures without making their full execution a gate for
+every prototype increment. Historical completed checkboxes stay completed.
+
 ## Current approved amendments
 
 ### Lightweight hierarchy and unified HDL iteration
@@ -107,6 +137,6 @@ shared capture), 55-58/159 (digital semantics and unified iteration), 96
 refinement). Portable-Verilog Vec work additionally belongs to 54/58/65-67/159,
 with 83-88 preservation and 92 documentation through their existing obligations.
 No new repository, mandatory Rust rewrite, semantic redesign or reverse
-prerequisite for 42 is introduced. `AGENTS.md` is unchanged.
-These planning amendments are not implementation or acceptance evidence;
-future implementation and closure still require their applicable qualification.
+prerequisite for 42 is introduced. These planning amendments are not
+implementation evidence. Future work follows the prototype execution policy
+above, including focused checks and architecture review.

@@ -23,6 +23,8 @@ def Nodal_Dialect : Dialect {
   let useDefaultTypePrinterParser = 1;
   let extraClassDeclaration = [{
     void registerTypes();
+    ::mlir::LogicalResult verifyOperationAttribute(
+        ::mlir::Operation *operation, ::mlir::NamedAttribute attribute) override;
   }];
 }
 

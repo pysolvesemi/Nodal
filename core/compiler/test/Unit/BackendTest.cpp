@@ -2217,6 +2217,93 @@ int main() {
       return fail("nested peer generated analog-node ddt emission is nondeterministic");
   }
 
+  std::string nestedPeerScaledDdtSource = nestedGeneratedNodeDdtSource;
+  auto nestedPeerScaledDdtContribution =
+      nestedPeerScaledDdtSource.find("          \"nodal.contribute\"");
+  auto nestedPeerScaledDdtOperand =
+      nestedPeerScaledDdtSource.find("%branch, %derivative", nestedPeerScaledDdtContribution);
+  if (nestedPeerScaledDdtContribution == std::string::npos ||
+      nestedPeerScaledDdtOperand == std::string::npos)
+    return fail("nested peer scaled ddt fixture lost its contribution anchor");
+  nestedPeerScaledDdtSource.insert(
+      nestedPeerScaledDdtContribution,
+      "          %capacitance = \"nodal.real_literal\"() <{value = 1.0e-12 : f64, metadata = "
+      "{}}> : () -> f64\n"
+      "          %scaled = \"nodal.analog_mul\"(%capacitance, %derivative) <{metadata = {}}> : "
+      "(f64, f64) -> f64\n");
+  nestedPeerScaledDdtOperand =
+      nestedPeerScaledDdtSource.find("%branch, %derivative", nestedPeerScaledDdtContribution);
+  nestedPeerScaledDdtSource.replace(nestedPeerScaledDdtOperand,
+                                    std::string("%branch, %derivative").size(), "%branch, %scaled");
+
+  for (llvm::StringRef mutation : {"valid", "fanout"}) {
+    auto candidate = parse(context, nestedPeerScaledDdtSource);
+    if (!candidate)
+      return fail("could not parse nested peer scaled ddt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *scaled = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_mul" &&
+          operation->getOperand(1).getDefiningOp() &&
+          operation->getOperand(1).getDefiningOp()->getName().getStringRef() == "nodal.analog_ddt")
+        scaled = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !scaled || !contribution)
+      return fail("nested peer scaled ddt fixture lost its result path or topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer scaled ddt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "fanout") {
+      mlir::OperationState state(scaled->getLoc(), "nodal.analog_neg");
+      state.addOperands(scaled->getResult(0));
+      state.addTypes(scaled->getResult(0).getType());
+      state.addAttribute("metadata", mlir::DictionaryAttr::get(&context));
+      mlir::Operation *escape = mlir::Operation::create(state);
+      contribution->getBlock()->getOperations().insert(contribution->getIterator(), escape);
+    }
+
+    std::string output = "sentinel";
+    llvm::raw_string_ostream stream(output);
+    const bool accepted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (accepted || output != "sentinel")
+        return fail("nested peer scaled ddt fanout escaped or published partial output");
+      continue;
+    }
+    const std::string equation = "I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
+                                 nestedFlatIndex + "]) <+ (1e-12 * ddt(V(nestedTap[" +
+                                 nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex + "])));";
+    if (!accepted || output.find(equation) == std::string::npos)
+      return fail("nested peer scaled ddt lost its owned row-major result path");
+    std::string target = output.substr(std::string("sentinel").size());
+    if (mlir::failed(nodal::reparseBackendTarget(target, *configuration)))
+      return fail("nested peer scaled ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer scaled ddt repeated emission failed");
+    repeatedStream.flush();
+    if (target != repeated)
+      return fail("nested peer scaled ddt emission is nondeterministic");
+  }
+
   for (llvm::StringRef mutation :
        {"valid", "second-owner", "second-induction", "second-source", "operator-owner",
         "operator-induction", "state", "wrong-branch"}) {

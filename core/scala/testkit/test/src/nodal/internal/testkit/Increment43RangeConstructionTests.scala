@@ -2470,6 +2470,9 @@ object Increment43RangeConstructionTests extends TestSuite:
         first.text.sliding("\"nodal.analog_ddt\"".length).count(_ == "\"nodal.analog_ddt\"") == 1
       )
       assert(
+        first.text.sliding("\"nodal.analog_mul\"".length).count(_ == "\"nodal.analog_mul\"") == 1
+      )
+      assert(
         first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
       )
       val nodeLines = first.text.linesIterator.filter(_.contains("\"nodal.node\"")).toVector

@@ -1297,3 +1297,29 @@ general slices, shaped terminals, generated connections or instances, reverse
 ranges, default specialization and eager unrolling remain unsupported.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Nested peer generated analog-node ddt result-path checkpoint
+
+The qualified nested peer-node `ddt` result retains its already-authored
+capacitance scale before the additive flow contribution. Both electrical arrays
+use the same canonical row-major occurrence index, while the potential access,
+derivative and contribution retain the exact child region and induction. The
+scale has one result use and does not add operator state.
+
+No backend admission rule, public API or schema is widened. The evidence reuses
+the canonical generated-node layout, peer branch, one-use dependency walker,
+operator renderer, source-map inventory and target reparser. Native validation
+retains the direct `ddt` predecessor, requires byte-identical repeated output
+and reparses the scaled target independently. A second use of the scaled result
+must reject before any target text is published. The configured public witness
+preserves both node source identities, both positive-stride dimensions and the
+single post-`ddt` capacitance multiplication from Scala construction through
+normalized IR and generated Verilog-A.
+
+The profile remains one direct child range, two nodes, one branch, one access,
+one `ddt`, one memoryless result scale and one contribution. Result fan-out, a
+second operator or state, wider/deeper groups, sibling or cross-range effects,
+general slices, shaped terminals, generated connections or instances, reverse
+ranges, default specialization and eager unrolling remain unsupported.
+Independent simulator qualification, the F-048/F-049/F-052 handoff and every
+F-043 acceptance obligation remain open.

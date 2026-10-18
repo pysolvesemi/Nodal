@@ -1,7 +1,7 @@
 # Foundation 45 readiness
 
 **Date:** 2026-10-18
-**Status:** Implementation and focused acceptance complete; verified integration pending.
+**Status:** Complete; verified squash integration `6bc1d37ea5909de093a9e163c618df8018374c35` preserves the tested tree `afb91b27aa53626204dbad98fb9c63c396bc54ab`.
 **Branch:** `increment/45-analog-canonicalization`
 **Base:** `9e0e368019961f78977ad80550a21ea1956fd417`
 
@@ -231,5 +231,7 @@ normalization. C covers causal negatives and affected predecessors. D retains th
 actual compiler demonstration, exact independent compile and declared numerical
 handoff. E separates mandatory validated normalization from unproved optional
 identities. F measures bounded DAG behavior and deterministic fixed points.
-A–F are complete; G and the parent remain open until verified integration.
+A–G and the parent are complete after verified squash integration `6bc1d37ea5909de093a9e163c618df8018374c35`.
+The integrated tree is exactly the focused-tested tree above; no production
+changes were introduced by this documentation-only closure.
 No CI, broad qualification or numerical simulation was executed.

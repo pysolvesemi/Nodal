@@ -1169,7 +1169,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Implementation evidence: [F-044 readiness and focused results](../implementation/increment44-readiness.md), in this increment branch. A–G complete; verified squash integration `cd7e8067998fd609fa891ecfb25598c1f117cbca` preserves the tested tree `de11ad3e6ebf473f0b4ac13288e85b3f3ba9365b`. No CI or numerical simulation is claimed.
 
-- [ ] **Increment 45 — Analog canonicalization passes**
+- [x] **Increment 45 — Analog canonicalization passes**
   - [x] **F-045.A — Architecture review, modularity, scalability and extensibility**
     - [x] **F-045.A.1** Prohibit unproved equation orientation, division by possibly zero expressions, contribution reordering, state movement, topology change, or residual elimination; retain before/after equation provenance.
     - [x] **F-045.A.2** Reuse the registered pass and source-equation contracts from 21/32; specify side-effect, state and residual-preservation boundaries.
@@ -1180,9 +1180,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-045.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
   - [x] **F-045.E — Optimization review and output quality.** Separate mandatory normalization from optional simplification; document each introduced rewrite and its numerical/domain preconditions. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-045.F — Representative scale, determinism and compatibility.** Measure expression-graph growth and repeated-pass behavior; require deterministic fixed-point output and stable provenance.
-  - [ ] **F-045.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 45; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-045.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 45; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Implementation evidence: [F-045 readiness and focused results](../implementation/increment45-readiness.md), in this increment branch. A–F pass; G and parent await verified integration. No CI or numerical simulation is claimed.
+  - Implementation evidence: [F-045 readiness and focused results](../implementation/increment45-readiness.md), in this increment branch. A–G complete; verified squash integration `6bc1d37ea5909de093a9e163c618df8018374c35` preserves the tested tree `afb91b27aa53626204dbad98fb9c63c396bc54ab`. No CI or numerical simulation is claimed.
 
 - [ ] **Increment 46 — Analog semantic lint suite**
   - [ ] **F-046.A — Architecture review, modularity, scalability and extensibility.** Reuse semantic topology, dimensions and diagnostics; distinguish the available source checks from later whole-island DAE analysis in 135.

@@ -109,6 +109,9 @@ private[nodal] object AnalogProceduralConstruction:
     if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
       AnalogEventRuntime.fail(7, s"$role is not permitted inside an analog event-controlled body")
 
+  def procedureActive: Boolean =
+    Option(current.get()).exists(_.stack.lastOption.exists(_.procedureDepth > 0))
+
   def generatedProcedureActive: Boolean =
     Option(current.get()).exists(_.stack.lastOption.exists: module =>
       module.procedureDepth > 0 && module.generatedContext.nonEmpty)
@@ -772,6 +775,9 @@ private[nodal] object AnalogProceduralConstruction:
       pending: PendingVariable
   ): Unit =
     val initialValue = pending.initializer.map: initializer =>
+      if module.controlBuilder.forall(_.atRoot) && AnalogContextContract.containsQuery(initializer)
+      then
+        AnalogContextContract.fail(4, "persistent initializers cannot read simulator context")
       semanticValue(module, initializer, None)
     initialValue.foreach(validateStorageInitializer(module, _))
     val inferredDimension = initialValue
@@ -809,6 +815,9 @@ private[nodal] object AnalogProceduralConstruction:
       builder: AnalogControlFlowConstruction.Builder
   ): Unit =
     val initialValue = pending.initializer.map: initializer =>
+      if module.controlBuilder.forall(_.atRoot) && AnalogContextContract.containsQuery(initializer)
+      then
+        AnalogContextContract.fail(4, "persistent initializers cannot read simulator context")
       semanticValue(module, initializer, None)
     initialValue.foreach(validateStorageInitializer(module, _))
     val inferredDimension = initialValue

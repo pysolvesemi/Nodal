@@ -79,6 +79,16 @@ FailureOr<std::string> formatSource(const AnalogSourceExpression &value,
       return failure();
     return "analysis(\"" + entry->verilogA.str() + "\")";
   }
+  if (llvm::StringRef(value.operation).starts_with(analogContextSourcePrefix)) {
+    auto *entry = lookupAnalogContext(
+        llvm::StringRef(value.operation).drop_front(analogContextSourcePrefix.size()));
+    if (!entry || !args.empty())
+      return failure();
+    return entry->verilogA.str();
+  }
+  if (value.operation == "analog_abstime")
+    return args.empty() ? FailureOr<std::string>(std::string("$abstime"))
+                        : FailureOr<std::string>(failure());
   if (value.operation == "analog_neg" || value.operation == "bool_not")
     return std::string("(") + (value.operation == "analog_neg" ? "-" : "!") + args[0] + ")";
   if (value.operation == "analog_select")
@@ -184,15 +194,6 @@ FailureOr<std::string> expression(Operation *op, llvm::StringRef source,
   auto parsed = parseAnalogSourceExpression(op, source);
   return failed(parsed) ? FailureOr<std::string>(failure())
                         : renderSource(*parsed, state, captures, op);
-}
-bool staticInitializer(const AnalogSourceExpression &value) {
-  if (llvm::StringRef(value.operation).starts_with(analogAnalysisSourcePrefix))
-    return false;
-  if (value.operation == "reference")
-    return value.declaration && llvm::isa<ParameterOp>(value.declaration);
-  if (value.operation == "potential_access" || value.operation == "flow_access")
-    return false;
-  return llvm::all_of(value.operands, staticInitializer);
 }
 FailureOr<std::string> eventExpression(Operation *event, AnalogEventRenderState &state) {
   if (llvm::isa<AnalogEventOrOp>(event)) {
@@ -1108,7 +1109,7 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
         auto initial = parseAnalogSourceExpression(op, text(op, "initializer_value"));
         auto rendered =
             failed(initial) ? FailureOr<std::string>(failure()) : renderSource(*initial, state);
-        if (failed(rendered) || !staticInitializer(*initial)) {
+        if (failed(rendered) || !isStaticAnalogSourceExpression(*initial)) {
           result = reject(op, "persistent event-variable initializers must be static expressions");
           return;
         }

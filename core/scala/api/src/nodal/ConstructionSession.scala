@@ -37,7 +37,9 @@ private final class ConstructionSession(val options: EmitOptions):
         "NODAL-ANALOG-035-001",
         s"stateful or continuous-time operator '${value.operation}'"
       )
-    waveformOperators.find(value => references.contains(value._1)).foreach: value =>
+    waveformOperators.find(value =>
+      references.contains(value._1) && value._2 != "analog_abstime"
+    ).foreach: value =>
       reject(value._1, "NODAL-ANALOG-036-001", s"time/waveform operator '${value._2}'")
     transferOperators.find(value => references.contains(value._1)).foreach: value =>
       reject(value._1, "NODAL-ANALOG-040-001", s"stateful transfer operator '${value._2}'")
@@ -1350,6 +1352,10 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
+      val _ = AnalogContextContract.validate(expression)
+      val _ = captureExpression(value)
     case expression: KernelExpr[?] if CandidateRuntime.proceduralShapeSource(expression) =>
       expression.operation match
         case Some("analog_array_fill") =>
@@ -1581,6 +1587,10 @@ private final class ConstructionSession(val options: EmitOptions):
   ): Unit =
     val module = currentModule
     val context = analogSemanticContext match
+      case Some(candidate)
+          if operation == "analog_abstime" && candidate.module == module.handle &&
+            candidate.kind == AnalogEquationRuntime.RegionKind.Procedural &&
+            AnalogProceduralConstruction.procedureActive => "procedure"
       case Some(candidate)
           if candidate.module == module.handle &&
             candidate.kind == AnalogEquationRuntime.RegionKind.Equation => "equation"
@@ -2391,7 +2401,12 @@ private final class ConstructionSession(val options: EmitOptions):
           generatedAnalogRegions.forall: analog =>
             analog.generatedOwnership.contains(generatedContext) &&
               (analog.contributions.nonEmpty ||
-                analog.expressions.exists(generatedExpressionReferences.contains)) &&
+                analog.expressions.exists(reference =>
+                  generatedExpressionReferences.contains(reference) ||
+                    expressionValues.get(reference).exists(_.operation.exists(
+                      _.startsWith(AnalogContextContract.Prefix)
+                    ))
+                )) &&
               analog.expressions.forall: reference =>
                 !generatedExpressionReferences.contains(reference) ||
                   generatedOperators.exists(operator =>
@@ -4000,6 +4015,17 @@ private final class ConstructionSession(val options: EmitOptions):
 
     expressionValues.toVector.collect:
       case (reference, expression) if reachable.contains(reference) =>
+        if expression.operation.exists(operation =>
+            operation.startsWith(AnalogContextContract.Prefix) ||
+              operation.startsWith(
+                AnalogFunctionRegistry.AnalysisPrefix
+              ) || operation == "analog_abstime"
+          )
+        then
+          AnalogContextContract.fail(
+            4,
+            "static parameter and shape expressions cannot read simulator context"
+          )
         val path = expressionPath(reference)
         val dataType = CandidateRuntime.expressionDataType(expression)
           .map(renderType(_, reference.module))

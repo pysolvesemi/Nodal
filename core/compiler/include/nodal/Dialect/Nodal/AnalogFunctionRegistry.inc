@@ -33,3 +33,7 @@ static constexpr AnalogAnalysisEntry analysisEntries[] = {
     {"ac", "ac"},
     {"noise", "noise"},
 };
+static constexpr AnalogContextEntry contextEntries[] = {
+    {"temperature", "temperature", "$temperature"},
+    {"nominal_temperature", "temperature", "($simparam(\"tnom\") + 273.15)"},
+};

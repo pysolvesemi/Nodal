@@ -218,6 +218,13 @@
       "NODAL-ANALOG-037-010",
       "NODAL-BACKEND-EVENT-001"
     ],
+    "analysis-and-environment": [
+      "NODAL-ANALOG-044-001",
+      "NODAL-ANALOG-044-002",
+      "NODAL-ANALOG-044-003",
+      "NODAL-ANALOG-044-004",
+      "NODAL-ANALOG-044-005"
+    ],
     "mathematical-and-simulator-functions": [
       "NODAL-ANALOG-038-001",
       "NODAL-ANALOG-038-002",

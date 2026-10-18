@@ -2743,6 +2743,40 @@ ${indent(body, 2)}
               semanticPath = expression.path
             )
             values.update(expression.path, result -> "f64")
+          case name if name.startsWith(AnalogContextContract.Prefix) =>
+            val descriptor =
+              AnalogContextContract.entry(name.stripPrefix(AnalogContextContract.Prefix))
+            if expression.operands.nonEmpty then
+              fail(
+                "NODAL-ANALOG-044-002",
+                "simulator context query requires zero operands",
+                Some(expression.path)
+              )
+            if expression.literal.nonEmpty || expression.unit.nonEmpty then
+              fail(
+                "NODAL-ANALOG-044-004",
+                "simulator context query cannot carry a constant or unit override",
+                Some(expression.path)
+              )
+            val outputType =
+              s"!nodal.quantity<${quoted(descriptor.resultKind)}, ${quoted(descriptor.dimension)}>"
+            lines += operation(
+              "nodal.analog_context",
+              results = Vector(result),
+              resultTypes = Vector(outputType),
+              attributes = Vector(
+                "query_kind" -> quoted(descriptor.id),
+                "registry_version" -> quoted(AnalogContextContract.Version),
+                "metadata" -> metadata
+              ) ++ region.generatedOwner.toVector.map(owner =>
+                "generated_owner" -> quoted(owner)
+              ) ++
+                region.generatedInduction.toVector.map(induction =>
+                  "generated_induction" -> quoted(induction)
+                ),
+              semanticPath = expression.path
+            )
+            values.update(expression.path, result -> outputType)
           case name if name.startsWith(AnalogFunctionRegistry.AnalysisPrefix) =>
             val id = name.stripPrefix(AnalogFunctionRegistry.AnalysisPrefix)
             if !AnalogFunctionRegistry.analysisTargets.contains(id) || expression.operands.nonEmpty
@@ -4163,7 +4197,9 @@ ${indent(body, 2)}
           analog.expressions.exists(_.path == operator.path)
         )
         if (operators.isEmpty && waveforms.isEmpty && transfers.isEmpty && noise.isEmpty &&
-            analog.contributions.isEmpty) ||
+            analog.contributions.isEmpty && !analog.expressions.exists(_.operation.startsWith(
+              AnalogContextContract.Prefix
+            ))) ||
           operators.exists(operator =>
             !operator.generatedOwner.contains(region.path) ||
               !operator.generatedInduction.contains(region.induction)

@@ -13,6 +13,8 @@ int main() {
         "laplace_nd((V(p, n) + noise_0), '{sqrt(4)}, '{1})",
         "laplace_nd(ddt(V(p, n)), '{1}, '{1, tau})", "laplace_nd(idt(V(p, n), 0), '{1}, '{1, tau})",
         "laplace_nd(I(<p>), '{1}, '{1})", "laplace_nd($abstime, '{1}, '{1})",
+        "laplace_nd($temperature, '{1}, '{1})",
+        "laplace_nd(($simparam(\"tnom\") + 273.15), '{1}, '{1})",
         "laplace_nd((analysis(\"tran\") ? V(p) : V(n)), '{abs(-1)}, '{1})",
         "zi_nd(V(p), '{1}, '{1}, 1e-3)", "zi_nd(transfer_0, '{0.5, 0.5}, '{1, -0.1}, 1e-3, 1e-5)",
         "zi_nd((V(p) > 1 ? V(p) : V(n)), '{1}, '{1}, 1, 0.1, 0)"}) {
@@ -50,7 +52,10 @@ int main() {
                                "laplace_nd(ddt(V(p), 1), '{1}, '{1})",
                                "laplace_nd(idt(V(p), 0, 1), '{1}, '{1})",
                                "laplace_nd(V(<p>), '{1}, '{1})",
-                               "laplace_nd($abstime(), '{1}, '{1})"}) {
+                               "laplace_nd($abstime(), '{1}, '{1})",
+                               "laplace_nd($temperature(), '{1}, '{1})",
+                               "laplace_nd($simparam(\"tnom\", 27), '{1}, '{1})",
+                               "laplace_nd($simparam(\"corner\"), '{1}, '{1})"}) {
     ++count;
     if (mlir::succeeded(nodal::reparseAnalogTransferCall(call))) {
       llvm::errs() << "accepted malformed transfer call: " << call << '\n';

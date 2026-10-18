@@ -3,6 +3,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/AnalogStorageModel.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -28,6 +30,8 @@ bool dependsOnSimulatorState(Operation *operation) {
     if (!visited.insert(current).second)
       continue;
     if (current->getName().getStringRef() == "nodal.analog_analysis" ||
+        current->getName().getStringRef() == "nodal.analog_context" ||
+        current->getName().getStringRef() == "nodal.analog_abstime" ||
         current->getName().getStringRef() == "nodal.analog_noise" ||
         current->getName().getStringRef() == "nodal.analog_transfer" ||
         current->getName().getStringRef() == "nodal.analog_user_call")
@@ -63,6 +67,19 @@ bool isAnalogAnalysisTarget(llvm::StringRef spelling) {
     if (entry.verilogA == spelling)
       return true;
   return false;
+}
+
+const AnalogContextEntry *lookupAnalogContext(llvm::StringRef id) {
+  for (const auto &entry : contextEntries)
+    if (entry.id == id)
+      return &entry;
+  return nullptr;
+}
+const AnalogContextEntry *lookupAnalogContextTarget(llvm::StringRef spelling) {
+  for (const auto &entry : contextEntries)
+    if (entry.verilogA == spelling)
+      return &entry;
+  return nullptr;
 }
 
 FailureOr<std::string> analogFunctionDimension(const AnalogFunctionEntry &entry,
@@ -188,15 +205,42 @@ evaluateAnalogFunction(const AnalogFunctionEntry &entry,
 LogicalResult verifyAnalogFunctionOperation(Operation *op) {
   auto name = op->getName().getStringRef();
   bool query = name == "nodal.analog_analysis";
-  if (!query) {
-    bool annotated = false;
-    for (NamedAttribute attribute : op->getAttrs())
-      annotated |= attribute.getName().getValue().starts_with("nodal.folded") ||
-                   attribute.getName().getValue().starts_with("nodal.simplif");
-    if (annotated && dependsOnSimulatorState(op))
-      return emitMappedFailure(
-          op, "NODAL-ANALOG-FOLD-001",
-          "simulator-state-dependent expressions cannot carry fold or simplification claims");
+  bool annotated = false;
+  for (NamedAttribute attribute : op->getAttrs()) {
+    auto key = attribute.getName().getValue();
+    annotated |= key.starts_with("nodal.folded") || key.starts_with("nodal.simplif") ||
+                 key.starts_with("nodal.static") || key == "static_value" ||
+                 key == "static_value_present";
+  }
+  if (annotated && dependsOnSimulatorState(op))
+    return emitMappedFailure(
+        op, "NODAL-ANALOG-FOLD-001",
+        "simulator-state-dependent expressions cannot carry fold, simplification or static claims");
+  if (name == "nodal.analog_context") {
+    const auto *entry = lookupAnalogContext(text(op, "query_kind"));
+    if (!entry || text(op, "registry_version") != analogContextRegistryVersion)
+      return emitMappedFailure(op, "NODAL-ANALOG-044-001",
+                               "unknown simulator context query or registry version");
+    if (op->getNumOperands() != 0 || op->getNumResults() != 1)
+      return emitMappedFailure(op, "NODAL-ANALOG-044-002",
+                               "simulator context queries require no operands and one result");
+    auto result = getAnalogNumericTypeInfo(op->getResult(0).getType());
+    if (failed(result) || result->kind != AnalogNumericKind::Real || result->legacyF64 ||
+        result->dimension != entry->dimension)
+      return emitMappedFailure(op, "NODAL-ANALOG-044-003",
+                               "simulator context query requires its typed real dimension");
+    if (!llvm::isa_and_nonnull<AnalogOp>(op->getParentOp()))
+      return emitMappedFailure(op, "NODAL-ANALOG-044-004",
+                               "standalone context query requires an analog expression region");
+    if (failed(verifyGeneratedAnalogOwnership(op)))
+      return failure();
+    for (auto key : {"target", "target_spelling", "verilog_a", "default", "default_value",
+                     "constant", "constant_value", "evaluation_phase", "phase"})
+      if (op->hasAttr(key))
+        return emitMappedFailure(
+            op, "NODAL-ANALOG-044-004",
+            "context query cannot override target, default or evaluation semantics");
+    return success();
   }
   if (!query && name != "nodal.analog_function")
     return success();

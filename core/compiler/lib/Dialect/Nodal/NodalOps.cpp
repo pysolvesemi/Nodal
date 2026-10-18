@@ -2948,32 +2948,33 @@ LogicalResult nodal::AnalogOp::verify() {
         llvm::isa<nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
                   nodal::AnalogBoundStepOp, nodal::AnalogTransferOp, nodal::AnalogNoiseOp,
-                  nodal::ContributeOp>(operation);
+                  nodal::AnalogContextOp, nodal::ContributeOp>(operation);
     if (generated &&
         !llvm::isa<nodal::RealLiteralOp, nodal::ParameterRefOp, nodal::AnalogAddOp,
                    nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
                    nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
                    nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
                    nodal::AnalogBoundStepOp, nodal::AnalogTransferOp, nodal::AnalogNoiseOp,
-                   nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
-                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
+                   nodal::AnalogContextOp, nodal::AccessOp, nodal::TerminalAccessOp,
+                   nodal::PortFlowAccessOp, nodal::ContributeOp, nodal::AnalogProcedureOp>(
+            operation))
       return operation.emitOpError(
           "NODAL-ITERATION-043-004: generated analog regions support only owned ddt/idt or "
-          "transition/slew/absdelay/abstime/boundStep/laplaceNd/ziNd/noise "
+          "transition/slew/absdelay/abstime/boundStep/laplaceNd/ziNd/noise/context "
           "expressions, additive contributions, or generated procedural storage");
     if (llvm::isa<nodal::ConstLiteralOp>(operation) && operation.getNumResults() == 1 &&
         operation.getResult(0).getType().isInteger(1))
       continue;
     if (!llvm::isa<nodal::RealLiteralOp, nodal::AnalogIntegerLiteralOp, nodal::ParameterRefOp,
                    nodal::AnalogFunctionOp, nodal::AnalogUserCallOp, nodal::AnalogAnalysisOp,
-                   nodal::AnalogNoiseOp, nodal::AnalogTransferOp, nodal::AnalogAddOp,
-                   nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp, nodal::AnalogNegOp,
-                   nodal::AnalogCompareOp, nodal::AnalogLogicOp, nodal::AnalogSelectOp,
-                   nodal::AnalogDdtOp, nodal::AnalogIdtOp, nodal::AnalogTransitionOp,
-                   nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp, nodal::AnalogAbstimeOp,
-                   nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp, nodal::AccessOp,
-                   nodal::TerminalAccessOp, nodal::PortFlowAccessOp, nodal::ContributeOp,
-                   nodal::AnalogProcedureOp>(operation))
+                   nodal::AnalogContextOp, nodal::AnalogNoiseOp, nodal::AnalogTransferOp,
+                   nodal::AnalogAddOp, nodal::AnalogSubOp, nodal::AnalogMulOp, nodal::AnalogDivOp,
+                   nodal::AnalogNegOp, nodal::AnalogCompareOp, nodal::AnalogLogicOp,
+                   nodal::AnalogSelectOp, nodal::AnalogDdtOp, nodal::AnalogIdtOp,
+                   nodal::AnalogTransitionOp, nodal::AnalogSlewOp, nodal::AnalogAbsdelayOp,
+                   nodal::AnalogAbstimeOp, nodal::AnalogBoundStepOp, nodal::AnalogHeldReadOp,
+                   nodal::AccessOp, nodal::TerminalAccessOp, nodal::PortFlowAccessOp,
+                   nodal::ContributeOp, nodal::AnalogProcedureOp>(operation))
       return operation.emitOpError(
           "NODAL-ANALOG-REGION-002: operation is not legal in the analog numeric region");
   }
@@ -3770,3 +3771,4 @@ LogicalResult nodal::AnalogNoiseOp::verify() {
 
 LogicalResult nodal::AnalogFunctionOp::verify() { return verifyAnalogFunctionOperation(*this); }
 LogicalResult nodal::AnalogAnalysisOp::verify() { return verifyAnalogFunctionOperation(*this); }
+LogicalResult nodal::AnalogContextOp::verify() { return verifyAnalogFunctionOperation(*this); }

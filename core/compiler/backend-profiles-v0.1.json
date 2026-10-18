@@ -15,7 +15,27 @@
       "naming": "semantic",
       "default_check_profile": "default",
       "target_verification": "builtin-framework-v1",
-      "target_reparse": "builtin-structural-v1"
+      "target_reparse": "builtin-structural-v1",
+      "simulator_context": {
+        "registry": "analog-functions-v1.json#contexts",
+        "supported": [
+          "analysis",
+          "time",
+          "temperature"
+        ],
+        "conditional_standard": {
+          "nominal_temperature": "requires simulator tnom parameter; Celsius converted to kelvin; no fallback"
+        },
+        "unavailable_provider": [
+          "frequency",
+          "operating_condition",
+          "corner",
+          "sweep_coordinate",
+          "random_seed"
+        ],
+        "effect": "simulator-read",
+        "independent_tool_execution": "not-implied-by-language-profile"
+      }
     },
     {
       "id": "verilog-ams",
@@ -29,7 +49,27 @@
       "naming": "semantic",
       "default_check_profile": "default",
       "target_verification": "builtin-framework-v1",
-      "target_reparse": "builtin-structural-v1"
+      "target_reparse": "builtin-structural-v1",
+      "simulator_context": {
+        "registry": "analog-functions-v1.json#contexts",
+        "supported": [
+          "analysis",
+          "time",
+          "temperature"
+        ],
+        "conditional_standard": {
+          "nominal_temperature": "requires simulator tnom parameter; Celsius converted to kelvin; no fallback"
+        },
+        "unavailable_provider": [
+          "frequency",
+          "operating_condition",
+          "corner",
+          "sweep_coordinate",
+          "random_seed"
+        ],
+        "effect": "simulator-read",
+        "independent_tool_execution": "not-implied-by-language-profile"
+      }
     }
   ],
   "check_profiles": [

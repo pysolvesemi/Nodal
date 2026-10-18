@@ -108,6 +108,10 @@ reparseAnalogEventBlock(llvm::StringRef source, const AnalogEventSymbols *symbol
                         AnalogEventPrivateFunctions *privateFunctions = nullptr);
 mlir::LogicalResult reparseAnalogEventDeclaration(llvm::StringRef source,
                                                   AnalogEventSymbols &symbols);
+// Independently classify the finite simulator-context target primitives. Returns
+// whether a runtime query occurred, rejects malformed names/arguments, and can
+// forbid queries at static boundaries without narrowing unrelated target syntax.
+mlir::FailureOr<bool> reparseAnalogContextQueries(llvm::StringRef source, bool allowRuntime);
 // Independent expression grammar for emitted noise calls; not permitted in events.
 mlir::LogicalResult reparseAnalogNoiseCall(llvm::StringRef source,
                                            const llvm::StringMap<unsigned> *functions = nullptr);

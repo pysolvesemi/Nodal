@@ -250,5 +250,97 @@
       "scala": "Noise",
       "verilog_a": "noise"
     }
+  ],
+  "contexts": [
+    {
+      "id": "analysis",
+      "result_kind": "boolean",
+      "dimension": "1",
+      "selector_kind": "analysis-kind",
+      "availability": "existing-analysis",
+      "verilog_a": "",
+      "phase": "runtime",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "time",
+      "result_kind": "real",
+      "dimension": "time",
+      "selector_kind": "none",
+      "availability": "existing-time",
+      "verilog_a": "$abstime",
+      "phase": "runtime",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "temperature",
+      "result_kind": "real",
+      "dimension": "temperature",
+      "selector_kind": "none",
+      "availability": "supported",
+      "verilog_a": "$temperature",
+      "phase": "runtime",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "nominal_temperature",
+      "result_kind": "real",
+      "dimension": "temperature",
+      "selector_kind": "none",
+      "availability": "conditional-standard",
+      "verilog_a": "($simparam(\"tnom\") + 273.15)",
+      "phase": "runtime",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "frequency",
+      "result_kind": "real",
+      "dimension": "time^-1",
+      "selector_kind": "none",
+      "availability": "unavailable-provider",
+      "verilog_a": "",
+      "phase": "small-signal",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "operating_condition",
+      "result_kind": "real",
+      "dimension": "supplied",
+      "selector_kind": "name",
+      "availability": "unavailable-provider",
+      "verilog_a": "",
+      "phase": "provider-defined",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "corner",
+      "result_kind": "boolean",
+      "dimension": "1",
+      "selector_kind": "name",
+      "availability": "unavailable-provider",
+      "verilog_a": "",
+      "phase": "provider-defined",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "sweep_coordinate",
+      "result_kind": "real",
+      "dimension": "supplied",
+      "selector_kind": "name",
+      "availability": "unavailable-provider",
+      "verilog_a": "",
+      "phase": "provider-defined",
+      "effect": "simulator-read"
+    },
+    {
+      "id": "random_seed",
+      "result_kind": "integer",
+      "dimension": "1",
+      "selector_kind": "scope",
+      "availability": "unavailable-provider",
+      "verilog_a": "",
+      "phase": "provider-defined",
+      "effect": "simulator-read"
+    }
   ]
 }

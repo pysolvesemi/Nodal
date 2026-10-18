@@ -1232,6 +1232,16 @@ def Nodal_AnalogAnalysisOp : Nodal_Op<"analog_analysis", [HasParent<"AnalogOp">]
   let hasVerifier = 1;
 }
 
+def Nodal_AnalogContextOp : Nodal_Op<"analog_context", [HasParent<"AnalogOp">]> {
+  let summary = "Typed effectful simulator context query, never an elaboration constant";
+  let arguments = (ins StrAttr:$query_kind, StrAttr:$registry_version,
+                       OptionalAttr<StrAttr>:$generated_owner,
+                       OptionalAttr<StrAttr>:$generated_induction,
+                       DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 class Nodal_AnalogBinaryOp<string mnemonic, string summaryText>
     : Nodal_Op<mnemonic, [HasParent<"AnalogOp">]> {
   let summary = summaryText;

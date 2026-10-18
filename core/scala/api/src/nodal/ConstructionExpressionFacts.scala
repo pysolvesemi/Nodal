@@ -243,6 +243,9 @@ private object ConstructionExpressionFacts:
                 visit(value).signature
               case _ => "unknown"
           namedAnalogDimension(AnalogFunctionContract.dimension(id, dimensions))
+        case expression: KernelExpr[?]
+            if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
+          namedAnalogDimension(AnalogContextContract.validate(expression).dimension)
         case parameter: Param[?] => visit(parameter.default)
         case state: AnalogState => physicalDimension(state.dimension)
 
@@ -301,7 +304,6 @@ private object ConstructionExpressionFacts:
                     physicalDimension(state.dimension)
                   }.getOrElse(AnalogDimension.Unknown)
                 case Some("analog_abstime") => AnalogDimension.Time
-                case Some("candidate-analysis-time") => AnalogDimension.Time
                 case Some("candidate-analysis-frequency") =>
                   AnalogDimension.Dimensionless.divide(AnalogDimension.Time)
                 case Some("candidate-environment-temperature") |

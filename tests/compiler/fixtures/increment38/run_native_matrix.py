@@ -124,9 +124,7 @@ def run(nodalc: Path, translate: Path, source: Path | None = None) -> int:
             forged = text.replace(
                 'metadata = {}}> : () -> i1',
                 'metadata = {}}> {nodal.folded = true, nodal.folded_value = true} : () -> i1', 1)
-            folded, _, after = positive(forged)
-            assert f'analysis("{entry["verilog_a"]}")' in after
-            assert "nodal.folded_value = true" not in folded
+            negative(forged, "FOLD-001")
             # A complete forged certificate on a parent must not hide the query.
             parent_forgery = text.replace(
                 '<{metadata = {}}> : (i1, f64, f64) -> f64',

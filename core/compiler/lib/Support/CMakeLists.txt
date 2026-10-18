@@ -1,4 +1,5 @@
 add_library(NodalSupport STATIC
+  BackendCapabilityRegistry.cpp
   DiagnosticSupport.cpp
   Version.cpp
 )

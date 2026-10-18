@@ -1,0 +1,349 @@
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts/generate_backend_capability_registry.py"
+SPEC = importlib.util.spec_from_file_location("backend_capability_registry", SCRIPT)
+assert SPEC and SPEC.loader
+REGISTRY = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(REGISTRY)
+
+# Pre-F47 operation-name admission, frozen independently of the generated table.
+DIRECT_OPERATIONS = {
+    "nodal." + name for name in """
+    unit module nature nature_import discipline discipline_import parameter
+    const_literal const_parameter_ref const_expr parameter_value parameter_constraint
+    parameter_envelope parameter_override terminal terminal_array instance instance_terminal
+    instance_terminal_array node node_array connect connect_array branch generate analog
+    real_literal analog_integer_literal parameter_ref access terminal_access port_flow_access
+    analog_add analog_sub analog_mul analog_div analog_neg analog_noise analog_transfer
+    analog_function analog_user_function analog_function_value analog_function_return
+    analog_user_call analog_analysis analog_context analog_compare analog_logic analog_select
+    analog_ddt analog_idt analog_transition analog_slew analog_absdelay analog_abstime
+    analog_bound_step contribute analog_held_read
+    """.split()
+}
+
+# Legacy 0.1 fields remain byte-for-value compatible; the feature inventory is additive.
+LEGACY_CONTEXT = {
+    "registry": "analog-functions-v1.json#contexts",
+    "supported": ["analysis", "time", "temperature"],
+    "conditional_standard": {
+        "nominal_temperature": "requires simulator tnom parameter; Celsius converted to kelvin; no fallback"
+    },
+    "unavailable_provider": [
+        "frequency", "operating_condition", "corner", "sweep_coordinate", "random_seed"
+    ],
+    "effect": "simulator-read",
+    "independent_tool_execution": "not-implied-by-language-profile",
+}
+LEGACY_PROFILES = [
+    {
+        "id": identity,
+        "translation": "nodal-to-" + identity,
+        "design_kinds": kinds,
+        "shaped_value_layout": layout,
+        "expression_materialization": expressions,
+        "naming": "semantic",
+        "default_check_profile": "default",
+        "target_verification": "builtin-framework-v1",
+        "target_reparse": "builtin-structural-v1",
+        "simulator_context": LEGACY_CONTEXT,
+    }
+    for identity, kinds, layout, expressions in [
+        ("verilog-a", ["analog"], "scalar-or-flat", "safe-inline"),
+        ("verilog-ams", ["analog", "mixed_signal"], "flat-packed", "readable"),
+    ]
+]
+LEGACY_CATALOG = {
+    "schema": 1,
+    "version": "0.1",
+    "public_api": "0.3-unchanged",
+    "selection": "explicit-translation",
+    "profiles": LEGACY_PROFILES,
+    "check_profiles": ["fast", "default", "release"],
+    "transaction": "clone-gate-buffer-verify-reparse-publish",
+    "unsupported_feature_policy": "reject-with-stable-diagnostic",
+}
+
+
+class BackendCapabilityRegistryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        (ROOT / ".work").mkdir(exist_ok=True)
+
+    def setUp(self) -> None:
+        self.catalog = json.loads((ROOT / REGISTRY.CATALOG).read_text(encoding="utf-8"))
+        self.inventory = self.catalog["feature_inventory"]
+        self.operations = {entry["operation"]: entry for entry in self.inventory["operations"]}
+
+    def invalid(self, message: str) -> None:
+        with self.assertRaisesRegex(REGISTRY.CatalogError, message):
+            REGISTRY.validate_catalog(self.catalog)
+
+    def test_valid_catalog_and_fresh_generated_table(self) -> None:
+        self.assertIs(REGISTRY.validate_catalog(self.catalog), self.inventory)
+        self.assertEqual(REGISTRY.outputs()[REGISTRY.OUTPUT],
+                         (ROOT / REGISTRY.OUTPUT).read_text(encoding="utf-8"))
+
+    def test_preserves_all_legacy_profile_fields(self) -> None:
+        legacy = {key: value for key, value in self.catalog.items() if key != "feature_inventory"}
+        self.assertEqual(legacy, LEGACY_CATALOG)
+
+    def test_direct_admission_exactly_preserves_previous_owner(self) -> None:
+        self.assertEqual({name for name, entry in self.operations.items()
+                          if entry["admission"] == "direct"}, DIRECT_OPERATIONS)
+        self.assertEqual(len(DIRECT_OPERATIONS), 58)
+
+    def test_every_current_tablegen_operation_is_cataloged(self) -> None:
+        source = (ROOT / REGISTRY.OPERATIONS).read_text(encoding="utf-8")
+        concrete = re.findall(r'def\s+Nodal_\w+Op\s*:\s*Nodal_\w*Op<"([^"]+)"', source)
+        self.assertEqual(len(concrete), len(set(concrete)))
+        self.assertEqual(set(self.operations), {"nodal." + name for name in concrete})
+        self.assertIn("nodal.analog_cross", self.operations)
+        self.assertIn("nodal.analog_add", self.operations)
+
+    def test_guarded_operations_do_not_become_direct(self) -> None:
+        for name in ("analog_procedure", "analog_cross", "analog_timer", "analog_on",
+                     "analog_variable", "analog_assign", "analog_loop", "shape_index",
+                     "shape_view", "shape_slice", "constant", "connection_set", "potential_equality"):
+            with self.subTest(operation=name):
+                self.assertEqual(self.operations["nodal." + name]["admission"], "guarded")
+
+    def test_shared_operations_need_actual_type_classification(self) -> None:
+        for name in ("port", "port_value", "constant", "shape_index", "shape_view", "shape_slice"):
+            with self.subTest(operation=name):
+                self.assertEqual(self.operations["nodal." + name]["domain"], "neutral")
+        self.assertEqual(self.operations["nodal.bridge"]["domain"], "analog")
+        self.assertEqual(self.operations["nodal.bridge"]["admission"], "unsupported")
+
+    def test_digital_equation_and_unlowered_forms_remain_explicitly_unsupported(self) -> None:
+        for name in ("net_driver", "net_drive", "clock_relation", "hardware_loop", "fsm",
+                     "analog_unknown", "analog_equation", "shape_flatten", "alias", "reference"):
+            with self.subTest(operation=name):
+                self.assertEqual(self.operations["nodal." + name]["admission"], "unsupported")
+        self.assertEqual(self.operations["nodal.clock_relation"]["domain"], "digital")
+        self.assertEqual(self.operations["nodal.analog_equation"]["domain"], "analog")
+
+    def test_generated_table_is_immutable_sorted_and_no_mlir_dependency(self) -> None:
+        content = REGISTRY.outputs()[REGISTRY.OUTPUT]
+        names = re.findall(r'\{"(nodal\.[^"]+)"', content)
+        self.assertEqual(names, sorted(self.operations))
+        self.assertIn("static constexpr BackendOperationDescriptor", content)
+        for relative in ("include/nodal/Support/BackendCapabilityRegistry.h",
+                         "lib/Support/BackendCapabilityRegistry.cpp"):
+            self.assertNotIn('#include "mlir/', (ROOT / "core/compiler" / relative).read_text())
+            self.assertNotIn('#include "nodal/Dialect/', (ROOT / "core/compiler" / relative).read_text())
+
+    def test_generation_is_independent_of_catalog_order(self) -> None:
+        original = REGISTRY.outputs()[REGISTRY.OUTPUT]
+        self.inventory["operations"].reverse()
+        self.inventory["features"].reverse()
+        self.inventory["language_profiles"].reverse()
+        self.inventory["consumer_observations"].reverse()
+        for profile in self.inventory["language_profiles"]:
+            profile["features"].reverse()
+        with tempfile.TemporaryDirectory(dir=ROOT / ".work") as directory:
+            root = Path(directory)
+            (root / "core").symlink_to(ROOT / "core", target_is_directory=True)
+            (root / "docs").symlink_to(ROOT / "docs", target_is_directory=True)
+            (root / "examples").symlink_to(ROOT / "examples", target_is_directory=True)
+            # Keep references local but replace just the catalog path through a mock.
+            original_catalog = REGISTRY.CATALOG
+            REGISTRY.CATALOG = Path("reordered.json")
+            try:
+                (root / REGISTRY.CATALOG).write_text(json.dumps(self.catalog), encoding="utf-8")
+                self.assertEqual(REGISTRY.outputs(root)[REGISTRY.OUTPUT], original)
+            finally:
+                REGISTRY.CATALOG = original_catalog
+
+    def test_duplicate_feature_id_rejects(self) -> None:
+        self.inventory["features"].append(copy.deepcopy(self.inventory["features"][0]))
+        self.invalid("duplicate id")
+
+    def test_duplicate_operation_rejects(self) -> None:
+        self.inventory["operations"].append(copy.deepcopy(self.inventory["operations"][0]))
+        self.invalid("duplicate operation")
+
+    def test_unknown_feature_reference_rejects(self) -> None:
+        self.inventory["operations"][0]["feature"] = "invented-feature"
+        self.invalid("unknown feature reference")
+
+    def test_invalid_domain_and_admission_reject(self) -> None:
+        operation = self.inventory["operations"][0]
+        for field in ("domain", "admission"):
+            original = operation[field]
+            for value in ("invented", "", None, [], 1):
+                with self.subTest(field=field, value=value):
+                    operation[field] = value
+                    self.invalid("invalid " + field)
+            operation[field] = original
+
+    def test_closed_domain_and_admission_values_are_recognized(self) -> None:
+        operation = self.operations["nodal.shape_view"]
+        for domain in REGISTRY.DOMAINS:
+            operation["domain"] = domain
+            REGISTRY.validate_catalog(self.catalog)
+        for admission in ("direct", "guarded", "normalize"):
+            operation["admission"] = admission
+            REGISTRY.validate_catalog(self.catalog)
+
+    def test_missing_existing_operation_rejects(self) -> None:
+        self.inventory["operations"].remove(self.operations["nodal.analog_add"])
+        self.invalid("TableGen inventory mismatch; missing=nodal.analog_add")
+
+    def test_unknown_operation_rejects(self) -> None:
+        operation = copy.deepcopy(self.inventory["operations"][0])
+        operation["operation"] = "nodal.future_unimplemented"
+        self.inventory["operations"].append(operation)
+        self.invalid("unknown=nodal.future_unimplemented")
+
+    def test_invalid_version_and_unknown_policy_reject(self) -> None:
+        for field, value in (("schema_version", 2), ("schema_version", True),
+                             ("inventory_version", "2"), ("unknown_operation_policy", "allow")):
+            original = self.inventory[field]
+            with self.subTest(field=field, value=value):
+                self.inventory[field] = value
+                self.invalid("unsupported|must reject")
+            self.inventory[field] = original
+
+    def test_missing_reference_and_unknown_validator_reject(self) -> None:
+        feature = self.inventory["features"][0]
+        for reference, message in (("missing/source.cpp", "missing reference"),
+                                   ("core/compiler/lib/Backend/AnalogVerticalSlice.cpp#inventedValidator",
+                                    "unknown validator")):
+            with self.subTest(reference=reference):
+                feature["validation_references"] = [reference]
+                self.invalid(message)
+
+    def test_unknown_analog_registry_reference_rejects(self) -> None:
+        self.inventory["features"][0]["registry_references"] = ["analog-functions-v1.json#invented"]
+        self.invalid("unsupported registry reference")
+
+    def test_registry_features_reference_the_authoritative_functions_analyses_contexts(self) -> None:
+        references = {ref for feature in self.inventory["features"]
+                      for ref in feature.get("registry_references", [])}
+        self.assertEqual(references, {"analog-functions-v1.json#" + name
+                                      for name in ("functions", "analyses", "contexts")})
+
+    def test_duplicate_profile_and_missing_feature_reference_reject(self) -> None:
+        profile = self.inventory["language_profiles"][0]
+        self.inventory["language_profiles"].append(copy.deepcopy(profile))
+        self.invalid("duplicate id")
+        self.inventory["language_profiles"].pop()
+        profile["features"].pop()
+        self.invalid("incomplete or unknown feature references")
+
+    def test_unsupported_feature_cannot_be_advertised(self) -> None:
+        for feature in self.inventory["language_profiles"][0]["features"]:
+            if feature["feature"] == "typed-source-equations":
+                feature["support"] = "supported"
+        self.invalid("support disagrees with operation admission")
+
+    def test_guarded_feature_cannot_be_advertised_as_unconditional(self) -> None:
+        for feature in self.inventory["language_profiles"][0]["features"]:
+            if feature["feature"] == "procedural-storage":
+                feature["support"] = "supported"
+        self.invalid("requires conditional support")
+
+    def test_consumer_observations_remain_witness_specific_and_separate(self) -> None:
+        observations = self.inventory["consumer_observations"]
+        self.assertEqual(len(observations), 2)
+        by_selection = {item["selection"]: item for item in observations}
+        self.assertEqual(by_selection["AnalogCapabilityStorage"]["result"], "compiled")
+        self.assertEqual(by_selection["AnalogCapabilityStorage"]["exit_code"], 0)
+        self.assertTrue(by_selection["AnalogCapabilityStorage"]["output_produced"])
+        self.assertEqual(by_selection["AnalogCapabilityHierarchy"]["result"], "rejected")
+        self.assertEqual(by_selection["AnalogCapabilityHierarchy"]["exit_code"], 65)
+        self.assertFalse(by_selection["AnalogCapabilityHierarchy"]["output_produced"])
+        for profile in self.inventory["language_profiles"]:
+            support = {entry["feature"]: entry["support"] for entry in profile["features"]}
+            self.assertEqual(support["structural-hierarchy"], "supported")
+            self.assertEqual(support["procedural-storage"], "conditional")
+        # Observations cannot change emitted name-level admission facts.
+        original = REGISTRY.outputs()[REGISTRY.OUTPUT]
+        self.inventory["consumer_observations"] = []
+        REGISTRY.validate_catalog(self.catalog)
+        with tempfile.TemporaryDirectory(dir=ROOT / ".work") as directory:
+            root = Path(directory)
+            for name in ("core", "docs", "examples"):
+                (root / name).symlink_to(ROOT / name, target_is_directory=True)
+            original_catalog = REGISTRY.CATALOG
+            REGISTRY.CATALOG = Path("without-observations.json")
+            try:
+                (root / REGISTRY.CATALOG).write_text(json.dumps(self.catalog), encoding="utf-8")
+                self.assertEqual(REGISTRY.outputs(root)[REGISTRY.OUTPUT], original)
+            finally:
+                REGISTRY.CATALOG = original_catalog
+
+    def test_consumer_observation_references_and_outcomes_are_closed(self) -> None:
+        observation = self.inventory["consumer_observations"][0]
+        for field, value, message in (
+            ("profile", "invented", "unknown observed profile"),
+            ("features", ["invented"], "unknown observed feature"),
+            ("result", "universally-supported", "invalid observation result"),
+            ("witness", "missing.scala", "missing reference"),
+            ("selection", "InventedClass", "selection is not present"),
+            ("evidence", ["missing.md"], "missing reference"),
+        ):
+            original = observation[field]
+            with self.subTest(field=field):
+                observation[field] = value
+                self.invalid(message)
+            observation[field] = original
+
+    def test_consumer_provenance_fields_are_required_and_checked(self) -> None:
+        observation = self.inventory["consumer_observations"][0]
+        for field, value, message in (
+            ("selection", None, "selection: expected nonempty string"),
+            ("tool_sha256", "abc", "invalid tool_sha256"),
+            ("model_sha256", "g" * 64, "invalid model_sha256"),
+            ("exit_code", True, "exit_code must be an integer"),
+            ("exit_code", "65", "exit_code must be an integer"),
+            ("exit_code", 0, "result disagrees with exit_code"),
+            ("output_produced", "false", "output_produced must be a boolean"),
+        ):
+            original = observation[field]
+            with self.subTest(field=field, value=value):
+                observation[field] = value
+                self.invalid(message)
+            observation[field] = original
+
+    def test_duplicate_json_keys_reject(self) -> None:
+        with self.assertRaisesRegex(REGISTRY.CatalogError, "duplicate key"):
+            json.loads('{"schema":1,"schema":2}', object_pairs_hook=REGISTRY.reject_duplicate_keys)
+
+    def test_check_mode_does_not_write_and_rejects_stale_output(self) -> None:
+        result = subprocess.run([sys.executable, str(SCRIPT), "--check"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tempfile.TemporaryDirectory(dir=ROOT / ".work") as directory:
+            root = Path(directory)
+            # A small repository mirror retains real validation references.
+            (root / "core/compiler/include/nodal/Support").mkdir(parents=True)
+            (root / "core/compiler/include/nodal/Dialect").symlink_to(
+                ROOT / "core/compiler/include/nodal/Dialect", target_is_directory=True)
+            (root / "core/compiler/lib").symlink_to(ROOT / "core/compiler/lib", target_is_directory=True)
+            (root / "docs").symlink_to(ROOT / "docs", target_is_directory=True)
+            (root / "examples").symlink_to(ROOT / "examples", target_is_directory=True)
+            for name in ("backend-profiles-v0.1.json", "analog-functions-v1.json"):
+                (root / "core/compiler" / name).symlink_to(ROOT / "core/compiler" / name)
+            destination = root / REGISTRY.OUTPUT
+            destination.write_text("stale\n", encoding="utf-8")
+            result = subprocess.run([sys.executable, str(SCRIPT), "--root", str(root), "--check"],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale backend capability registry", result.stderr)
+            self.assertEqual(destination.read_text(), "stale\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -18,6 +18,7 @@
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 #include "nodal/Support/AnalogHierarchySyntax.h"
+#include "nodal/Support/BackendCapabilityRegistry.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
@@ -48,66 +49,6 @@ using namespace mlir;
 
 namespace nodal {
 namespace {
-
-constexpr llvm::StringLiteral kSupportedOperations[] = {
-    "nodal.unit",
-    "nodal.module",
-    "nodal.nature",
-    "nodal.nature_import",
-    "nodal.discipline",
-    "nodal.discipline_import",
-    "nodal.parameter",
-    "nodal.const_literal",
-    "nodal.const_parameter_ref",
-    "nodal.const_expr",
-    "nodal.parameter_value",
-    "nodal.parameter_constraint",
-    "nodal.parameter_envelope",
-    "nodal.parameter_override",
-    "nodal.terminal",
-    "nodal.terminal_array",
-    "nodal.instance",
-    "nodal.instance_terminal",
-    "nodal.instance_terminal_array",
-    "nodal.node",
-    "nodal.node_array",
-    "nodal.connect",
-    "nodal.connect_array",
-    "nodal.branch",
-    "nodal.generate",
-    "nodal.analog",
-    "nodal.real_literal",
-    "nodal.analog_integer_literal",
-    "nodal.parameter_ref",
-    "nodal.access",
-    "nodal.terminal_access",
-    "nodal.port_flow_access",
-    "nodal.analog_add",
-    "nodal.analog_sub",
-    "nodal.analog_mul",
-    "nodal.analog_div",
-    "nodal.analog_neg",
-    "nodal.analog_noise",
-    "nodal.analog_transfer",
-    "nodal.analog_function",
-    "nodal.analog_user_function",
-    "nodal.analog_function_value",
-    "nodal.analog_function_return",
-    "nodal.analog_user_call",
-    "nodal.analog_analysis",
-    "nodal.analog_context",
-    "nodal.analog_compare",
-    "nodal.analog_logic",
-    "nodal.analog_select",
-    "nodal.analog_ddt",
-    "nodal.analog_idt",
-    "nodal.analog_transition",
-    "nodal.analog_slew",
-    "nodal.analog_absdelay",
-    "nodal.analog_abstime",
-    "nodal.analog_bound_step",
-    "nodal.contribute",
-};
 
 llvm::StringRef symbolName(Operation *operation) {
   if (auto name = operation->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()))
@@ -3754,7 +3695,7 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
       result = verifyPotentialFlowAccessOperation(operation);
       return;
     }
-    if (llvm::is_contained(kSupportedOperations, name) || name == "nodal.analog_held_read")
+    if (isDirectBackendOperation(name))
       return;
     result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
                                llvm::Twine("operation '") + name +

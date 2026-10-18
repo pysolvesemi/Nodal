@@ -78,5 +78,1415 @@
     "release"
   ],
   "transaction": "clone-gate-buffer-verify-reparse-publish",
-  "unsupported_feature_policy": "reject-with-stable-diagnostic"
+  "unsupported_feature_policy": "reject-with-stable-diagnostic",
+  "feature_inventory": {
+    "schema_version": 1,
+    "inventory_version": "1",
+    "scope": "implemented compiler language-output admission, independent of simulator/tool observations",
+    "admission_semantics": {
+      "direct": "Operation-name admission only; native semantic, type, effect, placement and rendering checks remain mandatory.",
+      "guarded": "Admitted only by the named existing context-sensitive validator; never a direct allowlist entry.",
+      "normalize": "Source-only form requiring a documented implemented lowering before operation admission; no current operation uses this category.",
+      "unsupported": "No current backend emission path; no fallback, omission or approximation."
+    },
+    "domain_semantics": "Neutral operations require caller-owned actual-IR type classification. Mixed means intrinsically analog and digital; arbitrary bridge kind strings do not establish it.",
+    "unknown_operation_policy": "reject",
+    "features": [
+      {
+        "id": "analog-events",
+        "summary": "Cross, above, timer, lifecycle events and event-controlled statements",
+        "constraints": [
+          "Exactly the native cross, above, timer, initial_step, final_step and any-of event contracts within a verified analog procedure.",
+          "Owned source expressions, analysis filters, event/storage effects and generated placement rules are checked; digital event scheduling and arbitrary wait/delay are unsupported."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogEventBackend.cpp#verifyAnalogProcedureTarget",
+          "core/compiler/lib/Dialect/Nodal/AnalogEvents.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment37-analog-events.md",
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "analog-expressions",
+        "summary": "Continuous scalar expressions and authored contributions",
+        "constraints": [
+          "Typed Real/Integer/Boolean forms, exact units and owned analog-region placements must pass native verification.",
+          "Division, nonfinite values, residual/contribution semantics and independently verified quantity erasure remain enforced; typed source equations are not emitted by this feature."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/implementation/increment30-analog-numeric-types.md",
+          "docs/implementation/increment32-equation-contribution-semantics.md"
+        ]
+      },
+      {
+        "id": "analysis-environment",
+        "summary": "Closed active-analysis and simulator-context queries",
+        "constraints": [
+          "Active analysis IDs come from analog-functions-v1.json#analyses; time is mapped separately by analog_abstime.",
+          "Ambient temperature is kelvin. Nominal temperature requires the consumer tnom parameter in Celsius and is converted to kelvin without a fallback.",
+          "Frequency, operating_condition, corner, sweep_coordinate and random_seed providers are unavailable; registry presence does not admit those queries."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp#verifyAnalogFunctionOperation"
+        ],
+        "documentation": [
+          "docs/implementation/increment44-readiness.md"
+        ],
+        "registry_references": [
+          "analog-functions-v1.json#analyses",
+          "analog-functions-v1.json#contexts"
+        ]
+      },
+      {
+        "id": "conservative-connectivity",
+        "summary": "Scalar and shaped conservative terminals, nodes, branches and bindings",
+        "constraints": [
+          "Verified conservative endpoints and actual net relations only; discipline, direction, orientation and floating-terminal rules remain active.",
+          "Shaped bindings use the existing conservative shape/projection proofs and bounded target layouts; arbitrary dynamic topology is unsupported."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/ConservativeConnectivity.cpp",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#renderBackendCandidate"
+        ],
+        "documentation": [
+          "docs/implementation/increment28-electrical-connectivity.md",
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "differential-integral",
+        "summary": "Source-semantic ddt and idt operators",
+        "constraints": [
+          "Only the finite validated operator contracts, dimensions, initialization/reset variants and legal static/generated placements; history cannot be folded, CSEd or moved across effect boundaries."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogNumeric.cpp",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/implementation/increment35-differential-integral-operators.md"
+        ]
+      },
+      {
+        "id": "digital-behavior",
+        "summary": "Digital connectivity, clock/reset domains and state machines",
+        "constraints": [
+          "No digital HDL implementation is advertised by the current analog backend, including when verilog-ams is selected.",
+          "The Verilog-A early language gate also inspects actual carrier types and every emitted hierarchy definition, including unused definitions; a neutral operation name or stale summary cannot hide digital values."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/architecture/0005-backend-capability-profiles.md"
+        ]
+      },
+      {
+        "id": "event-held-reads",
+        "summary": "Continuous reads of independently proven event-held real storage",
+        "constraints": [
+          "Only owner-correlated Real storage with independently verified event-held initialization and writes; arbitrary persistent variables are not admitted by the operation name."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogEvents.cpp",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/implementation/increment37-analog-events.md"
+        ]
+      },
+      {
+        "id": "mathematical-functions",
+        "summary": "Closed version-1 mathematical function registry",
+        "constraints": [
+          "Only registered functions and their exact arities, dimension rules and finite-domain checks; the registry is authoritative rather than an open function-name escape."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogFunctions.cpp#verifyAnalogFunctionOperation"
+        ],
+        "documentation": [
+          "docs/implementation/increment38-mathematical-simulator-functions.md"
+        ],
+        "registry_references": [
+          "analog-functions-v1.json#functions"
+        ]
+      },
+      {
+        "id": "mixed-signal-bridges",
+        "summary": "Bridge records awaiting explicit backend lowering",
+        "constraints": [
+          "Bridge records are analog-domain metadata by name; an arbitrary kind string is not authoritative proof of digital behavior.",
+          "Actual digital carrier types are rejected by the Verilog-A gate. No bridge record is emitted by the current backend admission path."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/architecture/0005-backend-capability-profiles.md"
+        ]
+      },
+      {
+        "id": "natures-disciplines",
+        "summary": "Declared or imported analog natures and disciplines",
+        "constraints": [
+          "Only independently verified nature/discipline identities, access functions and dimensions; imported declarations are not automatically simulator-provided."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/NatureDiscipline.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment27-natures-disciplines.md"
+        ]
+      },
+      {
+        "id": "noise",
+        "summary": "White, flicker and tabulated analog noise",
+        "constraints": [
+          "Exactly white (one density), flicker (density and constant dimensionless exponent), or table (constant frequency/density pairs).",
+          "Finite typed operands, nonnegative known densities, unique nonnegative table frequencies and ownership are checked; noise-modulated noise is unsupported."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogNoise.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment39-noise-operators.md"
+        ]
+      },
+      {
+        "id": "parameters",
+        "summary": "Typed parameters, constant-expression DAGs, bounds and overrides",
+        "constraints": [
+          "Existing parameter kinds, units, finite envelopes, source ownership and constant-expression verification remain mandatory.",
+          "Structural bounds must hold for every legal parameter setting; defaults are not proofs."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/ParameterModel.cpp",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/implementation/increment29-parameters-units.md"
+        ]
+      },
+      {
+        "id": "partial-topology-records",
+        "summary": "Verified component contracts and finite partial topology records",
+        "constraints": [
+          "component_contract must pass its native verifier. connection_set/flow_conservation require a partial physical component, complete=false and their native verifier.",
+          "potential_equality requires a verified partial component record and an independently proven actual equal net relation; no additional numeric contribution is emitted.",
+          "Complete equation/topology lowering is not provided by these metadata records."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations",
+          "core/compiler/lib/Dialect/Nodal/ConservativeConnectivity.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment42-analog-hierarchy.md"
+        ]
+      },
+      {
+        "id": "potential-flow-access",
+        "summary": "Potential and flow reads on verified conservative endpoints",
+        "constraints": [
+          "The existing potential/flow normalization and independent normalized-model checks are required; access support placements and orientation may not be forged."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/PotentialFlowAccess.cpp#normalizePotentialFlowAccess",
+          "core/compiler/lib/Dialect/Nodal/PotentialFlowAccess.cpp#verifyPotentialFlowAccessModel"
+        ],
+        "documentation": [
+          "docs/implementation/increment31-potential-flow-access.md"
+        ]
+      },
+      {
+        "id": "potential-flow-probes",
+        "summary": "Verified derived flow probe records",
+        "constraints": [
+          "Only derived probes accepted by verifyPotentialFlowAccessOperation and the normalized model; a named record alone does not admit a probe."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/PotentialFlowAccess.cpp#verifyPotentialFlowAccessOperation"
+        ],
+        "documentation": [
+          "docs/implementation/increment31-potential-flow-access.md"
+        ]
+      },
+      {
+        "id": "procedural-control",
+        "summary": "Finite structured analog if/case/loop and lexical exits",
+        "constraints": [
+          "Only operations accepted within verifyAnalogProcedureTarget; no generic procedural HDL escape.",
+          "Generated procedures admit at most one nonnested runtime loop, no loop-local declarations, and only the existing direct control/scope/exit placements.",
+          "Generated non-event loops require owned Integer bounds and retain stricter conditional/case and exit limits; event procedures use their separately checked placement profile."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogEventBackend.cpp#verifyAnalogProcedureTarget"
+        ],
+        "documentation": [
+          "docs/implementation/increment34-analog-control-flow.md",
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "procedural-storage",
+        "summary": "Verified analog procedure regions and ordered scalar/shaped storage",
+        "constraints": [
+          "Every operation must belong to one procedure accepted by verifyAnalogProcedureTarget, including source-expression, storage-reference and generated-owner validation.",
+          "Assignments require guard_present=false and exactly the dc/transient analysis pair. Storage projections and snapshots must resolve through the native storage model.",
+          "Declarations nested inside generated procedural loops and unverified persistent initialization are unsupported. Structural generated occurrence-local declarations remain supported by their existing ownership/initializer checks; array layout/cardinality and live-consumer budget checks remain active."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogEventBackend.cpp#verifyAnalogProcedureTarget",
+          "core/compiler/lib/Backend/AnalogEventBackend.cpp#verifyAnalogEventStorageStatement",
+          "core/compiler/lib/Dialect/Nodal/AnalogStorageModel.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment33-analog-variables-procedural-assignment.md",
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "shape-projections",
+        "summary": "Context-sensitive conservative or procedural shape projections",
+        "constraints": [
+          "shape_index/view/slice require a resolvable conservative shape or storage/value projection within a verified analog procedure; the operation name does not establish its domain.",
+          "Outside procedures, nodal.constant is admitted only as one nonempty-use index result whose users are verified conservative shape_index or shape_slice operations.",
+          "Digital ports, dynamic shapes, unproved bounds/cardinalities and unsupported projection compositions do not gain admission."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations",
+          "core/compiler/lib/Backend/AnalogEventBackend.cpp#verifyAnalogEventStorageStatement",
+          "core/compiler/lib/Dialect/Nodal/ShapeModel.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "source-topology-lowering",
+        "summary": "Source-only topology forms without current backend admission",
+        "constraints": [
+          "These operations have source/native semantics but are not admitted by the current backend operation verifier; no implicit normalization-to-supported claim."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/implementation/increment28-electrical-connectivity.md"
+        ]
+      },
+      {
+        "id": "structural-hierarchy",
+        "summary": "Modules, static generation and analog instance hierarchy",
+        "constraints": [
+          "Analog definitions and statically bounded generate domains only; every emitted definition is checked independently, including unused definitions.",
+          "Generated domains, owner identities, binding cardinalities and target signed-integer bounds must satisfy the existing hierarchy renderer; no parameter-default specialization or eager expansion is implied."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations",
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#renderBackendCandidate"
+        ],
+        "documentation": [
+          "docs/implementation/increment42-analog-hierarchy.md",
+          "docs/implementation/increment43-shape-contract.md"
+        ]
+      },
+      {
+        "id": "time-waveform",
+        "summary": "Transition, slew, absolute delay, absolute time and step bounds",
+        "constraints": [
+          "Existing exact operator arities, dimensions, continuity, initialization and placement contracts apply.",
+          "Time observation, timestep control and history remain effects; a language mapping does not establish consumer support."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/TimeWaveform.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment36-time-waveform-operators.md"
+        ]
+      },
+      {
+        "id": "transfer-functions",
+        "summary": "Finite laplace_nd and zi_nd transfer contracts",
+        "constraints": [
+          "Only laplace_nd with ascending_s coefficients and zi_nd with ascending_z_inverse coefficients; both use simulator-default initialization.",
+          "Nonempty static coefficient arrays and proven nonzero constant denominator d0 are required; zi_nd has one to three proven constant time arguments.",
+          "Explicit epsilon, initial_value and alternative transfer spellings/policies are unsupported."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogTransfer.cpp#verifyAnalogTransferOperation"
+        ],
+        "documentation": [
+          "docs/implementation/increment40-transfer-operators.md"
+        ]
+      },
+      {
+        "id": "typed-source-equations",
+        "summary": "Typed unknown/equation structural analysis without HDL lowering",
+        "constraints": [
+          "Typed equations and any source_equations-marked IR require equation-to-target lowering; structural matching is not HDL emission.",
+          "Rejected with NODAL-BACKEND-EQUATION-134-001 rather than erased or approximated."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations",
+          "core/compiler/lib/Dialect/Nodal/AnalogEquationModel.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment46-readiness.md"
+        ]
+      },
+      {
+        "id": "unlowered-shared-forms",
+        "summary": "Shared IR surfaces without current analog target lowering",
+        "constraints": [
+          "Native/source representation alone does not establish backend emission; each listed operation remains rejected until an explicit lowering is implemented.",
+          "Interface and shape carriers need type-sensitive classification; neutral means shared representation, not permission to emit digital behavior."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Backend/AnalogVerticalSlice.cpp#verifyBackendOperations"
+        ],
+        "documentation": [
+          "docs/architecture/0005-backend-capability-profiles.md"
+        ]
+      },
+      {
+        "id": "user-analog-functions",
+        "summary": "Typed module-local pure nonrecursive functions",
+        "constraints": [
+          "Only the existing isolated typed scalar function contract and total return profile; no recursion, simulator reads, mutable state or implicit function-call elimination."
+        ],
+        "validation_references": [
+          "core/compiler/lib/Dialect/Nodal/AnalogUserFunctions.cpp"
+        ],
+        "documentation": [
+          "docs/implementation/increment41-analog-functions.md"
+        ]
+      }
+    ],
+    "operations": [
+      {
+        "operation": "nodal.access",
+        "feature": "potential-flow-access",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.alias",
+        "feature": "source-topology-lowering",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.analog",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_above",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_absdelay",
+        "feature": "time-waveform",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_abstime",
+        "feature": "time-waveform",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_add",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_analysis",
+        "feature": "analysis-environment",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_array_fill",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_assign",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_bound_step",
+        "feature": "time-waveform",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_break",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_case",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_case_arm",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_compare",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_context",
+        "feature": "analysis-environment",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_continue",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_cross",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_ddt",
+        "feature": "differential-integral",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_div",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_equation",
+        "feature": "typed-source-equations",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.analog_event_or",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_final_step",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_function",
+        "feature": "mathematical-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_function_return",
+        "feature": "user-analog-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_function_value",
+        "feature": "user-analog-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_held_read",
+        "feature": "event-held-reads",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_idt",
+        "feature": "differential-integral",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_if",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_if_arm",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_initial_step",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_integer_literal",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_live_fill",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_logic",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_loop",
+        "feature": "procedural-control",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_mul",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_neg",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_noise",
+        "feature": "noise",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_on",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_procedure",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_scope",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_select",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_slew",
+        "feature": "time-waveform",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_sub",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_timer",
+        "feature": "analog-events",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_transfer",
+        "feature": "transfer-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_transition",
+        "feature": "time-waveform",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_unknown",
+        "feature": "typed-source-equations",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.analog_user_call",
+        "feature": "user-analog-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_user_function",
+        "feature": "user-analog-functions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.analog_variable",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.analog_variable_read",
+        "feature": "procedural-storage",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.branch",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.bridge",
+        "feature": "mixed-signal-bridges",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.clock_relation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.component_contract",
+        "feature": "partial-topology-records",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.connect",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.connect_array",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.connection_set",
+        "feature": "partial-topology-records",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.const_expr",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.const_literal",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.const_parameter_ref",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.constant",
+        "feature": "shape-projections",
+        "domain": "neutral",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.contribute",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.crossing",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.discipline",
+        "feature": "natures-disciplines",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.discipline_import",
+        "feature": "natures-disciplines",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.domain",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.domain_bind",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.domain_requirement",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.dynamic_value",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.enum",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.enum_case",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.flow_conservation",
+        "feature": "partial-topology-records",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.fsm",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_action",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_completion",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_state",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_transition",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.generate",
+        "feature": "structural-hierarchy",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.hardware_loop",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.instance",
+        "feature": "structural-hierarchy",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.instance_terminal",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.instance_terminal_array",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.interface",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.interface_abi",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.interface_instance",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.interface_member",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.interface_role",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.member_access",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.module",
+        "feature": "structural-hierarchy",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.nature",
+        "feature": "natures-disciplines",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.nature_import",
+        "feature": "natures-disciplines",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.net_drive",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.net_driver",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.net_read",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.node",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.node_array",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter_constraint",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter_envelope",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter_override",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter_ref",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.parameter_value",
+        "feature": "parameters",
+        "domain": "neutral",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.placeholder",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.port",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.port_flow_access",
+        "feature": "potential-flow-access",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.port_value",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.potential_equality",
+        "feature": "partial-topology-records",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.probe",
+        "feature": "potential-flow-probes",
+        "domain": "analog",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.real_literal",
+        "feature": "analog-expressions",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.reference",
+        "feature": "source-topology-lowering",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.reference_potential",
+        "feature": "source-topology-lowering",
+        "domain": "analog",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.reset_relation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.resolved_net",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.shape_flatten",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.shape_index",
+        "feature": "shape-projections",
+        "domain": "neutral",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.shape_slice",
+        "feature": "shape-projections",
+        "domain": "neutral",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.shape_view",
+        "feature": "shape-projections",
+        "domain": "neutral",
+        "admission": "guarded"
+      },
+      {
+        "operation": "nodal.state_owner",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.terminal",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.terminal_access",
+        "feature": "potential-flow-access",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.terminal_array",
+        "feature": "conservative-connectivity",
+        "domain": "analog",
+        "admission": "direct"
+      },
+      {
+        "operation": "nodal.timing_provenance",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.unit",
+        "feature": "structural-hierarchy",
+        "domain": "neutral",
+        "admission": "direct"
+      }
+    ],
+    "language_profiles": [
+      {
+        "id": "verilog-a",
+        "profile_version": "0.1",
+        "file_extension": ".va",
+        "implementation_scope": "verified analog emission; digital and mixed-signal lowering remain unsupported",
+        "features": [
+          {
+            "feature": "analog-events",
+            "support": "conditional"
+          },
+          {
+            "feature": "analog-expressions",
+            "support": "supported"
+          },
+          {
+            "feature": "analysis-environment",
+            "support": "conditional"
+          },
+          {
+            "feature": "conservative-connectivity",
+            "support": "supported"
+          },
+          {
+            "feature": "differential-integral",
+            "support": "supported"
+          },
+          {
+            "feature": "digital-behavior",
+            "support": "unsupported"
+          },
+          {
+            "feature": "event-held-reads",
+            "support": "supported"
+          },
+          {
+            "feature": "mathematical-functions",
+            "support": "supported"
+          },
+          {
+            "feature": "mixed-signal-bridges",
+            "support": "unsupported"
+          },
+          {
+            "feature": "natures-disciplines",
+            "support": "supported"
+          },
+          {
+            "feature": "noise",
+            "support": "supported"
+          },
+          {
+            "feature": "parameters",
+            "support": "supported"
+          },
+          {
+            "feature": "partial-topology-records",
+            "support": "conditional"
+          },
+          {
+            "feature": "potential-flow-access",
+            "support": "supported"
+          },
+          {
+            "feature": "potential-flow-probes",
+            "support": "conditional"
+          },
+          {
+            "feature": "procedural-control",
+            "support": "conditional"
+          },
+          {
+            "feature": "procedural-storage",
+            "support": "conditional"
+          },
+          {
+            "feature": "shape-projections",
+            "support": "conditional"
+          },
+          {
+            "feature": "source-topology-lowering",
+            "support": "unsupported"
+          },
+          {
+            "feature": "structural-hierarchy",
+            "support": "supported"
+          },
+          {
+            "feature": "time-waveform",
+            "support": "supported"
+          },
+          {
+            "feature": "transfer-functions",
+            "support": "supported"
+          },
+          {
+            "feature": "typed-source-equations",
+            "support": "unsupported"
+          },
+          {
+            "feature": "unlowered-shared-forms",
+            "support": "unsupported"
+          },
+          {
+            "feature": "user-analog-functions",
+            "support": "supported"
+          }
+        ]
+      },
+      {
+        "id": "verilog-ams",
+        "profile_version": "0.1",
+        "file_extension": ".vams",
+        "implementation_scope": "verified analog emission; digital and mixed-signal lowering remain unsupported",
+        "features": [
+          {
+            "feature": "analog-events",
+            "support": "conditional"
+          },
+          {
+            "feature": "analog-expressions",
+            "support": "supported"
+          },
+          {
+            "feature": "analysis-environment",
+            "support": "conditional"
+          },
+          {
+            "feature": "conservative-connectivity",
+            "support": "supported"
+          },
+          {
+            "feature": "differential-integral",
+            "support": "supported"
+          },
+          {
+            "feature": "digital-behavior",
+            "support": "unsupported"
+          },
+          {
+            "feature": "event-held-reads",
+            "support": "supported"
+          },
+          {
+            "feature": "mathematical-functions",
+            "support": "supported"
+          },
+          {
+            "feature": "mixed-signal-bridges",
+            "support": "unsupported"
+          },
+          {
+            "feature": "natures-disciplines",
+            "support": "supported"
+          },
+          {
+            "feature": "noise",
+            "support": "supported"
+          },
+          {
+            "feature": "parameters",
+            "support": "supported"
+          },
+          {
+            "feature": "partial-topology-records",
+            "support": "conditional"
+          },
+          {
+            "feature": "potential-flow-access",
+            "support": "supported"
+          },
+          {
+            "feature": "potential-flow-probes",
+            "support": "conditional"
+          },
+          {
+            "feature": "procedural-control",
+            "support": "conditional"
+          },
+          {
+            "feature": "procedural-storage",
+            "support": "conditional"
+          },
+          {
+            "feature": "shape-projections",
+            "support": "conditional"
+          },
+          {
+            "feature": "source-topology-lowering",
+            "support": "unsupported"
+          },
+          {
+            "feature": "structural-hierarchy",
+            "support": "supported"
+          },
+          {
+            "feature": "time-waveform",
+            "support": "supported"
+          },
+          {
+            "feature": "transfer-functions",
+            "support": "supported"
+          },
+          {
+            "feature": "typed-source-equations",
+            "support": "unsupported"
+          },
+          {
+            "feature": "unlowered-shared-forms",
+            "support": "unsupported"
+          },
+          {
+            "feature": "user-analog-functions",
+            "support": "supported"
+          }
+        ]
+      }
+    ],
+    "consumer_observation_policy": "Observations are tied to one exact witness, consumer version and language profile; successful internal reparse or one independent compile never establishes feature-wide simulator support.",
+    "consumer_observations": [
+      {
+        "id": "f047-openvaf-reloaded-analog-hierarchy",
+        "consumer": "OpenVAF-reloaded",
+        "version": "20260616-3-g0e83f1ed",
+        "tool_sha256": "b117284d8f871dbf54609ab009cdff819f443d8d33064111b8b0782af5c7e931",
+        "profile": "verilog-a",
+        "witness": "examples/continuousTimeApi/src/nodal/increment47fixture/Increment47ConstructionCheck.scala",
+        "evidence": [
+          "docs/implementation/increment47-readiness.md"
+        ],
+        "selection": "AnalogCapabilityHierarchy",
+        "model": "analog-hierarchy.va.direct",
+        "model_sha256": "424856c5f41fa403f382817238093e5585fb68b43115d7e5a1d08e3ffcd4482f",
+        "features": [
+          "structural-hierarchy"
+        ],
+        "result": "rejected",
+        "exit_code": 65,
+        "output_format": "OSDI",
+        "output_produced": false,
+        "detail": "This exact generated model was rejected at its named child-module instance; no hierarchy-wide or other-consumer conclusion follows."
+      },
+      {
+        "id": "f047-openvaf-reloaded-analog-storage",
+        "consumer": "OpenVAF-reloaded",
+        "version": "20260616-3-g0e83f1ed",
+        "tool_sha256": "b117284d8f871dbf54609ab009cdff819f443d8d33064111b8b0782af5c7e931",
+        "profile": "verilog-a",
+        "witness": "examples/continuousTimeApi/src/nodal/increment47fixture/Increment47ConstructionCheck.scala",
+        "evidence": [
+          "docs/implementation/increment47-readiness.md"
+        ],
+        "selection": "AnalogCapabilityStorage",
+        "model": "analog-storage.va.direct",
+        "model_sha256": "277c6fb6e9d411e7f33146bead1a5f74de1b4143f1afc59dbd22cd3a2c289747",
+        "features": [
+          "procedural-storage",
+          "procedural-control",
+          "analog-events",
+          "event-held-reads"
+        ],
+        "result": "compiled",
+        "exit_code": 0,
+        "output_format": "OSDI",
+        "output_produced": true,
+        "detail": "This exact scalar initial-step, Boolean/Integer control and held-Real witness compiled. No array, other event form, feature-wide support or numerical execution claim follows."
+      }
+    ]
+  }
 }

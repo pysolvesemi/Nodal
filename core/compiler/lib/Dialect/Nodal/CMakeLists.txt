@@ -10,6 +10,7 @@ add_mlir_dialect_library(NodalDialect
   AnalogSemanticInventory.cpp
   AnalogStorageModel.cpp
   ShapeModel.cpp
+  TargetCapabilities.cpp
   TimeWaveform.cpp
   ConservativeConnectivity.cpp
   NatureDiscipline.cpp

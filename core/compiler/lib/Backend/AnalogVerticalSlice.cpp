@@ -1231,22 +1231,30 @@ struct GeneratedNodeArrayLayout {
   std::string upper;
   std::string index;
   std::string count;
+  std::string ordinal;
 };
 
 GeneratedNodeArrayLayout generatedNodeArrayLayout(const GeneratedTargetBound &lower,
                                                   const GeneratedTargetBound &upper,
                                                   const GeneratedTargetBound &step,
                                                   llvm::StringRef induction) {
-  if (step.range.lower == 1 && step.range.upper == 1)
+  if (step.range.lower == 1 && step.range.upper == 1) {
+    // A direct array retains authored bounds, but a nested product layout is
+    // zero-based and must compose occurrence ordinals rather than HDL indices.
+    const std::string ordinal =
+        lower.range.lower == 0 && lower.range.upper == 0
+            ? induction.str()
+            : (llvm::Twine("(") + induction + " - " + lower.text + ")").str();
     return {lower.text, (llvm::Twine("(") + upper.text + " - 1)").str(), induction.str(),
-            (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str()};
+            (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str(), ordinal};
+  }
 
   const std::string extent = (llvm::Twine("(") + upper.text + " - " + lower.text + ")").str();
   const std::string rounded = (llvm::Twine("((") + extent + " + " + step.text + ") - 1)").str();
   const std::string count = (llvm::Twine("(") + rounded + " / " + step.text + ")").str();
-  return {"0", (llvm::Twine("(") + count + " - 1)").str(),
-          (llvm::Twine("((") + induction + " - " + lower.text + ") / " + step.text + ")").str(),
-          count};
+  const std::string ordinal =
+      (llvm::Twine("((") + induction + " - " + lower.text + ") / " + step.text + ")").str();
+  return {"0", (llvm::Twine("(") + count + " - 1)").str(), ordinal, count, ordinal};
 }
 
 FailureOr<GeneratedTargetBound> generatedTargetBound(Operation *generate, llvm::StringRef name) {
@@ -1678,8 +1686,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "generated analog-node contribution requires exactly-owned electrical nodes with "
             "unique names and source identities");
       const std::string targetIndex = parentLayout
-                                          ? (llvm::Twine("((") + parentLayout->index + " * " +
-                                             layout.count + ") + " + layout.index + ")")
+                                          ? (llvm::Twine("((") + parentLayout->ordinal + " * " +
+                                             layout.count + ") + " + layout.ordinal + ")")
                                                 .str()
                                           : layout.index;
       const std::string indexedNode =

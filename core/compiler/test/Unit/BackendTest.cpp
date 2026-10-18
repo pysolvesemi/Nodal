@@ -1477,6 +1477,77 @@ int main() {
   if (nestedGeneratedNodeEquationOutput != repeatedNestedGeneratedNodeEquationOutput)
     return fail("nested generated analog-node equation emission is nondeterministic");
 
+  // Nested arrays are zero-based even when an authored unit-step range is not.
+  // Keep literal expected expressions independent of the production layout helper.
+  struct NestedOriginCase {
+    int64_t outerLower, outerUpper, outerStep, innerLower, innerUpper, innerStep;
+    const char *outerCount;
+    const char *innerCount;
+    const char *index;
+  };
+  const NestedOriginCase nestedOrigins[] = {
+      {1, 8, 1, 2, 11, 3, "(8 - 1)", "((((11 - 2) + 3) - 1) / 3)",
+       "(((generate_0_index - 1) * ((((11 - 2) + 3) - 1) / 3)) + "
+       "((generate_1_index - 2) / 3))"},
+      {1, 8, 2, 2, 11, 1, "((((8 - 1) + 2) - 1) / 2)", "(11 - 2)",
+       "((((generate_0_index - 1) / 2) * (11 - 2)) + (generate_1_index - 2))"},
+      {1, 8, 1, 2, 11, 1, "(8 - 1)", "(11 - 2)",
+       "(((generate_0_index - 1) * (11 - 2)) + (generate_1_index - 2))"},
+      {-2, 2, 1, -3, 1, 1, "(2 - -2)", "(1 - -3)",
+       "(((generate_0_index - -2) * (1 - -3)) + (generate_1_index - -3))"},
+      {0, 3, 1, 0, 2, 1, "(3 - 0)", "(2 - 0)", "((generate_0_index * (2 - 0)) + generate_1_index)"},
+      {3, 4, 1, 5, 6, 1, "(4 - 3)", "(6 - 5)",
+       "(((generate_0_index - 3) * (6 - 5)) + (generate_1_index - 5))"},
+  };
+  for (const NestedOriginCase &test : nestedOrigins) {
+    auto candidate = parse(context, kNestedGeneratedNodeEquationModule);
+    if (!candidate)
+      return fail("could not parse nested unit-step origin fixture");
+    llvm::SmallVector<mlir::Operation *, 2> ranges;
+    candidate->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.generate")
+        ranges.push_back(operation);
+    });
+    if (ranges.size() != 2)
+      return fail("nested unit-step fixture lost its two ranges");
+    auto setRange = [&](mlir::Operation *range, int64_t lower, int64_t upper, int64_t step) {
+      auto integer = [&](int64_t value) {
+        return mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), value);
+      };
+      range->setAttr("lower", integer(lower));
+      range->setAttr("upper", integer(upper));
+      range->setAttr("step", integer(step));
+      int64_t count = 0;
+      for (int64_t index = lower; index < upper; index += step)
+        ++count;
+      mlir::NamedAttrList metadata(range->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("maximum_trip_count", integer(count));
+      range->setAttr("metadata", metadata.getDictionary(&context));
+    };
+    setRange(ranges[0], test.outerLower, test.outerUpper, test.outerStep);
+    setRange(ranges[1], test.innerLower, test.innerUpper, test.innerStep);
+    std::string output;
+    llvm::raw_string_ostream stream(output);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
+      return fail("nested unit-step origin emission failed");
+    stream.flush();
+    const std::string index = test.index;
+    const std::string extent = std::string("(") + test.outerCount + " * " + test.innerCount + ")";
+    if (output.find("electrical nestedTap[0:(" + extent + " - 1)];") == std::string::npos ||
+        output.find("I(nestedTap[" + index + "], p) <+ ") == std::string::npos ||
+        output.find("V(nestedTap[" + index + "], p)") == std::string::npos)
+      return fail("nested unit-step origins did not map to zero-based occurrence ordinals");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested unit-step origin target reparse failed");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested unit-step origin repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested unit-step origin emission is nondeterministic");
+  }
+
   for (llvm::StringRef mutation : {"owner", "induction"}) {
     auto invalid = parse(context, kNestedGeneratedNodeEquationModule);
     if (!invalid)

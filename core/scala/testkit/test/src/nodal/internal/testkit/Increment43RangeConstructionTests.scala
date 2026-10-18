@@ -936,6 +936,39 @@ final class Increment43NestedGeneratedNodeResistor extends Module:
       analog:
         I(nestedTap, p) <+ (V(nestedTap, p) / resistance)
 
+final class Increment43NestedGeneratedNodeUnitSteps extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+
+  hdlRange(1, rows, 1): _ =>
+    hdlRange(2, columns, 1): _ =>
+      val nestedTap = node(Electrical)
+      analog:
+        I(nestedTap, p) <+ (V(nestedTap, p) / 2.kOhm)
+
+final class Increment43NestedGeneratedNodeOuterUnitStep extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+
+  hdlRange(1, rows, 1): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      analog:
+        I(nestedTap, p) <+ (V(nestedTap, p) / 2.kOhm)
+
+final class Increment43NestedGeneratedNodeInnerUnitStep extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 1): _ =>
+      val nestedTap = node(Electrical)
+      analog:
+        I(nestedTap, p) <+ (V(nestedTap, p) / 2.kOhm)
+
 final class Increment43NestedPeerGeneratedNodeResistor extends Module:
   val rows: Param[Integer] = param(8.integer, range = 6 to 10)
   val columns: Param[Integer] = param(11.integer, range = 9 to 13)
@@ -2300,6 +2333,84 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains(s"V($nodeName[$flatIndex], p)"))
           finally delete(directory)
         case _ => assert(true)
+
+    test("nested unit-step origins use zero-based ordinals without changing direct arrays"):
+      val cases = Vector[(String, String, String, () => Module)](
+        (
+          "(rows - 1)",
+          "(columns - 2)",
+          "(((generate_0_index - 1) * (columns - 2)) + (generate_1_index - 2))",
+          () => new Increment43NestedGeneratedNodeUnitSteps
+        ),
+        (
+          "(rows - 1)",
+          "((((columns - 2) + 3) - 1) / 3)",
+          "(((generate_0_index - 1) * ((((columns - 2) + 3) - 1) / 3)) + " +
+            "((generate_1_index - 2) / 3))",
+          () => new Increment43NestedGeneratedNodeOuterUnitStep
+        ),
+        (
+          "((((rows - 1) + 2) - 1) / 2)",
+          "(columns - 2)",
+          "((((generate_0_index - 1) / 2) * (columns - 2)) + (generate_1_index - 2))",
+          () => new Increment43NestedGeneratedNodeInnerUnitStep
+        )
+      )
+      cases.foreach: (outerCount, innerCount, flatIndex, construct) =>
+        val snapshot = ConstructionKernel.inspect(construct())
+        assert(snapshot == ConstructionKernel.inspect(construct()))
+        assert(snapshot.generatedRegions.size == 2)
+        val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+        val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+        assert(child.parent.contains(outer.path))
+        assert(outer.declarations.isEmpty)
+        assert(child.declarations.size == 1)
+        val first = ScalaToMlirBridge.lower(construct())
+        assert(first == ScalaToMlirBridge.lower(construct()))
+        val sourceMap = first.text
+          .split("nodal.bridge.source_map", 2)(1)
+          .split("nodal.bridge.topology", 2)(0)
+        snapshot.generatedRegions.foreach: region =>
+          (Vector(region.path, region.induction) ++ region.declarations).foreach: path =>
+            val marker = s"semantic_path = \"$path\""
+            assert(sourceMap.sliding(marker.length).count(_ == marker) == 1)
+
+        (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+          case (Some(nodalc), Some(translator)) =>
+            val directory = workDirectory()
+            try
+              def compile(module: => Module) =
+                ScalaToMlirBridge
+                  .compileToVerilogA(
+                    module,
+                    Path.of(nodalc).toAbsolutePath,
+                    Path.of(translator).toAbsolutePath,
+                    directory,
+                    Duration.ofSeconds(60)
+                  )
+                  .fold(
+                    failure =>
+                      scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                    identity
+                  )
+              val result = compile(construct())
+              assert(result == compile(construct()))
+              val name = child.declarations.head.split('.').last
+              assert(
+                result.verilogA.contains(
+                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                )
+              )
+              assert(result.verilogA.contains(s"I($name[$flatIndex], p) <+"))
+              assert(result.verilogA.contains(s"V($name[$flatIndex], p)"))
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 1)
+              val direct = compile(new Increment43GeneratedNodeDdtContribution)
+              assert(direct.verilogA.contains("electrical tap[1:(lanes - 1)];"))
+              assert(direct.verilogA.contains("I(tap[generate_0_index], p) <+"))
+              assert(direct.verilogA.contains("ddt(V(tap[generate_0_index], p))"))
+            finally delete(directory)
+          case _ => assert(true)
 
     test("nested peer generated node equation retains both row-major child endpoints"):
       val snapshot = ConstructionKernel.inspect(new Increment43NestedPeerGeneratedNodeResistor)

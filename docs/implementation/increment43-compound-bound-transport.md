@@ -1323,3 +1323,35 @@ general slices, shaped terminals, generated connections or instances, reverse
 ranges, default specialization and eager unrolling remain unsupported.
 Independent simulator qualification, the F-048/F-049/F-052 handoff and every
 F-043 acceptance obligation remain open.
+
+## Nested unit-step occurrence-index repair
+
+Nested generated electrical arrays have zero-based product extents. Their
+row-major selections must therefore compose zero-based occurrence ordinals,
+even when an authored unit-step range starts above or below zero. The previous
+layout reused the direct-array index for such a dimension, which could select
+the wrong element or exceed the nested array bounds.
+
+The existing shared layout now retains both the authored array index and the
+occurrence ordinal. A unit-step ordinal subtracts the lower bound; a strided
+ordinal already performs that subtraction and division. Only nested equation
+composition uses the ordinal. Direct one-dimensional unit-step declarations
+and selections retain their authored bounds, and existing strided and
+zero-origin output is preserved. No capture, ownership, API, schema, storage,
+profile-admission or source-map contract changes.
+
+Native regressions cover each unit-step dimension separately, both together,
+negative origins, zero origins and singleton dimensions, with exact target
+indices/extents, deterministic repeat emission and target reparse. Public
+symbolic-envelope witnesses cover both unit steps and each mixed-stride case,
+unique region/induction/declaration source maps and direct-array compatibility.
+This is an indexing correctness repair, not independent simulator evidence or
+F-043 acceptance; all remaining checklist and later-tool obligations stay open.
+
+Local differential evidence: the unchanged new native regression fails against
+the immediate predecessor's layout implementation and passes after the repair.
+An independent evaluation of the actual emitted expressions enumerated all
+143 occurrences across the six native cases and found exact zero-based,
+non-overlapping coverage of each declared extent. The predecessor's first
+mixed-stride case instead selected indices 3 through 23 for a 21-element array.
+This is compiler/index evidence, not analog numerical simulation.

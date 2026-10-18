@@ -1098,6 +1098,32 @@ terminals, generated connections or instances, reverse ranges and eager
 unrolling remain unsupported. Independent simulator qualification, the
 F-048/F-049/F-052 handoff and every F-043 acceptance obligation remain open.
 
+## Nested generated analog-node group ddt checkpoint
+
+The same qualified two-node, two-branch nested group now admits exactly one
+child-owned direct `ddt` path while the other branch remains an independent
+direct memoryless equation. The derivative branch retains one potential access,
+one owned operator and one flow contribution to that same branch. Both
+electrical arrays keep the shared child owner and induction plus distinct
+declaration and source identities.
+
+This is the bounded derivative counterpart of the group `idt` profile. It
+reuses the product-extent row-major layout, compact source-index formulas,
+one-use dependency walker, generated branch inventory and target reparser. No
+state array, language memory, second expression engine, parameter-default
+specialization or host-lane unrolling is introduced. Native and configured
+public witnesses require deterministic IR and Verilog-A, exact source maps,
+independent target reparse and fail-closed rejection of a forged operator owner,
+induction or contribution destination. A second operator across the peer branch
+is also rejected before any target text is published.
+
+The profile remains one direct child range, two nodes, two branches, two
+accesses, two contributions and exactly one `ddt`. Operator chains, fan-out,
+sibling or cross-range dependencies, general slices, shaped terminals,
+generated connections or instances, reverse ranges, eager unrolling and wider
+operator admission remain unsupported. Independent simulator qualification,
+the F-048/F-049/F-052 handoff and every F-043 acceptance obligation remain open.
+
 ## Nested generated analog-node idt checkpoint
 
 The bounded two-dimensional child equation now admits exactly one previously

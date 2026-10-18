@@ -1538,9 +1538,9 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
   if (operators != 0) {
     const bool singleNodeOperator =
         nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1;
-    const bool groupIdt = nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 &&
-                          derivatives == 0 && integrals == 1;
-    return singleNodeOperator || groupIdt ? &child : nullptr;
+    const bool groupOperator =
+        nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 && operators == 1;
+    return singleNodeOperator || groupOperator ? &child : nullptr;
   }
   return accesses == branches && contributions == branches ? &child : nullptr;
 }
@@ -2856,13 +2856,15 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         "owned indexed branch");
   const bool singleBranchOperatorProfile =
       generatedNodeAccesses == 1 && generatedBranches.size() == 1;
-  const bool nestedGroupIdtProfile = parentGenerate && generatedNodeOperatorAccesses == 1 &&
-                                     generatedNodeAccesses == 2 && generatedBranches.size() == 2;
-  if (generatedNodeOperatorAccesses != 0 && !singleBranchOperatorProfile && !nestedGroupIdtProfile)
+  const bool nestedGroupOperatorProfile = parentGenerate && generatedNodeOperatorAccesses == 1 &&
+                                          generatedNodeAccesses == 2 &&
+                                          generatedBranches.size() == 2;
+  if (generatedNodeOperatorAccesses != 0 && !singleBranchOperatorProfile &&
+      !nestedGroupOperatorProfile)
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node operator access profile requires one access on one owned branch "
-        "or one owned idt path among two nested group branches");
+        "or one owned ddt/idt path among two nested group branches");
 
   output << "  analog begin\n";
   if (parentGenerate) {

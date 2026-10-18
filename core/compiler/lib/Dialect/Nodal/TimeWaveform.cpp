@@ -42,7 +42,13 @@ Operation *parameter(Value value) {
   if (name(op) != "nodal.parameter_ref")
     return nullptr;
   auto ref = op->getAttrOfType<FlatSymbolRefAttr>("parameter");
-  return ref ? SymbolTable::lookupNearestSymbolFrom(op, ref) : nullptr;
+  Operation *module = owner(op);
+  if (!ref || !module || module->getNumRegions() != 1 || module->getRegion(0).empty())
+    return nullptr;
+  for (Operation &candidate : module->getRegion(0).front())
+    if (name(&candidate) == "nodal.parameter" && text(&candidate, "sym_name") == ref.getValue())
+      return &candidate;
+  return nullptr;
 }
 
 // Legacy f64 retains canonical source units in metadata. Reconstruct dimensions

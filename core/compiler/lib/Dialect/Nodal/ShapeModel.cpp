@@ -30,14 +30,33 @@ bool precedesLexically(Operation *definition, Operation *use) {
   return false;
 }
 std::string pointerKey(Operation *op) { return std::to_string(reinterpret_cast<uintptr_t>(op)); }
-FailureOr<std::string> indexKey(Operation *module, Value value) {
-  auto identity = resolveStaticShapeIndexIdentity(module, value);
+FailureOr<StaticShapeIndexIdentity> indexIdentity(Operation *module, Value value,
+                                                  Operation *use = nullptr) {
+  if (!use)
+    return resolveStaticShapeIndexIdentity(module, value);
+  auto proof = resolveShapeIndexProof(value, use);
+  if (failed(proof))
+    return failure();
+  return proof->identity;
+}
+FailureOr<ParameterIntegerBounds> indexBounds(Operation *module, Value value, Operation *use) {
+  auto proof = resolveShapeIndexProof(value, use);
+  if (failed(proof) || !proof->attainedBounds)
+    return failure();
+  return *proof->attainedBounds;
+}
+std::string identityPrefix(StaticShapeIndexIdentity::Kind kind) {
+  return kind == StaticShapeIndexIdentity::Parameter   ? "p:"
+         : kind == StaticShapeIndexIdentity::Induction ? "i:"
+                                                       : "e:";
+}
+FailureOr<std::string> indexKey(Operation *module, Value value, Operation *use) {
+  auto identity = indexIdentity(module, value, use);
   if (failed(identity))
     return failure();
   if (identity->kind == StaticShapeIndexIdentity::Literal)
     return "l:" + std::to_string(identity->literal);
-  return (identity->kind == StaticShapeIndexIdentity::Parameter ? "p:" : "e:") +
-         pointerKey(identity->root);
+  return identityPrefix(identity->kind) + pointerKey(identity->root);
 }
 FailureOr<std::string> dimensionsKey(Operation *module, Type type) {
   auto shaped = llvm::dyn_cast<ShapedType>(type);
@@ -127,10 +146,10 @@ std::optional<ParameterIntegerBounds> dimensionProductBounds(Operation *module, 
   return result;
 }
 void addOffsetBounds(std::optional<ParameterIntegerBounds> &offset, Operation *module, Value index,
-                     Type inputType, unsigned strideAxis) {
+                     Type inputType, unsigned strideAxis, Operation *use) {
   if (!offset)
     return;
-  auto position = inferStaticShapeIndexBounds(module, index);
+  auto position = indexBounds(module, index, use);
   auto stride = dimensionProductBounds(module, inputType, strideAxis);
   if (failed(position) || !stride || position->lower < 0 ||
       position->upper > (std::numeric_limits<int64_t>::max() - offset->upper) / stride->upper) {
@@ -140,16 +159,15 @@ void addOffsetBounds(std::optional<ParameterIntegerBounds> &offset, Operation *m
   offset->lower += position->lower * stride->lower;
   offset->upper += position->upper * stride->upper;
 }
-std::optional<StaticProduct> indexProduct(Operation *module, Value value) {
-  auto identity = resolveStaticShapeIndexIdentity(module, value);
+std::optional<StaticProduct> indexProduct(Operation *module, Value value, Operation *use) {
+  auto identity = indexIdentity(module, value, use);
   if (failed(identity))
     return std::nullopt;
   StaticProduct result;
   if (identity->kind == StaticShapeIndexIdentity::Literal)
     result.coefficient = identity->literal;
   else
-    result.factors.push_back((identity->kind == StaticShapeIndexIdentity::Parameter ? "p:" : "e:") +
-                             pointerKey(identity->root));
+    result.factors.push_back(identityPrefix(identity->kind) + pointerKey(identity->root));
   return result;
 }
 bool addProduct(StaticSum &sum, const StaticProduct &term) {
@@ -196,8 +214,8 @@ std::optional<llvm::SmallVector<int64_t>> fixedDimensions(Operation *module, Typ
   }
   return result;
 }
-std::optional<int64_t> literalIndex(Operation *module, Value value) {
-  auto identity = resolveStaticShapeIndexIdentity(module, value);
+std::optional<int64_t> literalIndex(Operation *module, Value value, Operation *use) {
+  auto identity = indexIdentity(module, value, use);
   if (failed(identity) || identity->kind != StaticShapeIndexIdentity::Literal)
     return std::nullopt;
   return identity->literal;
@@ -244,7 +262,7 @@ std::optional<int64_t> mapLiteralOrdinal(Operation *module, llvm::ArrayRef<Opera
     if (llvm::isa<ShapeIndexOp>(projection)) {
       llvm::SmallVector<int64_t> prefix;
       for (Value index : projection->getOperands().drop_front()) {
-        auto literal = literalIndex(module, index);
+        auto literal = literalIndex(module, index, projection);
         if (!literal)
           return std::nullopt;
         prefix.push_back(*literal);
@@ -253,7 +271,7 @@ std::optional<int64_t> mapLiteralOrdinal(Operation *module, llvm::ArrayRef<Opera
       indices = std::move(prefix);
     } else {
       auto axis = projection->getAttrOfType<IntegerAttr>("axis");
-      auto lower = literalIndex(module, projection->getOperand(1));
+      auto lower = literalIndex(module, projection->getOperand(1), projection);
       if (!axis || axis.getInt() < 0 || static_cast<uint64_t>(axis.getInt()) >= indices->size() ||
           !lower || *lower < 0 ||
           (*indices)[axis.getInt()] > std::numeric_limits<int64_t>::max() - *lower)
@@ -328,8 +346,8 @@ void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProj
       llvm::SmallVector<StaticSum, 4> prefix;
       llvm::SmallVector<ParameterIntegerBounds, 4> prefixBounds;
       for (Value index : projection->getOperands().drop_front()) {
-        auto term = indexProduct(module, index);
-        auto range = inferStaticShapeIndexBounds(module, index);
+        auto term = indexProduct(module, index, projection);
+        auto range = indexBounds(module, index, projection);
         if (!term || failed(range))
           return;
         prefix.emplace_back();
@@ -344,8 +362,8 @@ void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProj
       continue;
     }
     auto axis = projection->getAttrOfType<IntegerAttr>("axis");
-    auto lower = indexProduct(module, projection->getOperand(1));
-    auto lowerBounds = inferStaticShapeIndexBounds(module, projection->getOperand(1));
+    auto lower = indexProduct(module, projection->getOperand(1), projection);
+    auto lowerBounds = indexBounds(module, projection->getOperand(1), projection);
     if (!axis || axis.getInt() < 0 || static_cast<uint64_t>(axis.getInt()) >= bounds.size() ||
         !lower || failed(lowerBounds) || !addProduct(coordinateTerms[axis.getInt()], *lower))
       return;
@@ -481,7 +499,7 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
       auto fixed = fixedDimensions(module, projection->getOperand(0).getType());
       unsigned axis = 0;
       for (Value index : projection->getOperands().drop_front()) {
-        auto key = indexKey(module, index);
+        auto key = indexKey(module, index, projection);
         if (failed(key))
           return failure();
         step += *key + ";";
@@ -494,10 +512,10 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
       if (linear) {
         unsigned axis = 0;
         for (Value index : projection->getOperands().drop_front()) {
-          auto position = indexProduct(module, index);
+          auto position = indexProduct(module, index, projection);
           auto stride = dimensionProduct(module, projection->getOperand(0).getType(), ++axis);
           addOffsetBounds(exactOffsetBounds, module, index, projection->getOperand(0).getType(),
-                          axis);
+                          axis, projection);
           auto term = position && stride ? multiplyProduct(*position, *stride) : std::nullopt;
           if (!term || !addProduct(offset, *term) || !addProduct(exactOffset, *term)) {
             linear = false;
@@ -509,13 +527,13 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
       step = "/slice[" + *inputKey + "](" +
              std::to_string(projection->getAttrOfType<IntegerAttr>("axis").getInt());
       for (Value bound : projection->getOperands().drop_front()) {
-        auto key = indexKey(module, bound);
+        auto key = indexKey(module, bound, projection);
         if (failed(key))
           return failure();
         step += ";" + *key;
       }
       step += ')';
-      auto lower = literalIndex(module, projection->getOperand(1));
+      auto lower = literalIndex(module, projection->getOperand(1), projection);
       identityMap = lower && *lower == 0 && *inputKey == *outputKey;
       result.wholeRoot &= identityMap;
       if (linear && !identityMap) {
@@ -525,11 +543,11 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
         if (!leading && fixed)
           leading = llvm::all_of(llvm::ArrayRef<int64_t>(*fixed).take_front(axis),
                                  [](int64_t extent) { return extent == 1; });
-        auto lowerProduct = indexProduct(module, projection->getOperand(1));
+        auto lowerProduct = indexProduct(module, projection->getOperand(1), projection);
         auto stride = dimensionProduct(module, projection->getOperand(0).getType(), axis + 1);
         auto term = lowerProduct && stride ? multiplyProduct(*lowerProduct, *stride) : std::nullopt;
         addOffsetBounds(exactOffsetBounds, module, projection->getOperand(1),
-                        projection->getOperand(0).getType(), axis + 1);
+                        projection->getOperand(0).getType(), axis + 1, projection);
         if (!leading || !term || !addProduct(offset, *term) || !addProduct(exactOffset, *term))
           linear = false;
       }
@@ -542,7 +560,7 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     const bool opaqueIndex =
         llvm::isa<ShapeIndexOp>(projection) &&
         llvm::any_of(projection->getOperands().drop_front(), [&](Value index) {
-          auto identity = resolveStaticShapeIndexIdentity(module, index);
+          auto identity = indexIdentity(module, index, projection);
           return failed(identity) || identity->kind != StaticShapeIndexIdentity::Literal;
         });
     if (!identityMap || opaqueIndex)

@@ -453,13 +453,16 @@ object Increment43NodeArrayTests extends TestSuite:
         failure(new Increment43InvalidNodeArrayIndex(form), "NODAL-SHAPE-043-006")
       )
 
-    test("foreign ownership and generated declaration or selection are rejected"):
+    test(
+      "foreign ownership and generated array declarations reject while scoped selection is retained"
+    ):
       (0 to 1).foreach(form =>
         failure(new Increment43ForeignNodeArray(form), "NODAL-SHAPE-043-006")
       )
-      Vector(false, true).foreach(declare =>
-        failure(new Increment43GeneratedNodeArray(declare), "NODAL-ITERATION-043-004")
-      )
+      failure(new Increment43GeneratedNodeArray(true), "NODAL-ITERATION-043-004")
+      val selected = ConstructionKernel.inspect(new Increment43GeneratedNodeArray(false))
+      assert(selected.shapeIndices.size == 1, selected.shapeIndices.head.generatedScope.nonEmpty)
+      assert(selected.shapeIndices.head.indices == Vector(selected.generatedRegions.head.induction))
 
     test("selected scalar connections retain aliases and inherited scalar self relations"):
       val snapshot = ConstructionKernel.inspect(new Increment43NodeArrayConnections)

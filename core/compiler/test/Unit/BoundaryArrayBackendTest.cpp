@@ -232,12 +232,18 @@ int main(int argc, char **argv) {
   if (!check(escaped.find("unsafe\\n*/\\\"source.scala:7:9-7:13") != std::string::npos,
              "retained authored binding source range survives target mapping"))
     return 1;
+  // Broader source-generated topology now permits nonzero origins and strides.
+  // Exact adapter coverage is an emitter obligation, not a zero-only grammar.
+  if (!check(mapped.find("for (binding_u_p_lane = 0; binding_u_p_lane < 4; "
+                         "binding_u_p_lane = binding_u_p_lane + 1)") != std::string::npos,
+             "adapter emits every logical lane exactly once from zero with unit stride"))
+    return 1;
   for (const auto &[before, after] :
        {std::pair<std::string, std::string>{".rhs(n)", ".rhs(m)"},
         {"inout n;", "input n;"},
         {".lhs(nodes[", ".lhs(missing["},
-        {"binding_u_p_lane = 0;", "binding_u_p_lane = 1;"},
-        {"binding_u_p_lane + 1", "binding_u_p_lane + 2"},
+        {"binding_u_p_lane = 0;", "binding_u_p_lane = -1;"},
+        {"binding_u_p_lane + 1", "binding_u_p_lane + 0"},
         {"localparam integer binding_u_p_stage_0 = ", "localparam real binding_u_p_stage_0 = "},
         {".rhs(binding_u_p_bus[binding_u_p_lane])", ".rhs(binding_u_p_bus[4])"},
         {"Child u(.p(binding_u_p_bus));", "Child u(.p(binding_u_p_bus[0]));"},

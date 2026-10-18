@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -77,6 +78,24 @@ resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
 InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
 bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,
                                               const InstantiatedIntegerExpression &right);
+
+/// Resolve only a direct instance in the use's immediate Module/Generate scope.
+/// Module definitions and parameter declarations have separate owner namespaces.
+mlir::LogicalResult verifyGeneratedStructuralOwnership(mlir::Operation *operation);
+mlir::Operation *resolveStructuralInstance(mlir::Operation *use, mlir::FlatSymbolRefAttr reference);
+mlir::Operation *resolveInstanceModuleDefinition(mlir::Operation *instance);
+
+/// Read-only facts from the existing checked positive generated-domain proof.
+/// No attained bounds means that the entire domain is proven empty. Otherwise
+/// the closed interval conservatively contains every attained source induction.
+struct GeneratedDomain {
+  mlir::Operation *module = nullptr;
+  mlir::Value induction;
+  InstantiatedIntegerExpression lower, upperExclusive, step;
+  uint64_t maximumTripCount = 0;
+  std::optional<ParameterIntegerBounds> attainedInductionBounds;
+};
+mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation);
 
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);

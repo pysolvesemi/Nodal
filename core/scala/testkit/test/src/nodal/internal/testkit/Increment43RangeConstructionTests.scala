@@ -7132,14 +7132,43 @@ object Increment43RangeConstructionTests extends TestSuite:
                   scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
                 identity
               )
-            assert(result.mlir.contains("operator_name = \"add\""))
-            assert(result.mlir.contains("\"nodal.generate\"(%generated_bound_value_"))
+            val generateLines = result.mlir.linesIterator
+              .filter(_.contains("\"nodal.generate\""))
+              .toVector
+            assert(generateLines.size == 1)
+            val generate = generateLines.head
+            assert(generate.contains(
+              "region_id = \"Increment43CompoundGeneratedContribution.generate_0\""
+            ))
+            val operands = "\"nodal.generate\"\\(([^)]+)\\)".r
+              .findFirstMatchIn(generate).get.group(1).split(", ").toVector
+            assert(operands.size == 3)
+            val definitions = result.mlir.linesIterator.flatMap { line =>
+              "^\\s*(%[^ ]+) = (.*)$".r.findFirstMatchIn(line)
+                .map(matched => matched.group(1) -> matched.group(2))
+            }.toMap
+            assert(definitions(operands(0)).contains("\"nodal.const_literal\"()"))
+            assert(definitions(operands(0)).contains("value = 0 : i64"))
+            assert(definitions(operands(2)).contains("\"nodal.const_literal\"()"))
+            assert(definitions(operands(2)).contains("value = 1 : i64"))
+            val upper = definitions(operands(1))
+            assert(upper.contains("operator_name = \"add\""))
+            val upperOperands = "\"nodal.const_expr\"\\(([^)]+)\\)".r
+              .findFirstMatchIn(upper).get.group(1).split(", ").toVector
+            assert(upperOperands.size == 2)
+            Vector("lanes", "extra").zip(upperOperands).foreach { (parameter, operand) =>
+              assert(definitions(operand).contains("\"nodal.const_parameter_ref\"()"))
+              assert(definitions(operand).contains(s"parameter = @$parameter"))
+            }
+            val induction = "induction = \"([^\"]+)\"".r
+              .findFirstMatchIn(generate).get.group(1)
             assert(result.verilogA.contains("parameter integer lanes = 3 from [1:4];"))
             assert(result.verilogA.contains("parameter integer extra = 1 from [1:2];"))
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 1)
             assert(
               result.verilogA.contains(
-                "for (generate_0_index = 0; generate_0_index < (lanes + extra); " +
-                  "generate_0_index = generate_0_index + 1) begin : generate_0"
+                s"for ($induction = 0; $induction < (lanes + extra); " +
+                  s"$induction = $induction + 1) begin : generate_0"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim == "V(p, n) <+ 1;") == 1)

@@ -39,7 +39,7 @@ mlir::FailureOr<ParameterIntegerBounds> inferStaticShapeIndexBounds(mlir::Operat
                                                                     mlir::Value value);
 
 struct StaticShapeIndexIdentity {
-  enum Kind { Literal, Parameter, Expression } kind;
+  enum Kind { Literal, Parameter, Expression, Induction } kind;
   int64_t literal = 0;
   mlir::Operation *root = nullptr;
   bool operator==(const StaticShapeIndexIdentity &other) const {
@@ -48,6 +48,16 @@ struct StaticShapeIndexIdentity {
 };
 mlir::FailureOr<StaticShapeIndexIdentity> resolveStaticShapeIndexIdentity(mlir::Operation *module,
                                                                           mlir::Value value);
+
+/// A use-aware static or direct active-induction proof. An empty attained range
+/// means the independently verified generated domain has no occurrences.
+struct ShapeIndexProof {
+  StaticShapeIndexIdentity identity;
+  std::optional<ParameterIntegerBounds> attainedBounds;
+};
+mlir::FailureOr<ShapeIndexProof> resolveShapeIndexProof(mlir::Value value, mlir::Operation *use);
+mlir::LogicalResult verifyShapeIndexInExtent(mlir::Value value, const StaticShapeDimension &extent,
+                                             mlir::Operation *use);
 
 /// Element-neutral facts derived from an actual acyclic SSA projection chain.
 /// These establish shape/ordinal mapping, never storage or conservative rights.

@@ -286,6 +286,9 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
 
+  def validateInstanceSelection(instance: Instance[?]): Unit =
+    active.foreach(_.validateInstanceSelection(instance))
+
   def attachInstance(instance: Instance[? <: Module], child: Module): Unit =
     active.foreach(_.attachInstance(instance, child))
 

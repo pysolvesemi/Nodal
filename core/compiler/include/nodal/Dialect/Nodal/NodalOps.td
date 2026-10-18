@@ -134,20 +134,22 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
 }
 
 def Nodal_InstanceOp : Nodal_Op<"instance",
-    [HasParent<"ModuleOp">, Symbol]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>, Symbol]> {
   let summary = "Typed module instance with explicit bindings";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
     FlatSymbolRefAttr:$module,
     DictionaryAttr:$parameter_bindings,
     DictionaryAttr:$domain_bindings,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
 }
 
 def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Typed immediate-child conservative terminal reference";
   let description = [{
     Resolves one declared boundary terminal of one direct child instance. The
@@ -161,6 +163,8 @@ def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
     StrAttr:$direction,
     StrAttr:$flow_orientation,
     StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let results = (outs Nodal_TerminalType:$result);
@@ -168,10 +172,12 @@ def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
 }
 
 def Nodal_InstanceTerminalArrayOp : Nodal_Op<"instance_terminal_array",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Whole immediate-child conservative array port reference";
   let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port, StrAttr:$name,
     StrAttr:$direction, StrAttr:$flow_orientation, StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
@@ -381,12 +387,14 @@ def Nodal_ParameterConstraintOp : Nodal_Op<"parameter_constraint",
 }
 
 def Nodal_ParameterOverrideOp : Nodal_Op<"parameter_override",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Lossless typed override of an instantiated module parameter";
   let arguments = (ins
     AnyType:$value,
     FlatSymbolRefAttr:$instance,
     FlatSymbolRefAttr:$parameter,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -488,7 +496,7 @@ def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice"> {
   let hasVerifier = 1;
 }
 
-def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
+def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
   let summary = "Symbolic structural generation region";
   let arguments = (ins
     Variadic<I64>:$bounds,
@@ -686,19 +694,23 @@ def Nodal_TerminalArrayOp : Nodal_Op<"terminal_array", [HasParent<"ModuleOp">]> 
   let hasVerifier = 1;
 }
 
-def Nodal_ConnectArrayOp : Nodal_Op<"connect_array", [HasParent<"ModuleOp">]> {
+def Nodal_ConnectArrayOp : Nodal_Op<"connect_array", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Exact whole-child conservative array binding";
   let arguments = (ins AnyType:$actual, AnyType:$child, StrAttr:$connection_id,
-    StrAttr:$source_path, DictionaryAttr:$metadata);
+    StrAttr:$source_path, OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
+    DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 
-def Nodal_ConnectOp : Nodal_Op<"connect", [HasParent<"ModuleOp">]> {
+def Nodal_ConnectOp : Nodal_Op<"connect", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Source-semantic conservative connection relation";
   let arguments = (ins
     Variadic<Nodal_TerminalType>:$members,
     StrAttr:$connection_id,
     StrAttr:$source_path,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;

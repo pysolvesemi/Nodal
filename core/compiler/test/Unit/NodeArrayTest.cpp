@@ -679,6 +679,66 @@ int main() {
       }
     }
   }
+  {
+    auto generatedSelection = [&](const std::string &name) {
+      const std::string scope = "Fixture." + name;
+      std::string selected = selection(
+          name, {{"i", "induction:" + scope + ".index"}, {"zero", "literal:0", "index"}}, "4,2");
+      selected = replace(selected, ".at(induction:" + scope + ".index,literal:0)",
+                         ".at(induction:" + scope + ".index,literal:0).in(" + scope + ")");
+      selected = replace(selected, "metadata = {",
+                         "generated_owner = \"" + scope + "\", generated_induction = \"" + scope +
+                             ".index\", metadata = {");
+      return "\"nodal.generate\"() <{induction = \"i\", lower = 0 : i64, upper = 4 : i64, "
+             "step = 1 : i64, region_id = \"" +
+             scope + "\", induction_path = \"" + scope +
+             ".index\", metadata = {maximum_trip_count = 4 : i64}}> ({\n^bb0(%i: i64):\n" +
+             "%zero = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n" +
+             selected + "}) : () -> ()\n";
+    };
+    auto module = parse(array("4,2") + generatedSelection("left") + generatedSelection("right"));
+    check(bool(module), "sibling induction fixture must verify before actual SSA mutation");
+    if (module) {
+      std::vector<mlir::Operation *> selections;
+      module->walk([&](nodal::ShapeIndexOp operation) { selections.push_back(operation); });
+      check(selections.size() == 2, "sibling fixture must retain two scoped selections");
+      if (selections.size() == 2) {
+        mlir::Value original = selections[1]->getOperand(1);
+        check(mlir::succeeded(nodal::resolveShapeIndexProof(original, selections[1])),
+              "actual local induction must resolve before mutation");
+        // Both blocks parsed and verified first: textual SSA scope rejection
+        // cannot stand in for the independent use-aware semantic proof.
+        selections[1]->setOperand(1, selections[0]->getOperand(1));
+        std::string diagnostics;
+        mlir::ScopedDiagnosticHandler handler(&context, [&](mlir::Diagnostic &diagnostic) {
+          llvm::raw_string_ostream stream(diagnostics);
+          diagnostic.print(stream);
+          return mlir::success();
+        });
+        check(mlir::failed(nodal::verifyShapeIndexMapping(selections[1])) &&
+                  diagnostics.find("NODAL-SHAPE-043-002") != std::string::npos,
+              "shape proof must reject an actual sibling induction with identical bounds");
+        check(mlir::failed(
+                  nodal::resolveStaticShapeProjection(selections[1]->getResult(0), selections[1])),
+              "neutral map must reject actual escaped induction before deriving physical keys");
+        selections[1]->setOperand(1, original);
+        check(mlir::succeeded(mlir::verify(*module)),
+              "restoring actual local induction must restore the verified graph");
+        mlir::Value literal = selections[1]->getOperand(2);
+        selections[1]->setOperand(2, selections[0]->getOperand(2));
+        check(mlir::failed(
+                  nodal::resolveShapeIndexProof(selections[1]->getOperand(2), selections[1])),
+              "equal-valued sibling literal must not bypass lexical ownership");
+        selections[1]->setOperand(2, literal);
+        literal.getDefiningOp()->moveAfter(selections[1]);
+        check(mlir::failed(nodal::resolveShapeIndexProof(literal, selections[1])),
+              "actual generated literal must dominate its index use");
+        literal.getDefiningOp()->moveBefore(selections[1]);
+        check(mlir::succeeded(mlir::verify(*module)),
+              "restoring literal dominance must restore the verified graph");
+      }
+    }
+  }
   reject(array("9223372036854775807,2"), "NODAL-SHAPE-043-005");
   reject(replace(array(), "storage = \"structural\"", "storage = \"memory\""),
          "NODAL-SHAPE-043-005");

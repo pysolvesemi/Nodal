@@ -198,6 +198,15 @@ private[nodal] object StructuralParameterBinding:
           val _ = resolve(child.path, declaration.path)
         }
 
+  def sameInteger(
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      left: String,
+      right: String
+  ): Boolean =
+    val query = new Query(snapshot, None)
+    query.resolve(owner, left) == query.resolve(owner, right)
+
   def defaultInteger(snapshot: ConstructionSnapshot, owner: String, reference: String): Long =
     new Query(snapshot, None).checkedLiteral(owner, reference)
 

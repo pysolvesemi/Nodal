@@ -97,6 +97,13 @@ Block *moduleBody(Operation *module) {
   return &module->getRegion(0).front();
 }
 
+Block *structuralBody(Operation *scope) {
+  if (!scope || (!isNamed(scope, "nodal.module") && !isNamed(scope, "nodal.generate")) ||
+      scope->getNumRegions() != 1 || !llvm::hasSingleElement(scope->getRegion(0)))
+    return nullptr;
+  return &scope->getRegion(0).front();
+}
+
 Operation *findTopLevelSymbol(Operation *scope, llvm::StringRef name,
                               llvm::StringRef operationName) {
   mlir::ModuleOp module = enclosingBuiltinModule(scope);
@@ -1142,16 +1149,17 @@ InstanceNodePtr literalInstanceNode(int64_t value, Operation *origin = nullptr) 
 class InstanceIntegerAnalysis {
 public:
   explicit InstanceIntegerAnalysis(Operation *owner, Operation *instance = nullptr,
-                                   bool evaluateParentDefaults = false)
+                                   bool evaluateParentDefaults = false, bool generatedI64 = false)
       : parent(owner), instance(instance), evaluateParentDefaults(evaluateParentDefaults),
-        parentBounds(owner) {
+        generatedI64(generatedI64), parentBounds(owner, generatedI64) {
     if (!moduleBody(parent))
       return;
     if (!instance) {
       valid = true;
       return;
     }
-    if (!isNamed(instance, "nodal.instance") || instance->getParentOp() != parent)
+    if (!isNamed(instance, "nodal.instance") || enclosingNodalModule(instance) != parent ||
+        !structuralBody(instance->getParentOp()))
       return;
     auto target = instance->getAttrOfType<FlatSymbolRefAttr>("module");
     child = target ? findTopLevelSymbol(parent, target.getValue(), "nodal.module") : nullptr;
@@ -1190,11 +1198,24 @@ public:
   Operation *childModule() const { return child; }
 
 private:
+  bool fits(IntegerBounds bounds, Type type) const {
+    auto integer = llvm::dyn_cast<IntegerType>(type);
+    return (generatedI64 && integer && integer.isSignless() && integer.getWidth() == 64) ||
+           boundsFitType(bounds, type);
+  }
+
   FailureOr<InstanceNodePtr> literal(Attribute attribute, Type type, Operation *origin) {
+    if (generatedI64 && type.isSignlessInteger(64)) {
+      auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute);
+      if (!integer || integer.getType() != type)
+        return failure();
+      auto number = integerBoundLiteral(integer);
+      return failed(number) ? FailureOr<InstanceNodePtr>(failure())
+                            : FailureOr<InstanceNodePtr>(literalInstanceNode(*number, origin));
+    }
     auto number = constantFromAttribute(attribute, type);
     if (failed(number) || number->kind != ConstantKind::Integer || !number->integerIsNarrow ||
-        !number->dimension.empty() ||
-        !boundsFitType({number->integerValue, number->integerValue}, type))
+        !number->dimension.empty() || !fits({number->integerValue, number->integerValue}, type))
       return failure();
     return literalInstanceNode(number->integerValue, origin);
   }
@@ -1275,7 +1296,7 @@ private:
     auto bindings = instance->getAttrOfType<DictionaryAttr>("parameter_bindings");
     Attribute binding = bindings ? bindings.get(symbolName(input)) : Attribute();
     Operation *override = nullptr;
-    for (Operation &operation : *moduleBody(parent)) {
+    for (Operation &operation : *structuralBody(instance->getParentOp())) {
       if (!isNamed(&operation, "nodal.parameter_override"))
         continue;
       auto instanceRef = operation.getAttrOfType<FlatSymbolRefAttr>("instance");
@@ -1351,7 +1372,7 @@ private:
     }
     auto result = integerOperationBounds(
         opcode, bounds, arity == 2 && sameIntegerNodes(node->operands[0], node->operands[1]));
-    if (failed(result) || !boundsFitType(*result, input.getType()))
+    if (failed(result) || !fits(*result, input.getType()))
       return failure();
     node->bounds = *result;
     if (allLiteral) {
@@ -1369,6 +1390,7 @@ private:
   Operation *child = nullptr;
   bool valid = false;
   bool evaluateParentDefaults;
+  bool generatedI64;
   IntegerBoundsAnalysis parentBounds;
   llvm::DenseMap<Operation *, InstanceNodePtr> parameters;
   llvm::DenseMap<Value, InstanceNodePtr> values;
@@ -1405,7 +1427,7 @@ LogicalResult checkInstanceConstraints(Operation *parameter, const EvaluatedCons
     llvm::append_range(pending, operation->getOperands());
   }
   if (dependent && nodal::getParameterKind(parameter) == "integer" && !parameter->hasAttr("unit")) {
-    InstanceIntegerAnalysis analysis(instance->getParentOp(), instance, true);
+    InstanceIntegerAnalysis analysis(enclosingNodalModule(instance), instance, true);
     if (failed(analysis.parameter(parameter)))
       return diagnosticOwner->emitOpError(
           "NODAL-PARAMETER-OVERRIDE-001: instantiated dependent Integer constraint is invalid");
@@ -1566,6 +1588,99 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
   return finish(success());
 }
 
+struct CheckedGeneratedBounds {
+  IntegerBounds lower, upper, step;
+  bool identicalBounds;
+};
+
+LogicalResult analyzeGeneratedBounds(Operation *operation, Operation *owner,
+                                     IntegerBoundsAnalysis &analysis,
+                                     IntegerBoundsAnalysis &generatedAnalysis,
+                                     llvm::DenseSet<Value> &verifiedDependencies,
+                                     CheckedGeneratedBounds &out) {
+  if (failed(nodal::verifyGeneratedBoundForm(operation))) {
+    return failure();
+  }
+  const unsigned boundOperands = operation->getNumOperands();
+  const bool operandForm = boundOperands != 0;
+  bool symbolic = operandForm;
+  FailureOr<IntegerBounds> lower = failure();
+  FailureOr<IntegerBounds> upper = failure();
+  FailureOr<IntegerBounds> step = failure();
+  bool identicalBounds = false;
+
+  if (operandForm) {
+    if (boundOperands != 3) {
+      return operation->emitOpError(
+          "NODAL-ITERATION-043-001: generated SSA bounds require exactly three operands");
+    }
+    llvm::DenseSet<Value> active;
+    for (Value bound : operation->getOperands()) {
+      if (failed(verifyGeneratedBoundDependencies(bound, owner, operation, active,
+                                                  verifiedDependencies))) {
+        return failure();
+      }
+    }
+    lower = generatedAnalysis.value(operation->getOperand(0));
+    upper = generatedAnalysis.value(operation->getOperand(1));
+    step = generatedAnalysis.value(operation->getOperand(2));
+    identicalBounds = operation->getOperand(0) == operation->getOperand(1);
+    if (!hasGeneratedCountContract(operation)) {
+      return operation->emitOpError(
+          "NODAL-ITERATION-043-001: generated SSA bounds require the captured count contract");
+    }
+  } else {
+    for (llvm::StringRef name :
+         {llvm::StringRef("lower"), llvm::StringRef("upper"), llvm::StringRef("step")}) {
+      Attribute attribute = operation->getAttr(name);
+      if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute)) {
+        symbolic = true;
+        Operation *parameter = findDirectSymbol(owner, reference.getValue(), "nodal.parameter");
+        if (!parameter || !nodal::isStructuralParameter(parameter)) {
+          return operation->emitOpError(
+              "NODAL-PARAMETER-STRUCTURAL-001: symbolic generate bounds require structural "
+              "parameters");
+        }
+      } else {
+        auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute);
+        if (!integer || failed(integerBoundLiteral(integer))) {
+          return operation->emitOpError(
+              "NODAL-ITERATION-043-001: generate bounds require representable integer literals "
+              "or parameter references");
+        }
+      }
+    }
+    lower = analysis.bound(operation->getAttr("lower"));
+    upper = analysis.bound(operation->getAttr("upper"));
+    step = analysis.bound(operation->getAttr("step"));
+    identicalBounds = operation->getAttr("lower") == operation->getAttr("upper");
+  }
+
+  const bool capturedCount = hasGeneratedCountContract(operation);
+
+  if (failed(lower) || failed(upper) || failed(step)) {
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-001: cannot prove finite integer generate bounds without "
+        "substituting parameter defaults");
+  }
+  if (step->lower <= 0 && step->upper >= 0) {
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-002: symbolic generate step can include zero or change sign");
+  }
+  if ((symbolic || capturedCount) && !identicalBounds &&
+      ((step->lower > 0 && lower->upper > upper->lower) ||
+       (step->upper < 0 && lower->lower < upper->upper))) {
+    return operation->emitOpError(
+        "NODAL-ITERATION-043-003: generate direction is not proven for every legal parameter "
+        "setting");
+  }
+  if (capturedCount &&
+      failed(verifyGeneratedCountContract(operation, *lower, *upper, *step, identicalBounds)))
+    return failure();
+  out = {*lower, *upper, *step, identicalBounds};
+  return success();
+}
+
 LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
   IntegerBoundsAnalysis analysis(owner);
   IntegerBoundsAnalysis generatedAnalysis(owner, true);
@@ -1575,94 +1690,9 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
     Operation *operation = generated.getOperation();
     if (failed(result) || enclosingNodalModule(operation) != owner)
       return;
-
-    if (failed(nodal::verifyGeneratedBoundForm(operation))) {
-      result = failure();
-      return;
-    }
-    const unsigned boundOperands = operation->getNumOperands();
-    const bool operandForm = boundOperands != 0;
-    bool symbolic = operandForm;
-    FailureOr<IntegerBounds> lower = failure();
-    FailureOr<IntegerBounds> upper = failure();
-    FailureOr<IntegerBounds> step = failure();
-    bool identicalBounds = false;
-
-    if (operandForm) {
-      if (boundOperands != 3) {
-        result = operation->emitOpError(
-            "NODAL-ITERATION-043-001: generated SSA bounds require exactly three operands");
-        return;
-      }
-      llvm::DenseSet<Value> active;
-      for (Value bound : operation->getOperands()) {
-        if (failed(verifyGeneratedBoundDependencies(bound, owner, operation, active,
-                                                    verifiedDependencies))) {
-          result = failure();
-          return;
-        }
-      }
-      lower = generatedAnalysis.value(operation->getOperand(0));
-      upper = generatedAnalysis.value(operation->getOperand(1));
-      step = generatedAnalysis.value(operation->getOperand(2));
-      identicalBounds = operation->getOperand(0) == operation->getOperand(1);
-      if (!hasGeneratedCountContract(operation)) {
-        result = operation->emitOpError(
-            "NODAL-ITERATION-043-001: generated SSA bounds require the captured count contract");
-        return;
-      }
-    } else {
-      for (llvm::StringRef name :
-           {llvm::StringRef("lower"), llvm::StringRef("upper"), llvm::StringRef("step")}) {
-        Attribute attribute = operation->getAttr(name);
-        if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute)) {
-          symbolic = true;
-          Operation *parameter = findDirectSymbol(owner, reference.getValue(), "nodal.parameter");
-          if (!parameter || !nodal::isStructuralParameter(parameter)) {
-            result = operation->emitOpError(
-                "NODAL-PARAMETER-STRUCTURAL-001: symbolic generate bounds require structural "
-                "parameters");
-            return;
-          }
-        } else {
-          auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute);
-          if (!integer || failed(integerBoundLiteral(integer))) {
-            result = operation->emitOpError(
-                "NODAL-ITERATION-043-001: generate bounds require representable integer literals "
-                "or parameter references");
-            return;
-          }
-        }
-      }
-      lower = analysis.bound(operation->getAttr("lower"));
-      upper = analysis.bound(operation->getAttr("upper"));
-      step = analysis.bound(operation->getAttr("step"));
-      identicalBounds = operation->getAttr("lower") == operation->getAttr("upper");
-    }
-
-    const bool capturedCount = hasGeneratedCountContract(operation);
-    if (!symbolic && !capturedCount)
-      return;
-    if (failed(lower) || failed(upper) || failed(step)) {
-      result = operation->emitOpError(
-          "NODAL-ITERATION-043-001: cannot prove finite integer generate bounds without "
-          "substituting parameter defaults");
-      return;
-    }
-    if (step->lower <= 0 && step->upper >= 0) {
-      result = operation->emitOpError(
-          "NODAL-ITERATION-043-002: symbolic generate step can include zero or change sign");
-      return;
-    }
-    if (!identicalBounds && ((step->lower > 0 && lower->upper > upper->lower) ||
-                             (step->upper < 0 && lower->lower < upper->upper))) {
-      result = operation->emitOpError(
-          "NODAL-ITERATION-043-003: generate direction is not proven for every legal parameter "
-          "setting");
-      return;
-    }
-    if (capturedCount)
-      result = verifyGeneratedCountContract(operation, *lower, *upper, *step, identicalBounds);
+    CheckedGeneratedBounds bounds;
+    result = analyzeGeneratedBounds(operation, owner, analysis, generatedAnalysis,
+                                    verifiedDependencies, bounds);
   });
   return result;
 }
@@ -1743,6 +1773,49 @@ FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &vis
 
 } // namespace
 
+LogicalResult nodal::verifyGeneratedStructuralOwnership(Operation *operation) {
+  if (!operation || !structuralBody(operation->getParentOp()))
+    return failure();
+  auto owner = operation->getAttrOfType<StringAttr>("generated_owner");
+  auto induction = operation->getAttrOfType<StringAttr>("generated_induction");
+  auto generated = llvm::dyn_cast<GenerateOp>(operation->getParentOp());
+  if (!generated)
+    return !owner && !induction
+               ? success()
+               : operation->emitOpError(
+                     "NODAL-ITERATION-043-004: module operation cannot claim generated ownership");
+  auto region = generated->getAttrOfType<StringAttr>("region_id");
+  auto path = generated->getAttrOfType<StringAttr>("induction_path");
+  if (!owner || !induction || !region || !path || owner != region || induction != path)
+    return operation->emitOpError("NODAL-ITERATION-043-004: structural operation requires its "
+                                  "exact generated owner and induction");
+  return success();
+}
+
+Operation *nodal::resolveStructuralInstance(Operation *use, FlatSymbolRefAttr reference) {
+  if (!use || !reference)
+    return nullptr;
+  Block *body = structuralBody(use->getParentOp());
+  if (!body)
+    return nullptr;
+  Operation *result = nullptr;
+  for (Operation &candidate : *body) {
+    if (symbolName(&candidate) != reference.getValue())
+      continue;
+    if (result || !isNamed(&candidate, "nodal.instance"))
+      return nullptr;
+    result = &candidate;
+  }
+  return result;
+}
+
+Operation *nodal::resolveInstanceModuleDefinition(Operation *instance) {
+  if (!isNamed(instance, "nodal.instance") || !structuralBody(instance->getParentOp()))
+    return nullptr;
+  auto reference = instance->getAttrOfType<FlatSymbolRefAttr>("module");
+  return reference ? findTopLevelSymbol(instance, reference.getValue(), "nodal.module") : nullptr;
+}
+
 LogicalResult nodal::verifyGeneratedBoundForm(Operation *operation) {
   const unsigned boundOperands = operation->getNumOperands();
   const bool hasLower = static_cast<bool>(operation->getAttr("lower"));
@@ -1764,6 +1837,68 @@ LogicalResult nodal::verifyGeneratedBoundForm(Operation *operation) {
   return success();
 }
 
+FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *operation) {
+  if (!operation)
+    return failure();
+  auto reject = [&](llvm::StringRef code, llvm::StringRef message) -> FailureOr<GeneratedDomain> {
+    operation->emitOpError() << code << ": " << message;
+    return failure();
+  };
+  Operation *module = enclosingNodalModule(operation);
+  Block *body = structuralBody(operation);
+  if (!isNamed(operation, "nodal.generate") || !module || !body || body->getNumArguments() > 1 ||
+      (body->getNumArguments() == 1 && !body->getArgument(0).getType().isSignlessInteger(64)))
+    return reject(
+        "NODAL-ITERATION-043-004",
+        "generated domain requires an owned single-block Generate and optional i64 induction");
+  IntegerBoundsAnalysis analysis(module), generatedAnalysis(module, true);
+  llvm::DenseSet<Value> dependencies;
+  CheckedGeneratedBounds bounds;
+  if (failed(analyzeGeneratedBounds(operation, module, analysis, generatedAnalysis, dependencies,
+                                    bounds)))
+    return failure();
+  if (bounds.step.lower <= 0)
+    return reject("NODAL-ITERATION-043-002", "induction domain requires a proven positive step");
+  auto count = positiveGenerateMaximumCount(bounds.lower.lower, bounds.upper.upper,
+                                            bounds.step.lower, bounds.identicalBounds);
+  if (!count)
+    return reject("NODAL-ITERATION-043-002",
+                  "induction domain requires a representable positive-step count");
+  InstanceIntegerAnalysis expressions(module, nullptr, false, true);
+  auto expression = [&](unsigned index, llvm::StringRef name) -> FailureOr<InstanceExpression> {
+    if (operation->getNumOperands())
+      return instanceExpression(expressions.value(operation->getOperand(index)));
+    Attribute attribute = operation->getAttr(name);
+    if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute))
+      return instanceExpression(
+          expressions.parameter(findDirectSymbol(module, reference.getValue(), "nodal.parameter")));
+    auto integer = llvm::dyn_cast_or_null<IntegerAttr>(attribute);
+    if (!integer)
+      return failure();
+    auto value = integerBoundLiteral(integer);
+    return failed(value) ? FailureOr<InstanceExpression>(failure())
+                         : FailureOr<InstanceExpression>(makeLiteralIntegerExpression(*value));
+  };
+  auto lower = expression(0, "lower"), upper = expression(1, "upper"), step = expression(2, "step");
+  if (failed(lower) || failed(upper) || failed(step))
+    return reject("NODAL-ITERATION-043-001",
+                  "generated bounds require a canonical owned Integer expression DAG");
+  GeneratedDomain domain;
+  domain.module = module;
+  if (body->getNumArguments())
+    domain.induction = body->getArgument(0);
+  domain.lower = *lower;
+  domain.upperExclusive = *upper;
+  domain.step = *step;
+  domain.maximumTripCount = *count;
+  // A nonempty positive half-open domain proves upper > lower, so subtracting
+  // one cannot underflow. This outer envelope deliberately retains stride holes.
+  if (*count)
+    domain.attainedInductionBounds =
+        ParameterIntegerBounds{bounds.lower.lower, bounds.upper.upper - 1};
+  return domain;
+}
+
 FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Value value) {
   if (!value)
     return failure();
@@ -1783,7 +1918,7 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferParameterIntegerBounds(Oper
 
 FailureOr<nodal::InstantiatedIntegerExpression>
 nodal::resolveInstanceIntegerParameter(Operation *instance, Operation *childParameter) {
-  Operation *parent = instance ? instance->getParentOp() : nullptr;
+  Operation *parent = enclosingNodalModule(instance);
   InstanceIntegerAnalysis analysis(parent, instance);
   if (!instance || !childParameter || childParameter->getParentOp() != analysis.childModule())
     return failure();
@@ -1792,7 +1927,7 @@ nodal::resolveInstanceIntegerParameter(Operation *instance, Operation *childPara
 
 FailureOr<nodal::InstantiatedIntegerExpression>
 nodal::resolveInstanceIntegerExpression(Operation *instance, Value childExpression) {
-  Operation *parent = instance ? instance->getParentOp() : nullptr;
+  Operation *parent = enclosingNodalModule(instance);
   InstanceIntegerAnalysis analysis(parent, instance);
   if (!instance || !childExpression ||
       enclosingNodalModule(childExpression.getDefiningOp()) != analysis.childModule())
@@ -2044,7 +2179,7 @@ LogicalResult nodal::ParameterOverrideOp::verify() {
       getOperation()->getNumOperands() != 1)
     return emitOpError(
         "NODAL-PARAMETER-OVERRIDE-001: override requires instance, parameter, and value");
-  return success();
+  return verifyGeneratedStructuralOwnership(getOperation());
 }
 
 LogicalResult nodal::ParameterEnvelopeOp::verify() {
@@ -2172,10 +2307,17 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       }
     }
 
+    llvm::SmallVector<Operation *> structuralOperations;
+    owner->walk([&](Operation *operation) {
+      if (operation != owner && enclosingNodalModule(operation) == owner &&
+          structuralBody(operation->getParentOp()))
+        structuralOperations.push_back(operation);
+    });
     if (failed(verifyGeneratedIntegerBounds(owner)))
       return failure();
 
-    for (Operation &operation : *body) {
+    for (Operation *structuralOperation : structuralOperations) {
+      Operation &operation = *structuralOperation;
       if (isNamed(&operation, "nodal.generate")) {
         for (llvm::StringRef name :
              {llvm::StringRef("lower"), llvm::StringRef("upper"), llvm::StringRef("step")}) {
@@ -2221,15 +2363,13 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       }
     }
 
-    for (Operation &operation : *body) {
+    for (Operation *structuralOperation : structuralOperations) {
+      Operation &operation = *structuralOperation;
       if (!isNamed(&operation, "nodal.parameter_override"))
         continue;
       auto instanceReference = operation.getAttrOfType<FlatSymbolRefAttr>("instance");
       auto parameterReference = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
-      Operation *instance =
-          instanceReference
-              ? findDirectSymbol(owner, instanceReference.getValue(), "nodal.instance")
-              : nullptr;
+      Operation *instance = resolveStructuralInstance(&operation, instanceReference);
       auto targetReference =
           instance ? instance->getAttrOfType<FlatSymbolRefAttr>("module") : FlatSymbolRefAttr();
       Operation *target =
@@ -2244,6 +2384,11 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       if (textAttr(parameter, "variability") == "fixed")
         return operation.emitOpError(
             "NODAL-PARAMETER-OVERRIDE-001: fixed parameter cannot be overridden");
+      Operation *actual =
+          operation.getNumOperands() == 1 ? operation.getOperand(0).getDefiningOp() : nullptr;
+      if (!actual || actual->getParentOp() != owner)
+        return operation.emitOpError(
+            "NODAL-PARAMETER-OVERRIDE-001: override requires an invariant module-owned expression");
       llvm::DenseSet<Operation *> stack;
       auto evaluated = evaluateValue(operation.getOperand(0), &operation, stack);
       FailureOr<EvaluatedConstant> normalized = failure();

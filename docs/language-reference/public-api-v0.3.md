@@ -136,8 +136,8 @@ occurrences retained. Independent symbolic tuples with unproved overlap reject,
 rather than silently becoming separate nets. Selected nodes retain existing
 scalar branch/access/connection semantics and immediate-child scalar connectivity.
 Arrays owned by another Module cannot be selected by bypassing that Module's
-boundary. Generated selections, bulk local array connections and writable Real-array
-storage are separate capabilities.
+boundary. Bulk local array connections and writable Real-array storage are separate
+capabilities. The generated selection profile is described below.
 
 Whole immediate-child array ports bind to parent-owned local/boundary roots or views
 through `connect(parentActual, child(_.port))` or `parentActual <> child(_.port)`.
@@ -154,6 +154,42 @@ views use vector/part-select connections. Noncontiguous views use a compact
 structural adapter whose generated alias instances share the same internal net;
 no lanes are enumerated by the Scala compiler. Target Integer/genvar carrier limits
 still apply. Internal target parsing is not independent simulator acceptance.
+
+## Generated conservative topology
+
+[Conservative node arrays v0.4](../design-gates/NodalConservativeNodeArrays-DG-v0.4.md)
+extends the existing `hdlRange(lower, upperExclusive, step)` callback with owned
+structural topology. Each callback is captured once, including empty domains.
+Multiple child instances, scalar local Electrical nodes and connections may occur
+inside nested rectangular ranges. Child definitions keep their own parameters,
+ports and bodies; their instance occurrences belong to the exact lexical range.
+An escaped or sibling instance handle cannot be selected, connected or overridden.
+
+```scala
+val count: Param[Integer] = param(4.integer, range = 1 to 32)
+val taps = inout(Electrical, count)
+val common = inout(Electrical)
+hdlRange(0, count): i =>
+  val element = instance(new Cell)
+  connect(taps.at(i), element(_.p))
+  connect(element(_.n), common)
+```
+
+A full-rank `at` can use a direct visible range induction together with static
+indices, including on an existing module-owned view. The range retains its source
+index, so nonzero origins and positive strides do not become ordinal indices.
+For a possibly nonempty domain, every attained index must fit the full legal
+extent envelope, using exact upper-bound identity or conservative bounds. An
+always-empty range has no attained coordinates, but still validates ownership,
+rank, types, child ports and bindings. General induction arithmetic and
+nonrectangular bounds are not admitted by this profile.
+
+Whole generated child-array bindings and parameter overrides reuse the ordinary
+invariant parent-owned contracts. Child definitions cannot capture parent induction.
+The compiler retains compact lexical structural generate scopes and reusable child
+definitions rather than expanding every lane. Existing generated analog payloads
+retain their separate execution and state ownership. Per-occurrence persistent
+initialized Real storage and per-occurrence parameter values remain unfinished.
 
 ## Additive writable Real arrays
 

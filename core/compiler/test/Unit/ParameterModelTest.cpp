@@ -7,6 +7,7 @@
 #include "mlir/Parser/Parser.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -332,6 +333,176 @@ int checkInstanceParameterQueries(mlir::MLIRContext &context) {
   return 0;
 }
 
+int checkGeneratedParameterQueries(mlir::MLIRContext &context) {
+  std::string source = kInstanceShapeParameters.str();
+  const std::string instance =
+      R"mlir(    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ())mlir";
+  const std::string override =
+      R"mlir(    "nodal.parameter_override"(%n) <{instance = @u, parameter = @A, metadata = {}}> : (i64) -> ())mlir";
+  auto inScope = [](std::string text, llvm::StringRef scope) {
+    auto position = text.find("metadata = {}");
+    text.replace(position, 13,
+                 "generated_owner = \"" + scope.str() + "\", generated_induction = \"" +
+                     scope.str() + ".i\", metadata = {}");
+    return text;
+  };
+  auto position = source.find(instance);
+  source.erase(position, instance.size());
+  position = source.find(override);
+  source.replace(
+      position, override.size(),
+      R"mlir(    "nodal.generate"() <{induction = "lane", lower = 0 : i64, upper = 3 : i64, step = 1 : i64, region_id = "Parent.first", induction_path = "Parent.first.i", metadata = {maximum_trip_count = 3 : i64}}> ({
+)mlir" + inScope(instance, "Parent.first") +
+          "\n" + inScope(override, "Parent.first") + R"mlir(
+    }) : () -> ()
+    "nodal.generate"() <{induction = "other", lower = 2 : i64, upper = 7 : i64, step = 2 : i64, region_id = "Parent.second", induction_path = "Parent.second.i", metadata = {maximum_trip_count = 3 : i64}}> ({
+)mlir" + inScope(instance, "Parent.second") +
+          R"mlir(
+    }) : () -> ())mlir");
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module || mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("generated invariant instance parameter fixture did not verify");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *formal = namedOperation(child, "B");
+  llvm::SmallVector<mlir::Operation *> scopes;
+  parent->walk([&](nodal::GenerateOp op) { scopes.push_back(op); });
+  if (scopes.size() != 2)
+    return fail("generated parameter fixture lost scopes");
+  auto *first = &scopes[0]->getRegion(0).front().front();
+  auto *second = &scopes[1]->getRegion(0).front().front();
+  auto *actualOverride = &scopes[0]->getRegion(0).front().back();
+  auto reference = mlir::FlatSymbolRefAttr::get(&context, "u");
+  if (nodal::resolveStructuralInstance(actualOverride, reference) != first ||
+      nodal::resolveStructuralInstance(second, reference) != second ||
+      nodal::resolveStructuralInstance(scopes[0], reference) ||
+      nodal::resolveInstanceModuleDefinition(first) != child)
+    return fail("instance lookup confused lexical scope or definition namespace");
+  auto firstValue = nodal::resolveInstanceIntegerParameter(first, formal);
+  auto secondValue = nodal::resolveInstanceIntegerParameter(second, formal);
+  if (mlir::failed(firstValue) || mlir::failed(secondValue) || firstValue->bounds.lower != 3 ||
+      firstValue->bounds.upper != 7 ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*secondValue,
+                                                       nodal::makeLiteralIntegerExpression(5)))
+    return fail("same-name generated instances mixed override environments");
+  auto firstDomain = nodal::resolveGeneratedDomain(scopes[0]);
+  auto secondDomain = nodal::resolveGeneratedDomain(scopes[1]);
+  if (mlir::failed(firstDomain) || mlir::failed(secondDomain) || firstDomain->module != parent ||
+      firstDomain->maximumTripCount != 3 || secondDomain->maximumTripCount != 3 ||
+      !secondDomain->attainedInductionBounds || secondDomain->attainedInductionBounds->lower != 2 ||
+      secondDomain->attainedInductionBounds->upper != 6)
+    return fail("shared generated domain lost positive source index/stride facts");
+  auto type = mlir::IntegerType::get(&context, 64);
+  auto induction = scopes[0]->getRegion(0).front().addArgument(type, scopes[0]->getLoc());
+  auto withInduction = nodal::resolveGeneratedDomain(scopes[0]);
+  if (mlir::failed(withInduction) || withInduction->induction != induction)
+    return fail("generated domain failed to retain actual induction SSA");
+  auto savedUpper = scopes[0]->getAttr("upper");
+  auto countMetadata = [&](int64_t count) {
+    return mlir::DictionaryAttr::get(
+        &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                        mlir::IntegerAttr::get(type, count))});
+  };
+  scopes[0]->setAttr("upper", mlir::IntegerAttr::get(type, 0));
+  scopes[0]->setAttr("metadata", countMetadata(0));
+  auto empty = nodal::resolveGeneratedDomain(scopes[0]);
+  if (mlir::failed(empty) || empty->maximumTripCount || empty->attainedInductionBounds)
+    return fail("empty generated domain invented attained coordinates");
+  scopes[0]->setAttr("upper", savedUpper);
+  scopes[0]->setAttr("lower", mlir::IntegerAttr::get(type, -2));
+  scopes[0]->setAttr("metadata", countMetadata(5));
+  auto negativeOrigin = nodal::resolveGeneratedDomain(scopes[0]);
+  if (mlir::failed(negativeOrigin) || negativeOrigin->maximumTripCount != 5 ||
+      negativeOrigin->lower.root->literal != -2)
+    return fail("generated signed-i64 origin was interpreted as unsigned");
+  scopes[0]->setAttr("lower", mlir::IntegerAttr::get(type, 0));
+  scopes[0]->setAttr("metadata", countMetadata(3));
+  scopes[0]->setAttr("step", mlir::IntegerAttr::get(type, 0));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(scopes[0])))
+    return fail("zero-step generated domain was accepted");
+  scopes[0]->setAttr("step", mlir::IntegerAttr::get(type, 1));
+  actualOverride->setAttr("instance", mlir::FlatSymbolRefAttr::get(&context, "d"));
+  if (mlir::succeeded(nodal::verifyParameterModel(*module)))
+    return fail("generated override escaped to an outer instance");
+  actualOverride->setAttr("instance", reference);
+  const auto savedActual = actualOverride->getOperand(0);
+  actualOverride->setOperand(0, induction);
+  if (mlir::succeeded(nodal::verifyParameterModel(*module)) ||
+      mlir::succeeded(nodal::resolveInstanceIntegerParameter(first, formal)))
+    return fail("per-occurrence induction silently entered invariant instance environment");
+  actualOverride->setOperand(0, savedActual);
+  // Switch the same range to its retained SSA form. Its upper atom must remain
+  // the actual parent parameter, and count metadata must be independently checked.
+  auto *n = namedOperation(parent, "N");
+  n->setAttr("classification", mlir::StringAttr::get(&context, "structural"));
+  mlir::Value lowerValue, stepValue;
+  for (mlir::Operation &op : parent->getRegion(0).front()) {
+    if (op.getName().getStringRef() != "nodal.const_literal")
+      continue;
+    auto value = op.getAttrOfType<mlir::IntegerAttr>("value");
+    if (value && value.getInt() == 2)
+      lowerValue = op.getResult(0);
+    if (value && value.getInt() == 1)
+      stepValue = op.getResult(0);
+  }
+  scopes[0]->setOperands({lowerValue, savedActual, stepValue});
+  for (auto name : {"lower", "upper", "step"})
+    scopes[0]->removeAttr(name);
+  scopes[0]->setAttr("region_id", mlir::StringAttr::get(&context, "Parent.range"));
+  scopes[0]->setAttr("induction_path", mlir::StringAttr::get(&context, "Parent.range.i"));
+
+  scopes[0]->setAttr("metadata", countMetadata(4));
+  auto symbolicDomain = nodal::resolveGeneratedDomain(scopes[0]);
+  auto nExpression = nodal::resolveOwnedIntegerParameter(parent, n);
+  if (mlir::failed(symbolicDomain) || mlir::failed(nExpression) ||
+      symbolicDomain->maximumTripCount != 4 ||
+      !nodal::equivalentInstantiatedIntegerExpressions(symbolicDomain->upperExclusive,
+                                                       *nExpression))
+    return fail("generated SSA domain specialized its parameter or lost exact upper identity");
+  scopes[0]->setAttr("metadata", countMetadata(3));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(scopes[0])))
+    return fail("forged generated count metadata passed the shared domain query");
+  scopes[0]->setAttr("metadata", countMetadata(4));
+  first->setAttr("sym_name", mlir::StringAttr::get(&context, "Child"));
+  if (nodal::resolveInstanceModuleDefinition(first) != child)
+    return fail("instance name shadowed its top-level module definition");
+  return 0;
+}
+
+int checkGeneratedWaveformParameterLookup(mlir::MLIRContext &context) {
+  std::string source = kValid.str();
+  const auto end = source.rfind("  }) : () -> ()");
+  source.insert(end, R"mlir(
+    "nodal.parameter"() <{classification = "ordinary", default_value = 1.0 : f64, metadata = {}, parameter_kind = "real", sym_name = "GAIN", type = f64, variability = "symbolic"}> : () -> ()
+    "nodal.generate"() <{induction = "i", lower = 0 : i64, upper = 2 : i64, step = 1 : i64, region_id = "Fixture.range", induction_path = "Fixture.range.i", metadata = {maximum_trip_count = 2 : i64}}> ({
+      "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Empty, parameter_bindings = {}, sym_name = "GAIN", generated_owner = "Fixture.range", generated_induction = "Fixture.range.i"}> : () -> ()
+      "nodal.analog"() <{metadata = {}, generated_owner = "Fixture.range", generated_induction = "Fixture.range.i"}> ({
+        %reference = "nodal.parameter_ref"() <{parameter = @GAIN, metadata = {}}> : () -> f64
+        "nodal.analog_procedure"() <{owner = "Fixture.range.proc", generated_owner = "Fixture.range", generated_induction = "Fixture.range.i", metadata = {}}> ({^bb0:}) : () -> ()
+      }) : () -> ()
+    }) : () -> ()
+)mlir");
+  source.insert(
+      source.find("  \"nodal.module\""),
+      "  \"nodal.module\"() <{metadata = {}, sym_name = \"Empty\"}> ({^bb0:}) : () -> ()\n");
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return fail("generated waveform parameter fixture did not parse");
+  mlir::Operation *reference = nullptr, *instance = nullptr;
+  module->walk([&](nodal::ParameterRefOp op) { reference = op; });
+  module->walk([&](nodal::InstanceOp op) { instance = op; });
+  auto dimension = nodal::getAnalogRealDimension(reference->getResult(0));
+  if (!nodal::isAnalogStaticExpression(reference->getResult(0)) || mlir::failed(dimension) ||
+      *dimension != "1")
+    return fail("generated symbol table hid the actual module parameter from waveform analysis");
+  reference->setAttr("parameter", mlir::FlatSymbolRefAttr::get(&context, "missing"));
+  instance->setAttr("sym_name", mlir::StringAttr::get(&context, "missing"));
+  if (nodal::isAnalogStaticExpression(reference->getResult(0)) ||
+      mlir::succeeded(nodal::getAnalogRealDimension(reference->getResult(0))))
+    return fail("same-name instance masqueraded as an analog parameter");
+  return 0;
+}
+
 } // namespace
 
 int main() {
@@ -339,7 +510,8 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  if (checkInstanceParameterQueries(context))
+  if (checkInstanceParameterQueries(context) || checkGeneratedParameterQueries(context) ||
+      checkGeneratedWaveformParameterLookup(context))
     return 1;
 
   auto valid = mlir::parseSourceString<mlir::ModuleOp>(kValid, &context);

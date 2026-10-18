@@ -1551,3 +1551,218 @@ This checkpoint does not complete F43. Source-generated child instances and
 connections, generated persistent-state declaration lifetime, partial child-array
 bindings/broader joins, cross-range storage, remaining operator/state/result
 fan-out and shared-live-fill demand lowering remain open where required.
+
+## Source-generated structural scopes (v0.4)
+
+The [v0.4 gate](../design-gates/NodalConservativeNodeArrays-DG-v0.4.md) extends
+published boundary-array checkpoint `b534451`. The selected path reuses existing
+`hdlRange` capture and Generate IR for child templates, conservative connections,
+local scalar nodes, nested rectangular scopes and owned array/view selection by
+an actual visible induction value. Whole child-array bindings and invariant
+parameter overrides reuse v0.3. Focused source/native/target acceptance is complete for this selected contract;
+remaining required F43 compositions stay open.
+
+The shared ParameterModel owner now distinguishes three namespaces: module
+parameters, exact lexical Module/Generate instance symbols and top-level module
+definitions. Generated instance substitution retains the actual enclosing Module
+and reads overrides only from the instance's direct lexical block. Invariant
+actual expressions remain module-owned. Generate's SymbolTable trait therefore
+does not hide a module parameter or allow a same-named Instance to serve as one;
+the affected waveform parameter query uses the typed module namespace too.
+
+`resolveGeneratedDomain` derives its bounds and captured count from the existing
+per-Generate validator and checked unsigned-distance count helper. It carries the
+actual optional i64 block argument, immutable canonical bound DAGs and conservative
+attained source-index bounds. Signed-i64 interpretation is local to generated
+bounds, preserving negative source origins without widening general parameter
+arithmetic. Legacy directional validation remains separate from the positive
+induction profile. Proven always-empty domains have no attained coordinates;
+type, ownership, shape and child-binding obligations still apply. Pure legacy
+generated analog/state bodies do not acquire unused induction arguments or
+silently move into the newer signed32 structural target profile.
+
+Connectivity derives one lexical scope at a time from actual SSA and symbols;
+generated templates are not nodes in the module-global union-find. Static array
+map identity, instance occurrence and local port incidence remain distinct.
+The hierarchy graph retains its existing typed definition index and per-scope
+endpoint indexes. Standalone scope lookup still scans a block; repeated parameter
+queries/DAG comparison can remain quadratic. No whole-pipeline linearity or
+measured speedup is claimed. No new mutable registry, parameter/count engine,
+per-lane source expansion or per-instance cloned module definition is introduced.
+
+The target layout uses structural generated scopes for declarations and instance
+statements. Source induction is distinct from an occurrence ordinal, and the
+new target path checks signed32 bounds/intermediates/updates. Existing direct
+signed64 paths remain intact. VAMS2023 §6.6.1 defines per-instance declaration
+scope and implicit localparam identity; §6.9.1 concatenates analog blocks after
+generate elaboration in textual/unrolling order. Mixed local analog/nested-scope
+emission must preserve that order and execute each actual procedure once. A scoped
+declaration location does not by itself authorize generated shaped persistent
+initialization; that lifetime work remains explicit.
+
+The shared parameter/domain unit passes its new scope/induction/override/count and
+waveform-namespace checks together with inherited cases. A focused read-only review
+of this frozen delta found no blocker in bound/count reuse, empty/stride handling,
+namespace separation or invariant override ownership. Query failures preserve the
+original causal diagnostic; an outer generic wrapper no longer obscures a forged
+count with an additional unrelated code. This is not a broad proof campaign.
+
+### Actual generated-topology witness
+
+`Increment43GeneratedTopologyTests.scala` contains the public Bank example:
+
+```scala
+val count: Param[Integer] = param(3.integer, range = 2 to 5)
+val resistance: Param[Real] = param(2.kOhm)
+val taps = inout(Electrical, count)
+val common = inout(Electrical)
+hdlRange(0, count): i =>
+  val element = instance(new Increment43TopologyCell)
+  element.param(_.resistance, resistance)
+  connect(taps.at(i), element(_.p))
+  element(_.n) <> common
+```
+
+The actual bridge output has one `nodal.generate` with `upper = @count`,
+`maximum_trip_count = 5`, and one i64 block argument. `nodal.shape_index` consumes
+that argument and the owned `taps` terminal array. The child instance, its parameter
+override, terminal handles and two connections are inside that same region, with
+matching generated owner/induction identities. The reusable child definition is
+outside it. The exported IR is retained as
+`.work/generated-topology-public-final/Increment43TopologyBank.va.source.mlir`.
+The emitted target includes this exact compact body:
+
+```verilog
+localparam integer node_map_taps_0_0 = hdl_range_increment43_generated_topo_dc37e5f6;
+element #(.resistance(resistance)) element_instance(.n(common), .p(taps[node_map_taps_0_0]));
+```
+
+Its enclosing structural loop starts at zero, compares the same allocated genvar
+with `count`, and increments by one. The child contains
+`I(p, n) <+ (V(p, n) / resistance);`. The parameter remains symbolic; neither the
+callback nor the target is expanded at its default value. The complete output is
+`.work/generated-topology-public-target-final/Increment43TopologyBank.va.target`.
+The million-occurrence witness likewise retains one structural template; this is
+a size/representation check, not a timing claim.
+
+### Focused shared/native acceptance
+
+The final native matrix passes 50/50 cases, including 24 positive cases with the
+actual default gate and stable repeated output. The affected boundary matrix
+passes 49/49, NodeArray unit 187 checks, storage unit 21 checks, and the parameter
+unit passes its new and inherited checks. All 26 final public sources (13 models
+with VA/AMS profile metadata) pass the actual native default gate and byte-identical
+replay. The source models cover nested axes, local joins, source origins/strides,
+owned views, separately captured equal static DAGs, whole child-array bindings,
+reusable child definitions, empty/singleton/million domains, sibling scopes and
+coexisting selected analog contributions.
+
+Commands, run from the repository with the matched local toolchain:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_generated_topology_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/generated-topology-native-final
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_boundary_array_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/generated-topology-boundary-native
+PYTHONDONTWRITEBYTECODE=1 NODAL_PUBLIC_NATIVE_OUTPUT=.work/generated-topology-public-native-final python3 .work/check-generated-topology-public.py
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-storage-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-parameter-model-unit-tests
+```
+
+Per-case commands/results are retained in the corresponding `.work/` summary JSON
+and `generated-topology-{native-final,boundary-native,public-native-final,node-final,storage-final,parameter-final}.log`.
+The first public integration replay found that generated-local literal index
+carriers needed the existing use-aware proof path. The repair shares literal
+extraction and actual lexical dominance checks; independent sibling/forward SSA
+and invalid-literal-in-empty-domain negatives remain enforced. No module hoisting
+or default substitution was used to bypass those obligations.
+
+### Focused target acceptance and architecture
+
+The final generated-topology backend unit passes 107 checks; directly affected
+boundary, hierarchy-syntax and event-reparse units pass 54, 236 and 308 checks.
+Existing backend, writable-array backend and matched connectivity aggregate units
+pass. Eighty writable predecessor artifacts remain byte-identical. Native-fixture
+target preflight passes 48 cases: 46 positive VA/AMS render/repeat cases and two
+expected inherited domain-capability rejections, not claimed target successes.
+
+All 26 actual public profile outputs are byte-identical across direct translation,
+repeat, native default-gate serialization without debug locations, and renamed
+transport input. Thirty-two source-scope/induction/target-loop records and two
+generated binding source/adapter-scope records are checked against the actual IR.
+Generated binding metadata retains `generated_scope` for its optional adapter loop;
+`source_scope` separately identifies the verified enclosing Generate. Hygienic
+instance spelling uses `target_instance` only when allocation changes the authored
+symbol. Comments remain provenance, never authorization for native ownership or
+for target grammar acceptance.
+
+```sh
+bash .work/check-generated-topology-focused.sh
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-generated-topology-targets.py
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-boundary-array-targets.py .work/generated-topology-public-final .work/generated-topology-public-target-final
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-generated-topology-correspondence.py
+```
+
+Exact build/replay commands, per-unit logs and binary hashes are in
+`.work/generated-topology-backend-handoff.md`; aggregate results are
+`.work/generated-topology-focused-final.log`,
+`.work/generated-topology-native-targets.log`,
+`.work/generated-topology-public-target-final.log`,
+`.work/generated-topology-correspondence.log` and
+`.work/generated-topology-writable-parity.log`.
+
+Focused independent source review found no concrete blocker in shared domain and
+namespace proofs, lexical backend state, actual-SSA index mapping, authored analog
+ordering, target hierarchy parsing or allocated-instance provenance. The review
+ran no additional tests. Parser negatives retain concrete malformed syntax,
+bounds, overflow and ownership cases. Two former adapter-only grammar negatives
+(starting at one and stepping by two) are now lawful structural loops; they were
+replaced with genuinely invalid origin/update cases while exact zero/unit-stride
+adapter-emission equations remain asserted. This does not claim a target parser
+can reconstruct source intent from an independently modified lawful loop.
+
+This is generic VAMS2023 structural compiler acceptance. It is not external
+simulator or OpenVAF acceptance. Existing generated procedure/operator/history
+restrictions remain explicit. Generated persistent shaped declaration lifetime,
+partial child-array bindings/broader joins, per-occurrence parameters/richer
+induction where required, cross-range storage, remaining operator/state/result
+fan-out and repeated shared-live-fill demand lowering remain unfinished F43 work.
+No parent checklist is closed by this checkpoint.
+
+The directly affected Scala predecessor replay exposed two genuine compatibility
+issues during integration. The shared bridge bounds query now takes the required
+structural effect: Generate domains require `topology`, whereas actual shape
+queries still require `shape`. A valid legacy topology-only parameter must not
+acquire a new shape requirement; forged missing-topology records still reject.
+Parameter override lookup also retains its existing owning-parent check before
+the new generated-scope guard, preserving the established scalar diagnostic.
+New source-span capture is limited to the generated operations that consume it,
+without a performance claim.
+
+The compound-range predecessor additionally contained incidental SSA-prefix and
+old induction-spelling assertions. Its replacement checks resolve actual bound
+operands/defining operations, both parameter references and their addition, then
+assert the exact symbolic loop using the verified Generate induction identity.
+The prior failed logs are retained; these repairs do not retroactively establish
+historical test validity or relax symbolic/compact-generation semantics.
+
+All 16 selected Scala predecessors pass with both matched tools: constructor and
+owning-parent behavior (2), scalar connectivity/visibility (2), legacy ranges (3),
+deep generation (2), NodeArray ownership/signed64 cardinality/aliases (3), boundary
+substitution and actual dual-target emission (2), reusable scalar hierarchy (1)
+and retained artifact reconstruction (1). Exact selectors are in
+`.work/scala-validation/run-generated-topology-predecessors.sh`; successful logs
+are `.work/scala-validation/generated-topology-predecessor-{constructor-2,connectivity-2,range-3,deep-2,node-3,boundary-2,hierarchy-target-1,artifacts-1}.log`.
+Pinned formatting passes all ten changed Scala files. Focused API/reference checks
+pass without a signature or API-inventory change. Contribution policy, changed
+Markdown structure/links, C++ pinned formatting and `git diff --check` pass.
+
+The new public suite passes 8/8 methods. After the compatibility repairs, four
+affected capture/scope/effect/dual-target methods pass again with the final tools.
+All 26 source, 26 normalized IR and 26 target files remain byte-identical to the
+prior completed artifact set. Logs are
+`.work/scala-validation/generated-topology-public-final.log`,
+`.work/scala-validation/generated-topology-compatibility-final.log` and
+`.work/scala-validation/generated-topology-compatibility-final-run.log`; exact
+selectors, source inventory and limits are in
+`.work/scala-validation/generated-topology-scala-handoff.md`. No CI or full
+qualification suite was run.

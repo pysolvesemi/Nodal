@@ -13,6 +13,11 @@ namespace nodal {
 // storage nor repeats the source shape/alias/definite-assignment analysis.
 mlir::FailureOr<std::string> staticTargetArithmetic(llvm::StringRef left, char operation,
                                                     llvm::StringRef right);
+// Check every retained source DAG intermediate and parameter initializer against
+// the structural target carrier, without owning or re-deriving range semantics.
+mlir::LogicalResult
+verifyTargetStructuralIntegerExpression(const InstantiatedIntegerExpression &expression);
+
 struct TargetShapeExpression {
   std::string text;
   ParameterIntegerBounds bounds;
@@ -43,9 +48,11 @@ struct ShapedProjectionProgram {
 // The caller supplies an independently verified root capability. Naming each
 // stage permits immutable structural constants as well as a reused procedural
 // temporary, without expanding a previous stage's expression tree.
-mlir::FailureOr<ShapedProjectionProgram>
-renderShapedProjectionProgram(const StaticShapeProjection &projection, llvm::StringRef ordinal,
-                              llvm::function_ref<std::string(unsigned)> stageName);
+mlir::FailureOr<ShapedProjectionProgram> renderShapedProjectionProgram(
+    const StaticShapeProjection &projection, llvm::StringRef ordinal,
+    llvm::function_ref<std::string(unsigned)> stageName,
+    llvm::function_ref<mlir::FailureOr<TargetShapeExpression>(mlir::Value, mlir::Operation *)>
+        scopedIndex = nullptr);
 mlir::FailureOr<ShapedProjectionProgram> renderShapedProjectionProgram(mlir::Value value,
                                                                        llvm::StringRef ordinal,
                                                                        llvm::StringRef temporary);

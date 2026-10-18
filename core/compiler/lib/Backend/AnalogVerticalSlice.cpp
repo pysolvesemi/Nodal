@@ -166,6 +166,10 @@ struct ModuleRenderState {
   llvm::DenseMap<Value, StaticNodeArrayLayout> nodeArrays;
   llvm::SmallVector<std::pair<std::string, std::string>> nodeMapConstants;
   unsigned nodeMapOrdinal = 0;
+  bool structuralScope = false;
+  llvm::DenseMap<Value, TargetShapeExpression> structuralIndices;
+  llvm::StringSet<> visibleTargetNames;
+  llvm::DenseMap<Operation *, std::string> targetInstanceNames;
   llvm::DenseMap<Value, std::string> terminals;
   llvm::DenseMap<Value, std::pair<std::string, std::string>> branches;
   llvm::DenseMap<Value, std::string> branchNames;
@@ -740,6 +744,26 @@ FailureOr<std::string> renderStaticNodeSelection(Operation *operation, Operation
   return array->second.name + "[" + ordinal + "]";
 }
 
+FailureOr<TargetShapeExpression> renderScopedShapeIndex(ModuleRenderState &state, Value index,
+                                                        Operation *use) {
+  auto proof = resolveShapeIndexProof(index, use);
+  if (failed(proof))
+    return failure();
+  if (proof->identity.kind == StaticShapeIndexIdentity::Induction) {
+    auto found = state.structuralIndices.find(index);
+    if (found == state.structuralIndices.end())
+      return failure();
+    return found->second;
+  }
+  if (proof->identity.kind == StaticShapeIndexIdentity::Literal) {
+    const int64_t value = proof->identity.literal;
+    if (value < std::numeric_limits<int32_t>::min() || value > std::numeric_limits<int32_t>::max())
+      return failure();
+    return TargetShapeExpression{std::to_string(value), {value, value}};
+  }
+  return renderShapeStaticIndex(use->getParentOfType<nodal::ModuleOp>(), index);
+}
+
 FailureOr<std::string> renderConservativeNodeSelection(Operation *operation, Operation *definition,
                                                        ModuleRenderState &state) {
   if (operation->getNumResults() != 1 || operation->getParentOp() != definition)
@@ -752,26 +776,46 @@ FailureOr<std::string> renderConservativeNodeSelection(Operation *operation, Ope
     return failure();
   // Keep the published direct signed64 spelling and capability. A composed map
   // proven fully concrete also needs no target Integer intermediate at all.
-  if (operation->getOperand(0) == selection->projection.root)
+  if (!state.structuralScope && operation->getOperand(0) == selection->projection.root)
     return renderStaticNodeSelection(operation, definition, state);
   if (selection->projection.literalRootFlatOffset)
     return array->second.name + "[" + std::to_string(*selection->projection.literalRootFlatOffset) +
            "]";
   unsigned ordinal = state.nodeMapOrdinal++;
-  auto program = renderShapedProjectionProgram(selection->projection, "0", [&](unsigned stage) {
-    std::string base = "node_map_" + array->second.name + "_" + std::to_string(ordinal) + "_" +
-                       std::to_string(stage);
-    std::string name = base;
-    unsigned collision = 0;
-    while (!state.eventState.reserved.insert(name).second)
-      name = base + "_" + std::to_string(++collision);
-    return name;
-  });
+  auto program = renderShapedProjectionProgram(
+      selection->projection, "0",
+      [&](unsigned stage) {
+        std::string base = "node_map_" + array->second.name + "_" + std::to_string(ordinal) + "_" +
+                           std::to_string(stage);
+        std::string name = base;
+        unsigned collision = 0;
+        while (!state.eventState.reserved.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        return name;
+      },
+      [&](Value index, Operation *use) -> FailureOr<TargetShapeExpression> {
+        return renderScopedShapeIndex(state, index, use);
+      });
   if (failed(program))
     return failure();
   for (const auto &step : program->steps)
     state.nodeMapConstants.emplace_back(step.destination, step.expression);
   return array->second.name + "[" + program->result + "]";
+}
+
+bool hasStructuralTopology(Operation *generate) {
+  if (generate->getNumRegions() != 1 || !llvm::hasSingleElement(generate->getRegion(0)))
+    return false;
+  Block &body = generate->getRegion(0).front();
+  if (body.getNumArguments() != 0)
+    return true;
+  for (Operation &operation : body) {
+    if (llvm::isa<InstanceOp, ConnectOp, ConnectArrayOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
+            operation) ||
+        (llvm::isa<GenerateOp>(operation) && hasStructuralTopology(&operation)))
+      return true;
+  }
+  return false;
 }
 
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
@@ -873,8 +917,15 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
                                  "declarations collide in the target namespace");
     }
   }
+  for (const auto &name : declarations)
+    state.visibleTargetNames.insert(name.getKey());
+  for (Operation &operation : region.front())
+    if (llvm::isa<InstanceOp, AnalogUserFunctionOp>(operation))
+      state.visibleTargetNames.insert(symbolName(&operation));
   bool validGeneratedNames = true;
   for (Operation *generate : generates) {
+    if (hasStructuralTopology(generate))
+      continue;
     generate->walk([&](Operation *operation) {
       if (operation->getName().getStringRef() != "nodal.node")
         return;
@@ -997,16 +1048,6 @@ FailureOr<std::string> legacyParameterInitializer(Operation *parameter) {
   return failure();
 }
 
-Operation *findDirectDefinition(Operation *definition, llvm::StringRef name) {
-  auto outer = definition->getParentOfType<mlir::ModuleOp>();
-  if (!outer)
-    return nullptr;
-  for (Operation &candidate : outer.getBody()->getOperations())
-    if (candidate.getName().getStringRef() == "nodal.module" && symbolName(&candidate) == name)
-      return &candidate;
-  return nullptr;
-}
-
 Operation *findDirectParameter(Operation *definition, llvm::StringRef name) {
   if (!definition || definition->getNumRegions() != 1 ||
       !llvm::hasSingleElement(definition->getRegion(0)))
@@ -1093,8 +1134,8 @@ std::string reserveStructuralName(ModuleRenderState &state, llvm::StringRef base
 
 void renderConservativeBindingMap(const ConservativeArrayBinding &binding, llvm::StringRef actual,
                                   llvm::StringRef helper, llvm::StringRef scope,
-                                  const ShapedProjectionProgram *program,
-                                  llvm::raw_ostream &output) {
+                                  const ShapedProjectionProgram *program, llvm::raw_ostream &output,
+                                  llvm::StringRef targetInstance = {}) {
   auto sourcePath = [](Operation *operation) -> std::string {
     if (auto path = operation->getAttrOfType<StringAttr>("source_path"))
       return path.getValue().str();
@@ -1153,6 +1194,10 @@ void renderConservativeBindingMap(const ConservativeArrayBinding &binding, llvm:
       {"alias_helper", helper},
       {"generated_scope", scope},
       {"stages", std::move(stages)}};
+  if (auto generated = llvm::dyn_cast<GenerateOp>(binding.operation->getParentOp()))
+    record["source_scope"] = generated->getAttrOfType<StringAttr>("region_id").getValue();
+  if (!targetInstance.empty() && targetInstance != symbolName(binding.instance))
+    record["target_instance"] = targetInstance;
   // JSON escapes source newlines and control characters. A standalone line
   // comment makes even comment-delimiter characters harmless target text.
   output << "  // nodal.array_binding " << llvm::json::Value(std::move(record)) << "\n";
@@ -1162,18 +1207,23 @@ FailureOr<std::string> renderConservativeArrayActual(const ConservativeArrayBind
                                                      ModuleRenderState &state,
                                                      llvm::StringRef aliasHelper,
                                                      llvm::raw_ostream &output) {
+  auto name = state.targetInstanceNames.find(binding.instance);
+  const llvm::StringRef targetInstance = name == state.targetInstanceNames.end()
+                                             ? symbolName(binding.instance)
+                                             : llvm::StringRef(name->second);
   const auto &projection = binding.actual.projection;
   auto root = state.nodeArrays.find(projection.root);
   if (root == state.nodeArrays.end())
     return failure();
   if (projection.wholeRoot) {
-    renderConservativeBindingMap(binding, root->second.name, "", "", nullptr, output);
+    renderConservativeBindingMap(binding, root->second.name, "", "", nullptr, output,
+                                 targetInstance);
     return root->second.name;
   }
   if (!requiresConservativeAdapter(projection)) {
     std::string actual = root->second.name + "[" + std::to_string(*projection.literalFirstOffset) +
                          ":" + std::to_string(*projection.literalLastOffset) + "]";
-    renderConservativeBindingMap(binding, actual, "", "", nullptr, output);
+    renderConservativeBindingMap(binding, actual, "", "", nullptr, output, targetInstance);
     return actual;
   }
 
@@ -1191,23 +1241,28 @@ FailureOr<std::string> renderConservativeArrayActual(const ConservativeArrayBind
   const std::string bus = reserveStructuralName(state, prefix + "_bus");
   const std::string lane = reserveStructuralName(state, prefix + "_lane");
   const std::string scope = reserveStructuralName(state, prefix + "_map");
-  auto program = renderShapedProjectionProgram(projection, lane, [&](unsigned stage) {
-    return reserveStructuralName(state, prefix + "_stage_" + std::to_string(stage));
-  });
+  auto program = renderShapedProjectionProgram(
+      projection, lane,
+      [&](unsigned stage) {
+        return reserveStructuralName(state, prefix + "_stage_" + std::to_string(stage));
+      },
+      [&](Value index, Operation *use) { return renderScopedShapeIndex(state, index, use); });
   if (failed(program) || program->root != projection.root)
     return failure();
-  renderConservativeBindingMap(binding, bus, aliasHelper, scope, &*program, output);
+  renderConservativeBindingMap(binding, bus, aliasHelper, scope, &*program, output, targetInstance);
   output << "  electrical [0:(" << layout->count.text << " - 1)] " << bus << ";\n"
-         << "  genvar " << lane << ";\n"
-         << "  generate\n"
-         << "    for (" << lane << " = 0; " << lane << " < " << layout->count.text << "; " << lane
+         << "  genvar " << lane << ";\n";
+  if (!state.structuralScope)
+    output << "  generate\n";
+  output << "    for (" << lane << " = 0; " << lane << " < " << layout->count.text << "; " << lane
          << " = " << lane << " + 1) begin : " << scope << "\n";
   for (const auto &step : program->steps)
     output << "      localparam integer " << step.destination << " = " << step.expression << ";\n";
   output << "      " << aliasHelper << " link(.lhs(" << root->second.name << "[" << program->result
          << "]), .rhs(" << bus << "[" << lane << "]));\n"
-         << "    end\n"
-         << "  endgenerate\n";
+         << "    end\n";
+  if (!state.structuralScope)
+    output << "  endgenerate\n";
   return bus;
 }
 
@@ -1217,6 +1272,9 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   if (!llvm::hasSingleElement(region))
     return failure();
 
+  auto topology = resolveConservativeStructuralScope(definition);
+  if (failed(topology))
+    return failure();
   llvm::SmallVector<Operation *, 8> instances;
   llvm::SmallVector<Operation *, 16> instanceTerminals;
   llvm::SmallVector<Operation *, 16> connections;
@@ -1249,8 +1307,7 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   llvm::DenseMap<Operation *, HierarchyInstanceRender> rendered;
   for (Operation *instance : instances) {
     llvm::StringRef name = symbolName(instance);
-    auto target = instance->getAttrOfType<FlatSymbolRefAttr>("module");
-    Operation *child = target ? findDirectDefinition(definition, target.getValue()) : nullptr;
+    Operation *child = resolveInstanceModuleDefinition(instance);
     auto domains = instance->getAttrOfType<DictionaryAttr>("domain_bindings");
     if (name.empty() || !isPortableVerilogIdentifier(name) || !child ||
         (domains && !domains.empty()) || !instancesByName.try_emplace(name, instance).second)
@@ -1258,86 +1315,65 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
                                "instance identity, target, or domain profile is unsupported");
     rendered[instance] = HierarchyInstanceRender{child, {}, {}};
   }
-  if (instances.empty())
+  if (instances.empty() && !state.structuralScope)
     return emitMappedFailure(definition, "NODAL-BACKEND-HIERARCHY-002",
                              "hierarchy endpoints or connections require an instance");
 
-  llvm::SmallVector<Value, 32> endpoints;
-  llvm::DenseMap<Value, unsigned> endpointIndices;
-  auto addEndpoint = [&](Value value) {
-    if (!endpointIndices.count(value)) {
-      endpointIndices[value] = static_cast<unsigned>(endpoints.size());
-      endpoints.push_back(value);
-    }
-  };
-  for (const auto &entry : state.terminals)
-    addEndpoint(entry.first);
-  for (Operation *terminal : instanceTerminals) {
-    if (terminal->getNumResults() != 1)
-      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-002",
-                               "child terminal must produce one conservative endpoint");
-    addEndpoint(terminal->getResult(0));
-  }
-  llvm::SmallVector<unsigned, 32> parent(endpoints.size());
-  for (unsigned index = 0; index < parent.size(); ++index)
-    parent[index] = index;
-  auto root = [&](unsigned index) {
-    while (parent[index] != index) {
-      parent[index] = parent[parent[index]];
-      index = parent[index];
-    }
-    return index;
-  };
-  auto unite = [&](unsigned left, unsigned right) {
-    left = root(left);
-    right = root(right);
-    if (left != right)
-      parent[right] = left;
-  };
-  for (Operation *connection : connections) {
-    if (connection->getNumOperands() < 2)
-      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-002",
-                               "connection requires at least two known endpoints");
-    auto first = endpointIndices.find(connection->getOperand(0));
-    if (first == endpointIndices.end())
-      return failure();
-    for (Value operand : connection->getOperands()) {
-      auto found = endpointIndices.find(operand);
-      if (found == endpointIndices.end())
-        return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-002",
-                                 "connection references an unsupported endpoint");
-      unite(first->second, found->second);
-    }
-  }
-
-  llvm::DenseSet<unsigned> childRoots;
-  for (Operation *terminal : instanceTerminals) {
-    auto instanceReference = terminal->getAttrOfType<FlatSymbolRefAttr>("instance");
-    auto port = terminal->getAttrOfType<StringAttr>("port");
-    Operation *instance =
-        instanceReference ? instancesByName.lookup(instanceReference.getValue()) : nullptr;
-    if (!instance || !port || !isPortableVerilogIdentifier(port.getValue()))
-      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
-                               "child terminal does not resolve to a portable instance port");
-    const unsigned terminalRoot = root(endpointIndices.lookup(terminal->getResult(0)));
-    childRoots.insert(terminalRoot);
+  llvm::DenseMap<Value, std::string> childActuals;
+  unsigned groupOrdinal = 0;
+  for (const auto &group : topology->scalarGroups) {
     std::set<std::string> anchors;
-    for (const auto &entry : state.terminals)
-      if (root(endpointIndices.lookup(entry.first)) == terminalRoot)
-        anchors.insert(entry.second);
-    if (anchors.size() != 1)
-      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-004",
-                               "child port requires exactly one parent-local net anchor");
-    auto &ports = rendered[instance].ports;
-    if (!ports.emplace(port.getValue().str(), *anchors.begin()).second)
-      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
-                               "child port is bound more than once");
-  }
-  for (Operation *connection : connections)
-    if (!childRoots.count(root(endpointIndices.lookup(connection->getOperand(0)))))
-      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-005",
+    llvm::SmallVector<Value> children;
+    for (Value member : group.members) {
+      auto endpoint = state.terminals.find(member);
+      if (endpoint != state.terminals.end())
+        anchors.insert(endpoint->second);
+      else if (llvm::isa_and_nonnull<InstanceTerminalOp>(member.getDefiningOp()))
+        children.push_back(member);
+      else
+        return emitMappedFailure(definition, "NODAL-BACKEND-HIERARCHY-002",
+                                 "scoped connection contains an unsupported endpoint");
+    }
+    if (!state.structuralScope && children.empty() && !group.connections.empty())
+      return emitMappedFailure(group.connections.front(), "NODAL-BACKEND-HIERARCHY-005",
                                "parent-only connection is not representable by the scalar "
                                "instance profile");
+    if (!state.structuralScope && !children.empty() && anchors.size() != 1)
+      return emitMappedFailure(children.front().getDefiningOp(), "NODAL-BACKEND-HIERARCHY-004",
+                               "child port requires exactly one parent-local net anchor");
+    if (children.empty() && group.connections.empty())
+      continue;
+    if (anchors.empty()) {
+      std::string net =
+          reserveStructuralName(state, "topology_net_" + std::to_string(groupOrdinal));
+      output << "  electrical " << net << ";\n";
+      anchors.insert(net);
+    }
+    const std::string &anchor = *anchors.begin();
+    unsigned aliasOrdinal = 0;
+    for (const auto &other : llvm::drop_begin(anchors)) {
+      if (aliasHelper.empty())
+        return failure();
+      auto name = reserveStructuralName(state, "topology_join_" + std::to_string(groupOrdinal) +
+                                                   "_" + std::to_string(aliasOrdinal++));
+      output << "  " << aliasHelper << " " << name << "(.lhs(" << anchor << "), .rhs(" << other
+             << "));\n";
+    }
+    for (Value child : children)
+      childActuals.try_emplace(child, anchor);
+    ++groupOrdinal;
+  }
+  for (Operation *terminal : instanceTerminals) {
+    auto reference = terminal->getAttrOfType<FlatSymbolRefAttr>("instance");
+    Operation *instance = resolveStructuralInstance(terminal, reference);
+    auto port = terminal->getAttrOfType<StringAttr>("port");
+    auto actual = terminal->getNumResults() == 1 ? childActuals.find(terminal->getResult(0))
+                                                 : childActuals.end();
+    if (!instance || !rendered.count(instance) || !port || actual == childActuals.end() ||
+        !rendered[instance].ports.emplace(port.getValue().str(), actual->second).second)
+      return emitMappedFailure(terminal, "NODAL-BACKEND-HIERARCHY-003",
+                               "child port requires one verified scoped connection");
+  }
 
   llvm::DenseSet<Value> boundArrays;
   for (Operation *connection : arrayConnections) {
@@ -1428,7 +1464,11 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
       }
       output << ")";
     }
-    output << " " << symbolName(instance) << "(";
+    auto targetName = state.targetInstanceNames.find(instance);
+    output << " "
+           << (targetName == state.targetInstanceNames.end() ? symbolName(instance)
+                                                             : llvm::StringRef(targetName->second))
+           << "(";
     bool first = true;
     for (const auto &[port, actual] : entry.ports) {
       output << (first ? "" : ", ") << "." << port << "(" << actual << ")";
@@ -1976,175 +2016,22 @@ composeGeneratedEquationLayout(llvm::ArrayRef<GeneratedEquationRange> ranges) {
   return result;
 }
 
-LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
-                                          llvm::raw_ostream &output,
-                                          Operation *parentGenerate = nullptr) {
-  if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A bounds require attributes or three SSA values");
-  const bool compound = generate->getNumOperands() == 3;
-  auto lower = compound ? generatedTargetBound(generate->getOperand(0), generate, "lower")
-                        : generatedTargetBound(generate, "lower");
-  auto upper = compound ? generatedTargetBound(generate->getOperand(1), generate, "upper")
-                        : generatedTargetBound(generate, "upper");
-  auto step = compound ? generatedTargetBound(generate->getOperand(2), generate, "step")
-                       : generatedTargetBound(generate, "step");
-  if (failed(lower) || failed(upper) || failed(step))
-    return failure();
-  if (step->range.lower <= 0 || lower->range.upper > upper->range.lower)
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A range must be forward for every legal setting");
+struct GeneratedAnalogPayload {
+  Operation *procedure = nullptr;
+  unsigned contributions = 0;
+  unsigned procedures = 0;
+  unsigned boundStepEffects = 0;
+  unsigned contributedBranches = 0;
+};
 
-  auto induction = generate->getAttrOfType<StringAttr>("induction");
-  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+FailureOr<GeneratedAnalogPayload>
+prepareGeneratedAnalogPayload(Operation *analog, Operation *generate, ModuleRenderState &state,
+                              bool generatedNodeContributionProfile,
+                              const llvm::DenseSet<Value> &generatedBranchValues) {
   auto regionId = generate->getAttrOfType<StringAttr>("region_id");
-  if (!induction || !inductionPath || !regionId ||
-      !isPortableVerilogIdentifier(induction.getValue()))
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A range requires canonical target identities");
-  llvm::StringRef label = regionId.getValue();
-  if (size_t separator = label.rfind('.'); separator != llvm::StringRef::npos)
-    label = label.drop_front(separator + 1);
-  if (!isPortableVerilogIdentifier(label))
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A label is not a portable identifier");
-
-  llvm::SmallVector<GeneratedEquationRange, 2> chain;
-  if (parentGenerate) {
-    if (nestedGeneratedNodeContribution(parentGenerate) != generate)
-      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                               "nested generated equation requires one direct lexical chain");
-    auto resolved = resolveGeneratedEquationChain(parentGenerate, generate);
-    if (failed(resolved))
-      return failure();
-    chain = std::move(*resolved);
-  }
-
-  Region &body = generate->getRegion(0);
-  if (!llvm::hasSingleElement(body))
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "generated Verilog-A range requires one body block");
-  Operation *analog = nullptr;
-  llvm::SmallVector<Operation *, 4> generatedNodes;
-  llvm::SmallVector<Operation *, 4> generatedBranches;
-  llvm::DenseSet<Operation *> generatedBranchOperations;
-  llvm::DenseSet<Value> generatedBranchValues;
-  const bool generatedNodeContributionProfile = isGeneratedNodeContributionProfile(generate);
-  if (generatedNodeContributionProfile) {
-    auto operation = body.front().begin();
-    while (operation->getName().getStringRef() == "nodal.node") {
-      generatedNodes.push_back(&*operation);
-      ++operation;
-    }
-    while (operation->getName().getStringRef() == "nodal.branch") {
-      generatedBranches.push_back(&*operation);
-      generatedBranchOperations.insert(&*operation);
-      if (operation->getNumResults() == 1)
-        generatedBranchValues.insert(operation->getResult(0));
-      ++operation;
-    }
-    analog = &body.front().back();
-    if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
-      return emitMappedFailure(
-          generate, "NODAL-BACKEND-CAPABILITY-001",
-          "generated analog-node contribution requires a nonempty positive-step range");
-    const GeneratedNodeArrayLayout layout =
-        generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue());
-    const std::string targetIndex =
-        chain.empty() ? layout.index : composeGeneratedEquationLayout(chain).ordinal;
-    llvm::DenseMap<Value, Operation *> ownedNodes;
-    llvm::StringSet<> nodeNames;
-    llvm::StringSet<> sourcePaths;
-    for (Operation *node : generatedNodes) {
-      auto nodeName = node->getAttrOfType<StringAttr>("name");
-      auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
-      auto nodeOwner = node->getAttrOfType<StringAttr>("generated_owner");
-      auto nodeInduction = node->getAttrOfType<StringAttr>("generated_induction");
-      auto terminalType = node->getNumResults() == 1
-                              ? llvm::dyn_cast<nodal::TerminalType>(node->getResult(0).getType())
-                              : nodal::TerminalType();
-      if (!nodeName || !sourcePath || sourcePath.getValue().trim().empty() ||
-          !isPortableVerilogIdentifier(nodeName.getValue()) || !nodeOwner || !nodeInduction ||
-          nodeOwner.getValue() != regionId.getValue() ||
-          nodeInduction.getValue() != inductionPath.getValue() || !terminalType ||
-          terminalType.getDiscipline() != "electrical" ||
-          !nodeNames.insert(nodeName.getValue()).second ||
-          !sourcePaths.insert(sourcePath.getValue()).second)
-        return emitMappedFailure(
-            node, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node contribution requires exactly-owned electrical nodes with "
-            "unique names and source identities");
-      const std::string indexedNode =
-          (llvm::Twine(nodeName.getValue()) + "[" + targetIndex + "]").str();
-      state.terminals.try_emplace(node->getResult(0), indexedNode);
-      ownedNodes.try_emplace(node->getResult(0), node);
-    }
-    llvm::DenseSet<Value> selectedNodes;
-    for (Operation *node : generatedNodes) {
-      for (OpOperand &use : node->getResult(0).getUses()) {
-        if (!generatedBranchOperations.contains(use.getOwner()) || use.getOperandNumber() > 1)
-          return emitMappedFailure(
-              node, "NODAL-BACKEND-CAPABILITY-001",
-              "generated analog-node arrays may escape only through direct owned branches");
-      }
-    }
-    for (Operation *branch : generatedBranches) {
-      auto branchMetadata = branch->getAttrOfType<DictionaryAttr>("metadata");
-      auto branchOwner =
-          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_owner") : StringAttr();
-      auto branchInduction =
-          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_induction") : StringAttr();
-      if (branch->getNumOperands() != 2 || branch->getNumResults() != 1)
-        return emitMappedFailure(
-            branch, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node branch requires two terminals and one branch result");
-      if (!branchOwner || !branchInduction || branchOwner.getValue() != regionId.getValue() ||
-          branchInduction.getValue() != inductionPath.getValue())
-        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated analog-node branch ownership does not match its range");
-
-      Operation *positiveNode = ownedNodes.lookup(branch->getOperand(0));
-      Operation *negativeNode = ownedNodes.lookup(branch->getOperand(1));
-      if (!positiveNode && !negativeNode)
-        return emitMappedFailure(
-            branch, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node branch requires at least one owned array element");
-      if (positiveNode && positiveNode == negativeNode)
-        return emitMappedFailure(
-            branch, "NODAL-BACKEND-CAPABILITY-001",
-            "generated analog-node branch cannot select the same array element twice");
-      auto positive = state.terminals.find(branch->getOperand(0));
-      auto negative = state.terminals.find(branch->getOperand(1));
-      if (positive == state.terminals.end() || negative == state.terminals.end())
-        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated analog-node branch requires only known terminals");
-      if (positiveNode)
-        selectedNodes.insert(positiveNode->getResult(0));
-      if (negativeNode)
-        selectedNodes.insert(negativeNode->getResult(0));
-      if (!state.branches
-               .try_emplace(branch->getResult(0),
-                            std::make_pair(positive->second, negative->second))
-               .second)
-        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
-                                 "generated analog-node branch result is duplicated");
-    }
-    for (Operation *node : generatedNodes)
-      if (!selectedNodes.contains(node->getResult(0)) && !node->getResult(0).use_empty())
-        return emitMappedFailure(
-            node, "NODAL-BACKEND-CAPABILITY-001",
-            "unselected generated analog-node array must not escape its direct body");
-  } else {
-    for (Operation &operation : body.front()) {
-      if (operation.getName().getStringRef() != "nodal.analog" || analog)
-        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
-                                 "fixed generated Verilog-A profile supports one analog region");
-      analog = &operation;
-    }
-  }
-  if (!analog)
-    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
-                             "fixed generated Verilog-A range has no analog contribution region");
+  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+  if (!regionId || !inductionPath)
+    return failure();
   auto analogOwner = analog->getAttrOfType<StringAttr>("generated_owner");
   auto analogInduction = analog->getAttrOfType<StringAttr>("generated_induction");
   if (!analogOwner || !analogInduction || analogOwner.getValue() != regionId.getValue() ||
@@ -2457,6 +2344,187 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                "flickerNoise/tableNoise expressions "
                                "only");
   }
+  return GeneratedAnalogPayload{eventProcedure, contributions, procedures, boundStepEffects,
+                                static_cast<unsigned>(contributedGeneratedBranches.size())};
+}
+
+LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
+                                          llvm::raw_ostream &output,
+                                          Operation *parentGenerate = nullptr) {
+  if (generate->getNumOperands() != 0 && generate->getNumOperands() != 3)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A bounds require attributes or three SSA values");
+  const bool compound = generate->getNumOperands() == 3;
+  auto lower = compound ? generatedTargetBound(generate->getOperand(0), generate, "lower")
+                        : generatedTargetBound(generate, "lower");
+  auto upper = compound ? generatedTargetBound(generate->getOperand(1), generate, "upper")
+                        : generatedTargetBound(generate, "upper");
+  auto step = compound ? generatedTargetBound(generate->getOperand(2), generate, "step")
+                       : generatedTargetBound(generate, "step");
+  if (failed(lower) || failed(upper) || failed(step))
+    return failure();
+  if (step->range.lower <= 0 || lower->range.upper > upper->range.lower)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range must be forward for every legal setting");
+
+  auto induction = generate->getAttrOfType<StringAttr>("induction");
+  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+  auto regionId = generate->getAttrOfType<StringAttr>("region_id");
+  if (!induction || !inductionPath || !regionId ||
+      !isPortableVerilogIdentifier(induction.getValue()))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range requires canonical target identities");
+  llvm::StringRef label = regionId.getValue();
+  if (size_t separator = label.rfind('.'); separator != llvm::StringRef::npos)
+    label = label.drop_front(separator + 1);
+  if (!isPortableVerilogIdentifier(label))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A label is not a portable identifier");
+
+  llvm::SmallVector<GeneratedEquationRange, 2> chain;
+  if (parentGenerate) {
+    if (nestedGeneratedNodeContribution(parentGenerate) != generate)
+      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                               "nested generated equation requires one direct lexical chain");
+    auto resolved = resolveGeneratedEquationChain(parentGenerate, generate);
+    if (failed(resolved))
+      return failure();
+    chain = std::move(*resolved);
+  }
+
+  Region &body = generate->getRegion(0);
+  if (!llvm::hasSingleElement(body))
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "generated Verilog-A range requires one body block");
+  Operation *analog = nullptr;
+  llvm::SmallVector<Operation *, 4> generatedNodes;
+  llvm::SmallVector<Operation *, 4> generatedBranches;
+  llvm::DenseSet<Operation *> generatedBranchOperations;
+  llvm::DenseSet<Value> generatedBranchValues;
+  const bool generatedNodeContributionProfile = isGeneratedNodeContributionProfile(generate);
+  if (generatedNodeContributionProfile) {
+    auto operation = body.front().begin();
+    while (operation->getName().getStringRef() == "nodal.node") {
+      generatedNodes.push_back(&*operation);
+      ++operation;
+    }
+    while (operation->getName().getStringRef() == "nodal.branch") {
+      generatedBranches.push_back(&*operation);
+      generatedBranchOperations.insert(&*operation);
+      if (operation->getNumResults() == 1)
+        generatedBranchValues.insert(operation->getResult(0));
+      ++operation;
+    }
+    analog = &body.front().back();
+    if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
+      return emitMappedFailure(
+          generate, "NODAL-BACKEND-CAPABILITY-001",
+          "generated analog-node contribution requires a nonempty positive-step range");
+    const GeneratedNodeArrayLayout layout =
+        generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue());
+    const std::string targetIndex =
+        chain.empty() ? layout.index : composeGeneratedEquationLayout(chain).ordinal;
+    llvm::DenseMap<Value, Operation *> ownedNodes;
+    llvm::StringSet<> nodeNames;
+    llvm::StringSet<> sourcePaths;
+    for (Operation *node : generatedNodes) {
+      auto nodeName = node->getAttrOfType<StringAttr>("name");
+      auto sourcePath = node->getAttrOfType<StringAttr>("source_path");
+      auto nodeOwner = node->getAttrOfType<StringAttr>("generated_owner");
+      auto nodeInduction = node->getAttrOfType<StringAttr>("generated_induction");
+      auto terminalType = node->getNumResults() == 1
+                              ? llvm::dyn_cast<nodal::TerminalType>(node->getResult(0).getType())
+                              : nodal::TerminalType();
+      if (!nodeName || !sourcePath || sourcePath.getValue().trim().empty() ||
+          !isPortableVerilogIdentifier(nodeName.getValue()) || !nodeOwner || !nodeInduction ||
+          nodeOwner.getValue() != regionId.getValue() ||
+          nodeInduction.getValue() != inductionPath.getValue() || !terminalType ||
+          terminalType.getDiscipline() != "electrical" ||
+          !nodeNames.insert(nodeName.getValue()).second ||
+          !sourcePaths.insert(sourcePath.getValue()).second)
+        return emitMappedFailure(
+            node, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node contribution requires exactly-owned electrical nodes with "
+            "unique names and source identities");
+      const std::string indexedNode =
+          (llvm::Twine(nodeName.getValue()) + "[" + targetIndex + "]").str();
+      state.terminals.try_emplace(node->getResult(0), indexedNode);
+      ownedNodes.try_emplace(node->getResult(0), node);
+    }
+    llvm::DenseSet<Value> selectedNodes;
+    for (Operation *node : generatedNodes) {
+      for (OpOperand &use : node->getResult(0).getUses()) {
+        if (!generatedBranchOperations.contains(use.getOwner()) || use.getOperandNumber() > 1)
+          return emitMappedFailure(
+              node, "NODAL-BACKEND-CAPABILITY-001",
+              "generated analog-node arrays may escape only through direct owned branches");
+      }
+    }
+    for (Operation *branch : generatedBranches) {
+      auto branchMetadata = branch->getAttrOfType<DictionaryAttr>("metadata");
+      auto branchOwner =
+          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_owner") : StringAttr();
+      auto branchInduction =
+          branchMetadata ? branchMetadata.getAs<StringAttr>("generated_induction") : StringAttr();
+      if (branch->getNumOperands() != 2 || branch->getNumResults() != 1)
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires two terminals and one branch result");
+      if (!branchOwner || !branchInduction || branchOwner.getValue() != regionId.getValue() ||
+          branchInduction.getValue() != inductionPath.getValue())
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch ownership does not match its range");
+
+      Operation *positiveNode = ownedNodes.lookup(branch->getOperand(0));
+      Operation *negativeNode = ownedNodes.lookup(branch->getOperand(1));
+      if (!positiveNode && !negativeNode)
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch requires at least one owned array element");
+      if (positiveNode && positiveNode == negativeNode)
+        return emitMappedFailure(
+            branch, "NODAL-BACKEND-CAPABILITY-001",
+            "generated analog-node branch cannot select the same array element twice");
+      auto positive = state.terminals.find(branch->getOperand(0));
+      auto negative = state.terminals.find(branch->getOperand(1));
+      if (positive == state.terminals.end() || negative == state.terminals.end())
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch requires only known terminals");
+      if (positiveNode)
+        selectedNodes.insert(positiveNode->getResult(0));
+      if (negativeNode)
+        selectedNodes.insert(negativeNode->getResult(0));
+      if (!state.branches
+               .try_emplace(branch->getResult(0),
+                            std::make_pair(positive->second, negative->second))
+               .second)
+        return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node branch result is duplicated");
+    }
+    for (Operation *node : generatedNodes)
+      if (!selectedNodes.contains(node->getResult(0)) && !node->getResult(0).use_empty())
+        return emitMappedFailure(
+            node, "NODAL-BACKEND-CAPABILITY-001",
+            "unselected generated analog-node array must not escape its direct body");
+  } else {
+    for (Operation &operation : body.front()) {
+      if (operation.getName().getStringRef() != "nodal.analog" || analog)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "fixed generated Verilog-A profile supports one analog region");
+      analog = &operation;
+    }
+  }
+  if (!analog)
+    return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                             "fixed generated Verilog-A range has no analog contribution region");
+  auto payload = prepareGeneratedAnalogPayload(
+      analog, generate, state, generatedNodeContributionProfile, generatedBranchValues);
+  if (failed(payload))
+    return failure();
+  Operation *eventProcedure = payload->procedure;
+  const unsigned contributions = payload->contributions;
+  const unsigned procedures = payload->procedures;
+  const unsigned boundStepEffects = payload->boundStepEffects;
   const unsigned profiles = static_cast<unsigned>(contributions != 0) +
                             static_cast<unsigned>(procedures != 0) +
                             static_cast<unsigned>(boundStepEffects != 0);
@@ -2466,7 +2534,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                              "one owned event procedure or boundStep effect");
   if (generatedNodeContributionProfile &&
       (contributions != generatedBranches.size() ||
-       contributedGeneratedBranches.size() != generatedBranches.size()))
+       payload->contributedBranches != generatedBranches.size()))
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node contribution profile requires one additive contribution per "
@@ -2713,6 +2781,205 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
   return success();
 }
 
+// A lexical structural scope carries declarations and template statements, not
+// one module-global net for every generated occurrence.
+LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &parentState,
+                                       llvm::StringRef aliasHelper, llvm::raw_ostream &output,
+                                       bool outermost = true) {
+  auto topology = resolveConservativeStructuralScope(generate);
+  auto domain = resolveGeneratedDomain(generate);
+  if (failed(topology) || failed(domain))
+    return failure();
+  if (failed(verifyTargetStructuralIntegerExpression(domain->lower)) ||
+      failed(verifyTargetStructuralIntegerExpression(domain->upperExclusive)) ||
+      failed(verifyTargetStructuralIntegerExpression(domain->step)) ||
+      domain->maximumTripCount > uint64_t(std::numeric_limits<int32_t>::max()))
+    return emitMappedFailure(generate, "NODAL-BACKEND-TOPOLOGY-001",
+                             "structural generated domain exceeds the signed32 target carrier");
+  int64_t updated = 0;
+  if (domain->attainedInductionBounds &&
+      (__builtin_add_overflow(domain->attainedInductionBounds->upper, domain->step.bounds.upper,
+                              &updated) ||
+       updated > std::numeric_limits<int32_t>::max()))
+    return emitMappedFailure(generate, "NODAL-BACKEND-TOPOLOGY-001",
+                             "structural generated update exceeds the signed32 target carrier");
+  const bool compound = generate->getNumOperands() == 3;
+  auto lower = compound ? generatedTargetBound(generate->getOperand(0), generate, "lower")
+                        : generatedTargetBound(generate, "lower");
+  auto upper = compound ? generatedTargetBound(generate->getOperand(1), generate, "upper")
+                        : generatedTargetBound(generate, "upper");
+  auto step = compound ? generatedTargetBound(generate->getOperand(2), generate, "step")
+                       : generatedTargetBound(generate, "step");
+  auto induction = generate->getAttrOfType<StringAttr>("induction");
+  auto region = generate->getAttrOfType<StringAttr>("region_id");
+  if (failed(lower) || failed(upper) || failed(step) || !induction || !region ||
+      !isPortableVerilogIdentifier(induction.getValue()))
+    return failure();
+  llvm::StringRef labelBase = region.getValue();
+  if (size_t dot = labelBase.rfind('.'); dot != llvm::StringRef::npos)
+    labelBase = labelBase.drop_front(dot + 1);
+  if (!isPortableVerilogIdentifier(labelBase))
+    return failure();
+  // Derived names of enclosing storage and expression carriers share the
+  // target namespace with the structural scope's genvar and label.
+  for (const auto &entry : parentState.eventState.names)
+    parentState.visibleTargetNames.insert(entry.second);
+  for (const auto *names :
+       {&parentState.waveformNames, &parentState.noiseNames, &parentState.transferNames})
+    for (const auto &entry : *names)
+      parentState.visibleTargetNames.insert(entry.second);
+  for (const auto &[name, expression] : parentState.nodeMapConstants)
+    parentState.visibleTargetNames.insert(name);
+  auto allocate = [](ModuleRenderState &state, llvm::StringRef base) {
+    std::string name = state.visibleTargetNames.insert(base).second
+                           ? base.str()
+                           : reserveStructuralName(state, base);
+    state.visibleTargetNames.insert(name);
+    return name;
+  };
+  const std::string indexName = allocate(parentState, induction.getValue());
+  const std::string label = allocate(parentState, labelBase);
+  ModuleRenderState state = parentState;
+  state.structuralScope = true;
+  state.nodeMapConstants.clear();
+  if (domain->induction)
+    state.structuralIndices[domain->induction] = TargetShapeExpression{
+        indexName, domain->attainedInductionBounds.value_or(domain->lower.bounds)};
+  std::string bodyText;
+  llvm::raw_string_ostream body(bodyText);
+  for (Operation *node : topology->nodes) {
+    auto name = node->getAttrOfType<StringAttr>("name");
+    auto type = node->getNumResults() == 1
+                    ? llvm::dyn_cast<TerminalType>(node->getResult(0).getType())
+                    : TerminalType();
+    if (!name || !isPortableVerilogIdentifier(name.getValue()) || !type ||
+        type.getDiscipline() != "electrical")
+      return emitMappedFailure(node, "NODAL-BACKEND-TOPOLOGY-002",
+                               "generated local node requires one owned electrical terminal");
+    auto target = allocate(state, name.getValue());
+    state.terminals[node->getResult(0)] = target;
+    body << "  electrical " << target << ";\n";
+  }
+  for (Operation *instance : topology->instances) {
+    if (!isPortableVerilogIdentifier(symbolName(instance)))
+      return failure();
+    state.targetInstanceNames[instance] = allocate(state, symbolName(instance));
+  }
+  llvm::SmallVector<Operation *> analogs, branches;
+  for (Operation &operation : generate->getRegion(0).front()) {
+    if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation)) {
+      auto reference = operation.getNumResults() == 1
+                           ? resolveConservativeShape(operation.getResult(0), &operation)
+                           : FailureOr<ConservativeShape>(failure());
+      if (failed(reference))
+        return failure();
+      if (llvm::isa<TerminalType>(operation.getResult(0).getType())) {
+        auto terminal = renderConservativeNodeSelection(&operation, generate, state);
+        if (failed(terminal))
+          return emitMappedFailure(
+              &operation, "NODAL-BACKEND-TOPOLOGY-003",
+              "generated selection exceeds the checked structural map profile");
+        state.terminals[operation.getResult(0)] = *terminal;
+      }
+    } else if (llvm::isa<BranchOp>(operation)) {
+      auto positive = state.terminals.find(operation.getOperand(0));
+      auto negative = state.terminals.find(operation.getOperand(1));
+      if (positive == state.terminals.end() || negative == state.terminals.end())
+        return failure();
+      state.branches[operation.getResult(0)] = {positive->second, negative->second};
+      if (auto name = operation.getAttrOfType<StringAttr>("name")) {
+        if (!name.getValue().empty()) {
+          if (!isPortableVerilogIdentifier(name.getValue()))
+            return failure();
+          state.branchNames[operation.getResult(0)] = allocate(state, name.getValue());
+          branches.push_back(&operation);
+        }
+      }
+    } else if (llvm::isa<AnalogOp>(operation)) {
+      analogs.push_back(&operation);
+    } else if (!llvm::isa<NodeOp, InstanceOp, InstanceTerminalOp, InstanceTerminalArrayOp,
+                          ConnectOp, ConnectArrayOp, ParameterOverrideOp, GenerateOp,
+                          ConstLiteralOp, ConstParameterRefOp, ConstExprOp, ConstantOp>(
+                   operation)) {
+      return emitMappedFailure(&operation, "NODAL-BACKEND-TOPOLOGY-004",
+                               "operation has no structural occurrence lowering");
+    }
+  }
+  for (const auto &[name, expression] : state.nodeMapConstants)
+    body << "  localparam integer " << name << " = " << expression << ";\n";
+  for (Operation *branch : branches) {
+    const auto &endpoints = state.branches.find(branch->getResult(0))->second;
+    body << "  branch (" << endpoints.first << ", " << endpoints.second << ") "
+         << state.branchNames.find(branch->getResult(0))->second << ";\n";
+  }
+  if (failed(renderHierarchy(generate, state, aliasHelper, body)))
+    return failure();
+  Operation *procedure = nullptr;
+  unsigned boundSteps = 0;
+  const llvm::DenseSet<Value> noLegacyIndexedBranches;
+  for (Operation *analog : analogs) {
+    auto payload =
+        prepareGeneratedAnalogPayload(analog, generate, state, false, noLegacyIndexedBranches);
+    if (failed(payload))
+      return failure();
+    if (payload->procedures > 1 || (procedure && payload->procedure))
+      return emitMappedFailure(analog, "NODAL-BACKEND-TOPOLOGY-005",
+                               "one ordered procedure is supported per generated occurrence");
+    if (payload->procedure)
+      procedure = payload->procedure;
+    boundSteps += payload->boundStepEffects;
+  }
+  if (boundSteps > 1)
+    return emitMappedFailure(generate, "NODAL-BACKEND-TOPOLOGY-005",
+                             "multiple generated boundStep effects remain unsupported");
+  if (procedure && failed(prepareGeneratedAnalogEventBackend(procedure, state.eventState, body, 2)))
+    return failure();
+  // VAMS concatenates analog blocks after elaboration in textual order. Keep
+  // each actual block beside its authored nested scopes; its own procedure still
+  // executes before that block's continuous reads, without duplicate execution.
+  for (Operation &operation : generate->getRegion(0).front()) {
+    if (llvm::isa<GenerateOp>(operation)) {
+      if (failed(renderStructuralGenerate(&operation, state, aliasHelper, body, false)))
+        return failure();
+    } else if (llvm::isa<AnalogOp>(operation)) {
+      body << "  analog begin\n";
+      if (procedure && procedure->getParentOp() == &operation &&
+          failed(renderAnalogEventProcedure(procedure, state.eventState, body)))
+        return failure();
+      if (failed(renderAnalog(&operation, state, body, false, true)))
+        return failure();
+      body << "  end\n";
+    }
+  }
+  body.flush();
+  auto inductionPath = generate->getAttrOfType<StringAttr>("induction_path");
+  llvm::json::Object correspondence{
+      {"source_scope", region.getValue()},
+      {"source_induction", inductionPath ? inductionPath.getValue() : llvm::StringRef()},
+      {"target_genvar", indexName},
+      {"target_label", label},
+      {"lower", lower->text},
+      {"upper_exclusive", upper->text},
+      {"step", step->text}};
+  output << "  // nodal.structural_scope " << llvm::json::Value(std::move(correspondence)) << "\n";
+  output << "  genvar " << indexName << ";\n";
+  if (outermost)
+    output << "  generate\n";
+  const llvm::StringRef loopIndent = outermost ? "    " : "  ";
+  output << loopIndent << "for (" << indexName << " = " << lower->text << "; " << indexName << " < "
+         << upper->text << "; " << indexName << " = " << indexName << " + " << step->text
+         << ") begin : " << label << "\n";
+  llvm::SmallVector<llvm::StringRef> lines;
+  llvm::StringRef(bodyText).split(lines, '\n');
+  for (auto line : lines)
+    if (!line.empty())
+      output << loopIndent << line << "\n";
+  output << loopIndent << "end\n";
+  if (outermost)
+    output << "  endgenerate\n";
+  return success();
+}
+
 LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelper,
                                llvm::raw_ostream &output) {
   ModuleRenderState state;
@@ -2865,6 +3132,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
   llvm::StringSet<> generatedInductions;
   llvm::StringSet<> generatedLabels;
   for (Operation *generate : generates) {
+    if (hasStructuralTopology(generate))
+      continue;
     llvm::SmallVector<Operation *, 2> targetRanges{generate};
     if (Operation *leaf = nestedGeneratedNodeContribution(generate)) {
       auto chain = resolveGeneratedEquationChain(generate, leaf);
@@ -2890,13 +3159,16 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
       if (!isPortableVerilogIdentifier(label) || !generatedLabels.insert(label).second)
         return emitMappedFailure(range, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated Verilog-A label is invalid or duplicated");
-      if (!isGeneratedNodeArrayTreeProfile(generate))
+      if (!isGeneratedNodeArrayTreeProfile(generate)) {
+        state.visibleTargetNames.insert(induction.getValue());
         output << "  genvar " << induction.getValue() << ";\n";
+      }
     }
   }
 
   for (Operation *generate : generates)
-    if (hasGeneratedNodeArray(generate) && failed(renderGeneratedNodeArray(generate, output)))
+    if (!hasStructuralTopology(generate) && hasGeneratedNodeArray(generate) &&
+        failed(renderGeneratedNodeArray(generate, output)))
       return failure();
 
   if (failed(renderHierarchy(definition, state, aliasHelper, output)))
@@ -2976,7 +3248,10 @@ LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelpe
         return failure();
   }
   for (Operation *generate : generates)
-    if (!isGeneratedNodeArrayTreeProfile(generate)) {
+    if (hasStructuralTopology(generate)) {
+      if (failed(renderStructuralGenerate(generate, state, aliasHelper, output)))
+        return failure();
+    } else if (!isGeneratedNodeArrayTreeProfile(generate)) {
       if (Operation *child = nestedGeneratedNodeContribution(generate)) {
         if (failed(renderGeneratedContribution(child, state, output, generate)))
           return failure();
@@ -3183,15 +3458,36 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
   llvm::StringSet<> moduleNames;
   for (Operation *definition : definitions) {
     moduleNames.insert(symbolName(definition));
-    for (Operation &operation : definition->getRegion(0).front()) {
-      if (!llvm::isa<ConnectArrayOp>(operation))
-        continue;
-      auto binding = resolveConservativeArrayBinding(&operation);
-      if (failed(binding))
-        return failure();
-      requiresAlias |= requiresConservativeAdapter(binding->actual.projection);
-    }
+    LogicalResult topologyResult = success();
+    definition->walk([&](Operation *operation) {
+      if (failed(topologyResult))
+        return;
+      if (llvm::isa<ConnectArrayOp>(operation)) {
+        auto binding = resolveConservativeArrayBinding(operation);
+        if (failed(binding)) {
+          topologyResult = failure();
+          return;
+        }
+        requiresAlias |= requiresConservativeAdapter(binding->actual.projection);
+      }
+      if (llvm::isa<GenerateOp>(operation) && hasStructuralTopology(operation)) {
+        auto scope = resolveConservativeStructuralScope(operation);
+        if (failed(scope)) {
+          topologyResult = failure();
+          return;
+        }
+        for (const auto &group : scope->scalarGroups) {
+          unsigned anchors = llvm::count_if(group.members, [](Value member) {
+            return !llvm::isa_and_nonnull<InstanceTerminalOp>(member.getDefiningOp());
+          });
+          requiresAlias |= anchors > 1;
+        }
+      }
+    });
+    if (failed(topologyResult))
+      return failure();
   }
+
   std::string aliasHelper = "nodal_alias_electrical";
   unsigned aliasCollision = 0;
   while (moduleNames.contains(aliasHelper))
@@ -3241,7 +3537,8 @@ LogicalResult verifyBackendTarget(llvm::StringRef candidate,
   return modules > 0 && modules == endmodules ? success() : failure();
 }
 
-LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfiguration &) {
+LogicalResult reparseBackendTarget(llvm::StringRef candidate,
+                                   const BackendConfiguration &configuration) {
   llvm::StringMap<unsigned> userFunctions;
   auto validParameterDeclaration = [](llvm::StringRef line) {
     llvm::StringRef code = line;
@@ -3447,6 +3744,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   using ConcreteArrayBounds = std::pair<std::optional<int64_t>, std::optional<int64_t>>;
   llvm::StringMap<ConcreteArrayBounds> arrayBounds;
   std::vector<HierarchyModuleSyntax> hierarchyModules;
+  // Render-local syntax context only. The scoped hierarchy parser delegates its
+  // analog payload back to this same grammar, with the actual visible declarations.
+  std::map<std::string, std::vector<std::string>> analogContextDeclarations;
+  std::map<std::string, std::vector<std::string>> parameterDeclarations;
   std::optional<std::size_t> currentHierarchyModule;
   // This structural target gate proves concrete bounds and validates symbolic
   // syntax/identity. Correlated symbolic bounds are proved per axis by the native
@@ -3640,6 +3941,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       auto count = llvm::count(llvm::StringRef(remaining).take_front(*consumed), '\n');
       if (!count)
         return failure();
+      analogContextDeclarations[hierarchyModules[*currentHierarchyModule].name].push_back(
+          remaining.substr(0, *consumed));
       lineIndex += count - 1;
       continue;
     }
@@ -3660,7 +3963,62 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       if (end == lines.size())
         return failure();
-      auto scope = parseStructuralGenerate(block);
+      // Find the analog block boundary lexically; all statements and expressions
+      // are subsequently checked by the existing analog/event grammar below.
+      auto scope =
+          parseStructuralGenerate(block, [](std::string_view text) -> std::optional<size_t> {
+            size_t position = 0;
+            unsigned depth = 0;
+            bool began = false;
+            while (position < text.size()) {
+              const char c = text[position];
+              if (c == '\0')
+                return std::nullopt;
+              if (c == '"') {
+                ++position;
+                bool closed = false;
+                while (position < text.size()) {
+                  if (text[position] == '\\') {
+                    position += 2;
+                    continue;
+                  }
+                  if (text[position++] == '"') {
+                    closed = true;
+                    break;
+                  }
+                }
+                if (!closed)
+                  return std::nullopt;
+              } else if (text.substr(position, 2) == "//") {
+                position = text.find('\n', position);
+                if (position == std::string_view::npos)
+                  return std::nullopt;
+              } else if (text.substr(position, 2) == "/*") {
+                position = text.find("*/", position + 2);
+                if (position == std::string_view::npos)
+                  return std::nullopt;
+                position += 2;
+              } else if (llvm::isAlpha(c) || c == '_' || c == '$') {
+                size_t start = position++;
+                while (position < text.size() && (llvm::isAlnum(text[position]) ||
+                                                  text[position] == '_' || text[position] == '$'))
+                  ++position;
+                auto token = text.substr(start, position - start);
+                if (token == "begin") {
+                  began = true;
+                  ++depth;
+                } else if (token == "end") {
+                  if (!depth)
+                    return std::nullopt;
+                  if (--depth == 0)
+                    return began ? std::optional<size_t>(position) : std::nullopt;
+                }
+              } else {
+                ++position;
+              }
+            }
+            return std::nullopt;
+          });
       if (!scope)
         return failure();
       hierarchyModules[*currentHierarchyModule].generatedScopes.push_back(std::move(*scope));
@@ -3787,6 +4145,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (!eventDeclaration(line))
         return failure();
       hierarchyModules[*currentHierarchyModule].hasBehavior = true;
+      analogContextDeclarations[hierarchyModules[*currentHierarchyModule].name].push_back(
+          line.str());
       continue;
     }
     if (line.starts_with("genvar ") && line.ends_with(";")) {
@@ -3823,6 +4183,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
                         [&](llvm::StringRef endpoint) { return validEndpoint(endpoint.trim()); }))
         return failure();
       eventSymbols.try_emplace(name, AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
+      analogContextDeclarations[hierarchyModules[*currentHierarchyModule].name].push_back(
+          line.str());
       continue;
     }
     if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ") ||
@@ -3897,6 +4259,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (validParameterDeclaration(line)) {
+      parameterDeclarations[hierarchyModules[*currentHierarchyModule].name].push_back(line.str());
       auto parameter = parameterDeclarationName(line);
       if (!parameter)
         return failure();
@@ -3937,8 +4300,57 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     return failure();
   }
+  auto validateScopedAnalog = [&](std::string_view text, const HierarchyModuleSyntax &visible,
+                                  const std::vector<std::string> &declarations) {
+    std::string wrapper;
+    llvm::raw_string_ostream output(wrapper);
+    output << "module " << visible.name;
+    if (!visible.ports.empty()) {
+      output << "(";
+      llvm::interleaveComma(visible.ports, output);
+      output << ")";
+    }
+    output << ";\n";
+    std::set<std::string> parameters;
+    for (const auto &declaration : parameterDeclarations[visible.name]) {
+      auto parameter = parameterDeclarationName(declaration);
+      if (!parameter)
+        return false;
+      parameters.insert(parameter->first);
+      output << declaration << "\n";
+    }
+    // An active genvar is a symbolic integer constant in each occurrence. Its
+    // exact domain is checked by the enclosing structural grammar, never by a
+    // substituted default in this analog-only syntax context.
+    for (const auto &name : visible.genvars) {
+      if (!parameters.insert(name).second)
+        return false;
+      output << "parameter integer " << name << " = 0;\n";
+    }
+    for (const auto &parameter : visible.integerDeclarations)
+      if (parameters.insert(parameter.name).second)
+        output << (parameter.fixed ? "localparam" : "parameter") << " integer " << parameter.name
+               << " = " << parameter.initializer << ";\n";
+    for (const auto &name : visible.nodes) {
+      const auto vector = visible.vectors.find(name);
+      std::string range;
+      if (vector != visible.vectors.end())
+        range = "[" + vector->second.lower + ":" + vector->second.upper + "] ";
+      if (auto direction = visible.portDirections.find(name);
+          direction != visible.portDirections.end())
+        output << direction->second << " " << range << name << ";\n";
+      output << "electrical " << range << name << ";\n";
+    }
+    for (const auto &declaration : analogContextDeclarations[visible.name])
+      output << declaration << "\n";
+    for (const auto &declaration : declarations)
+      output << declaration << "\n";
+    output << text << "\nendmodule\n";
+    output.flush();
+    return succeeded(reparseBackendTarget(wrapper, configuration));
+  };
   return sawModule && !insideModule && !insideAnalog && !generatedDepth &&
-                 verifyHierarchySyntax(hierarchyModules)
+                 verifyHierarchySyntax(hierarchyModules, validateScopedAnalog)
              ? success()
              : failure();
 }

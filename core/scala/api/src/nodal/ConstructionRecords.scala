@@ -67,12 +67,15 @@ private[nodal] final case class KernelDeclarationSnapshot(
     conservativeDimensions: Vector[String] = Vector.empty
 )
 
+private[nodal] final case class KernelGeneratedScope(owner: String, induction: String)
+
 private[nodal] final case class KernelInstanceSnapshot(
     path: String,
     childModule: String,
     lexicalDomain: Option[String],
     bindings: Vector[(String, String)],
-    parameterBindings: Vector[(String, String)] = Vector.empty
+    parameterBindings: Vector[(String, String)] = Vector.empty,
+    generatedScope: Option[KernelGeneratedScope] = None
 )
 
 private[nodal] final case class KernelConservativeArrayBindingSnapshot(
@@ -80,7 +83,8 @@ private[nodal] final case class KernelConservativeArrayBindingSnapshot(
     owner: String,
     instance: String,
     port: String,
-    actual: String
+    actual: String,
+    generatedScope: Option[KernelGeneratedScope] = None
 )
 
 private[nodal] final case class KernelParameterExpressionSnapshot(
@@ -112,7 +116,8 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     input: String,
     indices: Vector[String],
     resultDimensions: Vector[String] = Vector.empty,
-    sourceUses: Vector[String] = Vector.empty
+    sourceUses: Vector[String] = Vector.empty,
+    generatedScope: Option[KernelGeneratedScope] = None
 )
 
 private[nodal] final case class KernelShapeSliceSnapshot(
@@ -150,7 +155,9 @@ private[nodal] final case class KernelTopologyEdge(
     owner: String,
     kind: String,
     left: String,
-    right: String
+    right: String,
+    generatedScope: Option[KernelGeneratedScope] = None,
+    path: Option[String] = None
 )
 
 private[nodal] final case class KernelAnalogExpressionSnapshot(
@@ -336,7 +343,8 @@ private final case class ShapeIndexRecord(
     indices: Vector[Int | Expr[Integer]],
     resultDimensions: Vector[Any],
     conservative: Option[ConservativeSelectionKey] = None,
-    sourceUses: Vector[(ExpressionRef, Vector[Dimension])] = Vector.empty
+    sourceUses: Vector[(ExpressionRef, Vector[Dimension])] = Vector.empty,
+    generatedScope: Option[GeneratedRegionRecord] = None
 )
 
 private final case class ShapeSliceSelection(
@@ -356,7 +364,8 @@ private final class InstanceRecord(
     val ordinal: Int,
     val child: Long,
     val lexicalDomain: Option[ClockDomain],
-    val captured: Boolean
+    val captured: Boolean,
+    val generatedScope: Option[GeneratedRegionRecord] = None
 ):
   var defaultBinding: Option[ClockDomain] = None
   val namedBindings: mutable.ArrayBuffer[(ClockDomain, ClockDomain)] = mutable.ArrayBuffer.empty
@@ -374,7 +383,13 @@ private final class ModuleRecord(
   var expressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 
-private final case class Operation(owner: Long, kind: String, values: Vector[Any])
+private final case class Operation(
+    owner: Long,
+    kind: String,
+    values: Vector[Any],
+    generatedScope: Option[GeneratedRegionRecord] = None,
+    source: Option[SourceSpan] = None
+)
 
 private final class AnalogRegionRecord(
     val module: Long,

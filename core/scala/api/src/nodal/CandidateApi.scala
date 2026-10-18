@@ -352,7 +352,9 @@ object ClockDomain:
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
 
-  def apply[A](select: M => A): A = select(module)
+  def apply[A](select: M => A): A =
+    ConstructionKernel.validateInstanceSelection(this)
+    select(module)
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
     val parameter = select(module)

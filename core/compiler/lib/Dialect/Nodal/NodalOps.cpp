@@ -160,6 +160,19 @@ bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
   return false;
 }
 
+FailureOr<int64_t> staticShapeLiteral(Value value) {
+  Operation *definition = value ? value.getDefiningOp() : nullptr;
+  if (!definition || definition->getNumOperands() || definition->getNumResults() != 1 ||
+      definition->hasAttr("unit") ||
+      !((llvm::isa<nodal::ConstantOp>(definition) && value.getType().isIndex()) ||
+        (llvm::isa<nodal::ConstLiteralOp>(definition) && value.getType().isInteger(64))))
+    return failure();
+  auto literal = definition->getAttrOfType<IntegerAttr>("value");
+  if (!literal || literal.getType() != value.getType() || !literal.getValue().isSignedIntN(64))
+    return failure();
+  return literal.getValue().getSExtValue();
+}
+
 bool hasStaticShapeIndexDependencies(Value value, Operation *module,
                                      llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
                                      bool directModule = false) {
@@ -1742,12 +1755,10 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferStaticShapeIndexBounds(Oper
       definition->getParentOp() != module)
     return failure();
   if (value.getType().isIndex()) {
-    auto literal = definition->getAttrOfType<IntegerAttr>("value");
-    if (!llvm::isa<nodal::ConstantOp>(definition) || definition->hasAttr("unit") || !literal ||
-        !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
+    auto number = staticShapeLiteral(value);
+    if (failed(number))
       return failure();
-    const int64_t number = literal.getValue().getSExtValue();
-    return ParameterIntegerBounds{number, number};
+    return ParameterIntegerBounds{*number, *number};
   }
   llvm::SmallPtrSet<Operation *, 16> active;
   if (!value.getType().isInteger(64) ||
@@ -1762,11 +1773,10 @@ FailureOr<nodal::StaticShapeIndexIdentity> nodal::resolveStaticShapeIndexIdentit
     return failure();
   Operation *definition = value.getDefiningOp();
   if (llvm::isa<ConstantOp, ConstLiteralOp>(definition)) {
-    auto literal = definition->getAttrOfType<IntegerAttr>("value");
-    if (!literal || !literal.getValue().isSignedIntN(64))
+    auto number = staticShapeLiteral(value);
+    if (failed(number))
       return failure();
-    return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Literal,
-                                    literal.getValue().getSExtValue(), nullptr};
+    return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Literal, *number, nullptr};
   }
   if (llvm::isa<ConstParameterRefOp>(definition)) {
     auto name = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
@@ -1778,6 +1788,77 @@ FailureOr<nodal::StaticShapeIndexIdentity> nodal::resolveStaticShapeIndexIdentit
   if (!llvm::isa<ConstExprOp>(definition))
     return failure();
   return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Expression, 0, definition};
+}
+
+FailureOr<nodal::ShapeIndexProof> nodal::resolveShapeIndexProof(Value value, Operation *use) {
+  if (!value || !use)
+    return failure();
+  auto module = use->getParentOfType<nodal::ModuleOp>();
+  if (!module)
+    return failure();
+  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+    auto generated = llvm::dyn_cast_or_null<nodal::GenerateOp>(argument.getOwner()->getParentOp());
+    if (!generated || argument.getArgNumber() != 0 || !value.getType().isInteger(64) ||
+        generated->getParentOfType<nodal::ModuleOp>() != module ||
+        !generated->isProperAncestor(use))
+      return failure();
+    auto domain = resolveGeneratedDomain(generated);
+    if (failed(domain) || domain->induction != value)
+      return failure();
+    return ShapeIndexProof{{StaticShapeIndexIdentity::Induction, 0, generated},
+                           domain->attainedInductionBounds};
+  }
+  Operation *definition = value.getDefiningOp();
+  if (definition && llvm::isa<GenerateOp>(definition->getParentOp())) {
+    // Literal carriers may be emitted beside their generated use. Only the
+    // actual pure literal and lexical dominance establish this narrow proof;
+    // parameter and compound static dependencies retain module ownership.
+    auto number = staticShapeLiteral(value);
+    if (failed(number) || definition->getParentOfType<ModuleOp>() != module ||
+        !isDeclaredBeforeStructuredUse(definition, use))
+      return failure();
+    return ShapeIndexProof{{StaticShapeIndexIdentity::Literal, *number, nullptr},
+                           ParameterIntegerBounds{*number, *number}};
+  }
+  auto identity = resolveStaticShapeIndexIdentity(module, value);
+  auto bounds = inferStaticShapeIndexBounds(module, value);
+  if (failed(identity) || failed(bounds))
+    return failure();
+  return ShapeIndexProof{*identity, *bounds};
+}
+
+LogicalResult nodal::verifyShapeIndexInExtent(Value value, const StaticShapeDimension &extent,
+                                              Operation *use) {
+  auto reject = [&]() {
+    return use->emitOpError(
+        "NODAL-SHAPE-043-002: index is not in bounds for every legal shape and active occurrence");
+  };
+  auto proof = resolveShapeIndexProof(value, use);
+  if (failed(proof) || extent.bounds.lower <= 0)
+    return reject();
+  if (proof->identity.kind != StaticShapeIndexIdentity::Induction)
+    return proof->attainedBounds && proof->attainedBounds->lower >= 0 &&
+                   proof->attainedBounds->upper < extent.bounds.lower
+               ? success()
+               : reject();
+  auto domain = resolveGeneratedDomain(proof->identity.root);
+  if (failed(domain) || domain->step.bounds.lower <= 0)
+    return reject();
+  if (!proof->attainedBounds)
+    return success(); // Empty domains do not waive the surrounding type/owner checks.
+  if (domain->lower.bounds.lower < 0)
+    return reject();
+  if (domain->upperExclusive.bounds.upper <= extent.bounds.lower)
+    return success();
+  FailureOr<InstantiatedIntegerExpression> dimension =
+      extent.parameter ? resolveOwnedIntegerParameter(domain->module, extent.parameter)
+      : extent.expression
+          ? resolveOwnedIntegerExpression(domain->module, extent.expression)
+          : FailureOr<InstantiatedIntegerExpression>(makeLiteralIntegerExpression(extent.literal));
+  return succeeded(dimension) &&
+                 equivalentInstantiatedIntegerExpressions(domain->upperExclusive, *dimension)
+             ? success()
+             : reject();
 }
 
 FailureOr<nodal::AnalogArrayValue> nodal::resolveAnalogArrayValue(Value value, Operation *use) {
@@ -1924,7 +2005,7 @@ LogicalResult nodal::InstanceOp::verify() {
   auto module = getOperation()->getAttrOfType<FlatSymbolRefAttr>("module");
   if (!module || module.getValue().empty())
     return emitOpError("requires a referenced module symbol");
-  return success();
+  return verifyGeneratedStructuralOwnership(getOperation());
 }
 
 LogicalResult nodal::InstanceTerminalOp::verify() {
@@ -1940,7 +2021,7 @@ LogicalResult nodal::InstanceTerminalOp::verify() {
     return emitOpError() << "unsupported child terminal direction '" << direction << "'";
   if (textAttr(getOperation(), "flow_orientation") != "out_of_component")
     return emitOpError("child terminal flow must be oriented out of the parent component");
-  return success();
+  return verifyGeneratedStructuralOwnership(getOperation());
 }
 
 LogicalResult nodal::InstanceTerminalArrayOp::verify() {
@@ -2100,6 +2181,12 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
       symbolicMinima.try_emplace(dimension, minimumExtent);
     }
     Value indexValue = operation->getOperand(axis + 1);
+    if (conservative) {
+      auto extent = resolveStaticShapeDimension(owner, dimension);
+      if (failed(extent) || failed(verifyShapeIndexInExtent(indexValue, *extent, operation)))
+        return failure();
+      continue;
+    }
     Operation *index = indexValue.getDefiningOp();
     if (!index || index->getParentOfType<nodal::ModuleOp>() != owner)
       return operation->emitOpError(
@@ -2537,6 +2624,11 @@ LogicalResult nodal::GenerateOp::verify() {
   if (failed(verifyGeneratedBoundForm(getOperation())))
     return failure();
 
+  Block &body = getOperation()->getRegion(0).front();
+  if (body.getNumArguments() > 1 ||
+      (body.getNumArguments() == 1 && !body.getArgument(0).getType().isInteger(64)))
+    return emitOpError("NODAL-ITERATION-043-004: generated body accepts at most one i64 induction");
+
   auto regionId = getOperation()->getAttrOfType<StringAttr>("region_id");
   auto inductionPath = getOperation()->getAttrOfType<StringAttr>("induction_path");
   if (static_cast<bool>(regionId) != static_cast<bool>(inductionPath))
@@ -2566,7 +2658,15 @@ LogicalResult nodal::GenerateOp::verify() {
     return emitOpError(
         "NODAL-ITERATION-043-004: nested captured generation cannot omit ownership identities");
   }
-  return success();
+  if (body.getNumArguments()) {
+    if (!regionId)
+      return emitOpError("NODAL-ITERATION-043-004: induction argument requires a captured domain");
+    if (failed(resolveGeneratedDomain(getOperation())))
+      return failure();
+  }
+  if (failed(verifyNodeArraySelections(getOperation())))
+    return failure();
+  return success(succeeded(resolveConservativeStructuralScope(getOperation())));
 }
 
 LogicalResult nodal::HardwareLoopOp::verify() {

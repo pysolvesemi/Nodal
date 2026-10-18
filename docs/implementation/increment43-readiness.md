@@ -266,14 +266,22 @@ is governed by
 [NodalConservativeNodeArrays-DG-v0.3](../design-gates/NodalConservativeNodeArrays-DG-v0.3.md):
 boundary arrays, whole-child bindings, exact finalized instance parameter
 substitution and compact noncontiguous structural adapters. This is selected
-implementation scope with focused acceptance now passing: eight new public
+implementation scope published as `b534451750ab1674fc269632d3c226cdafb6fc89`
+with exact tested-tree equality and zero Actions runs. Focused acceptance passes: eight new public
 methods, 16 affected predecessors, 49 native binding cases and ten actual
 dual-target models. The shape-contract note records commands, source/output
 examples, architecture review and target-consumer limits. Source-authored
-generated topology remains the next required shared-scope implementation.
+generated topology is the next required shared-scope implementation under
+[NodalConservativeNodeArrays-DG-v0.4](../design-gates/NodalConservativeNodeArrays-DG-v0.4.md).
+Its selected implementation passes eight new public methods, 16 directly affected
+predecessors, 50 native cases and 13 actual dual-target models, with exact native
+and target replay. Shared ownership/domain proofs and scoped target emission
+received focused architecture review. Commands, integration repairs and finite
+limits are recorded in the shape-contract note. Generated persistent shaped-state
+declaration lifetime is the next required implementation.
 Extra operator/state/result fan-out,
-cross-range storage, broader conservative ports/views and generated
-connections/instances also remain open where not implemented. No required
+cross-range storage, broader conservative bindings and remaining generated compositions also remain
+open where not implemented. No required
 child or parent is closed by these checkpoints. Do not silently treat an
 intentional current rejection as the final feature.
 

@@ -93,7 +93,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private val shapeIndices = mutable.LinkedHashMap.empty[ExpressionRef, ShapeIndexRecord]
   private val shapeViews = mutable.LinkedHashMap.empty[ExpressionRef, ShapeViewRecord]
   private val nodeSelectionLookup = mutable.HashMap.empty[
-    DeclarationRef,
+    (DeclarationRef, Option[GeneratedRegionRecord]),
     mutable.LinkedHashMap[StructuralShapeCoordinates.Region, ExpressionRef]
   ]
   private var constructorFailure: Option[(Throwable, String)] = None
@@ -111,24 +111,35 @@ private final class ConstructionSession(val options: EmitOptions):
     fail("NODAL-CONSTRUCT-016", "hardware construction has no active Module")
   )
 
+  private def activeGeneratedRegion: Option[GeneratedRegionRecord] =
+    moduleStack.lastOption.flatMap(module =>
+      generationStack.reverseIterator.find(_.owner == module.handle)
+    )
+
+  private def generatedScopeSnapshot(region: Option[GeneratedRegionRecord])
+      : Option[KernelGeneratedScope] =
+    region.map(value =>
+      KernelGeneratedScope(generatedRegionPath(value), expressionPath(value.induction))
+    )
+
   def requireNoGeneratedEffect(role: String): Unit =
-    generationStack.lastOption.foreach: region =>
+    activeGeneratedRegion.foreach: region =>
       fail(
         "NODAL-ITERATION-043-004",
         s"$role is not permitted inside structural hdlRange until generated ownership and target lowering are available",
         Some(generatedRegionPath(region))
       )
 
-  def generatedRegionActive: Boolean = generationStack.nonEmpty
+  def generatedRegionActive: Boolean = activeGeneratedRegion.nonEmpty
 
   def generatedContinuousRegionActive: Boolean =
-    generationStack.lastOption.exists: generated =>
+    activeGeneratedRegion.exists: generated =>
       analogStack.lastOption.exists(_.generatedOwnership.contains(
         generatedRegionPath(generated) -> expressionPath(generated.induction)
       ))
 
   def generatedRegionOwnership: Option[(String, String)] =
-    generationStack.lastOption.map: region =>
+    activeGeneratedRegion.map: region =>
       generatedRegionPath(region) -> expressionPath(region.induction)
 
   private def moduleHandle(module: Module): Long =
@@ -142,7 +153,6 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def beginModule(module: Module): Unit =
-    requireNoGeneratedEffect("child Module construction")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
     val handle = nextModule
@@ -215,6 +225,26 @@ private final class ConstructionSession(val options: EmitOptions):
     domainIds.put(domain, reference)
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
+  private def validateGeneratedDependencies(values: Iterable[Any]): Unit =
+    val pending = mutable.ArrayBuffer.from(values)
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    while pending.nonEmpty do
+      pending.remove(pending.size - 1) match
+        case expression: KernelExpr[?]
+            if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
+          if expression.operation.contains("generate_index") then
+            val reference = Option(expressionIds.get(expression))
+            if !generationStack.exists(region =>
+                region.owner == currentModule.handle && reference.contains(region.induction)
+              )
+            then
+              fail(
+                "NODAL-ITERATION-043-004",
+                "generated induction dependency escaped its active owning Module/Generate scope"
+              )
+          else pending ++= expression.operands
+        case _ => ()
+
   def registerDeclaration(
       value: AnyRef,
       kind: KernelSignalKind,
@@ -229,6 +259,7 @@ private final class ConstructionSession(val options: EmitOptions):
     if kind != KernelSignalKind.AnalogNode && !activeGeneratedVariable then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
+    validateGeneratedDependencies(attributes.map(_._2))
     dataType.foreach(validateShapeType(_, module.handle, kind == KernelSignalKind.Variable))
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
@@ -382,6 +413,45 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     parameters.distinct.foreach(markStructuralParameterEffect(_, "shape"))
 
+  private def directGeneratedInduction(value: Any): Option[GeneratedRegionRecord] = value match
+    case expression: KernelExpr[?] if expression.operation.contains("generate_index") =>
+      val reference = Option(expressionIds.get(expression)).getOrElse(
+        fail("NODAL-SHAPE-043-006", "generated index has no captured identity")
+      )
+      val region = generationStack.find(value =>
+        value.owner == currentModule.handle && value.induction == reference
+      )
+        .getOrElse(fail("NODAL-SHAPE-043-006", "generated index escaped its active owning scope"))
+      if expression.resultType != Some(
+          KernelTypeDescriptor("Integer")
+        ) || expression.operands.nonEmpty
+      then
+        fail("NODAL-SHAPE-043-006", "generated index has invalid Integer provenance")
+      Some(region)
+    case _ => None
+
+  private def nodeIndexBound(value: Dimension, analysis: StructuralBoundAnalysis): StructuralBound =
+    directGeneratedInduction(value) match
+      case None => analysis(value)
+      case Some(region) =>
+        val lower = analysis(region.lower.asInstanceOf[Dimension])
+        val upper = analysis(region.upperExclusive.asInstanceOf[Dimension])
+        val step = analysis(region.step.asInstanceOf[Dimension])
+        if (region.maximumTripCount != 0 && lower.bounds.lower < 0) || step.bounds.lower <= 0 then
+          fail(
+            "NODAL-SHAPE-043-002",
+            "generated node index requires nonnegative lower and positive step"
+          )
+        // An empty scope has no attained index. Keep a representable placeholder envelope;
+        // its type, owner and shape checks still run before publishing the captured template.
+        val maximum = if region.maximumTripCount == 0 then lower.bounds.upper
+        else math.max(lower.bounds.upper, upper.bounds.upper - 1L)
+        StructuralBound(
+          value,
+          IterationDomain.Bounds(lower.bounds.lower, maximum),
+          (lower.parameters ++ upper.parameters ++ step.parameters).distinct
+        )
+
   private def nodeSelectionMap(
       input: DeclarationRef | ExpressionRef,
       indices: Vector[Dimension]
@@ -398,7 +468,7 @@ private final class ConstructionSession(val options: EmitOptions):
         case literal: Int => literal: Dimension
         case expression: Expr[?] => expression.asInstanceOf[Expr[Integer]]: Dimension
         case _ => fail("NODAL-SHAPE-043-006", "node-array map requires static Integer dimensions")
-      val checked = analysis(dimension)
+      val checked = nodeIndexBound(dimension, analysis)
       val identity = dimension match
         case literal: Int => literal.toString
         case parameter: Param[?] =>
@@ -406,7 +476,10 @@ private final class ConstructionSession(val options: EmitOptions):
         case expression: KernelExpr[?] => expression.literal match
             case Some(literal) => literal.value.toLong.toString
             case None =>
-              val ref = expressionIds.get(expression); s"expression:${ref.module}:${ref.index}"
+              val ref = expressionIds.get(expression)
+              val kind = if expression.operation.contains("generate_index") then "induction"
+              else "expression"
+              s"$kind:${ref.module}:${ref.index}"
         case _ => fail("NODAL-SHAPE-043-006", "node-array map lacks canonical static identity")
       bounds.update(identity, BigInt(checked.bounds.lower) -> BigInt(checked.bounds.upper))
       identity
@@ -459,7 +532,6 @@ private final class ConstructionSession(val options: EmitOptions):
       indices: Vector[Dimension]
   ): ExpressionRef =
     val module = currentModule
-    requireNoGeneratedEffect("generated node-array selection")
     val (input, reference) = nodeArrayInput(array)
     if value.discipline != Electrical then
       fail("NODAL-SHAPE-043-006", "node-array selection requires Electrical capability")
@@ -472,15 +544,26 @@ private final class ConstructionSession(val options: EmitOptions):
         "node-array index",
         signed64Literals = true
       )
-    val indexBounds = indices.map(analysis(_))
+    val indexBounds = indices.map(nodeIndexBound(_, analysis))
     val dimensionBounds = array.dimensions.map(analysis(_))
-    if indexBounds.zip(dimensionBounds).exists((index, dimension) =>
-        index.bounds.lower < 0L || index.bounds.upper >= dimension.bounds.lower
-      )
-    then
-      fail("NODAL-SHAPE-043-002", "node-array index is not valid for every legal extent")
+    indices.indices.foreach: axis =>
+      val index = indexBounds(axis)
+      val dimension = dimensionBounds(axis)
+      val valid = directGeneratedInduction(indices(axis)) match
+        case Some(region) =>
+          val upper = analysis(region.upperExclusive.asInstanceOf[Dimension])
+          region.maximumTripCount == 0 ||
+          analysis.sameIdentity(
+            region.upperExclusive.asInstanceOf[Dimension],
+            array.dimensions(axis)
+          ) ||
+          upper.bounds.upper <= dimension.bounds.lower
+        case None => index.bounds.lower >= 0L && index.bounds.upper < dimension.bounds.lower
+      if !valid then
+        fail("NODAL-SHAPE-043-002", "node-array index is not valid for every legal extent")
     val (_, key, axes) = nodeSelectionMap(input, indices)
-    val existing = nodeSelectionLookup.get(reference)
+    val scopeKey = reference -> activeGeneratedRegion
+    val existing = nodeSelectionLookup.get(scopeKey)
     val canonicalReference = existing.flatMap(_.get(key))
     if canonicalReference.isEmpty then
       existing.foreach(_.valuesIterator.foreach: previous =>
@@ -513,11 +596,12 @@ private final class ConstructionSession(val options: EmitOptions):
             indices,
             Vector.empty,
             Some(ConservativeSelectionKey(reference, key)),
-            Vector(occurrence -> indices)
+            Vector(occurrence -> indices),
+            activeGeneratedRegion
           )
         )
         nodeSelectionLookup.getOrElseUpdate(
-          reference,
+          scopeKey,
           mutable.LinkedHashMap.empty
         ).update(key, occurrence)
         occurrence
@@ -530,9 +614,14 @@ private final class ConstructionSession(val options: EmitOptions):
       case parameter: Param[?] => s"parameter:${declarationPath(declarationIds.get(parameter))}"
       case expression: KernelExpr[?] => expression.literal match
           case Some(literal) => s"literal:${literal.value.toLong}"
-          case None => s"expression:${expressionPath(expressionIds.get(expression))}"
+          case None =>
+            val tag =
+              if expression.operation.contains("generate_index") then "induction" else "expression"
+            s"$tag:${expressionPath(expressionIds.get(expression))}"
       case _ => fail("NODAL-SHAPE-043-006", "node-array selector lacks canonical identity")
-    s"${pathOfReference(index.input)}.at(${indices.mkString(",")})"
+    val suffix =
+      index.generatedScope.map(region => s".in(${generatedRegionPath(region)})").getOrElse("")
+    s"${pathOfReference(index.input)}.at(${indices.mkString(",")})$suffix"
 
   private def validateShapeType(
       dataType: DataType[?],
@@ -1043,6 +1132,9 @@ private final class ConstructionSession(val options: EmitOptions):
       structuralOperands: Vector[Any] = Vector.empty
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      validateGeneratedDependencies(value match
+        case expression: KernelExpr[?] => expression.operands
+        case _ => structuralOperands)
       val reference = ExpressionRef(module.handle, module.expressionCount)
       module.expressionCount += 1
       expressionIds.put(value, reference)
@@ -1408,7 +1500,8 @@ private final class ConstructionSession(val options: EmitOptions):
       parent.instances.size,
       childHandle,
       domainStack.lastOption,
-      captured
+      captured,
+      activeGeneratedRegion
     )
     parent.instances += record
     child.attached = true
@@ -1435,6 +1528,7 @@ private final class ConstructionSession(val options: EmitOptions):
             "NODAL-PARAMETER-BINDING-020",
             "only the owning parent Module can retrieve a captured child Instance"
           )
+        requireInstanceScope(record)
         if !record.captured || captured then
           fail("NODAL-HIERARCHY-017", "child Module was attached twice")
         (existing.asInstanceOf[Instance[M]], false)
@@ -1443,23 +1537,35 @@ private final class ConstructionSession(val options: EmitOptions):
         attachInstance(created, module, captured)
         (created, true)
 
+  private def requireInstanceScope(record: InstanceRecord): Unit =
+    if !currentModule.instances.exists(
+        _ eq record
+      ) || record.generatedScope != activeGeneratedRegion
+    then
+      fail("NODAL-HIERARCHY-044", "Instance handle escaped its exact lexical Module/Generate scope")
+
+  def validateInstanceSelection(instance: AnyRef): Unit =
+    requireInstanceScope(instanceRecord(instance))
+
   private def instanceRecord(instance: AnyRef): InstanceRecord =
     Option(instanceIds.get(instance)).getOrElse(
       fail("NODAL-BINDING-016", "binding targets an unknown Instance")
     )
 
   def bindDefault(instance: AnyRef, domain: ClockDomain): Unit =
-    instanceRecord(instance).defaultBinding = Some(domain)
+    val record = instanceRecord(instance)
+    requireInstanceScope(record)
+    record.defaultBinding = Some(domain)
 
   def bindNamed(instance: AnyRef, requirement: ClockDomain, domain: ClockDomain): Unit =
     val record = instanceRecord(instance)
+    requireInstanceScope(record)
     val requirementReference = domainRef(requirement)
     if requirementReference.module != record.child then
       fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
     record.namedBindings += requirement -> domain
 
   def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
-    requireNoGeneratedEffect("generated conservative array binding")
     if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
       fail("NODAL-SHAPE-043-007", "conservative array bindings require module scope")
     val parent = currentModule
@@ -1480,6 +1586,7 @@ private final class ConstructionSession(val options: EmitOptions):
         "array binding requires one whole port of an attached immediate child and one parent-owned actual"
       )
     val ((instance, port), actual) = candidates.head
+    requireInstanceScope(instance)
     val (reference, _) = nodeArrayInput(actual)
     if left.discipline != Electrical || right.discipline != Electrical then
       fail("NODAL-SHAPE-043-007", "array binding requires matching Electrical capabilities")
@@ -1506,7 +1613,6 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
-    requireNoGeneratedEffect("generated conservative connection")
     val parent = currentModule
     val portKinds = Set(
       KernelSignalKind.AnalogInput,
@@ -1534,6 +1640,19 @@ private final class ConstructionSession(val options: EmitOptions):
       // attachInstance alone marks a child attached, after recording it in its exact parent.
       val childPort = owner.attached && owner.parentAtConstruction.contains(parent.handle) &&
         portKinds.contains(declaration.kind)
+      if childPort then
+        parent.instances.find(_.child == reference.module).foreach(requireInstanceScope)
+      if local then
+        val generatedDeclaration =
+          records(reference.module).generatedRegions.find(_.declarations.contains(reference))
+        if generatedDeclaration.exists(region => !generationStack.exists(_ eq region)) then
+          fail("NODAL-HIERARCHY-044", "local node escaped its generated lexical scope")
+        val selectionScope = value match
+          case selectedNode: Node[?] =>
+            selectedNode.endpointReference.flatMap(shapeIndices.get).flatMap(_.generatedScope)
+          case _ => None
+        if selectionScope.exists(region => !generationStack.exists(_ eq region)) then
+          fail("NODAL-HIERARCHY-044", "selected endpoint escaped its generated lexical scope")
       if !local && !childPort then
         fail(
           "NODAL-HIERARCHY-040",
@@ -1657,6 +1776,7 @@ private final class ConstructionSession(val options: EmitOptions):
         "NODAL-PARAMETER-BINDING-020",
         "instance parameter override must be recorded by the owning parent Module"
       )
+    requireInstanceScope(record)
     val targetReference = parameter match
       case reference: AnyRef =>
         Option(declarationIds.get(reference)).getOrElse(
@@ -1757,7 +1877,8 @@ private final class ConstructionSession(val options: EmitOptions):
   private final case class StructuralBound(
       value: Any,
       bounds: IterationDomain.Bounds,
-      parameters: Vector[DeclarationRef]
+      parameters: Vector[DeclarationRef],
+      identity: Option[Int] = None
   )
 
   private def structuralRangeAttribute(
@@ -1777,6 +1898,26 @@ private final class ConstructionSession(val options: EmitOptions):
   ):
     private val cache = mutable.HashMap.empty[ExpressionRef, StructuralBound]
     private val active = mutable.HashSet.empty[ExpressionRef]
+    private val identityIds = mutable.HashMap.empty[(Int, String, Vector[Int]), Int]
+    private val identityKeys = mutable.ArrayBuffer.empty[(Int, String, Vector[Int])]
+
+    private def intern(key: (Int, String, Vector[Int])): Int = identityIds.getOrElseUpdate(
+      key, {
+        val id = identityKeys.size
+        identityKeys += key
+        id
+      }
+    )
+
+    private def parameterFact(parameter: Param[?]): StructuralBound =
+      val fact = parameterBound(parameter, owner, diagnosticCode, subject)
+      val reference = fact.parameters.head
+      fact.copy(identity =
+        Some(intern((1, s"${reference.module}:${reference.index}", Vector.empty)))
+      )
+
+    def sameIdentity(left: Dimension, right: Dimension): Boolean =
+      apply(left).identity == apply(right).identity
 
     private def invalid(message: String, path: Option[String] = None): Nothing =
       fail(diagnosticCode, message.replace("hdlRange", subject), path)
@@ -1814,7 +1955,7 @@ private final class ConstructionSession(val options: EmitOptions):
                   invalid("hdlRange Integer expression has invalid arity")
                 val operands = expression.operands.map:
                   case parameter: Param[?] =>
-                    parameterBound(parameter, owner, diagnosticCode, subject)
+                    parameterFact(parameter)
                   case child: KernelExpr[?] => expressionBound(child)
                   case _ => invalid("hdlRange expression has a non-static or untyped operand")
                 // Correlation is valid only for the very same captured operand. Equal intervals
@@ -1829,7 +1970,16 @@ private final class ConstructionSession(val options: EmitOptions):
                         problem => invalid(problem.message, Some(expressionPath(reference))),
                         identity
                       )
-                StructuralBound(expression, bounds, operands.flatMap(_.parameters).distinct)
+                val operandIds = operands.map(_.identity.get)
+                val key = if operandIds.forall(id => identityKeys(id)._1 == 0) then
+                  (0, bounds.lower.toString, Vector.empty[Int])
+                else (2, expression.operation.get, operandIds)
+                StructuralBound(
+                  expression,
+                  bounds,
+                  operands.flatMap(_.parameters).distinct,
+                  Some(intern(key))
+                )
             cache.update(reference, result)
             result
           finally
@@ -1846,12 +1996,22 @@ private final class ConstructionSession(val options: EmitOptions):
           else value.value.toIntOption.map(_.toLong)
         )
         .getOrElse(invalid("hdlRange literal must be a representable public Integer literal"))
-      StructuralBound(expression, IterationDomain.Bounds(literal, literal), Vector.empty)
+      StructuralBound(
+        expression,
+        IterationDomain.Bounds(literal, literal),
+        Vector.empty,
+        Some(intern((0, literal.toString, Vector.empty)))
+      )
 
     def apply(value: Int | Expr[Integer]): StructuralBound = value match
       case literal: Int =>
-        StructuralBound(literal, IterationDomain.Bounds(literal, literal), Vector.empty)
-      case parameter: Param[?] => parameterBound(parameter, owner, diagnosticCode, subject)
+        StructuralBound(
+          literal,
+          IterationDomain.Bounds(literal, literal),
+          Vector.empty,
+          Some(intern((0, literal.toString, Vector.empty)))
+        )
+      case parameter: Param[?] => parameterFact(parameter)
       // Preserve the existing by-value handling of a direct immutable literal. A literal inside
       // an expression graph, in contrast, needs a captured owner for canonical serialization.
       case expression: KernelExpr[?] if expression.literal.nonEmpty => literalBound(expression)
@@ -1955,7 +2115,7 @@ private final class ConstructionSession(val options: EmitOptions):
         upperBound.bounds,
         stepBound.bounds,
         maximum,
-        identicalBounds = sameStructuralBound(lower, upperExclusive)
+        identicalBounds = analysis.sameIdentity(lower, upperExclusive)
       )
       .fold(
         problem =>
@@ -2003,8 +2163,6 @@ private final class ConstructionSession(val options: EmitOptions):
       record
     )
     val domainCount = module.domains.size
-    val instanceCount = module.instances.size
-    val operationCount = operations.size
     val analogRegionCount = analogRegions.size
     val continuousOperatorCount = continuousOperators.size
     val waveformOperatorCount = waveformOperators.size
@@ -2087,14 +2245,16 @@ private final class ConstructionSession(val options: EmitOptions):
             "contribution",
           Some(generatedRegionPath(record))
         )
-      if module.domains.size != domainCount || module.instances.size != instanceCount ||
-        operations.size != operationCount
-      then
+      if module.domains.size != domainCount then
         fail(
           "NODAL-ITERATION-043-004",
-          "generated domains, instances, connections, assignments, and unsupported analog effects require the next F-043 ownership stage",
+          "generated domains require their own lexical ownership contract",
           Some(provisionalModulePath(module.handle))
         )
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, generatedRegionPath(record))
+        throw failure
     finally
       val removed = generationStack.remove(generationStack.size - 1)
       if removed ne record then
@@ -2508,7 +2668,8 @@ private final class ConstructionSession(val options: EmitOptions):
   def operation(kind: String, values: Any*): Unit =
     val generatedAnalogContribution =
       kind == "analog-contribute" && generatedContinuousRegionActive
-    if !generatedAnalogContribution then
+    val structuralTopology = kind == "node-connect" || kind == "node-array-connect"
+    if !generatedAnalogContribution && !structuralTopology then
       requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" then
       analogSemanticContext.foreach: context =>
@@ -2529,7 +2690,15 @@ private final class ConstructionSession(val options: EmitOptions):
       val owner = moduleStack.lastOption.map(_.handle).getOrElse(
         fail("NODAL-LIFECYCLE-018", "operation requires an active Module")
       )
-      val captured = Operation(owner, kind, values.toVector)
+      val captured = Operation(
+        owner,
+        kind,
+        values.toVector,
+        activeGeneratedRegion,
+        if structuralTopology && activeGeneratedRegion.nonEmpty then
+          semanticOrigin.captureSemanticSource()
+        else None
+      )
       operations += captured
       moduleStack.lastOption.foreach(module =>
         semanticOrigin.captureOperation(module.handle, kind, captured.values)
@@ -2895,7 +3064,8 @@ private final class ConstructionSession(val options: EmitOptions):
           owner,
           instancePath(operation.owner, binding.instanceOrdinal),
           declarationPath(binding.port),
-          pathOfReference(binding.actual)
+          pathOfReference(binding.actual),
+          generatedScopeSnapshot(operation.generatedScope)
         ) -> binding
 
   private def markConservativeBindingDependencies(): Unit =
@@ -2966,7 +3136,8 @@ private final class ConstructionSession(val options: EmitOptions):
               Some(port.path)
             )
 
-  private def topology(): Vector[KernelTopologyEdge] =
+  private def topologyRecords(): Vector[(KernelTopologyEdge, Operation)] =
+    val ordinals = mutable.HashMap.empty[Long, Int]
     val edges = operations.toVector.flatMap: operation =>
       if Set("node-connect", "terminal-connect", "inout-pass-through").contains(operation.kind) &&
         operation.values.size >= 2
@@ -2976,10 +3147,22 @@ private final class ConstructionSession(val options: EmitOptions):
             val (first, second) =
               if operation.kind == "node-connect" && right < left then right -> left
               else left -> right
-            Some(KernelTopologyEdge(modulePath(operation.owner), operation.kind, first, second))
+            val ordinal = ordinals.getOrElse(operation.owner, 0)
+            ordinals.update(operation.owner, ordinal + 1)
+            val path = operation.generatedScope.map(_ =>
+              s"${modulePath(operation.owner)}.connection_$ordinal"
+            )
+            Some(KernelTopologyEdge(
+              modulePath(operation.owner),
+              operation.kind,
+              first,
+              second,
+              generatedScopeSnapshot(operation.generatedScope),
+              path
+            ) -> operation)
           case _ => None
       else None
-    edges.sortBy(edge => (edge.owner, edge.kind, edge.left, edge.right))
+    edges.sortBy((edge, _) => (edge.owner, edge.kind, edge.left, edge.right, edge.path))
 
   private def clockEdgeName(edge: ClockEdge): String = edge match
     case ClockEdge.Rising => "rising"
@@ -3088,7 +3271,8 @@ private final class ConstructionSession(val options: EmitOptions):
           modulePath(instance.child),
           instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
           bindings.toVector.sortBy(_._1),
-          parameters.sortBy(_._1)
+          parameters.sortBy(_._1),
+          generatedScopeSnapshot(instance.generatedScope)
         )
       KernelModuleSnapshot(
         modulePath(module.handle),
@@ -3170,7 +3354,8 @@ private final class ConstructionSession(val options: EmitOptions):
         indices = index.indices.map(generatedBound),
         resultDimensions =
           index.resultDimensions.map(renderShapeDimension(_, index.reference.module)),
-        sourceUses = index.sourceUses.map(use => expressionPath(use._1)).sorted
+        sourceUses = index.sourceUses.map(use => expressionPath(use._1)).sorted,
+        generatedScope = generatedScopeSnapshot(index.generatedScope)
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
@@ -3518,7 +3703,9 @@ private final class ConstructionSession(val options: EmitOptions):
     val reachable = capturedExpressionClosure(
       (lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
         shapeDimensionExpressionRoots).collect:
-        case expression: KernelExpr[?] if expression.literal.isEmpty => expression
+        case expression: KernelExpr[?]
+            if expression.literal.isEmpty && !expression.operation.contains("generate_index") =>
+          expression
     )
 
     expressionValues.toVector.collect:
@@ -3617,6 +3804,7 @@ private final class ConstructionSession(val options: EmitOptions):
         )
     val abi = interfaceAbi(resolved)
     val arrayBindings = conservativeArrayBindingRecords
+    val topologyEdges = topologyRecords()
     val snapshot = ConstructionSnapshot(
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
@@ -3638,12 +3826,14 @@ private final class ConstructionSession(val options: EmitOptions):
       modules = modules,
       interfaceAbi = abi,
       resolvedNets = resolvedNets(),
-      topology = topology(),
+      topology = topologyEdges.map(_._1),
       names = semantic.names,
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ endpointSources ++ arrayBindings.flatMap((binding, record) =>
+        (semantic.sourceMap ++ endpointSources ++ topologyEdges.flatMap((edge, record) =>
+          edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
+        ) ++ arrayBindings.flatMap((binding, record) =>
           record.source.map(SourceMapEntry(binding.path, _))
         ) ++ AnalogUserFunctionRuntime.sourceMap(
           userFunctions.snapshots(modulePath)

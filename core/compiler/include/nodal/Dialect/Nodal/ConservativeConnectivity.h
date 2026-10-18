@@ -42,6 +42,24 @@ resolveConservativeArrayBinding(mlir::Operation *operation);
 mlir::LogicalResult verifyConservativeInstanceArray(mlir::Operation *operation);
 mlir::LogicalResult verifyConservativeArrayBindings(mlir::Operation *module);
 
+/// Derived single-occurrence relations for one immediate Module/Generate scope.
+/// No generated endpoint is inserted into the module-level connectivity graph.
+struct ConservativeScalarGroup {
+  llvm::SmallVector<mlir::Value, 4> members;
+  llvm::SmallVector<mlir::Operation *, 4> connections;
+};
+struct ConservativeStructuralScope {
+  mlir::Operation *module = nullptr;
+  mlir::Operation *scope = nullptr;
+  llvm::SmallVector<mlir::Operation *, 4> instances;
+  llvm::SmallVector<mlir::Operation *, 4> nodes;
+  llvm::SmallVector<mlir::Operation *, 4> childScopes;
+  llvm::SmallVector<ConservativeScalarGroup, 2> scalarGroups;
+  llvm::SmallVector<ConservativeArrayBinding, 2> arrayBindings;
+};
+mlir::FailureOr<ConservativeStructuralScope>
+resolveConservativeStructuralScope(mlir::Operation *scope);
+
 /// Port incidence is retained independently of physical connectivity aliases.
 struct ConservativePortIncidence {
   mlir::Operation *declaration = nullptr;

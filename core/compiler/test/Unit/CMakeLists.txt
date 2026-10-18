@@ -386,3 +386,20 @@ llvm_update_compile_flags(nodal-boundary-array-backend-unit-tests)
 target_link_libraries(nodal-boundary-array-backend-unit-tests
   PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.boundary-array-backend-unit COMMAND nodal-boundary-array-backend-unit-tests)
+
+add_executable(nodal-generated-topology-backend-unit-tests GeneratedTopologyBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-topology-backend-unit-tests)
+target_link_libraries(nodal-generated-topology-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-topology-backend-unit COMMAND nodal-generated-topology-backend-unit-tests)
+
+add_test(NAME nodal.native.generated-topology-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_topology_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-generated-topology-evidence"
+)
+set_tests_properties(nodal.native.generated-topology-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

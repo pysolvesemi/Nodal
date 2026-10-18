@@ -129,6 +129,32 @@ FailureOr<TargetShapeExpression> product(const TargetShapeExpression &left,
 }
 } // namespace
 
+LogicalResult
+verifyTargetStructuralIntegerExpression(const InstantiatedIntegerExpression &expression) {
+  if (!expression.root || !portable(expression.bounds))
+    return failure();
+  llvm::SmallVector<const InstantiatedIntegerNode *> work{expression.root.get()};
+  llvm::DenseSet<const InstantiatedIntegerNode *> visited;
+  llvm::DenseSet<Value> active;
+  llvm::DenseSet<Operation *> parameters;
+  while (!work.empty()) {
+    const auto *node = work.pop_back_val();
+    if (!visited.insert(node).second)
+      continue;
+    if (!portable(node->bounds))
+      return failure();
+    if (node->parameter && !portableParameterInitializer(node->parameter, active, parameters))
+      return failure();
+    if (node->origin && node->origin->getNumResults() == 1 &&
+        llvm::isa<ConstExprOp, ConstLiteralOp, ConstParameterRefOp>(node->origin) &&
+        !portableStaticDAG(node->origin->getResult(0), active, parameters))
+      return failure();
+    for (const auto &operand : node->operands)
+      work.push_back(operand.get());
+  }
+  return success();
+}
+
 FailureOr<TargetShapedLayout> resolveTargetShapedLayout(Operation *module,
                                                         llvm::StringRef dimensions) {
   auto maximum = inferStaticShapeMaximumCardinality(module, dimensions);
@@ -222,9 +248,10 @@ FailureOr<llvm::SmallVector<TargetShapeExpression>> unflatten(const TargetShapeE
 }
 } // namespace
 
-FailureOr<ShapedProjectionProgram>
-renderShapedProjectionProgram(const StaticShapeProjection &reference, llvm::StringRef ordinal,
-                              llvm::function_ref<std::string(unsigned)> stageName) {
+FailureOr<ShapedProjectionProgram> renderShapedProjectionProgram(
+    const StaticShapeProjection &reference, llvm::StringRef ordinal,
+    llvm::function_ref<std::string(unsigned)> stageName,
+    llvm::function_ref<FailureOr<TargetShapeExpression>(Value, Operation *)> scopedIndex) {
   Operation *operation = reference.root.getDefiningOp();
   auto module = operation ? operation->getParentOfType<ModuleOp>() : ModuleOp();
   if (!module)
@@ -266,7 +293,8 @@ renderShapedProjectionProgram(const StaticShapeProjection &reference, llvm::Stri
     if (llvm::isa<ShapeIndexOp>(projection)) {
       llvm::SmallVector<TargetShapeExpression> prefix;
       for (Value index : projection->getOperands().drop_front()) {
-        auto rendered = renderShapeStaticIndex(module, index);
+        auto rendered =
+            scopedIndex ? scopedIndex(index, projection) : renderShapeStaticIndex(module, index);
         if (failed(rendered))
           return failure();
         prefix.push_back(*rendered);
@@ -278,9 +306,12 @@ renderShapedProjectionProgram(const StaticShapeProjection &reference, llvm::Stri
       if (!axis || axis.getInt() < 0 || uint64_t(axis.getInt()) >= coordinates.size() ||
           projection->getNumOperands() != 4)
         return failure();
-      auto lower = renderShapeStaticIndex(module, projection->getOperand(1));
-      auto upper = renderShapeStaticIndex(module, projection->getOperand(2));
-      auto length = renderShapeStaticIndex(module, projection->getOperand(3));
+      auto renderBound = [&](Value value) {
+        return scopedIndex ? scopedIndex(value, projection) : renderShapeStaticIndex(module, value);
+      };
+      auto lower = renderBound(projection->getOperand(1));
+      auto upper = renderBound(projection->getOperand(2));
+      auto length = renderBound(projection->getOperand(3));
       if (failed(lower) || failed(upper) || failed(length))
         return failure();
       auto shifted = sum(coordinates[axis.getInt()], *lower);

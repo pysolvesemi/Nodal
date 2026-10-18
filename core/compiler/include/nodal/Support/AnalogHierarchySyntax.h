@@ -7,6 +7,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -52,13 +53,36 @@ struct HierarchyIntegerParameterSyntax {
   bool fixed = false;
 };
 
-struct HierarchyStructuralGenerateSyntax {
+/// One ordered value tree owns structural statements and their lexical scope.
+/// `count` retains the legacy spelling for the loop's upper-exclusive bound.
+struct HierarchyStructuralStatementSyntax {
+  enum class Kind {
+    Generate,
+    LocalParameter,
+    ElectricalNode,
+    Genvar,
+    Instance,
+    AnalogDeclaration,
+    Analog
+  };
+  Kind kind = Kind::Generate;
   std::string genvar;
+  std::string lower = "0";
   std::string count;
+  std::string step = "1";
   std::string label;
-  std::vector<HierarchyIntegerParameterSyntax> localParameters;
+  std::vector<HierarchyStructuralStatementSyntax> body;
+  HierarchyIntegerParameterSyntax parameter;
   HierarchyInstanceSyntax instance;
+  std::string name;
+  std::string text;
+  std::optional<HierarchyVectorSyntax> vector;
 };
+using HierarchyStructuralGenerateSyntax = HierarchyStructuralStatementSyntax;
+
+/// The analog grammar remains owned by the caller. Return the exact number of
+/// consumed bytes for one supported analog block, or reject it.
+using HierarchyAnalogBlockParser = std::function<std::optional<std::size_t>(std::string_view)>;
 
 /// Recognizes the emitted conservative hierarchy profile, including vector actuals.
 /// This does not claim to be an independent or general Verilog-A parser.
@@ -155,9 +179,24 @@ public:
     return result;
   }
 
-  std::optional<HierarchyStructuralGenerateSyntax> structuralGenerate() {
-    if (text.find('\0') != std::string_view::npos || !keyword("generate") || !keyword("for") ||
-        !consume('('))
+  std::optional<HierarchyStructuralGenerateSyntax>
+  structuralGenerate(const HierarchyAnalogBlockParser &parseAnalog = {}) {
+    if (text.find('\0') != std::string_view::npos || !keyword("generate"))
+      return std::nullopt;
+    auto result = structuralLoop(parseAnalog);
+    if (!result || !keyword("endgenerate") || peek() != '\0')
+      return std::nullopt;
+    return result;
+  }
+
+private:
+  std::string_view text;
+  std::size_t position = 0;
+  bool malformedWhitespace = false;
+
+  std::optional<HierarchyStructuralGenerateSyntax>
+  structuralLoop(const HierarchyAnalogBlockParser &parseAnalog) {
+    if (!keyword("for") || !consume('('))
       return std::nullopt;
     HierarchyStructuralGenerateSyntax result;
     auto induction = identifier();
@@ -165,13 +204,13 @@ public:
     if (!induction || !consume('='))
       return std::nullopt;
     auto initial = constant(references, ';');
-    if (!initial || *initial != "0" || !consume(';'))
+    if (!initial || !consume(';'))
       return std::nullopt;
     auto condition = identifier();
     if (!condition || *condition != *induction || !consume('<'))
       return std::nullopt;
-    auto count = constant(references, ';');
-    if (!count || !consume(';'))
+    auto upper = constant(references, ';');
+    if (!upper || !consume(';'))
       return std::nullopt;
     auto destination = identifier();
     if (!destination || *destination != *induction || !consume('='))
@@ -180,51 +219,182 @@ public:
     if (!update || *update != *induction || !consume('+'))
       return std::nullopt;
     auto step = constant(references);
-    if (!step || *step != "1" || !consume(')') || !keyword("begin") || !consume(':'))
+    if (!step || !consume(')') || !keyword("begin") || !consume(':'))
       return std::nullopt;
     auto label = identifier();
     if (!label)
       return std::nullopt;
     result.genvar = *induction;
-    result.count = *count;
+    result.lower = *initial;
+    result.count = *upper;
+    result.step = *step;
     result.label = *label;
-    while (keyword("localparam")) {
-      if (!keyword("integer"))
+    while (!keyword("end")) {
+      if (peek() == '\0')
         return std::nullopt;
-      auto name = identifier();
-      if (!name || !consume('='))
-        return std::nullopt;
-      auto initializer = constant(references, ';');
-      if (!initializer || !consume(';'))
-        return std::nullopt;
-      result.localParameters.push_back({*name, *initializer, true});
+      space();
+      const auto start = position;
+      HierarchyStructuralStatementSyntax statement;
+      using Kind = HierarchyStructuralStatementSyntax::Kind;
+      if (keyword("localparam")) {
+        if (!keyword("integer"))
+          return std::nullopt;
+        auto name = identifier();
+        if (!name || !consume('='))
+          return std::nullopt;
+        auto initializer = constant(references, ';');
+        if (!initializer || !consume(';'))
+          return std::nullopt;
+        statement.kind = Kind::LocalParameter;
+        statement.parameter = {*name, *initializer, true};
+      } else if (keyword("electrical")) {
+        statement.kind = Kind::ElectricalNode;
+        if (consume('[')) {
+          auto lower = constant(references, ':');
+          if (!lower || !consume(':'))
+            return std::nullopt;
+          auto upper = constant(references, ']');
+          if (!upper || !consume(']'))
+            return std::nullopt;
+          statement.vector = HierarchyVectorSyntax{*lower, *upper};
+        }
+        do {
+          auto name = identifier();
+          if (!name)
+            return std::nullopt;
+          statement.name = *name;
+          result.body.push_back(statement);
+        } while (consume(','));
+        if (!consume(';'))
+          return std::nullopt;
+        continue;
+      } else if (keyword("genvar")) {
+        auto name = identifier();
+        if (!name || !consume(';'))
+          return std::nullopt;
+        statement.kind = Kind::Genvar;
+        statement.name = *name;
+      } else if (keyword("for")) {
+        position = start;
+        auto nested = structuralLoop(parseAnalog);
+        if (!nested)
+          return std::nullopt;
+        statement = std::move(*nested);
+      } else if (keyword("analog")) {
+        if (!parseAnalog)
+          return std::nullopt;
+        auto consumed = parseAnalog(text.substr(start));
+        if (!consumed || !*consumed || *consumed > text.size() - start)
+          return std::nullopt;
+        position = start + *consumed;
+        statement.kind = Kind::Analog;
+        statement.text = std::string(text.substr(start, *consumed));
+      } else if (keyword("branch")) {
+        if (!consume('('))
+          return std::nullopt;
+        unsigned parentheses = 1;
+        while (position < text.size() && parentheses) {
+          const char token = text[position++];
+          if (token == '(')
+            ++parentheses;
+          else if (token == ')')
+            --parentheses;
+        }
+        auto name = identifier();
+        if (parentheses || !name || !consume(';'))
+          return std::nullopt;
+        statement.kind = Kind::AnalogDeclaration;
+        statement.name = *name;
+        statement.text = std::string(text.substr(start, position - start));
+      } else if (keyword("real") || keyword("integer")) {
+        auto name = identifier();
+        auto semicolon = findSemicolon(position);
+        if (!name || semicolon == std::string_view::npos)
+          return std::nullopt;
+        auto declaration = text.substr(start, semicolon - start + 1);
+        // Preserve the declaration for its existing semantic owner, including
+        // supported scalar initializers. Array initializer/lifetime legality is
+        // not established by this structural syntax hook.
+        statement.kind = Kind::AnalogDeclaration;
+        statement.name = *name;
+        statement.text = std::string(declaration);
+        position = semicolon + 1;
+      } else {
+        auto semicolon = findSemicolon(start);
+        if (semicolon == std::string_view::npos)
+          return std::nullopt;
+        auto parsed = HierarchySyntaxParser(text.substr(start, semicolon - start + 1)).instance();
+        if (!parsed)
+          return std::nullopt;
+        statement.kind = Kind::Instance;
+        statement.instance = std::move(*parsed);
+        position = semicolon + 1;
+      }
+      result.body.push_back(std::move(statement));
     }
-    space();
-    const auto start = position;
-    auto semicolon = text.find(';', start);
-    if (semicolon == std::string_view::npos)
-      return std::nullopt;
-    auto parsed = HierarchySyntaxParser(text.substr(start, semicolon - start + 1)).instance();
-    if (!parsed)
-      return std::nullopt;
-    result.instance = std::move(*parsed);
-    position = semicolon + 1;
-    if (!keyword("end") || !keyword("endgenerate") || peek() != '\0')
-      return std::nullopt;
     return result;
   }
 
-private:
-  std::string_view text;
-  std::size_t position = 0;
-
   void space() {
-    while (position < text.size() && std::isspace(static_cast<unsigned char>(text[position])))
-      ++position;
+    while (position < text.size()) {
+      if (std::isspace(static_cast<unsigned char>(text[position]))) {
+        ++position;
+      } else if (text.substr(position, 2) == "//") {
+        auto end = text.find('\n', position + 2);
+        position = end == std::string_view::npos ? text.size() : end + 1;
+      } else if (text.substr(position, 2) == "/*") {
+        auto end = text.find("*/", position + 2);
+        if (end == std::string_view::npos) {
+          malformedWhitespace = true;
+          position = text.size();
+          return;
+        }
+        position = end + 2;
+      } else {
+        return;
+      }
+    }
   }
   char peek() {
     space();
+    if (malformedWhitespace)
+      return '\1';
     return position == text.size() ? '\0' : text[position];
+  }
+  std::size_t findSemicolon(std::size_t start) const {
+    for (auto index = start; index < text.size(); ++index) {
+      if (text.substr(index, 2) == "//") {
+        auto end = text.find('\n', index + 2);
+        if (end == std::string_view::npos)
+          return end;
+        index = end;
+      } else if (text.substr(index, 2) == "/*") {
+        auto end = text.find("*/", index + 2);
+        if (end == std::string_view::npos)
+          return end;
+        index = end + 1;
+      } else if (text[index] == ';') {
+        return index;
+      }
+    }
+    return std::string_view::npos;
+  }
+  static std::string withoutComments(std::string_view value) {
+    std::string result;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+      if (value.substr(index, 2) == "//") {
+        auto end = value.find('\n', index + 2);
+        index = end == std::string_view::npos ? value.size() : end;
+        result += ' ';
+      } else if (value.substr(index, 2) == "/*") {
+        auto end = value.find("*/", index + 2);
+        index = end == std::string_view::npos ? value.size() : end + 1;
+        result += ' ';
+      } else {
+        result += value[index];
+      }
+    }
+    return result;
   }
   bool consume(char value) {
     if (peek() != value)
@@ -239,7 +409,7 @@ private:
   std::optional<std::string> identifier() {
     space();
     const std::size_t start = position;
-    if (position == text.size() || !identifierStart(text[position]))
+    if (malformedWhitespace || position == text.size() || !identifierStart(text[position]))
       return std::nullopt;
     ++position;
     while (position < text.size() &&
@@ -362,7 +532,7 @@ private:
     auto end = position;
     while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])))
       --end;
-    return std::string(text.substr(start, end - start));
+    return withoutComments(text.substr(start, end - start));
   }
 };
 
@@ -380,8 +550,8 @@ parseHierarchyModuleHeader(std::string_view text) {
 }
 
 inline std::optional<HierarchyStructuralGenerateSyntax>
-parseStructuralGenerate(std::string_view text) {
-  return HierarchySyntaxParser(text).structuralGenerate();
+parseStructuralGenerate(std::string_view text, const HierarchyAnalogBlockParser &parseAnalog = {}) {
+  return HierarchySyntaxParser(text).structuralGenerate(parseAnalog);
 }
 
 struct HierarchyModuleSyntax {
@@ -401,6 +571,12 @@ struct HierarchyModuleSyntax {
   std::set<std::string> genvars;
   bool hasBehavior = false;
 };
+
+/// Validate supported analog payload with its derived lexical declarations.
+/// The module view contains inherited/local electrical nodes, static parameters
+/// and active genvars; storage declarations retain source order separately.
+using HierarchyAnalogValidator = std::function<bool(std::string_view, const HierarchyModuleSyntax &,
+                                                    const std::vector<std::string> &)>;
 
 namespace hierarchy_detail {
 
@@ -425,6 +601,7 @@ public:
     bool lowerAttained = false;
     bool upperAttained = false;
     bool dense = false;
+    std::optional<int64_t> spacing = {};
   };
 
   Id literal(int64_t value) {
@@ -446,6 +623,22 @@ public:
                        upper.has_value(),
                        lower.has_value() && upper.has_value()});
   }
+  Id induction(const std::string &name, std::optional<int64_t> first, std::optional<int64_t> last,
+               std::optional<int64_t> stride) {
+    return intern('s', name, invalid, invalid,
+                  Node{'s',
+                       invalid,
+                       invalid,
+                       {},
+                       first,
+                       last,
+                       first,
+                       last,
+                       first.has_value(),
+                       last.has_value(),
+                       stride == 1,
+                       stride});
+  }
   const Node &node(Id id) const { return nodes[id]; }
 
   Id apply(char operation, Id left, Id right) {
@@ -453,11 +646,12 @@ public:
       return invalid;
     // Copy before interning, which can reallocate the arena.
     const auto lhs = node(left), rhs = node(right);
-    // A dense generated divisor can attain zero between nonzero endpoint
-    // witnesses. Reject that actual undefined occurrence, including unused stages.
+    // A dense or known strided divisor can attain zero between nonzero
+    // endpoints. Reject that undefined occurrence, including unused stages.
     if ((operation == '/' || operation == '%') &&
-        (rhs.constant == 0 ||
-         (rhs.dense && rhs.lower && rhs.upper && *rhs.lower <= 0 && *rhs.upper >= 0)))
+        (rhs.constant == 0 || (rhs.lower && rhs.upper && *rhs.lower <= 0 && *rhs.upper >= 0 &&
+                               (rhs.dense || (rhs.spacing && *rhs.spacing > 0 && rhs.first &&
+                                              rhs.last && *rhs.first % *rhs.spacing == 0)))))
       return invalid;
     if (lhs.constant && rhs.constant) {
       auto value = compute(operation, *lhs.constant, *rhs.constant);
@@ -486,6 +680,12 @@ public:
         return lhs.left;
     }
     Node result{operation, left, right, {}, {}, {}};
+    if (operation == '+' || operation == '-') {
+      if (rhs.constant)
+        result.spacing = lhs.spacing;
+      else if (lhs.constant)
+        result.spacing = rhs.spacing;
+    }
     if (lhs.first && rhs.first) {
       result.first = compute(operation, *lhs.first, *rhs.first);
       if (!result.first)
@@ -724,16 +924,6 @@ public:
     return expressions.parse(text, locals, signed32, &values);
   }
 
-private:
-  IntegerExpressions &expressions;
-  const HierarchyModuleSyntax &module;
-  ParameterEnvironment *parent;
-  const HierarchyInstanceSyntax *instance;
-  const Environment *parentLocals;
-  std::map<std::string, std::size_t> declarations;
-  Environment values;
-  bool valid = true;
-
   static std::set<std::string> references(std::string_view text) {
     std::set<std::string> result;
     for (std::size_t position = 0; position < text.size();) {
@@ -751,6 +941,16 @@ private:
     }
     return result;
   }
+
+private:
+  IntegerExpressions &expressions;
+  const HierarchyModuleSyntax &module;
+  ParameterEnvironment *parent;
+  const HierarchyInstanceSyntax *instance;
+  const Environment *parentLocals;
+  std::map<std::string, std::size_t> declarations;
+  Environment values;
+  bool valid = true;
 
   bool resolve(const std::string &name) {
     std::vector<std::pair<std::string, bool>> pending{{name, false}};
@@ -814,7 +1014,8 @@ inline bool isSharedNetAlias(const HierarchyModuleSyntax &module) {
 
 /// Verify actual target declarations and instance boundaries. Source projection
 /// correspondence is deliberately not inferred from this standalone target text.
-inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modules) {
+inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modules,
+                                  const HierarchyAnalogValidator &validateAnalog = {}) {
   using Expressions = hierarchy_detail::IntegerExpressions;
   Expressions expressions;
   std::map<std::string, std::size_t> indices;
@@ -844,21 +1045,27 @@ inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modu
   for (std::size_t index = 0; index < modules.size(); ++index) {
     const auto &parent = modules[index];
     auto verifyInstance = [&](const HierarchyInstanceSyntax &instance,
-                              const Expressions::Environment &locals, bool structural) {
+                              const Expressions::Environment &locals, bool structural,
+                              const HierarchyModuleSyntax &actualScope,
+                              const std::set<std::string> &varying) {
       auto found = indices.find(instance.module);
-      if (found == indices.end() || parent.nodes.count(instance.name) ||
+      if (found == indices.end() || actualScope.nodes.count(instance.name) ||
           parent.parameters.count(instance.name) || locals.count(instance.name))
         return false;
       const auto &child = modules[found->second];
-      if (structural && !hierarchy_detail::isSharedNetAlias(child))
-        return false;
       edges[index].push_back(found->second);
       if (instance.ports.size() != child.ports.size())
         return false;
       for (const auto &[parameter, value] : instance.parameters) {
-        (void)value;
         if (!child.parameters.count(parameter) || child.fixedParameters.count(parameter))
           return false;
+        auto parsed = parseHierarchyInstance("Parameter #(.value(" + value + ")) temporary();");
+        if (!parsed)
+          return false;
+        for (const auto &reference : parsed->parameterReferences)
+          if ((!parent.parameters.count(reference) && !locals.count(reference)) ||
+              (structural && varying.count(reference)))
+            return false;
       }
       for (const auto &reference : instance.parameterReferences)
         if (!parent.parameters.count(reference) && !locals.count(reference))
@@ -869,24 +1076,28 @@ inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modu
         return false;
       for (const auto &[port, actual] : instance.ports) {
         auto endpoint = parseHierarchyEndpoint(actual);
-        if (!child.ports.count(port) || !endpoint || !parent.nodes.count(endpoint->name))
+        if (!child.ports.count(port) || !endpoint || !actualScope.nodes.count(endpoint->name))
           return false;
         for (const auto &reference : endpoint->parameterReferences)
           if (!parent.parameters.count(reference) && !locals.count(reference))
             return false;
         std::string internal = child.portAliases.empty() ? port : child.portAliases.at(port);
         auto formalVector = child.vectors.find(internal);
-        auto actualVector = parent.vectors.find(endpoint->name);
-        const bool actualArray = parent.arrays.count(endpoint->name) != 0;
+        auto actualVector = actualScope.vectors.find(endpoint->name);
+        const bool actualArray = actualScope.arrays.count(endpoint->name) != 0;
         const bool selected = !endpoint->index.empty();
         const bool part = !endpoint->partSelectEnd.empty();
+        if (structural && formalVector != child.vectors.end())
+          for (const auto &reference : endpoint->parameterReferences)
+            if (varying.count(reference))
+              return false;
         if ((!selected && actualArray) || part) {
-          if (formalVector == child.vectors.end() || actualVector == parent.vectors.end())
+          if (formalVector == child.vectors.end() || actualVector == actualScope.vectors.end())
             return false;
         } else if (formalVector != child.vectors.end() || selected != actualArray) {
           return false;
         }
-        if (actualVector == parent.vectors.end()) {
+        if (actualVector == actualScope.vectors.end()) {
           // Compatibility for scalar hierarchy users without vector metadata.
           if (part)
             return false;
@@ -931,37 +1142,151 @@ inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modu
     };
     std::set<std::string> instanceNames;
     for (const auto &instance : parent.instances)
-      if (!instanceNames.insert(instance.name).second || !verifyInstance(instance, {}, false))
+      if (!instanceNames.insert(instance.name).second ||
+          !verifyInstance(instance, {}, false, parent, {}))
         return false;
+
+    // This is a derived view of the actual lexical scope, not another semantic
+    // registry. In particular, do not copy descendant trees into every view.
+    HierarchyModuleSyntax visible = parent;
+    visible.instances.clear();
+    visible.generatedScopes.clear();
+    visible.genvars.clear();
+    using Environment = Expressions::Environment;
+    using Scope = HierarchyStructuralGenerateSyntax;
+    using Kind = HierarchyStructuralStatementSyntax::Kind;
+    std::function<bool(const Scope &, Environment, Environment, std::set<std::string>,
+                       std::set<std::string>, HierarchyModuleSyntax, std::vector<std::string>)>
+        verifyScope;
+    verifyScope = [&](const Scope &scope, Environment locals, Environment invariants,
+                      std::set<std::string> varying, std::set<std::string> declaredGenvars,
+                      HierarchyModuleSyntax view, std::vector<std::string> declarations) {
+      if (scope.kind != Kind::Generate || !declaredGenvars.count(scope.genvar) ||
+          parent.parameters.count(scope.genvar) || view.nodes.count(scope.genvar) ||
+          locals.count(scope.genvar))
+        return false;
+      auto lower = environments[index].parse(scope.lower, invariants, true);
+      auto upper = environments[index].parse(scope.count, invariants, true);
+      auto step = environments[index].parse(scope.step, invariants, true);
+      if (lower == Expressions::invalid || upper == Expressions::invalid ||
+          step == Expressions::invalid)
+        return false;
+      auto low = expressions.node(lower).constant;
+      auto high = expressions.node(upper).constant;
+      auto stride = expressions.node(step).constant;
+      if (stride && *stride <= 0)
+        return false;
+      std::optional<int64_t> first = low, last;
+      bool empty = lower == upper || (low && high && *low >= *high);
+      if (empty)
+        first.reset();
+      else if (low && high && stride) {
+        // All inputs already fit signed32. Avoid the overflowing ceil spelling
+        // (distance + step - 1) and check the actual final update as well.
+        const int64_t distance = *high - *low;
+        const int64_t count = distance / *stride + (distance % *stride != 0);
+        if (count > std::numeric_limits<int32_t>::max())
+          return false;
+        last = *low + (count - 1) * *stride;
+        const int64_t exit = *last + *stride;
+        if (exit < std::numeric_limits<int32_t>::min() ||
+            exit > std::numeric_limits<int32_t>::max())
+          return false;
+      } else if (high && stride == 1) {
+        last = *high - 1;
+        if (*last < std::numeric_limits<int32_t>::min())
+          return false;
+      }
+      std::string identity = parent.name;
+      for (const auto &[name, value] : locals)
+        identity += "." + name + "@" + std::to_string(value);
+      identity += "." + scope.label + "." + scope.genvar;
+      locals.emplace(scope.genvar,
+                     expressions.induction(identity, first, last, empty ? std::nullopt : stride));
+      varying.insert(scope.genvar);
+      view.genvars.insert(scope.genvar);
+      std::set<std::string> names{scope.genvar};
+      auto declare = [&](const std::string &name) {
+        return !name.empty() && !view.nodes.count(name) && !parent.parameters.count(name) &&
+               !declaredGenvars.count(name) && !locals.count(name) && names.insert(name).second;
+      };
+      for (const auto &statement : scope.body) {
+        switch (statement.kind) {
+        case Kind::LocalParameter: {
+          const auto &stage = statement.parameter;
+          if (!stage.fixed || !declare(stage.name))
+            return false;
+          auto value = environments[index].parse(stage.initializer, locals, true);
+          if (value == Expressions::invalid)
+            return false;
+          bool varies = false;
+          for (const auto &reference :
+               hierarchy_detail::ParameterEnvironment::references(stage.initializer))
+            varies |= varying.count(reference) != 0;
+          locals.emplace(stage.name, value);
+          if (varies)
+            varying.insert(stage.name);
+          else
+            invariants.emplace(stage.name, value);
+          view.parameters.insert(stage.name);
+          view.fixedParameters.insert(stage.name);
+          view.integerDeclarations.push_back(stage);
+          break;
+        }
+        case Kind::ElectricalNode:
+          if (!declare(statement.name))
+            return false;
+          if (statement.vector) {
+            auto lower = environments[index].parse(statement.vector->lower, invariants, true);
+            auto upper = environments[index].parse(statement.vector->upper, invariants, true);
+            if (lower == Expressions::invalid || upper == Expressions::invalid)
+              return false;
+            auto low = expressions.node(lower).constant;
+            auto high = expressions.node(upper).constant;
+            if (low && high &&
+                (*low > *high || *high - *low + 1 > std::numeric_limits<int32_t>::max()))
+              return false;
+            view.arrays.insert(statement.name);
+            view.vectors.emplace(statement.name, *statement.vector);
+          }
+          view.nodes.insert(statement.name);
+          view.electricalNodes.insert(statement.name);
+          break;
+        case Kind::Genvar:
+          if (!declare(statement.name) || !declaredGenvars.insert(statement.name).second)
+            return false;
+          break;
+        case Kind::Instance:
+          if (!declare(statement.instance.name) ||
+              !verifyInstance(statement.instance, locals, true, view, varying))
+            return false;
+          break;
+        case Kind::Generate:
+          if (!declare(statement.label) || !verifyScope(statement, locals, invariants, varying,
+                                                        declaredGenvars, view, declarations))
+            return false;
+          break;
+        case Kind::AnalogDeclaration:
+          if (!declare(statement.name) || !validateAnalog)
+            return false;
+          declarations.push_back(statement.text);
+          if (!validateAnalog({}, view, declarations))
+            return false;
+          break;
+        case Kind::Analog:
+          if (!validateAnalog || !validateAnalog(statement.text, view, declarations))
+            return false;
+          break;
+        }
+      }
+      return true;
+    };
     std::set<std::string> labels;
     for (const auto &scope : parent.generatedScopes) {
-      if (!parent.genvars.count(scope.genvar) || parent.parameters.count(scope.genvar) ||
-          parent.nodes.count(scope.genvar) || !labels.insert(scope.label).second ||
+      if (scope.label.empty() || !labels.insert(scope.label).second ||
           parent.nodes.count(scope.label) || parent.parameters.count(scope.label) ||
-          instanceNames.count(scope.label))
-        return false;
-      Expressions::Environment environment;
-      auto count = environments[index].parse(scope.count, {}, true);
-      if (count == Expressions::invalid)
-        return false;
-      auto constantCount = expressions.node(count).constant;
-      if (constantCount && *constantCount <= 0)
-        return false;
-      environment.emplace(
-          scope.genvar,
-          expressions.symbol(parent.name + "." + scope.label + "." + scope.genvar, 0,
-                             constantCount ? std::optional<int64_t>(*constantCount - 1)
-                                           : std::nullopt));
-      for (const auto &stage : scope.localParameters) {
-        if (!stage.fixed || environment.count(stage.name) || parent.nodes.count(stage.name) ||
-            parent.parameters.count(stage.name) || parent.genvars.count(stage.name))
-          return false;
-        auto value = environments[index].parse(stage.initializer, environment, true);
-        if (value == Expressions::invalid)
-          return false;
-        environment.emplace(stage.name, value);
-      }
-      if (!verifyInstance(scope.instance, environment, true))
+          parent.genvars.count(scope.label) || instanceNames.count(scope.label) ||
+          !verifyScope(scope, {}, {}, {}, parent.genvars, visible, {}))
         return false;
     }
   }

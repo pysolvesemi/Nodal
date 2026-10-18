@@ -184,9 +184,22 @@ then mark only completed child deliverables with short verified notes. They
 remain open at migration; this process update does not claim F-043 completion.
 Finish required fixed/symbolic shape/index/slice behavior, generated storage and
 operator ownership, supported target layouts and source/index maps within the
-approved scope. Current bounded generated profiles still reject wider/deeper
-groups, extra operator/state/result fan-out, cross-range storage, general slices,
-shaped terminals and generated connections/instances where not implemented.
+approved scope. The published prototype checkpoints now admit independent wider branch/operator
+groups, deeper direct generated equation chains, composed structural views and
+read-only fixed/symbolic unit-stride slices. Their exact tests and limits are in
+[increment43-compound-bound-transport.md](increment43-compound-bound-transport.md)
+and [increment43-shape-contract.md](increment43-shape-contract.md). Commits
+`8900b8a2eb9f00f3f63cad6b8dc34d097657b003` and
+`2b81ba5cdf0f7672aa86211fbb2b62b69bfc9a74` were published with tested-tree equality
+and no CI. These are partial implementation checkpoints, not whole-child closure.
+
+Extra operator/state/result fan-out, cross-range storage, writable selections,
+shaped conservative endpoints and generated connections/instances remain open
+where not implemented. The next coordinated production change introduces owned
+module-local electrical node arrays and scalar static selections under the
+[additive node-array gate](../design-gates/NodalConservativeNodeArrays-DG-v0.1.md).
+Its declaration, canonical alias identity, native connectivity and actual target
+layout must all agree before acceptance.
 Do not silently treat an intentional current rejection as the final feature.
 
 Use the existing shared owners, unified `hdlRange`, approved design gates and

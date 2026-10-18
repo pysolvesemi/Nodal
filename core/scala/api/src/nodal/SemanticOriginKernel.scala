@@ -658,7 +658,7 @@ private[nodal] final class SemanticOriginBuilder:
       case "input" | "analog-input" => Vector("in(")
       case "output" | "analog-output" => Vector("out(")
       case "analog-inout" => Vector("inout(")
-      case "analog-node" => Vector("node(")
+      case "analog-node" | "analog-node-array" => Vector("node(")
       case "wire" => Vector("wire(")
       case "variable" => Vector("variable(")
       case "memory" => Vector("Mem(")

@@ -13,6 +13,7 @@
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 #include "nodal/Support/AnalogHierarchySyntax.h"
 
@@ -33,6 +34,7 @@
 #include <charconv>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -63,6 +65,7 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.instance",
     "nodal.instance_terminal",
     "nodal.node",
+    "nodal.node_array",
     "nodal.connect",
     "nodal.branch",
     "nodal.generate",
@@ -142,7 +145,15 @@ std::string terminalDirection(Operation *operation) {
   return {};
 }
 
+struct StaticNodeArrayLayout {
+  std::string name;
+  std::string extent;
+  llvm::SmallVector<std::string> dimensions;
+  llvm::SmallVector<ParameterIntegerBounds> bounds;
+};
+
 struct ModuleRenderState {
+  llvm::DenseMap<Value, StaticNodeArrayLayout> nodeArrays;
   llvm::DenseMap<Value, std::string> terminals;
   llvm::DenseMap<Value, std::pair<std::string, std::string>> branches;
   llvm::DenseMap<Value, std::string> branchNames;
@@ -629,10 +640,119 @@ LogicalResult orderParametersByDependency(Operation *definition,
   return success();
 }
 
+// Shape semantics and proofs stay in the native shape owner. The target owns
+// only deterministic compact row-major arithmetic, never per-lane expansion.
+FailureOr<std::string> staticTargetArithmetic(llvm::StringRef left, char operation,
+                                              llvm::StringRef right) {
+  int64_t lhs = 0, rhs = 0, result = 0;
+  const bool constantLeft = !left.getAsInteger(10, lhs);
+  const bool constantRight = !right.getAsInteger(10, rhs);
+  if (constantLeft && constantRight) {
+    const bool overflow = operation == '*' ? __builtin_mul_overflow(lhs, rhs, &result)
+                                           : __builtin_add_overflow(lhs, rhs, &result);
+    if (overflow)
+      return failure();
+    return std::to_string(result);
+  }
+  if (operation == '*' && ((constantLeft && lhs == 0) || (constantRight && rhs == 0)))
+    return std::string("0");
+  if (constantLeft && lhs == (operation == '*' ? 1 : 0))
+    return right.str();
+  if (constantRight && rhs == (operation == '*' ? 1 : 0))
+    return left.str();
+  return (llvm::Twine("(") + left + " " + (operation == '*' ? "*" : "+") + " " + right + ")").str();
+}
+
+FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
+                                                        Operation *definition) {
+  auto shaped = operation->getNumResults() == 1
+                    ? llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType())
+                    : nodal::ShapedType();
+  auto terminal =
+      shaped ? llvm::dyn_cast<nodal::TerminalType>(shaped.getElementType()) : nodal::TerminalType();
+  auto name = operation->getAttrOfType<StringAttr>("name");
+  auto sourcePath = operation->getAttrOfType<StringAttr>("source_path");
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  auto semanticPath = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  auto ownerMetadata = definition->getAttrOfType<DictionaryAttr>("metadata");
+  auto ownerPath = ownerMetadata ? ownerMetadata.getAs<StringAttr>("semantic_path") : StringAttr();
+  llvm::StringRef owner = ownerPath ? ownerPath.getValue() : symbolName(definition);
+  if (operation->getParentOp() != definition || operation->getNumOperands() || !terminal ||
+      terminal.getDiscipline() != "electrical" || !name ||
+      !isPortableVerilogIdentifier(name.getValue()) || !sourcePath ||
+      sourcePath.getValue() != (owner + "." + name.getValue()).str() || !semanticPath ||
+      semanticPath.getValue() != sourcePath.getValue() || !storage ||
+      storage.getValue() != "structural")
+    return failure();
+  if (failed(inferStaticShapeMaximumCardinality(definition, shaped.getDimensions())))
+    return failure();
+  StaticNodeArrayLayout result;
+  result.name = name.getValue().str();
+  result.extent = "1";
+  llvm::SmallVector<llvm::StringRef> dimensions;
+  shaped.getDimensions().split(dimensions, ',', -1, true);
+  for (llvm::StringRef token : dimensions) {
+    auto dimension = resolveStaticShapeDimension(definition, token);
+    if (failed(dimension))
+      return failure();
+    FailureOr<std::string> text = std::to_string(dimension->literal);
+    if (dimension->parameter)
+      text = symbolName(dimension->parameter).str();
+    else if (dimension->expression)
+      text = renderParameterConstantExpression(dimension->expression);
+    if (failed(text))
+      return failure();
+    auto extent = staticTargetArithmetic(result.extent, '*', *text);
+    if (failed(extent))
+      return failure();
+    result.extent = *extent;
+    result.dimensions.push_back(*text);
+    result.bounds.push_back(dimension->bounds);
+  }
+  return result;
+}
+
+FailureOr<std::string> renderStaticNodeSelection(Operation *operation, Operation *definition,
+                                                 ModuleRenderState &state) {
+  if (operation->getParentOp() != definition || operation->getNumOperands() < 2 ||
+      operation->getNumResults() != 1)
+    return failure();
+  auto terminal = llvm::dyn_cast<nodal::TerminalType>(operation->getResult(0).getType());
+  auto array = state.nodeArrays.find(operation->getOperand(0));
+  if (!terminal || terminal.getDiscipline() != "electrical" || array == state.nodeArrays.end() ||
+      operation->getNumOperands() - 1 != array->second.dimensions.size())
+    return failure();
+  std::string ordinal = "0";
+  for (size_t axis = 0; axis < array->second.dimensions.size(); ++axis) {
+    Value index = operation->getOperand(axis + 1);
+    auto bounds = inferStaticShapeIndexBounds(definition, index);
+    if (failed(bounds) || bounds->lower < 0 || bounds->upper >= array->second.bounds[axis].lower)
+      return failure();
+    FailureOr<std::string> text = failure();
+    Operation *producer = index.getDefiningOp();
+    if (producer && producer->getName().getStringRef() == "nodal.constant")
+      text = std::to_string(bounds->lower);
+    else
+      text = renderParameterConstantExpression(index);
+    if (failed(text))
+      return failure();
+    auto product = staticTargetArithmetic(ordinal, '*', array->second.dimensions[axis]);
+    if (failed(product))
+      return failure();
+    auto sum = staticTargetArithmetic(*product, '+', *text);
+    if (failed(sum))
+      return failure();
+    ordinal = *sum;
+  }
+  return array->second.name + "[" + ordinal + "]";
+}
+
 LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state,
                                  llvm::SmallVectorImpl<Operation *> &parameters,
                                  llvm::SmallVectorImpl<Operation *> &ports,
                                  llvm::SmallVectorImpl<Operation *> &nodes,
+                                 llvm::SmallVectorImpl<Operation *> &nodeArrays,
                                  llvm::SmallVectorImpl<Operation *> &namedBranches,
                                  llvm::SmallVectorImpl<Operation *> &analogs,
                                  llvm::SmallVectorImpl<Operation *> &generates) {
@@ -659,6 +779,20 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       if (failed(nodeName))
         return failure();
       state.terminals.try_emplace(operation.getResult(0), *nodeName);
+    } else if (name == "nodal.node_array") {
+      auto layout = resolveStaticNodeArray(&operation, definition);
+      if (failed(layout))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-001",
+                                 "node array requires owned bounded electrical dimensions");
+      nodeArrays.push_back(&operation);
+      state.nodeArrays.try_emplace(operation.getResult(0), std::move(*layout));
+    } else if (name == "nodal.shape_index") {
+      auto endpoint = renderStaticNodeSelection(&operation, definition, state);
+      if (failed(endpoint))
+        return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-002",
+                                 "node selection requires a direct array and bounded full-rank "
+                                 "static indices");
+      state.terminals.try_emplace(operation.getResult(0), *endpoint);
     } else if (name == "nodal.branch") {
       if (operation.getNumOperands() != 2 || operation.getNumResults() != 1)
         return failure();
@@ -683,7 +817,7 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
   // These names share a target namespace even though the source IR uses
   // different declaration kinds. Reject invalid names before publishing HDL.
   llvm::StringSet<> declarations;
-  for (const auto *group : {&parameters, &ports, &nodes, &namedBranches}) {
+  for (const auto *group : {&parameters, &ports, &nodes, &nodeArrays, &namedBranches}) {
     for (Operation *declaration : *group) {
       auto spelling = declaration->getAttrOfType<StringAttr>(
           declaration->getName().getStringRef() == "nodal.parameter" ? "sym_name" : "name");
@@ -734,6 +868,10 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
            rhs->getAttrOfType<StringAttr>("name").getValue();
   });
   llvm::sort(nodes, [](Operation *lhs, Operation *rhs) {
+    return lhs->getAttrOfType<StringAttr>("name").getValue() <
+           rhs->getAttrOfType<StringAttr>("name").getValue();
+  });
+  llvm::sort(nodeArrays, [](Operation *lhs, Operation *rhs) {
     return lhs->getAttrOfType<StringAttr>("name").getValue() <
            rhs->getAttrOfType<StringAttr>("name").getValue();
   });
@@ -3150,11 +3288,12 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   llvm::SmallVector<Operation *, 8> parameters;
   llvm::SmallVector<Operation *, 8> ports;
   llvm::SmallVector<Operation *, 8> nodes;
+  llvm::SmallVector<Operation *, 8> nodeArrays;
   llvm::SmallVector<Operation *, 4> namedBranches;
   llvm::SmallVector<Operation *, 2> analogs;
   llvm::SmallVector<Operation *, 2> generates;
-  if (failed(collectModuleState(definition, state, parameters, ports, nodes, namedBranches, analogs,
-                                generates)))
+  if (failed(collectModuleState(definition, state, parameters, ports, nodes, nodeArrays,
+                                namedBranches, analogs, generates)))
     return emitMappedFailure(definition, "NODAL-BACKEND-RC-001",
                              "could not collect RC module structure");
 
@@ -3202,15 +3341,21 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << ";\n";
   }
 
-  for (Operation *branch : namedBranches) {
-    auto endpoints = state.branches.find(branch->getResult(0));
-    auto name = branch->getAttrOfType<StringAttr>("name");
-    if (endpoints == state.branches.end() || !name || name.getValue().trim().empty())
-      return emitMappedFailure(branch, "NODAL-BACKEND-RC-004",
-                               "named branch is not losslessly renderable");
-    output << "  branch (" << endpoints->second.first << ", " << endpoints->second.second << ") "
-           << name.getValue() << ";\n";
-  }
+  auto renderNamedBranches = [&]() -> LogicalResult {
+    for (Operation *branch : namedBranches) {
+      auto endpoints = state.branches.find(branch->getResult(0));
+      auto name = branch->getAttrOfType<StringAttr>("name");
+      if (endpoints == state.branches.end() || !name || name.getValue().trim().empty())
+        return emitMappedFailure(branch, "NODAL-BACKEND-RC-004",
+                                 "named branch is not losslessly renderable");
+      output << "  branch (" << endpoints->second.first << ", " << endpoints->second.second << ") "
+             << name.getValue() << ";\n";
+    }
+
+    return success();
+  };
+  if (nodeArrays.empty() && failed(renderNamedBranches()))
+    return failure();
 
   for (Operation *parameter : parameters) {
     llvm::StringRef kind = nodal::getParameterKind(parameter);
@@ -3266,6 +3411,17 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
       output << " // unit: " << unit;
     output << "\n";
   }
+
+  for (Operation *array : nodeArrays) {
+    const auto &layout = state.nodeArrays.find(array->getResult(0))->second;
+    int64_t extent = 0;
+    const std::string upper = !llvm::StringRef(layout.extent).getAsInteger(10, extent)
+                                  ? std::to_string(extent - 1)
+                                  : "(" + layout.extent + " - 1)";
+    output << "  electrical " << layout.name << "[0:" << upper << "];\n";
+  }
+  if (!nodeArrays.empty() && failed(renderNamedBranches()))
+    return failure();
 
   llvm::StringSet<> generatedInductions;
   llvm::StringSet<> generatedLabels;
@@ -3352,7 +3508,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     }
   }
 
-  if ((!ports.empty() || !nodes.empty() || !namedBranches.empty() || !parameters.empty()) &&
+  if ((!ports.empty() || !nodes.empty() || !nodeArrays.empty() || !namedBranches.empty() ||
+       !parameters.empty()) &&
       !analogs.empty())
     output << "\n";
   if (failed(renderAnalogUserFunctions(definition, output)))
@@ -3415,21 +3572,49 @@ public:
   GeneratedBoundExpressionParser(llvm::StringRef text, const std::set<std::string> &parameters)
       : text(text), parameters(parameters) {}
 
-  bool parse() { return expression(0) && position == text.size(); }
+  bool parse() { return expression(0, value) && position == text.size(); }
+  std::optional<int64_t> constantValue() const { return value; }
 
 private:
-  bool expression(unsigned depth) {
+  bool expression(unsigned depth, std::optional<int64_t> &result) {
+    result.reset();
     if (depth >= 512 || position >= text.size())
       return false;
     if (text[position] == '(') {
       ++position;
       const size_t contents = position;
-      if (expression(depth + 1) && consume(' ') && binaryOperator() && consume(' ') &&
-          expression(depth + 1) && consume(')'))
-        return true;
+      std::optional<int64_t> left, right;
+      if (expression(depth + 1, left) && consume(' ') && position < text.size() &&
+          llvm::StringRef("+-*/%").contains(text[position])) {
+        char operation = text[position++];
+        if (consume(' ') && expression(depth + 1, right) && consume(')')) {
+          if ((operation == '/' || operation == '%') && right && *right == 0)
+            return false;
+          if (!left || !right)
+            return true;
+          int64_t computed = 0;
+          if ((operation == '+' && __builtin_add_overflow(*left, *right, &computed)) ||
+              (operation == '-' && __builtin_sub_overflow(*left, *right, &computed)) ||
+              (operation == '*' && __builtin_mul_overflow(*left, *right, &computed)))
+            return false;
+          if (operation == '/' || operation == '%') {
+            if (*left == std::numeric_limits<int64_t>::min() && *right == -1)
+              return false;
+            computed = operation == '/' ? *left / *right : *left % *right;
+          }
+          result = computed;
+          return true;
+        }
+      }
       position = contents;
-      if (consume('-') && expression(depth + 1) && consume(')'))
+      if (consume('-') && expression(depth + 1, left) && consume(')')) {
+        if (left) {
+          if (*left == std::numeric_limits<int64_t>::min())
+            return false;
+          result = -*left;
+        }
         return true;
+      }
       return false;
     }
 
@@ -3440,9 +3625,12 @@ private:
     while (position < text.size() && text[position] >= '0' && text[position] <= '9')
       ++position;
     if (position != digits) {
-      int64_t ignored = 0;
-      auto parsed = std::from_chars(text.begin() + start, text.begin() + position, ignored);
-      return parsed.ec == std::errc() && parsed.ptr == text.begin() + position;
+      int64_t number = 0;
+      auto parsed = std::from_chars(text.begin() + start, text.begin() + position, number);
+      if (parsed.ec != std::errc() || parsed.ptr != text.begin() + position)
+        return false;
+      result = number;
+      return true;
     }
     position = start;
 
@@ -3466,16 +3654,10 @@ private:
     return true;
   }
 
-  bool binaryOperator() {
-    if (position >= text.size() || !llvm::StringRef("+-*/%").contains(text[position]))
-      return false;
-    ++position;
-    return true;
-  }
-
   llvm::StringRef text;
   const std::set<std::string> &parameters;
   size_t position = 0;
+  std::optional<int64_t> value;
 };
 
 bool validGeneratedBoundExpression(llvm::StringRef text, const std::set<std::string> &parameters) {
@@ -3494,6 +3676,17 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
     if (failed(result) || operation == module.getOperation())
       return;
     llvm::StringRef name = operation->getName().getStringRef();
+    if (name == "nodal.shape_index" && operation->getNumResults() == 1 &&
+        llvm::isa<nodal::TerminalType>(operation->getResult(0).getType()))
+      return;
+    if (name == "nodal.constant" && operation->getNumResults() == 1 &&
+        operation->getResult(0).getType().isIndex() && !operation->use_empty() &&
+        llvm::all_of(operation->getUsers(), [](Operation *user) {
+          return user->getName().getStringRef() == "nodal.shape_index" &&
+                 user->getNumResults() == 1 &&
+                 llvm::isa<nodal::TerminalType>(user->getResult(0).getType());
+        }))
+      return;
     if (llvm::is_contained(kSupportedOperations, name) || name == "nodal.analog_held_read")
       return;
     auto procedure = llvm::dyn_cast<nodal::AnalogProcedureOp>(operation);
@@ -3699,8 +3892,115 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   llvm::StringSet<> eventNames;
   llvm::StringSet<> generatedNames;
   llvm::StringSet<> generatedLabels;
+  llvm::StringSet<> namedBranchNames;
+  using ConcreteArrayBounds = std::pair<std::optional<int64_t>, std::optional<int64_t>>;
+  llvm::StringMap<ConcreteArrayBounds> arrayBounds;
   std::vector<HierarchyModuleSyntax> hierarchyModules;
   std::optional<std::size_t> currentHierarchyModule;
+  // This structural target gate proves concrete bounds and validates symbolic
+  // syntax/identity. Correlated symbolic bounds are proved per axis by the native
+  // shape owner and checked again before row-major target arithmetic is emitted.
+  auto validEndpoint = [&](llvm::StringRef text, bool allowBranch = false,
+                           bool allowGenerated = false) {
+    if (!currentHierarchyModule)
+      return false;
+    auto endpoint = parseHierarchyEndpoint(text.str());
+    if (!endpoint || !isPortableVerilogIdentifier(endpoint->name))
+      return false;
+    auto array = arrayBounds.find(endpoint->name);
+    if (endpoint->index.empty())
+      return array == arrayBounds.end() &&
+             (hierarchyModules[*currentHierarchyModule].nodes.count(endpoint->name) ||
+              (allowBranch && namedBranchNames.contains(endpoint->name)));
+    if (array == arrayBounds.end())
+      return false;
+    auto parameters = hierarchyModules[*currentHierarchyModule].parameters;
+    if (allowGenerated)
+      for (const auto &name : generatedNames)
+        parameters.insert(name.getKey().str());
+    GeneratedBoundExpressionParser index(endpoint->index, parameters);
+    if (!index.parse())
+      return false;
+    auto value = index.constantValue();
+    return !value || ((!array->second.first || *value >= *array->second.first) &&
+                      (!array->second.second || *value <= *array->second.second));
+  };
+  auto validSelectedEndpoints = [&](llvm::StringRef statement, bool allowGenerated) {
+    bool quoted = false;
+    for (size_t position = 0; position < statement.size(); ++position) {
+      if (quoted && statement[position] == '\\') {
+        if (++position == statement.size())
+          return false;
+        continue;
+      }
+      if (statement[position] == '"') {
+        quoted = !quoted;
+        continue;
+      }
+      if (quoted)
+        continue;
+      if (statement[position] == ']')
+        return false;
+      if (statement[position] == '[') {
+        size_t start = position;
+        while (start && (llvm::isAlnum(statement[start - 1]) || statement[start - 1] == '_' ||
+                         statement[start - 1] == '$'))
+          --start;
+        size_t close = statement.find(']', position + 1);
+        if (start == position || close == llvm::StringRef::npos ||
+            !validEndpoint(statement.slice(start, close + 1), false, allowGenerated))
+          return false;
+        position = close;
+      }
+    }
+    return !quoted;
+  };
+  auto validElectricalAccesses = [&](llvm::StringRef statement, bool allowGenerated) {
+    bool quoted = false;
+    for (size_t position = 0; position < statement.size(); ++position) {
+      if (quoted && statement[position] == '\\') {
+        if (++position == statement.size())
+          return false;
+        continue;
+      }
+      if (statement[position] == '"') {
+        quoted = !quoted;
+        continue;
+      }
+      if (quoted || (statement[position] != 'V' && statement[position] != 'I') ||
+          (position && (llvm::isAlnum(statement[position - 1]) || statement[position - 1] == '_' ||
+                        statement[position - 1] == '$')) ||
+          position + 1 == statement.size() || statement[position + 1] != '(')
+        continue;
+      size_t close = position + 2;
+      unsigned depth = 1;
+      for (; close < statement.size() && depth; ++close) {
+        if (statement[close] == '(')
+          ++depth;
+        else if (statement[close] == ')')
+          --depth;
+      }
+      if (depth)
+        return false;
+      auto arguments = statement.slice(position + 2, close - 1).trim();
+      if (statement[position] == 'I' && arguments.starts_with("<") && arguments.ends_with(">")) {
+        auto port = arguments.drop_front().drop_back();
+        if (!currentHierarchyModule ||
+            !hierarchyModules[*currentHierarchyModule].ports.count(port.str()))
+          return false;
+      } else {
+        llvm::SmallVector<llvm::StringRef, 2> endpoints;
+        arguments.split(endpoints, ',', -1, true);
+        if (endpoints.empty() || endpoints.size() > 2 ||
+            !llvm::all_of(endpoints, [&](llvm::StringRef endpoint) {
+              return validEndpoint(endpoint.trim(), endpoints.size() == 1, allowGenerated);
+            }))
+          return false;
+      }
+      position = close - 1;
+    }
+    return !quoted;
+  };
   auto identifierEventDeclaration = [&](llvm::StringRef name) {
     return !name.contains(',') && validIdentifierList(name) && eventNames.insert(name).second;
   };
@@ -3760,6 +4060,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       eventNames.clear();
       generatedNames.clear();
       generatedLabels.clear();
+      namedBranchNames.clear();
+      arrayBounds.clear();
       userFunctions.clear();
       insideModule = true;
       sawModule = true;
@@ -3871,7 +4173,8 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       }
       if (generatedDepth)
         generatedStatement = true;
-      if (!line.ends_with(";"))
+      if (!line.ends_with(";") || !validSelectedEndpoints(line, generatedDepth != 0) ||
+          !validElectricalAccesses(line, generatedDepth != 0))
         return failure();
       if (line.contains("<+") && !line.contains(" = ")) {
         if (!userFunctions.empty()) {
@@ -3919,9 +4222,16 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     if (line.starts_with("branch (") && line.ends_with(";")) {
       llvm::StringRef declaration = line.drop_front(sizeof("branch (") - 1).drop_back();
-      size_t close = declaration.find(") ");
-      if (close == llvm::StringRef::npos || !validIdentifierList(declaration.take_front(close)) ||
-          !validIdentifierList(declaration.drop_front(close + 2)))
+      size_t close = declaration.rfind(") ");
+      if (close == llvm::StringRef::npos)
+        return failure();
+      llvm::SmallVector<llvm::StringRef, 2> endpoints;
+      declaration.take_front(close).split(endpoints, ',', -1, true);
+      llvm::StringRef name = declaration.drop_front(close + 2).trim();
+      if (endpoints.size() != 2 || !isPortableVerilogIdentifier(name) ||
+          !namedBranchNames.insert(name).second ||
+          !llvm::all_of(endpoints,
+                        [&](llvm::StringRef endpoint) { return validEndpoint(endpoint.trim()); }))
         return failure();
       continue;
     }
@@ -3951,7 +4261,21 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
           !validGeneratedBoundExpression(range.second.trim(),
                                          hierarchyModules[*currentHierarchyModule].parameters))
         return failure();
-      hierarchyModules[*currentHierarchyModule].nodes.insert(declaration.take_front(open).str());
+      const auto &parameters = hierarchyModules[*currentHierarchyModule].parameters;
+      GeneratedBoundExpressionParser lower(range.first.trim(), parameters);
+      GeneratedBoundExpressionParser upper(range.second.trim(), parameters);
+      if (!lower.parse() || !upper.parse() ||
+          (lower.constantValue() && upper.constantValue() &&
+           *lower.constantValue() > *upper.constantValue()) ||
+          !arrayBounds
+               .try_emplace(declaration.take_front(open),
+                            ConcreteArrayBounds{lower.constantValue(), upper.constantValue()})
+               .second ||
+          !hierarchyModules[*currentHierarchyModule]
+               .nodes.insert(declaration.take_front(open).str())
+               .second)
+        return failure();
+      hierarchyModules[*currentHierarchyModule].arrays.insert(declaration.take_front(open).str());
       continue;
     }
     if (line.starts_with("electrical ") && line.ends_with(";") &&
@@ -3972,6 +4296,11 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (auto instance = parseHierarchyInstance(line.str())) {
+      for (const auto &[port, actual] : instance->ports) {
+        (void)port;
+        if (!validEndpoint(actual))
+          return failure();
+      }
       hierarchyModules[*currentHierarchyModule].instances.push_back(std::move(*instance));
       continue;
     }

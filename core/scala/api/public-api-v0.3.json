@@ -98,6 +98,16 @@
       "TargetLayout.SystemVerilogPacked"
     ]
   },
+  "conservative_node_arrays": {
+    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.1.md",
+    "type": "NodeArray[D <: Discipline]",
+    "constructor": "Module.node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
+    "selection": "NodeArray.at(indices: Dimension*): Node[D]",
+    "initial_profile": "module-local Electrical; static full-rank selection",
+    "is_data_or_expr": false,
+    "physical_identity": "owned declaration and canonical index tuple",
+    "scalar_node_overload": "retained"
+  },
   "values_and_connectivity": {
     "value_aggregate": "Struct",
     "value_is_directionless_and_storable": true,

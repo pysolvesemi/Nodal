@@ -150,7 +150,11 @@ private[nodal] object ScalaToMlirBridge:
       def isSlice: Boolean = record match
         case view: KernelShapeViewSnapshot => view.slice.nonEmpty
         case _ => false
-      def code: String = if isSlice then "NODAL-BRIDGE-046"
+      def isNodeSelection: Boolean = record match
+        case index: KernelShapeIndexSnapshot => index.sourceUses.nonEmpty
+        case _ => false
+      def code: String = if isNodeSelection then "NODAL-BRIDGE-048"
+      else if isSlice then "NODAL-BRIDGE-046"
       else if isView then "NODAL-BRIDGE-045" else "NODAL-BRIDGE-044"
       def name: String =
         if isSlice then "shape_slice" else if isView then "shape_view" else "shape_index"
@@ -375,7 +379,10 @@ ${indent(body, 2)}
         normalizedPath.patch(position, "sym_name = \"$module\"", symbolAttribute.length)
 
     private def standardConservativeDeclarations: Vector[String] =
-      val needsElectrical = modules.exists(module => terminalDeclarations(module).nonEmpty)
+      val needsElectrical = modules.exists(module =>
+        terminalDeclarations(module).nonEmpty ||
+          module.declarations.exists(_.kind == "analog-node-array")
+      )
       if !needsElectrical then Vector.empty
       else
         val standardMetadata = (semanticPath: String) =>
@@ -437,6 +444,7 @@ ${indent(body, 2)}
         "analog-output",
         "analog-inout",
         "analog-node",
+        "analog-node-array",
         "conservative-terminal",
         "analog-signal"
       )
@@ -820,6 +828,17 @@ ${indent(body, 2)}
             "parameter expression has no owning Module",
             Some(expression.path)
           )
+      modules.foreach: module =>
+        module.declarations.foreach: declaration =>
+          if declaration.kind == "analog-node-array" then validateNodeArray(module, declaration)
+          else if declaration.conservativeDimensions.nonEmpty then
+            fail(
+              "NODAL-BRIDGE-047",
+              "only node arrays may carry conservative dimensions",
+              Some(declaration.path)
+            )
+      val nodeSelections = mutable.HashMap.empty[String, Vector[KernelShapeIndexSnapshot]]
+      val nodeSelectionUses = mutable.HashSet.empty[String]
       val validatedShapes = mutable.HashMap.empty[String, (String, Vector[String])]
       structuralShapeOperations.foreach: shape =>
         val module = modulesByPath.getOrElse(
@@ -839,14 +858,29 @@ ${indent(body, 2)}
         if module.declarations.exists(_.path == shape.path) then
           fail(shape.code, "structural shape identity aliases a declaration", Some(shape.path))
         val dimensions = module.declarations.find(_.path == shape.input) match
+          case Some(declaration) if declaration.kind == "analog-node-array" =>
+            if !shape.isNodeSelection then
+              fail(
+                shape.code,
+                "node arrays require complete conservative endpoint selection",
+                Some(shape.path)
+              )
+            declaration.conservativeDimensions
           case Some(declaration) =>
-            if declaration.kind != "input" && declaration.kind != "output" then
+            if shape.isNodeSelection || (declaration.kind != "input" && declaration.kind != "output")
+            then
               fail(shape.code, "structural shape input must be a module port", Some(shape.path))
             val dataType = declaration.dataType.getOrElse(
               fail(shape.code, "structural shape input type is absent", Some(shape.path))
             )
             vecTypeParts(dataType, shape.path)._2
           case None =>
+            if shape.isNodeSelection then
+              fail(
+                shape.code,
+                "node selection requires its direct owned array declaration",
+                Some(shape.path)
+              )
             validatedShapes.get(shape.input) match
               case Some((owner, dimensions)) if owner == shape.owner => dimensions
               case _ =>
@@ -868,6 +902,18 @@ ${indent(body, 2)}
                 Some(shape.path)
               )
           case index: KernelShapeIndexSnapshot =>
+            if shape.isNodeSelection then
+              validateNodeSelection(
+                module,
+                dimensions,
+                index,
+                nodeSelections.getOrElse(index.input, Vector.empty),
+                nodeSelectionUses
+              )
+              nodeSelections.update(
+                index.input,
+                nodeSelections.getOrElse(index.input, Vector.empty) :+ index
+              )
             if index.indices.isEmpty || index.indices.size > dimensions.size then
               fail(
                 shape.code,
@@ -1076,8 +1122,9 @@ ${indent(body, 2)}
         result
 
       module.declarations.sortBy(_.path).foreach: declaration =>
-        declaration.dataType.toVector
-          .flatMap(compoundShapeDimensionPaths(_, declaration.path))
+        (declaration.dataType.toVector
+          .flatMap(compoundShapeDimensionPaths(_, declaration.path)) ++
+          declaration.conservativeDimensions.filter(expressionsByPath.contains))
           .distinct
           .foreach: dimensionPath =>
             val (_, dataType) = emitStaticValue(
@@ -1096,6 +1143,29 @@ ${indent(body, 2)}
                 "compound Vec dimension must have Integer type",
                 Some(dimensionPath)
               )
+
+      module.declarations.filter(_.kind == "analog-node-array").sortBy(_.path)
+        .zipWithIndex.foreach: (declaration, index) =>
+          val result = s"%node_array_$index"
+          val resultType = nodeArrayType(declaration)
+          body += operation(
+            "nodal.node_array",
+            results = Vector(result),
+            resultTypes = Vector(resultType),
+            attributes = Vector(
+              "name" -> quoted(declaration.name),
+              "source_path" -> quoted(declaration.path),
+              "metadata" -> bridgeMetadata(
+                declaration.path,
+                Vector(
+                  "declaration_kind" -> quoted(declaration.kind),
+                  "storage" -> quoted("structural")
+                )
+              )
+            ),
+            semanticPath = declaration.path
+          )
+          values.update(declaration.path, result -> resultType)
 
       structuralShapesByOwner.getOrElse(module.path, Vector.empty).foreach: shape =>
         shape.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
@@ -1116,6 +1186,9 @@ ${indent(body, 2)}
               Some(dimensionPath)
             )
         val (inputValue, inputType, elementText) = declarationsByPath.get(shape.input) match
+          case Some(declaration) if shape.isNodeSelection =>
+            val (value, dataType) = values(declaration.path)
+            (value, dataType, "!nodal.terminal<\"electrical\">")
           case Some(declaration) =>
             val dataType = declaration.dataType.getOrElse(
               fail(shape.code, "structural shape input type is absent", Some(shape.path))
@@ -1143,7 +1216,8 @@ ${indent(body, 2)}
                 Some(shape.path)
               )
             )
-        val elementType = parseType(elementText, shape.path)
+        val elementType =
+          if shape.isNodeSelection then elementText else parseType(elementText, shape.path)
         val resultType =
           if shape.dimensions.isEmpty then elementType
           else s"!nodal.shaped<${quoted(shape.dimensions.mkString(","))}, $elementType>"
@@ -1279,12 +1353,18 @@ ${indent(body, 2)}
               attributes = Vector(
                 "metadata" -> bridgeMetadata(
                   index.path,
-                  Vector("input_path" -> quoted(index.input))
+                  Vector("input_path" -> quoted(index.input)) ++
+                    Option.when(shape.isNodeSelection)(Vector(
+                      "selection_kind" -> quoted("node_array"),
+                      "storage" -> quoted("structural"),
+                      "source_uses" -> array(index.sourceUses.map(quoted))
+                    )).toVector.flatten
                 )
               ),
               semanticPath = index.path
             )
-        if shape.dimensions.nonEmpty then
+        if shape.isNodeSelection then values.update(shape.path, shape.result -> resultType)
+        else if shape.dimensions.nonEmpty then
           emittedShapes.update(shape.path, (shape.result, resultType, elementText))
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
@@ -3107,6 +3187,105 @@ ${indent(body, 2)}
             offset = end
         if offset < text.length then offset += 1
       dimensions.result()
+
+    private def nodeArrayType(declaration: KernelDeclarationSnapshot): String =
+      s"!nodal.shaped<${quoted(declaration.conservativeDimensions.mkString(","))}, !nodal.terminal<${quoted("electrical")}>>"
+
+    private def validateNodeArray(
+        module: KernelModuleSnapshot,
+        declaration: KernelDeclarationSnapshot
+    ): Unit =
+      def invalid(message: String): Nothing =
+        fail("NODAL-BRIDGE-047", message, Some(declaration.path))
+      val attributes = declaration.attributes.toMap
+      if declaration.conservativeDimensions.isEmpty || declaration.dataType.nonEmpty || declaration.domain.nonEmpty ||
+        attributes.get("discipline") != Some("electrical") ||
+        attributes.get("potential_nature") != Some("voltage") ||
+        attributes.get("flow_nature") != Some("current") ||
+        declaration.name.isEmpty || declaration.name.trim != declaration.name ||
+        declaration.path != s"${module.path}.${declaration.name}" || !sourceByPath.contains(
+          declaration.path
+        )
+      then
+        invalid(
+          "node array requires an owned source-mapped Electrical declaration and nonempty shape"
+        )
+      var cardinality = BigInt(1)
+      declaration.conservativeDimensions.foreach: dimension =>
+        val static = dimension.toLongOption.map(_.toString).getOrElse(
+          shapeDimensionStaticPath(
+            module,
+            dimension
+          ).getOrElse(invalid("node array dimension has no owned static identity"))
+        )
+        val expected = dimension.toLongOption.map(_.toString).getOrElse(
+          module.declarations.find(_.path == static).map(_.name).getOrElse:
+            parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
+              .get(static).flatMap(_.literal).getOrElse(static)
+        )
+        if dimension != expected then invalid("node array dimension spelling is noncanonical")
+        val bounds = shapeStaticBounds(
+          module,
+          static,
+          declaration.path,
+          "NODAL-BRIDGE-047",
+          "node-array dimension"
+        )
+        if bounds.lower <= 0L then invalid("node array dimension requires a positive minimum")
+        cardinality *= BigInt(bounds.upper)
+        if cardinality > BigInt(Long.MaxValue) then
+          invalid("node array element count exceeds signed 64-bit bounds")
+
+    private def validateNodeSelection(
+        module: KernelModuleSnapshot,
+        dimensions: Vector[String],
+        index: KernelShapeIndexSnapshot,
+        previous: Vector[KernelShapeIndexSnapshot],
+        usedSources: mutable.HashSet[String]
+    ): Unit =
+      def invalid(message: String): Nothing = fail("NODAL-BRIDGE-048", message, Some(index.path))
+      val expressions = parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
+      def token(value: String): String =
+        value.toLongOption match
+          case Some(literal) =>
+            if value != literal.toString then invalid("node-array index literal is noncanonical")
+            s"literal:$literal"
+          case None =>
+            val path = shapeDimensionStaticPath(
+              module,
+              value
+            ).getOrElse(invalid("node-array selector has no owned static identity"))
+            if value != path then invalid("node-array selector must carry its full static identity")
+            module.declarations.find(_.path == path) match
+              case Some(_) => s"parameter:$path"
+              case None =>
+                val expression = expressions(path)
+                if expression.literal.nonEmpty then
+                  invalid("literal node-array selectors must be normalized to their numeric value")
+                s"expression:$path"
+      if index.indices.size != dimensions.size || index.resultDimensions.nonEmpty then
+        invalid("node-array selection requires full rank and a scalar terminal result")
+      val tokens = index.indices.map(token)
+      if index.path != s"${index.input}.at(${tokens.mkString(",")})" then
+        invalid("node-array endpoint identity does not match its canonical selector")
+      if index.sourceUses.isEmpty || index.sourceUses != index.sourceUses.distinct.sorted then
+        invalid("node-array source uses must be nonempty, unique and ordered")
+      index.sourceUses.foreach: source =>
+        if source.trim != source || !source.startsWith(
+            s"${module.path}."
+          ) || source == index.path ||
+          !sourceByPath.contains(source) || !usedSources.add(source) ||
+          module.declarations.exists(_.path == source) || expressions.contains(source)
+        then invalid("node-array selection occurrence has no distinct owned source-map identity")
+      val bounds = index.indices.map(shapeIndexBounds(module, _, index.path))
+      previous.foreach: other =>
+        if other.indices.map(token) == tokens then
+          invalid("duplicate canonical node-array physical endpoint")
+        val otherBounds = other.indices.map(shapeIndexBounds(module, _, other.path))
+        if !bounds.zip(otherBounds).exists((left, right) =>
+            left.upper < right.lower || right.upper < left.lower
+          )
+        then invalid("distinct node-array selectors may alias for a legal parameter setting")
 
     private def shapeDimensionMinimum(
         module: KernelModuleSnapshot,

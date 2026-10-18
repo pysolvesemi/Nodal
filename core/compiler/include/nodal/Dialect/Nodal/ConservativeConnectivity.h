@@ -17,6 +17,16 @@ mlir::LogicalResult materializeConservativeConnectivity(mlir::ModuleOp module);
 /// do not claim a complete local equation boundary.
 bool isPartialPhysicalComponent(mlir::Operation *module);
 
+/// True only for a full-rank scalar selection of a directly owned node array.
+bool isNodeArraySelection(mlir::Operation *operation);
+
+/// Independently validate actual SSA index identities and possible aliases.
+mlir::LogicalResult verifyNodeArraySelections(mlir::Operation *module);
+
+/// Merge equivalent selected endpoints and their authored source-use provenance
+/// before connectivity or access grouping. Never creates scalar node declarations.
+mlir::LogicalResult normalizeNodeArraySelections(mlir::ModuleOp module);
+
 } // namespace nodal
 
 #endif // NODAL_DIALECT_NODAL_CONSERVATIVECONNECTIVITY_H

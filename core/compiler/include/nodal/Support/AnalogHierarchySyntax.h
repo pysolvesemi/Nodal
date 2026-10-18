@@ -14,6 +14,13 @@
 
 namespace nodal {
 
+struct HierarchyEndpointSyntax {
+  std::string name;
+  std::string index;
+  std::string spelling;
+  std::set<std::string> parameterReferences;
+};
+
 struct HierarchyInstanceSyntax {
   std::string module;
   std::string name;
@@ -22,11 +29,18 @@ struct HierarchyInstanceSyntax {
   std::set<std::string> parameterReferences;
 };
 
-/// Recognizes only the named scalar instance grammar emitted by Increment 42.
+/// Recognizes named scalar instances, including scalar selections of node arrays.
 /// This does not claim to be an independent or general Verilog-A parser.
 class HierarchySyntaxParser {
 public:
   explicit HierarchySyntaxParser(std::string_view text) : text(text) {}
+
+  std::optional<HierarchyEndpointSyntax> terminal() {
+    if (text.find('\0') != std::string_view::npos)
+      return std::nullopt;
+    auto result = endpoint();
+    return result && peek() == '\0' ? result : std::nullopt;
+  }
 
   std::optional<HierarchyInstanceSyntax> instance() {
     if (text.find('\0') != std::string_view::npos)
@@ -63,9 +77,11 @@ public:
         auto port = identifier();
         if (!port || !consume('('))
           return std::nullopt;
-        auto actual = identifier();
-        if (!actual || !consume(')') || !result.ports.emplace(*port, *actual).second)
+        auto actual = endpoint();
+        if (!actual || !consume(')') || !result.ports.emplace(*port, actual->spelling).second)
           return std::nullopt;
+        result.parameterReferences.insert(actual->parameterReferences.begin(),
+                                          actual->parameterReferences.end());
       } while (consume(','));
     }
     if (!consume(')') || !consume(';') || peek() != '\0')
@@ -106,6 +122,22 @@ private:
       ++position;
     return std::string(text.substr(start, position - start));
   }
+  std::optional<HierarchyEndpointSyntax> endpoint() {
+    auto name = identifier();
+    if (!name)
+      return std::nullopt;
+    HierarchyEndpointSyntax result;
+    result.name = *name;
+    result.spelling = *name;
+    if (consume('[')) {
+      auto index = constant(result.parameterReferences, ']');
+      if (!index || !consume(']'))
+        return std::nullopt;
+      result.index = *index;
+      result.spelling += "[" + *index + "]";
+    }
+    return result;
+  }
   bool number() {
     const std::size_t start = position;
     while (position < text.size() && digit(text[position]))
@@ -136,7 +168,7 @@ private:
     }
     return true;
   }
-  std::optional<std::string> constant(std::set<std::string> &references) {
+  std::optional<std::string> constant(std::set<std::string> &references, char delimiter = ')') {
     space();
     const auto start = position;
     std::size_t depth = 0;
@@ -144,7 +176,7 @@ private:
     bool sawValue = false;
     while (position < text.size()) {
       const char token = peek();
-      if (token == ')' && depth == 0)
+      if (token == delimiter && depth == 0)
         break;
       if (expectsValue) {
         if (token == '+' || token == '-' || token == '!') {
@@ -190,6 +222,10 @@ private:
   }
 };
 
+inline std::optional<HierarchyEndpointSyntax> parseHierarchyEndpoint(std::string_view text) {
+  return HierarchySyntaxParser(text).terminal();
+}
+
 inline std::optional<HierarchyInstanceSyntax> parseHierarchyInstance(std::string_view text) {
   return HierarchySyntaxParser(text).instance();
 }
@@ -198,6 +234,7 @@ struct HierarchyModuleSyntax {
   std::string name;
   std::set<std::string> ports;
   std::set<std::string> nodes;
+  std::set<std::string> arrays;
   std::set<std::string> parameters;
   std::set<std::string> fixedParameters;
   std::vector<HierarchyInstanceSyntax> instances;
@@ -222,9 +259,15 @@ inline bool verifyHierarchySyntax(const std::vector<HierarchyModuleSyntax> &modu
       edges[index].push_back(found->second);
       if (instance.ports.size() != child.ports.size())
         return false;
-      for (const auto &[port, actual] : instance.ports)
-        if (!child.ports.count(port) || !parent.nodes.count(actual))
+      for (const auto &[port, actual] : instance.ports) {
+        auto endpoint = parseHierarchyEndpoint(actual);
+        if (!child.ports.count(port) || !endpoint || !parent.nodes.count(endpoint->name) ||
+            (endpoint->index.empty() == (parent.arrays.count(endpoint->name) != 0)))
           return false;
+        for (const auto &reference : endpoint->parameterReferences)
+          if (!parent.parameters.count(reference))
+            return false;
+      }
       for (const auto &[parameter, value] : instance.parameters) {
         (void)value;
         if (!child.parameters.count(parameter) || child.fixedParameters.count(parameter))

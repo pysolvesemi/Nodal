@@ -98,3 +98,30 @@ port views, slices, row/plane selection, reshape and flatten, preserving the
 immediate source mapping. Writable slices and l-values remain separate open
 Foundation obligations. Native structural IR verification does not imply
 Verilog-A array or target-layout support; unsupported targets reject explicitly.
+
+## Additive conservative node arrays
+
+[Conservative node arrays v0.1](../design-gates/NodalConservativeNodeArrays-DG-v0.1.md)
+adds the module constructor
+`node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]`.
+The existing `node(Electrical): Node[Electrical.type]` scalar form is unchanged.
+NodeArray is a conservative endpoint carrier, not Data, Expr, Signal or Vec(Real).
+
+```scala
+val ground = inout(Electrical)
+val taps = node(Electrical, 2, 3)
+analog:
+  I(taps.at(1, 2), ground) <+ V(taps.at(1, 2), ground) / 1000.0
+```
+
+The initial profile uses module-local Electrical declarations and static full-rank
+`at(indices: Dimension*): Node[D]` selections. Positive fixed/bounded symbolic
+shapes and every index must be valid over the complete legal parameter envelope.
+Zero indices are valid. Selections work inside or outside analog; repeated equal
+canonical index tuples reference the same physical node, with distinct source
+occurrences retained. Independent symbolic tuples with unproved overlap reject,
+rather than silently becoming separate nets. Selected nodes retain existing
+scalar branch/access/connection semantics and immediate-child scalar connectivity.
+Arrays owned by another Module cannot be selected by bypassing that Module's
+boundary. This does not add conservative array ports, generated selections,
+array views or writable Real-array storage.

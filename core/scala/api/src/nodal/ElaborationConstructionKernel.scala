@@ -154,6 +154,24 @@ private[nodal] object ConstructionKernel:
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
 
+  def declareNodeArray(
+      value: NodeArray[?],
+      discipline: Discipline,
+      dimensions: Vector[Dimension]
+  ): Unit =
+    active.getOrElse(throw new IllegalStateException("node array requires an active Module"))
+      .registerNodeArray(value, discipline, dimensions)
+
+  def selectNodeArray(
+      value: Node[?],
+      array: NodeArray[?],
+      indices: Vector[Dimension]
+  ): ExpressionRef =
+    active.getOrElse(
+      throw new IllegalStateException("node array selection requires an active Module")
+    )
+      .registerNodeSelection(value, array, indices)
+
   def shapeIndex[A <: Data, B <: Data](
       expression: KernelExpr[B],
       input: Expr[Vec[A]],

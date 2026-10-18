@@ -14,6 +14,7 @@ private[nodal] enum KernelSignalKind(val label: String):
   case AnalogOutput extends KernelSignalKind("analog-output")
   case AnalogInout extends KernelSignalKind("analog-inout")
   case AnalogNode extends KernelSignalKind("analog-node")
+  case AnalogNodeArray extends KernelSignalKind("analog-node-array")
   case InterfacePort extends KernelSignalKind("interface-port")
   case InterfaceArray extends KernelSignalKind("interface-array")
   case DigitalInout extends KernelSignalKind("digital-inout")
@@ -62,7 +63,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     name: String,
     dataType: Option[String],
     domain: Option[String],
-    attributes: Vector[(String, String)]
+    attributes: Vector[(String, String)],
+    conservativeDimensions: Vector[String] = Vector.empty
 )
 
 private[nodal] final case class KernelInstanceSnapshot(
@@ -101,7 +103,8 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     owner: String,
     input: String,
     indices: Vector[String],
-    resultDimensions: Vector[String] = Vector.empty
+    resultDimensions: Vector[String] = Vector.empty,
+    sourceUses: Vector[String] = Vector.empty
 )
 
 private[nodal] final case class KernelShapeSliceSnapshot(
@@ -283,7 +286,8 @@ private final case class DeclarationRecord(
     dataType: Option[DataType[? <: Data]],
     explicitName: Option[String],
     domainCandidate: Option[ClockDomain],
-    attributes: Vector[(String, Any)]
+    attributes: Vector[(String, Any)],
+    conservativeDimensions: Vector[Dimension] = Vector.empty
 )
 
 private final class GeneratedRegionRecord(
@@ -299,11 +303,18 @@ private final class GeneratedRegionRecord(
 ):
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
 
+private final case class ConservativeSelectionKey(
+    array: DeclarationRef,
+    indices: Vector[Either[Long, DeclarationRef | ExpressionRef]]
+)
+
 private final case class ShapeIndexRecord(
     reference: ExpressionRef,
     input: DeclarationRef | ExpressionRef,
     indices: Vector[Int | Expr[Integer]],
-    resultDimensions: Vector[Any]
+    resultDimensions: Vector[Any],
+    conservative: Option[ConservativeSelectionKey] = None,
+    sourceUses: Vector[(ExpressionRef, Vector[Dimension])] = Vector.empty
 )
 
 private final case class ShapeSliceSelection(

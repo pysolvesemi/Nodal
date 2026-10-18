@@ -67,6 +67,10 @@ private final class ConstructionSession(val options: EmitOptions):
     mutable.LinkedHashMap.empty[(String, String), GeneratedRegionRecord]
   private val shapeIndices = mutable.LinkedHashMap.empty[ExpressionRef, ShapeIndexRecord]
   private val shapeViews = mutable.LinkedHashMap.empty[ExpressionRef, ShapeViewRecord]
+  private val nodeSelectionLookup = mutable.HashMap.empty[
+    DeclarationRef,
+    mutable.LinkedHashMap[Vector[Either[Long, DeclarationRef | ExpressionRef]], ExpressionRef]
+  ]
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -192,7 +196,8 @@ private final class ConstructionSession(val options: EmitOptions):
       dataType: Option[DataType[? <: Data]],
       explicitName: Option[String],
       domain: Option[ClockDomain],
-      attributes: Vector[(String, Any)]
+      attributes: Vector[(String, Any)],
+      conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
     val activeGeneratedVariable =
       kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
@@ -210,7 +215,8 @@ private final class ConstructionSession(val options: EmitOptions):
       dataType,
       explicitName,
       domain,
-      attributes
+      attributes,
+      conservativeDimensions
     )
     declarationIds.put(value, reference)
     semanticOrigin.captureDeclaration(
@@ -223,6 +229,129 @@ private final class ConstructionSession(val options: EmitOptions):
     generationStack.lastOption
       .filter(_.owner == module.handle)
       .foreach(_.declarations += reference)
+
+  def registerNodeArray(
+      value: NodeArray[?],
+      discipline: Discipline,
+      dimensions: Vector[Dimension]
+  ): Unit =
+    val module = currentModule
+    if discipline != Electrical || dimensions.isEmpty || analogStack.nonEmpty ||
+      analogSemanticContext.nonEmpty
+    then
+      fail(
+        "NODAL-SHAPE-043-005",
+        "node arrays require a module-local Electrical declaration outside analog regions"
+      )
+    requireNoGeneratedEffect("generated node-array declaration")
+    val analysis =
+      new StructuralBoundAnalysis(module.handle, "NODAL-SHAPE-043-005", "node-array dimension")
+    val bounds = dimensions.map(analysis(_))
+    if bounds.exists(_.bounds.lower <= 0L) ||
+      bounds.foldLeft(BigInt(1))((count, bound) => count * BigInt(bound.bounds.upper)) >
+        BigInt(Long.MaxValue)
+    then
+      fail(
+        "NODAL-SHAPE-043-005",
+        "node arrays require positive finite dimensions and signed-64-bit element counts"
+      )
+    registerDeclaration(
+      value,
+      KernelSignalKind.AnalogNodeArray,
+      None,
+      None,
+      None,
+      CandidateRuntime.conservativeAttributes(discipline),
+      dimensions
+    )
+    bounds.flatMap(_.parameters).distinct.foreach: parameter =>
+      markStructuralParameterEffect(parameter, "shape")
+      markStructuralParameterEffect(parameter, "rank")
+
+  def registerNodeSelection(
+      value: Node[?],
+      array: NodeArray[?],
+      indices: Vector[Dimension]
+  ): ExpressionRef =
+    val module = currentModule
+    requireNoGeneratedEffect("generated node-array selection")
+    val reference = Option(declarationIds.get(array)).getOrElse(
+      fail("NODAL-SHAPE-043-006", "node-array selection has no owned declaration")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != module.handle || declaration.kind != KernelSignalKind.AnalogNodeArray ||
+      value.discipline != Electrical || array.discipline != Electrical
+    then
+      fail("NODAL-SHAPE-043-006", "node-array selection must retain its local Electrical owner")
+    if indices.size != declaration.conservativeDimensions.size then
+      fail("NODAL-SHAPE-043-002", "node-array selection requires the complete declared rank")
+    val analysis =
+      new StructuralBoundAnalysis(module.handle, "NODAL-SHAPE-043-006", "node-array index")
+    val indexBounds = indices.map(analysis(_))
+    val dimensionBounds = declaration.conservativeDimensions.map(analysis(_))
+    if indexBounds.zip(dimensionBounds).exists((index, dimension) =>
+        index.bounds.lower < 0L || index.bounds.upper >= dimension.bounds.lower
+      )
+    then
+      fail("NODAL-SHAPE-043-002", "node-array index is not valid for every legal extent")
+    def canonical(index: Dimension): Either[Long, DeclarationRef | ExpressionRef] = index match
+      case literal: Int => Left(literal.toLong)
+      case parameter: Param[?] => Right(declarationIds.get(parameter))
+      case expression: KernelExpr[?] => expression.literal match
+          case Some(literal) => Left(literal.value.toLong)
+          case None => Right(expressionIds.get(expression))
+      case _ => fail("NODAL-SHAPE-043-006", "node-array index lacks canonical static identity")
+    val key = indices.map(canonical)
+    val existing = nodeSelectionLookup.get(reference)
+    val canonicalReference = existing.flatMap(_.get(key))
+    if canonicalReference.isEmpty then
+      existing.foreach(_.valuesIterator.foreach: previous =>
+        val previousBounds = shapeIndices(previous).indices.map(analysis(_))
+        if !indexBounds.zip(previousBounds).exists((left, right) =>
+            left.bounds.upper < right.bounds.lower || right.bounds.upper < left.bounds.lower
+          )
+        then
+          fail(
+            "NODAL-SHAPE-043-006",
+            "distinct node-array selectors may alias for a legal parameter setting"
+          ))
+    val occurrence = captureExpression(value, Vector(array)).getOrElse(
+      fail("NODAL-SHAPE-043-006", "node-array selection requires an active Module")
+    )
+    val endpoint = canonicalReference match
+      case Some(previous) =>
+        val record = shapeIndices(previous)
+        shapeIndices.update(
+          previous,
+          record.copy(sourceUses = record.sourceUses :+ (occurrence -> indices))
+        )
+        previous
+      case None =>
+        shapeIndices.update(
+          occurrence,
+          ShapeIndexRecord(
+            occurrence,
+            reference,
+            indices,
+            Vector.empty,
+            Some(ConservativeSelectionKey(reference, key)),
+            Vector(occurrence -> indices)
+          )
+        )
+        nodeSelectionLookup.getOrElseUpdate(
+          reference,
+          mutable.LinkedHashMap.empty
+        ).update(key, occurrence)
+        occurrence
+    indexBounds.flatMap(_.parameters).distinct.foreach(markStructuralParameterEffect(_, "shape"))
+    endpoint
+
+  private def conservativeEndpointPath(key: ConservativeSelectionKey): String =
+    val indices = key.indices.map:
+      case Left(value) => s"literal:$value"
+      case Right(reference: DeclarationRef) => s"parameter:${declarationPath(reference)}"
+      case Right(reference: ExpressionRef) => s"expression:${expressionPath(reference)}"
+    s"${declarationPath(key.array)}.at(${indices.mkString(",")})"
 
   private def validateShapeType(dataType: DataType[?], owner: Long): Unit =
     val descriptor = CandidateRuntime.typeDescriptor(dataType)
@@ -689,7 +818,10 @@ private final class ConstructionSession(val options: EmitOptions):
         invalid("shape slice requires positive dimensions and signed 64-bit maximum element counts")
     (sourceBounds ++ resultBounds ++ Vector(lower, upper, length)).flatMap(_.parameters)
 
-  private def captureExpression(value: AnyRef): Option[ExpressionRef] =
+  private def captureExpression(
+      value: AnyRef,
+      structuralOperands: Vector[Any] = Vector.empty
+  ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
       val reference = ExpressionRef(module.handle, module.expressionCount)
       module.expressionCount += 1
@@ -699,7 +831,7 @@ private final class ConstructionSession(val options: EmitOptions):
           expressionValues.update(reference, expression)
           analogStack.lastOption.foreach(_.expressions += reference)
           expression.operands
-        case _ => Vector.empty
+        case _ => structuralOperands
       semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
       reference
 
@@ -1072,7 +1204,11 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
     def endpoint(value: AnyRef): Node[?] =
-      val reference = Option(declarationIds.get(value)).getOrElse(
+      val selected = value match
+        case node: Node[?] =>
+          node.endpointReference.flatMap(shapeIndices.get).flatMap(_.conservative)
+        case _ => None
+      val reference = selected.map(_.array).orElse(Option(declarationIds.get(value))).getOrElse(
         fail("NODAL-HIERARCHY-038", "connection endpoint is outside this construction transaction")
       )
       val owner = records(reference.module)
@@ -1082,7 +1218,8 @@ private final class ConstructionSession(val options: EmitOptions):
         case _ =>
           fail("NODAL-HIERARCHY-039", "conservative connection requires a node or analog port")
       val local = reference.module == parent.handle &&
-        (portKinds.contains(declaration.kind) || declaration.kind == KernelSignalKind.AnalogNode)
+        (portKinds.contains(declaration.kind) || declaration.kind == KernelSignalKind.AnalogNode ||
+          (selected.nonEmpty && declaration.kind == KernelSignalKind.AnalogNodeArray))
       // attachInstance alone marks a child attached, after recording it in its exact parent.
       val childPort = owner.attached && owner.parentAtConstruction.contains(parent.handle) &&
         portKinds.contains(declaration.kind)
@@ -2139,6 +2276,10 @@ private final class ConstructionSession(val options: EmitOptions):
       .getOrElse(s"${modulePath(parent)}.instance_$ordinal")
 
   def pathOf(value: Any): Option[String] = value match
+    case node: Node[?] if node.endpointReference.nonEmpty =>
+      node.endpointReference.flatMap(
+        shapeIndices.get
+      ).flatMap(_.conservative).map(conservativeEndpointPath)
     case reference: AnyRef =>
       Option(declarationIds.get(reference))
         .map(declarationPath)
@@ -2509,7 +2650,8 @@ private final class ConstructionSession(val options: EmitOptions):
           declarationName(declaration.reference),
           declaration.dataType.map(renderType(_, module.handle)),
           declarationDomain(declaration, resolved),
-          declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle))
+          declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle)),
+          declaration.conservativeDimensions.map(renderShapeDimension(_, module.handle))
         )
       val instances = module.instances.toVector.map: instance =>
         val child = records(instance.child)
@@ -2619,12 +2761,15 @@ private final class ConstructionSession(val options: EmitOptions):
         case reference: DeclarationRef => declarationPath(reference)
         case reference: ExpressionRef => expressionPath(reference)
       KernelShapeIndexSnapshot(
-        path = expressionPath(index.reference),
+        path = index.conservative.map(
+          conservativeEndpointPath
+        ).getOrElse(expressionPath(index.reference)),
         owner = modulePath(index.reference.module),
         input = inputPath,
         indices = index.indices.map(generatedBound),
         resultDimensions =
-          index.resultDimensions.map(renderShapeDimension(_, index.reference.module))
+          index.resultDimensions.map(renderShapeDimension(_, index.reference.module)),
+        sourceUses = index.sourceUses.map(use => expressionPath(use._1)).sorted
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
@@ -2825,36 +2970,49 @@ private final class ConstructionSession(val options: EmitOptions):
     .sortBy(_.path)
 
   private def analogSnapshots(): Vector[KernelAnalogRegionSnapshot] =
+    // Endpoint selectors are structural uses even when authored lexically inside analog.
+    // Keep a shared expression in the runtime inventory if any runtime consumer needs it.
+    val structural = capturedExpressionClosure(
+      shapeIndices.valuesIterator.filter(_.conservative.nonEmpty)
+        .flatMap(_.sourceUses.iterator.flatMap(_._2.iterator))
+    )
     analogRegions.toVector.sortBy(region => (modulePath(region.module), region.ordinal)).map:
       region =>
         val generatedOwnership = region.generatedOwnership.map(canonicalGeneratedOwnership)
-        val expressions = region.expressions.distinct.toVector.map: reference =>
-          val expression = expressionValues.getOrElse(
-            reference,
-            fail(
-              "NODAL-ANALOG-SNAPSHOT-001",
-              "analog expression reference has no captured value",
-              Some(expressionPath(reference))
+        val runtimeRoots = region.expressions.iterator.filterNot(structural.contains)
+          .flatMap(expressionValues.get) ++ region.contributions.iterator.flatMap:
+          (target, value) => Iterator(target, value)
+        val runtime = if structural.isEmpty then Set.empty[ExpressionRef]
+        else capturedExpressionClosure(runtimeRoots)
+        val expressions = region.expressions.distinct.toVector
+          .filter(reference => !structural.contains(reference) || runtime.contains(reference))
+          .map: reference =>
+            val expression = expressionValues.getOrElse(
+              reference,
+              fail(
+                "NODAL-ANALOG-SNAPSHOT-001",
+                "analog expression reference has no captured value",
+                Some(expressionPath(reference))
+              )
             )
-          )
-          val operandPaths =
-            if expression.literal.nonEmpty then Vector.empty
-            else
-              expression.operands.toVector.map: operand =>
-                pathOf(operand).getOrElse(
-                  fail(
-                    "NODAL-ANALOG-SNAPSHOT-002",
-                    s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
-                    Some(expressionPath(reference))
+            val operandPaths =
+              if expression.literal.nonEmpty then Vector.empty
+              else
+                expression.operands.toVector.map: operand =>
+                  pathOf(operand).getOrElse(
+                    fail(
+                      "NODAL-ANALOG-SNAPSHOT-002",
+                      s"analog expression operand '${renderAny(operand, reference.module)}' has no semantic path",
+                      Some(expressionPath(reference))
+                    )
                   )
-                )
-          KernelAnalogExpressionSnapshot(
-            expressionPath(reference),
-            expression.operation.getOrElse("unsupported_generic"),
-            operandPaths,
-            expression.literal.map(_.value),
-            expression.operands.lift(1).collect { case unit: String => unit }
-          )
+            KernelAnalogExpressionSnapshot(
+              expressionPath(reference),
+              expression.operation.getOrElse("unsupported_generic"),
+              operandPaths,
+              expression.literal.map(_.value),
+              expression.operands.lift(1).collect { case unit: String => unit }
+            )
         val byPath = expressions.map(expression => expression.path -> expression).toMap
         val contributions = region.contributions.toVector.zipWithIndex.map:
           case ((target, value), index) =>
@@ -2890,7 +3048,7 @@ private final class ConstructionSession(val options: EmitOptions):
           generatedOwnership.map(_._2)
         )
 
-  private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =
+  private def capturedExpressionClosure(roots: Iterator[Any]): Set[ExpressionRef] =
     val reachable = mutable.LinkedHashSet.empty[ExpressionRef]
     val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
 
@@ -2908,6 +3066,10 @@ private final class ConstructionSession(val options: EmitOptions):
       case _: Param[?] => ()
       case _ => ()
 
+    roots.foreach(visit)
+    reachable.toSet
+
+  private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =
     val roots = rootParameterBindings.iterator.map(_._2) ++ records.valuesIterator.flatMap(
       _.instances.iterator.flatMap(_.parameterOverrides.iterator.map(_._2))
     )
@@ -2929,17 +3091,21 @@ private final class ConstructionSession(val options: EmitOptions):
         dimensions ++ nested.getOrElse(Vector.empty)
 
     val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
-      _.declarations.iterator.flatMap(_.dataType.iterator.flatMap(shapeDimensionRoots))
+      _.declarations.iterator.flatMap(declaration =>
+        declaration.dataType.iterator.flatMap(shapeDimensionRoots) ++
+          declaration.conservativeDimensions.iterator
+      )
     )
     val shapeViewExpressionRoots = shapeViews.valuesIterator.flatMap(view =>
       view.dimensions.iterator ++ view.slice.iterator.flatMap(selection =>
         Iterator(selection.lower, selection.upperExclusive)
       )
     )
-    (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots ++
-      shapeViewExpressionRoots).foreach:
-      case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)
-      case _ => ()
+    val reachable = capturedExpressionClosure(
+      (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots ++
+        shapeViewExpressionRoots).collect:
+        case expression: KernelExpr[?] if expression.literal.isEmpty => expression
+    )
 
     expressionValues.toVector.collect:
       case (reference, expression) if reachable.contains(reference) =>
@@ -2987,6 +3153,7 @@ private final class ConstructionSession(val options: EmitOptions):
       "analog-output",
       "analog-inout",
       "analog-node",
+      "analog-node-array",
       "conservative-terminal",
       "analog-signal"
     )
@@ -3027,6 +3194,12 @@ private final class ConstructionSession(val options: EmitOptions):
     semanticResult = Some(semantic)
     val resolved = resolveDomains()
     val modules = snapshots(resolved)
+    val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val endpointSources = shapeIndices.valuesIterator.filter(_.conservative.nonEmpty).flatMap:
+      index =>
+        sourceByPath.get(expressionPath(index.sourceUses.head._1)).map(source =>
+          SourceMapEntry(conservativeEndpointPath(index.conservative.get), source)
+        )
     val abi = interfaceAbi(resolved)
     val snapshot = ConstructionSnapshot(
       root = modulePath(rootHandle),
@@ -3054,7 +3227,7 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ AnalogUserFunctionRuntime.sourceMap(
+        (semantic.sourceMap ++ endpointSources ++ AnalogUserFunctionRuntime.sourceMap(
           userFunctions.snapshots(modulePath)
         )).sortBy(_.semanticPath),
       analogRegions = analogSnapshots(),

@@ -7,6 +7,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
@@ -663,6 +664,8 @@ LogicalResult verifyPotentialFlowAccessOperation(Operation *operation) {
 }
 
 LogicalResult normalizePotentialFlowAccess(mlir::ModuleOp module) {
+  if (failed(normalizeNodeArraySelections(module)))
+    return failure();
   llvm::SmallVector<Operation *, 8> modules;
   module.walk([&](Operation *operation) {
     if (isNamed(operation, "nodal.module"))

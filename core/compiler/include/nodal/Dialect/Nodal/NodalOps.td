@@ -652,6 +652,13 @@ def Nodal_NodeOp : Nodal_Op<"node", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let hasVerifier = 1;
 }
 
+def Nodal_NodeArrayOp : Nodal_Op<"node_array", [HasParent<"ModuleOp">]> {
+  let summary = "Owned structural array of internal electrical nodes";
+  let arguments = (ins StrAttr:$name, StrAttr:$source_path, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_ConnectOp : Nodal_Op<"connect", [HasParent<"ModuleOp">]> {
   let summary = "Source-semantic conservative connection relation";
   let arguments = (ins

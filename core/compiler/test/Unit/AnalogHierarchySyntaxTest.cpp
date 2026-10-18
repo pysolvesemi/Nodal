@@ -44,7 +44,9 @@ int main() {
   negative.push_back("Cell 3a();");
   negative.push_back("Cell a(.p(n.x));");
   negative.push_back("Cell #(.R(1)) a(.p(n + x));");
-  negative.push_back("Cell #(.R(1)) a(.p(n[0]));");
+  negative.push_back("Cell #(.R(1)) a(.p(n[]));");
+  negative.push_back("Cell #(.R(1)) a(.p(n[0][1]));");
+  negative.push_back("Cell #(.R(1)) a(.p(n[(COUNT +)]));");
   unsigned checks = 0;
   bool ok = true;
   for (const auto &text : positive) {
@@ -58,6 +60,15 @@ int main() {
     ++checks;
     if (nodal::parseHierarchyInstance(text)) {
       std::cerr << "ACCEPTED: " << text << '\n';
+      ok = false;
+    }
+  }
+  for (const std::string text :
+       {"Cell a(.p(n[0]), .n(gnd));", "Cell a(.p(n[((COUNT * 2) + 1)]), .n(gnd));"}) {
+    ++checks;
+    auto instance = nodal::parseHierarchyInstance(text);
+    if (!instance || !nodal::parseHierarchyEndpoint(instance->ports.at("p"))) {
+      std::cerr << "REJECTED: selected scalar endpoint " << text << '\n';
       ok = false;
     }
   }
@@ -134,6 +145,18 @@ int main() {
   rejectSurface(altered);
   ++checks;
   ok &= !nodal::parseHierarchyInstance(std::string("Empty x();\0trailing", 19));
+  ++checks;
+  ok &= !nodal::parseHierarchyEndpoint(std::string("mid\0trailing", 12));
+  altered = modules;
+  altered[1].instances[0].ports["p"] = "mid[0]";
+  rejectSurface(altered);
+  altered[1].arrays.insert("mid");
+  ++checks;
+  ok &= nodal::verifyHierarchySyntax(altered);
+  altered[1].instances[0].ports["p"] = "mid";
+  rejectSurface(altered);
+  altered[1].instances[0].ports["p"] = "mid[(UNKNOWN + 1)]";
+  rejectSurface(altered);
   std::cout << checks << " hierarchy-syntax checks " << (ok ? "passed" : "failed") << '\n';
   return ok ? 0 : 1;
 }

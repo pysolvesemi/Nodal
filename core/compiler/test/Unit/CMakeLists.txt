@@ -323,3 +323,9 @@ add_test(NAME nodal.native.shape-slice-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-shape-slice-evidence"
 )
 set_tests_properties(nodal.native.shape-slice-integration PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-node-array-unit-tests NodeArrayTest.cpp)
+llvm_update_compile_flags(nodal-node-array-unit-tests)
+target_link_libraries(nodal-node-array-unit-tests
+  PRIVATE NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.node-array-unit COMMAND nodal-node-array-unit-tests)

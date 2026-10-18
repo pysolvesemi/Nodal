@@ -11,9 +11,11 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 
 #include "llvm/ADT/APInt.h"
@@ -1432,6 +1434,67 @@ LogicalResult verifyAnalogProcedure(Operation *operation) {
 
 } // namespace
 
+FailureOr<nodal::StaticShapeDimension>
+nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || dimension.empty() ||
+      dimension != dimension.trim())
+    return failure();
+  auto bounds = inferShapeDimensionBounds(module, dimension, true);
+  if (failed(bounds))
+    return failure();
+  StaticShapeDimension result{*bounds};
+  if (!dimension.getAsInteger(10, result.literal))
+    return result;
+  result.parameter = findDirectModuleParameter(module, dimension);
+  if (!result.parameter)
+    result.expression = findDirectModuleStaticValue(module, dimension);
+  return result;
+}
+
+FailureOr<int64_t> nodal::inferStaticShapeMaximumCardinality(Operation *module,
+                                                             llvm::StringRef dimensions) {
+  llvm::SmallVector<llvm::StringRef> tokens;
+  dimensions.split(tokens, ',', -1, true);
+  llvm::StringMap<ParameterIntegerBounds> proven;
+  uint64_t maximum = 1;
+  for (llvm::StringRef token : tokens) {
+    auto found = proven.find(token);
+    if (found == proven.end()) {
+      auto dimension = resolveStaticShapeDimension(module, token);
+      if (failed(dimension))
+        return failure();
+      found = proven.try_emplace(token, dimension->bounds).first;
+    }
+    const int64_t extent = found->second.upper;
+    if (extent <= 0 || maximum > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                                     static_cast<uint64_t>(extent))
+      return failure();
+    maximum *= static_cast<uint64_t>(extent);
+  }
+  return static_cast<int64_t>(maximum);
+}
+
+FailureOr<nodal::ParameterIntegerBounds> nodal::inferStaticShapeIndexBounds(Operation *module,
+                                                                            Value value) {
+  Operation *definition = value ? value.getDefiningOp() : nullptr;
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || !definition ||
+      definition->getParentOp() != module)
+    return failure();
+  if (value.getType().isIndex()) {
+    auto literal = definition->getAttrOfType<IntegerAttr>("value");
+    if (!llvm::isa<nodal::ConstantOp>(definition) || definition->hasAttr("unit") || !literal ||
+        !literal.getType().isIndex() || !literal.getValue().isSignedIntN(64))
+      return failure();
+    const int64_t number = literal.getValue().getSExtValue();
+    return ParameterIntegerBounds{number, number};
+  }
+  llvm::SmallPtrSet<Operation *, 16> active;
+  if (!value.getType().isInteger(64) ||
+      !hasStaticShapeIndexDependencies(value, module, active, 0, true))
+    return failure();
+  return inferParameterIntegerBounds(value);
+}
+
 LogicalResult nodal::PlaceholderOp::verify() {
   auto label = (*this)->getAttrOfType<StringAttr>("label");
   if (!label || label.getValue().empty())
@@ -1474,6 +1537,8 @@ LogicalResult nodal::ModuleOp::verify() {
     if (type && failed(verifyShapedTypeContract(getOperation(), &operation, type.getValue())))
       return failure();
   }
+  if (failed(verifyNodeArraySelections(getOperation())))
+    return failure();
   return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 
@@ -1640,6 +1705,15 @@ LogicalResult nodal::ShapeIndexOp::verify() {
     return emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
   const unsigned indices = getOperation()->getNumOperands() - 1;
   const unsigned rank = shapedRank(shaped.getDimensions());
+  const bool conservative = llvm::isa<nodal::TerminalType>(shaped.getElementType());
+  if (conservative &&
+      (!llvm::isa_and_nonnull<nodal::NodeArrayOp>(getOperation()->getOperand(0).getDefiningOp()) ||
+       indices != rank ||
+       getOperation()->getOperand(0).getDefiningOp()->getParentOp() !=
+           getOperation()->getParentOp() ||
+       !llvm::isa_and_nonnull<nodal::ModuleOp>(getOperation()->getParentOp())))
+    return emitOpError("NODAL-SHAPE-043-006: conservative selection requires full-rank "
+                       "direct-module node-array ownership");
   if (indices == 0 || indices > rank)
     return emitOpError("NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
   llvm::SmallVector<llvm::StringRef> dimensions;
@@ -1686,7 +1760,14 @@ LogicalResult nodal::ShapeIndexOp::verify() {
 
     int64_t lower = 0;
     int64_t upper = 0;
-    if (indexValue.getType().isIndex()) {
+    if (conservative) {
+      auto bounds = inferStaticShapeIndexBounds(owner, indexValue);
+      if (failed(bounds))
+        return emitOpError(
+            "NODAL-SHAPE-043-002: node-array index requires a directly owned static Integer proof");
+      lower = bounds->lower;
+      upper = bounds->upper;
+    } else if (indexValue.getType().isIndex()) {
       // Preserve the legacy literal form exactly; metadata and runtime values do not prove it.
       auto literal = index->getAttrOfType<IntegerAttr>("value");
       if (!llvm::isa<nodal::ConstantOp>(index) || index->hasAttr("unit") || !literal ||
@@ -1956,29 +2037,8 @@ LogicalResult nodal::ShapeSliceOp::verify() {
 
   // Reuse the shape/parameter bounds owner for every dimension. No reshape
   // count-equality rule applies: a slice changes the selected axis length.
-  llvm::StringMap<nodal::ParameterIntegerBounds> dimensionBounds;
-  auto shapeFits = [&](llvm::ArrayRef<llvm::StringRef> dimensions) {
-    uint64_t maximumCount = 1;
-    for (llvm::StringRef dimension : dimensions) {
-      if (dimension.empty() || dimension != dimension.trim())
-        return false;
-      auto found = dimensionBounds.find(dimension);
-      if (found == dimensionBounds.end()) {
-        auto bounds = inferShapeDimensionBounds(owner, dimension, true);
-        if (failed(bounds))
-          return false;
-        found = dimensionBounds.try_emplace(dimension, *bounds).first;
-      }
-      const auto bounds = found->second;
-      if (bounds.lower <= 0 || bounds.upper < bounds.lower ||
-          maximumCount > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                             static_cast<uint64_t>(bounds.upper))
-        return false;
-      maximumCount *= static_cast<uint64_t>(bounds.upper);
-    }
-    return true;
-  };
-  if (!shapeFits(inputDimensions) || !shapeFits(resultDimensions))
+  if (failed(inferStaticShapeMaximumCardinality(owner, input.getDimensions())) ||
+      failed(inferStaticShapeMaximumCardinality(owner, result.getDimensions())))
     return emitOpError(
         "NODAL-SHAPE-043-004: slice dimensions require positive finite structural proofs and "
         "signed 64-bit cardinality");
@@ -2061,7 +2121,7 @@ LogicalResult nodal::ShapeSliceOp::verify() {
         "NODAL-SHAPE-043-004: result extent must retain the exact canonical upper-minus-lower "
         "length identity");
   if (!dimensionMatches(inputDimensions[axis], upper) &&
-      upperBounds->upper > dimensionBounds.find(inputDimensions[axis])->second.lower)
+      upperBounds->upper > resolveStaticShapeDimension(owner, inputDimensions[axis])->bounds.lower)
     return emitOpError(
         "NODAL-SHAPE-043-004: slice upper endpoint exceeds a legal source-axis extent");
   return success();
@@ -2175,6 +2235,45 @@ LogicalResult nodal::NodeOp::verify() {
     return emitOpError(
         "NODAL-ITERATION-043-004: generated node ownership or induction metadata does not match "
         "its enclosing generate region");
+  return success();
+}
+
+LogicalResult nodal::NodeArrayOp::verify() {
+  Operation *operation = getOperation();
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
+  auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
+  auto terminal =
+      shaped ? llvm::dyn_cast<nodal::TerminalType>(shaped.getElementType()) : nodal::TerminalType();
+  if (!owner || operation->getParentOp() != owner || !terminal ||
+      terminal.getDiscipline() != "electrical" ||
+      failed(resolveDisciplineDeclaration(
+          operation, FlatSymbolRefAttr::get(operation->getContext(), terminal.getDiscipline()))))
+    return emitOpError(
+        "NODAL-SHAPE-043-005: node array requires directly owned shaped Electrical terminals");
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  llvm::StringRef name = textAttr(operation, "name"), source = textAttr(operation, "source_path");
+  llvm::StringRef ownerPath = metadataSemanticPath(owner);
+  if (ownerPath.empty())
+    ownerPath = textAttr(owner, "sym_name");
+  if (name.empty() || name != name.trim() || source != (ownerPath + "." + name).str() ||
+      metadataSemanticPath(operation) != source || !storage || storage.getValue() != "structural" ||
+      operation->hasAttr("dimensions") || operation->hasAttr("generated_owner") ||
+      operation->hasAttr("generated_induction") || operation->hasAttr("direction"))
+    return emitOpError(
+        "NODAL-SHAPE-043-005: node array requires canonical structural declaration identity");
+  if (failed(inferStaticShapeMaximumCardinality(owner, shaped.getDimensions())))
+    return emitOpError("NODAL-SHAPE-043-005: node-array dimensions require positive finite owned "
+                       "proofs and signed 64-bit cardinality");
+  for (Operation &candidate : owner->getRegion(0).front()) {
+    if (&candidate != operation &&
+        (textAttr(&candidate, "name") == name || metadataSemanticPath(&candidate) == source))
+      return emitOpError("NODAL-SHAPE-043-005: node-array declaration identity must be unique");
+    if (llvm::isa<nodal::ComponentContractOp>(candidate) &&
+        textAttr(&candidate, "kind") == "concrete")
+      return emitOpError("NODAL-SHAPE-043-005: sparse node-array selections do not prove complete "
+                         "component coverage");
+  }
   return success();
 }
 

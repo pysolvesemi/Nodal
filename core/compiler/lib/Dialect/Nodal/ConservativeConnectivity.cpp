@@ -5,11 +5,14 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -303,6 +306,8 @@ std::string sanitizeSymbol(llvm::StringRef value) {
 }
 
 std::string endpointPath(Operation *operation, llvm::StringRef modulePath) {
+  if (nodal::isNodeArraySelection(operation))
+    return metadataText(operation, "semantic_path").str();
   llvm::StringRef explicitPath = textAttr(operation, "source_path");
   if (!explicitPath.empty())
     return explicitPath.str();
@@ -326,6 +331,134 @@ struct EndpointInfo {
   bool terminal = false;
   std::string flowOrientation;
 };
+
+struct ArrayIndexIdentity {
+  enum Kind { Literal, Parameter, Expression } kind;
+  int64_t literal = 0;
+  Operation *root = nullptr;
+
+  bool operator==(const ArrayIndexIdentity &other) const {
+    return kind == other.kind && literal == other.literal && root == other.root;
+  }
+};
+
+struct ArraySelectionInfo {
+  Operation *operation;
+  Value array;
+  std::vector<ArrayIndexIdentity> indices;
+  std::vector<nodal::ParameterIntegerBounds> bounds;
+  std::string path;
+  std::vector<std::string> uses;
+};
+
+LogicalResult collectArraySelections(Operation *module,
+                                     std::vector<ArraySelectionInfo> &selections) {
+  Block *body = moduleBody(module);
+  if (!body)
+    return success();
+  llvm::StringRef ownerPath = metadataText(module, "semantic_path");
+  if (ownerPath.empty())
+    ownerPath = textAttr(module, "sym_name");
+  const std::string prefix = (ownerPath + ".").str();
+  auto ownedPath = [&](llvm::StringRef path) {
+    return isCanonicalText(path) && path.starts_with(prefix) && path.size() > prefix.size();
+  };
+  for (Operation &operation : *body) {
+    if (!nodal::isNodeArraySelection(&operation))
+      continue;
+    // The operation verifier owns rank, element and all-legal-index proofs.
+    if (failed(mlir::verify(&operation)))
+      return failure();
+    ArraySelectionInfo selection{&operation, operation.getOperand(0), {}, {}, {}, {}};
+    Operation *array = selection.array.getDefiningOp();
+    selection.path = textAttr(array, "source_path").str() + ".at(";
+    for (Value index : operation.getOperands().drop_front()) {
+      auto bounds = nodal::inferStaticShapeIndexBounds(module, index);
+      if (failed(bounds))
+        return operation.emitOpError("NODAL-SHAPE-043-006: selection index proof is unavailable");
+      selection.bounds.push_back(*bounds);
+      Operation *definition = index.getDefiningOp();
+      std::string token;
+      if (llvm::isa<nodal::ConstantOp, nodal::ConstLiteralOp>(definition)) {
+        auto literal = definition->getAttrOfType<IntegerAttr>("value");
+        if (!literal || !literal.getValue().isSignedIntN(64))
+          return operation.emitOpError("NODAL-SHAPE-043-006: invalid literal index identity");
+        int64_t value = literal.getValue().getSExtValue();
+        selection.indices.push_back({ArrayIndexIdentity::Literal, value, nullptr});
+        token = "literal:" + std::to_string(value);
+      } else if (llvm::isa<nodal::ConstParameterRefOp>(definition)) {
+        auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
+        Operation *parameter = nullptr;
+        for (Operation &candidate : *body)
+          if (reference && llvm::isa<nodal::ParameterOp>(candidate) &&
+              textAttr(&candidate, "sym_name") == reference.getValue())
+            parameter = &candidate;
+        llvm::StringRef path =
+            parameter ? metadataText(parameter, "semantic_path") : llvm::StringRef();
+        if (!parameter || !ownedPath(path))
+          return operation.emitOpError(
+              "NODAL-SHAPE-043-006: parameter index source identity is absent");
+        selection.indices.push_back({ArrayIndexIdentity::Parameter, 0, parameter});
+        token = "parameter:" + path.str();
+      } else {
+        llvm::StringRef path = metadataText(definition, "semantic_path");
+        unsigned matches = 0;
+        for (Operation &candidate : *body)
+          if (metadataText(&candidate, "semantic_path") == path)
+            ++matches;
+        if (!llvm::isa<nodal::ConstExprOp>(definition) || !ownedPath(path) || matches != 1)
+          return operation.emitOpError(
+              "NODAL-SHAPE-043-006: compound index requires a unique owned root");
+        selection.indices.push_back({ArrayIndexIdentity::Expression, 0, definition});
+        token = "expression:" + path.str();
+      }
+      if (selection.indices.size() > 1)
+        selection.path += ',';
+      selection.path += token;
+    }
+    selection.path += ')';
+    auto metadata = operation.getAttrOfType<DictionaryAttr>("metadata");
+    auto uses = metadata ? metadata.getAs<ArrayAttr>("source_uses") : ArrayAttr();
+    if (metadataText(&operation, "semantic_path") != selection.path ||
+        metadataText(&operation, "input_path") != textAttr(array, "source_path") ||
+        metadataText(&operation, "storage") != "structural" ||
+        metadataText(&operation, "selection_kind") != "node_array" ||
+        !isCanonicalStringArray(uses, true))
+      return operation.emitOpError(
+          "NODAL-SHAPE-043-006: selected endpoint identity or source provenance is invalid");
+    for (Attribute attribute : uses) {
+      llvm::StringRef use = llvm::cast<StringAttr>(attribute).getValue();
+      if (!ownedPath(use) || use == selection.path ||
+          (!selection.uses.empty() && use <= llvm::StringRef(selection.uses.back())))
+        return operation.emitOpError(
+            "NODAL-SHAPE-043-006: source uses must be owned, sorted and unique");
+      selection.uses.push_back(use.str());
+    }
+    for (const ArraySelectionInfo &previous : selections) {
+      const bool same = previous.array == selection.array && previous.indices == selection.indices;
+      if (!same && previous.path == selection.path)
+        return operation.emitOpError(
+            "NODAL-SHAPE-043-006: distinct selected endpoints cannot share source identity");
+      if (!same) {
+        for (const std::string &use : selection.uses)
+          if (std::binary_search(previous.uses.begin(), previous.uses.end(), use))
+            return operation.emitOpError(
+                "NODAL-SHAPE-043-006: one source use cannot name distinct endpoints");
+      }
+      if (same || previous.array != selection.array)
+        continue;
+      bool disjoint = false;
+      for (unsigned axis = 0; axis < selection.bounds.size(); ++axis)
+        disjoint |= selection.bounds[axis].upper < previous.bounds[axis].lower ||
+                    previous.bounds[axis].upper < selection.bounds[axis].lower;
+      if (!disjoint)
+        return operation.emitOpError(
+            "NODAL-SHAPE-043-006: distinct node-array selectors may alias for legal parameters");
+    }
+    selections.push_back(std::move(selection));
+  }
+  return success();
+}
 
 struct SetInfo {
   unsigned root = 0;
@@ -392,7 +525,7 @@ LogicalResult materializeModule(Operation *module) {
   llvm::StringSet<> sourcePaths;
   for (Operation &operation : *body) {
     if (!isNamed(&operation, "nodal.terminal") && !isNamed(&operation, "nodal.node") &&
-        !isNamed(&operation, "nodal.instance_terminal"))
+        !isNamed(&operation, "nodal.instance_terminal") && !nodal::isNodeArraySelection(&operation))
       continue;
     if (operation.getNumResults() != 1)
       return operation.emitOpError(
@@ -407,7 +540,9 @@ LogicalResult materializeModule(Operation *module) {
           "NODAL-TERMINAL-DISCIPLINE-001: endpoint discipline must resolve to a "
           "continuous conservative discipline");
 
-    const llvm::StringRef endpointName = textAttr(&operation, "name");
+    const llvm::StringRef endpointName = nodal::isNodeArraySelection(&operation)
+                                             ? metadataText(&operation, "semantic_path")
+                                             : textAttr(&operation, "name");
     if (!isCanonicalText(endpointName) || !endpointNames.insert(endpointName).second)
       return operation.emitOpError(
           "NODAL-CONNECTIVITY-PROVENANCE-001: endpoint names must be canonical and unique "
@@ -586,6 +721,12 @@ LogicalResult materializeModule(Operation *module) {
     for (unsigned index : indices) {
       info.members.push_back(endpoints[index].value);
       info.memberPaths.push_back(endpoints[index].path);
+      if (nodal::isNodeArraySelection(endpoints[index].operation)) {
+        auto metadata = endpoints[index].operation->getAttrOfType<DictionaryAttr>("metadata");
+        for (Attribute use : metadata.getAs<ArrayAttr>("source_uses"))
+          info.provenance.push_back("node-array-use:" +
+                                    llvm::cast<StringAttr>(use).getValue().str());
+      }
       if (info.discipline.empty()) {
         info.discipline = endpoints[index].discipline;
       } else if (info.discipline != endpoints[index].discipline) {
@@ -764,6 +905,8 @@ LogicalResult materializeModule(Operation *module) {
 }
 
 LogicalResult materializeInPlace(mlir::ModuleOp module) {
+  if (failed(nodal::normalizeNodeArraySelections(module)))
+    return failure();
   bool optedIn = false;
   llvm::StringSet<> componentPaths;
   for (Operation &operation : module.getBody()->getOperations()) {
@@ -1064,6 +1207,69 @@ LogicalResult nodal::FlowConservationOp::verify() {
 bool nodal::isPartialPhysicalComponent(Operation *module) {
   Operation *contract = componentContract(module);
   return contract && textAttr(contract, "kind") == "partial";
+}
+
+bool nodal::isNodeArraySelection(Operation *operation) {
+  return llvm::isa_and_nonnull<nodal::ShapeIndexOp>(operation) && operation->getNumOperands() > 1 &&
+         operation->getNumResults() == 1 &&
+         llvm::isa<nodal::TerminalType>(operation->getResult(0).getType()) &&
+         llvm::isa_and_nonnull<nodal::NodeArrayOp>(operation->getOperand(0).getDefiningOp());
+}
+
+LogicalResult nodal::verifyNodeArraySelections(Operation *module) {
+  std::vector<ArraySelectionInfo> selections;
+  return collectArraySelections(module, selections);
+}
+
+LogicalResult nodal::normalizeNodeArraySelections(mlir::ModuleOp module) {
+  // Validate all definitions before changing any aliases. The enclosing gate
+  // and connectivity transactions retain their existing clone/commit boundary.
+  std::vector<std::vector<ArraySelectionInfo>> definitions;
+  LogicalResult valid = success();
+  module.walk([&](nodal::ModuleOp definition) {
+    definitions.emplace_back();
+    if (failed(collectArraySelections(definition, definitions.back())))
+      valid = failure();
+  });
+  if (failed(valid))
+    return failure();
+  for (auto &selections : definitions) {
+    std::vector<ArraySelectionInfo *> representatives;
+    for (ArraySelectionInfo &selection : selections) {
+      ArraySelectionInfo *representative = nullptr;
+      for (ArraySelectionInfo *candidate : representatives)
+        if (candidate->array == selection.array && candidate->indices == selection.indices) {
+          representative = candidate;
+          break;
+        }
+      if (!representative) {
+        representatives.push_back(&selection);
+        continue;
+      }
+      representative->uses.insert(representative->uses.end(), selection.uses.begin(),
+                                  selection.uses.end());
+      llvm::sort(representative->uses);
+      representative->uses.erase(
+          std::unique(representative->uses.begin(), representative->uses.end()),
+          representative->uses.end());
+      Builder builder(module.getContext());
+      NamedAttrList metadata(representative->operation->getAttrOfType<DictionaryAttr>("metadata"));
+      metadata.set("source_uses", stringArray(builder, representative->uses));
+      representative->operation->setAttr("metadata", metadata.getDictionary(module.getContext()));
+      llvm::SmallPtrSet<Operation *, 4> orphanedIndexLiterals;
+      for (Value index : selection.operation->getOperands().drop_front())
+        if (index.getType().isIndex() && llvm::isa<nodal::ConstantOp>(index.getDefiningOp()))
+          orphanedIndexLiterals.insert(index.getDefiningOp());
+      selection.operation->getResult(0).replaceAllUsesWith(representative->operation->getResult(0));
+      selection.operation->erase();
+      // Only legacy pure index literals validated above can become orphaned
+      // here. This is not general dead-code cleanup or another storage model.
+      for (Operation *literal : orphanedIndexLiterals)
+        if (literal->getResult(0).use_empty())
+          literal->erase();
+    }
+  }
+  return success();
 }
 
 LogicalResult nodal::materializeConservativeConnectivity(mlir::ModuleOp module) {

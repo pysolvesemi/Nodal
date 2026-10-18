@@ -248,8 +248,12 @@ private[nodal] object ReproducibilityContract:
           "semantic_path" -> string(declaration.path),
           "declaration_kind" -> string(declaration.kind),
           "data_type" -> optionalString(declaration.dataType),
-          "shape" -> string(shapeOf(declaration.dataType)),
-          "layout" -> string(layoutOf(declaration.dataType, backendProfile)),
+          "shape" -> string(if declaration.conservativeDimensions.nonEmpty then
+            declaration.conservativeDimensions.mkString("x")
+          else shapeOf(declaration.dataType)),
+          "layout" -> string(if declaration.conservativeDimensions.nonEmpty then
+            "conservative-flat-row-major"
+          else layoutOf(declaration.dataType, backendProfile)),
           "storage" -> string(storageOf(declaration.kind))
         )
     array(declarations)
@@ -274,6 +278,7 @@ private[nodal] object ReproducibilityContract:
 
   private def storageOf(kind: String): String = kind match
     case "parameter" => "symbolic-parameter"
+    case "analog-node-array" => "structural"
     case "register" => "register"
     case "memory" => "memory"
     case "wire" | "variable" | "analog-signal" => "signal"
@@ -434,7 +439,8 @@ private[nodal] object ReproducibilityContract:
     array(originEntries ++ waiverEntries ++ generatedEntries)
 
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
-    obj(
+    val nodeSelections = snapshot.shapeIndices.filter(_.sourceUses.nonEmpty).sortBy(_.path)
+    JObject(Vector(
       "root" -> string(snapshot.root),
       "modules" -> array(
         snapshot.modules.sortBy(_.path).map: module =>
@@ -455,14 +461,16 @@ private[nodal] object ReproducibilityContract:
             ),
             "declarations" -> array(
               module.declarations.sortBy(_.path).map: declaration =>
-                obj(
+                obj((Vector(
                   "path" -> string(declaration.path),
                   "kind" -> string(declaration.kind),
                   "name" -> string(declaration.name),
                   "data_type" -> optionalString(declaration.dataType),
                   "domain" -> optionalString(declaration.domain),
                   "attributes" -> attributes(declaration.attributes)
-                )
+                ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
+                  "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
+                ).toVector)*)
             ),
             "instances" -> array(
               module.instances.sortBy(_.path).map: instance =>
@@ -560,7 +568,16 @@ private[nodal] object ReproducibilityContract:
           )
       ),
       "waivers" -> waiverInventory(snapshot)
-    )
+    ) ++ Option.when(nodeSelections.nonEmpty)(
+      "node_array_selections" -> array(nodeSelections.map: selection =>
+        obj(
+          "path" -> string(selection.path),
+          "owner" -> string(selection.owner),
+          "input" -> string(selection.input),
+          "indices" -> array(selection.indices.map(string)),
+          "source_uses" -> array(selection.sourceUses.sorted.map(string))
+        ))
+    ).toVector)
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

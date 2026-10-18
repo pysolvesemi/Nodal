@@ -6,6 +6,7 @@
 #include "mlir/Parser/Parser.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalTypes.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
@@ -1032,6 +1033,44 @@ module attributes {
     "nodal.parameter_override"(%root_gain) <{instance = @child, metadata = {}, parameter = @gain}> : (f64) -> ()
   }) : () -> ()
 }
+)mlir";
+
+constexpr llvm::StringLiteral kStaticNodeArrayModule = R"mlir(
+module attributes {nodal.backend.profile = "verilog-a", nodal.target.profile = "analog"} {
+  "nodal.nature"() <{abstol = 1.0e-6 : f64, access = "V", metadata = {}, sym_name = "Voltage", units = "V"}> : () -> ()
+  "nodal.nature"() <{abstol = 1.0e-12 : f64, access = "I", metadata = {}, sym_name = "Current", units = "A"}> : () -> ()
+  "nodal.discipline"() <{domain = "continuous", flow = @Current, metadata = {}, potential = @Voltage, sym_name = "electrical"}> : () -> ()
+  "nodal.module"() <{metadata = {root = true, semantic_path = "ArrayNodes"}, sym_name = "ArrayNodes"}> ({
+  ^bb0:
+    %p = "nodal.terminal"() <{metadata = {declaration_kind = "analog-inout"}, name = "p", source_path = "ArrayNodes.p"}> : () -> !nodal.terminal<"electrical">
+    %array = "nodal.node_array"() <{name = "tap", source_path = "ArrayNodes.tap", metadata = {semantic_path = "ArrayNodes.tap", storage = "structural"}}> : () -> !nodal.shaped<"2,3", !nodal.terminal<"electrical">>
+    %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %selected = "nodal.shape_index"(%array, %one, %one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:1,literal:1)", source_uses = ["ArrayNodes.selection"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, i64, i64) -> !nodal.terminal<"electrical">
+    %other = "nodal.shape_index"(%array, %zero, %one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:0,literal:1)", source_uses = ["ArrayNodes.other"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, i64, i64) -> !nodal.terminal<"electrical">
+    %branch = "nodal.branch"(%selected, %p) <{metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    %named = "nodal.branch"(%other, %p) <{name = "probeBranch", metadata = {}}> : (!nodal.terminal<"electrical">, !nodal.terminal<"electrical">) -> !nodal.branch<"electrical">
+    "nodal.analog"() <{metadata = {}}> ({
+    ^bb0:
+      %voltage = "nodal.access"(%branch) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">) -> f64
+      %resistance = "nodal.real_literal"() <{value = 1000.0 : f64, metadata = {}}> : () -> f64
+      %current = "nodal.analog_div"(%voltage, %resistance) <{metadata = {}}> : (f64, f64) -> f64
+      "nodal.contribute"(%branch, %current) <{kind = "flow", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+      %potential = "nodal.real_literal"() <{value = 1.0 : f64, metadata = {}}> : () -> f64
+      "nodal.contribute"(%named, %potential) <{kind = "potential", metadata = {}}> : (!nodal.branch<"electrical">, f64) -> ()
+    }) : () -> ()
+  }) : () -> ()
+}
+)mlir";
+
+constexpr llvm::StringLiteral kStaticNodeArrayParameter = R"mlir(
+    "nodal.parameter"() <{classification = "structural", default_value = 4 : i64, metadata = {semantic_path = "ArrayNodes.COUNT"}, parameter_kind = "integer", sym_name = "COUNT", type = i64, variability = "symbolic"}> : () -> ()
+    %default = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    "nodal.parameter_value"(%default) <{metadata = {}, parameter = @COUNT}> : (i64) -> ()
+    %minimum = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %maximum = "nodal.const_literal"() <{metadata = {}, spelling = "8", value = 8 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{constraint_kind = "range", lower_inclusive = true, metadata = {}, parameter = @COUNT, upper_inclusive = true}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{effects = ["shape"], metadata = {}, parameter = @COUNT, policy = "static_generate"}> : () -> ()
 )mlir";
 
 class RejectingReparseHooks final : public nodal::TargetVerificationHooks {
@@ -7281,6 +7320,256 @@ int main() {
   rejectedEscapedNodeStream.flush();
   if (rejectedEscapedNode != "sentinel")
     return fail("generated node non-branch escape published partial output");
+
+  // Required Foundation 43 profile: one compact declaration and selected scalar
+  // endpoints through the existing branch/access/contribution renderer.
+  auto staticNodes = parse(context, kStaticNodeArrayModule);
+  if (!staticNodes)
+    return fail("could not parse static electrical node-array fixture");
+  std::string staticNodeOutput;
+  llvm::raw_string_ostream staticNodeStream(staticNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*staticNodes, nodal::BackendKind::VerilogA, staticNodeStream)))
+    return fail("static electrical node-array emission failed");
+  staticNodeStream.flush();
+  const std::string expectedStaticNodeBody = "module ArrayNodes(p);\n"
+                                             "  inout p;\n"
+                                             "  electrical p;\n"
+                                             "  electrical tap[0:5];\n"
+                                             "  branch (tap[1], p) probeBranch;\n"
+                                             "\n"
+                                             "  analog begin\n"
+                                             "    I(tap[4], p) <+ (V(tap[4], p) / 1000);\n"
+                                             "    V(probeBranch) <+ 1;\n"
+                                             "  end\n"
+                                             "endmodule\n";
+  if (!llvm::StringRef(staticNodeOutput).ends_with(expectedStaticNodeBody) ||
+      mlir::failed(nodal::reparseBackendTarget(staticNodeOutput, *configuration)))
+    return fail("static electrical node-array row-major target differs or cannot reparse");
+  std::string repeatedStaticNodeOutput;
+  llvm::raw_string_ostream repeatedStaticNodeStream(repeatedStaticNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*staticNodes, nodal::BackendKind::VerilogA, repeatedStaticNodeStream)))
+    return fail("static node-array repeated emission failed");
+  repeatedStaticNodeStream.flush();
+  if (repeatedStaticNodeOutput != staticNodeOutput)
+    return fail("static node-array repeated emission changed output");
+  for (const auto &mutation :
+       {std::make_pair("tap[4]", "missing[4]"), std::make_pair("tap[4]", "tap[6]"),
+        std::make_pair("tap[4]", "tap[-1]"), std::make_pair("tap[4]", "tap[(3 + 3)]"),
+        std::make_pair("tap[4]", "tap[(1 / 0)]"),
+        std::make_pair("tap[4]", "tap[(9223372036854775807 + 1)]"),
+        std::make_pair("tap[4]", "tap[MISSING]"), std::make_pair("tap[4]", "tap[1][1]"),
+        std::make_pair("tap[4]", "tap[]"), std::make_pair("tap[4]", "p[1]"),
+        std::make_pair("tap[4]", "tap"), std::make_pair("tap[1]", "tap[6]"),
+        std::make_pair("tap[0:5]", "tap[5:0]")}) {
+    std::string malformedTarget = staticNodeOutput;
+    const size_t position = malformedTarget.find(mutation.first);
+    if (position == std::string::npos)
+      return fail("static node-array target mutation anchor missing");
+    malformedTarget.replace(position, std::string(mutation.first).size(), mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedTarget, *configuration)))
+      return fail("malformed static node-array target passed independent structural reparse");
+  }
+  for (const auto &replacement :
+       {"V(tap, p)", "V(missing, p)", "V(tap[6], p)", "V(p[1], p)", "V(tap[4], missing)"}) {
+    std::string malformedRead = staticNodeOutput;
+    const std::string original = "V(tap[4], p)";
+    const size_t position = malformedRead.find(original);
+    if (position == std::string::npos)
+      return fail("node-array RHS-only mutation anchor missing");
+    malformedRead.replace(position, original.size(), replacement);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedRead, *configuration)))
+      return fail("malformed node-array RHS access passed structural reparse");
+  }
+  auto replaceAll = [](std::string &text, llvm::StringRef before, llvm::StringRef after) {
+    size_t position = 0;
+    while ((position = text.find(before.str(), position)) != std::string::npos) {
+      text.replace(position, before.size(), after.str());
+      position += after.size();
+    }
+  };
+  std::string symbolicNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(symbolicNodeSource, "2,3", "2,COUNT");
+  symbolicNodeSource.insert(symbolicNodeSource.find("    %p ="), kStaticNodeArrayParameter.str());
+  auto symbolicNodes = parse(context, symbolicNodeSource);
+  if (!symbolicNodes)
+    return fail("could not parse symbolic static node-array fixture");
+  std::string symbolicNodeOutput;
+  llvm::raw_string_ostream symbolicNodeStream(symbolicNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*symbolicNodes, nodal::BackendKind::VerilogA, symbolicNodeStream)))
+    return fail("symbolic static node-array emission failed");
+  symbolicNodeStream.flush();
+  if (symbolicNodeOutput.find("  parameter integer COUNT = 4 from [2:8];\n"
+                              "  electrical tap[0:((2 * COUNT) - 1)];\n") == std::string::npos ||
+      symbolicNodeOutput.find("I(tap[(COUNT + 1)], p) <+ (V(tap[(COUNT + 1)], p) / 1000);") ==
+          std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(symbolicNodeOutput, *configuration)))
+    return fail("symbolic node-array target lost extents or row-major scalar selection");
+  for (const auto &mutation : {std::make_pair("(COUNT + 1)", "(UNKNOWN + 1)"),
+                               std::make_pair("(COUNT + 1)", "(COUNT && 1)"),
+                               std::make_pair("(COUNT + 1)", "(COUNT + )")}) {
+    std::string malformedTarget = symbolicNodeOutput;
+    replaceAll(malformedTarget, mutation.first, mutation.second);
+    if (mlir::succeeded(nodal::reparseBackendTarget(malformedTarget, *configuration)))
+      return fail("malformed symbolic node selection passed structural reparse");
+  }
+  std::string expressionNodeSource = symbolicNodeSource;
+  expressionNodeSource.insert(
+      expressionNodeSource.find("    %selected ="),
+      "    %expression = \"nodal.const_expr\"(%one, %zero) <{metadata = {semantic_path = "
+      "\"ArrayNodes.indexExpr\"}, operator_name = \"add\"}> : (i64, i64) -> i64\n");
+  replaceAll(expressionNodeSource, "%array, %one, %one", "%array, %expression, %one");
+  replaceAll(expressionNodeSource, "at(literal:1,literal:1)",
+             "at(expression:ArrayNodes.indexExpr,literal:1)");
+  auto expressionNodes = parse(context, expressionNodeSource);
+  if (!expressionNodes)
+    return fail("could not parse expression-indexed node-array fixture");
+  std::string expressionNodeOutput;
+  llvm::raw_string_ostream expressionNodeStream(expressionNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*expressionNodes, nodal::BackendKind::VerilogA, expressionNodeStream)))
+    return fail("canonical static expression node-array index emission failed");
+  expressionNodeStream.flush();
+  if (expressionNodeOutput.find("tap[(((1 + 0) * COUNT) + 1)]") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(expressionNodeOutput, *configuration)))
+    return fail("canonical static index expression lost its retained target identity");
+  std::string namedExpressionSource = expressionNodeSource;
+  replaceAll(
+      namedExpressionSource, "%branch = \"nodal.branch\"(%selected, %p) <{metadata = {}}>",
+      "%branch = \"nodal.branch\"(%selected, %p) <{name = \"indexedBranch\", metadata = {}}>");
+  auto namedExpressionNodes = parse(context, namedExpressionSource);
+  if (!namedExpressionNodes)
+    return fail("named expression-indexed node-array fixture did not parse");
+  std::string namedExpressionOutput;
+  llvm::raw_string_ostream namedExpressionStream(namedExpressionOutput);
+  if (mlir::failed(nodal::emitBackend(*namedExpressionNodes, nodal::BackendKind::VerilogA,
+                                      namedExpressionStream)))
+    return fail("named expression-indexed node-array emission failed");
+  namedExpressionStream.flush();
+  if (namedExpressionOutput.find("branch (tap[(((1 + 0) * COUNT) + 1)], p) indexedBranch;") ==
+          std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(namedExpressionOutput, *configuration)))
+    return fail("nested symbolic named-branch endpoint failed structural reparse");
+
+  std::string duplicateNodeSource = kStaticNodeArrayModule.str();
+  duplicateNodeSource.insert(duplicateNodeSource.find("    %other ="), R"mlir(
+    %legacy_one = "nodal.constant"() <{value = 1 : index, metadata = {}}> : () -> index
+    %duplicate = "nodal.shape_index"(%array, %legacy_one, %legacy_one) <{metadata = {input_path = "ArrayNodes.tap", selection_kind = "node_array", semantic_path = "ArrayNodes.tap.at(literal:1,literal:1)", source_uses = ["ArrayNodes.duplicate"], storage = "structural"}}> : (!nodal.shaped<"2,3", !nodal.terminal<"electrical">>, index, index) -> !nodal.terminal<"electrical">
+)mlir");
+  replaceAll(duplicateNodeSource, "\"nodal.branch\"(%selected, %p)",
+             "\"nodal.branch\"(%duplicate, %p)");
+  auto duplicateNodes = parse(context, duplicateNodeSource);
+  if (!duplicateNodes)
+    return fail("duplicate legacy-indexed node-array fixture did not parse");
+  for (unsigned repetition = 0; repetition != 2; ++repetition) {
+    std::string duplicateOutput;
+    llvm::raw_string_ostream duplicateStream(duplicateOutput);
+    if (mlir::failed(
+            nodal::emitBackend(*duplicateNodes, nodal::BackendKind::VerilogA, duplicateStream)))
+      return fail("duplicate selectors with separate legacy index literals did not emit");
+    duplicateStream.flush();
+    if (duplicateOutput != staticNodeOutput)
+      return fail("equivalent selectors changed canonical row-major target output");
+  }
+
+  std::string largeNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(largeNodeSource, "2,3", "1000000,1000000");
+  auto largeNodes = parse(context, largeNodeSource);
+  if (!largeNodes)
+    return fail("compact large node-array fixture did not parse");
+  std::string largeNodeOutput;
+  llvm::raw_string_ostream largeNodeStream(largeNodeOutput);
+  if (mlir::failed(nodal::emitBackend(*largeNodes, nodal::BackendKind::VerilogA, largeNodeStream)))
+    return fail("compact large node-array emission failed");
+  largeNodeStream.flush();
+  if (largeNodeOutput.size() > 4096 ||
+      largeNodeOutput.find("electrical tap[0:999999999999];") == std::string::npos ||
+      largeNodeOutput.find("I(tap[1000001], p)") == std::string::npos)
+    return fail("large node-array target lost compact checked row-major arithmetic");
+
+  std::string renamedNodeSource = kStaticNodeArrayModule.str();
+  replaceAll(renamedNodeSource, "sym_name = \"ArrayNodes\"", "sym_name = \"RenamedArrayNodes\"");
+  auto renamedNodes = parse(context, renamedNodeSource);
+  if (!renamedNodes)
+    return fail("renamed target node-array fixture did not parse");
+  std::string renamedNodeOutput;
+  llvm::raw_string_ostream renamedNodeStream(renamedNodeOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*renamedNodes, nodal::BackendKind::VerilogA, renamedNodeStream)))
+    return fail("renamed target module lost node-array semantic source ownership");
+  renamedNodeStream.flush();
+  if (renamedNodeOutput.find("module RenamedArrayNodes(p);") == std::string::npos)
+    return fail("node-array target module rename was not retained");
+
+  std::string arrayHierarchySource = kHierarchyModule.str();
+  const size_t arrayHierarchyPortStart = arrayHierarchySource.find("    %top_vin =");
+  const size_t arrayHierarchyPortEnd = arrayHierarchySource.find('\n', arrayHierarchyPortStart);
+  if (arrayHierarchyPortStart == std::string::npos || arrayHierarchyPortEnd == std::string::npos)
+    return fail("selected hierarchy fixture source anchor missing");
+  arrayHierarchySource.replace(arrayHierarchyPortStart,
+                               arrayHierarchyPortEnd - arrayHierarchyPortStart, R"mlir(
+    %taps = "nodal.node_array"() <{name = "taps", source_path = "Top.taps", metadata = {semantic_path = "Top.taps", storage = "structural"}}> : () -> !nodal.shaped<"3", !nodal.terminal<"electrical">>
+    %lane = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %top_vin = "nodal.shape_index"(%taps, %lane) <{metadata = {input_path = "Top.taps", selection_kind = "node_array", semantic_path = "Top.taps.at(literal:1)", source_uses = ["Top.selected"], storage = "structural"}}> : (!nodal.shaped<"3", !nodal.terminal<"electrical">>, i64) -> !nodal.terminal<"electrical">
+)mlir");
+  auto arrayHierarchy = parse(context, arrayHierarchySource);
+  if (!arrayHierarchy)
+    return fail("selected scalar hierarchy fixture did not parse");
+  std::string arrayHierarchyOutput;
+  llvm::raw_string_ostream arrayHierarchyStream(arrayHierarchyOutput);
+  if (mlir::failed(
+          nodal::emitBackend(*arrayHierarchy, nodal::BackendKind::VerilogA, arrayHierarchyStream)))
+    return fail("selected node-array scalar hierarchy binding failed emission");
+  arrayHierarchyStream.flush();
+  if (arrayHierarchyOutput.find("child(.vin(taps[1]), .vout(vout));") == std::string::npos ||
+      mlir::failed(nodal::reparseBackendTarget(arrayHierarchyOutput, *configuration)))
+    return fail("selected node-array scalar hierarchy binding lost target endpoint identity");
+  for (const auto &replacement : {"taps[3]", "taps[MISSING]", "vout[1]", "taps", "unknown[1]"}) {
+    std::string invalidHierarchy = arrayHierarchyOutput;
+    replaceAll(invalidHierarchy, "taps[1]", replacement);
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidHierarchy, *configuration)))
+      return fail("malformed selected hierarchy endpoint passed structural reparse");
+  }
+
+  // Mutate after successful parsing so backend verification cannot rely on the
+  // parser's verifier. Failed emission must leave the caller's output untouched.
+  for (unsigned mutation = 0; mutation != 4; ++mutation) {
+    auto invalidNodes = parse(context, kStaticNodeArrayModule);
+    if (!invalidNodes)
+      return fail("static node-array invalid fixture did not parse");
+    mlir::Operation *array = nullptr;
+    mlir::Operation *selector = nullptr;
+    invalidNodes->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() == "nodal.node_array")
+        array = operation;
+      if (!selector && operation->getName().getStringRef() == "nodal.shape_index")
+        selector = operation;
+    });
+    if (!array || !selector)
+      return fail("static node-array source mutation anchor missing");
+    if (mutation == 0) {
+      auto index = selector->getOperand(1).getDefiningOp();
+      index->setAttr("value", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2));
+      index->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+    } else if (mutation == 1) {
+      array->setAttr("source_path", mlir::StringAttr::get(&context, "Foreign.tap"));
+    } else if (mutation == 2) {
+      array->getResult(0).setType(
+          nodal::ShapedType::get(&context, "2,3", mlir::Float64Type::get(&context)));
+    } else {
+      selector->getResult(0).setType(mlir::Float64Type::get(&context));
+    }
+    std::string rejectedNodeOutput = "sentinel";
+    llvm::raw_string_ostream rejectedNodeStream(rejectedNodeOutput);
+    if (mlir::succeeded(
+            nodal::emitBackend(*invalidNodes, nodal::BackendKind::VerilogA, rejectedNodeStream)))
+      return fail("invalid static node-array source passed backend verification");
+    rejectedNodeStream.flush();
+    if (rejectedNodeOutput != "sentinel")
+      return fail("invalid static node-array source published partial output");
+  }
 
   RejectingReparseHooks rejectingHooks;
   std::string rejected = "sentinel";

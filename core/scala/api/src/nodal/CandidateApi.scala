@@ -139,15 +139,31 @@ final class Variable[A <: Data] private[nodal] (
 /** Candidate analog node or port. */
 final class Node[D <: Discipline] private[nodal] (
     val discipline: D,
-    kind: KernelSignalKind
+    kind: KernelSignalKind,
+    selection: Option[(NodeArray[D], Vector[Dimension])] = None
 ):
-  CandidateRuntime.declare(
-    this,
-    kind,
-    attributes = CandidateRuntime.conservativeAttributes(discipline)
-  )
+  private[nodal] val endpointReference: Option[ExpressionRef] = selection match
+    case Some((array, indices)) => Some(ConstructionKernel.selectNodeArray(this, array, indices))
+    case None =>
+      CandidateRuntime.declare(
+        this,
+        kind,
+        attributes = CandidateRuntime.conservativeAttributes(discipline)
+      )
+      None
 
   infix def <>(other: Node[?]): Unit = CandidateRuntime.connectNodes(this, other)
+
+/** Owned conservative node shape; selection returns a scalar endpoint reference. */
+final class NodeArray[D <: Discipline] private[nodal] (
+    val discipline: D,
+    private[nodal] val dimensions: Vector[Dimension]
+):
+  AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
+  ConstructionKernel.declareNodeArray(this, discipline, dimensions)
+
+  def at(indices: Dimension*): Node[D] =
+    new Node(discipline, KernelSignalKind.AnalogNode, Some(this -> indices.toVector))
 
 /** Frequency metadata carried by a clock-domain declaration. */
 sealed trait Frequency
@@ -313,6 +329,13 @@ abstract class Module:
 
   protected final def node[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogNode)
+
+  protected final def node[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(discipline, dimension +: dimensions.toVector)
 
   protected final def wire[A <: Data](dataType: DataType[A]): Signal[A] =
     new Signal(dataType, KernelSignalKind.Wire)

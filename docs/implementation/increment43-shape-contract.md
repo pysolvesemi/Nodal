@@ -533,3 +533,88 @@ ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.shap
 ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.shape-contract-integration$'
 python3 -m unittest tests.compiler.test_increment43_shape_slice tests.compiler.test_increment43_shape_index tests.compiler.test_increment43_shape_view tests.compiler.test_increment43_shape_contract
 ```
+
+## Conservative endpoint-array ownership work
+
+The [node-array gate](../design-gates/NodalConservativeNodeArrays-DG-v0.1.md)
+records the next coordinated production contract. Conservative arrays are owned
+node declarations, not Vec(Real) ports. Static scalar selections retain one
+physical endpoint identity plus separate authored source occurrences. The shared
+declaration/shape/index owners, native conservative connectivity and actual target
+layout are extended together. The focused results below describe this finite
+profile, not completion of all F-043 array obligations.
+
+The implementation uses a distinct shaped conservative declaration instead of
+widening scalar NodeOp, so existing generated scalar-node occurrence ownership
+remains intact. Shape type dimensions are authoritative. Existing static-bound
+proof helpers resolve positive extents and checked total cardinality for native
+verification and backend rendering; a second dimension parser/interval engine is
+not appropriate. Canonical alias normalization precedes connectivity and probe
+grouping, while read-only verification reconstructs identity from actual operands.
+The native comparison of selected endpoint tuples is O(S² × rank) for S authored
+selections; it does not enumerate the array cardinality. Static proofs and source
+identity scans retain their existing costs. There is no general speedup claim.
+Equivalent selectors merge provenance and remove only newly dead validated legacy
+index literals associated with the removed selector; this is not general DCE.
+Existing potential/self-connection behavior and oriented-flow self-access rejection
+remain scalar rules after canonicalization, not array-specific substitutes.
+Selected endpoints compose with existing immediate-child scalar terminals; they
+do not create a new hierarchy-array ABI or relax unsupported connection lowering.
+
+Target reparse checks emitted structural syntax, declared arrays and legal static
+references. Per-axis semantic bounds remain the responsibility of native/target
+lowering validation. It must not claim a second proof of arbitrary correlated
+symbolic row-major bounds or introduce an unrelated algebra engine for that claim.
+
+### Focused node-array acceptance
+
+Nineteen public node-array methods passed with the current native tools and the
+actual default gate pipeline (67 seconds). Six public witnesses retain source
+MLIR, normalized MLIR, Verilog-A and construction artifacts: fixed, symbolic,
+inline literal, inline compound, child-local declarations and a parent selected
+endpoint connected to an immediate-child scalar terminal. All six normalized
+documents and targets were byte-identical on repeat. The symbolic target
+keeps `rows` and `lane`, using the index `((lane * 3) + 2)` rather than defaults.
+Repeated selections share physical endpoints while preserving authored source spans.
+
+The dedicated native node-array unit passed 37 checks; the existing conservative
+connectivity unit and all four affected shape integration tests also passed. The
+backend unit executable passed with its scalar/generated predecessors plus new
+fixed/symbolic, alias, hierarchy, source-owner and target-negative cases. Shared
+hierarchy syntax passed 62 checks. Actual fixed/symbolic translator emission and
+fixed Verilog-AMS emission passed; fixed repeated CLI emission was byte-identical.
+A trillion-element shape remained one compact declaration: this checks absence of
+compiler lane expansion, not simulator capacity or a performance improvement.
+
+Review found and fixed two concrete trust-boundary cases: deduplicated selectors
+could leave legacy index literals that the backend rejected, and an RHS-only bare
+array access could evade bracket-only target checks. Exact regressions now cover
+both, together with malformed scalar/array hierarchy actuals and embedded NULs.
+Independent OpenVAF compilation and numerical simulation were not run.
+
+Exact primary commands (outputs remain under ignored `.work`):
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43NodeArrayTests -- nodal.internal.testkit.Increment43NodeArrayTests
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.(node-array|conservative-connectivity)-unit$'
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.shape-(contract|index|view|slice)-integration$'
+.work/native-release/core/compiler/test/Unit/nodal-backend-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-hierarchy-syntax-unit-tests
+.work/native-release/bin/nodal-translate --nodal-to-verilog-a .work/f43-backend-array-fixed.mlir -o .work/f43-backend-array-fixed.va
+.work/native-release/bin/nodal-translate --nodal-to-verilog-a .work/f43-backend-array-symbolic.mlir -o .work/f43-backend-array-symbolic.va
+```
+
+Eleven directly affected Scala predecessors passed (hierarchy 3, scalar RC 2,
+artifacts 2, shape/index 2 and slices 2). Pinned Scala/C++ formatting, changed
+Markdown/link checks, additive gate/contribution policy, API JSON parsing and
+whitespace checks passed. No CI was run. Exact predecessor selectors were:
+
+```sh
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.AnalogHierarchyConnectivityIntegrationTests -- 'nodal.internal.testkit.AnalogHierarchyConnectivityIntegrationTests.{direct ports and reversed operator share explicit and typed connect topology,public Scala visibility does not permit child or sibling internal endpoints,an endpoint from another construction transaction is rejected}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.RcVerticalSliceTests -- 'nodal.internal.testkit.RcVerticalSliceTests.{Scala RC compiles through nodalc to exact Verilog-A,unsupported analog operator fails before native launch}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.ReproducibilityContractTests -- 'nodal.internal.testkit.ReproducibilityContractTests.{canonical artifacts survive repeated construction and valid traversal orders,verified MLIR HDL and manifest are byte-identical across work directories}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeContractTests -- 'nodal.internal.testkit.Increment43ShapeContractTests.{configured native accepts composed structural shape edges,bridge rejects forged static-index ownership rank and bounds}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeSliceTests -- 'nodal.internal.testkit.Increment43ShapeSliceTests.{caught slice failures publish neither a view nor structural endpoint effects,configured native verifies public fixed symbolic and composed slice transport}'
+```

@@ -2390,7 +2390,9 @@ object Increment43RangeConstructionTests extends TestSuite:
                   )
                   .fold(
                     failure =>
-                      scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                      scala.util.Failure[Nothing](
+                        new java.lang.AssertionError(failure.toString)
+                      ).get,
                     identity
                   )
               val result = compile(construct())

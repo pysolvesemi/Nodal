@@ -2133,12 +2133,94 @@ int main() {
       return fail("nested generated analog-node idt emission is nondeterministic");
   }
 
-  for (const auto &[kind, source] : std::array<std::pair<llvm::StringRef, llvm::StringRef>, 2>{
-           std::pair<llvm::StringRef, llvm::StringRef>{"ddt", nestedGeneratedNodeDdtSource},
-           std::pair<llvm::StringRef, llvm::StringRef>{"idt", nestedGeneratedNodeIdtSource}}) {
-    auto candidate = parse(context, source);
+  for (llvm::StringRef mutation : {"valid", "second-owner", "second-induction", "second-source",
+                                   "operator-owner", "operator-induction", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeDdtSource);
     if (!candidate)
-      return fail("could not parse nested peer generated analog-node operator fixture");
+      return fail("could not parse nested peer generated analog-node ddt fixture");
+    mlir::Operation *firstNode = nullptr;
+    mlir::Operation *branch = nullptr;
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *contribution = nullptr;
+    candidate->walk([&](mlir::Operation *operation) {
+      if (!firstNode && operation->getName().getStringRef() == "nodal.node")
+        firstNode = operation;
+      if (operation->getName().getStringRef() == "nodal.branch")
+        branch = operation;
+      if (operation->getName().getStringRef() == "nodal.analog_ddt")
+        derivative = operation;
+      if (operation->getName().getStringRef() == "nodal.contribute")
+        contribution = operation;
+    });
+    if (!firstNode || !branch || !derivative || !contribution)
+      return fail("nested peer generated analog-node ddt fixture lost its topology");
+    mlir::Operation *secondNode = firstNode->clone();
+    firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
+    secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
+    secondNode->setAttr(
+        "source_path", mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.nestedReturn"));
+    mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
+    branch->setOperand(1, secondNode->getResult(0));
+    if (!rootTerminal || !rootTerminal->use_empty())
+      return fail("nested peer generated analog-node ddt retained its root endpoint");
+    rootTerminal->erase();
+    if (mutation == "second-owner")
+      secondNode->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "second-induction")
+      secondNode->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "second-source")
+      secondNode->setAttr("source_path", mlir::StringAttr::get(&context, ""));
+    if (mutation == "operator-owner")
+      derivative->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0"));
+    if (mutation == "operator-induction")
+      derivative->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeEquation.generate_0.index"));
+    if (mutation == "wrong-branch") {
+      mlir::Operation *forgedBranch = branch->clone();
+      branch->getBlock()->getOperations().insert(std::next(branch->getIterator()), forgedBranch);
+      contribution->setOperand(0, forgedBranch->getResult(0));
+    }
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested peer generated analog-node ddt passed backend verification");
+      if (output != "sentinel")
+        return fail("forged nested peer generated analog-node ddt published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested peer generated analog-node ddt emission failed");
+    if (output.find("I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
+                    "]) <+ ddt(V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" +
+                    nestedFlatIndex + "]))") == std::string::npos)
+      return fail("nested peer generated analog-node ddt lost its row-major endpoints");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested peer generated analog-node ddt failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested peer generated analog-node ddt repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested peer generated analog-node ddt emission is nondeterministic");
+  }
+
+  {
+    auto candidate = parse(context, nestedGeneratedNodeIdtSource);
+    if (!candidate)
+      return fail("could not parse unsupported nested peer generated analog-node idt fixture");
     mlir::Operation *firstNode = nullptr;
     mlir::Operation *branch = nullptr;
     candidate->walk([&](mlir::Operation *operation) {
@@ -2148,7 +2230,7 @@ int main() {
         branch = operation;
     });
     if (!firstNode || !branch)
-      return fail("nested peer generated analog-node operator fixture lost its topology");
+      return fail("unsupported nested peer generated analog-node idt fixture lost its topology");
     mlir::Operation *secondNode = firstNode->clone();
     firstNode->getBlock()->getOperations().insert(branch->getIterator(), secondNode);
     secondNode->setAttr("name", mlir::StringAttr::get(&context, "nestedReturn"));
@@ -2157,20 +2239,15 @@ int main() {
     mlir::Operation *rootTerminal = branch->getOperand(1).getDefiningOp();
     branch->setOperand(1, secondNode->getResult(0));
     if (!rootTerminal || !rootTerminal->use_empty())
-      return fail("nested peer generated analog-node operator retained its root endpoint");
+      return fail("unsupported nested peer generated analog-node idt retained its root endpoint");
     rootTerminal->erase();
-
     std::string output = "sentinel";
     llvm::raw_string_ostream stream(output);
     if (mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
-      return fail(
-          ("unsupported nested peer generated analog-node " + kind + " passed backend verification")
-              .str());
+      return fail("unsupported nested peer generated analog-node idt passed backend verification");
     stream.flush();
     if (output != "sentinel")
-      return fail(
-          ("unsupported nested peer generated analog-node " + kind + " published partial output")
-              .str());
+      return fail("unsupported nested peer generated analog-node idt published partial output");
   }
 
   for (llvm::StringRef mutation : {"valid", "owner", "induction", "name", "source"}) {

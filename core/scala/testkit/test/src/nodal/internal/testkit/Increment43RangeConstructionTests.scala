@@ -948,6 +948,17 @@ final class Increment43NestedPeerGeneratedNodeResistor extends Module:
       analog:
         I(nestedTap, nestedReturn) <+ (V(nestedTap, nestedReturn) / resistance)
 
+final class Increment43NestedPeerGeneratedNodeDdt extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      val nestedReturn = node(Electrical)
+      analog:
+        I(nestedTap, nestedReturn) <+ (1.pF * ddt(V(nestedTap, nestedReturn)))
+
 final class Increment43NestedGeneratedNodeGroupResistors extends Module:
   val rows: Param[Integer] = param(8.integer, range = 6 to 10)
   val columns: Param[Integer] = param(11.integer, range = 9 to 13)
@@ -2403,6 +2414,134 @@ object Increment43RangeConstructionTests extends TestSuite:
                 _.trim ==
                   s"I(${names.head}[$flatIndex], ${names(1)}[$flatIndex]) <+ " +
                   s"(V(${names.head}[$flatIndex], ${names(1)}[$flatIndex]) / resistance);"
+              ) == 1
+            )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("nested peer generated node ddt retains both row-major child endpoints"):
+      val snapshot = ConstructionKernel.inspect(new Increment43NestedPeerGeneratedNodeDdt)
+      assert(snapshot == ConstructionKernel.inspect(new Increment43NestedPeerGeneratedNodeDdt))
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(child.parent.contains(outer.path))
+      assert(outer.declarations.isEmpty)
+      assert(child.declarations.size == 2)
+      assert(child.declarations.distinct.size == 2)
+      assert(snapshot.analogRegions.size == 1)
+      val analog = snapshot.analogRegions.head
+      assert(analog.generatedOwner.contains(child.path))
+      assert(analog.generatedInduction.contains(child.induction))
+      assert(analog.contributions.size == 1)
+
+      val first = ScalaToMlirBridge.lower(new Increment43NestedPeerGeneratedNodeDdt)
+      assert(first == ScalaToMlirBridge.lower(new Increment43NestedPeerGeneratedNodeDdt))
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 1)
+      assert(
+        first.text.sliding("\"nodal.analog_ddt\"".length).count(_ == "\"nodal.analog_ddt\"") == 1
+      )
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 1
+      )
+      val nodeLines = first.text.linesIterator.filter(_.contains("\"nodal.node\"")).toVector
+      val ddtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
+      assert(nodeLines.size == 2)
+      (nodeLines :+ ddtLine).foreach: line =>
+        assert(line.contains(s"generated_owner = \"${child.path}\""))
+        assert(line.contains(s"generated_induction = \"${child.induction}\""))
+      snapshot.generatedRegions.foreach: region =>
+        assert(snapshot.sourceMap.count(_.semanticPath == region.induction) == 1)
+        region.declarations.foreach: declaration =>
+          assert(snapshot.sourceMap.count(_.semanticPath == declaration) == 1)
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def expectNativeFailure(text: String, label: String, expectedCode: String): Unit =
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              NativeCompilerClient.run(
+                first.copy(text = text, sha256 = hash),
+                NativeCompilerRequest(
+                  executable = Path.of(nodalc).toAbsolutePath,
+                  arguments = Vector("--nodal-to-verilog-a"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case failure: NativeCompilerFailure =>
+                  assert(failure.diagnostic.code == expectedCode)
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(false, s"forged nested peer ddt $label accepted: $success")
+
+            val childOwner = s"generated_owner = \"${child.path}\""
+            val parentOwner = s"generated_owner = \"${outer.path}\""
+            val forgedDdtLine = ddtLine.replace(childOwner, parentOwner)
+            val ddtOffset = first.text.indexOf(ddtLine)
+            assert(ddtOffset >= 0)
+            assert(forgedDdtLine != ddtLine)
+            expectNativeFailure(
+              first.text.patch(ddtOffset, forgedDdtLine, ddtLine.length),
+              "operator owner",
+              "NODAL-ITERATION-043-004"
+            )
+
+            val secondNodeLine = nodeLines(1)
+            val sourcePathPattern = "source_path = \"[^\"]+\"".r
+            val forgedNodeLine = sourcePathPattern.replaceFirstIn(
+              secondNodeLine,
+              "source_path = \"\""
+            )
+            val secondNodeOffset = first.text.indexOf(secondNodeLine)
+            assert(secondNodeOffset >= 0)
+            assert(forgedNodeLine != secondNodeLine)
+            expectNativeFailure(
+              first.text.patch(secondNodeOffset, forgedNodeLine, secondNodeLine.length),
+              "peer source",
+              "NODAL-BACKEND-CAPABILITY-001"
+            )
+
+            def compileNestedPeerDdt() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43NestedPeerGeneratedNodeDdt,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNestedPeerDdt()
+            assert(result == compileNestedPeerDdt())
+            val names = child.declarations.map(_.split('.').last)
+            val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+            val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+            val flatIndex =
+              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+            names.foreach: name =>
+              assert(
+                result.verilogA.contains(
+                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                )
+              )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(
+                  s"I(${names.head}[$flatIndex], ${names(1)}[$flatIndex]) <+"
+                ) && line.contains("1e-12") && line.contains(
+                  s"ddt(V(${names.head}[$flatIndex], ${names(1)}[$flatIndex]))"
+                )
               ) == 1
             )
           finally delete(directory)

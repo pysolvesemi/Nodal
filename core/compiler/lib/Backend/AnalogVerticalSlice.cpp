@@ -1538,11 +1538,14 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
   if (operators != 0) {
     const bool singleNodeOperator =
         nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1;
+    const bool peerDerivative = nodes == 2 && branches == 1 && accesses == 1 &&
+                                contributions == 1 && derivatives == 1 && integrals == 0;
     const bool groupOperator =
         nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 && operators == 1;
     const bool groupMixedOperators = nodes == 2 && branches == 2 && accesses == 2 &&
                                      contributions == 2 && derivatives == 1 && integrals == 1;
-    return singleNodeOperator || groupOperator || groupMixedOperators ? &child : nullptr;
+    return singleNodeOperator || peerDerivative || groupOperator || groupMixedOperators ? &child
+                                                                                        : nullptr;
   }
   return accesses == branches && contributions == branches ? &child : nullptr;
 }

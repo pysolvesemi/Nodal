@@ -1879,6 +1879,104 @@ int main() {
       return fail("nested generated analog-node group ddt emission is nondeterministic");
   }
 
+  std::string nestedGeneratedNodeGroupMixedSource = nestedGeneratedNodeGroupIdtSource;
+  auto nestedGroupMixedExpression =
+      nestedGeneratedNodeGroupMixedSource.find("          %return_resistance =");
+  auto nestedGroupMixedContribution = nestedGeneratedNodeGroupMixedSource.find(
+      "          \"nodal.contribute\"", nestedGroupMixedExpression);
+  if (nestedGroupMixedExpression == std::string::npos ||
+      nestedGroupMixedContribution == std::string::npos)
+    return fail("nested generated analog-node mixed fixture lost its expression anchors");
+  nestedGeneratedNodeGroupMixedSource.replace(
+      nestedGroupMixedExpression, nestedGroupMixedContribution - nestedGroupMixedExpression,
+      "          %return_derivative = \"nodal.analog_ddt\"(%return_voltage) <{analyses = "
+      "[\"ac\", \"dc\", \"initialization\", \"noise\", \"operating-point\", "
+      "\"transient\"], context = \"contribution\", generated_owner = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1\", generated_induction = "
+      "\"NestedGeneratedNodeGroupEquations.generate_0.generate_1.index\", initialization = "
+      "\"none\", input_dimension = \"voltage\", metadata = {identity = "
+      "\"return_derivative\"}, operator_contract = \"increment35\", operator_id = "
+      "\"NestedGeneratedNodeGroupEquations.return_derivative\", owner = "
+      "\"NestedGeneratedNodeGroupEquations\", result_dimension = \"time^-1*voltage\"}> : "
+      "(f64) -> f64\n");
+  nestedGroupMixedContribution =
+      nestedGeneratedNodeGroupMixedSource.find("%return_branch, %return_current");
+  if (nestedGroupMixedContribution == std::string::npos)
+    return fail("nested generated analog-node mixed fixture lost its contribution operand");
+  nestedGeneratedNodeGroupMixedSource.replace(nestedGroupMixedContribution,
+                                              std::string("%return_branch, %return_current").size(),
+                                              "%return_branch, %return_derivative");
+
+  for (llvm::StringRef mutation :
+       {"valid", "derivative-owner", "derivative-induction", "integral-state", "wrong-branch"}) {
+    auto candidate = parse(context, nestedGeneratedNodeGroupMixedSource);
+    if (!candidate)
+      return fail("could not parse nested generated analog-node mixed fixture");
+    mlir::Operation *derivative = nullptr;
+    mlir::Operation *integral = nullptr;
+    llvm::SmallVector<mlir::Operation *, 2> branches;
+    llvm::SmallVector<mlir::Operation *, 2> contributions;
+    candidate->walk([&](mlir::Operation *operation) {
+      llvm::StringRef name = operation->getName().getStringRef();
+      if (name == "nodal.analog_ddt")
+        derivative = operation;
+      else if (name == "nodal.analog_idt")
+        integral = operation;
+      else if (name == "nodal.branch")
+        branches.push_back(operation);
+      else if (name == "nodal.contribute")
+        contributions.push_back(operation);
+    });
+    if (!derivative || !integral || branches.size() != 2 || contributions.size() != 2)
+      return fail("nested generated analog-node mixed fixture lost its owned topology");
+    if (mutation == "derivative-owner")
+      derivative->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    if (mutation == "derivative-induction")
+      derivative->setAttr(
+          "generated_induction",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0.index"));
+    if (mutation == "integral-state")
+      integral->setAttr(
+          "state_id",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.mixed.forged"));
+    if (mutation == "wrong-branch")
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+
+    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    llvm::raw_string_ostream stream(output);
+    const bool emitted =
+        mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+    stream.flush();
+    if (mutation != "valid") {
+      if (emitted)
+        return fail("forged nested generated analog-node mixed ownership passed verification");
+      if (output != "sentinel")
+        return fail("forged nested generated analog-node mixed ownership published partial output");
+      continue;
+    }
+    if (!emitted)
+      return fail("nested generated analog-node mixed emission failed");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "] , p)") != std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "] , n)") != std::string::npos)
+      return fail("nested generated analog-node mixed output introduced unstable spacing");
+    if (output.find("V(nestedTap[" + nestedFlatIndex + "], p) <+ idt((V(nestedTap[" +
+                    nestedFlatIndex + "], p) / 1), 0)") == std::string::npos ||
+        output.find("I(nestedReturn[" + nestedFlatIndex + "], n) <+ ddt(V(nestedReturn[" +
+                    nestedFlatIndex + "], n))") == std::string::npos)
+      return fail("nested generated analog-node mixed output lost its distinct operators");
+    if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("nested generated analog-node mixed output failed independent target reparse");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("nested generated analog-node mixed repeated emission failed");
+    repeatedStream.flush();
+    if (output != repeated)
+      return fail("nested generated analog-node mixed emission is nondeterministic");
+  }
+
   std::string nestedGeneratedNodeDdtSource = kNestedGeneratedNodeEquationModule.str();
   auto nestedDdtResistance = nestedGeneratedNodeDdtSource.find("          %resistance =");
   auto nestedDdtContribution =

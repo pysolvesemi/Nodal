@@ -996,6 +996,22 @@ final class Increment43NestedGeneratedNodeGroupDdt extends Module:
         I(nestedTap, p) <+ (1.pF * ddt(V(nestedTap, p)))
         I(nestedReturn, n) <+ (V(nestedReturn, n) / secondResistance)
 
+final class Increment43NestedGeneratedNodeGroupMixedOperators extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val nestedTap = node(Electrical)
+      val nestedReturn = node(Electrical)
+      analog:
+        I(nestedTap, p) <+ (1.pF * ddt(V(nestedTap, p)))
+        val voltage = V(nestedReturn, n)
+        val voltageRate = voltage / 1.0.s
+        V(nestedReturn, n) <+ idt(voltageRate, 0.0.V)
+
 final class Increment43NestedGeneratedNodeIdt extends Module:
   val rows: Param[Integer] = param(8.integer, range = 6 to 10)
   val columns: Param[Integer] = param(11.integer, range = 9 to 13)
@@ -2764,6 +2780,154 @@ object Increment43RangeConstructionTests extends TestSuite:
                 _.trim ==
                   s"I(${names(1)}[$flatIndex], n) <+ " +
                   s"(V(${names(1)}[$flatIndex], n) / secondResistance);"
+              ) == 1
+            )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("nested generated node group retains distinct ddt and idt ownership"):
+      val snapshot =
+        ConstructionKernel.inspect(new Increment43NestedGeneratedNodeGroupMixedOperators)
+      assert(
+        snapshot == ConstructionKernel.inspect(
+          new Increment43NestedGeneratedNodeGroupMixedOperators
+        )
+      )
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(child.parent.contains(outer.path))
+      assert(outer.declarations.isEmpty)
+      assert(child.declarations.size == 2)
+      assert(child.declarations.distinct.size == 2)
+      assert(snapshot.analogRegions.size == 1)
+      val analog = snapshot.analogRegions.head
+      assert(analog.generatedOwner.contains(child.path))
+      assert(analog.generatedInduction.contains(child.induction))
+      assert(analog.contributions.size == 2)
+
+      val first = ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeGroupMixedOperators)
+      assert(
+        first == ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodeGroupMixedOperators)
+      )
+      assert(first.text.sliding("\"nodal.node\"".length).count(_ == "\"nodal.node\"") == 2)
+      assert(first.text.sliding("\"nodal.branch\"".length).count(_ == "\"nodal.branch\"") == 2)
+      assert(
+        first.text.sliding("\"nodal.analog_ddt\"".length).count(_ == "\"nodal.analog_ddt\"") == 1
+      )
+      assert(
+        first.text.sliding("\"nodal.analog_idt\"".length).count(_ == "\"nodal.analog_idt\"") == 1
+      )
+      assert(
+        first.text.sliding("\"nodal.contribute\"".length).count(_ == "\"nodal.contribute\"") == 2
+      )
+      val ddtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_ddt\"")).get
+      val idtLine = first.text.linesIterator.find(_.contains("\"nodal.analog_idt\"")).get
+      Seq(ddtLine, idtLine).foreach: line =>
+        assert(line.contains(s"generated_owner = \"${child.path}\""))
+        assert(line.contains(s"generated_induction = \"${child.induction}\""))
+      assert(idtLine.contains("state_id"))
+      val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+      val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+      assert(sourceMapStart >= 0)
+      assert(sourceMapEnd > sourceMapStart)
+      val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+      snapshot.generatedRegions.foreach: region =>
+        val regionMarker = s"semantic_path = \"${region.path}\""
+        val inductionMarker = s"semantic_path = \"${region.induction}\""
+        assert(sourceMap.sliding(regionMarker.length).count(_ == regionMarker) == 1)
+        assert(sourceMap.sliding(inductionMarker.length).count(_ == inductionMarker) == 1)
+        region.declarations.foreach: declaration =>
+          val declarationMarker = s"semantic_path = \"$declaration\""
+          assert(sourceMap.sliding(declarationMarker.length).count(_ == declarationMarker) == 1)
+
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            def expectNativeFailure(text: String, label: String): Unit =
+              val hash = MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8))
+                .map(value => f"${value & 0xff}%02x").mkString
+              NativeCompilerClient.run(
+                first.copy(text = text, sha256 = hash),
+                NativeCompilerRequest(
+                  executable = Path.of(nodalc).toAbsolutePath,
+                  arguments = Vector("--nodal-to-verilog-a"),
+                  workingDirectory = directory,
+                  timeout = Duration.ofSeconds(30)
+                )
+              ) match
+                case _: NativeCompilerFailure => ()
+                case success: NativeCompilerSuccess =>
+                  scala.Predef.assert(
+                    false,
+                    s"forged nested mixed operator $label accepted: $success"
+                  )
+
+            val childOwner = s"generated_owner = \"${child.path}\""
+            val parentOwner = s"generated_owner = \"${outer.path}\""
+            val forgedDdtLine = ddtLine.replace(childOwner, parentOwner)
+            val ddtOffset = first.text.indexOf(ddtLine)
+            assert(ddtOffset >= 0)
+            assert(forgedDdtLine != ddtLine)
+            expectNativeFailure(
+              first.text.patch(ddtOffset, forgedDdtLine, ddtLine.length),
+              "ddt owner"
+            )
+
+            val statePattern = "state_id = \"[^\"]+\"".r
+            val forgedIdtLine =
+              statePattern.replaceFirstIn(idtLine, "state_id = \"forged.mixed.state\"")
+            val idtOffset = first.text.indexOf(idtLine)
+            assert(idtOffset >= 0)
+            assert(forgedIdtLine != idtLine)
+            expectNativeFailure(
+              first.text.patch(idtOffset, forgedIdtLine, idtLine.length),
+              "idt state"
+            )
+
+            def compileNestedGroupMixedOperators() =
+              ScalaToMlirBridge
+                .compileToVerilogA(
+                  new Increment43NestedGeneratedNodeGroupMixedOperators,
+                  Path.of(nodalc).toAbsolutePath,
+                  Path.of(translator).toAbsolutePath,
+                  directory,
+                  Duration.ofSeconds(60)
+                )
+                .fold(
+                  failure =>
+                    scala.util.Failure[Nothing](new java.lang.AssertionError(failure.toString)).get,
+                  identity
+                )
+            val result = compileNestedGroupMixedOperators()
+            assert(result == compileNestedGroupMixedOperators())
+            val names = child.declarations.map(_.split('.').last)
+            val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+            val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+            val flatIndex =
+              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+            names.foreach: name =>
+              assert(
+                result.verilogA.contains(
+                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                )
+              )
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"I(${names.head}[$flatIndex], p) <+") &&
+                  line.contains("1e-12") &&
+                  line.contains(s"ddt(V(${names.head}[$flatIndex], p))")
+              ) == 1
+            )
+            assert(
+              result.verilogA.linesIterator.count(line =>
+                line.contains(s"V(${names(1)}[$flatIndex], n) <+") &&
+                  line.contains(s"idt((V(${names(1)}[$flatIndex], n) / 1), 0)")
               ) == 1
             )
           finally delete(directory)

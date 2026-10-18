@@ -1175,3 +1175,37 @@ cross-range operators, a general slice/index signature, shaped terminals,
 generated connections or instances, reverse ranges, default specialization or
 eager unrolling. Independent simulator qualification, the F-048/F-049/F-052
 handoff and every F-043 acceptance obligation remain open.
+
+## Nested generated analog-node mixed operator checkpoint
+
+The bounded two-node, two-branch nested group now composes exactly one
+child-owned `ddt` path with exactly one child-owned `idt` path on the other
+branch. Each operator consumes the sole potential access for its own branch and
+feeds the additive contribution back to that exact branch. The integral keeps
+its canonical operator-owned state identity; the derivative remains
+non-state-retaining. Both electrical declarations retain the shared child owner
+and induction plus distinct declaration and source identities.
+
+This is a narrow composition of the already-qualified nested group `ddt` and
+`idt` profiles. It reuses the product-extent row-major layout, compact
+source-index formulas, one-use dependency walker, generated branch inventory,
+operator renderers and target reparser. It does not add a public API, schema,
+state array, language memory, shape/index registry or expression engine.
+Parameter defaults are not substituted and generated occurrences are not
+unrolled.
+
+Native and configured public witnesses require exactly one operator of each
+kind, distinct branch destinations, exact owner/induction/state identities,
+complete source maps, byte-identical repeated IR and target output, and
+independent target reparse. Forged derivative ownership or induction, forged
+integral state and a redirected contribution reject before target publication.
+The predecessor two-`ddt` negative remains rejected, so this checkpoint does
+not silently admit arbitrary same-kind operator groups.
+
+The profile remains one direct child range, two nodes, two branches, two
+accesses, two contributions, one `ddt` and one `idt`. Operator chains, fan-out,
+wider or deeper generated groups, sibling or cross-range dependencies, general
+slices, shaped terminals, generated connections or instances, reverse ranges,
+default specialization and eager unrolling remain unsupported. Independent
+simulator qualification, the F-048/F-049/F-052 handoff and every F-043
+acceptance obligation remain open.

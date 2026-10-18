@@ -1540,7 +1540,9 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
         nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1;
     const bool groupOperator =
         nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 && operators == 1;
-    return singleNodeOperator || groupOperator ? &child : nullptr;
+    const bool groupMixedOperators = nodes == 2 && branches == 2 && accesses == 2 &&
+                                     contributions == 2 && derivatives == 1 && integrals == 1;
+    return singleNodeOperator || groupOperator || groupMixedOperators ? &child : nullptr;
   }
   return accesses == branches && contributions == branches ? &child : nullptr;
 }
@@ -2859,12 +2861,15 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   const bool nestedGroupOperatorProfile = parentGenerate && generatedNodeOperatorAccesses == 1 &&
                                           generatedNodeAccesses == 2 &&
                                           generatedBranches.size() == 2;
+  const bool nestedGroupMixedOperatorProfile =
+      parentGenerate && generatedNodeOperatorAccesses == 2 && generatedNodeAccesses == 2 &&
+      generatedBranches.size() == 2;
   if (generatedNodeOperatorAccesses != 0 && !singleBranchOperatorProfile &&
-      !nestedGroupOperatorProfile)
+      !nestedGroupOperatorProfile && !nestedGroupMixedOperatorProfile)
     return emitMappedFailure(
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node operator access profile requires one access on one owned branch "
-        "or one owned ddt/idt path among two nested group branches");
+        "or one owned ddt/idt path per nested group branch");
 
   output << "  analog begin\n";
   if (parentGenerate) {

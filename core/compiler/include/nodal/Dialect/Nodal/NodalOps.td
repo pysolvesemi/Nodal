@@ -859,7 +859,7 @@ def Nodal_PortFlowAccessOp
   let hasVerifier = 1;
 }
 
-def Nodal_ProbeOp : Nodal_Op<"probe", [HasParent<"ModuleOp">]> {
+def Nodal_ProbeOp : Nodal_Op<"probe", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Compiler-owned source-free potential or flow probe intent";
   let arguments = (ins
     Variadic<AnyType>:$subject,
@@ -867,6 +867,8 @@ def Nodal_ProbeOp : Nodal_Op<"probe", [HasParent<"ModuleOp">]> {
     StrAttr:$kind,
     StrAttr:$constraint_intent,
     ArrayAttr:$provenance,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;

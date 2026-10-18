@@ -1837,6 +1837,46 @@ LogicalResult nodal::verifyGeneratedBoundForm(Operation *operation) {
   return success();
 }
 
+FailureOr<nodal::GeneratedScopeActivity>
+nodal::analyzeGeneratedScopeActivity(Operation *operation) {
+  using Activity = GeneratedScopeActivity;
+  if (!operation)
+    return failure();
+  Operation *module = enclosingNodalModule(operation);
+  Block *body = structuralBody(operation);
+  if (!isNamed(operation, "nodal.generate") || !module || !body || body->getNumArguments() > 1 ||
+      (body->getNumArguments() == 1 && !body->getArgument(0).getType().isSignlessInteger(64))) {
+    operation->emitOpError(
+        "NODAL-ITERATION-043-004: generated activity requires an owned single-block Generate");
+    return failure();
+  }
+  IntegerBoundsAnalysis analysis(module), generatedAnalysis(module, true);
+  llvm::DenseSet<Value> dependencies;
+  CheckedGeneratedBounds bounds;
+  if (failed(analyzeGeneratedBounds(operation, module, analysis, generatedAnalysis, dependencies,
+                                    bounds)))
+    return failure();
+  if (body->getNumArguments() && bounds.step.lower <= 0) {
+    operation->emitOpError(
+        "NODAL-ITERATION-043-002: induction domain requires a proven positive step");
+    return failure();
+  }
+  if (bounds.identicalBounds)
+    return Activity::AlwaysEmpty;
+  if (bounds.step.lower > 0) {
+    if (bounds.lower.lower >= bounds.upper.upper)
+      return Activity::AlwaysEmpty;
+    if (bounds.lower.upper < bounds.upper.lower)
+      return Activity::AlwaysNonempty;
+  } else {
+    if (bounds.lower.upper <= bounds.upper.lower)
+      return Activity::AlwaysEmpty;
+    if (bounds.lower.lower > bounds.upper.upper)
+      return Activity::AlwaysNonempty;
+  }
+  return Activity::MaybeEmpty;
+}
+
 FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *operation) {
   if (!operation)
     return failure();

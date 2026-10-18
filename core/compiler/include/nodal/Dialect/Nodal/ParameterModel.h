@@ -111,6 +111,11 @@ struct GeneratedDomain {
 };
 mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation);
 
+/// Activity facts from the same checked bound/direction/count contract. Legacy
+/// no-induction negative-step loops are retained; no lanes are enumerated.
+enum class GeneratedScopeActivity { AlwaysEmpty, AlwaysNonempty, MaybeEmpty };
+mlir::FailureOr<GeneratedScopeActivity> analyzeGeneratedScopeActivity(mlir::Operation *operation);
+
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);
 

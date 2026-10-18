@@ -82,7 +82,6 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.access",
     "nodal.terminal_access",
     "nodal.port_flow_access",
-    "nodal.probe",
     "nodal.analog_add",
     "nodal.analog_sub",
     "nodal.analog_mul",
@@ -2716,6 +2715,10 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             "unselected generated analog-node array must not escape its direct body");
   } else {
     for (Operation &operation : body.front()) {
+      // Source-free probe records carry checked intent, not another equation.
+      // Keep the inherited analog-iteration layout and signed64 range profile.
+      if (llvm::isa<ProbeOp>(operation))
+        continue;
       if (operation.getName().getStringRef() != "nodal.analog" || analog)
         return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                  "fixed generated Verilog-A profile supports one analog region");
@@ -3111,6 +3114,10 @@ LogicalResult renderStructuralGenerate(Operation *generate, ModuleRenderState &p
       }
     } else if (llvm::isa<AnalogOp>(operation)) {
       analogs.push_back(&operation);
+    } else if (llvm::isa<ProbeOp>(operation)) {
+      // The complete native access/probe model is verified at the candidate
+      // boundary. Intent records add neither an equation nor a physical branch.
+      continue;
     } else if (!llvm::isa<NodeOp, InstanceOp, InstanceTerminalOp, InstanceTerminalArrayOp,
                           ConnectOp, ConnectArrayOp, ParameterOverrideOp, GenerateOp,
                           ConstLiteralOp, ConstParameterRefOp, ConstExprOp, ConstantOp>(
@@ -3669,6 +3676,10 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
                  succeeded(resolveConservativeShape(user->getResult(0), user));
         }))
       return;
+    if (llvm::isa<ProbeOp>(operation)) {
+      result = verifyPotentialFlowAccessOperation(operation);
+      return;
+    }
     if (llvm::is_contained(kSupportedOperations, name) || name == "nodal.analog_held_read")
       return;
     result = emitMappedFailure(operation, "NODAL-BACKEND-CAPABILITY-001",
@@ -3683,6 +3694,18 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
                                      llvm::raw_ostream &output) {
   if (failed(verifyRootExport(definitions)))
     return failure();
+  // Rendering is also a direct boundary: independently validate normalized
+  // physical groups and their exact active support placements before emitting
+  // any declaration. A derived record's name or owner attributes are not proof.
+  llvm::DenseSet<Operation *> verifiedAccessRoots;
+  for (Operation *definition : definitions) {
+    auto root = definition->getParentOfType<mlir::ModuleOp>();
+    if (!root)
+      return failure();
+    if (verifiedAccessRoots.insert(root.getOperation()).second &&
+        failed(verifyPotentialFlowAccessModel(root)))
+      return failure();
+  }
   bool requiresAlias = false;
   llvm::StringSet<> moduleNames;
   for (Operation *definition : definitions) {

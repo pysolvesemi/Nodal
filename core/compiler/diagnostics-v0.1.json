@@ -159,7 +159,8 @@
       "NODAL-ACCESS-REFERENCE-001",
       "NODAL-ACCESS-PORT-001",
       "NODAL-PROBE-KIND-001",
-      "NODAL-PROBE-PROVENANCE-001"
+      "NODAL-PROBE-PROVENANCE-001",
+      "NODAL-PROBE-SCOPE-001"
     ],
     "analog-procedural-assignment": [
       "NODAL-ANALOG-033-001",

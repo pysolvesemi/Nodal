@@ -296,14 +296,20 @@ compact exact region coverage in the existing connectivity owner. The selected
 implementation passes six new public methods, 14 affected predecessors, 54 native
 relation cases, 140 relation backend checks and 16 actual dual-target profiles
 with exact native/target replay. Focused architecture review and changed-file
-format/document/contribution checks pass; publication retains `[skip ci]`.
+format/document/contribution checks pass. The exact tested tree is published as
+`9f04db02e054bba18ab5a0580f245fe5d05a5084` with `[skip ci]` and zero Actions
+runs.
 The shape-contract note records commands, ownership review,
 source/IR/target examples and remaining limits.
-The next required shared-owner repair is generated probe placement: derived
-probes must remain in the scope that dominates their generated endpoint operands
-(F-043.B.2/B.3). The shape-contract note retains the concrete failing flow
-reproducer. Generated local conservative-array declarations follow under
-F-043.B.1–B.3 and the approved topology gate. After those implementations,
+The required generated-probe placement repair (F-043.B.2/B.3) is implemented:
+physical groups retain their source-free semantics while checked active scopes
+own derived records and dominating operands. The exact formerly failing public
+flow witness now passes; focused checks cover 39 native cases, 191 shared-query
+unit assertions, 102 backend checks, three public methods and four actual
+VA/AMS profiles. Affected predecessors and focused architecture review pass;
+the shape-contract note records commands and the preserved before failure.
+Generated local conservative-array declarations are next under F-043.B.1–B.3
+and the approved topology gate. After those implementations,
 evaluate retained shared-live-fill consumption against the original shape,
 evaluation-count and lifetime obligations, then review every existing F-043 child
 and linked amendment against the implemented profile. Current operator fan-out,

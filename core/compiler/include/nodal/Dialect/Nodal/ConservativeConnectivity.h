@@ -58,6 +58,13 @@ enum class ConservativeAlias { Equal, Distinct, Inert, Unknown, ResourceLimit, I
 ConservativeAlias compareConservativeEndpoints(mlir::Value left, mlir::Value right,
                                                mlir::Operation *use);
 
+/// Compare independently valid source occurrences without pretending that a
+/// sibling's SSA value is available at the other use. Only common structural
+/// ancestors supply exact relations; other generated wiring remains a family.
+ConservativeAlias compareConservativeEndpointOccurrences(mlir::Value left, mlir::Operation *leftUse,
+                                                         mlir::Value right,
+                                                         mlir::Operation *rightUse);
+
 /// Derived single-occurrence relations for one immediate Module/Generate scope.
 /// No generated endpoint is inserted into the module-level connectivity graph.
 struct ConservativeScalarGroup {

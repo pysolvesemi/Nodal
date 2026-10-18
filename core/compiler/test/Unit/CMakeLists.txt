@@ -432,3 +432,20 @@ set_tests_properties(nodal.native.conservative-relation-integration PROPERTIES
   TIMEOUT 60
   ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
+
+add_executable(nodal-generated-probe-backend-unit-tests GeneratedProbeBackendTest.cpp)
+llvm_update_compile_flags(nodal-generated-probe-backend-unit-tests)
+target_link_libraries(nodal-generated-probe-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-probe-backend-unit COMMAND nodal-generated-probe-backend-unit-tests)
+
+add_test(NAME nodal.native.generated-probe-placement
+  COMMAND "${Python3_EXECUTABLE}" -B
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_generated_probe_placement_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --output-root "${NODAL_REPOSITORY_ROOT}/.work/generated-probe-placement-native"
+)
+set_tests_properties(nodal.native.generated-probe-placement PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

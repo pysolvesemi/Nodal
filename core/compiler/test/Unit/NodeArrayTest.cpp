@@ -703,6 +703,26 @@ int main() {
       module->walk([&](nodal::ShapeIndexOp operation) { selections.push_back(operation); });
       check(selections.size() == 2, "sibling fixture must retain two scoped selections");
       if (selections.size() == 2) {
+        using Alias = nodal::ConservativeAlias;
+        mlir::Value left = selections[0]->getResult(0), right = selections[1]->getResult(0);
+        check(nodal::compareConservativeEndpointOccurrences(left, selections[0], right,
+                                                            selections[1]) == Alias::Unknown,
+              "independent live induction families require an overlap proof");
+        check(nodal::compareConservativeEndpointOccurrences(left, selections[0], left,
+                                                            selections[1]) == Alias::Invalid,
+              "cross-occurrence query must reject a real sibling SSA escape");
+        auto foreign =
+            parse(array() + literal("zero", 0) + selection("foreign", {{"zero", "literal:0"}}));
+        mlir::Operation *foreignSelection = nullptr;
+        if (foreign)
+          foreign->walk([&](nodal::ShapeIndexOp operation) { foreignSelection = operation; });
+        check(foreignSelection && nodal::compareConservativeEndpointOccurrences(
+                                      left, selections[0], foreignSelection->getResult(0),
+                                      foreignSelection) == Alias::Invalid,
+              "cross-occurrence query must reject different actual module definitions");
+        check(nodal::compareConservativeEndpointOccurrences(left, nullptr, right, selections[1]) ==
+                  Alias::Invalid,
+              "cross-occurrence query must reject an absent actual use");
         mlir::Value original = selections[1]->getOperand(1);
         check(mlir::succeeded(nodal::resolveShapeIndexProof(original, selections[1])),
               "actual local induction must resolve before mutation");

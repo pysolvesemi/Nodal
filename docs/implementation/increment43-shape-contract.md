@@ -2132,3 +2132,141 @@ API inventory/reference checks pass. The four changed Markdown files, exact
 intended-file contribution-policy check and Git diff checks pass. The gate uses
 separate scope markers required by the policy parser. No CI or broad
 qualification was executed, and no F43 checklist state is changed.
+
+## Generated source-free probe placement
+
+The conservative relation checkpoint is published as
+`9f04db02e054bba18ab5a0580f245fe5d05a5084`, exact tested tree
+`0f829b2b2e2a424dfc8e8993c835226d83880ebe`, parent
+`be57bd4cd206fd6f8b0a57af3462cce57c1b0d4a`, with zero Actions runs.
+The next required F-043.B.2/B.3 repair addresses the retained nested singleton
+flow failure described above. Existing F31 physical source-free branch semantics
+and the approved generated-topology ownership contract remain authoritative;
+this is an internal shared-owner repair, not a new public signature.
+
+PotentialFlowAccess currently groups across a module without retaining active
+occurrence support and appends every derived probe to the module body. ProbeOp
+also requires that parent, and the structural backend rejects generated records.
+Changing only the insertion point or splitting physical groups by lexical scope
+would leave semantic gaps. The selected correction separates physical grouping
+from checked support/placement. Named branches retain actual branch SSA identity;
+implicit groups reuse conservative physical endpoint proofs. Same invariant
+endpoints used across scopes must retain their existing mixed-kind and sourcing
+rules. Proven-empty occurrences contribute no active access kind or sourcing,
+while their source structure still verifies. Maybe-empty sourcing and overlapping
+families require a proof within the existing domain/connectivity profile or an
+explicit capability rejection.
+
+Derived records must use actual dominating subjects at their validated
+Module/Generate support, preserve canonical provenance, and verify independently
+against the reconstructed source groups. Normalization must plan before replacing
+records and remain idempotent. Generated target admission consumes that native
+contract and adds no numerical constraint or duplicate physical branch. Existing
+shared domain, endpoint and generated ownership owners are reused; no second
+connectivity or conditional-count engine is introduced. Focused implementation
+and positive/negative target checks are in progress; no result is claimed yet.
+
+The new cross-occurrence endpoint entry point independently validates each SSA
+reference at its own use and proves each physical point in that context. Exact
+relation edges are limited to common structural ancestors; non-common generated
+wiring remains a family in the existing uncertainty traversal. Same-use queries
+use that same engine. No coordinate arithmetic or root registry is duplicated.
+Activity facts come from ParameterModel's existing checked bound, direction and
+captured-count analysis: identical bounds or disjoint ordered envelopes prove
+empty/nonempty support, otherwise activity remains maybe-empty. Legacy
+no-induction negative-step ranges retain their direction; explicit induction
+domains keep the positive-step rule. This adds no trip-count enumeration and
+makes no universal alias/support or scaling claim.
+
+### Focused probe result and compatibility
+
+The retained nested singleton flow fixture now passes the actual default gate,
+normalization repeat and normalized replay. The new public nested selected-flow
+model independently reproduced the pre-change dominance failure, exit 1 on a
+module-level probe using a generated branch. Its exact source hashes and failure
+are retained in `.work/generated-probes-before/`. The native reproducer is now
+tracked as
+[`generated-probe-nested-singleton.mlir`](../../tests/compiler/fixtures/increment43/generated-probe-nested-singleton.mlir).
+
+Focused native acceptance passes 39 cases: 27 source cases and 12 independent
+mutations of accepted normalized records. These cover generated/nested/empty
+supports, source-free kinds, named versus implicit branches, same invariant
+selected endpoints in siblings, uncertain overlapping families, guaranteed versus
+maybe-empty sourcing, and exact moved/missing/duplicate/forged records. Legacy
+uncaptured no-argument negative-step generation retains native acceptance:
+probe-specific ownership requires absent generated attributes for that actual
+legacy scope, while captured scopes require the exact pair. No arbitrary
+identity is synthesized. The target still has its separate existing range
+capabilities; this does not claim negative-step HDL support.
+
+The shared-query NodeArray unit passes 191 assertions, including real invalid
+sibling/foreign/null-use and ambiguous-induction API controls. Existing parameter
+checks, the 54-case conservative relation matrix and four targeted F31
+normalization/reference/mixed-kind/forged-provenance predecessors pass (seven
+selected CTests). The new backend unit passes 102 checks; affected generated-topology 107,
+conservative-relation 140 and aggregate backend checks pass. Signed64 singleton
+coordinates retain the legacy target layout without bypassing the captured trip
+count contract. Direct renderer mutations reject transactionally. The three new
+public Scala methods pass (one capture, two configured integration), producing
+four actual VA/AMS profiles. The observed source branches remain source-free;
+their values feed a distinct output contribution. Both repeated flow reads and
+the potential read retain actual semantic-path provenance. Active mixed-kind
+invariant sibling access rejects `NODAL-PROBE-KIND-001`; the proved-empty sibling
+contributes no intent. Unproved support reports registered
+`NODAL-PROBE-SCOPE-001`, without claiming a conditional-domain solver.
+
+All four exported public inputs pass independent default-gate/replay and exact
+direct/repeat/default-gate/renamed-transport target parity. Inputs, normalized IR,
+targets and logs are retained under `.work/generated-probes-public-final`,
+`.work/generated-probes-public-native-final` and
+`.work/generated-probes-public-target-final`; their hashes are recorded in
+`.work/generated-probes-final-validation.json`. Final matched tool hashes:
+
+- `nodalc`: `2d090605f08551d95a5ffed6c2adde5ed7fd1634417197c3a976ea5d0b0300d1`
+- `nodal-translate`: `b5c575629bd8469697216540b36805f0af4108ffdf3fb5c5e74173407376507d`
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_generated_probe_placement_matrix.py --nodalc .work/native-release/bin/nodalc --output-root .work/generated-probe-placement-native
+.work/native-release/core/compiler/test/Unit/nodal-generated-probe-backend-unit-tests
+PYTHONDONTWRITEBYTECODE=1 NODAL_PUBLIC_NATIVE_SOURCE=.work/generated-probes-public-final NODAL_PUBLIC_NATIVE_OUTPUT=.work/generated-probes-public-native-final python3 .work/check-generated-topology-public.py
+PYTHONDONTWRITEBYTECODE=1 python3 .work/check-boundary-array-targets.py .work/generated-probes-public-final .work/generated-probes-public-target-final
+```
+
+Focused architecture review found no remaining concrete issue in physical
+identity versus support placement, activity facts, exact owner/dominance checks,
+record inventory or target admission. This shares the prior endpoint/parameter
+owners and adds no emitted equation, duplicate physical registry or count engine.
+Query-local activity caching avoids repeated activity analysis within one plan;
+physical grouping and repeated connectivity traversals can still be quadratic or
+worse. No whole-pipeline scaling improvement is claimed. Probe replacement occurs
+after complete planning; earlier in-place selector/reference normalization is
+not rolled back. The existing clone/output boundary remains transactional.
+
+For actual public source, `Increment43NestedSelectedProbes` in
+`core/scala/testkit/test/src/nodal/internal/testkit/Increment43GeneratedProbeTests.scala`
+uses existing selected terminals inside nested `hdlRange` calls:
+
+```scala
+analog:
+  I(output, common) <+ I(current, common) + I(current, common) + V(voltage, common) / 1.kOhm
+```
+
+Its actual Verilog-A target contains the following statement inside the nested
+structural loops, with the three row-major map constants declared in that scope:
+
+```verilog
+I(outputs[node_map_outputs_2_0], common) <+ ((I(currents[node_map_currents_0_0], common) + I(currents[node_map_currents_0_0], common)) + (V(voltages[node_map_voltages_1_0], common) / 1000));
+```
+
+Two checked native probe intents remain inside the generated owner; no extra
+zero constraint is inserted into the target. This is generic compiler/structural
+VA/AMS acceptance, not simulator execution. Generated local conservative-array
+declarations are the next required F43 implementation. F43 remains open.
+
+Exact Scala selectors and commands are in
+`.work/scala-validation/generated-probes-scala-handoff.md`; native/backend
+commands, case inventories and finite limits are in
+`.work/generated-probe-placement-test-handoff.md` and
+`.work/generated-probe-backend-handoff.md`. Changed Scala/native formatting,
+Markdown/link checks, diagnostic-catalog JSON parsing and diff checks pass.
+No checklist state changes or CI executions are part of this repair.

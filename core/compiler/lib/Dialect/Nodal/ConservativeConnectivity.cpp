@@ -1868,28 +1868,41 @@ bool disjointRegions(const nodal::StaticShapeRegion &left, const nodal::StaticSh
 
 nodal::ConservativeAlias nodal::compareConservativeEndpoints(Value left, Value right,
                                                              Operation *use) {
+  return compareConservativeEndpointOccurrences(left, use, right, use);
+}
+
+nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value left,
+                                                                       Operation *leftUse,
+                                                                       Value right,
+                                                                       Operation *rightUse) {
   using Alias = ConservativeAlias;
-  if (!left || !right || !use || !llvm::isa<TerminalType>(left.getType()) ||
-      !llvm::isa<TerminalType>(right.getType()))
+  if (!left || !right || !leftUse || !rightUse || !llvm::isa<TerminalType>(left.getType()) ||
+      !llvm::isa<TerminalType>(right.getType()) ||
+      enclosingNodalModule(leftUse) != enclosingNodalModule(rightUse))
     return Alias::Invalid;
-  auto lhs = resolveConservativeEndpoint(left, use), rhs = resolveConservativeEndpoint(right, use);
-  if (failed(lhs) || failed(rhs) || lhs->useScope != rhs->useScope)
+  auto lhs = resolveConservativeEndpoint(left, leftUse);
+  auto rhs = resolveConservativeEndpoint(right, rightUse);
+  if (failed(lhs) || failed(rhs))
     return Alias::Invalid;
-  if (left == right)
+  // Preserve the established same-use identity query. Across uses, an empty
+  // occurrence has no physical support even when both references are identical.
+  if (left == right && leftUse == rightUse)
     return Alias::Equal;
-  for (Operation *scope = lhs->useScope; scope && !llvm::isa<nodal::ModuleOp>(scope);
-       scope = scope->getParentOp())
-    if (llvm::isa<GenerateOp>(scope)) {
-      auto domain = resolveGeneratedDomain(scope);
-      if (failed(domain))
-        return Alias::Invalid;
-      if (!domain->maximumTripCount)
-        return Alias::Inert; // No scalar occurrence, not proof of distinct nodes.
-    }
+  for (Operation *support : {lhs->useScope, rhs->useScope})
+    for (Operation *scope = support; scope && !llvm::isa<nodal::ModuleOp>(scope);
+         scope = scope->getParentOp())
+      if (llvm::isa<GenerateOp>(scope)) {
+        auto activity = analyzeGeneratedScopeActivity(scope);
+        if (failed(activity))
+          return Alias::Invalid;
+        if (*activity == GeneratedScopeActivity::AlwaysEmpty)
+          return Alias::Inert; // No scalar occurrence, not proof of distinct nodes.
+      }
   StaticShapePoint start, target;
-  if (resolveStaticShapePoint(lhs->shape.projection, use, start) !=
+  if (resolveStaticShapePoint(lhs->shape.projection, leftUse, start) !=
           ShapeRegionProofStatus::Proved ||
-      resolveStaticShapePoint(rhs->shape.projection, use, target) != ShapeRegionProofStatus::Proved)
+      resolveStaticShapePoint(rhs->shape.projection, rightUse, target) !=
+          ShapeRegionProofStatus::Proved)
     return Alias::Unknown;
   if (comparePoints(start, target) == Alias::Equal)
     return Alias::Equal;
@@ -1912,7 +1925,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpoints(Value left, Value r
   };
   llvm::SmallVector<Operation *, 4> visibleScopes;
   for (Operation *scope = lhs->useScope; scope; scope = scope->getParentOp()) {
-    if (structuralBody(scope))
+    if (structuralBody(scope) && (scope == rhs->useScope || scope->isProperAncestor(rhs->useScope)))
       visibleScopes.push_back(scope);
     if (llvm::isa<nodal::ModuleOp>(scope))
       break;
@@ -1944,7 +1957,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpoints(Value left, Value r
   // outside consumer cannot infer distinctness from an omitted family.
   llvm::SmallVector<std::pair<Value, Value>, 4> families;
   bool malformedFamily = false;
-  Operation *module = enclosingNodalModule(use);
+  Operation *module = enclosingNodalModule(leftUse);
   module->walk([&](Operation *operation) {
     Operation *scope = operation->getParentOp();
     if (enclosingNodalModule(operation) != module || !structuralBody(scope) ||

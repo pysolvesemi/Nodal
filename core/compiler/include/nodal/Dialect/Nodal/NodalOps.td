@@ -452,6 +452,23 @@ def Nodal_ShapeViewOp : Nodal_Op<"shape_view"> {
   let hasVerifier = 1;
 }
 
+def Nodal_ShapeSliceOp : Nodal_Op<"shape_slice", [HasParent<"ModuleOp">]> {
+  let summary = "Read-only half-open unit-stride structural shape slice";
+  let arguments = (ins
+    AnyType:$input,
+    I64:$lower,
+    I64:$upperExclusive,
+    I64:$length,
+    I64Attr:$axis,
+    StrAttr:$dimensions,
+    StrAttr:$origin,
+    StrAttr:$observability,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_GenerateOp : Nodal_Op<"generate", [NoTerminator]> {
   let summary = "Symbolic structural generation region";
   let arguments = (ins

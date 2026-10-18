@@ -84,6 +84,7 @@
       "at",
       "row",
       "plane",
+      "slice",
       "flatten",
       "reshape",
       "map",

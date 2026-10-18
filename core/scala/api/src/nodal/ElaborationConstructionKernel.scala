@@ -165,9 +165,10 @@ private[nodal] object ConstructionKernel:
   def shapeView[A <: Data](
       expression: KernelExpr[Vec[A]],
       input: Expr[Vec[A]],
-      dimensions: Vector[Dimension]
+      dimensions: Vector[Dimension],
+      slice: Option[ShapeSliceSelection] = None
   ): Unit = active match
-    case Some(session) => session.registerShapeView(expression, input, dimensions)
+    case Some(session) => session.registerShapeView(expression, input, dimensions, slice)
     case None => ()
 
   def defineUserFunction[A <: Data](

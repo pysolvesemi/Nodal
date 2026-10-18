@@ -1205,6 +1205,66 @@ private[nodal] object CandidateRuntime:
   def shapePlane[A <: Data](value: Expr[Vec[A]], index: Dimension): Expr[Vec[A]] =
     shapePrefix(value, index, expectedRank = 3, name = "plane")
 
+  def shapeSlice[A <: Data](
+      value: Expr[Vec[A]],
+      lower: Dimension,
+      upperExclusive: Dimension,
+      axis: Int
+  ): Expr[Vec[A]] =
+    def invalid(message: String): Nothing =
+      scala.util.Failure[Nothing](
+        new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
+      ).get
+    val descriptor = expressionDataType(value).map(typeDescriptor)
+      .filter(_.kind == "Vec").getOrElse(invalid("shape slice requires a Vec value"))
+    val element = descriptor.arguments.headOption.collect:
+      case candidate: DataType[?] => candidate
+    .getOrElse(invalid("shape slice requires an element type"))
+    val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+      case dimensions: Seq[?] => dimensions.toVector.map:
+          case dimension: Int => dimension: Dimension
+          case dimension: Expr[?] => dimension.asInstanceOf[Expr[Integer]]: Dimension
+          case _ => invalid("shape slice requires static Integer dimensions")
+      case _ => Vector.empty
+    if axis < 0 || axis >= sourceDimensions.size then
+      invalid("shape slice axis is outside the input rank")
+    def literalValue(dimension: Dimension): Option[Long] = dimension match
+      case value: Int => Some(value.toLong)
+      case expression: KernelExpr[?] =>
+        expression.literal.filter(_.kind == "integer").flatMap(_.value.toLongOption)
+      case _ => None
+    def integerValue(dimension: Dimension): Expr[Integer] = dimension match
+      case value: Int => literalInteger(value)
+      case expression: Expr[Integer] => expression
+    val length: Dimension = (literalValue(lower), literalValue(upperExclusive)) match
+      case (Some(start), Some(end)) =>
+        val count = BigInt(end) - BigInt(start)
+        if count <= 0 || !count.isValidLong then
+          invalid("shape slice requires a positive signed-64-bit length")
+        if count.isValidInt then count.toInt
+        else
+          literal[Integer](
+            KernelTypeDescriptor("Integer"),
+            "integer",
+            count.toString,
+            Vector(count.toLong)
+          )
+      case (Some(0L), _) => upperExclusive
+      case _ => integerExpr("analog_sub", integerValue(upperExclusive), integerValue(lower))
+    val dimensions = sourceDimensions.updated(axis, length)
+    val result = new KernelExpr[Vec[A]](
+      Vector(value, lower, upperExclusive, length),
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(element, dimensions))),
+      operation = Some("shape_slice")
+    )
+    ConstructionKernel.shapeView(
+      result,
+      value,
+      dimensions,
+      Some(ShapeSliceSelection(axis, lower, upperExclusive))
+    )
+    result
+
   def shapeFlatten[A <: Data](value: Expr[Vec[A]]): Expr[Vec[A]] =
     val dimensions = expressionDataType(value)
       .map(typeDescriptor)
@@ -1221,7 +1281,7 @@ private[nodal] object CandidateRuntime:
         (value match
           case expression: KernelExpr[?] =>
             expression.operation.exists(operation =>
-              operation == "shape_view" || operation == "shape_index"
+              operation == "shape_view" || operation == "shape_index" || operation == "shape_slice"
             )
           case _ => false)
     if structuralCarrier && fixedDimensions.nonEmpty &&

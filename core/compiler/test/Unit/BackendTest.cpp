@@ -1687,6 +1687,106 @@ int main() {
   if (nestedGeneratedNodeGroupEquationsOutput != repeatedNestedGeneratedNodeGroupEquationsOutput)
     return fail("nested generated analog-node group equations emission is nondeterministic");
 
+  // Deeper authored chains retain one leaf body and compose occurrence ordinals.
+  // Build the witness from the accepted two-dimensional source without unrolling.
+  for (unsigned depth : {3u, 6u}) {
+    std::string source = kNestedGeneratedNodeGroupEquationsModule.str();
+    const std::string oldLeaf = "NestedGeneratedNodeGroupEquations.generate_0.generate_1";
+    std::string parent = "NestedGeneratedNodeGroupEquations.generate_0";
+    std::string opens, closes;
+    std::string expectedCount = "((((8 - 1) + 2) - 1) / 2)";
+    std::string expectedOrdinal = "((generate_0_index - 1) / 2)";
+    for (unsigned level = 1; level + 1 < depth; ++level) {
+      parent += ".middle_" + std::to_string(level);
+      const std::string induction = "middle_" + std::to_string(level) + "_index";
+      opens += "      \"nodal.generate\"() <{induction = \"" + induction +
+               "\", lower = -2 : i64, upper = 3 : i64, step = 2 : i64, region_id = \"" + parent +
+               "\", induction_path = \"" + parent +
+               ".index\", metadata = {maximum_trip_count = 3 : i64}}> ({\n";
+      closes += "      }) : () -> ()\n";
+      const std::string count = "((((3 - -2) + 2) - 1) / 2)";
+      expectedCount = "(" + expectedCount + " * " + count + ")";
+      expectedOrdinal =
+          "((" + expectedOrdinal + " * " + count + ") + ((" + induction + " - -2) / 2))";
+    }
+    const std::string newLeaf = parent + ".generate_1";
+    size_t position = 0;
+    while ((position = source.find(oldLeaf, position)) != std::string::npos) {
+      source.replace(position, oldLeaf.size(), newLeaf);
+      position += newLeaf.size();
+    }
+    const auto begin = source.find("      \"nodal.generate\"");
+    const auto end = source.find("    }) : () -> ()\n  })", begin);
+    if (begin == std::string::npos || end == std::string::npos)
+      return fail("deep generated witness lost lexical wrapping anchors");
+    source.insert(end, closes);
+    source.insert(begin, opens);
+    expectedCount = "(" + expectedCount + " * ((((11 - 2) + 3) - 1) / 3))";
+    expectedOrdinal =
+        "((" + expectedOrdinal + " * ((((11 - 2) + 3) - 1) / 3)) + ((generate_1_index - 2) / 3))";
+    auto candidate = parse(context, source);
+    if (!candidate || mlir::failed(mlir::verify(*candidate)))
+      return fail("deep generated witness must pass native lexical verification");
+    std::string output;
+    llvm::raw_string_ostream stream(output);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
+      return fail("deep generated equation chain failed emission");
+    stream.flush();
+    if (output.find("electrical nestedTap[0:(" + expectedCount + " - 1)];") == std::string::npos ||
+        output.find("I(nestedTap[" + expectedOrdinal + "], p) <+ (V(nestedTap[" + expectedOrdinal +
+                    "], p) / 1000);") == std::string::npos ||
+        llvm::StringRef(output).count("    for (") != depth ||
+        llvm::StringRef(output).count("  genvar ") != depth ||
+        llvm::StringRef(output).count(" <+ ") != 2 ||
+        mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+      return fail("deep generated equation chain lost compact exact row-major mapping");
+    std::string unmatched = output;
+    const size_t loopEnd = unmatched.find("    end\n");
+    if (loopEnd == std::string::npos)
+      return fail("deep generated reparse control lost loop terminator");
+    unmatched.erase(loopEnd, std::string("    end\n").size());
+    if (mlir::succeeded(nodal::reparseBackendTarget(unmatched, *configuration)))
+      return fail("deep generated reparse accepted unmatched lexical loops");
+    std::string invalidStep = output;
+    const std::string update = "middle_1_index = middle_1_index + 2";
+    const size_t updatePosition = invalidStep.find(update);
+    if (updatePosition == std::string::npos)
+      return fail("deep generated reparse control lost middle loop update");
+    invalidStep.replace(updatePosition, update.size(), "middle_1_index = middle_1_index + 0");
+    if (mlir::succeeded(nodal::reparseBackendTarget(invalidStep, *configuration)))
+      return fail("deep generated reparse accepted zero-step middle loop");
+    std::string repeated;
+    llvm::raw_string_ostream repeatedStream(repeated);
+    if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+      return fail("deep generated equation repeat failed");
+    repeatedStream.flush();
+    if (repeated != output)
+      return fail("deep generated equation output is nondeterministic");
+
+    candidate->walk([&](mlir::Operation *operation) {
+      if (operation->getName().getStringRef() != "nodal.generate")
+        return;
+      operation->setAttr("lower", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0));
+      operation->setAttr("upper",
+                         mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2097152));
+      operation->setAttr("step", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 1));
+      mlir::NamedAttrList metadata(operation->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+      metadata.set("maximum_trip_count",
+                   mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 2097152));
+      operation->setAttr("metadata", metadata.getDictionary(&context));
+    });
+    if (mlir::failed(mlir::verify(*candidate)))
+      return fail("overflow witness must reach backend product validation");
+    std::string rejected = "sentinel";
+    llvm::raw_string_ostream rejectedStream(rejected);
+    if (mlir::succeeded(
+            nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, rejectedStream)))
+      return fail("deep generated product overflow was accepted");
+    rejectedStream.flush();
+    if (rejected != "sentinel")
+      return fail("deep generated product overflow published partial output");
+  }
+
   for (llvm::StringRef mutation :
        {"second-branch-owner", "second-access-owner", "second-contribution-destination"}) {
     auto invalid = parse(context, kNestedGeneratedNodeGroupEquationsModule);

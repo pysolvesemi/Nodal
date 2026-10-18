@@ -147,8 +147,13 @@ private[nodal] object ScalaToMlirBridge:
         case view: KernelShapeViewSnapshot => view.dimensions
         case index: KernelShapeIndexSnapshot => index.resultDimensions
       def isView: Boolean = record.isInstanceOf[KernelShapeViewSnapshot]
-      def code: String = if isView then "NODAL-BRIDGE-045" else "NODAL-BRIDGE-044"
-      def name: String = if isView then "shape_view" else "shape_index"
+      def isSlice: Boolean = record match
+        case view: KernelShapeViewSnapshot => view.slice.nonEmpty
+        case _ => false
+      def code: String = if isSlice then "NODAL-BRIDGE-046"
+      else if isView then "NODAL-BRIDGE-045" else "NODAL-BRIDGE-044"
+      def name: String =
+        if isSlice then "shape_slice" else if isView then "shape_view" else "shape_index"
       def result: String = s"%${name}_$ordinal"
 
     private lazy val structuralShapeOperations: Vector[StructuralShapeOperation] =
@@ -851,6 +856,8 @@ ${indent(body, 2)}
                   Some(shape.path)
                 )
         shape.record match
+          case view: KernelShapeViewSnapshot if view.slice.nonEmpty =>
+            validateShapeSlice(module, dimensions, view)
           case view: KernelShapeViewSnapshot =>
             val sourceSignature = shapeViewSignature(module, dimensions, view.path)
             val targetSignature = shapeViewSignature(module, view.dimensions, view.path)
@@ -1141,6 +1148,72 @@ ${indent(body, 2)}
           if shape.dimensions.isEmpty then elementType
           else s"!nodal.shaped<${quoted(shape.dimensions.mkString(","))}, $elementType>"
         shape.record match
+          case view: KernelShapeViewSnapshot if view.slice.nonEmpty =>
+            val selection = view.slice.get
+            def staticValue(token: String): (String, String) =
+              token.toLongOption match
+                case Some(literal) =>
+                  shapeStaticValues.getOrElseUpdate(
+                    s"literal:$literal", {
+                      val result = allocateShapeStaticValue()
+                      body += operation(
+                        "nodal.const_literal",
+                        results = Vector(result),
+                        resultTypes = Vector("i64"),
+                        attributes = Vector(
+                          "value" -> s"$literal : i64",
+                          "spelling" -> quoted(literal.toString),
+                          "metadata" -> "{use = \"shape_slice_bound\"}"
+                        ),
+                        semanticPath = view.path
+                      )
+                      result -> "i64"
+                    }
+                  )
+                case None =>
+                  val path = shapeDimensionStaticPath(module, token).getOrElse(
+                    fail(shape.code, "shape slice value has no static identity", Some(view.path))
+                  )
+                  val value = emitStaticValue(
+                    path,
+                    parameterSymbols,
+                    declarationsByPath,
+                    expressionsByPath,
+                    body,
+                    shapeStaticValues,
+                    () => allocateShapeStaticValue(),
+                    requireStructural = true
+                  )
+                  if value._2 != "i64" then
+                    fail(shape.code, "shape slice operands must have Integer type", Some(view.path))
+                  value
+            val bounds = Vector(
+              selection.lower,
+              selection.upperExclusive,
+              view.dimensions(selection.axis)
+            ).map(staticValue)
+            body += operation(
+              "nodal.shape_slice",
+              results = Vector(shape.result),
+              operands = inputValue +: bounds.map(_._1),
+              operandTypes = inputType +: bounds.map(_._2),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "axis" -> integer(selection.axis),
+                "dimensions" -> quoted(view.dimensions.mkString(",")),
+                "origin" -> quoted(view.input),
+                "observability" -> quoted("source_mapped"),
+                "metadata" -> bridgeMetadata(
+                  view.path,
+                  Vector(
+                    "input_path" -> quoted(view.input),
+                    "storage" -> quoted("structural"),
+                    "access" -> quoted("read_only")
+                  )
+                )
+              ),
+              semanticPath = view.path
+            )
           case view: KernelShapeViewSnapshot =>
             body += operation(
               "nodal.shape_view",
@@ -3075,6 +3148,95 @@ ${indent(body, 2)}
           .get(dimension)
           .filter(expression => expression.owner == module.path && expression.path == dimension)
           .map(_.path)
+
+    private def validateShapeSlice(
+        module: KernelModuleSnapshot,
+        source: Vector[String],
+        view: KernelShapeViewSnapshot
+    ): Unit =
+      val selection = view.slice.get
+      def invalid(message: String): Nothing = fail("NODAL-BRIDGE-046", message, Some(view.path))
+      val expressions = parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
+      def canonical(token: String): Either[Long, String] =
+        if token.isEmpty || token.trim != token then invalid("shape slice identity is noncanonical")
+        token.toLongOption match
+          case Some(value) =>
+            if token != value.toString then invalid("shape slice literal is noncanonical")
+            Left(value)
+          case None =>
+            val path = shapeDimensionStaticPath(module, token).getOrElse(
+              invalid("shape slice value has no owned static identity")
+            )
+            expressions.get(path).flatMap(_.literal) match
+              case Some(literal) => Left(literal.toLongOption.getOrElse(
+                  invalid("shape slice literal exceeds signed 64-bit bounds")
+                ))
+              case None => Right(path)
+      def bounds(token: String): IterationDomain.Bounds =
+        val path = token.toLongOption.map(_ => token).getOrElse(
+          shapeDimensionStaticPath(
+            module,
+            token
+          ).getOrElse(invalid("shape slice value is not owned"))
+        )
+        shapeStaticBounds(module, path, view.path, "NODAL-BRIDGE-046", "shape slice")
+      if selection.axis < 0 || selection.axis >= source.size || view.dimensions.size != source.size
+      then
+        invalid("shape slice axis or result rank does not match its input")
+      source.indices.filter(_ != selection.axis).foreach: axis =>
+        if view.dimensions(axis) != source(axis) then
+          invalid("shape slice must retain every unselected dimension")
+      // Equal static identities do not make alternate snapshot spellings canonical.
+      Vector(selection.lower, selection.upperExclusive).foreach: token =>
+        val expected = canonical(token).fold(_.toString, identity)
+        if token != expected then
+          invalid("shape slice endpoint must use its canonical static identity")
+      (source ++ view.dimensions).foreach: token =>
+        val expected = canonical(token).fold(
+          _.toString,
+          path =>
+            module.declarations.find(_.path == path).map(_.name).getOrElse(path)
+        )
+        if token != expected then
+          invalid("shape slice dimension must use its canonical extent token")
+      val lower = bounds(selection.lower)
+      val upper = bounds(selection.upperExclusive)
+      val lengthToken = view.dimensions(selection.axis)
+      val length = bounds(lengthToken)
+      val lowerIdentity = canonical(selection.lower)
+      val upperIdentity = canonical(selection.upperExclusive)
+      val lengthIdentity = canonical(lengthToken)
+      val canonicalLength = (lowerIdentity, upperIdentity) match
+        case (Left(lo), Left(hi)) =>
+          val difference = BigInt(hi) - BigInt(lo)
+          difference.isValidLong && lengthIdentity == Left(difference.toLong)
+        case (Left(0L), _) => lengthIdentity == upperIdentity
+        case _ =>
+          expressions.get(lengthToken).exists(expression =>
+            expression.literal.isEmpty && expression.operation == "analog_sub" &&
+              expression.operands.size == 2 && canonical(expression.operands(0)) == upperIdentity &&
+              canonical(expression.operands(1)) == lowerIdentity
+          )
+      if !canonicalLength || lower.lower < 0L || length.lower <= 0L then
+        invalid(
+          "shape slice requires nonnegative lower and canonical strictly positive upper-minus-lower length"
+        )
+      val sourceBounds = source.map(bounds)
+      val resultBounds = view.dimensions.map(bounds)
+      if upperIdentity != canonical(source(selection.axis)) && upper.upper > sourceBounds(
+          selection.axis
+        ).lower
+      then
+        invalid("shape slice upper bound is not valid for every legal input extent")
+      Vector(sourceBounds, resultBounds).foreach: values =>
+        if values.exists(_.lower <= 0L) ||
+          values.foldLeft(BigInt(1))((count, value) => count * BigInt(value.upper)) > BigInt(
+            Long.MaxValue
+          )
+        then
+          invalid(
+            "shape slice requires positive dimensions and signed 64-bit maximum element counts"
+          )
 
     private def shapeViewSignature(
         module: KernelModuleSnapshot,

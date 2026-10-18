@@ -157,11 +157,11 @@ bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
 }
 
 bool hasStaticShapeIndexDependencies(Value value, Operation *module,
-                                     llvm::SmallPtrSetImpl<Operation *> &active,
-                                     unsigned depth = 0) {
+                                     llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
+                                     bool directModule = false) {
   Operation *operation = value.getDefiningOp();
   if (!operation || operation->getParentOfType<nodal::ModuleOp>() != module || depth >= 512 ||
-      !active.insert(operation).second)
+      (directModule && operation->getParentOp() != module) || !active.insert(operation).second)
     return false;
   const llvm::scope_exit remove([&] { active.erase(operation); });
   if (llvm::isa<nodal::ConstLiteralOp>(operation))
@@ -176,7 +176,7 @@ bool hasStaticShapeIndexDependencies(Value value, Operation *module,
   if (!llvm::isa<nodal::ConstExprOp>(operation))
     return false;
   return llvm::all_of(operation->getOperands(), [&](Value operand) {
-    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1);
+    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule);
   });
 }
 
@@ -222,12 +222,13 @@ Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath)
   return result;
 }
 
-FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension) {
+FailureOr<nodal::ParameterIntegerBounds>
+inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool directModule = false) {
   int64_t literal = 0;
   if (!dimension.getAsInteger(10, literal)) {
     if (literal <= 0)
       return failure();
-    return literal;
+    return nodal::ParameterIntegerBounds{literal, literal};
   }
 
   if (Operation *parameter = findDirectModuleParameter(module, dimension)) {
@@ -237,7 +238,7 @@ FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef
         !parameterHasShapeEnvelope(module, dimension) ||
         !parameterHasPositiveFiniteRange(module, dimension) || failed(bounds) || bounds->lower <= 0)
       return failure();
-    return bounds->lower;
+    return *bounds;
   }
 
   Value value = findDirectModuleStaticValue(module, dimension);
@@ -245,10 +246,17 @@ FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef
       !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
     return failure();
   llvm::SmallPtrSet<Operation *, 16> active;
-  if (!hasStaticShapeIndexDependencies(value, module, active))
+  if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule))
     return failure();
   auto bounds = nodal::inferParameterIntegerBounds(value);
   if (failed(bounds) || bounds->lower <= 0)
+    return failure();
+  return *bounds;
+}
+
+FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension) {
+  auto bounds = inferShapeDimensionBounds(module, dimension);
+  if (failed(bounds))
     return failure();
   return bounds->lower;
 }
@@ -1879,6 +1887,183 @@ LogicalResult nodal::ShapeViewOp::verify() {
     return emitOpError(
         "NODAL-SHAPE-043-003: shape view requires equal literal products and bounded structural "
         "static-expression root multisets within signed 64-bit counts");
+  return success();
+}
+
+LogicalResult nodal::ShapeSliceOp::verify() {
+  Operation *operation = getOperation();
+  auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
+  auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
+  if (!input || !result || input.getElementType() != result.getElementType())
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice requires shaped input/result with equal element types");
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
+  Operation *source = operation->getOperand(0).getDefiningOp();
+  if (!owner || operation->getParentOp() != owner || !source || source->getParentOp() != owner ||
+      !llvm::isa<nodal::PortValueOp, nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(
+          source) ||
+      (llvm::isa<nodal::ShapeViewOp>(source) && textAttr(source, "materialization") != "view"))
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice input requires a directly owned structural shape value");
+
+  auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
+  auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
+  auto access = metadata ? metadata.getAs<StringAttr>("access") : StringAttr();
+  auto inputPath = metadata ? metadata.getAs<StringAttr>("input_path") : StringAttr();
+  llvm::StringRef ownerPath = metadataSemanticPath(owner);
+  if (ownerPath.empty())
+    ownerPath = textAttr(owner, "sym_name");
+  const std::string ownerPrefix = (ownerPath + ".").str();
+  auto ownedPath = [&](llvm::StringRef path) {
+    return path == path.trim() && path.starts_with(ownerPrefix) && path.size() > ownerPrefix.size();
+  };
+  llvm::StringRef sourcePath = metadataSemanticPath(source);
+  llvm::StringRef resultPath = metadataSemanticPath(operation);
+  if (!storage || storage.getValue() != "structural" || !access ||
+      access.getValue() != "read_only" || textAttr(operation, "observability") != "source_mapped" ||
+      !inputPath || inputPath.getValue() != sourcePath ||
+      textAttr(operation, "origin") != sourcePath || !ownedPath(sourcePath) ||
+      !ownedPath(resultPath) || resultPath == sourcePath)
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice requires owned source-mapped read-only structural identity");
+  for (Operation &candidate : owner->getRegion(0).front())
+    if (&candidate != operation && metadataSemanticPath(&candidate) == resultPath)
+      return emitOpError("NODAL-SHAPE-043-004: slice semantic identity must be unique");
+  if (llvm::isa<nodal::PortValueOp>(source)) {
+    auto port = source->getAttrOfType<FlatSymbolRefAttr>("port");
+    Operation *declaration = nullptr;
+    for (Operation &candidate : owner->getRegion(0).front())
+      if (port && llvm::isa<nodal::PortOp>(candidate) &&
+          textAttr(&candidate, "sym_name") == port.getValue())
+        declaration = &candidate;
+    if (!declaration || metadataSemanticPath(declaration) != sourcePath)
+      return emitOpError(
+          "NODAL-SHAPE-043-004: slice port input must retain its declaration source identity");
+  }
+  if (textAttr(operation, "dimensions") != result.getDimensions())
+    return emitOpError("NODAL-SHAPE-043-004: dimensions must exactly match the result shaped type");
+
+  llvm::SmallVector<llvm::StringRef> inputDimensions, resultDimensions;
+  input.getDimensions().split(inputDimensions, ',', -1, true);
+  result.getDimensions().split(resultDimensions, ',', -1, true);
+  const int64_t axis = operation->getAttrOfType<IntegerAttr>("axis").getInt();
+  if (axis < 0 || static_cast<uint64_t>(axis) >= inputDimensions.size() ||
+      inputDimensions.size() != resultDimensions.size())
+    return emitOpError("NODAL-SHAPE-043-004: slice axis or result rank is invalid");
+  for (unsigned index = 0; index < inputDimensions.size(); ++index)
+    if (index != static_cast<uint64_t>(axis) && inputDimensions[index] != resultDimensions[index])
+      return emitOpError("NODAL-SHAPE-043-004: slice must preserve every unselected axis");
+
+  // Reuse the shape/parameter bounds owner for every dimension. No reshape
+  // count-equality rule applies: a slice changes the selected axis length.
+  llvm::StringMap<nodal::ParameterIntegerBounds> dimensionBounds;
+  auto shapeFits = [&](llvm::ArrayRef<llvm::StringRef> dimensions) {
+    uint64_t maximumCount = 1;
+    for (llvm::StringRef dimension : dimensions) {
+      if (dimension.empty() || dimension != dimension.trim())
+        return false;
+      auto found = dimensionBounds.find(dimension);
+      if (found == dimensionBounds.end()) {
+        auto bounds = inferShapeDimensionBounds(owner, dimension, true);
+        if (failed(bounds))
+          return false;
+        found = dimensionBounds.try_emplace(dimension, *bounds).first;
+      }
+      const auto bounds = found->second;
+      if (bounds.lower <= 0 || bounds.upper < bounds.lower ||
+          maximumCount > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
+                             static_cast<uint64_t>(bounds.upper))
+        return false;
+      maximumCount *= static_cast<uint64_t>(bounds.upper);
+    }
+    return true;
+  };
+  if (!shapeFits(inputDimensions) || !shapeFits(resultDimensions))
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice dimensions require positive finite structural proofs and "
+        "signed 64-bit cardinality");
+
+  auto literal = [](Value value) -> std::optional<int64_t> {
+    Operation *definition = value.getDefiningOp();
+    if (!llvm::isa_and_nonnull<nodal::ConstLiteralOp>(definition) || !value.getType().isInteger(64))
+      return std::nullopt;
+    auto attribute = definition->getAttrOfType<IntegerAttr>("value");
+    if (!attribute || attribute.getType() != value.getType() ||
+        !attribute.getValue().isSignedIntN(64))
+      return std::nullopt;
+    return attribute.getValue().getSExtValue();
+  };
+  auto parameter = [&](Value value) -> Operation * {
+    Operation *definition = value.getDefiningOp();
+    if (!llvm::isa_and_nonnull<nodal::ConstParameterRefOp>(definition))
+      return nullptr;
+    auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
+    return reference ? findDirectModuleParameter(owner, reference.getValue()) : nullptr;
+  };
+  auto sameIdentity = [&](Value left, Value right) {
+    if (auto number = literal(left))
+      return literal(right) == number;
+    if (Operation *declaration = parameter(left))
+      return parameter(right) == declaration;
+    return left == right;
+  };
+  auto dimensionMatches = [&](llvm::StringRef dimension, Value value) {
+    if (auto number = literal(value))
+      return *number > 0 && dimension == std::to_string(*number);
+    if (Operation *declaration = parameter(value))
+      return dimension == textAttr(declaration, "sym_name");
+    return llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()) &&
+           dimension == metadataSemanticPath(value.getDefiningOp()) &&
+           findDirectModuleStaticValue(owner, dimension) == value;
+  };
+  auto staticBounds = [&](Value value) -> FailureOr<nodal::ParameterIntegerBounds> {
+    llvm::SmallPtrSet<Operation *, 16> active;
+    if (!value.getType().isInteger(64) ||
+        !hasStaticShapeIndexDependencies(value, owner, active, 0, true))
+      return failure();
+    if (llvm::isa<nodal::ConstExprOp>(value.getDefiningOp())) {
+      llvm::StringRef path = metadataSemanticPath(value.getDefiningOp());
+      if (!ownedPath(path) || findDirectModuleStaticValue(owner, path) != value)
+        return failure();
+    }
+    return nodal::inferParameterIntegerBounds(value);
+  };
+  Value lower = operation->getOperand(1), upper = operation->getOperand(2),
+        length = operation->getOperand(3);
+  auto lowerBounds = staticBounds(lower), upperBounds = staticBounds(upper),
+       lengthBounds = staticBounds(length);
+  if (failed(lowerBounds) || failed(upperBounds) || failed(lengthBounds) ||
+      lowerBounds->lower < 0 || lengthBounds->lower <= 0)
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice endpoints and positive length require owned static Integer "
+        "proofs for every legal parameter setting");
+
+  bool canonicalLength = false;
+  auto lowerLiteral = literal(lower), upperLiteral = literal(upper);
+  if (lowerLiteral && upperLiteral) {
+    // Nonnegative lower and a positive mathematical difference fit i64 once
+    // upper > lower; compare before subtracting to avoid signed overflow.
+    auto lengthLiteral = literal(length);
+    canonicalLength = lengthLiteral && *upperLiteral > *lowerLiteral &&
+                      *lengthLiteral == *upperLiteral - *lowerLiteral;
+  } else if (lowerLiteral && *lowerLiteral == 0) {
+    canonicalLength = sameIdentity(length, upper);
+  } else {
+    Operation *definition = length.getDefiningOp();
+    canonicalLength = llvm::isa<nodal::ConstExprOp>(definition) &&
+                      textAttr(definition, "operator_name") == "sub" &&
+                      definition->getNumOperands() == 2 &&
+                      sameIdentity(definition->getOperand(0), upper) &&
+                      sameIdentity(definition->getOperand(1), lower);
+  }
+  if (!canonicalLength || !dimensionMatches(resultDimensions[axis], length))
+    return emitOpError(
+        "NODAL-SHAPE-043-004: result extent must retain the exact canonical upper-minus-lower "
+        "length identity");
+  if (!dimensionMatches(inputDimensions[axis], upper) &&
+      upperBounds->upper > dimensionBounds.find(inputDimensions[axis])->second.lower)
+    return emitOpError(
+        "NODAL-SHAPE-043-004: slice upper endpoint exceeds a legal source-axis extent");
   return success();
 }
 

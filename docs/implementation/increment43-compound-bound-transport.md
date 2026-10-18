@@ -1414,8 +1414,8 @@ width and operator-kind counts do not establish ownership.
 
 Focused local validation passed: the native backend unit target (0.21 seconds)
 and eleven selected `Increment43RangeConstructionTests` methods (154 seconds,
-zero failures), with both native tool paths explicitly configured. The PR
-records exact selectors and commands. Pinned formatting and whitespace checks
+zero failures), with both native tool paths explicitly configured. Exact local
+selectors and commands are retained below. Pinned formatting and whitespace checks
 also passed.
 Native regressions cover widths three and sixteen, two same-kind derivatives,
 forged ownership and swapped destinations, exact compact target/index mapping,
@@ -1438,3 +1438,55 @@ the intended backend verifier; process/CLI failure is not accepted as evidence.
 Historical run records are preserved as history and are not retroactively
 claimed to prove those negative semantics. The native semantic verifiers and
 all meaningful malformed-input cases remain intact.
+
+## Direct generated-equation chains
+
+The generated-node equation layout now resolves a finite direct lexical chain
+rather than recognizing exactly two authored ranges. Each intermediate range
+contains one child generate; the leaf retains the existing independently owned
+node/branch/equation profile. Sibling topology, cross-range storage and unrelated
+procedural profiles are not admitted by this change.
+
+One shared range resolver retains bounds, induction and region identities and
+checks the maximum product of occurrence counts before multiplication against
+the signed-64 structural extent envelope. Array declarations and equation
+indices compose the same zero-based row-major path. Unit-stride negative origins
+and strided ranges use occurrence ordinals, not authored induction values as
+flat offsets. Direct one-dimensional layouts preserve their existing spelling.
+
+The chain walk is iterative, with storage proportional to authored depth, never
+the number of generated instances. Product and index strings are built once per
+chain in emitted-text order, avoiding repeated growing-prefix copies or per-node
+index reconstruction. Existing parameter-bound resolution and native operation
+verification retain their own costs and limits; no whole-compiler speedup or
+unbounded-depth claim is made. The existing generated-bound target parser rejects
+expression nesting at depth 512, including synthesized left-nested product bounds;
+passing the extent envelope alone does not override that resource limit.
+
+Focused local checks passed: `nodal.native.backend-unit` (0.28 seconds) includes
+exact three- and six-dimensional arrays/indices, repeat determinism, signed-64
+product overflow and malformed nested-loop target controls. Three public Scala
+methods in `Increment43DeepGenerationTests` passed with both native tools
+configured (48 seconds): a symbolic three-dimensional independent-derivative
+group, a four-dimensional mixed-stride memoryless equation, and swapped
+three-dimensional derivative destinations. Forged leaf object/branch/operator
+owners also reject through their actual native/backend diagnostic families.
+Existing native two-dimensional output assertions remain unchanged and pass.
+The exact public command, after the same tool environment below, is
+`.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43DeepGenerationTests`.
+These results do not accept sibling generated trees, cross-range storage, shaped terminals or generated instances.
+
+### Reproduce the generated branch-group checks
+
+The local wrapper selects pinned Mill 1.1.7 and isolates caches under `.work`.
+With the pinned native targets built, the exact acceptance command was:
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43RangeConstructionTests -- 'nodal.internal.testkit.Increment43RangeConstructionTests.{nested three-branch groups retain independent same-kind operators and exact layout,nested three-branch ddt rejects destination permutations with equal branch totals,nested peer generated node equation retains both row-major child endpoints,nested peer generated node ddt retains both row-major child endpoints,nested peer generated node idt retains both row-major child endpoints and state,negative-origin unit steps retain one nested peer idt state and scaled result path,nested generated node group equations retain independent row-major ownership,nested generated node group idt retains one instance-owned state path,nested generated node group ddt retains one instance-owned derivative path,nested generated node group retains distinct ddt and idt ownership,generated node access may feed one direct owned ddt contribution}'
+```
+
+The affected native binary was checked with
+`ctest --test-dir .work/native-release -R '^nodal.native.backend-unit$' --output-on-failure`.
+Native target reparse is an internal syntax check, not simulator qualification.

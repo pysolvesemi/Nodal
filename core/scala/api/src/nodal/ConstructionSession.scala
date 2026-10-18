@@ -557,19 +557,23 @@ private final class ConstructionSession(val options: EmitOptions):
   def registerShapeView[A <: Data](
       expression: KernelExpr[Vec[A]],
       input: Expr[Vec[A]],
-      dimensions: Vector[Dimension]
+      dimensions: Vector[Dimension],
+      slice: Option[ShapeSliceSelection] = None
   ): Unit =
     val module = currentModule
+    val code = if slice.nonEmpty then "NODAL-SHAPE-043-004" else "NODAL-SHAPE-043-003"
     val (inputReference, structuralInput, path) =
-      structuralShapeInput(input, module.handle, "NODAL-SHAPE-043-003")
+      structuralShapeInput(input, module.handle, code)
     if structuralInput.isEmpty then
+      if slice.nonEmpty then
+        fail(code, "shape slice requires a structural module port or shaped result", Some(path))
       val _ = captureExpression(expression)
     structuralInput.foreach: inputType =>
       val descriptor = Option(CandidateRuntime.typeDescriptor(inputType))
         .filter(_.kind == "Vec")
         .getOrElse(
           fail(
-            "NODAL-SHAPE-043-003",
+            code,
             "shape-view input must have Vec type",
             Some(path)
           )
@@ -582,7 +586,7 @@ private final class ConstructionSession(val options: EmitOptions):
       )
       if !resultDescriptor.contains(expectedDescriptor) then
         fail(
-          "NODAL-SHAPE-043-003",
+          code,
           "shape-view result must retain the element type and exact requested dimensions",
           Some(path)
         )
@@ -591,28 +595,99 @@ private final class ConstructionSession(val options: EmitOptions):
         case _ => Vector.empty
       val analysis = new StructuralBoundAnalysis(
         module.handle,
-        "NODAL-SHAPE-043-003",
+        code,
         "shape view"
       )
-      val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
-        shapeViewSignature(sourceDimensions, module.handle, path, analysis)
-      val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
-        shapeViewSignature(dimensions, module.handle, path, analysis)
-      if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
-        sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
-      then
-        fail(
-          "NODAL-SHAPE-043-003",
-          "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
-          Some(path)
-        )
-      (sourceParameters ++ targetParameters).distinct.foreach(
-        markStructuralParameterEffect(_, "shape")
-      )
+      val parameters = slice match
+        case Some(selection) =>
+          validateShapeSlice(selection, sourceDimensions, dimensions, path, analysis)
+        case None =>
+          val (sourceLiteralProduct, sourceRoots, sourceWorstCase, sourceParameters) =
+            shapeViewSignature(sourceDimensions, module.handle, path, analysis)
+          val (targetLiteralProduct, targetRoots, targetWorstCase, targetParameters) =
+            shapeViewSignature(dimensions, module.handle, path, analysis)
+          if sourceLiteralProduct != targetLiteralProduct || sourceRoots != targetRoots ||
+            sourceWorstCase > BigInt(Long.MaxValue) || targetWorstCase > BigInt(Long.MaxValue)
+          then
+            fail(
+              code,
+              "shape view requires equal literal products and canonical static-expression root multisets within signed 64-bit bounds",
+              Some(path)
+            )
+          sourceParameters ++ targetParameters
+      parameters.distinct.foreach(markStructuralParameterEffect(_, "shape"))
       val reference = captureExpression(expression).getOrElse(
-        fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
+        fail(code, "shape view requires an active Module")
       )
-      shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions))
+      shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions, slice))
+
+  private def validateShapeSlice(
+      selection: ShapeSliceSelection,
+      source: Vector[Any],
+      result: Vector[Dimension],
+      path: String,
+      analysis: StructuralBoundAnalysis
+  ): Vector[DeclarationRef] =
+    def invalid(message: String): Nothing = fail("NODAL-SHAPE-043-004", message, Some(path))
+    def dimension(value: Any): Dimension = value match
+      case literal: Int => literal
+      case expression: Expr[?] => expression.asInstanceOf[Expr[Integer]]
+      case _ => invalid("shape slice dimension is not Integer data")
+    def identity(value: Dimension): Either[Long, DeclarationRef | ExpressionRef] = value match
+      case literal: Int => Left(literal.toLong)
+      case parameter: Param[?] => Right(Option(declarationIds.get(parameter)).getOrElse(
+          invalid("shape slice parameter has no captured identity")
+        ))
+      case expression: KernelExpr[?] => expression.literal match
+          case Some(literal) => Left(literal.value.toLongOption.getOrElse(
+              invalid("shape slice literal exceeds signed 64-bit bounds")
+            ))
+          case None => Right(Option(expressionIds.get(expression)).getOrElse(
+              invalid("shape slice expression has no captured identity")
+            ))
+      case _ => invalid("shape slice value has no canonical static identity")
+    if selection.axis < 0 || selection.axis >= source.size || result.size != source.size then
+      invalid("shape slice axis or result rank does not match its input")
+    val sourceDimensions = source.map(dimension)
+    sourceDimensions.indices.filter(_ != selection.axis).foreach: axis =>
+      if identity(sourceDimensions(axis)) != identity(result(axis)) then
+        invalid("shape slice must retain every unselected dimension")
+    val lower = analysis(selection.lower)
+    val upper = analysis(selection.upperExclusive)
+    val lengthDimension = result(selection.axis)
+    val length = analysis(lengthDimension)
+    val lowerIdentity = identity(selection.lower)
+    val upperIdentity = identity(selection.upperExclusive)
+    val lengthIdentity = identity(lengthDimension)
+    val canonicalLength = (lowerIdentity, upperIdentity) match
+      case (Left(lo), Left(hi)) =>
+        val difference = BigInt(hi) - BigInt(lo)
+        difference.isValidLong && lengthIdentity == Left(difference.toLong)
+      case (Left(0L), _) => lengthIdentity == upperIdentity
+      case _ => lengthDimension match
+          case expression: KernelExpr[?]
+              if expression.operation.contains("analog_sub") &&
+                expression.operands.size == 2 =>
+            identity(dimension(expression.operands(0))) == upperIdentity &&
+            identity(dimension(expression.operands(1))) == lowerIdentity
+          case _ => false
+    if !canonicalLength || lower.bounds.lower < 0L || length.bounds.lower <= 0L then
+      invalid(
+        "shape slice requires nonnegative lower and canonical strictly positive upper-minus-lower length"
+      )
+    val sourceBounds = sourceDimensions.map(analysis(_))
+    val resultBounds = result.map(analysis(_))
+    if upperIdentity != identity(sourceDimensions(selection.axis)) &&
+      upper.bounds.upper > sourceBounds(selection.axis).bounds.lower
+    then
+      invalid("shape slice upper bound is not valid for every legal input extent")
+    Vector(sourceBounds, resultBounds).foreach: bounds =>
+      if bounds.exists(_.bounds.lower <= 0L) ||
+        bounds.foldLeft(BigInt(1))((count, bound) => count * BigInt(bound.bounds.upper)) >
+          BigInt(Long.MaxValue)
+      then
+        invalid("shape slice requires positive dimensions and signed 64-bit maximum element counts")
+    (sourceBounds ++ resultBounds ++ Vector(lower, upper, length)).flatMap(_.parameters)
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -2561,7 +2636,14 @@ private final class ConstructionSession(val options: EmitOptions):
         path = expressionPath(view.reference),
         owner = modulePath(view.reference.module),
         input = inputPath,
-        dimensions = view.dimensions.map(renderShapeDimension(_, view.reference.module))
+        dimensions = view.dimensions.map(renderShapeDimension(_, view.reference.module)),
+        slice = view.slice.map(selection =>
+          KernelShapeSliceSnapshot(
+            selection.axis,
+            generatedBound(selection.lower),
+            generatedBound(selection.upperExclusive)
+          )
+        )
       )
 
   private def relationName(relation: ClockRelation): String =
@@ -2849,7 +2931,11 @@ private final class ConstructionSession(val options: EmitOptions):
     val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
       _.declarations.iterator.flatMap(_.dataType.iterator.flatMap(shapeDimensionRoots))
     )
-    val shapeViewExpressionRoots = shapeViews.valuesIterator.flatMap(_.dimensions.iterator)
+    val shapeViewExpressionRoots = shapeViews.valuesIterator.flatMap(view =>
+      view.dimensions.iterator ++ view.slice.iterator.flatMap(selection =>
+        Iterator(selection.lower, selection.upperExclusive)
+      )
+    )
     (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots ++
       shapeViewExpressionRoots).foreach:
       case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)

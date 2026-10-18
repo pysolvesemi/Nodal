@@ -104,11 +104,18 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     resultDimensions: Vector[String] = Vector.empty
 )
 
+private[nodal] final case class KernelShapeSliceSnapshot(
+    axis: Int,
+    lower: String,
+    upperExclusive: String
+)
+
 private[nodal] final case class KernelShapeViewSnapshot(
     path: String,
     owner: String,
     input: String,
-    dimensions: Vector[String]
+    dimensions: Vector[String],
+    slice: Option[KernelShapeSliceSnapshot] = None
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -299,10 +306,17 @@ private final case class ShapeIndexRecord(
     resultDimensions: Vector[Any]
 )
 
+private final case class ShapeSliceSelection(
+    axis: Int,
+    lower: Dimension,
+    upperExclusive: Dimension
+)
+
 private final case class ShapeViewRecord(
     reference: ExpressionRef,
     input: DeclarationRef | ExpressionRef,
-    dimensions: Vector[Int | Expr[Integer]]
+    dimensions: Vector[Dimension],
+    slice: Option[ShapeSliceSelection] = None
 )
 
 private final class InstanceRecord(

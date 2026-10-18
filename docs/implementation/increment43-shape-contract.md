@@ -456,3 +456,80 @@ scalar carriers, foreign ownership and forged dimensions/element types.
 Pinned Scalafmt and whitespace checks passed. These results do not close
 F-043's general range slices, l-value selection, target array layouts or
 other unfinished children; no CI was run.
+
+### Reproduce the structural composition checks
+
+The local wrapper selects pinned Mill 1.1.7 and isolates caches under `.work`.
+With the pinned native targets built, the exact acceptance command was:
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeContractTests -- 'nodal.internal.testkit.Increment43ShapeContractTests.{composed structural shapes preserve immediate deterministic SSA edges,composed structural shapes traverse long alternating chains without expansion,composed structural shapes reject uncaptured foreign and forged typed carriers,composed structural shapes reject malformed dependency snapshots,configured native accepts composed structural shape edges,public row and plane views retain exact remaining dimensions,public row and plane views reject wrong rank bounds and forged result shape,chained reshape and flatten retain structural view ownership,indexing a structural view retains its immediate SSA predecessor,fixed and symbolic flatten reuse the structural shape-view proof,bridge emits and independently validates fixed structural reshape,bridge rejects forged symbolic reshape proofs and worst-case overflow,configured native accepts public fixed and symbolic reshape transport}'
+```
+
+## Read-only structural range slices
+
+The [additive slice gate](../design-gates/NodalStructuralSlices-DG-v0.1.md)
+selects `slice(lower, upperExclusive, axis = 0)` under the owner's Foundation
+implementation request. It is a half-open, unit-stride, rank-preserving alias
+view, with a zero-based static axis. Literal zero is a valid endpoint. Empty,
+reversed, negative and unproven ranges reject; zero-sized shaped values remain
+illegal. Fixed and bounded symbolic endpoints retain their exact canonical
+length: literal difference, the upper identity for literal-zero lower, or the
+ordered subtraction DAG. Defaults and coincident intervals are not identities.
+
+The existing shape-view record and registry own one optional typed slice payload.
+Capture validates before registering a slice or marking structural parameter
+effects. The bridge's existing dependency schedule retains immediate SSA edges
+through slices, rows/planes, reshape/flatten and indexing. The native
+`nodal.shape_slice` operation independently proves endpoint/length provenance,
+remaining axes, element type, signed-64 cardinality and source ownership. It uses
+the existing parameter bounds and static-dependency helpers. Relaxing reshape
+cardinality equality or pretending a slice is a rank-reducing index was rejected;
+neither preserves the actual range/alias contract.
+
+Supported sources are module structural Vec ports and captured non-scalar
+structural results, including Real/f64 and existing supported scalar element
+types. Only interval-safe inequalities and exact source-extent identity are
+accepted; arbitrary correlated symbolic inequalities remain conservative
+rejections. No element expansion, storage allocation, new interval engine or
+parallel mutable shape registry is introduced. Per-operation native identity
+and uniqueness scans and repeated proof setup may be quadratic across a large
+module; the dependency scheduler's complexity is not a whole-pipeline bound.
+No measured speedup is claimed.
+
+Native-verified structural IR is not target array lowering. The public mixed
+digital/analog target witness rejects with `NODAL-VERIFY-ANALOG-004` for its
+missing explicit bridge before layout lowering; this is not evidence for a
+slice-specific target capability diagnostic. Writable/l-value selections, overlap/driver rules,
+shaped conservative terminals and remaining target layout/source-map obligations
+stay open under F-043. This checkpoint cannot complete the parent or those
+required children.
+
+### Focused slice acceptance and reproduction
+
+Nine public slice methods passed with both native tools configured (69 seconds),
+including seven independently native-verified public graphs. Six directly affected
+composition/reshape/flatten predecessors passed (64 seconds). The native slice
+matrix passed 46 cases (13 positives repeated and 33 exact-diagnostic negatives);
+its slice/index/view integration tests passed 3/3, the shape-contract predecessor
+passed 1/1, and the Python fixture/checker tests passed 15/15. Pinned formatting,
+API JSON, additive gate/document checks and whitespace checks passed. No CI ran.
+
+The exact Scala selectors used were:
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeSliceTests -- 'nodal.internal.testkit.Increment43ShapeSliceTests.{fixed slices preserve rank singleton extents and immediate source identity,symbolic slices retain canonical subtraction and full extent identities,slice chains compose through plane row reshape flatten and scalar selection,invalid slice bounds owners and element carriers reject before publication,caught slice failures publish neither a view nor structural endpoint effects,bridge independently rejects forged slice shape bounds length and source graphs,slice boundaries preserve signed64 counts and reject foreign or coincident identities,configured mixed-signal target rejects missing explicit bridge before layout lowering,configured native verifies public fixed symbolic and composed slice transport}'
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43ShapeContractTests -- 'nodal.internal.testkit.Increment43ShapeContractTests.{composed structural shapes preserve immediate deterministic SSA edges,composed structural shapes reject malformed dependency snapshots,configured native accepts composed structural shape edges,fixed and symbolic flatten reuse the structural shape-view proof,bridge rejects forged symbolic reshape proofs and worst-case overflow,configured native accepts public fixed and symbolic reshape transport}'
+```
+
+Native acceptance used the built targets and focused CTest selectors:
+
+```sh
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.shape-(slice|index|view)-integration$'
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.shape-contract-integration$'
+python3 -m unittest tests.compiler.test_increment43_shape_slice tests.compiler.test_increment43_shape_index tests.compiler.test_increment43_shape_view tests.compiler.test_increment43_shape_contract
+```

@@ -1502,14 +1502,18 @@ bool isGeneratedNodeContributionProfile(Operation *generate) {
 }
 
 Operation *nestedGeneratedNodeContribution(Operation *generate) {
-  Region &body = generate->getRegion(0);
-  if (!llvm::hasSingleElement(body) || body.front().getOperations().size() != 1)
+  Operation *leaf = generate;
+  while (!isGeneratedNodeContributionProfile(leaf)) {
+    Region &body = leaf->getRegion(0);
+    if (!llvm::hasSingleElement(body) || body.front().getOperations().size() != 1)
+      return nullptr;
+    leaf = &body.front().front();
+    if (leaf->getName().getStringRef() != "nodal.generate")
+      return nullptr;
+  }
+  if (leaf == generate)
     return nullptr;
-  Operation &child = body.front().front();
-  if (child.getName().getStringRef() != "nodal.generate" ||
-      !isGeneratedNodeContributionProfile(&child))
-    return nullptr;
-
+  Operation &child = *leaf;
   Region &childBody = child.getRegion(0);
   unsigned nodes = 0, branches = 0;
   Operation *analog = nullptr;
@@ -1551,6 +1555,85 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
              : nullptr;
 }
 
+// A chain carries authored ranges, not expanded occurrences. Both storage and
+// equation emission resolve this same path and compose its row-major layout.
+struct GeneratedEquationRange {
+  Operation *operation;
+  GeneratedTargetBound lower, upper, step;
+  StringAttr induction, regionId, inductionPath;
+  GeneratedNodeArrayLayout layout;
+};
+
+FailureOr<llvm::SmallVector<GeneratedEquationRange, 2>>
+resolveGeneratedEquationChain(Operation *root, Operation *leaf) {
+  llvm::SmallVector<GeneratedEquationRange, 2> ranges;
+  __int128 maximumProduct = 1;
+  for (Operation *current = root;;) {
+    const bool compound = current->getNumOperands() == 3;
+    if (current->getNumOperands() != 0 && !compound)
+      return emitMappedFailure(current, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated equation bounds require attributes or three SSA values");
+    auto lower = compound ? generatedTargetBound(current->getOperand(0), current, "lower")
+                          : generatedTargetBound(current, "lower");
+    auto upper = compound ? generatedTargetBound(current->getOperand(1), current, "upper")
+                          : generatedTargetBound(current, "upper");
+    auto step = compound ? generatedTargetBound(current->getOperand(2), current, "step")
+                         : generatedTargetBound(current, "step");
+    if (failed(lower) || failed(upper) || failed(step))
+      return failure();
+    auto induction = current->getAttrOfType<StringAttr>("induction");
+    auto regionId = current->getAttrOfType<StringAttr>("region_id");
+    auto inductionPath = current->getAttrOfType<StringAttr>("induction_path");
+    if (!induction || !regionId || !inductionPath ||
+        !isPortableVerilogIdentifier(induction.getValue()) || step->range.lower <= 0 ||
+        lower->range.upper >= upper->range.lower)
+      return emitMappedFailure(
+          current, "NODAL-BACKEND-CAPABILITY-001",
+          "generated equation chain requires canonical nonempty positive ranges");
+    const __int128 span = static_cast<__int128>(upper->range.upper) - lower->range.lower;
+    const __int128 count = (span + step->range.lower - 1) / step->range.lower;
+    // Limit before multiplying, so deep symbolic paths cannot overflow the
+    // signed-64 structural layout envelope even in the validation arithmetic.
+    if (count <= 0 || count > INT64_MAX || maximumProduct > INT64_MAX / count)
+      return emitMappedFailure(current, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated equation layout exceeds the signed-64 extent envelope");
+    maximumProduct *= count;
+    ranges.push_back({current, *lower, *upper, *step, induction, regionId, inductionPath,
+                      generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue())});
+    if (current == leaf)
+      return ranges;
+    Region &body = current->getRegion(0);
+    if (!llvm::hasSingleElement(body) || body.front().getOperations().size() != 1 ||
+        body.front().front().getName().getStringRef() != "nodal.generate")
+      return emitMappedFailure(current, "NODAL-BACKEND-CAPABILITY-001",
+                               "generated equation layout requires one direct lexical chain");
+    current = &body.front().front();
+  }
+}
+
+struct GeneratedEquationLayout {
+  std::string count, ordinal;
+};
+
+GeneratedEquationLayout
+composeGeneratedEquationLayout(llvm::ArrayRef<GeneratedEquationRange> ranges) {
+  GeneratedEquationLayout result;
+  llvm::raw_string_ostream count(result.count), ordinal(result.ordinal);
+  for (size_t index = 1; index < ranges.size(); ++index) {
+    count << "(";
+    ordinal << "((";
+  }
+  count << ranges.front().layout.count;
+  ordinal << ranges.front().layout.ordinal;
+  for (const GeneratedEquationRange &range : llvm::drop_begin(ranges)) {
+    count << " * " << range.layout.count << ")";
+    ordinal << " * " << range.layout.count << ") + " << range.layout.ordinal << ")";
+  }
+  count.flush();
+  ordinal.flush();
+  return result;
+}
+
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
                                           llvm::raw_ostream &output,
                                           Operation *parentGenerate = nullptr) {
@@ -1584,48 +1667,15 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
                              "generated Verilog-A label is not a portable identifier");
 
-  std::optional<GeneratedNodeArrayLayout> parentLayout;
-  StringAttr parentInduction;
-  StringAttr parentRegionId;
-  StringAttr parentInductionPath;
-  std::optional<GeneratedTargetBound> parentLower;
-  std::optional<GeneratedTargetBound> parentUpper;
-  std::optional<GeneratedTargetBound> parentStep;
+  llvm::SmallVector<GeneratedEquationRange, 2> chain;
   if (parentGenerate) {
     if (nestedGeneratedNodeContribution(parentGenerate) != generate)
-      return emitMappedFailure(
-          generate, "NODAL-BACKEND-CAPABILITY-001",
-          "nested generated analog-node equation requires one direct child equation profile");
-    const bool parentCompound = parentGenerate->getNumOperands() == 3;
-    if (parentGenerate->getNumOperands() != 0 && !parentCompound)
-      return emitMappedFailure(
-          parentGenerate, "NODAL-BACKEND-CAPABILITY-001",
-          "nested generated Verilog-A bounds require attributes or three SSA values");
-    auto resolvedParentLower = parentCompound ? generatedTargetBound(parentGenerate->getOperand(0),
-                                                                     parentGenerate, "lower")
-                                              : generatedTargetBound(parentGenerate, "lower");
-    auto resolvedParentUpper = parentCompound ? generatedTargetBound(parentGenerate->getOperand(1),
-                                                                     parentGenerate, "upper")
-                                              : generatedTargetBound(parentGenerate, "upper");
-    auto resolvedParentStep =
-        parentCompound ? generatedTargetBound(parentGenerate->getOperand(2), parentGenerate, "step")
-                       : generatedTargetBound(parentGenerate, "step");
-    if (failed(resolvedParentLower) || failed(resolvedParentUpper) || failed(resolvedParentStep))
+      return emitMappedFailure(generate, "NODAL-BACKEND-CAPABILITY-001",
+                               "nested generated equation requires one direct lexical chain");
+    auto resolved = resolveGeneratedEquationChain(parentGenerate, generate);
+    if (failed(resolved))
       return failure();
-    parentLower = *resolvedParentLower;
-    parentUpper = *resolvedParentUpper;
-    parentStep = *resolvedParentStep;
-    parentInduction = parentGenerate->getAttrOfType<StringAttr>("induction");
-    parentRegionId = parentGenerate->getAttrOfType<StringAttr>("region_id");
-    parentInductionPath = parentGenerate->getAttrOfType<StringAttr>("induction_path");
-    if (!parentInduction || !parentRegionId || !parentInductionPath ||
-        !isPortableVerilogIdentifier(parentInduction.getValue()) || parentStep->range.lower <= 0 ||
-        parentLower->range.upper >= parentUpper->range.lower)
-      return emitMappedFailure(parentGenerate, "NODAL-BACKEND-CAPABILITY-001",
-                               "nested generated analog-node equation requires canonical nonempty "
-                               "positive parent bounds");
-    parentLayout = generatedNodeArrayLayout(*parentLower, *parentUpper, *parentStep,
-                                            parentInduction.getValue());
+    chain = std::move(*resolved);
   }
 
   Region &body = generate->getRegion(0);
@@ -1658,6 +1708,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           "generated analog-node contribution requires a nonempty positive-step range");
     const GeneratedNodeArrayLayout layout =
         generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue());
+    const std::string targetIndex =
+        chain.empty() ? layout.index : composeGeneratedEquationLayout(chain).ordinal;
     llvm::DenseMap<Value, Operation *> ownedNodes;
     llvm::StringSet<> nodeNames;
     llvm::StringSet<> sourcePaths;
@@ -1680,11 +1732,6 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
             node, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node contribution requires exactly-owned electrical nodes with "
             "unique names and source identities");
-      const std::string targetIndex = parentLayout
-                                          ? (llvm::Twine("((") + parentLayout->ordinal + " * " +
-                                             layout.count + ") + " + layout.ordinal + ")")
-                                                .str()
-                                          : layout.index;
       const std::string indexedNode =
           (llvm::Twine(nodeName.getValue()) + "[" + targetIndex + "]").str();
       state.terminals.try_emplace(node->getResult(0), indexedNode);
@@ -2858,17 +2905,17 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         "owned indexed branch");
 
   output << "  analog begin\n";
-  if (parentGenerate) {
-    llvm::StringRef parentLabel = parentRegionId.getValue();
+  for (const GeneratedEquationRange &range : llvm::drop_end(chain, chain.empty() ? 0 : 1)) {
+    llvm::StringRef parentLabel = range.regionId.getValue();
     if (size_t separator = parentLabel.rfind('.'); separator != llvm::StringRef::npos)
       parentLabel = parentLabel.drop_front(separator + 1);
     if (!isPortableVerilogIdentifier(parentLabel))
-      return emitMappedFailure(parentGenerate, "NODAL-BACKEND-CAPABILITY-001",
+      return emitMappedFailure(range.operation, "NODAL-BACKEND-CAPABILITY-001",
                                "nested generated Verilog-A parent label is invalid");
-    output << "    for (" << parentInduction.getValue() << " = " << parentLower->text << "; "
-           << parentInduction.getValue() << " < " << parentUpper->text << "; "
-           << parentInduction.getValue() << " = " << parentInduction.getValue() << " + "
-           << parentStep->text << ") begin : " << parentLabel << "\n";
+    output << "    for (" << range.induction.getValue() << " = " << range.lower.text << "; "
+           << range.induction.getValue() << " < " << range.upper.text << "; "
+           << range.induction.getValue() << " = " << range.induction.getValue() << " + "
+           << range.step.text << ") begin : " << parentLabel << "\n";
   }
   output << "    for (" << induction.getValue() << " = " << lower->text << "; "
          << induction.getValue() << " < " << upper->text << "; " << induction.getValue() << " = "
@@ -2879,7 +2926,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   if (failed(renderAnalog(analog, state, output, false)))
     return failure();
   output << "    end\n";
-  if (parentGenerate)
+  for (size_t index = 1; index < chain.size(); ++index)
     output << "    end\n";
   output << "  end\n";
   return success();
@@ -2916,31 +2963,10 @@ LogicalResult renderNestedGeneratedNodeContributionArray(Operation *generate,
         generate, "NODAL-BACKEND-CAPABILITY-001",
         "nested generated analog-node equation requires one direct child equation profile");
 
-  auto resolveLayout = [&](Operation *range) -> FailureOr<GeneratedNodeArrayLayout> {
-    if (range->getNumOperands() != 0 && range->getNumOperands() != 3)
-      return emitMappedFailure(
-          range, "NODAL-BACKEND-CAPABILITY-001",
-          "nested generated analog-node arrays require attributes or three SSA bounds");
-    const bool compound = range->getNumOperands() == 3;
-    auto lower = compound ? generatedTargetBound(range->getOperand(0), range, "lower")
-                          : generatedTargetBound(range, "lower");
-    auto upper = compound ? generatedTargetBound(range->getOperand(1), range, "upper")
-                          : generatedTargetBound(range, "upper");
-    auto step = compound ? generatedTargetBound(range->getOperand(2), range, "step")
-                         : generatedTargetBound(range, "step");
-    if (failed(lower) || failed(upper) || failed(step))
-      return failure();
-    if (step->range.lower <= 0 || lower->range.upper >= upper->range.lower)
-      return emitMappedFailure(
-          range, "NODAL-BACKEND-CAPABILITY-001",
-          "nested generated analog-node arrays require nonempty positive-step ranges");
-    return generatedNodeArrayLayout(*lower, *upper, *step, "");
-  };
-
-  auto outerLayout = resolveLayout(generate);
-  auto innerLayout = resolveLayout(child);
-  if (failed(outerLayout) || failed(innerLayout))
+  auto chain = resolveGeneratedEquationChain(generate, child);
+  if (failed(chain))
     return failure();
+  const std::string count = composeGeneratedEquationLayout(*chain).count;
   auto childRegion = child->getAttrOfType<StringAttr>("region_id");
   auto childInduction = child->getAttrOfType<StringAttr>("induction_path");
   if (!childRegion || !childInduction)
@@ -2968,8 +2994,6 @@ LogicalResult renderNestedGeneratedNodeContributionArray(Operation *generate,
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "nested generated analog-node equation requires an exactly-owned "
                                "electrical node with unique source identity");
-    const std::string count =
-        (llvm::Twine("(") + outerLayout->count + " * " + innerLayout->count + ")").str();
     output << "  electrical " << nodeName.getValue() << "[0:(" << count << " - 1)];\n";
   }
   return success();
@@ -3247,8 +3271,14 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
   llvm::StringSet<> generatedLabels;
   for (Operation *generate : generates) {
     llvm::SmallVector<Operation *, 2> targetRanges{generate};
-    if (Operation *child = nestedGeneratedNodeContribution(generate))
-      targetRanges.push_back(child);
+    if (Operation *leaf = nestedGeneratedNodeContribution(generate)) {
+      auto chain = resolveGeneratedEquationChain(generate, leaf);
+      if (failed(chain))
+        return failure();
+      targetRanges.clear();
+      for (const GeneratedEquationRange &range : *chain)
+        targetRanges.push_back(range.operation);
+    }
     for (Operation *range : targetRanges) {
       auto induction = range->getAttrOfType<StringAttr>("induction");
       auto regionId = range->getAttrOfType<StringAttr>("region_id");
@@ -3696,7 +3726,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   candidate.split(lines, '\n', -1, true);
   bool insideModule = false;
   bool insideAnalog = false;
-  unsigned generatedDepth = 0;
+  size_t generatedDepth = 0;
   bool generatedStatement = false;
   bool sawModule = false;
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
@@ -3776,8 +3806,6 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     }
     if (insideAnalog) {
       if (line.starts_with("for (")) {
-        if (generatedDepth >= 2)
-          return failure();
         size_t close = line.find(") begin : ");
         if (close == llvm::StringRef::npos || close + sizeof(") begin : ") - 1 >= line.size())
           return failure();

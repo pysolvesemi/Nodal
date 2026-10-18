@@ -1,7 +1,9 @@
 # Increment 51 readiness and implementation
 
-Status: implementation and focused local validation complete (A–F, including D.1/D.2).
-Parent/G remain open pending verified integration.
+Status: complete after verified squash integration `38ad908456f2d482fc5045a04bfdafeacdaa474d`.
+The sole parent is `07c062cb93b31f1fed9a17ccf2aa4177058187fc`; the integrated
+tree exactly matches tested tree `f2bdb1e848ac5d75c2a113f0233638a407b17303`.
+All F-051 children and the parent are complete. No CI was run.
 Base: `07c062cb93b31f1fed9a17ccf2aa4177058187fc`, verified F-050 documentation
 closure. Branch: `increment/51-waveform-results`.
 
@@ -144,5 +146,5 @@ remaining blocker; bounded measured retention needs no speculative cache. B/C/D:
 typed parsing, streaming, interpolation/comparison, independent references and
 meaningful malformed/unit/boundary/late-error controls pass. F: long-trace and
 retained-sweep observations plus deterministic versioned serialization pass.
-A–F, including D.1/D.2, are complete. G and the parent await verified integration.
+All children and the parent are complete after the verified integration above.
 No CI or broad qualification ran; existing compiler capability limits remain.

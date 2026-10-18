@@ -82,6 +82,8 @@
     "dimensions": "Int | Expr[Integer]",
     "operations": [
       "at",
+      "row",
+      "plane",
       "flatten",
       "reshape",
       "map",

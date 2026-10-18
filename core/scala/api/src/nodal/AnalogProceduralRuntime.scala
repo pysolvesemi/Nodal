@@ -83,7 +83,9 @@ private[nodal] object AnalogProceduralRuntime:
       variables: Vector[VariableRecord],
       assignments: Vector[AssignmentRecord],
       controlFlow: Option[AnalogControlFlowConstruction.Snapshot] = None,
-      controlExpressions: Vector[ControlExpressionRecord] = Vector.empty
+      controlExpressions: Vector[ControlExpressionRecord] = Vector.empty,
+      generatedOwner: Option[String] = None,
+      generatedInduction: Option[String] = None
   )
 
   final case class Diagnostic(code: String, message: String, path: Option[String] = None):

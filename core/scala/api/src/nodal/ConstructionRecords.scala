@@ -83,6 +83,34 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     unit: Option[String]
 )
 
+private[nodal] final case class KernelGeneratedRegionSnapshot(
+    path: String,
+    owner: String,
+    parent: Option[String],
+    induction: String,
+    lower: String,
+    upperExclusive: String,
+    step: String,
+    maximum: Option[Int],
+    maximumTripCount: Int,
+    declarations: Vector[String]
+)
+
+private[nodal] final case class KernelShapeIndexSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    indices: Vector[String],
+    resultDimensions: Vector[String] = Vector.empty
+)
+
+private[nodal] final case class KernelShapeViewSnapshot(
+    path: String,
+    owner: String,
+    input: String,
+    dimensions: Vector[String]
+)
+
 private[nodal] final case class KernelModuleSnapshot(
     path: String,
     className: String,
@@ -119,14 +147,18 @@ private[nodal] final case class KernelAnalogContributionSnapshot(
     path: String,
     target: String,
     value: String,
-    kind: String
+    kind: String,
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelAnalogRegionSnapshot(
     path: String,
     module: String,
     expressions: Vector[KernelAnalogExpressionSnapshot],
-    contributions: Vector[KernelAnalogContributionSnapshot]
+    contributions: Vector[KernelAnalogContributionSnapshot],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelContinuousOperatorSnapshot(
@@ -141,7 +173,9 @@ private[nodal] final case class KernelContinuousOperatorSnapshot(
     stateId: Option[String],
     initialization: String,
     analyses: Vector[String],
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelWaveformOperatorSnapshot(
@@ -156,7 +190,9 @@ private[nodal] final case class KernelWaveformOperatorSnapshot(
     outputContinuity: String,
     stateId: Option[String],
     analyses: Vector[String],
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelTransferOperatorSnapshot(
@@ -167,7 +203,9 @@ private[nodal] final case class KernelTransferOperatorSnapshot(
     denominatorSize: Int,
     operands: Vector[String],
     resultDimension: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelNoiseOperatorSnapshot(
@@ -177,7 +215,9 @@ private[nodal] final case class KernelNoiseOperatorSnapshot(
     label: String,
     operands: Vector[String],
     resultDimension: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    generatedOwner: Option[String] = None,
+    generatedInduction: Option[String] = None
 )
 
 private[nodal] final case class KernelWaiverSnapshot(
@@ -212,7 +252,10 @@ private[nodal] final case class ConstructionSnapshot(
     analogSemantics: AnalogEquationRuntime.Snapshot =
       AnalogEquationRuntime.Snapshot(Vector.empty, Vector.empty),
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
-    waivers: Vector[KernelWaiverSnapshot] = Vector.empty
+    waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
+    generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
+    shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
+    shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -236,6 +279,32 @@ private final case class DeclarationRecord(
     attributes: Vector[(String, Any)]
 )
 
+private final class GeneratedRegionRecord(
+    val owner: Long,
+    val ordinal: Int,
+    val parentOrdinal: Option[Int],
+    val induction: ExpressionRef,
+    val lower: Any,
+    val upperExclusive: Any,
+    val step: Any,
+    val maximum: Option[Int],
+    val maximumTripCount: Int
+):
+  val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+
+private final case class ShapeIndexRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef | ExpressionRef,
+    indices: Vector[Int | Expr[Integer]],
+    resultDimensions: Vector[Any]
+)
+
+private final case class ShapeViewRecord(
+    reference: ExpressionRef,
+    input: DeclarationRef | ExpressionRef,
+    dimensions: Vector[Int | Expr[Integer]]
+)
+
 private final class InstanceRecord(
     val ordinal: Int,
     val child: Long,
@@ -254,12 +323,17 @@ private final class ModuleRecord(
   val domains: mutable.ArrayBuffer[DomainRecord] = mutable.ArrayBuffer.empty
   val declarations: mutable.ArrayBuffer[DeclarationRecord] = mutable.ArrayBuffer.empty
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
+  val generatedRegions: mutable.ArrayBuffer[GeneratedRegionRecord] = mutable.ArrayBuffer.empty
   var expressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 
 private final case class Operation(owner: Long, kind: String, values: Vector[Any])
 
-private final class AnalogRegionRecord(val module: Long, val ordinal: Int):
+private final class AnalogRegionRecord(
+    val module: Long,
+    val ordinal: Int,
+    val generatedOwnership: Option[(String, String)]
+):
   val expressions: mutable.ArrayBuffer[ExpressionRef] = mutable.ArrayBuffer.empty
   val contributions: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 

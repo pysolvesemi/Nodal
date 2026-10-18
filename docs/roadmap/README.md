@@ -73,13 +73,30 @@ without duplicate status or reverse parent dependencies. The bounded additive
 configuration gate is owned by 65. No new numbered increment, 43 prerequisite,
 SystemVerilog dependency, implementation start or completed checkbox is added.
 
+### Areas and symbolic structural conditionals
+
+[Areas and symbolic structural conditionals](areas-symbolic-conditionals-v0.1-plan.md)
+records the owner's 2026-10-10 approval of lightweight `new Area`, typed
+`hdlRange` Area collections, direct static member access, ordinary-looking
+symbolic parameter/index `if/else`, value-producing branches and parameter-aware
+behavioral `when`. It extends the older explicit-only conditional direction
+through a bounded future compiler-capture/API gate; host-only Scala control and
+ordinary ranges retain their meaning. No `staticIf` is required for common use.
+
+Its 11 new descendants belong to existing 55/56/58/153/159/65-67 obligations and
+live only in that plan. It includes the approved Scala/Verilog acceptance pair,
+ownership/driver/rejection requirements and independent qualification handoffs.
+It adds no numbered increment, F-043 prerequisite, SystemVerilog dependency or
+implementation claim. Historical API gates and acceptance remain unchanged.
+
 ## Ownership and status
 
 The main file owns its existing states, the lightweight amendment owns its
 previously added descendants, the modularization plan owns only F-160 and its
 descendants, the compact scalar declaration amendment owns only its listed
 new F-097 descendants, and the portable-Verilog Vec amendment owns only its
-listed new 54/58/65-67/159 descendants.
+listed new 54/58/65-67/159 descendants. The Area/conditional amendment solely
+owns its listed new 55/56/58/153/159/65-67 descendants.
 Parent completion requires all applicable children and explicit prerequisites
 across these linked documents. Planning updates do not complete checkboxes;
 existing IDs and accepted evidence remain unchanged.

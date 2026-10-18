@@ -19,6 +19,10 @@ struct AnalogEventRenderState {
 mlir::LogicalResult prepareAnalogEventBackend(mlir::Operation *module,
                                               AnalogEventRenderState &state,
                                               llvm::raw_ostream &declarations);
+mlir::LogicalResult prepareGeneratedAnalogEventBackend(mlir::Operation *procedure,
+                                                       AnalogEventRenderState &state,
+                                                       llvm::raw_ostream &declarations,
+                                                       unsigned indent);
 mlir::LogicalResult renderAnalogEventProcedure(mlir::Operation *procedure,
                                                AnalogEventRenderState &state,
                                                llvm::raw_ostream &output);

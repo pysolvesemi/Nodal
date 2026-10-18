@@ -341,29 +341,21 @@ LogicalResult renderBlock(Block &block, AnalogEventRenderState &state, llvm::raw
   }
   return success();
 }
-} // namespace
 
-LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderState &state,
-                                        llvm::raw_ostream &out) {
-  module->walk([&](Operation *op) {
-    for (auto key : {"name", "sym_name"})
-      if (!text(op, key).empty())
-        state.reserved.insert(text(op, key));
-  });
+LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &state,
+                                  llvm::raw_ostream &out, unsigned indent, bool allowLoops) {
   LogicalResult result = success();
-  module->walk([&](Operation *op) {
-    if (failed(result))
-      return;
-    auto procedure = op->getParentOfType<AnalogProcedureOp>();
-    if (!procedure || !hasAnalogEvents(procedure))
+  procedure->walk([&](Operation *op) {
+    auto owner = op->getParentOfType<AnalogProcedureOp>();
+    if (failed(result) || !owner || owner.getOperation() != procedure)
       return;
     if (llvm::isa<AnalogVariableOp, AnalogVariableReadOp>(op)) {
       // Genvar expansion duplicates lexical state as well as event histories.
-      // The scalar target currently has no per-generated-instance storage
-      // representation; never alias loop-local variables across occurrences.
-      // Root variables intentionally shared by handlers remain supported.
+      // Ordinary static monitor loops still reject loop-local state. Generated
+      // procedures instead place their declarations inside the owning generated
+      // block, so each elaborated occurrence receives distinct target storage.
       if (llvm::isa<AnalogVariableOp>(op)) {
-        for (Operation *scope = op->getParentOp(); scope != procedure.getOperation();
+        for (Operation *scope = op->getParentOp(); scope != procedure;
              scope = scope->getParentOp()) {
           if (llvm::isa<AnalogLoopOp>(scope) && hasAnalogEvents(scope)) {
             result = reject(op, "loop-local event state requires per-generated-instance storage");
@@ -380,8 +372,8 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
       state.names[op] = generated;
       if (llvm::isa<AnalogVariableOp>(op))
         state.variables[id] = generated;
-      out << "  " << (type.getKind() == "real" ? "real " : "integer ") << generated;
-      if (llvm::isa<AnalogVariableOp>(op) && op->getParentOp() == procedure.getOperation() &&
+      out.indent(indent) << (type.getKind() == "real" ? "real " : "integer ") << generated;
+      if (llvm::isa<AnalogVariableOp>(op) && op->getParentOp() == procedure &&
           op->getAttrOfType<BoolAttr>("initialized").getValue()) {
         auto value = parseAnalogSourceExpression(op, text(op, "initializer_value"));
         auto rendered =
@@ -394,6 +386,10 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
       }
       out << ";\n";
     } else if (llvm::isa<AnalogLoopOp>(op)) {
+      if (!allowLoops) {
+        result = reject(op, "generated event storage does not admit nested procedural loops");
+        return;
+      }
       auto base = nameFor(text(op, "statement_id"), state);
       // Reserve all derived names as a group, including adversarial authored names.
       while (llvm::any_of(
@@ -404,15 +400,49 @@ LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderStat
       for (auto suffix : {"_index", "_limit", "_break", "_continue"}) {
         state.reserved.insert(base + suffix);
         bool generateIndex = hasAnalogEvents(op) && llvm::StringRef(suffix) == "_index";
-        out << (generateIndex ? "  genvar " : "  integer ") << base << suffix << ";\n";
+        out.indent(indent) << (generateIndex ? "genvar " : "integer ") << base << suffix << ";\n";
       }
     }
   });
   return result;
 }
+} // namespace
+
+LogicalResult prepareAnalogEventBackend(Operation *module, AnalogEventRenderState &state,
+                                        llvm::raw_ostream &out) {
+  module->walk([&](Operation *op) {
+    for (auto key : {"name", "sym_name"})
+      if (!text(op, key).empty())
+        state.reserved.insert(text(op, key));
+  });
+  LogicalResult result = success();
+  module->walk([&](AnalogProcedureOp procedure) {
+    if (failed(result) || !hasAnalogEvents(procedure) || procedure->hasAttr("generated_owner"))
+      return;
+    result = prepareEventStorage(procedure.getOperation(), state, out, 2, true);
+  });
+  return result;
+}
+
+LogicalResult prepareGeneratedAnalogEventBackend(Operation *procedure,
+                                                 AnalogEventRenderState &state,
+                                                 llvm::raw_ostream &out, unsigned indent) {
+  auto eventProcedure = llvm::dyn_cast_or_null<AnalogProcedureOp>(procedure);
+  if (!eventProcedure || !procedure->hasAttr("generated_owner") ||
+      !procedure->hasAttr("generated_induction"))
+    return reject(procedure, "generated storage requires one owned analog procedure");
+  if (auto module = procedure->getParentOfType<ModuleOp>())
+    module->walk([&](Operation *op) {
+      for (auto key : {"name", "sym_name"})
+        if (!text(op, key).empty())
+          state.reserved.insert(text(op, key));
+    });
+  return prepareEventStorage(procedure, state, out, indent, true);
+}
 LogicalResult renderAnalogEventProcedure(Operation *procedure, AnalogEventRenderState &state,
                                          llvm::raw_ostream &out) {
-  if (!hasAnalogEvents(procedure))
+  if (!hasAnalogEvents(procedure) &&
+      (!procedure->hasAttr("generated_owner") || !procedure->hasAttr("generated_induction")))
     return reject(procedure, "ordinary procedure lowering remains gated");
   if (failed(verifyAnalogEventProcedure(procedure)))
     return failure();

@@ -349,6 +349,31 @@ LogicalResult context(Operation *op) {
     owner = text(module, "sym_name").str();
   if (text(op, "owner") != owner || text(procedure, "owner") != owner)
     return reject(op, 5, "analog event owner differs from the enclosing component");
+  auto generated = op->getParentOfType<GenerateOp>();
+  auto generatedOwner = op->getAttrOfType<StringAttr>("generated_owner");
+  auto generatedInduction = op->getAttrOfType<StringAttr>("generated_induction");
+  if (static_cast<bool>(generatedOwner) != static_cast<bool>(generatedInduction))
+    return op->emitOpError(
+        "NODAL-ITERATION-043-004: generated event ownership requires paired owner and induction "
+        "identities");
+  if (!generated) {
+    if (generatedOwner)
+      return op->emitOpError(
+          "NODAL-ITERATION-043-004: ordinary analog event cannot claim generated ownership");
+  } else {
+    auto regionId = generated->getAttrOfType<StringAttr>("region_id");
+    auto inductionPath = generated->getAttrOfType<StringAttr>("induction_path");
+    auto procedureOwner = procedure->getAttrOfType<StringAttr>("generated_owner");
+    auto procedureInduction = procedure->getAttrOfType<StringAttr>("generated_induction");
+    if (!generatedOwner || !regionId || !inductionPath || !procedureOwner || !procedureInduction ||
+        generatedOwner.getValue() != regionId.getValue() ||
+        generatedInduction.getValue() != inductionPath.getValue() ||
+        procedureOwner.getValue() != regionId.getValue() ||
+        procedureInduction.getValue() != inductionPath.getValue())
+      return op->emitOpError(
+          "NODAL-ITERATION-043-004: generated event ownership or induction does not match its "
+          "immediate generated procedure");
+  }
   bool underRuntime = false;
   for (Operation *parent = op->getParentOp(); parent != procedure; parent = parent->getParentOp()) {
     if (!parent || llvm::isa<AnalogOnOp>(parent))

@@ -34,6 +34,7 @@ private[nodal] object AnalogProceduralConstruction:
     var scopeSerial = 0
     var procedureDepth = 0
     var procedureComplete = false
+    var generatedContext: Option[(String, String)] = None
     val eventBindings = mutable.LinkedHashMap.empty[String, AnyRef]
     var eventDepth = 0
     var controlBuilder: Option[AnalogControlFlowConstruction.Builder] = None
@@ -82,6 +83,16 @@ private[nodal] object AnalogProceduralConstruction:
     if Option(current.get()).exists(_.stack.lastOption.exists(_.eventDepth > 0)) then
       AnalogEventRuntime.fail(7, s"$role is not permitted inside an analog event-controlled body")
 
+  def generatedProcedureActive: Boolean =
+    Option(current.get()).exists(_.stack.lastOption.exists: module =>
+      module.procedureDepth > 0 && module.generatedContext.nonEmpty)
+
+  def retainsGeneratedVariable(value: AnyRef, context: (String, String)): Boolean =
+    Option(current.get()).exists(_.stack.lastOption.exists: module =>
+      val retained = Option(module.variables.get(value))
+      module.procedureComplete && module.generatedContext.contains(context) &&
+      retained.exists(variable => module.variableRecords.exists(_.variable == variable)))
+
   def requireDigitalEventContext(): Unit =
     requireContinuousContext("digital event process")
     if Option(current.get()).exists(_.stack.lastOption.exists(_.procedureDepth > 0)) then
@@ -93,6 +104,9 @@ private[nodal] object AnalogProceduralConstruction:
       analyses: Vector[String] = Vector.empty
   ): Event =
     val module = activeModule
+    ConstructionKernel.generatedRegionOwnership.foreach: context =>
+      if module.procedureDepth == 0 || !module.generatedContext.contains(context) then
+        ConstructionKernel.requireNoGeneratedEffect(s"analog event '$operation'")
     new Event(Some(KernelAnalogEventDefinition(
       module.module,
       operation,
@@ -171,6 +185,9 @@ private[nodal] object AnalogProceduralConstruction:
 
   def eventControl[A](event: Event)(body: => A): A =
     val module = activeModule
+    ConstructionKernel.generatedRegionOwnership.foreach: context =>
+      if module.procedureDepth == 0 || !module.generatedContext.contains(context) then
+        ConstructionKernel.requireNoGeneratedEffect("analog event-controlled region")
     if module.procedureDepth == 0 then
       AnalogEventRuntime.fail(1, "analog on requires an active analogProcedure")
     if module.eventDepth > 0 then
@@ -204,6 +221,9 @@ private[nodal] object AnalogProceduralConstruction:
       source: Option[AnalogProceduralRuntime.Source]
   ): Unit =
     val module = activeModule
+    ConstructionKernel.generatedRegionOwnership.foreach: context =>
+      if module.procedureDepth == 0 || !module.generatedContext.contains(context) then
+        ConstructionKernel.requireNoGeneratedEffect("generated analog variable declaration")
     module.pending += PendingVariable(
       value,
       dataType,
@@ -562,6 +582,14 @@ private[nodal] object AnalogProceduralConstruction:
 
   def procedure[A](body: => A): A =
     val module = activeModule
+    val generatedContext = ConstructionKernel.generatedRegionOwnership
+    generatedContext.foreach: context =>
+      module.generatedContext match
+        case Some(existing) if existing != context =>
+          ConstructionKernel.requireNoGeneratedEffect(
+            "analog procedures spanning generated ownership"
+          )
+        case _ => module.generatedContext = Some(context)
     module.procedureDepth += 1
     try
       module.recorder.procedure:
@@ -572,6 +600,10 @@ private[nodal] object AnalogProceduralConstruction:
         materializeVariables(module)
         val result = body
         val snapshot = builder.finish()
+        if generatedContext.nonEmpty && module.variableRecords.isEmpty then
+          ConstructionKernel.requireNoGeneratedEffect(
+            "analog procedural region without generated lexical storage"
+          )
         if builder.hasStructuredControl then module.controlSnapshot = Some(snapshot)
         module.procedureComplete = true
         result
@@ -906,6 +938,8 @@ private[nodal] object AnalogProceduralConstruction:
 
     snapshot.copy(
       owner = owner,
+      generatedOwner = snapshot.generatedOwner.map(remapIdentity),
+      generatedInduction = snapshot.generatedInduction.map(remapIdentity),
       variables = snapshot.variables.map: record =>
         record.copy(
           variable = remapVariable(record.variable),
@@ -927,7 +961,8 @@ private[nodal] object AnalogProceduralConstruction:
     )
 
   def snapshots(
-      resolveOwner: Module => String
+      resolveOwner: Module => String,
+      resolveGeneratedOwnership: ((String, String)) => (String, String)
   ): Vector[AnalogProceduralRuntime.Snapshot] =
     Option(current.get()).toVector.flatMap: value =>
       value.modules.foreach(finalizeEvents)
@@ -943,7 +978,12 @@ private[nodal] object AnalogProceduralConstruction:
               module.controlExpressions.toVector
             )
           else module.recorder.snapshot
-        val retained = remapSnapshot(resolvePayloads(module, sourceSnapshot), owner)
+        val generatedContext = module.generatedContext.map(resolveGeneratedOwnership)
+        val contextual = sourceSnapshot.copy(
+          generatedOwner = generatedContext.map(_._1),
+          generatedInduction = generatedContext.map(_._2)
+        )
+        val retained = remapSnapshot(resolvePayloads(module, contextual), owner)
         Option.when(
           retained.variables.nonEmpty || retained.assignments.nonEmpty ||
             retained.controlFlow.nonEmpty || retained.controlExpressions.nonEmpty

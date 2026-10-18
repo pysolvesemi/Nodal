@@ -743,7 +743,7 @@ private[nodal] final class SemanticOriginBuilder:
       localNames: IdentityHashMap[AnyRef, String]
   ): Option[String] =
     val operation = generatedStem(capture.site.apiOperation)
-    val shaped = Set("at", "flatten", "reshape", "map", "zip", "reduce")
+    val shaped = Set("at", "row", "plane", "flatten", "reshape", "map", "zip", "reduce")
     if !shaped.contains(operation) then None
     else
       capture.operands.headOption.flatMap:

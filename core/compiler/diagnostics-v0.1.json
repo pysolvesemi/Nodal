@@ -9,6 +9,16 @@
     "source-range"
   ],
   "families": {
+    "iteration-bounds": [
+      "NODAL-ITERATION-043-001",
+      "NODAL-ITERATION-043-002",
+      "NODAL-ITERATION-043-003",
+      "NODAL-ITERATION-043-004"
+    ],
+    "shaped-values": [
+      "NODAL-SHAPE-043-001",
+      "NODAL-SHAPE-043-002"
+    ],
     "interface": [
       "NODAL-INTERFACE-STORAGE-001",
       "NODAL-INTERFACE-ROLE-001",
@@ -214,6 +224,8 @@
     ]
   },
   "preserved_prefixes": [
+    "NODAL-SHAPE-",
+    "NODAL-ITERATION-",
     "NODAL-BRIDGE-",
     "NODAL-BRIDGE-PROCESS-",
     "NODAL-CONSTRUCT-",

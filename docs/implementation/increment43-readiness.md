@@ -2,8 +2,10 @@
 
 **Initial readiness date:** 2026-10-01
 **Latest process/handoff update:** 2026-10-18
-**Status:** Implementation children complete under focused prototype acceptance;
-F-043.G and the parent remain open pending verified integration of PR #139.
+**Status:** Complete under focused prototype acceptance after verified squash
+integration of PR #139 as `f706d6e8bcc3a36f2adcbfd78fc56289c01934cd`.
+**Accepted head:** `848611306eea3359c35f371c70895d7a4f3257ed`
+**Exact tested/integrated tree:** `8e3c02c56d58c818f56f632b5d6f7b04bd3c269a`
 **Refreshed integration target:** `dev` at `3d5a6f259505ea5084cf7606c0cfeb92e5843e41`
 (read-only verification, 2026-10-18).
 **Branch:** `increment/43-analog-arrays-generation`
@@ -341,7 +343,7 @@ records exact commands, causal negative cases, measured output and limitations.
 The main A–F children and three linked F-043 iteration descendants now have their
 own implementation and focused validation. This reconciles the original checklist,
 ADR 0017 and approved gates; it does not waive required semantics or add unlimited
-composition requirements. G and the parent remain open until verified integration.
+composition requirements. G and the parent close only with the verified integration recorded above.
 
 - A/B: shared shape/domain arithmetic, structural view maps, actual hierarchy and
   generated-scope ownership are used across source, bridge, native and backend.
@@ -393,3 +395,14 @@ Handoff policy checks: six focused positive/negative document/contribution tests
 changed Markdown links/structure, JSON parsing, ignored `.work/` handling and
 Git diff checks passed. Existing checklist states and accepted records were
 preserved. No CI or compiler suite was run for this policy-only update.
+
+## Verified integration
+
+PR [#139](https://github.com/pysolvesemi/Nodal/pull/139) was squash-merged as
+`f706d6e8bcc3a36f2adcbfd78fc56289c01934cd` into `dev`, with the single parent
+`3d5a6f259505ea5084cf7606c0cfeb92e5843e41`. The merged tree exactly equals tested
+head `848611306eea3359c35f371c70895d7a4f3257ed` tree
+`8e3c02c56d58c818f56f632b5d6f7b04bd3c269a`. The actual merge message includes
+`[skip ci]`; read-only Actions inventory returns zero runs. G and the F-043 parent
+are complete under the prototype policy. This documentation-only closure changes
+no production source and makes no additional tool or numerical success claim.

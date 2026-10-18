@@ -2672,7 +2672,8 @@ transitive DA and compact saturated preflight, without claiming whole-pipeline
 linearity. The final source/tool/output hash manifests are retained alongside
 the logs. This completes the implementation acceptance described in the
 [original-scope reconciliation](increment43-readiness.md#final-original-scope-reconciliation);
-verified integration remains pending.
+verified integration completed as `f706d6e8bcc3a36f2adcbfd78fc56289c01934cd`
+with exact tested-tree equality and zero Actions runs.
 
 The actual normalized `event-or.va.mlir` binds one deferred `%2` from the voltage
 variable `%0`; both `nodal.analog_cross` and `nodal.analog_above` consume that same

@@ -1,7 +1,7 @@
 # Foundation 44 readiness
 
 **Date:** 2026-10-18
-**Status:** Implementation and focused acceptance complete; verified integration pending.
+**Status:** Complete; verified squash integration `cd7e8067998fd609fa891ecfb25598c1f117cbca`.
 **Branch:** `increment/44-analysis-environment`
 **Base:** `dev` at `3aea29823aaeea532c30471387cdd26ed51d8719`
 
@@ -51,7 +51,7 @@ selector, effect, phase and availability; unknown provider calls reject explicit
   initialization effects; exercise repeated/generated contexts and stable identity.
 - G: retain concise evidence/limits and verify integration only after required
   children pass. A–F and their implementation/validation children are complete;
-  G and the parent remain open until verified integration.
+  G and the parent are complete after verified integration.
 
 ## Architecture and portability decision
 
@@ -262,5 +262,6 @@ simulator observations with constants or moving them across consumers would need
 additional semantic proof; existing explicit shared-fill demand ownership is
 preserved. F is covered by repeated source instances, repeated target emission,
 analysis/context combinations and generated occurrence-local witnesses. G and the
-parent await the verified integration commit. No F-139 provider implementation or
+parent are complete after verified squash integration `cd7e8067998fd609fa891ecfb25598c1f117cbca`, with exact
+tested tree `de11ad3e6ebf473f0b4ac13288e85b3f3ba9365b`. No F-139 provider implementation or
 unsupported vendor frequency behavior is claimed by this F-044 completion.

@@ -1153,7 +1153,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Focused implementation acceptance: [readiness and original-scope reconciliation](../implementation/increment43-readiness.md#final-original-scope-reconciliation) and [production contracts, commands, actual Scala/IR/VA examples and tool handoffs](../implementation/increment43-shape-contract.md) cover A–F, B.1–B.3 and D.1–D.2 in [PR #139](https://github.com/pysolvesemi/Nodal/pull/139). Fixed/symbolic shapes, writable/conservative views, generated ownership, shared live-fill demand, causal negatives, scale and deterministic replay pass within the recorded finite profile. Internal reparse is distinct from the documented OpenVAF incompatibility; later numerical checks remain unexecuted. Verified squash integration: `f706d6e8bcc3a36f2adcbfd78fc56289c01934cd`, exact tested source tree `8e3c02c56d58c818f56f632b5d6f7b04bd3c269a`, accepted head `848611306eea3359c35f371c70895d7a4f3257ed`. No CI was run.
 
-- [ ] **Increment 44 — Analysis state and environmental constructs**
+- [x] **Increment 44 — Analysis state and environmental constructs**
   - Original scope retained: Implement analysis-dependent behavior, temperature/environment access, initial/final semantics, and portability policy.
   - [x] **F-044.A — Architecture review, modularity, scalability and extensibility.** Separate analysis, environment and initialization context from ordinary parameters and pure function effects; preserve future 138-140 seams.
   - [x] **F-044.B — Implementation and integration**
@@ -1165,9 +1165,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-044.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
   - [x] **F-044.E — Optimization review and output quality.** Review environment-query duplication without folding dynamic analysis state or moving initialization effects. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-044.F — Representative scale, determinism and compatibility.** Exercise analysis/environment combinations and repeated instances; retain stable context identities across runs.
-  - [ ] **F-044.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 44; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-044.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 44; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Implementation evidence: [F-044 readiness and focused results](../implementation/increment44-readiness.md), in this increment branch. A–F pass; G and parent await verified integration. No CI or numerical simulation is claimed.
+  - Implementation evidence: [F-044 readiness and focused results](../implementation/increment44-readiness.md), in this increment branch. A–G complete; verified squash integration `cd7e8067998fd609fa891ecfb25598c1f117cbca` preserves the tested tree `de11ad3e6ebf473f0b4ac13288e85b3f3ba9365b`. No CI or numerical simulation is claimed.
 
 - [ ] **Increment 45 — Analog canonicalization passes**
   - [ ] **F-045.A — Architecture review, modularity, scalability and extensibility**

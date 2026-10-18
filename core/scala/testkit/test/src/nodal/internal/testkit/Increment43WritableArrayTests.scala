@@ -576,11 +576,11 @@ object Increment43WritableArrayTests extends TestSuite:
           case _ =>
             throw new java.lang.AssertionError("generated persistent root unexpectedly lowered")
 
-    test("selected control event and compound initializer consumers reject causally"):
-      for form <- 0 to 3 do
-        assert(
-          failure(new Increment43WritableControlBoundary(form)).contains("NODAL-SHAPE-043-007")
-        )
+    test("selected controls are live while compound selected initializers reject causally"):
+      for form <- 0 to 2 do
+        assert(document(new Increment43WritableControlBoundary(form)).text
+          .contains("reference_form = \"storage\""))
+      assert(failure(new Increment43WritableControlBoundary(3)).contains("NODAL-SHAPE-043-007"))
 
     test("selected branch intersections and caught failures retain exact coverage"):
       assert(document(new Increment43WritableBranches(false)).text.contains("nodal.analog_if"))
@@ -733,7 +733,8 @@ object Increment43WritableArrayTests extends TestSuite:
           failure(new Increment43WritableOrdinaryFailure(form)).contains("NODAL-ANALOG-033-011")
         )
       assert(failure(new Increment43WritableOrdinaryFailure(2)).contains("NODAL-ANALOG-033-010"))
-      assert(failure(new Increment43WritableOrdinaryFailure(4)).contains("NODAL-SHAPE-043-007"))
+      assert(document(new Increment43WritableOrdinaryFailure(4)).text
+        .contains("reference_form = \"storage\""))
 
     test("coverage keys compare shared deep coordinate DAGs exactly"):
       import AnalogStorageCoverage.Coordinate.*

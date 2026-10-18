@@ -1154,6 +1154,17 @@ LogicalResult requireStructuredRead(Operation *operation, llvm::StringRef identi
   return success();
 }
 
+FailureOr<std::string> structuredVariableIdentity(Operation *operation, Value value,
+                                                  const StructuredDataflowContext &context,
+                                                  bool requireInitialized,
+                                                  const StructuredInitializedSet &initialized);
+
+bool typedStorageInventory(Operation *operation, llvm::StringRef attributeName) {
+  return operation->hasAttr("reference_form") &&
+         (attributeName == "condition_reads" || attributeName == "selector_reads" ||
+          attributeName == "bound_reads" || attributeName == "event_reads");
+}
+
 LogicalResult requireStructuredReads(Operation *operation, llvm::StringRef attributeName,
                                      const StructuredInitializedSet &initialized,
                                      const StructuredDataflowContext &context) {
@@ -1162,6 +1173,16 @@ LogicalResult requireStructuredReads(Operation *operation, llvm::StringRef attri
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
                                     llvm::Twine("missing structured read inventory '") +
                                         attributeName + "'");
+  if (typedStorageInventory(operation, attributeName)) {
+    auto bindings = nodal::resolveAnalogSourceStorageBindings(operation);
+    if (failed(bindings))
+      return failure();
+    for (const auto &binding : *bindings)
+      if (failed(structuredVariableIdentity(operation, binding.reference, context,
+                                            /*requireInitialized=*/true, initialized)))
+        return failure();
+    return success();
+  }
   for (Attribute attribute : reads) {
     auto identity = llvm::dyn_cast<StringAttr>(attribute);
     if (!identity || identity.getValue().trim().empty())
@@ -1219,6 +1240,18 @@ LogicalResult verifyStructuredReferenceInventory(Operation *operation,
     return nodal::emitMappedFailure(operation, "NODAL-ANALOG-034-014",
                                     llvm::Twine("missing structured reference inventory '") +
                                         attributeName + "'");
+  if (typedStorageInventory(operation, attributeName)) {
+    auto bindings = nodal::resolveAnalogSourceStorageBindings(operation);
+    if (failed(bindings))
+      return failure();
+    const StructuredInitializedSet noInitializationRequirement;
+    for (const auto &binding : *bindings)
+      if (failed(structuredVariableIdentity(operation, binding.reference, context,
+                                            /*requireInitialized=*/false,
+                                            noInitializationRequirement)))
+        return failure();
+    return success();
+  }
   for (Attribute attribute : references) {
     auto identity = llvm::dyn_cast<StringAttr>(attribute);
     if (!identity)
@@ -2844,6 +2877,8 @@ LogicalResult nodal::AnalogIfOp::verify() {
 }
 
 LogicalResult nodal::AnalogIfArmOp::verify() {
+  if (failed(resolveAnalogSourceStorageBindings(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
                                        "analog conditional arm")) ||
       failed(requireSingleBlock(getOperation())) ||
@@ -2892,6 +2927,8 @@ LogicalResult nodal::AnalogIfArmOp::verify() {
 }
 
 LogicalResult nodal::AnalogCaseOp::verify() {
+  if (failed(resolveAnalogSourceStorageBindings(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
                                        "structured analog case")) ||
       failed(requireText(getOperation(), "statement_id", "case statement identity")) ||
@@ -2995,6 +3032,8 @@ LogicalResult nodal::AnalogCaseArmOp::verify() {
 }
 
 LogicalResult nodal::AnalogLoopOp::verify() {
+  if (failed(resolveAnalogSourceStorageBindings(getOperation())))
+    return failure();
   if (failed(requireProceduralAncestor(getOperation(), "NODAL-ANALOG-034-014",
                                        "structured analog loop")) ||
       failed(requireSingleBlock(getOperation())) ||

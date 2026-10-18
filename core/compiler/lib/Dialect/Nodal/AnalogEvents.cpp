@@ -69,17 +69,44 @@ std::string semanticPath(Operation *op) {
 }
 using Expression = AnalogSourceExpression;
 
+bool storageBindingOwner(Operation *operation) {
+  return llvm::isa<AnalogIfArmOp, AnalogCaseOp, AnalogLoopOp, AnalogCrossOp, AnalogAboveOp,
+                   AnalogTimerOp, AnalogInitialStepOp, AnalogFinalStepOp>(operation);
+}
+
 // Parse the canonical source expression grammar, NOT HDL text. This boundary
 // independently derives dimensions, reads and constants from actual declarations.
 // In particular, parameter defaults never become constant-expression evidence.
 class ExpressionParser {
 public:
   explicit ExpressionParser(Operation *operation)
-      : operation(operation), module(operation->getParentOfType<ModuleOp>()) {}
+      : operation(operation), module(operation->getParentOfType<ModuleOp>()) {
+    if (storageBindingOwner(operation)) {
+      auto bindings = resolveAnalogSourceStorageBindings(operation);
+      validBindings = succeeded(bindings);
+      if (validBindings)
+        storageBindings = std::move(*bindings);
+      storageForm = operation->hasAttr("reference_form");
+    }
+  }
 
   FailureOr<Expression> parse(llvm::StringRef input, unsigned depth = 0) {
-    if (depth > 128 || input.empty() || input != input.trim())
+    if (!validBindings || depth > 128 || input.empty() || input != input.trim())
       return failure();
+    for (const auto &binding : storageBindings) {
+      if (binding.path != input)
+        continue;
+      auto type = llvm::cast<VariableType>(binding.reference.getType());
+      Expression result{type.getKind().str(),
+                        type.getDimension().str(),
+                        std::nullopt,
+                        {input.str()},
+                        "reference",
+                        "",
+                        binding.reference.getDefiningOp()};
+      result.storageReference = binding.reference;
+      return result;
+    }
     // Captured selected leaves are bound to actual operand SSA before parsing
     // source function syntax. A label may contain parentheses but is never a
     // textual description from which storage coordinates can be manufactured.
@@ -292,6 +319,9 @@ public:
 private:
   Operation *operation;
   ModuleOp module;
+  llvm::SmallVector<AnalogSourceStorageBinding> storageBindings;
+  bool validBindings = true;
+  bool storageForm = false;
 
   Operation *declaration(llvm::StringRef path) {
     Operation *found = nullptr;
@@ -316,6 +346,10 @@ private:
     if (!decl)
       return failure();
     if (auto variable = llvm::dyn_cast<AnalogVariableOp>(decl)) {
+      // Typed source form has no mutable textual fallback. Every mutable leaf
+      // must have matched a verified actual operand above.
+      if (storageForm)
+        return failure();
       auto type = llvm::dyn_cast<VariableType>(variable->getResult(0).getType());
       if (!type)
         return failure();
@@ -427,6 +461,48 @@ LogicalResult context(Operation *op) {
   return success();
 }
 } // namespace
+
+FailureOr<llvm::SmallVector<AnalogSourceStorageBinding>>
+resolveAnalogSourceStorageBindings(Operation *operation) {
+  if (!operation || !storageBindingOwner(operation))
+    return failure();
+  auto fail =
+      [&](llvm::StringRef message) -> FailureOr<llvm::SmallVector<AnalogSourceStorageBinding>> {
+    (void)reject(operation, 10, message);
+    return failure();
+  };
+  llvm::SmallVector<AnalogSourceStorageBinding> result;
+  auto form = operation->getAttrOfType<StringAttr>("reference_form");
+  if (!operation->hasAttr("reference_form")) {
+    if (operation->getNumOperands())
+      return fail("storage reference operands require explicit storage reference form");
+    return result;
+  }
+  if (!form || form.getValue() != "storage")
+    return fail("unknown procedural storage reference form");
+  auto otherwise = operation->getAttrOfType<BoolAttr>("is_else");
+  if (llvm::isa<AnalogInitialStepOp, AnalogFinalStepOp>(operation) ||
+      (otherwise && otherwise.getValue()))
+    return fail("lifecycle events and else arms cannot bind storage references");
+  auto staticSelector = operation->getAttrOfType<BoolAttr>("static_value_present");
+  if (operation->getNumOperands() &&
+      (text(operation, "stage") == "static" ||
+       (llvm::isa<AnalogCaseOp>(operation) && staticSelector && staticSelector.getValue())))
+    return fail("static controls cannot bind mutable storage references");
+  std::set<std::string> paths;
+  for (Value reference : operation->getOperands()) {
+    if (!llvm::isa<VariableType>(reference.getType()) ||
+        failed(resolveAnalogStorageReference(reference, operation)))
+      return fail("control reference requires an actual owned scalar storage handle");
+    Operation *definition = reference.getDefiningOp();
+    std::string path = llvm::isa<AnalogVariableOp>(definition) ? text(definition, "identity").str()
+                                                               : semanticPath(definition);
+    if (path.empty() || path != llvm::StringRef(path).trim() || !paths.insert(path).second)
+      return fail("control storage reference labels must be canonical and unique");
+    result.push_back({std::move(path), reference});
+  }
+  return result;
+}
 
 FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(Operation *context,
                                                               llvm::StringRef source) {
@@ -643,6 +719,20 @@ LogicalResult verifyAnalogProceduralExpressions(Operation *procedure) {
         return;
       }
     }
+    if (storageBindingOwner(op) && op->hasAttr("reference_form")) {
+      auto bindings = resolveAnalogSourceStorageBindings(op);
+      std::set<std::string> bound;
+      if (failed(bindings)) {
+        result = failure();
+        return;
+      }
+      for (const auto &binding : *bindings)
+        bound.insert(binding.path);
+      if (bound != expression->reads) {
+        result = reject(op, 10, "control storage bindings differ from actual source leaves");
+        return;
+      }
+    }
     auto reads = assignment ? FailureOr<std::set<std::string>>(operandReads) : strings(inventory);
     if (failed(reads) || *reads != expression->reads ||
         (claimedStatic && expression->constant != claimedStatic))
@@ -691,6 +781,18 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
       auto observed = strings(inventory);
       if (failed(observed))
         return reject(op, 5, "invalid event read inventory");
+      std::set<Operation *> observedRoots;
+      if (op->hasAttr("reference_form")) {
+        auto bindings = resolveAnalogSourceStorageBindings(op);
+        if (failed(bindings))
+          return failure();
+        for (const auto &binding : *bindings) {
+          auto reference = resolveAnalogStorageReference(binding.reference, op);
+          if (failed(reference))
+            return failure();
+          observedRoots.insert(reference->declaration);
+        }
+      }
       bool changed = false;
       for (Operation *between = op->getNextNode(); between != consumer;
            between = between->getNextNode())
@@ -698,7 +800,9 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
           if (assignment->getNumOperands()) {
             auto reference = resolveAnalogStorageReference(assignment->getOperand(0), assignment);
             if (succeeded(reference))
-              changed |= observed->count(text(reference->declaration, "identity").str()) != 0;
+              changed |= op->hasAttr("reference_form")
+                             ? observedRoots.count(reference->declaration) != 0
+                             : observed->count(text(reference->declaration, "identity").str()) != 0;
           }
         });
       if (changed)
@@ -723,6 +827,9 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
     }
     return success();
   }
+  auto bindings = resolveAnalogSourceStorageBindings(op);
+  if (failed(bindings))
+    return failure();
   auto arguments = op->getAttrOfType<ArrayAttr>("arguments");
   auto analyses = op->getAttrOfType<ArrayAttr>("analyses");
   auto readInventory = strings(op->getAttrOfType<ArrayAttr>("event_reads"));
@@ -782,6 +889,13 @@ LogicalResult verifyAnalogEventOperation(Operation *op) {
       return reject(op, 4, "cross direction must be a proven falling, either, or rising value");
     if (tolerance && expression->constant && *expression->constant < 0.0)
       return reject(op, 4, "event tolerances must be nonnegative; zero selects simulator defaults");
+  }
+  if (op->hasAttr("reference_form")) {
+    std::set<std::string> bound;
+    for (const auto &binding : *bindings)
+      bound.insert(binding.path);
+    if (bound != allReads)
+      return reject(op, 5, "event storage bindings differ from actual source leaves");
   }
   if (allReads != *readInventory)
     return reject(op, 5, "event read inventory is incomplete");

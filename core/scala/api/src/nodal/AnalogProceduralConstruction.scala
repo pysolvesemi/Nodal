@@ -279,7 +279,8 @@ private[nodal] object AnalogProceduralConstruction:
       definition.source,
       definition.name
     )
-    result.arguments.foreach(argument => requireScalarControl(argument.value))
+    definition.arguments.zip(result.arguments).foreach: (authored, argument) =>
+      requireScalarControl(module, authored._2, argument.value)
     result.validate()
     result
 
@@ -871,12 +872,36 @@ private[nodal] object AnalogProceduralConstruction:
         source = source
       )
 
-  private def requireScalarControl(value: AnalogProceduralRuntime.Value): Unit =
-    if value.allReads.exists(reference => reference.root.valueType.dimensions.nonEmpty) then
+  private def requireScalarControl(
+      module: ModuleState,
+      expression: Expr[? <: Data],
+      value: AnalogProceduralRuntime.Value
+  ): Unit =
+    def unsupported(message: String): Nothing =
       AnalogProceduralRuntime.reject(AnalogProceduralRuntime.Diagnostic(
         "NODAL-SHAPE-043-007",
-        "selected array reads in control and event expressions require explicit reference operands"
+        message
       ))
+    if value.valueType.dimensions.nonEmpty ||
+      value.allReads.exists(_.valueType.dimensions.nonEmpty)
+    then unsupported("control and event expressions require scalar storage references")
+    // A selected immutable fill is a deferred value, not a mutable storage leaf.
+    // Check the authored DAG as well as the outer payload so compound expressions
+    // cannot hide that unsupported value-source form behind scalar arithmetic.
+    val visited = new IdentityHashMap[KernelExpr[?], java.lang.Boolean]()
+    def visit(candidate: Any, depth: Int): Unit = candidate match
+      case authored: KernelExpr[?] if !visited.containsKey(authored) =>
+        if depth >= 512 then unsupported("control expression exceeds supported dependency depth")
+        visited.put(authored, java.lang.Boolean.TRUE)
+        if CandidateRuntime.proceduralShapeSource(authored) then
+          if storageReference(module, authored).isEmpty then
+            unsupported(
+              "deferred shaped values in controls and events require a scalar value contract"
+            )
+        else authored.operands.foreach(visit(_, depth + 1))
+      case values: Iterable[?] => values.foreach(visit(_, depth + 1))
+      case _ => ()
+    visit(expression, 0)
 
   private def runtimeCondition(
       module: ModuleState,
@@ -884,15 +909,15 @@ private[nodal] object AnalogProceduralConstruction:
       source: Option[AnalogProceduralRuntime.Source]
   ): AnalogControlFlowRuntime.Condition =
     val semantic = semanticValue(module, expression, None)
-    requireScalarControl(semantic)
+    requireScalarControl(module, expression, semantic)
     AnalogControlFlowRuntime.Condition(
       semantic.rendered,
-      semantic.reads.map(_.identity).toSet,
+      semantic.allReads.map(_.identity).toSet,
       AnalogControlFlowRuntime.Stage.Runtime,
       None,
       semantic.valueType,
       source,
-      selectedReads = semantic.reads
+      selectedReads = semantic.allReads.distinct
     )
 
   def conditional[A](body: => A): A =
@@ -940,14 +965,14 @@ private[nodal] object AnalogProceduralConstruction:
       AnalogControlFlowRuntime.Selector.staticBoolean(value, source = source)
     case None =>
       val semantic = semanticValue(module, expression, None)
-      requireScalarControl(semantic)
+      requireScalarControl(module, expression, semantic)
       AnalogControlFlowRuntime.Selector(
         semantic.rendered,
-        semantic.reads.map(_.identity).toSet,
+        semantic.allReads.map(_.identity).toSet,
         semantic.valueType.kind,
         semantic.valueType.dimension,
         source = source,
-        selectedReads = semantic.reads
+        selectedReads = semantic.allReads.distinct
       )
 
   def integerCase[A](expression: Expr[Integer])(body: => A): A =
@@ -1024,16 +1049,16 @@ private[nodal] object AnalogProceduralConstruction:
     val module = activeModule
     val source = ConstructionKernel.captureAnalogProceduralSource
     val bound = semanticValue(module, iterations, None)
-    requireScalarControl(bound)
+    requireScalarControl(module, iterations, bound)
     activeBuilder(module).loop(
       AnalogControlFlowRuntime.LoopStage.RuntimeBounded,
       minimumIterations,
       maximumIterations,
-      bound.reads.map(_.identity).toSet,
+      bound.allReads.map(_.identity).toSet,
       bound.valueType,
       None,
       source,
-      boundSelectedReads = bound.reads
+      boundSelectedReads = bound.allReads.distinct
     ): identity =>
       module.controlExpressions += AnalogProceduralRuntime.ControlExpressionRecord(
         identity.stripSuffix(".body"),

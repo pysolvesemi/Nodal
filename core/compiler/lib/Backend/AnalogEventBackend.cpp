@@ -47,7 +47,8 @@ std::string nameFor(llvm::StringRef identity, AnalogEventRenderState &state) {
 using Captures = llvm::DenseMap<Operation *, std::string>;
 FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
                                     AnalogEventRenderState &state,
-                                    const Captures &captures = Captures()) {
+                                    const Captures &captures = Captures(),
+                                    Operation *consumer = nullptr) {
   if (value.operation == "literal") {
     if (value.kind == "boolean")
       return value.spelling == "true" ? std::string("1") : std::string("0");
@@ -61,6 +62,14 @@ FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
     return value.spelling;
   }
   if (value.operation == "reference") {
+    if (value.storageReference) {
+      auto references = state.liveReferences.find(consumer);
+      if (references == state.liveReferences.end())
+        return failure();
+      auto access = references->second.find(value.storageReference);
+      return access == references->second.end() ? FailureOr<std::string>(failure())
+                                                : access->second.text;
+    }
     if (auto found = captures.find(value.declaration); found != captures.end())
       return found->second;
     if (auto found = state.names.find(value.declaration); found != state.names.end())
@@ -75,7 +84,7 @@ FailureOr<std::string> renderSource(const AnalogSourceExpression &value,
   }
   std::vector<std::string> args;
   for (const auto &child : value.operands) {
-    auto rendered = renderSource(child, state, captures);
+    auto rendered = renderSource(child, state, captures, consumer);
     if (failed(rendered))
       return failure();
     args.push_back(*rendered);
@@ -137,7 +146,7 @@ FailureOr<std::string> expression(Operation *op, llvm::StringRef source,
                                   const Captures &captures = Captures()) {
   auto parsed = parseAnalogSourceExpression(op, source);
   return failed(parsed) ? FailureOr<std::string>(failure())
-                        : renderSource(*parsed, state, captures);
+                        : renderSource(*parsed, state, captures, op);
 }
 bool staticInitializer(const AnalogSourceExpression &value) {
   if (llvm::StringRef(value.operation).starts_with(analogAnalysisSourcePrefix))
@@ -188,24 +197,25 @@ FailureOr<std::string> eventExpression(Operation *event, AnalogEventRenderState 
   return function + ")";
 }
 
-struct MappedAccess {
-  std::string text;
-  std::string temporary;
-  ShapedProjectionProgram program;
-};
+using MappedAccess = AnalogMappedStorageAccess;
 void renderMap(const MappedAccess &access, llvm::raw_ostream &out, unsigned indent) {
   for (const auto &step : access.program.steps)
     out.indent(indent) << access.temporary << " = " << step.expression << ";\n";
 }
 FailureOr<MappedAccess> storageAccess(Value handle, Operation *use, llvm::StringRef ordinal,
-                                      AnalogEventRenderState &state) {
+                                      AnalogEventRenderState &state,
+                                      llvm::StringRef coordinateTemporary = {}) {
   auto reference = resolveAnalogStorageReference(handle, use);
   if (failed(reference))
     return failure();
   auto name = state.names.find(reference->declaration);
   if (name == state.names.end())
     return failure();
-  MappedAccess result{name->second, state.mapNames[use].second, {}};
+  std::string temporary = coordinateTemporary.str();
+  if (temporary.empty())
+    if (auto maps = state.mapNames.find(use); maps != state.mapNames.end())
+      temporary = maps->second.second;
+  MappedAccess result{name->second, std::move(temporary), {}};
   if (!llvm::isa<ShapedType>(reference->root.getType()))
     return result;
   auto program = renderShapedProjectionProgram(handle, ordinal, result.temporary);
@@ -214,6 +224,35 @@ FailureOr<MappedAccess> storageAccess(Value handle, Operation *use, llvm::String
   result.program = *program;
   result.text += "[" + program->result + "]";
   return result;
+}
+void renderReferenceMaps(Operation *consumer, AnalogEventRenderState &state, llvm::raw_ostream &out,
+                         unsigned indent) {
+  auto references = state.liveReferences.find(consumer);
+  if (references == state.liveReferences.end())
+    return;
+  // Operands retain authored binding order; DenseMap iteration does not.
+  llvm::DenseSet<Value> emitted;
+  for (Value operand : consumer->getOperands()) {
+    auto access = references->second.find(operand);
+    if (access != references->second.end() && emitted.insert(operand).second)
+      renderMap(access->second, out, indent);
+  }
+}
+void renderEventReferenceMaps(Operation *event, AnalogEventRenderState &state,
+                              llvm::raw_ostream &out, unsigned indent) {
+  llvm::SmallVector<Operation *> pending{event};
+  llvm::DenseSet<Operation *> visited;
+  while (!pending.empty()) {
+    Operation *current = pending.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    if (llvm::isa<AnalogEventOrOp>(current)) {
+      for (Value operand : llvm::reverse(current->getOperands()))
+        pending.push_back(operand.getDefiningOp());
+    } else {
+      renderReferenceMaps(current, state, out, indent);
+    }
+  }
 }
 FailureOr<MappedAccess> snapshotAccess(Value source, Operation *use, llvm::StringRef ordinal,
                                        AnalogEventRenderState &state) {
@@ -375,6 +414,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
       auto value = eventExpression(op, state);
       if (failed(value))
         return reject(op, "unused event cannot be emitted losslessly");
+      renderEventReferenceMaps(op, state, out, indent);
       line("@(" + *value + ") begin");
       line("end");
     }
@@ -382,6 +422,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     auto value = eventExpression(op->getOperand(0).getDefiningOp(), state);
     if (failed(value))
       return reject(op, "event expression cannot be emitted losslessly");
+    renderEventReferenceMaps(op->getOperand(0).getDefiningOp(), state, out, indent);
     line("@(" + *value + ") begin");
     if (failed(renderBlock(op->getRegion(0).front(), state, out, indent + 2)))
       return failure();
@@ -392,6 +433,10 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
       return failure();
     line("end");
   } else if (llvm::isa<AnalogIfOp>(op)) {
+    // Coordinate setup is parameter/literal-only. Do it before the whole
+    // first-match chain; numeric loads stay inside their reached predicates.
+    for (Operation &arm : op->getRegion(0).front())
+      renderReferenceMaps(&arm, state, out, indent);
     unsigned index = 0;
     for (Operation &arm : op->getRegion(0).front()) {
       bool otherwise = arm.getAttrOfType<BoolAttr>("is_else").getValue();
@@ -408,6 +453,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
       line("end");
     }
   } else if (llvm::isa<AnalogCaseOp>(op)) {
+    renderReferenceMaps(op, state, out, indent);
     auto selector = expression(op, text(op, "selector_value"), state);
     if (failed(selector))
       return reject(op, "case selector cannot be emitted losslessly");
@@ -432,6 +478,7 @@ LogicalResult renderStatement(Operation *op, AnalogEventRenderState &state, llvm
     }
     line("endcase");
   } else if (llvm::isa<AnalogLoopOp>(op)) {
+    renderReferenceMaps(op, state, out, indent);
     auto bound = expression(op, text(op, "bound_value"), state);
     if (failed(bound))
       return reject(op, "loop bound cannot be emitted losslessly");
@@ -718,6 +765,42 @@ LogicalResult prepareEventStorage(Operation *procedure, AnalogEventRenderState &
       }
     }
   });
+  if (failed(result))
+    return result;
+  // All declarations are named before resolving direct live storage accesses.
+  // Binding truth remains the native per-owner operand/descriptor helper.
+  procedure->walk([&](Operation *op) {
+    if (failed(result) || !op->hasAttr("reference_form"))
+      return;
+    auto bindings = resolveAnalogSourceStorageBindings(op);
+    if (failed(bindings)) {
+      result = reject(op, "control/event references have no owned native storage bindings");
+      return;
+    }
+    auto identity = field(op->getAttrOfType<DictionaryAttr>("metadata"), "semantic_path");
+    for (auto key : {"arm_id", "event_id", "statement_id"})
+      if (identity.empty())
+        identity = text(op, key);
+    for (auto [ordinal, binding] : llvm::enumerate(*bindings)) {
+      auto reference = resolveAnalogStorageReference(binding.reference, op);
+      if (failed(reference)) {
+        result = reject(op, "live control/event leaf requires actual scalar storage");
+        return;
+      }
+      std::string temporary;
+      if (llvm::isa<ShapedType>(reference->root.getType()))
+        temporary =
+            nameFor((identity + ".reference_" + llvm::Twine(ordinal) + ".map").str(), state);
+      auto access = storageAccess(binding.reference, op, "0", state, temporary);
+      if (failed(access)) {
+        result = reject(op, "live reference map exceeds the portable target integer profile");
+        return;
+      }
+      if (!temporary.empty())
+        out.indent(indent) << "integer " << temporary << ";\n";
+      state.liveReferences[op].try_emplace(binding.reference, std::move(*access));
+    }
+  });
   return result;
 }
 } // namespace
@@ -793,7 +876,7 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
     }
     if (!generated || failed(result))
       return;
-    if (storage && failed(verifyGeneratedAnalogOwnership(op))) {
+    if ((storage || op->hasAttr("reference_form")) && failed(verifyGeneratedAnalogOwnership(op))) {
       result = failure();
       return;
     }
@@ -808,7 +891,14 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
     return result;
   if (loops.size() > 1)
     return reject(procedure, "generated procedure admits at most one nonnested runtime loop");
-  auto ownedRootIntegerRead = [&](Operation *op, llvm::StringRef inventory) {
+  auto supportedGeneratedControlRead = [&](Operation *op, llvm::StringRef inventory,
+                                           llvm::StringRef source, bool allowBoolean = false) {
+    if (op->hasAttr("reference_form")) {
+      auto bindings = resolveAnalogSourceStorageBindings(op);
+      auto value = parseAnalogSourceExpression(op, text(op, source));
+      return succeeded(bindings) && succeeded(value) &&
+             (value->kind == "integer" || (allowBoolean && value->kind == "boolean"));
+    }
     auto reads = op->getAttrOfType<ArrayAttr>(inventory);
     auto path = reads && reads.size() == 1 ? llvm::dyn_cast<StringAttr>(reads[0]) : StringAttr();
     return llvm::any_of(procedure->getRegion(0).front(), [&](Operation &candidate) {
@@ -823,8 +913,8 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
     if (text(loop, "stage") != "runtime" || hasAnalogEvents(loop) ||
         (events ? !llvm::isa<AnalogOnOp>(loop->getParentOp()) : loop->getParentOp() != procedure))
       return reject(loop, "generated runtime loop has unsupported event or lexical placement");
-    if (!events && !ownedRootIntegerRead(loop, "bound_reads"))
-      return reject(loop, "generated runtime bound requires one owned root Integer variable");
+    if (!events && !supportedGeneratedControlRead(loop, "bound_reads", "bound_value"))
+      return reject(loop, "generated runtime bound requires an owned Integer source");
     auto directArm = [&](Operation *op) {
       return op && llvm::isa<AnalogIfArmOp, AnalogCaseArmOp>(op) && op->getParentOp() &&
              llvm::isa<AnalogIfOp, AnalogCaseOp>(op->getParentOp()) &&
@@ -843,7 +933,8 @@ LogicalResult verifyAnalogProcedureTarget(Operation *procedure) {
       if (llvm::isa<AnalogIfOp, AnalogCaseOp>(op)) {
         if (parent != loop || (llvm::isa<AnalogIfOp>(op) ? ++conditionals > 1 : ++cases > 1) ||
             (!events && (conditionals && cases)) ||
-            (!events && llvm::isa<AnalogCaseOp>(op) && !ownedRootIntegerRead(op, "selector_reads")))
+            (!events && llvm::isa<AnalogCaseOp>(op) &&
+             !supportedGeneratedControlRead(op, "selector_reads", "selector_value", true)))
           result = reject(op, "generated loop controls must be direct and nonnested");
         return;
       }

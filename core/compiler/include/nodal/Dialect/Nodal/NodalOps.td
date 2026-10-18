@@ -879,7 +879,9 @@ def Nodal_AnalogHeldReadOp : Nodal_Op<"analog_held_read", [HasParent<"AnalogOp">
 // No Pure trait: an unused monitor must retain timestep/history effects.
 class Nodal_AnalogEventOp<string mnemonic> : Nodal_Op<mnemonic> {
   let summary = "Source-semantic analog event monitor or analysis lifecycle event";
-  let arguments = (ins StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
+  let arguments = (ins Variadic<Nodal_VariableType>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    StrAttr:$event_id, StrAttr:$owner, StrAttr:$contract,
     StrAttr:$name, OptionalAttr<StrAttr>:$generated_owner,
     OptionalAttr<StrAttr>:$generated_induction, ArrayAttr:$arguments, ArrayAttr:$analyses,
     ArrayAttr:$event_reads, DictionaryAttr:$metadata);
@@ -938,6 +940,10 @@ def Nodal_AnalogIfArmOp
     : Nodal_Op<"analog_if_arm", [HasParent<"AnalogIfOp">, NoTerminator]> {
   let summary = "One retained arm of a structured analog conditional";
   let arguments = (ins
+    Variadic<Nodal_VariableType>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$arm_id,
     StrAttr:$owner,
     BoolAttr:$is_else,
@@ -957,6 +963,10 @@ def Nodal_AnalogIfArmOp
 def Nodal_AnalogCaseOp : Nodal_Op<"analog_case", [NoTerminator]> {
   let summary = "Exact non-fall-through structured analog case selection";
   let arguments = (ins
+    Variadic<Nodal_VariableType>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$statement_id,
     StrAttr:$owner,
     StrAttr:$selector_value,
@@ -988,6 +998,10 @@ def Nodal_AnalogCaseArmOp
 def Nodal_AnalogLoopOp : Nodal_Op<"analog_loop", [NoTerminator]> {
   let summary = "Exact static or finite runtime-bounded analog loop";
   let arguments = (ins
+    Variadic<Nodal_VariableType>:$references,
+    OptionalAttr<StrAttr>:$reference_form,
+    OptionalAttr<StrAttr>:$generated_owner,
+    OptionalAttr<StrAttr>:$generated_induction,
     StrAttr:$statement_id,
     StrAttr:$owner,
     StrAttr:$stage,

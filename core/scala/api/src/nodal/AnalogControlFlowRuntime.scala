@@ -425,7 +425,7 @@ private[nodal] object AnalogControlFlowRuntime:
     legacy.toSet.diff(represented) ++ typed.map(_.root.identity)
 
   private def eventReads(event: AnalogEventRuntime.Expression): Vector[StorageReference] =
-    event.arguments.flatMap(_.value.reads) ++ event.alternatives.flatMap(eventReads)
+    event.arguments.flatMap(_.value.allReads).distinct ++ event.alternatives.flatMap(eventReads)
 
   private def requireVisibleReferences(
       references: Iterable[String],

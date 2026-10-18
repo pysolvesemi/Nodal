@@ -11,6 +11,7 @@
 
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 const std::string variable = "!nodal.variable<\"real\", \"1\">";
@@ -119,6 +120,127 @@ std::string loop(const std::string &name, const std::string &body,
          "minimum_iterations = 0 : i64, maximum_iterations = " +
          maximum + " : i64, static_trip_count_present = false, static_trip_count = 0 : i64, " +
          metadata(name) + "}> ({\n" + body + "}) : () -> ()\n";
+}
+struct StorageReference {
+  std::string name;
+  std::string kind = "real";
+  std::string dimension = "1";
+};
+using StorageReferences = std::vector<StorageReference>;
+std::string referenceList(const StorageReferences &references, const std::string &form) {
+  std::string result;
+  for (const auto &reference : references) {
+    if (!result.empty())
+      result += ", ";
+    result += form == "operands" ? "%" + reference.name
+              : form == "types"
+                  ? "!nodal.variable<\"" + reference.kind + "\", \"" + reference.dimension + "\">"
+                  : "\"Arrays." + reference.name + "\"";
+  }
+  return result;
+}
+std::string regionBody(const std::string &body) { return body.empty() ? "^bb0:\n" : body; }
+// Native control arms require an authored statement. These fixtures end each
+// binding list in a dimensionless Real selection; a literal write needs no
+// numeric capture and does not add a Real carrier to the target.
+std::string controlBody(const std::string &name, const StorageReferences &references,
+                        const std::string &body) {
+  return body.empty() ? assignment(name + "Body", references.back().name, "", "0.0", false) : body;
+}
+std::string ifArm(const std::string &name, const std::string &condition,
+                  const StorageReferences &references, const std::string &body = "") {
+  return "\"nodal.analog_if_arm\"(" + referenceList(references, "operands") +
+         ") <{reference_form = \"storage\", arm_id = \"Arrays." + name +
+         "\", owner = \"Arrays\", is_else = false, stage = \"runtime\", condition_value = \"" +
+         condition +
+         "\", condition_kind = \"boolean\", condition_dimension = \"1\", "
+         "condition_reads = [" +
+         referenceList(references, "reads") +
+         "], static_value_present = false, static_value = false, " + metadata(name) + "}> ({\n" +
+         controlBody(name, references, body) + "}) : (" + referenceList(references, "types") +
+         ") -> ()\n";
+}
+std::string ifGroup(const std::string &name, const std::string &arms) {
+  return "\"nodal.analog_if\"() <{statement_id = \"Arrays." + name + "\", owner = \"Arrays\", " +
+         metadata(name) + "}> ({\n" + arms + "}) : () -> ()\n";
+}
+std::string booleanCase(const std::string &name, const std::string &selector,
+                        const StorageReferences &references, const std::string &body = "") {
+  return "\"nodal.analog_case\"(" + referenceList(references, "operands") +
+         ") <{reference_form = \"storage\", statement_id = \"Arrays." + name +
+         "\", owner = \"Arrays\", selector_value = \"" + selector +
+         "\", selector_kind = \"boolean\", selector_dimension = \"1\", selector_reads = [" +
+         referenceList(references, "reads") +
+         "], static_value_present = false, static_value = \"\", " + metadata(name) +
+         "}> ({\n\"nodal.analog_case_arm\"() <{arm_id = \"Arrays." + name +
+         ".true\", owner = \"Arrays\", is_default = false, labels = [\"boolean:true\"], "
+         "metadata = {}}> ({\n" +
+         controlBody(name + "True", references, body) +
+         "}) : () -> ()\n\"nodal.analog_case_arm\"() <{arm_id = \"Arrays." + name +
+         ".default\", owner = \"Arrays\", is_default = true, labels = [], metadata = {}}> ({\n" +
+         controlBody(name + "Default", references, "") + "}) : () -> ()\n}) : (" +
+         referenceList(references, "types") + ") -> ()\n";
+}
+std::string storageLoop(const std::string &name, const std::string &bound,
+                        const StorageReferences &references, const std::string &body) {
+  return "\"nodal.analog_loop\"(" + referenceList(references, "operands") +
+         ") <{reference_form = \"storage\", statement_id = \"Arrays." + name +
+         "\", owner = \"Arrays\", stage = \"runtime\", bound_value = \"" + bound +
+         "\", bound_kind = \"integer\", bound_dimension = \"1\", bound_reads = [" +
+         referenceList(references, "reads") +
+         "], minimum_iterations = 1 : i64, maximum_iterations = 2 : i64, "
+         "static_trip_count_present = false, static_trip_count = 0 : i64, " +
+         metadata(name) + "}> ({\n" + regionBody(body) + "}) : (" +
+         referenceList(references, "types") + ") -> ()\n";
+}
+std::string eventArgument(unsigned slot, const std::string &value, const std::string &dimension,
+                          const StorageReferences &references = {},
+                          const std::string &kind = "real") {
+  return "{slot = " + std::to_string(slot) + " : i64, value = \"" + value + "\", kind = \"" + kind +
+         "\", dimension = \"" + dimension + "\", reads = [" + referenceList(references, "reads") +
+         "]}";
+}
+std::string storageEvent(const std::string &name, const std::string &operation,
+                         const std::string &arguments, const StorageReferences &references) {
+  return "%" + name + " = \"nodal.analog_" + operation + "\"(" +
+         referenceList(references, "operands") +
+         ") <{reference_form = \"storage\", event_id = "
+         "\"Arrays." +
+         name +
+         "\", owner = \"Arrays\", contract = \"increment37\", name = \"\", "
+         "arguments = [" +
+         arguments + "], analyses = [], event_reads = [" + referenceList(references, "reads") +
+         "], " + metadata(name) + "}> : (" + referenceList(references, "types") +
+         ") -> !nodal.analog_event\n";
+}
+std::string on(const std::string &name, const std::string &event, const std::string &body = "") {
+  return "\"nodal.analog_on\"(%" + event + ") <{statement_id = \"Arrays." + name +
+         "\", owner = \"Arrays\", " + metadata(name) + "}> ({\n" + regionBody(body) +
+         "}) : (!nodal.analog_event) -> ()\n";
+}
+// Extract the actual array accesses from one emitted statement. Assertions can
+// compare coordinate identities without depending on private-name spelling.
+std::vector<std::string> arrayAccesses(const std::string &statement,
+                                       const std::string &root = "event_Arrays_values") {
+  std::vector<std::string> result;
+  const std::string prefix = root + "[";
+  size_t position = 0;
+  while ((position = statement.find(prefix, position)) != std::string::npos) {
+    const auto end = statement.find(']', position);
+    if (end == std::string::npos)
+      break;
+    result.push_back(statement.substr(position, end + 1 - position));
+    position = end + 1;
+  }
+  return result;
+}
+std::string statementContaining(const std::string &target, const std::string &anchor) {
+  auto position = target.find(anchor);
+  if (position == std::string::npos)
+    return "";
+  const auto start = target.rfind('\n', position);
+  return target.substr(start == std::string::npos ? 0 : start + 1,
+                       target.find('\n', position) - (start == std::string::npos ? 0 : start + 1));
 }
 bool before(const std::string &text, const std::string &first, const std::string &second) {
   auto firstPosition = text.find(first), secondPosition = text.find(second);
@@ -708,6 +830,351 @@ int main(int argc, char **argv) {
     if (emit(source, rejected) || rejected != "sentinel")
       return fail("forged generated event-free storage published target output");
   }
+
+  // Control references are live storage capabilities. Pure aliases may precede
+  // the owner, but no numeric leaf may be captured before short-circuit or
+  // first-match evaluation. The two aliases of lane zero retain their distinct
+  // authored binding identities, while every consumer has its own map setup.
+  const std::string flag = R"mlir(
+%flag = "nodal.analog_variable"() <{identity = "Arrays.flag", owner = "Arrays", declaration_order = 1 : i64, initialized = true, initializer_value = "true", initializer_kind = "boolean", initializer_dimension = "1", initializer_reads = [], metadata = {semantic_path = "Arrays.flag"}}> : () -> !nodal.variable<"boolean", "1">
+)mlir";
+  const std::string controlAliases = index("first", "values", "4", "%c0", "i64") +
+                                     index("second", "values", "4", "%c1", "i64") +
+                                     index("alias", "values", "4", "%c0", "i64");
+  const std::string shortCircuit = "bool_and(Arrays.flag,bool_or(real_gt(Arrays.first,0.0),"
+                                   "real_gt(analog_div(1.0,Arrays.second),0.0)))";
+  const std::string liveControls =
+      ifGroup("firstMatch",
+              ifArm("firstArm", shortCircuit, {{"flag", "boolean"}, {"first"}, {"second"}},
+                    assignment("firstArmWrite", "first", "", "0.0", false)) +
+                  ifArm("laterArm", "real_gt(analog_div(1.0,Arrays.alias),0.0)", {{"alias"}},
+                        assignment("laterArmWrite", "second", "", "3.0", false))) +
+      assignment("betweenConditions", "first", "", "-2.0", false) +
+      ifGroup("reusedCondition",
+              ifArm("afterWrite", shortCircuit, {{"flag", "boolean"}, {"first"}, {"second"}})) +
+      booleanCase("choose", "real_gt(Arrays.first,Arrays.second)", {{"first"}, {"second"}}) +
+      ifGroup("equalSelections",
+              ifArm("aliases", "real_gt(Arrays.first,Arrays.alias)", {{"first"}, {"alias"}})) +
+      ifGroup(
+          "repeatedSelection",
+          ifArm("repeatedLeaf", "real_gt(analog_add(Arrays.first,Arrays.first),0.0)", {{"first"}}));
+  const std::string partialControlRoot =
+      declaration("values", "4") + controlAliases +
+      assignment("initializeFirst", "first", "", "1.0", false) +
+      assignment("initializeSecond", "second", "", "2.0", false) + flag;
+  const std::string persistentControlRoot =
+      fill("fill", "4") + declaration("values", "4", "fill") + controlAliases + flag;
+  for (bool generated : {false, true}) {
+    for (bool eventLocal : {false, true}) {
+      const std::string body =
+          (eventLocal || generated ? partialControlRoot : persistentControlRoot) + liveControls;
+      const std::string source = wrap(body, "", generated, false, !eventLocal);
+      std::string target;
+      if (!deterministicTarget(source, target))
+        return fail("live selected control failed deterministic emission or target reparse");
+      const auto first = statementContaining(target, "if ((event_Arrays_flag &&");
+      const auto later = statementContaining(target, "else if (");
+      const auto selector = statementContaining(target, "case (");
+      const auto firstLoads = arrayAccesses(first);
+      const auto laterLoads = arrayAccesses(later);
+      const auto selectorLoads = arrayAccesses(selector);
+      const auto aliasLine = statementContaining(target, "if ((event_Arrays_values["
+                                                         "event_Arrays_aliases_reference_0_map]");
+      const auto aliasLoads = arrayAccesses(aliasLine);
+      const auto repeatedLoads = arrayAccesses(statementContaining(
+          target, "if (((event_Arrays_values[event_Arrays_repeatedLeaf_reference_0_map]"));
+      if (firstLoads.size() != 2 || firstLoads[0] == firstLoads[1] || laterLoads.size() != 1 ||
+          selectorLoads.size() != 2 || selectorLoads[0] == selectorLoads[1] ||
+          aliasLoads.size() != 2 || aliasLoads[0] == aliasLoads[1] || repeatedLoads.size() != 2 ||
+          repeatedLoads[0] != repeatedLoads[1] ||
+          llvm::StringRef(target).count("event_Arrays_repeatedLeaf_reference_0_map = ") != 1 ||
+          first.find(" || ") == std::string::npos || first.find("(1.0 / ") == std::string::npos ||
+          later.find("(1.0 / ") == std::string::npos ||
+          !before(target, "event_Arrays_laterArm_reference_0_map = ", first) ||
+          !before(target, "event_Arrays_values[event_Arrays_betweenConditions_target_map] = -2.0;",
+                  "event_Arrays_afterWrite_reference_1_map = ") ||
+          llvm::StringRef(target).count("real ") != 1 ||
+          target.find("real event_Arrays_first") != std::string::npos ||
+          target.find("real event_Arrays_alias") != std::string::npos ||
+          (generated && !before(target, "for (array_gen", "integer event_Arrays_firstArm_")))
+        return fail("selected control lost live leaves, distinct maps or first-match setup order");
+      if (!generated && !eventLocal)
+        artifact("live-storage-controls", source, target);
+      if (generated && eventLocal)
+        artifact("live-storage-controls-generated-event", source, target);
+    }
+  }
+
+  // Native-only Integer grammar witness: the selected Real comparison chooses
+  // an Integer limit. Each inner-loop entry captures it once, then body
+  // predicates observe the current lane on each reached iteration. This is not
+  // evidence for a public Real-to-Integer cast or generated nested-loop support.
+  const std::string enteredLoop = storageLoop(
+      "selectedBound", "analog_select(real_gt(Arrays.first,0.0),1,2)", {{"first"}},
+      ifGroup("insideLoop", ifArm("insideCondition", "real_gt(Arrays.first,0.0)", {{"first"}})) +
+          assignment("loopMutation", "first", "", "-1.0", false));
+  const std::string nestedLoopSource =
+      wrap(persistentControlRoot + loop("outerEntries", enteredLoop, "2"), "", false, false, true);
+  std::string nestedLoopTarget;
+  if (!deterministicTarget(nestedLoopSource, nestedLoopTarget) ||
+      llvm::StringRef(nestedLoopTarget).count("event_Arrays_selectedBound_limit = ") != 1 ||
+      !before(nestedLoopTarget, "for (event_Arrays_outerEntries_index",
+              "event_Arrays_selectedBound_reference_0_map = ") ||
+      !before(nestedLoopTarget, "event_Arrays_selectedBound_reference_0_map = ",
+              "event_Arrays_selectedBound_limit = ") ||
+      !before(nestedLoopTarget,
+              "event_Arrays_selectedBound_limit = ", "for (event_Arrays_selectedBound_index") ||
+      !before(nestedLoopTarget, "for (event_Arrays_selectedBound_index",
+              "event_Arrays_insideCondition_reference_0_map = ") ||
+      arrayAccesses(statementContaining(nestedLoopTarget, "event_Arrays_selectedBound_limit = "))
+              .size() != 1 ||
+      statementContaining(nestedLoopTarget, "event_Arrays_selectedBound_limit = ")
+              .find(" ? 1 : 2)") == std::string::npos ||
+      llvm::StringRef(nestedLoopTarget).count("real ") != 1)
+    return fail("selected Integer bound lost once-per-entry capture or nested live reevaluation");
+  artifact("live-storage-native-integer-bound", nestedLoopSource, nestedLoopTarget);
+  const std::string generatedLoopSource =
+      wrap(partialControlRoot + enteredLoop, "", true, false, true);
+  std::string generatedLoopTarget;
+  if (!deterministicTarget(generatedLoopSource, generatedLoopTarget) ||
+      !before(generatedLoopTarget, "for (array_gen", "integer event_Arrays_selectedBound_limit;") ||
+      !before(generatedLoopTarget,
+              "event_Arrays_values[event_Arrays_initializeFirst_target_map] = 1.0;",
+              "event_Arrays_selectedBound_limit = ") ||
+      llvm::StringRef(generatedLoopTarget).count("event_Arrays_selectedBound_limit = ") != 1)
+    return fail("generated selected Integer loop bound escaped its owning finite occurrence");
+  artifact("live-storage-generated-integer-bound", generatedLoopSource, generatedLoopTarget);
+  const std::string generatedCaseSource =
+      wrap(partialControlRoot +
+               storageLoop("caseBound", "analog_select(real_gt(Arrays.first,0.0),1,2)", {{"first"}},
+                           booleanCase("loopChoose", "real_gt(Arrays.first,Arrays.second)",
+                                       {{"first"}, {"second"}})),
+           "", true, false, true);
+  std::string generatedCaseTarget;
+  if (!deterministicTarget(generatedCaseSource, generatedCaseTarget) ||
+      !before(generatedCaseTarget, "for (event_Arrays_caseBound_index",
+              "event_Arrays_loopChoose_reference_0_map = ") ||
+      !before(generatedCaseTarget, "event_Arrays_loopChoose_reference_1_map = ", "case (") ||
+      arrayAccesses(statementContaining(generatedCaseTarget, "case (")).size() != 2)
+    return fail("generated direct Boolean case lost its typed live selector inside a finite loop");
+  artifact("live-storage-generated-loop-case", generatedCaseSource, generatedCaseTarget);
+
+  const std::string continueStatement = R"mlir(
+"nodal.analog_continue"() <{statement_id = "Arrays.continueInner", owner = "Arrays", metadata = {}}> : () -> ()
+)mlir";
+  const std::string breakStatement = R"mlir(
+"nodal.analog_break"() <{statement_id = "Arrays.breakInner", owner = "Arrays", metadata = {}}> : () -> ()
+)mlir";
+  const std::string exitsSource =
+      wrap(persistentControlRoot +
+               loop("outerWithExits",
+                    loop("innerWithExits",
+                         ifGroup("continueIf", ifArm("continueArm", "real_gt(Arrays.first,0.0)",
+                                                     {{"first"}}, continueStatement)) +
+                             assignment("afterContinue", "first", "", "-1.0", false) +
+                             booleanCase("breakCase", "real_gt(Arrays.second,0.0)", {{"second"}},
+                                         breakStatement),
+                         "2"),
+                    "2"),
+           "", false, false, true);
+  std::string exitsTarget;
+  if (!deterministicTarget(exitsSource, exitsTarget) ||
+      !before(exitsTarget, "for (event_Arrays_innerWithExits_index",
+              "event_Arrays_continueArm_reference_0_map = ") ||
+      !before(exitsTarget, "event_Arrays_innerWithExits_continue = 1;",
+              "event_Arrays_values[event_Arrays_afterContinue_target_map] = -1.0;") ||
+      !before(exitsTarget, "event_Arrays_values[event_Arrays_afterContinue_target_map] = -1.0;",
+              "event_Arrays_breakCase_reference_0_map = ") ||
+      exitsTarget.find("event_Arrays_innerWithExits_break = 1;") == std::string::npos ||
+      exitsTarget.find("event_Arrays_outerWithExits_break = 1;") != std::string::npos ||
+      exitsTarget.find("event_Arrays_outerWithExits_continue = 1;") != std::string::npos)
+    return fail("nested live control changed nearest-loop break/continue or statement order");
+  artifact("live-storage-nested-exits", exitsSource, exitsTarget);
+
+  // An immediate-input slice/flatten/index map remains compact and symbolic.
+  // Equal defaults must not substitute for the module-static parameter proof.
+  const std::string selectedMapRoot =
+      fill("fill", "2,COUNT") + declaration("values", "2,COUNT", "fill") +
+      slice("columns", "values", "2,COUNT", 1, 3, "2,2", 1) + view("flat", "columns", "2,2", "4") +
+      index("tail", "flat", "4", "%c3", "i64");
+  const std::string selectedMapSource =
+      wrap(selectedMapRoot +
+               ifGroup("mapped", ifArm("mappedArm", "real_gt(Arrays.tail,0.0)", {{"tail"}})),
+           parameter(), false, false, true);
+  std::string selectedMapTarget;
+  if (!deterministicTarget(selectedMapSource, selectedMapTarget) ||
+      selectedMapTarget.find(" % 2") == std::string::npos ||
+      selectedMapTarget.find(" / 2") == std::string::npos ||
+      statementContaining(selectedMapTarget, "if ((event_Arrays_values[").find("COUNT") !=
+          std::string::npos ||
+      selectedMapTarget.find(" * COUNT") == std::string::npos ||
+      arrayAccesses(statementContaining(selectedMapTarget, "if ((event_Arrays_values[")).size() !=
+          1 ||
+      llvm::StringRef(selectedMapTarget).count("real ") != 1)
+    return fail("selected control map lost compact noncontiguous symbolic indexing");
+  artifact("live-storage-symbolic-map", selectedMapSource, selectedMapTarget);
+  std::string deepControl = fill("fill", "2,3") + declaration("values", "2,3", "fill");
+  previous = "values";
+  for (unsigned depth = 0; depth < 48; ++depth) {
+    auto next = "controlView" + std::to_string(depth);
+    deepControl += slice(next, previous, "2,3", 0, 3, "2,3", 1);
+    previous = next;
+  }
+  deepControl +=
+      index("deepLeaf", previous, "2,3", "%c1, %c2", "i64, i64") +
+      ifGroup("deepControl", ifArm("deepArm", "real_gt(Arrays.deepLeaf,0.0)", {{"deepLeaf"}}));
+  std::string deepControlTarget;
+  if (!deterministicTarget(wrap(deepControl, "", false, false, true), deepControlTarget) ||
+      deepControlTarget.size() > 30000 ||
+      llvm::StringRef(deepControlTarget).count("event_Arrays_deepArm_reference_0_map = ") != 49 ||
+      arrayAccesses(statementContaining(deepControlTarget, "if ((event_Arrays_values[")).size() !=
+          1)
+    return fail("deep selected control map expanded recursively or emitted a numeric snapshot");
+
+  // Every legal monitor slot keeps its actual array leaf inline, including
+  // physical-unit tolerances. OR emits one ordered monitor expression and unused
+  // primitives/compositions retain their independent evaluation requests.
+  const StorageReferences voltageFirst{{"voltage", "real", "voltage"}};
+  const StorageReferences voltageTolerance{{"voltageTolerance", "real", "voltage"}};
+  const StorageReferences startTime{{"startTime", "real", "time"}};
+  const StorageReferences period{{"period", "real", "time"}};
+  const StorageReferences timeTolerance{{"timeTolerance", "real", "time"}};
+  const StorageReferences crossReferences{{"voltage", "real", "voltage"},
+                                          {"timeTolerance", "real", "time"},
+                                          {"voltageTolerance", "real", "voltage"}};
+  const StorageReferences timerReferences{
+      {"startTime", "real", "time"}, {"period", "real", "time"}, {"timeTolerance", "real", "time"}};
+  const std::string eventRoots =
+      withRealDimension(fill("voltageFill", "2", "1.0 V") +
+                            declaration("values", "2", "voltageFill") +
+                            index("voltage", "values", "2", "%c0", "i64") +
+                            index("voltageTolerance", "values", "2", "%c1", "i64"),
+                        "voltage") +
+      withRealDimension(fill("timeFill", "3", "1.0 s") + declaration("times", "3", "timeFill") +
+                            index("startTime", "times", "3", "%c0", "i64") +
+                            index("period", "times", "3", "%c1", "i64") +
+                            index("timeTolerance", "times", "3", "%c2", "i64"),
+                        "time");
+  const std::string crossArguments =
+      eventArgument(0, "Arrays.voltage", "voltage", voltageFirst) + ", " +
+      eventArgument(1, "1", "1", {}, "integer") + ", " +
+      eventArgument(2, "Arrays.timeTolerance", "time", timeTolerance) + ", " +
+      eventArgument(3, "Arrays.voltageTolerance", "voltage", voltageTolerance) + ", " +
+      eventArgument(4, "1", "1", {}, "integer");
+  const std::string aboveArguments =
+      eventArgument(0, "Arrays.voltage", "voltage", voltageFirst) + ", " +
+      eventArgument(1, "Arrays.timeTolerance", "time", timeTolerance) + ", " +
+      eventArgument(2, "Arrays.voltageTolerance", "voltage", voltageTolerance) + ", " +
+      eventArgument(3, "1", "1", {}, "integer");
+  const std::string timerArguments =
+      eventArgument(0, "Arrays.startTime", "time", startTime) + ", " +
+      eventArgument(1, "Arrays.period", "time", period) + ", " +
+      eventArgument(2, "Arrays.timeTolerance", "time", timeTolerance) + ", " +
+      eventArgument(3, "1", "1", {}, "integer");
+  auto eventOr = [](const std::string &name, const std::string &left, const std::string &right) {
+    return "%" + name + " = \"nodal.analog_event_or\"(%" + left + ", %" + right +
+           ") <{event_id = \"Arrays." + name +
+           "\", owner = \"Arrays\", contract = \"increment37\", "
+           "name = \"\", metadata = {}}> : (!nodal.analog_event, !nodal.analog_event) -> "
+           "!nodal.analog_event\n";
+  };
+  const std::string liveEvents =
+      storageEvent("cross", "cross", crossArguments, crossReferences) +
+      storageEvent("timer", "timer", timerArguments, timerReferences) +
+      eventOr("either", "cross", "timer") + on("onEither", "either") +
+      storageEvent("unusedAbove", "above", aboveArguments, crossReferences) +
+      storageEvent("crossAgain", "cross", crossArguments, crossReferences) +
+      on("onAgain", "crossAgain") +
+      storageEvent("unusedOrAbove", "above", aboveArguments, crossReferences) +
+      storageEvent("unusedOrTimer", "timer", timerArguments, timerReferences) +
+      eventOr("unusedEither", "unusedOrAbove", "unusedOrTimer");
+  for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+    const std::string source =
+        profileSource(wrap(eventRoots + liveEvents, "", false, false, true), kind);
+    std::string target;
+    if (!deterministicTarget(source, target, kind))
+      return fail("live selected monitor failed deterministic emission or target reparse");
+    const auto combined = statementContaining(target, "@(cross(");
+    const auto timerLoads = arrayAccesses(combined, "event_Arrays_times");
+    const auto voltageLoads = arrayAccesses(combined);
+    const auto unused = statementContaining(target, "@(above(");
+    if (llvm::StringRef(target).count("@(") != 4 || llvm::StringRef(target).count("real ") != 2 ||
+        combined.find(" or timer(") == std::string::npos || voltageLoads.size() != 2 ||
+        voltageLoads[0] == voltageLoads[1] || timerLoads.size() != 4 ||
+        timerLoads[1] == timerLoads[2] || timerLoads[2] == timerLoads[3] ||
+        arrayAccesses(unused).size() != 2 ||
+        !before(target, "event_Arrays_cross_reference_0_map = ", combined) ||
+        !before(target, "event_Arrays_timer_reference_2_map = ", combined) ||
+        !before(target, "event_Arrays_unusedAbove_reference_0_map = ", unused) ||
+        !before(target, "event_Arrays_unusedOrTimer_reference_2_map = ",
+                "@(above(event_Arrays_values[event_Arrays_unusedOrAbove_reference_0_map]") ||
+        target.find("real event_Arrays_cross") != std::string::npos)
+      return fail("event storage was captured, aliased or lost ordered/unused monitor evaluation");
+    artifact(kind == nodal::BackendKind::VerilogAMS ? "live-storage-events-ams"
+                                                    : "live-storage-events",
+             source, target, kind == nodal::BackendKind::VerilogAMS ? ".vams" : ".va");
+  }
+
+  // Native-selected reference checks and target-size checks remain separate:
+  // reject before publishing any bytes, even when the caller already has output.
+  const std::string validControl =
+      wrap(persistentControlRoot + liveControls, "", false, false, true);
+  std::vector<std::string> forbiddenControls;
+  for (const char *replacement : {"reference_form = \"snapshot\"", "reference_form = \"\""}) {
+    std::string source = validControl;
+    const std::string original = "reference_form = \"storage\"";
+    source.replace(source.find(original), original.size(), replacement);
+    forbiddenControls.push_back(source);
+  }
+  forbiddenControls.push_back(
+      wrap(declaration("values", "4") + controlAliases +
+               ifGroup("uninitialized",
+                       ifArm("uninitializedArm", "real_gt(Arrays.first,0.0)", {{"first"}})),
+           "", false, false, true));
+  // Correct the dimension on the intervening assignment so relocation, rather
+  // than a malformed assignment type, is the rejected property.
+  std::string interveningWrite =
+      withRealDimension(assignment("interveningWrite", "voltage", "", "2.0 V", false), "voltage");
+  const std::string assignmentKind = "value_kind = \"real\", value_dimension = \"1\"";
+  interveningWrite.replace(interveningWrite.find(assignmentKind), assignmentKind.size(),
+                           "value_kind = \"real\", value_dimension = \"voltage\"");
+  forbiddenControls.push_back(
+      wrap(eventRoots + storageEvent("moved", "cross", crossArguments, crossReferences) +
+               interveningWrite + on("movedOn", "moved"),
+           "", false, false, true));
+  for (const auto &source : forbiddenControls) {
+    mlir::ScopedDiagnosticHandler handler(&context,
+                                          [](mlir::Diagnostic &) { return mlir::success(); });
+    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+    if (module && mlir::succeeded(mlir::verify(*module)))
+      return fail("forbidden live reference passed native verification");
+    std::string rejected = "sentinel";
+    if (emit(source, rejected) || rejected != "sentinel")
+      return fail("forbidden live reference published partial target output");
+  }
+  const std::string wideControlSource =
+      wrap(fill("fill", "Arrays.small") + declaration("values", "Arrays.small", "fill") +
+               index("wideLeaf", "values", "Arrays.small", "%c0", "i64") +
+               ifGroup("wide", ifArm("wideArm", "real_gt(Arrays.wideLeaf,0.0)", {{"wideLeaf"}})),
+           wideExpression, false, false, true);
+  auto validWideControl = mlir::parseSourceString<mlir::ModuleOp>(wideControlSource, &context);
+  if (!validWideControl || mlir::failed(mlir::verify(*validWideControl)))
+    return fail("selected signed32 target fixture was not independently native-valid");
+  std::string rejectedWideControl = "sentinel";
+  if (emit(wideControlSource, rejectedWideControl) || rejectedWideControl != "sentinel")
+    return fail("selected signed32 intermediate overflow published target output");
+  const std::string lastLaneSource =
+      wrap(fill("fill", "2147483647") + declaration("values", "2147483647", "fill") +
+               index("lastLane", "values", "2147483647", "%c2147483646", "i64") +
+               ifGroup("lastLaneControl",
+                       ifArm("lastLaneArm", "real_gt(Arrays.lastLane,0.0)", {{"lastLane"}})),
+           literal(2147483646), false, false, true);
+  std::string lastLaneTarget;
+  if (!deterministicTarget(lastLaneSource, lastLaneTarget) || lastLaneTarget.size() > 4096 ||
+      lastLaneTarget.find("event_Arrays_lastLaneArm_reference_0_map = 2147483646;") ==
+          std::string::npos ||
+      llvm::StringRef(lastLaneTarget).count("real ") != 1)
+    return fail("last signed32 selected lane was rejected or expanded by array cardinality");
   llvm::outs() << "writable array backend checks passed\n";
   return 0;
 }

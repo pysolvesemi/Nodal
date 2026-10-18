@@ -951,3 +951,124 @@ Logs are retained under `.work/persistent-initializer-*` and
 `.work/scala-validation/logs/writable-array-persistent-final.log`. Focused
 read-only architecture review found no blocker. No CI, full qualification or
 independent simulator acceptance was run for this checkpoint.
+
+## Live selected-storage control and event references
+
+This shared extension follows
+[`NodalWritableRealArrays-DG-v0.4`](../design-gates/NodalWritableRealArrays-DG-v0.4.md).
+Controls and primitive event owners use an explicit storage-reference form with
+actual scalar handles for every mutable source leaf when selected storage is
+involved. Legacy zero-operand scalar source forms retain their semantics. The
+native canonical source parser derives kind, units and leaf sets from the actual
+handles, with no missing-binding fallback to textual selected-path lookup.
+Existing storage ownership and selected-region definite assignment remain the
+single sources of truth. Constructing pure projection aliases does not load data.
+
+Target maps contain only proven static coordinates; numeric loads remain inline
+at their existing consumers. All if-arm map setup precedes the whole first-match
+chain, avoiding statements between else-if arms. Case and loop maps precede those
+statements; the existing loop limit is still evaluated once at each entry.
+Primitive and OR-composed monitor maps are emitted at the actual consuming on
+statement (or the existing unused monitor), without adding reset events or
+captured Real temporaries. A distinct map belongs to each consumer/actual handle;
+no two selected leaves share the second leaf's final coordinate accidentally.
+Event relocation barriers derive observed roots from handles rather than assuming
+selected leaf labels are declaration identities. Handler writes do not establish
+unconditional following initialization.
+
+This implementation does not create a public Real-to-Integer cast or broaden
+user-function placement. Native direct selected-reference Integer bounds and
+public composition through existing scalar Integer storage are distinguished.
+Pure fill/view-derived scalar control sources, compound selected scalar
+initializers, generated persistent initialization, conservative port mappings and
+broader generated object/state support remain open where not yet implemented.
+
+The native implementation passed 47 focused typed-control cases, including positive
+plain/default-gate verification and deterministic round trips, and exact negative
+diagnostic sets. Directly affected predecessors passed: writable storage 49,
+scalar/control 32, storage descriptors 21 and conservative node arrays 37.
+Matched event and direction CTests also passed. Native lexical escape coverage
+remains in the descriptor tests; a textual out-of-scope SSA fixture is rejected
+by MLIR parsing and is not counted as a semantic-verifier test.
+
+```sh
+source .work/nodal-toolchain-env.sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodalc nodal-storage-model-unit-tests nodal-node-array-unit-tests -j 4
+PYTHONDONTWRITEBYTECODE=1 ctest --test-dir .work/native-release -V --output-on-failure -R '^nodal.native.typed-control-integration$'
+ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.analog-(procedural|control-flow)-'
+PYTHONDONTWRITEBYTECODE=1 python3 tests/compiler/fixtures/increment43/run_writable_array_matrix.py --nodalc .work/native-release/bin/nodalc --work-dir .work/typed-control-writable-predecessors
+.work/native-release/core/compiler/test/Unit/nodal-storage-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+PYTHONDONTWRITEBYTECODE=1 ctest --test-dir .work/native-release --output-on-failure -R '^nodal.native.(analog-events-matrix|analog-event-direction-review)$'
+```
+
+Focused read-only native/backend review found no blocker in binding completeness,
+selected initialization, actual-root event barriers, static map placement or live
+numeric leaves. The review was read-only; actual target/public execution results
+are recorded below.
+
+The target backend and writable backend units passed, including live/order,
+short-circuit/else-if placement, used/unused event composition, generated typed
+controls and deep compact maps. The strict target parser passed 308 cases (34
+new live-reference cases); noise/transfer parsers retain 24/40 passing cases.
+Nine CLI outputs match unit outputs exactly. Existing target grammar already
+supports these expression placements, so no production parser widening was
+needed. An initially empty authored arm fixture was corrected to contain a real
+write; the inherited empty-arm admission rule was preserved.
+
+```sh
+PYTHONPATH=.work/python-tools .work/python-tools/bin/cmake --build .work/native-release --target nodal-translate nodal-backend-unit-tests nodal-writable-array-backend-unit-tests nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-writable-array-backend-unit-tests .work/live-control-backend
+for target in nodal-backend-unit-tests nodal-event-reparse-unit-tests nodal-noise-reparse-unit-tests nodal-transfer-reparse-unit-tests; do
+  .work/native-release/core/compiler/test/Unit/$target
+done
+bash .work/check-live-control-cli.sh
+```
+
+Native and backend logs remain under `.work/typed-control-*` and
+`.work/live-control-*`; raw outputs are not new acceptance ledgers. The new native
+CTest disables Python bytecode generation, keeping transient outputs in `.work`.
+
+The two new public suites passed 11 grouped methods against both configured
+native tools. The final nested-loop fixture then added its planned break arm;
+its exact affected target method passed again with nearest-loop break/continue,
+selected reads after mutation and bound-on-entry semantics. Six actual public
+models emit deterministic Verilog-A and Verilog-AMS: mixed/reused conditions,
+public Integer-loop composition, cross/above/timer and reused OR monitors,
+partial-lane event-local reads, symbolic noncontiguous views and supported
+generated lexical storage. Separate AMS CLI replay matches all six retained
+outputs. Source/normalized IR and actual targets are under
+`.work/scala-validation/storage-reference-witnesses/`.
+
+```sh
+export NODAL_NODALC="$PWD/.work/native-release/bin/nodalc"
+export NODAL_TRANSLATE="$PWD/.work/native-release/bin/nodal-translate"
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43StorageReferenceTests nodal.internal.testkit.Increment43StorageReferenceFailureTests
+.work/scala-validation/mill-jvm.sh core.scala.testkit.test.testOnly nodal.internal.testkit.Increment43StorageReferenceTests -- 'nodal.internal.testkit.Increment43StorageReferenceTests.live conditions and loop body predicates native verify and emit deterministically'
+python3 .work/scala-validation/write-storage-reference-witnesses.py
+```
+
+Actual source in `Increment43StorageReferenceTests.scala` reuses a predicate
+across an intervening selected write:
+
+```scala
+val reused = (flag && (cells.at(0) > 0.0.real)) || (cells.at(1) > 0.0.real)
+```
+
+Its emitted predicates contain distinct inline `cells[...reference_1_map]` and
+`cells[...reference_2_map]` leaves under `&&`/`||`; the later consumer has its own
+coordinate names and observes the authored write. No Real capture declaration is
+inserted for predicate-only or monitor-only models. This is structural emission
+and reparse evidence, not numerical simulator execution. Pure uniform-fill
+scalarization and compound selected scalar initialization remain separate open
+source-consumer work.
+
+Nine directly affected public scalar/control/event and former-boundary
+predecessors passed. The two former selected-control negatives now assert actual
+typed-reference emission; their compound-initializer negative remains causal.
+Pinned formatting passed for all eight changed Scala files and affected native
+files; changed Markdown and whitespace checks passed. Exact predecessor
+selectors are retained in `.work/scala-validation/run-storage-reference-tests.sh`
+and logs in `storage-reference-predecessors.log` and
+`storage-reference-boundary-predecessors.log`. No CI/full qualification or
+independent consumer/simulator success is claimed.

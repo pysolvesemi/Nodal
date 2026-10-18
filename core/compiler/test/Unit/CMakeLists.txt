@@ -355,3 +355,14 @@ add_test(NAME nodal.native.writable-array-integration
     --work-dir "${CMAKE_BINARY_DIR}/increment43-writable-array-evidence"
 )
 set_tests_properties(nodal.native.writable-array-integration PROPERTIES TIMEOUT 60)
+
+add_test(NAME nodal.native.typed-control-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_typed_control_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-typed-control-evidence"
+)
+set_tests_properties(nodal.native.typed-control-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

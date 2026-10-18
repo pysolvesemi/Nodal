@@ -14,6 +14,11 @@
 #include <optional>
 
 namespace nodal {
+struct AnalogMappedStorageAccess {
+  std::string text;
+  std::string temporary;
+  ShapedProjectionProgram program;
+};
 struct AnalogEventRenderState {
   llvm::DenseMap<mlir::Operation *, std::string> names;
   llvm::DenseMap<mlir::Operation *, std::string> loops;
@@ -23,6 +28,10 @@ struct AnalogEventRenderState {
   // Derived target lifetime decisions, keyed only by the verified SSA graph.
   llvm::DenseMap<mlir::Operation *, std::string> declarationInitializers;
   llvm::DenseSet<mlir::Operation *> declarationOnlyValues;
+  // Control/event references retain live storage loads. Only their verified
+  // static coordinates have private setup programs, one per actual handle.
+  llvm::DenseMap<mlir::Operation *, llvm::DenseMap<mlir::Value, AnalogMappedStorageAccess>>
+      liveReferences;
   llvm::StringMap<std::string> variables;
   llvm::StringSet<> reserved;
 };

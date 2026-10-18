@@ -417,6 +417,72 @@ int main() {
     return 1;
   count += 4;
 
+  // Live selected control/event leaves reuse the same indexed-expression
+  // grammar. Coordinate assignments are statements, while numeric reads stay
+  // inside the reached predicate, selector, bound or monitor payload.
+  for (llvm::StringRef block :
+       {"begin counter = 0; other = 3; "
+        "if ((data[counter] > gain) && (data[other] < gain)) begin data[0] = 1.0; end "
+        "else if ((data[other] > gain) || (data[counter] < 0.0)) begin data[1] = 2.0; end "
+        "else begin data[2] = 3.0; end end",
+        "begin counter = ((lanes - 1) % 4); "
+        "if ((data[counter] > 0.0) ? data[1] > gain : data[2] < gain) "
+        "begin data[counter] = gain; end end",
+        "begin counter = 0; case (data[counter] > gain) "
+        "0: begin data[counter] = 1.0; end 1: begin data[counter] = 2.0; end endcase end",
+        "begin counter = 0; other = (data[counter] > 0.0 ? 1 : 2); "
+        "for (counter = 0; counter < other; counter = counter + 1) begin "
+        "if (data[0] > gain) begin data[0] = data[0] - 1.0; end end end",
+        "begin counter = 0; for (other = 0; other < lanes; other = other + 1) begin "
+        "if (data[counter] > gain) begin data[counter] = data[counter] - 1.0; end end end",
+        "begin counter = 0; other = 3; "
+        "@(cross((data[counter] - gain), 1, data[other], 0.01)) begin data[1] = 4.0; end end",
+        "begin counter = 0; @(above(data[counter], 0.001, 0.01)) begin end end",
+        "begin counter = 0; other = 1; "
+        "@(timer(data[counter], data[other], 0.001, 1)) begin data[2] = 1.0; end end",
+        "begin counter = 0; other = 1; "
+        "@(cross(data[counter], 1) or above(data[other])) begin data[2] = 1.0; end end",
+        "begin counter = 0; @(cross(data[counter], 1)) begin end "
+        "data[counter] = gain; @(cross(data[counter], 1)) begin end end",
+        "begin counter = (lanes - 1); @(above(symbolic[counter])) begin end end",
+        "begin counter = 0; other = 3; "
+        "@(cross((data[counter] > gain ? data[counter] : data[other]), 0)) begin end end"}) {
+    ++count;
+    if (!validBlock(block, &symbols)) {
+      llvm::errs() << "rejected valid live selected control/event syntax: " << block << '\n';
+      return 1;
+    }
+  }
+  for (llvm::StringRef block :
+       {"begin if (data > gain) begin end end",
+        "begin if (scalar[0] > gain) begin end end",
+        "begin if (data[gain] > 0.0) begin end end",
+        "begin if (data[4] > 0.0) begin end end",
+        "begin if (data[counter] > gain) begin end counter = 1; else begin end end",
+        "begin if (data[0] > gain) begin end else if (data[1] > gain) end end",
+        "begin case (missing[0] > gain) 0: begin end endcase end",
+        "begin case (data[4] > gain) default: begin end endcase end",
+        "begin counter = (data[0] > gain ? (2147483647 + 1) : 1); end",
+        "begin counter = (data[0] > gain ? 1 : (1 / 0)); end",
+        "begin counter = (65536 * 65536); @(above(data[counter])) begin end end",
+        "begin @(above(data)) begin end end",
+        "begin @(cross(scalar[0], 1)) begin end end",
+        "begin @(cross(data[missing], 1)) begin end end",
+        "begin @(cross(data[0], 1, symbolic[-1], 0.01)) begin end end",
+        "begin @(cross(data[0], 1, data[4], 0.01)) begin end end",
+        "begin @(timer(data[0], data[1.0])) begin end end",
+        "begin @(timer(data[0], missing[0])) begin end end",
+        "begin @(cross(data[0], 1) or above(data[4])) begin end end",
+        "begin @(above(data[0])) begin @(above(data[1])) begin end end end",
+        "begin @(above(data[0])) begin end else begin end end",
+        "begin @(above(data[0])) begin end counter = missing; end"}) {
+    ++count;
+    if (validBlock(block, &symbols)) {
+      llvm::errs() << "accepted invalid live selected control/event syntax: " << block << '\n';
+      return 1;
+    }
+  }
+
   llvm::outs() << "Foundation 43 event-array reparse: " << count << " cases passed\n";
   return 0;
 }

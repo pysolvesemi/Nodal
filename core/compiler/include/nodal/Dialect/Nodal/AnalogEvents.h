@@ -5,6 +5,8 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <optional>
 #include <set>
 #include <string>
@@ -22,7 +24,16 @@ struct AnalogSourceExpression {
   std::string spelling;
   mlir::Operation *declaration = nullptr;
   std::vector<AnalogSourceExpression> operands;
+  // Live scalar handle for typed control/event leaves, never a captured value.
+  mlir::Value storageReference;
 };
+/// Per-owner bindings derived from actual scalar storage operands.
+struct AnalogSourceStorageBinding {
+  std::string path;
+  mlir::Value reference;
+};
+mlir::FailureOr<llvm::SmallVector<AnalogSourceStorageBinding>>
+resolveAnalogSourceStorageBindings(mlir::Operation *operation);
 mlir::FailureOr<AnalogSourceExpression> parseAnalogSourceExpression(mlir::Operation *context,
                                                                     llvm::StringRef source);
 /// Actual captured scalar read binding; paths are labels, never selectors.

@@ -223,7 +223,9 @@ with shared owner/control/storage checks. Forty-nine semantic cases, 32 direct
 scalar/control predecessors, affected event/backend matrices and five configured
 public methods passed; exact scope and commands remain in the implementation note.
 
-Ordinary persistent shaped initialization is implemented under
+Ordinary persistent shaped initialization is published as
+`06a209712de094a7851c3c89fa3fb7991666c28e` with exact tested-tree equality
+and no CI, under
 [v0.3](../design-gates/NodalWritableRealArrays-DG-v0.3.md): compact VAMS2.4 constant
 replicated declaration initialization, preserving the standard initialization
 phase rather than an event/runtime reset. Actual tested OpenVAF versions reject
@@ -231,9 +233,16 @@ all Real arrays, including existing public witnesses; the concrete F48 consumer
 handoff is documented separately from language-structural acceptance. Generated
 persistent initializer lifecycle remains outside this ordinary-root extension.
 
-Array-derived control/event predicates and loop bounds still need
-actual typed reference operands; present text-only inventories reject selected
-reads rather than introduce eager snapshots or metadata-only lookup. Generated
+Live selected-control/event references are implemented under
+[v0.4](../design-gates/NodalWritableRealArrays-DG-v0.4.md): actual scalar storage
+reference operands, compact static coordinate setup and live numeric leaves at
+the existing evaluation sites. First-match/short-circuit behavior, loop-bound
+evaluation once per entry and event monitor lifetime are preserved. Eleven public
+methods, nine affected predecessors and focused native/backend checks passed;
+commands and limits are recorded in the shape-contract note. Public loop
+composition uses existing scalar Integer storage; no new Real-to-Integer cast
+is introduced. Pure uniform-fill scalar consumers and compound selected scalar
+initialization remain open. Generated
 persistent initialization still needs per-occurrence declaration lifetime.
 Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated

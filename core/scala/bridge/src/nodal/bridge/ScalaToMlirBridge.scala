@@ -2671,25 +2671,100 @@ ${indent(body, 2)}
                   "immutable procedural view has a forged value type",
                   Some(program.owner)
                 )
+        def controlReferences(
+            reads: Set[String],
+            references: Vector[StorageReference],
+            path: String
+        ): Unit =
+          references.foreach: selected =>
+            reference(selected)
+            if selected.valueType.dimensions.nonEmpty then
+              fail("NODAL-BRIDGE-049", "control storage reference must be scalar", Some(path))
+          val identities = references.map(_.identity)
+          val hasSelection = references.exists(_.isInstanceOf[StorageSelection])
+          if identities.distinct.size != identities.size ||
+            (hasSelection && reads != identities.toSet) ||
+            (!hasSelection && reads.exists(identity => !variables.contains(identity)))
+          then
+            fail(
+              "NODAL-BRIDGE-049",
+              "control storage reference inventory is incomplete or ambiguous",
+              Some(path)
+            )
+        def scalarControl(input: Value, path: String): Unit =
+          value(input)
+          if input.valueType.dimensions.nonEmpty || input.source.exists {
+              case _: ShapedSource.Read => false
+              case _ => true
+            }
+          then
+            fail(
+              "NODAL-BRIDGE-049",
+              "control value requires scalar storage or ordinary scalar expression",
+              Some(path)
+            )
+          val reads = input.allReads.distinct
+          controlReferences(reads.map(_.identity).toSet, reads, path)
+        def eventReferences(event: AnalogEventRuntime.Expression, path: String): Unit =
+          event.arguments.foreach(argument =>
+            scalarControl(argument.value, s"$path.argument_${argument.slot}")
+          )
+          event.alternatives.zipWithIndex.foreach((alternative, index) =>
+            eventReferences(alternative, s"$path.alternative_$index")
+          )
         program.variables.foreach: record =>
           dimensions(record.variable.valueType.dimensions, record.variable.identity)
           record.initializer.foreach(value(_))
         program.assignments.foreach: assignment =>
           reference(assignment.target)
           value(assignment.value)
-        program.controlExpressions.foreach(expression => value(expression.value))
+        program.controlExpressions.foreach: expression =>
+          if expression.role == "loop-bound" then
+            scalarControl(expression.value, expression.identity)
+          else value(expression.value)
         def block(input: AnalogControlFlowRuntime.Block): Unit = input.statements.foreach:
           case assignment: AnalogControlFlowRuntime.Statement.Assign =>
             assignment.storageTarget.foreach(reference)
           case scope: AnalogControlFlowRuntime.Statement.Scope => block(scope.body)
-          case event: AnalogControlFlowRuntime.Statement.EventControl => block(event.body)
+          case event: AnalogControlFlowRuntime.Statement.EventControl =>
+            eventReferences(event.event, s"${event.identity}.event")
+            block(event.body)
           case branch: AnalogControlFlowRuntime.Statement.IfThenElse =>
-            branch.branches.foreach(value => block(value.body))
+            branch.branches.zipWithIndex.foreach: (arm, index) =>
+              if arm.condition.valueType.dimensions.nonEmpty then
+                fail(
+                  "NODAL-BRIDGE-049",
+                  "condition must have scalar value type",
+                  Some(branch.identity)
+                )
+              controlReferences(
+                arm.condition.reads,
+                arm.condition.selectedReads,
+                s"${branch.identity}.condition_$index"
+              )
+              block(arm.body)
             branch.otherwise.foreach(block)
           case selection: AnalogControlFlowRuntime.Statement.CaseStatement =>
+            controlReferences(
+              selection.selector.reads,
+              selection.selector.selectedReads,
+              s"${selection.identity}.selector"
+            )
             selection.arms.foreach(arm => block(arm.body))
             selection.default.foreach(block)
-          case loop: AnalogControlFlowRuntime.Statement.Loop => block(loop.body)
+          case loop: AnalogControlFlowRuntime.Statement.Loop =>
+            if loop.boundValueType.dimensions.nonEmpty then
+              fail(
+                "NODAL-BRIDGE-049",
+                "loop bound must have scalar value type",
+                Some(loop.identity)
+              )
+            controlReferences(
+              loop.boundReads,
+              loop.boundSelectedReads,
+              s"${loop.identity}.loop-bound"
+            )
+            block(loop.body)
           case _ => ()
         program.controlFlow.foreach(control => block(control.root))
 

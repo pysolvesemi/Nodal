@@ -1522,44 +1522,33 @@ Operation *nestedGeneratedNodeContribution(Operation *generate) {
     else if (name == "nodal.analog")
       analog = &operation;
   }
-  if (nodes == 0 || nodes > 2 || branches == 0 || branches > nodes || !analog ||
-      !llvm::hasSingleElement(analog->getRegion(0)))
+  if (nodes == 0 || branches == 0 || !analog || !llvm::hasSingleElement(analog->getRegion(0)))
     return nullptr;
 
   unsigned accesses = 0, contributions = 0, derivatives = 0, integrals = 0;
   for (Operation &operation : analog->getRegion(0).front()) {
     llvm::StringRef name = operation.getName().getStringRef();
-    if (name == "nodal.access")
-      ++accesses;
-    else if (name == "nodal.analog_ddt")
+    if (name == "nodal.access") {
+      if (operation.getNumResults() != 1)
+        return nullptr;
+      accesses += !operation.getResult(0).use_empty();
+    } else if (name == "nodal.analog_ddt")
       ++derivatives;
     else if (name == "nodal.analog_idt")
       ++integrals;
     else if (name == "nodal.contribute")
       ++contributions;
-    else if (name != "nodal.real_literal" && name != "nodal.parameter_reference" &&
+    else if (name != "nodal.real_literal" && name != "nodal.parameter_ref" &&
              name != "nodal.analog_add" && name != "nodal.analog_sub" &&
              name != "nodal.analog_mul" && name != "nodal.analog_div" && name != "nodal.analog_neg")
       return nullptr;
   }
-  const unsigned operators = derivatives + integrals;
-  if (operators != 0) {
-    const bool singleNodeOperator =
-        nodes == 1 && branches == 1 && accesses == 1 && contributions == 1 && operators == 1;
-    const bool peerDerivative = nodes == 2 && branches == 1 && accesses == 1 &&
-                                contributions == 1 && derivatives == 1 && integrals == 0;
-    const bool peerIntegral = nodes == 2 && branches == 1 && accesses == 1 && contributions == 1 &&
-                              derivatives == 0 && integrals == 1;
-    const bool groupOperator =
-        nodes == 2 && branches == 2 && accesses == 2 && contributions == 2 && operators == 1;
-    const bool groupMixedOperators = nodes == 2 && branches == 2 && accesses == 2 &&
-                                     contributions == 2 && derivatives == 1 && integrals == 1;
-    return singleNodeOperator || peerDerivative || peerIntegral || groupOperator ||
-                   groupMixedOperators
-               ? &child
-               : nullptr;
-  }
-  return accesses == branches && contributions == branches ? &child : nullptr;
+  // Cardinality is not an ownership rule. The renderer validates each branch's
+  // access, operator/state identities and contribution independently, so disjoint
+  // equations compose without enumerating one/two-node or operator-kind tuples.
+  return accesses == branches && contributions == branches && derivatives + integrals <= accesses
+             ? &child
+             : nullptr;
 }
 
 LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState &state,
@@ -1646,6 +1635,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
   Operation *analog = nullptr;
   llvm::SmallVector<Operation *, 4> generatedNodes;
   llvm::SmallVector<Operation *, 4> generatedBranches;
+  llvm::DenseSet<Operation *> generatedBranchOperations;
+  llvm::DenseSet<Value> generatedBranchValues;
   const bool generatedNodeContributionProfile = isGeneratedNodeContributionProfile(generate);
   if (generatedNodeContributionProfile) {
     auto operation = body.front().begin();
@@ -1655,6 +1646,9 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
     }
     while (operation->getName().getStringRef() == "nodal.branch") {
       generatedBranches.push_back(&*operation);
+      generatedBranchOperations.insert(&*operation);
+      if (operation->getNumResults() == 1)
+        generatedBranchValues.insert(operation->getResult(0));
       ++operation;
     }
     analog = &body.front().back();
@@ -1664,6 +1658,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
           "generated analog-node contribution requires a nonempty positive-step range");
     const GeneratedNodeArrayLayout layout =
         generatedNodeArrayLayout(*lower, *upper, *step, induction.getValue());
+    llvm::DenseMap<Value, Operation *> ownedNodes;
     llvm::StringSet<> nodeNames;
     llvm::StringSet<> sourcePaths;
     for (Operation *node : generatedNodes) {
@@ -1693,11 +1688,12 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       const std::string indexedNode =
           (llvm::Twine(nodeName.getValue()) + "[" + targetIndex + "]").str();
       state.terminals.try_emplace(node->getResult(0), indexedNode);
+      ownedNodes.try_emplace(node->getResult(0), node);
     }
     llvm::DenseSet<Value> selectedNodes;
     for (Operation *node : generatedNodes) {
       for (OpOperand &use : node->getResult(0).getUses()) {
-        if (!llvm::is_contained(generatedBranches, use.getOwner()) || use.getOperandNumber() > 1)
+        if (!generatedBranchOperations.contains(use.getOwner()) || use.getOperandNumber() > 1)
           return emitMappedFailure(
               node, "NODAL-BACKEND-CAPABILITY-001",
               "generated analog-node arrays may escape only through direct owned branches");
@@ -1718,22 +1714,8 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(branch, "NODAL-BACKEND-CAPABILITY-001",
                                  "generated analog-node branch ownership does not match its range");
 
-      Operation *positiveNode = nullptr;
-      Operation *negativeNode = nullptr;
-      for (Operation *node : generatedNodes) {
-        const bool positive = branch->getOperand(0) == node->getResult(0);
-        const bool negative = branch->getOperand(1) == node->getResult(0);
-        if (!positive && !negative)
-          continue;
-        if ((positive && positiveNode) || (negative && negativeNode))
-          return emitMappedFailure(
-              branch, "NODAL-BACKEND-CAPABILITY-001",
-              "generated analog-node branches require unambiguous owned array elements");
-        if (positive)
-          positiveNode = node;
-        if (negative)
-          negativeNode = node;
-      }
+      Operation *positiveNode = ownedNodes.lookup(branch->getOperand(0));
+      Operation *negativeNode = ownedNodes.lookup(branch->getOperand(1));
       if (!positiveNode && !negativeNode)
         return emitMappedFailure(
             branch, "NODAL-BACKEND-CAPABILITY-001",
@@ -1786,8 +1768,6 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
 
   Block &analogBody = analog->getRegion(0).front();
   unsigned contributions = 0;
-  unsigned generatedNodeAccesses = 0;
-  unsigned generatedNodeOperatorAccesses = 0;
   llvm::DenseSet<Value> accessedGeneratedBranches;
   llvm::DenseSet<Value> contributedGeneratedBranches;
   unsigned procedures = 0;
@@ -2591,10 +2571,7 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
                                  "generated contribution ownership does not match its range");
       if (generatedNodeContributionProfile) {
         if (operation.getNumOperands() < 1 ||
-            llvm::none_of(generatedBranches,
-                          [&](Operation *branch) {
-                            return operation.getOperand(0) == branch->getResult(0);
-                          }) ||
+            !generatedBranchValues.contains(operation.getOperand(0)) ||
             !contributedGeneratedBranches.insert(operation.getOperand(0)).second)
           return emitMappedFailure(
               &operation, "NODAL-BACKEND-CAPABILITY-001",
@@ -2816,20 +2793,30 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
       if (!owner || !generatedInduction || owner.getValue() != regionId.getValue() ||
           generatedInduction.getValue() != inductionPath.getValue() ||
           operation.getNumOperands() != 1 ||
-          llvm::none_of(generatedBranches, [&](Operation *branch) {
-            return operation.getOperand(0) == branch->getResult(0);
-          }))
+          !generatedBranchValues.contains(operation.getOperand(0)))
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node access ownership does not match its branch");
-      if (operation.getNumResults() != 1 || !operation.getResult(0).hasOneUse())
+      if (operation.getNumResults() != 1)
+        return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
+                                 "generated analog-node access requires one result");
+      // Public contribution construction also captures the target-side access.
+      // It is pure and unused: retain its ownership checks, but do not count it
+      // as an equation input or impose a destination path on a dead value.
+      if (operation.getResult(0).use_empty())
+        continue;
+      if (!operation.getResult(0).hasOneUse())
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node access requires one owned contribution path");
       OpOperand &use = *operation.getResult(0).getUses().begin();
       Operation *user = use.getOwner();
-      const bool directDdt = user->getBlock() == &analogBody && use.getOperandNumber() == 0 &&
-                             user->getName().getStringRef() == "nodal.analog_ddt";
+      llvm::DenseSet<Operation *> derivativePath;
+      const bool directDdt =
+          user->getBlock() == &analogBody && use.getOperandNumber() == 0 &&
+          user->getName().getStringRef() == "nodal.analog_ddt" && user->getNumResults() == 1 &&
+          generatedValueFeedsOneContribution(user->getResult(0), analogBody, derivativePath,
+                                             operation.getOperand(0));
       llvm::DenseSet<Operation *> active;
       const bool ownedIdtInput = generatedValueFeedsOneIdtInput(operation.getResult(0), analogBody,
                                                                 active, operation.getOperand(0));
@@ -2845,8 +2832,6 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         return emitMappedFailure(
             &operation, "NODAL-BACKEND-CAPABILITY-001",
             "generated analog-node branch requires one access without fan-out");
-      ++generatedNodeAccesses;
-      generatedNodeOperatorAccesses += static_cast<unsigned>(directDdt || ownedIdtInput);
     }
     if (!supportedExpression)
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
@@ -2871,20 +2856,6 @@ LogicalResult renderGeneratedContribution(Operation *generate, ModuleRenderState
         analog, "NODAL-BACKEND-CAPABILITY-001",
         "generated analog-node contribution profile requires one additive contribution per "
         "owned indexed branch");
-  const bool singleBranchOperatorProfile =
-      generatedNodeAccesses == 1 && generatedBranches.size() == 1;
-  const bool nestedGroupOperatorProfile = parentGenerate && generatedNodeOperatorAccesses == 1 &&
-                                          generatedNodeAccesses == 2 &&
-                                          generatedBranches.size() == 2;
-  const bool nestedGroupMixedOperatorProfile =
-      parentGenerate && generatedNodeOperatorAccesses == 2 && generatedNodeAccesses == 2 &&
-      generatedBranches.size() == 2;
-  if (generatedNodeOperatorAccesses != 0 && !singleBranchOperatorProfile &&
-      !nestedGroupOperatorProfile && !nestedGroupMixedOperatorProfile)
-    return emitMappedFailure(
-        analog, "NODAL-BACKEND-CAPABILITY-001",
-        "generated analog-node operator access profile requires one access on one owned branch "
-        "or one owned ddt/idt path per nested group branch");
 
   output << "  analog begin\n";
   if (parentGenerate) {

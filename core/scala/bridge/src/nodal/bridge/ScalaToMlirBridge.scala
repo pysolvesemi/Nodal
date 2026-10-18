@@ -130,16 +130,75 @@ private[nodal] object ScalaToMlirBridge:
       .view
       .mapValues(_.sortBy(_.path))
       .toMap
-    private val shapeIndicesByOwner = snapshot.shapeIndices
-      .groupBy(_.owner)
-      .view
-      .mapValues(_.sortBy(_.path))
-      .toMap
-    private val shapeViewsByOwner = snapshot.shapeViews
-      .groupBy(_.owner)
-      .view
-      .mapValues(_.toVector)
-      .toMap
+    private final case class StructuralShapeOperation(
+        record: KernelShapeViewSnapshot | KernelShapeIndexSnapshot,
+        ordinal: Int
+    ):
+      def path: String = record match
+        case view: KernelShapeViewSnapshot => view.path
+        case index: KernelShapeIndexSnapshot => index.path
+      def owner: String = record match
+        case view: KernelShapeViewSnapshot => view.owner
+        case index: KernelShapeIndexSnapshot => index.owner
+      def input: String = record match
+        case view: KernelShapeViewSnapshot => view.input
+        case index: KernelShapeIndexSnapshot => index.input
+      def dimensions: Vector[String] = record match
+        case view: KernelShapeViewSnapshot => view.dimensions
+        case index: KernelShapeIndexSnapshot => index.resultDimensions
+      def isView: Boolean = record.isInstanceOf[KernelShapeViewSnapshot]
+      def code: String = if isView then "NODAL-BRIDGE-045" else "NODAL-BRIDGE-044"
+      def name: String = if isView then "shape_view" else "shape_index"
+      def result: String = s"%${name}_$ordinal"
+
+    private lazy val structuralShapeOperations: Vector[StructuralShapeOperation] =
+      val ordinals = mutable.HashMap.empty[(String, Boolean), Int]
+      val records: Vector[KernelShapeViewSnapshot | KernelShapeIndexSnapshot] =
+        snapshot.shapeViews ++ snapshot.shapeIndices
+      val operations = records.map: record =>
+        val operation = StructuralShapeOperation(record, 0)
+        val key = operation.owner -> operation.isView
+        val ordinal = ordinals.getOrElse(key, 0)
+        ordinals.update(key, ordinal + 1)
+        operation.copy(ordinal = ordinal)
+      val byPath = mutable.HashMap.empty[String, Int]
+      operations.zipWithIndex.foreach: (operation, index) =>
+        if byPath.contains(operation.path) then
+          fail(operation.code, "duplicate structural shape identity", Some(operation.path))
+        byPath.update(operation.path, index)
+      val consumers = Array.fill(operations.size)(mutable.ArrayBuffer.empty[Int])
+      val indegree = Array.fill(operations.size)(0)
+      val previous = mutable.HashMap.empty[(String, Boolean), Int]
+      operations.zipWithIndex.foreach: (operation, index) =>
+        val key = operation.owner -> operation.isView
+        // Capture order within each record kind is part of the snapshot contract.
+        // Input edges interleave the kinds without repairing reordered snapshots.
+        val dependencies = (previous.get(key).toVector ++ byPath.get(operation.input)).distinct
+        dependencies.foreach: dependency =>
+          consumers(dependency) += index
+          indegree(index) += 1
+        previous.update(key, index)
+      val ready = mutable.PriorityQueue.empty[Int](using Ordering.Int.reverse)
+      indegree.indices.filter(indegree(_) == 0).foreach(ready.enqueue(_))
+      val ordered = Vector.newBuilder[StructuralShapeOperation]
+      var visited = 0
+      while ready.nonEmpty do
+        val index = ready.dequeue()
+        ordered += operations(index)
+        visited += 1
+        consumers(index).foreach: consumer =>
+          indegree(consumer) -= 1
+          if indegree(consumer) == 0 then ready.enqueue(consumer)
+      if visited != operations.size then
+        val blocked = operations(indegree.indexWhere(_ > 0))
+        fail(
+          blocked.code,
+          "structural shape dependencies contain a cycle or contradict capture order",
+          Some(blocked.path)
+        )
+      ordered.result()
+
+    private lazy val structuralShapesByOwner = structuralShapeOperations.groupBy(_.owner)
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -756,111 +815,77 @@ ${indent(body, 2)}
             "parameter expression has no owning Module",
             Some(expression.path)
           )
-      val validatedShapeViews = mutable.LinkedHashMap.empty[String, KernelShapeViewSnapshot]
-      snapshot.shapeViews.foreach: view =>
+      val validatedShapes = mutable.HashMap.empty[String, (String, Vector[String])]
+      structuralShapeOperations.foreach: shape =>
         val module = modulesByPath.getOrElse(
-          view.owner,
-          fail("NODAL-BRIDGE-045", "shape view has no owning Module", Some(view.path))
+          shape.owner,
+          fail(shape.code, "structural shape has no owning Module", Some(shape.path))
         )
-        if !view.path.startsWith(s"${view.owner}.") || view.path.trim != view.path ||
-          view.input.trim != view.input || !view.input.startsWith(s"${view.owner}.")
+        if !shape.path.startsWith(s"${shape.owner}.") || shape.path.trim != shape.path ||
+          shape.input.trim != shape.input || !shape.input.startsWith(s"${shape.owner}.")
         then
           fail(
-            "NODAL-BRIDGE-045",
-            "shape-view identity is noncanonical or escapes its owning Module",
-            Some(view.path)
+            shape.code,
+            "structural shape identity is noncanonical or escapes its owning Module",
+            Some(shape.path)
           )
-        if !sourceByPath.contains(view.path) then
-          fail("NODAL-BRIDGE-045", "shape-view identity has no source-map entry", Some(view.path))
-        val sourceDimensions = module.declarations.find(_.path == view.input) match
+        if !sourceByPath.contains(shape.path) then
+          fail(shape.code, "structural shape identity has no source-map entry", Some(shape.path))
+        if module.declarations.exists(_.path == shape.path) then
+          fail(shape.code, "structural shape identity aliases a declaration", Some(shape.path))
+        val dimensions = module.declarations.find(_.path == shape.input) match
           case Some(declaration) =>
             if declaration.kind != "input" && declaration.kind != "output" then
-              fail("NODAL-BRIDGE-045", "shape-view input must be a module port", Some(view.path))
+              fail(shape.code, "structural shape input must be a module port", Some(shape.path))
             val dataType = declaration.dataType.getOrElse(
-              fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
+              fail(shape.code, "structural shape input type is absent", Some(shape.path))
             )
-            vecTypeParts(dataType, view.path)._2
+            vecTypeParts(dataType, shape.path)._2
           case None =>
-            validatedShapeViews.get(view.input) match
-              case Some(inputView) if inputView.owner == view.owner => inputView.dimensions
+            validatedShapes.get(shape.input) match
+              case Some((owner, dimensions)) if owner == shape.owner => dimensions
               case _ =>
                 fail(
-                  "NODAL-BRIDGE-045",
-                  "shape-view input must be an earlier structural view in the same Module",
-                  Some(view.path)
+                  shape.code,
+                  "shape input must be an earlier captured shaped result in the same Module",
+                  Some(shape.path)
                 )
-        val sourceSignature = shapeViewSignature(module, sourceDimensions, view.path)
-        val targetSignature = shapeViewSignature(module, view.dimensions, view.path)
-        if sourceSignature != targetSignature then
-          fail(
-            "NODAL-BRIDGE-045",
-            "shape-view source and result dimensions are not canonically equal",
-            Some(view.path)
-          )
-        validatedShapeViews += view.path -> view
-      snapshot.shapeIndices.foreach: index =>
-        val module = modulesByPath.getOrElse(
-          index.owner,
-          fail("NODAL-BRIDGE-044", "shape index has no owning Module", Some(index.path))
-        )
-        if !index.path.startsWith(s"${index.owner}.") || index.path.trim != index.path ||
-          index.input.trim != index.input
-        then
-          fail(
-            "NODAL-BRIDGE-044",
-            "shape-index identity is noncanonical or escapes its owning Module",
-            Some(index.path)
-          )
-        if !sourceByPath.contains(index.path) then
-          fail(
-            "NODAL-BRIDGE-044",
-            "shape-index identity has no source-map entry",
-            Some(index.path)
-          )
-        val dimensions = module.declarations.find(_.path == index.input) match
-          case Some(declaration) =>
-            if declaration.kind != "input" && declaration.kind != "output" then
+        shape.record match
+          case view: KernelShapeViewSnapshot =>
+            val sourceSignature = shapeViewSignature(module, dimensions, view.path)
+            val targetSignature = shapeViewSignature(module, view.dimensions, view.path)
+            if sourceSignature != targetSignature then
               fail(
-                "NODAL-BRIDGE-044",
-                "shape-index input must be a module port or structural view",
-                Some(index.path)
+                shape.code,
+                "shape-view source and result dimensions are not canonically equal",
+                Some(shape.path)
               )
-            val dataType = declaration.dataType.getOrElse(
-              fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
-            )
-            vecTypeParts(dataType, index.path)._2
-          case None =>
-            validatedShapeViews.get(index.input) match
-              case Some(inputView) if inputView.owner == index.owner => inputView.dimensions
-              case _ =>
-                fail(
-                  "NODAL-BRIDGE-044",
-                  "shape-index input must be a captured structural view in the same Module",
-                  Some(index.path)
-                )
-        if index.indices.isEmpty || index.indices.size > dimensions.size then
-          fail(
-            "NODAL-BRIDGE-044",
-            "shape-index rank is empty or exceeds input rank",
-            Some(index.path)
-          )
-        val expectedResultDimensions = dimensions.drop(index.indices.size)
-        if index.resultDimensions != expectedResultDimensions then
-          fail(
-            "NODAL-BRIDGE-044",
-            "shape-index result dimensions do not match the unselected input axes",
-            Some(index.path)
-          )
-        index.indices.zip(dimensions).zipWithIndex.foreach:
-          case ((position, dimension), axis) =>
-            val minimum = shapeDimensionMinimum(module, dimension, index.path)
-            val bounds = shapeIndexBounds(module, position, index.path)
-            if bounds.lower < 0L || bounds.upper >= minimum then
+          case index: KernelShapeIndexSnapshot =>
+            if index.indices.isEmpty || index.indices.size > dimensions.size then
               fail(
-                "NODAL-BRIDGE-044",
-                s"shape index is not valid for every legal extent at axis $axis",
-                Some(index.path)
+                shape.code,
+                "shape-index rank is empty or exceeds input rank",
+                Some(shape.path)
               )
+            val expectedResultDimensions = dimensions.drop(index.indices.size)
+            if index.resultDimensions != expectedResultDimensions then
+              fail(
+                shape.code,
+                "shape-index result dimensions do not match the unselected input axes",
+                Some(shape.path)
+              )
+            index.indices.zip(dimensions).zipWithIndex.foreach:
+              case ((position, dimension), axis) =>
+                val minimum = shapeDimensionMinimum(module, dimension, shape.path)
+                val bounds = shapeIndexBounds(module, position, shape.path)
+                if bounds.lower < 0L || bounds.upper >= minimum then
+                  fail(
+                    shape.code,
+                    s"shape index is not valid for every legal extent at axis $axis",
+                    Some(shape.path)
+                  )
+        if shape.dimensions.nonEmpty then
+          validatedShapes.update(shape.path, shape.owner -> shape.dimensions)
       requireUnique(
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
@@ -1035,7 +1060,7 @@ ${indent(body, 2)}
           case _ => ()
 
       val shapeStaticValues = mutable.LinkedHashMap.empty[String, (String, String)]
-      val emittedShapeViews =
+      val emittedShapes =
         mutable.LinkedHashMap.empty[String, (String, String, String)]
       var nextShapeStaticValue = 0
       def allocateShapeStaticValue(): String =
@@ -1065,165 +1090,129 @@ ${indent(body, 2)}
                 Some(dimensionPath)
               )
 
-      shapeViewsByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
-        (view, ordinal) =>
-          view.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
-            val (_, dataType) = emitStaticValue(
-              dimensionPath,
-              parameterSymbols,
-              declarationsByPath,
-              expressionsByPath,
-              body,
-              shapeStaticValues,
-              () => allocateShapeStaticValue(),
-              requireStructural = true
+      structuralShapesByOwner.getOrElse(module.path, Vector.empty).foreach: shape =>
+        shape.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
+          val (_, dataType) = emitStaticValue(
+            dimensionPath,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            body,
+            shapeStaticValues,
+            () => allocateShapeStaticValue(),
+            requireStructural = true
+          )
+          if dataType != "i64" then
+            fail(
+              shape.code,
+              "structural shape expression dimension must have Integer type",
+              Some(dimensionPath)
             )
-            if dataType != "i64" then
+        val (inputValue, inputType, elementText) = declarationsByPath.get(shape.input) match
+          case Some(declaration) =>
+            val dataType = declaration.dataType.getOrElse(
+              fail(shape.code, "structural shape input type is absent", Some(shape.path))
+            )
+            val (element, _) = vecTypeParts(dataType, shape.path)
+            val portValue = s"${shape.result}_input"
+            val shapedType = parseType(dataType, shape.path)
+            body += operation(
+              "nodal.port_value",
+              results = Vector(portValue),
+              resultTypes = Vector(shapedType),
+              attributes = Vector(
+                "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
+                "metadata" -> bridgeMetadata(shape.input, Vector("use" -> quoted(shape.name)))
+              ),
+              semanticPath = shape.input
+            )
+            (portValue, shapedType, element)
+          case None =>
+            emittedShapes.getOrElse(
+              shape.input,
               fail(
-                "NODAL-BRIDGE-045",
-                "shape-view expression dimension must have Integer type",
-                Some(dimensionPath)
+                shape.code,
+                "structural shaped input was not emitted before its consumer",
+                Some(shape.path)
               )
-          val (inputValue, inputType, elementText) = declarationsByPath.get(view.input) match
-            case Some(declaration) =>
-              val dataType = declaration.dataType.getOrElse(
-                fail("NODAL-BRIDGE-045", "shape-view input type is absent", Some(view.path))
-              )
-              val (element, _) = vecTypeParts(dataType, view.path)
-              val portValue = s"%shape_view_${ordinal}_input"
-              val shapedType = parseType(dataType, view.path)
-              body += operation(
-                "nodal.port_value",
-                results = Vector(portValue),
-                resultTypes = Vector(shapedType),
-                attributes = Vector(
-                  "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
-                  "metadata" -> bridgeMetadata(view.input, Vector("use" -> quoted("shape_view")))
-                ),
-                semanticPath = view.input
-              )
-              (portValue, shapedType, element)
-            case None =>
-              emittedShapeViews.getOrElse(
-                view.input,
-                fail(
-                  "NODAL-BRIDGE-045",
-                  "shape-view input was not emitted before its consumer",
-                  Some(view.path)
-                )
-              )
-          val resultType =
-            s"!nodal.shaped<${quoted(view.dimensions.mkString(","))}, ${parseType(elementText, view.path)}>"
-          val resultValue = s"%shape_view_$ordinal"
-          body += operation(
-            "nodal.shape_view",
-            results = Vector(resultValue),
-            operands = Vector(inputValue),
-            operandTypes = Vector(inputType),
-            resultTypes = Vector(resultType),
-            attributes = Vector(
-              "dimensions" -> quoted(view.dimensions.mkString(",")),
-              "origin" -> quoted(view.input),
-              "materialization" -> quoted("view"),
-              "observability" -> quoted("source_mapped"),
-              "metadata" -> bridgeMetadata(
-                view.path,
-                Vector(
-                  "input_path" -> quoted(view.input),
-                  "storage" -> quoted("structural")
-                )
-              )
-            ),
-            semanticPath = view.path
-          )
-          emittedShapeViews += view.path -> ((resultValue, resultType, elementText))
-
-      shapeIndicesByOwner.getOrElse(module.path, Vector.empty).zipWithIndex.foreach:
-        (index, ordinal) =>
-          val (inputValue, shapedType, elementText) = declarationsByPath.get(index.input) match
-            case Some(declaration) =>
-              val sourceType = declaration.dataType.getOrElse(
-                fail("NODAL-BRIDGE-044", "shape-index input type is absent", Some(index.path))
-              )
-              val (element, _) = vecTypeParts(sourceType, index.path)
-              val sourceShapedType = parseType(sourceType, index.path)
-              val portValue = s"%shape_index_${ordinal}_input"
-              body += operation(
-                "nodal.port_value",
-                results = Vector(portValue),
-                resultTypes = Vector(sourceShapedType),
-                attributes = Vector(
-                  "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
-                  "metadata" -> bridgeMetadata(index.input, Vector("use" -> quoted("shape_index")))
-                ),
-                semanticPath = index.input
-              )
-              (portValue, sourceShapedType, element)
-            case None =>
-              emittedShapeViews.getOrElse(
-                index.input,
-                fail(
-                  "NODAL-BRIDGE-044",
-                  "shape-index input structural view was not emitted before its consumer",
-                  Some(index.path)
-                )
-              )
-          val elementType = parseType(elementText, index.path)
-          val resultType =
-            if index.resultDimensions.isEmpty then elementType
-            else
-              s"!nodal.shaped<${quoted(index.resultDimensions.mkString(","))}, $elementType>"
-          val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
-            position.toIntOption match
-              case Some(literal) =>
-                val result = s"%shape_index_${ordinal}_index_$axis"
-                body += operation(
-                  "nodal.constant",
-                  results = Vector(result),
-                  resultTypes = Vector("index"),
-                  attributes = Vector(
-                    "value" -> s"$literal : index",
-                    "metadata" -> bridgeMetadata(
-                      index.path,
-                      Vector("axis" -> integer(axis))
-                    )
-                  ),
-                  semanticPath = index.path
-                )
-                result -> "index"
-              case None =>
-                val value = emitStaticValue(
-                  position,
-                  parameterSymbols,
-                  declarationsByPath,
-                  expressionsByPath,
-                  body,
-                  shapeStaticValues,
-                  () => allocateShapeStaticValue(),
-                  requireStructural = true
-                )
-                if value._2 != "i64" then
-                  fail(
-                    "NODAL-BRIDGE-044",
-                    "shape index expression must have Integer type",
-                    Some(position)
+            )
+        val elementType = parseType(elementText, shape.path)
+        val resultType =
+          if shape.dimensions.isEmpty then elementType
+          else s"!nodal.shaped<${quoted(shape.dimensions.mkString(","))}, $elementType>"
+        shape.record match
+          case view: KernelShapeViewSnapshot =>
+            body += operation(
+              "nodal.shape_view",
+              results = Vector(shape.result),
+              operands = Vector(inputValue),
+              operandTypes = Vector(inputType),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "dimensions" -> quoted(view.dimensions.mkString(",")),
+                "origin" -> quoted(view.input),
+                "materialization" -> quoted("view"),
+                "observability" -> quoted("source_mapped"),
+                "metadata" -> bridgeMetadata(
+                  view.path,
+                  Vector(
+                    "input_path" -> quoted(view.input),
+                    "storage" -> quoted("structural")
                   )
-                value
-          val result = s"%shape_index_$ordinal"
-          body += operation(
-            "nodal.shape_index",
-            results = Vector(result),
-            operands = inputValue +: indexValues.map(_._1),
-            operandTypes = shapedType +: indexValues.map(_._2),
-            resultTypes = Vector(resultType),
-            attributes = Vector(
-              "metadata" -> bridgeMetadata(
-                index.path,
-                Vector("input_path" -> quoted(index.input))
-              )
-            ),
-            semanticPath = index.path
-          )
+                )
+              ),
+              semanticPath = view.path
+            )
+          case index: KernelShapeIndexSnapshot =>
+            val indexValues = index.indices.zipWithIndex.map: (position, axis) =>
+              position.toIntOption match
+                case Some(literal) =>
+                  val result = s"${shape.result}_index_$axis"
+                  body += operation(
+                    "nodal.constant",
+                    results = Vector(result),
+                    resultTypes = Vector("index"),
+                    attributes = Vector(
+                      "value" -> s"$literal : index",
+                      "metadata" -> bridgeMetadata(index.path, Vector("axis" -> integer(axis)))
+                    ),
+                    semanticPath = index.path
+                  )
+                  result -> "index"
+                case None =>
+                  val value = emitStaticValue(
+                    position,
+                    parameterSymbols,
+                    declarationsByPath,
+                    expressionsByPath,
+                    body,
+                    shapeStaticValues,
+                    () => allocateShapeStaticValue(),
+                    requireStructural = true
+                  )
+                  if value._2 != "i64" then
+                    fail(
+                      shape.code,
+                      "shape index expression must have Integer type",
+                      Some(position)
+                    )
+                  value
+            body += operation(
+              "nodal.shape_index",
+              results = Vector(shape.result),
+              operands = inputValue +: indexValues.map(_._1),
+              operandTypes = inputType +: indexValues.map(_._2),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "metadata" -> bridgeMetadata(
+                  index.path,
+                  Vector("input_path" -> quoted(index.input))
+                )
+              ),
+              semanticPath = index.path
+            )
+        if shape.dimensions.nonEmpty then
+          emittedShapes.update(shape.path, (shape.result, resultType, elementText))
 
       module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
         body ++= renderInstance(

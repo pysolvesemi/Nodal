@@ -65,8 +65,8 @@ private final class ConstructionSession(val options: EmitOptions):
     mutable.ArrayBuffer.empty
   private val generatedOwnershipRecords =
     mutable.LinkedHashMap.empty[(String, String), GeneratedRegionRecord]
-  private val shapeIndices: mutable.ArrayBuffer[ShapeIndexRecord] = mutable.ArrayBuffer.empty
-  private val shapeViews: mutable.ArrayBuffer[ShapeViewRecord] = mutable.ArrayBuffer.empty
+  private val shapeIndices = mutable.LinkedHashMap.empty[ExpressionRef, ShapeIndexRecord]
+  private val shapeViews = mutable.LinkedHashMap.empty[ExpressionRef, ShapeViewRecord]
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -280,13 +280,12 @@ private final class ConstructionSession(val options: EmitOptions):
       lower
     case _ => fail("NODAL-SHAPE-043-002", "shape extent has no proven finite minimum")
 
-  def registerShapeIndex[A <: Data, B <: Data](
-      expression: KernelExpr[B],
+  private def structuralShapeInput[A <: Data](
       input: Expr[Vec[A]],
-      indices: Vector[Dimension]
-  ): Unit =
-    val module = currentModule
-    val inputReference: DeclarationRef | ExpressionRef = input match
+      owner: Long,
+      code: String
+  ): (DeclarationRef | ExpressionRef, Option[DataType[? <: Data]], String) =
+    val reference: DeclarationRef | ExpressionRef = input match
       case candidate: AnyRef =>
         Option(declarationIds.get(candidate))
           .map(reference => reference: DeclarationRef | ExpressionRef)
@@ -295,35 +294,49 @@ private final class ConstructionSession(val options: EmitOptions):
               reference: DeclarationRef | ExpressionRef
             )
           )
+          .getOrElse(fail(code, "shape input has no structural identity"))
+    val (inputOwner, path) = reference match
+      case declaration: DeclarationRef => declaration.module -> declarationPath(declaration)
+      case expression: ExpressionRef => expression.module -> expressionPath(expression)
+    if inputOwner != owner then
+      fail(code, "shape input must be owned by the active Module", Some(path))
+    val dataType = reference match
+      case declaration: DeclarationRef =>
+        val record = records(declaration.module).declarations(declaration.index)
+        if record.kind == KernelSignalKind.Input || record.kind == KernelSignalKind.Output then
+          record.dataType
+        else None
+      case expression: ExpressionRef =>
+        val dimensions = shapeViews.get(expression).map(_.dimensions)
+          .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
+            .map(_.resultDimensions))
           .getOrElse(
-            fail("NODAL-SHAPE-043-002", "indexed value has no structural identity")
+            fail(code, "shape input is not a captured structural shaped result", Some(path))
           )
-    val inputOwner = inputReference match
-      case reference: DeclarationRef => reference.module
-      case reference: ExpressionRef => reference.module
-    val inputPath = inputReference match
-      case reference: DeclarationRef => declarationPath(reference)
-      case reference: ExpressionRef => expressionPath(reference)
-    if inputOwner != module.handle then
-      fail(
-        "NODAL-SHAPE-043-002",
-        "indexed value must be owned by the active Module",
-        Some(inputPath)
-      )
-    val structuralInput = inputReference match
-      case reference: DeclarationRef =>
-        val declaration = records(reference.module).declarations(reference.index)
-        if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
-        then None
-        else declaration.dataType
-      case reference: ExpressionRef =>
-        if !shapeViews.exists(_.reference == reference) then
+        val dataType = expressionValues.get(expression)
+          .flatMap(CandidateRuntime.expressionDataType)
+          .getOrElse(fail(code, "structural shape input has no captured type", Some(path)))
+        val descriptor = CandidateRuntime.typeDescriptor(dataType)
+        val actualDimensions = descriptor.arguments.lift(1).toVector.flatMap:
+          case values: Seq[?] => values.toVector
+          case _ => Vector.empty
+        if descriptor.kind != "Vec" || actualDimensions != dimensions then
           fail(
-            "NODAL-SHAPE-043-002",
-            "indexed expression input is not a captured structural view",
-            Some(inputPath)
+            code,
+            "structural shape input type disagrees with its captured dimensions",
+            Some(path)
           )
-        CandidateRuntime.expressionDataType(input)
+        Some(dataType)
+    (reference, dataType, path)
+
+  def registerShapeIndex[A <: Data, B <: Data](
+      expression: KernelExpr[B],
+      input: Expr[Vec[A]],
+      indices: Vector[Dimension]
+  ): Unit =
+    val module = currentModule
+    val (inputReference, structuralInput, inputPath) =
+      structuralShapeInput(input, module.handle, "NODAL-SHAPE-043-002")
     structuralInput match
       case None =>
         // Preserve the previously exposed inert expression surface until shaped
@@ -412,8 +425,10 @@ private final class ConstructionSession(val options: EmitOptions):
         val reference = captureExpression(expression).getOrElse(
           fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
         )
-        shapeIndices +=
+        shapeIndices.update(
+          reference,
           ShapeIndexRecord(reference, inputReference, positions.map(_._1), resultDimensions)
+        )
 
   private final case class ShapeViewFactor(
       literal: Option[Long],
@@ -545,48 +560,12 @@ private final class ConstructionSession(val options: EmitOptions):
       dimensions: Vector[Dimension]
   ): Unit =
     val module = currentModule
-    val inputReference: DeclarationRef | ExpressionRef = input match
-      case candidate: AnyRef =>
-        Option(declarationIds.get(candidate))
-          .map(reference => reference: DeclarationRef | ExpressionRef)
-          .orElse(
-            Option(expressionIds.get(candidate)).map(reference =>
-              reference: DeclarationRef | ExpressionRef
-            )
-          )
-          .getOrElse(
-            fail("NODAL-SHAPE-043-003", "shape-view value has no structural identity")
-          )
-    val inputOwner = inputReference match
-      case reference: DeclarationRef => reference.module
-      case reference: ExpressionRef => reference.module
-    if inputOwner != module.handle then
-      fail(
-        "NODAL-SHAPE-043-003",
-        "shape-view value must be owned by the active Module",
-        Some(inputReference match
-          case reference: DeclarationRef => declarationPath(reference)
-          case reference: ExpressionRef => expressionPath(reference))
-      )
-    val path = inputReference match
-      case reference: DeclarationRef =>
-        val declaration = records(reference.module).declarations(reference.index)
-        if declaration.kind != KernelSignalKind.Input && declaration.kind != KernelSignalKind.Output
-        then
-          val _ = captureExpression(expression)
-          None
-        else Some(declarationPath(reference))
-      case reference: ExpressionRef =>
-        if !shapeViews.exists(_.reference == reference) then
-          fail(
-            "NODAL-SHAPE-043-003",
-            "shape-view expression input is not a captured structural view",
-            Some(expressionPath(reference))
-          )
-        Some(expressionPath(reference))
-    path.foreach: path =>
-      val descriptor = CandidateRuntime.expressionDataType(input)
-        .map(CandidateRuntime.typeDescriptor)
+    val (inputReference, structuralInput, path) =
+      structuralShapeInput(input, module.handle, "NODAL-SHAPE-043-003")
+    if structuralInput.isEmpty then
+      val _ = captureExpression(expression)
+    structuralInput.foreach: inputType =>
+      val descriptor = Option(CandidateRuntime.typeDescriptor(inputType))
         .filter(_.kind == "Vec")
         .getOrElse(
           fail(
@@ -594,6 +573,18 @@ private final class ConstructionSession(val options: EmitOptions):
             "shape-view input must have Vec type",
             Some(path)
           )
+        )
+      val resultDescriptor = CandidateRuntime.expressionDataType(expression)
+        .map(CandidateRuntime.typeDescriptor)
+      val expectedDescriptor = KernelTypeDescriptor(
+        "Vec",
+        Vector(descriptor.arguments.head, dimensions)
+      )
+      if !resultDescriptor.contains(expectedDescriptor) then
+        fail(
+          "NODAL-SHAPE-043-003",
+          "shape-view result must retain the element type and exact requested dimensions",
+          Some(path)
         )
       val sourceDimensions = descriptor.arguments.lift(1).toVector.flatMap:
         case values: Seq[?] => values.toVector
@@ -621,7 +612,7 @@ private final class ConstructionSession(val options: EmitOptions):
       val reference = captureExpression(expression).getOrElse(
         fail("NODAL-SHAPE-043-003", "shape view requires an active Module")
       )
-      shapeViews += ShapeViewRecord(reference, inputReference, dimensions)
+      shapeViews.update(reference, ShapeViewRecord(reference, inputReference, dimensions))
 
   private def captureExpression(value: AnyRef): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
@@ -2548,7 +2539,7 @@ private final class ConstructionSession(val options: EmitOptions):
     generatedRegionPath(region) -> expressionPath(region.induction)
 
   private def shapeIndexSnapshots(): Vector[KernelShapeIndexSnapshot] =
-    shapeIndices.toVector.map: index =>
+    shapeIndices.values.toVector.map: index =>
       val inputPath = index.input match
         case reference: DeclarationRef => declarationPath(reference)
         case reference: ExpressionRef => expressionPath(reference)
@@ -2562,7 +2553,7 @@ private final class ConstructionSession(val options: EmitOptions):
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
-    shapeViews.toVector.map: view =>
+    shapeViews.values.toVector.map: view =>
       val inputPath = view.input match
         case reference: DeclarationRef => declarationPath(reference)
         case reference: ExpressionRef => expressionPath(reference)
@@ -2843,7 +2834,7 @@ private final class ConstructionSession(val options: EmitOptions):
         Iterator(region.lower, region.upperExclusive, region.step)
       )
     )
-    val shapeIndexRoots = shapeIndices.iterator.flatMap(_.indices.iterator)
+    val shapeIndexRoots = shapeIndices.valuesIterator.flatMap(_.indices.iterator)
     def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] =
       val descriptor = CandidateRuntime.typeDescriptor(dataType)
       if descriptor.kind != "Vec" then Vector.empty
@@ -2858,7 +2849,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
       _.declarations.iterator.flatMap(_.dataType.iterator.flatMap(shapeDimensionRoots))
     )
-    val shapeViewExpressionRoots = shapeViews.iterator.flatMap(_.dimensions.iterator)
+    val shapeViewExpressionRoots = shapeViews.valuesIterator.flatMap(_.dimensions.iterator)
     (roots ++ generatedRoots ++ shapeIndexRoots ++ shapeDimensionExpressionRoots ++
       shapeViewExpressionRoots).foreach:
       case expression: KernelExpr[?] if expression.literal.isEmpty => visit(expression)

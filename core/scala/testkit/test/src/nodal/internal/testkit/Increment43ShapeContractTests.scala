@@ -104,6 +104,86 @@ final class Increment43ReshapedRowView extends Module, Increment43ShapeClock:
   val reshaped: Expr[Vec[Real]] = samples.reshape(3, 2)
   val selected: Expr[Vec[Real]] = reshaped.row(2)
 
+final class Increment43ComposedPlaneRow extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3, 4))
+  val plane: Expr[Vec[Real]] = samples.plane(1)
+  val row: Expr[Vec[Real]] = plane.row(0)
+  val selected: Expr[Real] = row.at(2)
+
+final class Increment43SymbolicComposedPlaneRow extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(3.integer, range = 3 to 5)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, lanes, 2, lanes))
+  val plane: Expr[Vec[Real]] = samples.plane(1)
+  val row: Expr[Vec[Real]] = plane.row(0)
+  val selected: Expr[Real] = row.at(lanes - 3.integer)
+
+final class Increment43ComposedRowReshape extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 4))
+  val row: Expr[Vec[Real]] = samples.row(1)
+  val reshaped: Expr[Vec[Real]] = row.reshape(2, 2)
+  val selected: Expr[Real] = reshaped.at(1, 1)
+
+final class Increment43SymbolicComposedRowReshape extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(3.integer, range = 3 to 5)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, lanes))
+  val row: Expr[Vec[Real]] = samples.row(1)
+  val reshaped: Expr[Vec[Real]] = row.reshape(1, lanes)
+  val selected: Expr[Real] = reshaped.at(0, lanes - 3.integer)
+
+final class Increment43AlternatingShapeViews extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(3.integer, range = 3 to 5)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, lanes, 4))
+  val plane: Expr[Vec[Real]] = samples.plane(1)
+  val reshaped: Expr[Vec[Real]] = plane.reshape(lanes, 4)
+  val row: Expr[Vec[Real]] = reshaped.row(0)
+  val flattened: Expr[Vec[Real]] = row.flatten
+  val expanded: Expr[Vec[Real]] = flattened.reshape(2, 2)
+  val selected: Expr[Real] = expanded.at(1, 1)
+
+final class Increment43SymbolicComposedRowFlatten extends Module, Increment43ShapeClock:
+  val lanes: Param[Integer] = param(3.integer, range = 3 to 5)
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, lanes))
+  val row: Expr[Vec[Real]] = samples.row(1)
+  val flattened: Expr[Vec[Real]] = row.flatten
+  val selected: Expr[Real] = flattened.at(2)
+
+final class Increment43LongAlternatingShapes extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 1, 4))
+  val repeated: Expr[Vec[Real]] = (0 until 64).foldLeft(samples: Expr[Vec[Real]]): (value, _) =>
+    value.row(0).reshape(1, 4)
+  val selected: Expr[Real] = repeated.row(0).at(2)
+
+final class Increment43ScalarShapeCarrier extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val selected: Expr[Real] = samples.at(1, 2)
+  val reshaped: Expr[Vec[Real]] = samples.reshape(3, 2)
+
+final class Increment43ForgedShapedExpression(flatten: Boolean) extends Module:
+  val forged: Expr[Vec[Real]] =
+    val expression = new KernelExpr[Vec[Real]](
+      Vector.empty,
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(Real, Vector(2, 3)))),
+      operation = Some("shape_index")
+    )
+    ConstructionKernel.expression(expression)
+    expression
+  val selected: Expr[? <: Data] = if flatten then forged.flatten else forged.row(0)
+
+final class Increment43ForgedViewResult extends Module, Increment43ShapeClock:
+  val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3))
+  val forged: Expr[Vec[Real]] =
+    val expression = new KernelExpr[Vec[Real]](
+      Vector(samples),
+      resultType = Some(KernelTypeDescriptor("Vec", Vector(Integer, Vector(3, 2)))),
+      operation = Some("shape_view")
+    )
+    ConstructionKernel.shapeView(expression, samples, Vector(3, 2))
+    expression
+
+final class Increment43ForeignShapeCarrier extends Module, Increment43ShapeClock:
+  val child = new Increment43FixedRowView
+  val invalid: Expr[Vec[Real]] = child.selected.reshape(1, 3)
+
 final class Increment43InvalidRowRank extends Module, Increment43ShapeClock:
   val samples: Signal[Vec[Real]] = in(Vec(Real, 2, 3, 4))
   val invalid: Expr[Vec[Real]] = samples.row(0)
@@ -378,6 +458,157 @@ object Increment43ShapeContractTests extends TestSuite:
       assert(ScalaToMlirBridge.fromSnapshot(plane).text.contains(
         "!nodal.shaped<\"3,4\", f64>"
       ))
+
+    test("composed structural shapes preserve immediate deterministic SSA edges"):
+      val fixed = ConstructionKernel.inspect(new Increment43ComposedPlaneRow)
+      val symbolic = ConstructionKernel.inspect(new Increment43SymbolicComposedPlaneRow)
+      Vector(fixed, symbolic).foreach: snapshot =>
+        assert(snapshot.shapeIndices.size == 3)
+        assert(snapshot.shapeIndices(1).input == snapshot.shapeIndices.head.path)
+        assert(snapshot.shapeIndices(2).input == snapshot.shapeIndices(1).path)
+        assert(snapshot.shapeIndices(2).resultDimensions.isEmpty)
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+        assert(occurrences(document.text, "\"nodal.port_value\"") == 1)
+        assert(document.text.contains("%shape_index_1 = \"nodal.shape_index\"(%shape_index_0,"))
+        assert(document.text.contains("%shape_index_2 = \"nodal.shape_index\"(%shape_index_1,"))
+
+      Vector(
+        ConstructionKernel.inspect(new Increment43ComposedRowReshape),
+        ConstructionKernel.inspect(new Increment43SymbolicComposedRowReshape),
+        ConstructionKernel.inspect(new Increment43SymbolicComposedRowFlatten)
+      ).foreach: snapshot =>
+        assert(snapshot.shapeViews.head.input == snapshot.shapeIndices.head.path)
+        assert(snapshot.shapeIndices(1).input == snapshot.shapeViews.head.path)
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+        assert(occurrences(document.text, "\"nodal.port_value\"") == 1)
+        assert(document.text.contains("%shape_view_0 = \"nodal.shape_view\"(%shape_index_0)"))
+        assert(document.text.contains("%shape_index_1 = \"nodal.shape_index\"(%shape_view_0,"))
+        assert(document.text.indexOf("%shape_index_0 =") < document.text.indexOf("%shape_view_0 ="))
+        assert(document.text.indexOf("%shape_view_0 =") < document.text.indexOf("%shape_index_1 ="))
+
+      val alternating = ScalaToMlirBridge.lower(new Increment43AlternatingShapeViews)
+      assert(alternating == ScalaToMlirBridge.lower(new Increment43AlternatingShapeViews))
+      assert(occurrences(alternating.text, "\"nodal.port_value\"") == 1)
+      assert(occurrences(alternating.text, "\"nodal.shape_index\"") == 3)
+      assert(occurrences(alternating.text, "\"nodal.shape_view\"") == 3)
+      assert(alternating.text.contains("%shape_view_1 = \"nodal.shape_view\"(%shape_index_1)"))
+      assert(alternating.text.contains("%shape_view_2 = \"nodal.shape_view\"(%shape_view_1)"))
+      assert(alternating.text.contains("%shape_index_2 = \"nodal.shape_index\"(%shape_view_2,"))
+
+    test("composed structural shapes traverse long alternating chains without expansion"):
+      val snapshot = ConstructionKernel.inspect(new Increment43LongAlternatingShapes)
+      assert(snapshot.shapeIndices.size == 66)
+      assert(snapshot.shapeViews.size == 64)
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document == ScalaToMlirBridge.fromSnapshot(snapshot))
+      assert(occurrences(document.text, "\"nodal.port_value\"") == 1)
+      assert(occurrences(document.text, "\"nodal.shape_index\"") == 66)
+      assert(occurrences(document.text, "\"nodal.shape_view\"") == 64)
+      assert(document.text.contains("%shape_index_64 = \"nodal.shape_index\"(%shape_view_63,"))
+      assert(document.text.contains("%shape_index_65 = \"nodal.shape_index\"(%shape_index_64,"))
+
+    test("composed structural shapes reject uncaptured foreign and forged typed carriers"):
+      assert(failure(new Increment43ForgedShapedExpression(false)).diagnostic.code ==
+        "NODAL-SHAPE-043-002")
+      Vector(
+        failure(new Increment43ForgedShapedExpression(true)),
+        failure(new Increment43ForgedViewResult),
+        failure(new Increment43ForeignShapeCarrier)
+      ).foreach(error => assert(error.diagnostic.code == "NODAL-SHAPE-043-003"))
+
+    test("composed structural shapes reject malformed dependency snapshots"):
+      val indexed = ConstructionKernel.inspect(new Increment43ComposedPlaneRow)
+      val mixed = ConstructionKernel.inspect(new Increment43ComposedRowReshape)
+      val scalar = ConstructionKernel.inspect(new Increment43ScalarShapeCarrier)
+      val indexFailures = Vector(
+        indexed.copy(shapeIndices = indexed.shapeIndices.tail),
+        indexed.copy(shapeIndices = indexed.shapeIndices.reverse),
+        indexed.copy(shapeIndices =
+          indexed.shapeIndices.updated(
+            1,
+            indexed.shapeIndices(1).copy(input = "Foreign.row")
+          )
+        ),
+        indexed.copy(shapeIndices =
+          indexed.shapeIndices.updated(
+            0,
+            indexed.shapeIndices.head.copy(input = indexed.shapeIndices(1).path)
+          )
+        ),
+        indexed.copy(shapeIndices =
+          indexed.shapeIndices.updated(
+            0,
+            indexed.shapeIndices.head.copy(resultDimensions = Vector("4", "3"))
+          )
+        ),
+        indexed.copy(shapeIndices =
+          indexed.shapeIndices.updated(
+            1,
+            indexed.shapeIndices(1).copy(resultDimensions = Vector.empty)
+          )
+        ),
+        indexed.copy(shapeIndices =
+          indexed.shapeIndices.updated(
+            2,
+            indexed.shapeIndices(2).copy(input = indexed.shapeIndices(2).path)
+          )
+        )
+      )
+      indexFailures.foreach: forged =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        assert(error.diagnostic.code == "NODAL-BRIDGE-044")
+      val viewFailures = Vector(
+        mixed.copy(shapeIndices = mixed.shapeIndices.tail),
+        mixed.copy(shapeViews = mixed.shapeViews.map(_.copy(input = "Foreign.row"))),
+        mixed.copy(shapeIndices =
+          mixed.shapeIndices.updated(
+            0,
+            mixed.shapeIndices.head.copy(input = mixed.shapeViews.head.path)
+          )
+        ),
+        mixed.copy(shapeViews = mixed.shapeViews.map(_.copy(dimensions = Vector("3", "2")))),
+        mixed.copy(shapeViews = mixed.shapeViews.map(_.copy(path = mixed.shapeIndices.head.path))),
+        scalar.copy(shapeViews =
+          scalar.shapeViews.map(_.copy(input = scalar.shapeIndices.head.path))
+        )
+      )
+      viewFailures.zipWithIndex.foreach: (forged, ordinal) =>
+        val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged))
+          .failed.get.asInstanceOf[BridgeException]
+        val expectedCode = if ordinal == 4 then "NODAL-BRIDGE-044" else "NODAL-BRIDGE-045"
+        assert(error.diagnostic.code == expectedCode)
+
+    test("configured native accepts composed structural shape edges"):
+      sys.env.get("NODAL_NODALC") match
+        case None => assert(true)
+        case Some(executable) =>
+          val directory = Files.createTempDirectory("nodal-increment43-shape-composition-")
+          try
+            val request = NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--pass-pipeline=builtin.module(nodal-verify-parameters)"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+            Vector(
+              ScalaToMlirBridge.lower(new Increment43ComposedPlaneRow),
+              ScalaToMlirBridge.lower(new Increment43SymbolicComposedPlaneRow),
+              ScalaToMlirBridge.lower(new Increment43ComposedRowReshape),
+              ScalaToMlirBridge.lower(new Increment43SymbolicComposedRowReshape),
+              ScalaToMlirBridge.lower(new Increment43SymbolicComposedRowFlatten),
+              ScalaToMlirBridge.lower(new Increment43AlternatingShapeViews),
+              ScalaToMlirBridge.lower(new Increment43LongAlternatingShapes)
+            ).foreach: document =>
+              NativeCompilerClient.run(document, request) match
+                case success: NativeCompilerSuccess =>
+                  assert(success.normalizedMlir.contains("nodal.shape_index"))
+                  assert(occurrences(success.normalizedMlir, "\"nodal.port_value\"") == 1)
+                case failure: NativeCompilerFailure =>
+                  scala.Predef.assert(false, s"${failure.diagnostic}\n${failure.standardError}")
+          finally delete(directory)
 
     test("public row and plane views reject wrong rank bounds and forged result shape"):
       Vector(

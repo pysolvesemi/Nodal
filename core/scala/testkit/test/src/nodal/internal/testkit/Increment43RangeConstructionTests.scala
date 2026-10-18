@@ -1097,6 +1097,57 @@ final class Increment43NestedGeneratedNodeGroupMixedOperators extends Module:
         val voltageRate = voltage / 1.0.s
         V(nestedReturn, n) <+ idt(voltageRate, 0.0.V)
 
+final class Increment43NestedGeneratedNodeThreeDdt extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+  val q = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val firstTap = node(Electrical)
+      val secondTap = node(Electrical)
+      val thirdTap = node(Electrical)
+      analog:
+        I(firstTap, p) <+ (1.pF * ddt(V(firstTap, p)))
+        I(secondTap, n) <+ (1.pF * ddt(V(secondTap, n)))
+        I(thirdTap, q) <+ (1.pF * ddt(V(thirdTap, q)))
+
+final class Increment43NestedGeneratedNodeThreeIdt extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+  val q = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val firstTap = node(Electrical)
+      val secondTap = node(Electrical)
+      val thirdTap = node(Electrical)
+      analog:
+        V(firstTap, p) <+ idt(V(firstTap, p) / 1.0.s, 0.0.V)
+        V(secondTap, n) <+ idt(V(secondTap, n) / 1.0.s, 0.0.V)
+        V(thirdTap, q) <+ idt(V(thirdTap, q) / 1.0.s, 0.0.V)
+
+final class Increment43NestedGeneratedNodePermutedDdt extends Module:
+  val rows: Param[Integer] = param(8.integer, range = 6 to 10)
+  val columns: Param[Integer] = param(11.integer, range = 9 to 13)
+  val p = inout(Electrical)
+  val n = inout(Electrical)
+  val q = inout(Electrical)
+
+  hdlRange(1, rows, 2): _ =>
+    hdlRange(2, columns, 3): _ =>
+      val firstTap = node(Electrical)
+      val secondTap = node(Electrical)
+      val thirdTap = node(Electrical)
+      analog:
+        I(secondTap, n) <+ (1.pF * ddt(V(firstTap, p)))
+        I(thirdTap, q) <+ (1.pF * ddt(V(secondTap, n)))
+        I(firstTap, p) <+ (1.pF * ddt(V(thirdTap, q)))
+
 final class Increment43NestedGeneratedNodeIdt extends Module:
   val rows: Param[Integer] = param(8.integer, range = 6 to 10)
   val columns: Param[Integer] = param(11.integer, range = 9 to 13)
@@ -1189,6 +1240,14 @@ object Increment43RangeConstructionTests extends TestSuite:
 
   private def constructionFailure(body: => Any): ConstructionException =
     scala.util.Try(body).failed.get.asInstanceOf[ConstructionException]
+
+  private def generatedInductionSymbol(document: NodalMlirDocument, regionPath: String): String =
+    val marker = s"region_id = \"$regionPath\""
+    val lines = document.text.linesIterator.filter(line =>
+      line.contains("\"nodal.generate\"") && line.contains(marker)
+    ).toVector
+    assert(lines.size == 1)
+    "induction = \"([^\"]+)\"".r.findFirstMatchIn(lines.head).get.group(1)
 
   val tests: Tests = Tests:
     test("bounded symbolic hdlRange captures stable generated ownership"):
@@ -2519,7 +2578,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               NativeCompilerClient.run(
                 first.copy(text = forged, sha256 = hash),
                 NativeCompilerRequest(
-                  executable = Path.of(nodalc).toAbsolutePath,
+                  executable = Path.of(translator).toAbsolutePath,
                   arguments = Vector("--nodal-to-verilog-a"),
                   workingDirectory = directory,
                   timeout = Duration.ofSeconds(30)
@@ -2550,10 +2609,12 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedPeerEquation()
             assert(result == compileNestedPeerEquation())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
@@ -2624,7 +2685,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               NativeCompilerClient.run(
                 first.copy(text = text, sha256 = hash),
                 NativeCompilerRequest(
-                  executable = Path.of(nodalc).toAbsolutePath,
+                  executable = Path.of(translator).toAbsolutePath,
                   arguments = Vector("--nodal-to-verilog-a"),
                   workingDirectory = directory,
                   timeout = Duration.ofSeconds(30)
@@ -2679,10 +2740,12 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedPeerDdt()
             assert(result == compileNestedPeerDdt())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
@@ -2753,7 +2816,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               NativeCompilerClient.run(
                 first.copy(text = text, sha256 = hash),
                 NativeCompilerRequest(
-                  executable = Path.of(nodalc).toAbsolutePath,
+                  executable = Path.of(translator).toAbsolutePath,
                   arguments = Vector("--nodal-to-verilog-a"),
                   workingDirectory = directory,
                   timeout = Duration.ofSeconds(30)
@@ -2785,7 +2848,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             expectNativeFailure(
               first.text.patch(idtOffset, forgedStateLine, idtLine.length),
               "state identity",
-              "NODAL-BACKEND-CAPABILITY-001"
+              "NODAL-ANALOG-035-005"
             )
 
             val secondNodeLine = nodeLines(1)
@@ -2820,10 +2883,12 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedPeerIdt()
             assert(result == compileNestedPeerIdt())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
@@ -3004,14 +3069,14 @@ object Increment43RangeConstructionTests extends TestSuite:
             NativeCompilerClient.run(
               first.copy(text = forgedText, sha256 = forgedHash),
               NativeCompilerRequest(
-                executable = Path.of(nodalc).toAbsolutePath,
+                executable = Path.of(translator).toAbsolutePath,
                 arguments = Vector("--nodal-to-verilog-a"),
                 workingDirectory = directory,
                 timeout = Duration.ofSeconds(30)
               )
             ) match
               case failure: NativeCompilerFailure =>
-                assert(failure.diagnostic.code == "NODAL-BACKEND-CAPABILITY-001")
+                assert(failure.diagnostic.code == "NODAL-ANALOG-035-005")
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(false, s"forged negative-origin idt state accepted: $success")
 
@@ -3032,18 +3097,20 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNegativeOriginScaledIdt()
             assert(result == compileNegativeOriginScaledIdt())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "(rows - -2)"
             val innerCount = "(columns - -3)"
             val flatIndex =
-              "(((generate_0_index - -2) * (columns - -3)) + (generate_1_index - -3))"
+              s"((($outerIndex - -2) * (columns - -3)) + ($innerIndex - -3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
                   s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
                 )
               )
-            assert(result.verilogA.contains("generate_0_index = -2"))
-            assert(result.verilogA.contains("generate_1_index = -3"))
+            assert(result.verilogA.contains(s"$outerIndex = -2"))
+            assert(result.verilogA.contains(s"$innerIndex = -3"))
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
@@ -3126,14 +3193,17 @@ object Increment43RangeConstructionTests extends TestSuite:
             NativeCompilerClient.run(
               first.copy(text = forged, sha256 = hash),
               NativeCompilerRequest(
-                executable = Path.of(nodalc).toAbsolutePath,
+                executable = Path.of(translator).toAbsolutePath,
                 arguments = Vector("--nodal-to-verilog-a"),
                 workingDirectory = directory,
                 timeout = Duration.ofSeconds(30)
               )
             ) match
               case failure: NativeCompilerFailure =>
-                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
+                assert(failure.diagnostic.code == "NODAL-BACKEND-CAPABILITY-001")
+                assert(failure.standardError.contains(
+                  "generated analog-node branch ownership does not match its range"
+                ))
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(
                   false,
@@ -3157,17 +3227,20 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedGroupEquations()
             assert(result == compileNestedGroupEquations())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
                   s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
                 )
               )
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 3)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
             assert(
@@ -3252,13 +3325,14 @@ object Increment43RangeConstructionTests extends TestSuite:
             NativeCompilerClient.run(
               first.copy(text = forged, sha256 = hash),
               NativeCompilerRequest(
-                executable = Path.of(nodalc).toAbsolutePath,
+                executable = Path.of(translator).toAbsolutePath,
                 arguments = Vector("--nodal-to-verilog-a"),
                 workingDirectory = directory,
                 timeout = Duration.ofSeconds(30)
               )
             ) match
-              case _: NativeCompilerFailure => ()
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ANALOG-035-005")
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(
                   false,
@@ -3282,17 +3356,20 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedGroupIdt()
             assert(result == compileNestedGroupIdt())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
                   s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
                 )
               )
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 3)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
             assert(
@@ -3375,13 +3452,14 @@ object Increment43RangeConstructionTests extends TestSuite:
             NativeCompilerClient.run(
               first.copy(text = forged, sha256 = hash),
               NativeCompilerRequest(
-                executable = Path.of(nodalc).toAbsolutePath,
+                executable = Path.of(translator).toAbsolutePath,
                 arguments = Vector("--nodal-to-verilog-a"),
                 workingDirectory = directory,
                 timeout = Duration.ofSeconds(30)
               )
             ) match
-              case _: NativeCompilerFailure => ()
+              case failure: NativeCompilerFailure =>
+                assert(failure.diagnostic.code == "NODAL-ITERATION-043-004")
               case success: NativeCompilerSuccess =>
                 scala.Predef.assert(
                   false,
@@ -3405,17 +3483,20 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedGroupDdt()
             assert(result == compileNestedGroupDdt())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
                   s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
                 )
               )
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 3)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
             assert(
@@ -3495,20 +3576,21 @@ object Increment43RangeConstructionTests extends TestSuite:
         case (Some(nodalc), Some(translator)) =>
           val directory = workDirectory()
           try
-            def expectNativeFailure(text: String, label: String): Unit =
+            def expectNativeFailure(text: String, label: String, expectedCode: String): Unit =
               val hash = MessageDigest.getInstance("SHA-256")
                 .digest(text.getBytes(StandardCharsets.UTF_8))
                 .map(value => f"${value & 0xff}%02x").mkString
               NativeCompilerClient.run(
                 first.copy(text = text, sha256 = hash),
                 NativeCompilerRequest(
-                  executable = Path.of(nodalc).toAbsolutePath,
+                  executable = Path.of(translator).toAbsolutePath,
                   arguments = Vector("--nodal-to-verilog-a"),
                   workingDirectory = directory,
                   timeout = Duration.ofSeconds(30)
                 )
               ) match
-                case _: NativeCompilerFailure => ()
+                case failure: NativeCompilerFailure =>
+                  assert(failure.diagnostic.code == expectedCode)
                 case success: NativeCompilerSuccess =>
                   scala.Predef.assert(
                     false,
@@ -3523,7 +3605,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(forgedDdtLine != ddtLine)
             expectNativeFailure(
               first.text.patch(ddtOffset, forgedDdtLine, ddtLine.length),
-              "ddt owner"
+              "ddt owner",
+              "NODAL-ITERATION-043-004"
             )
 
             val statePattern = "state_id = \"[^\"]+\"".r
@@ -3534,7 +3617,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(forgedIdtLine != idtLine)
             expectNativeFailure(
               first.text.patch(idtOffset, forgedIdtLine, idtLine.length),
-              "idt state"
+              "idt state",
+              "NODAL-ANALOG-035-005"
             )
 
             def compileNestedGroupMixedOperators() =
@@ -3554,17 +3638,20 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNestedGroupMixedOperators()
             assert(result == compileNestedGroupMixedOperators())
             val names = child.declarations.map(_.split('.').last)
+            val outerIndex = generatedInductionSymbol(first, outer.path)
+            val innerIndex = generatedInductionSymbol(first, child.path)
             val outerCount = "((((rows - 1) + 2) - 1) / 2)"
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             val flatIndex =
-              s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
+              s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
                   s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
                 )
               )
-            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+            assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
+            assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 3)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
             assert(
@@ -3580,6 +3667,207 @@ object Increment43RangeConstructionTests extends TestSuite:
                   line.contains(s"idt((V(${names(1)}[$flatIndex], n) / 1), 0)")
               ) == 1
             )
+          finally delete(directory)
+        case _ => assert(true)
+
+    test("nested three-branch groups retain independent same-kind operators and exact layout"):
+      val cases = Vector[(String, () => Module)](
+        "ddt" -> (() => new Increment43NestedGeneratedNodeThreeDdt),
+        "idt" -> (() => new Increment43NestedGeneratedNodeThreeIdt)
+      )
+      cases.foreach: (kind, create) =>
+        val snapshot = ConstructionKernel.inspect(create())
+        assert(snapshot == ConstructionKernel.inspect(create()))
+        assert(snapshot.generatedRegions.size == 2)
+        val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+        val child = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+        assert(child.parent.contains(outer.path))
+        assert(outer.declarations.isEmpty)
+        assert(child.declarations.size == 3)
+        assert(child.declarations.distinct.size == 3)
+        assert(snapshot.analogRegions.size == 1)
+        val analog = snapshot.analogRegions.head
+        assert(analog.generatedOwner.contains(child.path))
+        assert(analog.generatedInduction.contains(child.induction))
+        assert(analog.contributions.size == 3)
+        analog.contributions.foreach: contribution =>
+          assert(contribution.generatedOwner.contains(child.path))
+          assert(contribution.generatedInduction.contains(child.induction))
+        assert(snapshot.continuousOperators.map(_.operation) == Vector.fill(3)(s"analog_$kind"))
+        assert(snapshot.continuousOperators.map(_.path).distinct.size == 3)
+        snapshot.continuousOperators.foreach: operator =>
+          assert(operator.generatedOwner.contains(child.path))
+          assert(operator.generatedInduction.contains(child.induction))
+          if kind == "idt" then assert(operator.stateId.contains(s"${operator.path}.state"))
+          else assert(operator.stateId.isEmpty)
+
+        val first = ScalaToMlirBridge.lower(create())
+        assert(first == ScalaToMlirBridge.lower(create()))
+        val operationCounts = Vector(
+          "nodal.generate" -> 2,
+          "nodal.node" -> 3,
+          "nodal.branch" -> 3,
+          "nodal.access" -> 6,
+          "nodal.contribute" -> 3,
+          "nodal.analog_ddt" -> (if kind == "ddt" then 3 else 0),
+          "nodal.analog_idt" -> (if kind == "idt" then 3 else 0)
+        )
+        operationCounts.foreach: (operation, expected) =>
+          val marker = s"\"$operation\""
+          assert(first.text.sliding(marker.length).count(_ == marker) == expected)
+        val sourceMapStart = first.text.indexOf("nodal.bridge.source_map")
+        val sourceMapEnd = first.text.indexOf("nodal.bridge.topology", sourceMapStart)
+        assert(sourceMapStart >= 0)
+        assert(sourceMapEnd > sourceMapStart)
+        val sourceMap = first.text.substring(sourceMapStart, sourceMapEnd)
+        val snapshotPaths = snapshot.generatedRegions.flatMap(region =>
+          Vector(region.induction) ++ region.declarations
+        ) ++ snapshot.continuousOperators.map(_.path)
+        snapshotPaths.foreach: path =>
+          assert(snapshot.sourceMap.count(_.semanticPath == path) == 1)
+        val sourcePaths = snapshotPaths ++ snapshot.generatedRegions.map(_.path)
+        sourcePaths.foreach: path =>
+          val marker = s"semantic_path = \"$path\""
+          assert(sourceMap.sliding(marker.length).count(_ == marker) == 1)
+        val operatorLines = first.text.linesIterator
+          .filter(_.contains(s"\"nodal.analog_$kind\""))
+          .toVector
+        assert(operatorLines.size == 3)
+        operatorLines.foreach: line =>
+          assert(line.contains(s"generated_owner = \"${child.path}\""))
+          assert(line.contains(s"generated_induction = \"${child.induction}\""))
+
+        (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+          case (Some(nodalc), Some(translator)) =>
+            val directory = workDirectory()
+            try
+              def expectNativeFailure(text: String, expectedCode: String): Unit =
+                val hash = MessageDigest.getInstance("SHA-256")
+                  .digest(text.getBytes(StandardCharsets.UTF_8))
+                  .map(value => f"${value & 0xff}%02x").mkString
+                NativeCompilerClient.run(
+                  first.copy(text = text, sha256 = hash),
+                  NativeCompilerRequest(
+                    executable = Path.of(translator).toAbsolutePath,
+                    arguments = Vector("--nodal-to-verilog-a"),
+                    workingDirectory = directory,
+                    timeout = Duration.ofSeconds(30)
+                  )
+                ) match
+                  case failure: NativeCompilerFailure =>
+                    assert(failure.diagnostic.code == expectedCode)
+                  case success: NativeCompilerSuccess =>
+                    scala.Predef.assert(false, s"forged three-branch $kind accepted: $success")
+
+              val originalLine = operatorLines.last
+              val offset = first.text.indexOf(originalLine)
+              assert(offset >= 0)
+              val forgedOwner = originalLine.replace(
+                s"generated_owner = \"${child.path}\"",
+                s"generated_owner = \"${outer.path}\""
+              )
+              assert(forgedOwner != originalLine)
+              expectNativeFailure(
+                first.text.patch(offset, forgedOwner, originalLine.length),
+                "NODAL-ITERATION-043-004"
+              )
+              if kind == "idt" then
+                val statePattern = "state_id = \"[^\"]+\"".r
+                val firstState = statePattern.findFirstIn(operatorLines.head).get
+                val aliasedState = statePattern.replaceFirstIn(originalLine, firstState)
+                assert(aliasedState != originalLine)
+                expectNativeFailure(
+                  first.text.patch(offset, aliasedState, originalLine.length),
+                  "NODAL-ANALOG-035-005"
+                )
+
+              def compileGroup() =
+                ScalaToMlirBridge
+                  .compileToVerilogA(
+                    create(),
+                    Path.of(nodalc).toAbsolutePath,
+                    Path.of(translator).toAbsolutePath,
+                    directory,
+                    Duration.ofSeconds(60)
+                  )
+                  .fold(
+                    failure =>
+                      scala.util.Failure[Nothing](
+                        new java.lang.AssertionError(failure.toString)
+                      ).get,
+                    identity
+                  )
+              val result = compileGroup()
+              assert(result == compileGroup())
+              val accessMarker = "\"nodal.access\""
+              assert(result.mlir.sliding(accessMarker.length).count(_ == accessMarker) == 6)
+              val names = child.declarations.map(_.split('.').last)
+              val outerIndex = generatedInductionSymbol(first, outer.path)
+              val innerIndex = generatedInductionSymbol(first, child.path)
+              val outerCount = "((((rows - 1) + 2) - 1) / 2)"
+              val innerCount = "((((columns - 2) + 3) - 1) / 3)"
+              val flatIndex =
+                s"(((($outerIndex - 1) / 2) * $innerCount) + (($innerIndex - 2) / 3))"
+              names.foreach: name =>
+                assert(
+                  result.verilogA.linesIterator.count(
+                    _ == s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  ) == 1
+                )
+              assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p, q;") == 1)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 4)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
+              assert(result.verilogA.linesIterator.count(_.contains("<+")) == 3)
+              assert(result.verilogA.sliding(4).count(_ == s"$kind(") == 3)
+              assert(result.verilogA.contains(s"$outerIndex = 1"))
+              assert(result.verilogA.contains(s"$outerIndex = $outerIndex + 2"))
+              assert(result.verilogA.contains(s"$innerIndex = 2"))
+              assert(result.verilogA.contains(s"$innerIndex = $innerIndex + 3"))
+              names.zip(Vector("p", "n", "q")).foreach: (name, terminal) =>
+                val branch = s"$name[$flatIndex], $terminal"
+                val expected =
+                  if kind == "ddt" then s"I($branch) <+ (1e-12 * ddt(V($branch)));"
+                  else s"V($branch) <+ idt((V($branch) / 1), 0);"
+                assert(result.verilogA.linesIterator.count(_.trim == expected) == 1)
+            finally delete(directory)
+          case _ => assert(true)
+
+    test("nested three-branch ddt rejects destination permutations with equal branch totals"):
+      val first = ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodePermutedDdt)
+      assert(first == ScalaToMlirBridge.lower(new Increment43NestedGeneratedNodePermutedDdt))
+      for operation <- Vector("nodal.branch", "nodal.analog_ddt", "nodal.contribute") do
+        val marker = s"\"$operation\""
+        assert(first.text.sliding(marker.length).count(_ == marker) == 3)
+      val accessBranch = "\"nodal.access\"\\((%[^,)]+)".r
+      val contributeBranch = "\"nodal.contribute\"\\((%[^,)]+)".r
+      val inputAccesses = first.text.linesIterator.filter(_.contains("kind = \"potential\""))
+      val accessed = inputAccesses.flatMap(line =>
+        accessBranch.findFirstMatchIn(line).map(_.group(1))
+      ).toVector
+      val contributed = contributeBranch.findAllMatchIn(first.text).map(_.group(1)).toVector
+      assert(accessed.distinct.size == 3)
+      assert(contributed.distinct.size == 3)
+      assert(accessed.toSet == contributed.toSet)
+      assert(accessed.zip(contributed).forall((source, destination) => source != destination))
+      (sys.env.get("NODAL_NODALC"), sys.env.get("NODAL_TRANSLATE")) match
+        case (Some(nodalc), Some(translator)) =>
+          val directory = workDirectory()
+          try
+            ScalaToMlirBridge.compileToVerilogA(
+              new Increment43NestedGeneratedNodePermutedDdt,
+              Path.of(nodalc).toAbsolutePath,
+              Path.of(translator).toAbsolutePath,
+              directory,
+              Duration.ofSeconds(60)
+            ) match
+              case Left(failure) =>
+                assert(failure.diagnostic.code == "NODAL-BACKEND-CAPABILITY-001")
+                assert(failure.standardError.contains(
+                  "must feed one memoryless contribution on its branch"
+                ))
+              case Right(success) =>
+                scala.Predef.assert(false, s"permuted three-branch ddt accepted: $success")
           finally delete(directory)
         case _ => assert(true)
 
@@ -4622,15 +4910,17 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileDdt()
             assert(result == compileDdt())
+            val nodeName = region.declarations.head.split('.').last
+            val index = generatedInductionSymbol(first, region.path)
             assert(
               result.verilogA.linesIterator.count(line =>
-                line.contains("I(tap[generate_0_index], p) <+") &&
-                  line.contains("ddt(V(tap[generate_0_index], p))")
+                line.contains(s"I($nodeName[$index], p) <+") &&
+                  line.contains(s"ddt(V($nodeName[$index], p))")
               ) == 1
             )
             assert(
               result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[1:(lanes - 1)];"
+                _.trim == s"electrical $nodeName[1:(lanes - 1)];"
               ) == 1
             )
           finally delete(directory)

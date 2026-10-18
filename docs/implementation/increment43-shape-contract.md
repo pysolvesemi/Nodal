@@ -428,3 +428,31 @@ This bounded checkpoint does not add constant or symbolic range slices,
 l-value selection, storage allocation, eager element expansion, target array
 lowering, Verilog-A generation or source/index maps. Those requirements and
 every F-043 parent/descendant checkbox remain open.
+
+## Composing structural prefix selections and views
+
+Rank-reducing `row`/`plane` results now compose with later structural
+`reshape`/`flatten` and further index selections. Fixed and symbolic extents
+retain their original proofs; the bridge emits each operation from its immediate
+SSA predecessor rather than returning to the root port. Scalar selections,
+foreign owners and generic expressions merely carrying a shaped type cannot
+be promoted into structural carriers.
+
+Construction keeps the existing capture records in insertion-ordered keyed
+maps. The bridge derives one dependency schedule from those records, with
+input edges and original intra-kind capture-order edges. An iterative indegree
+queue rejects missing predecessors, cycles and reversed same-kind snapshots;
+validation and emission consume the same schedule. This avoids a second semantic
+registry or native schema change. Scheduling requires O(V + E) temporary space
+and O(V log V) time; preexisting per-operation declaration lookup scans remain.
+No end-to-end performance improvement is claimed.
+
+Focused local checks passed: five new methods and eight affected predecessors
+in `Increment43ShapeContractTests`, thirteen total with zero failures. Seven
+composed graphs also passed configured `nodalc` verification, including a
+130-operation alternating chain. Checks cover fixed/symbolic composition,
+exact SSA dependencies, repeat determinism, missing/reordered/cyclic inputs,
+scalar carriers, foreign ownership and forged dimensions/element types.
+Pinned Scalafmt and whitespace checks passed. These results do not close
+F-043's general range slices, l-value selection, target array layouts or
+other unfinished children; no CI was run.

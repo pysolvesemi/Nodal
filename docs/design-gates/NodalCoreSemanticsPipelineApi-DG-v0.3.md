@@ -178,3 +178,30 @@ fixtures for v0.1/v0.2, Increment 13 and Increment 14 non-regression, and green 
 
 All implementation behavior remains inert. Increment 16 is the first construction-kernel increment and
 must implement against this gate rather than redesigning the public surface.
+
+## Foundation 43 structural composition implementation - 2026-10-18
+
+This checkpoint implements composition of the existing frozen shaped-value
+operations; it adds no public signature. A rank-reducing `row` or `plane` result
+is a structural carrier for subsequent `reshape`, `flatten` and index selection,
+just as an earlier structural view is. Every edge retains its immediate input,
+module owner, element type and proven dimensions. A full-rank scalar selection
+is not a carrier. Existing port and internal-wire compatibility boundaries,
+all-legal-parameter bounds, cardinality proofs and native verification remain.
+
+The selected shared owner is the existing construction-session shape capture,
+with one derived dependency schedule used by bridge validation and emission.
+Treating every shaped expression as a carrier, rereading the root port, or
+maintaining a second mutable shape registry were rejected because they lose
+provenance, alias mapping or authoritative ownership. Same-kind capture order
+is preserved while valid cross-kind dependencies may interleave. Public source
+compatibility and snapshot schemas are unchanged.
+
+Authority is the owner's explicit request to implement all unchecked Foundation
+items from Increment 43, within this gate's already frozen shape semantics. It
+is not evidence that the owner separately selected a new API signature. Focused
+validation passed thirteen shape methods, including seven configured-native
+composition graphs and malformed-owner/type/shape/order/cycle controls. See the
+[implementation record](../implementation/increment43-shape-contract.md).
+General slices, writable/l-value selections and target arrays remain unfinished
+F-043 requirements and are not approved away by this checkpoint.

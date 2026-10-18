@@ -1379,3 +1379,62 @@ generated connections or instances, reverse ranges, default specialization or
 eager unrolling. It is compiler/index and storage-ownership evidence, not an
 independent simulator result or F-043 acceptance. Every F-043 parent and
 descendant obligation remains open.
+
+## Compositional generated branch groups
+
+The generated electrical-node equation path now admits finite groups of
+independently owned branches without enumerating one/two-node or operator-kind
+combinations. The same profile supports repeated `ddt` or `idt` paths across
+distinct branches. Nested equations still use two authored dimensions and the
+existing zero-based row-major occurrence layout; no generated lane is unrolled.
+
+The owning layer remains `AnalogVerticalSlice.cpp`: capture records, bridge IR,
+native ownership verification, range arithmetic, source maps and operator/state
+identities are unchanged. The structural recognizer checks the supported body
+and live-access/branch/contribution cardinality, while the existing production
+renderer validates each concrete node, branch, access, operator and contribution.
+A derivative result now has the same single-use, same-branch endpoint proof as
+the generated integral path, including through a memoryless result expression.
+The structural recognizer uses the real `nodal.parameter_ref` operation name,
+so existing symbolic-coefficient equations reach their established renderer.
+Unused pure target-side access captures emitted by the public construction path
+retain ownership verification but do not count as live equation inputs. Live
+dead-end expressions and fan-out remain rejected.
+Swapping two contribution destinations cannot pass merely because their counts
+and destination sets match. Cross-range ownership, result fan-out, operator
+chains, forged state and malformed source identities remain rejected.
+
+Node and branch membership uses module-local derived lookup sets/maps instead
+of rescanning every node/branch for each use. These are transient indexes of the
+existing SSA identities, not additional mutable semantic registries. Membership
+work scales with declarations, branches and uses; expression-path validation
+retains the bounded existing dependency walker. No measured speedup is claimed.
+The alternative of adding another fixed-width profile was rejected because
+width and operator-kind counts do not establish ownership.
+
+Focused local validation passed: the native backend unit target (0.21 seconds)
+and eleven selected `Increment43RangeConstructionTests` methods (154 seconds,
+zero failures), with both native tool paths explicitly configured. The PR
+records exact selectors and commands. Pinned formatting and whitespace checks
+also passed.
+Native regressions cover widths three and sixteen, two same-kind derivatives,
+forged ownership and swapped destinations, exact compact target/index mapping,
+repeat determinism and internal target reparse. Public Scala witnesses cover
+three independent same-kind operator branches through the configured compiler.
+These selected cases do not establish simulator accuracy or all F-043 work.
+General slices, deeper generation, shaped terminals and generated connections
+or instances remain required unfinished work; no parent checklist is completed
+by this checkpoint. CI is not run under the prototype policy.
+
+### Backend-negative invocation repair
+
+Exact diagnostic assertions in the new public witnesses exposed an inherited
+test-harness error: eight existing generated-backend negative helpers passed
+`--nodal-to-verilog-a` to `nodalc`, although that option belongs to
+`nodal-translate`. A broad failure match could count command-line rejection as
+semantic rejection. The affected helpers now select the translator and retain
+specific expected ownership/capability diagnostics. Focused reruns must reach
+the intended backend verifier; process/CLI failure is not accepted as evidence.
+Historical run records are preserved as history and are not retroactively
+claimed to prove those negative semantics. The native semantic verifiers and
+all meaningful malformed-input cases remain intact.

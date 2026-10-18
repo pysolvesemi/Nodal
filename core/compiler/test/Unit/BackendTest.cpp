@@ -2,6 +2,7 @@
 
 #include "circt/Dialect/HW/HWDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
@@ -1727,6 +1728,106 @@ int main() {
       return fail("forged nested generated analog-node group equation published partial output");
   }
 
+  // Group width is independent of ownership: extend the same canonical source
+  // with disjoint branches, rather than adding a special three-node profile.
+  for (unsigned width : {3u, 16u}) {
+    std::string source = kNestedGeneratedNodeGroupEquationsModule.str();
+    auto copyLine = [&](llvm::StringRef anchor) {
+      const size_t begin = source.find(anchor.str());
+      const size_t end = source.find('\n', begin);
+      return source.substr(begin, end - begin + 1);
+    };
+    const std::string node = copyLine("        %tap =");
+    const std::string branch = copyLine("        %tap_branch =");
+    const size_t expressionBegin = source.find("          %tap_voltage =");
+    const size_t expressionEnd = source.find("          %return_voltage =");
+    const std::string expression = source.substr(expressionBegin, expressionEnd - expressionBegin);
+    auto rename = [](std::string text, unsigned index) {
+      for (const auto &replacement :
+           {std::make_pair(std::string("nestedTap"), "extraNode" + std::to_string(index)),
+            std::make_pair(std::string("tap"), "extra" + std::to_string(index))}) {
+        size_t position = 0;
+        while ((position = text.find(replacement.first, position)) != std::string::npos) {
+          text.replace(position, replacement.first.size(), replacement.second);
+          position += replacement.second.size();
+        }
+      }
+      return text;
+    };
+    for (unsigned index = 2; index < width; ++index) {
+      source.insert(source.find("        %tap_branch ="), rename(node, index));
+      source.insert(source.find("        \"nodal.analog\""), rename(branch, index));
+      source.insert(source.find("          %return_voltage ="), rename(expression, index));
+    }
+    for (unsigned variant : {0u, 1u, 2u, 3u}) {
+      const bool forged = variant == 1 || variant == 3;
+      auto candidate = parse(context, source);
+      if (!candidate)
+        return fail("could not parse widened generated branch group");
+      mlir::Operation *lastNode = nullptr;
+      unsigned nodes = 0;
+      candidate->walk([&](mlir::Operation *operation) {
+        if (operation->getName().getStringRef() == "nodal.node") {
+          lastNode = operation;
+          ++nodes;
+        }
+      });
+      if (nodes != width || !lastNode)
+        return fail("widened generated branch group lost nodes");
+      if (variant >= 2) {
+        llvm::SmallVector<mlir::Operation *> accesses;
+        candidate->walk([&](mlir::Operation *operation) {
+          if (operation->getName().getStringRef() == "nodal.access")
+            accesses.push_back(operation);
+        });
+        for (mlir::Operation *access : accesses) {
+          mlir::Operation *unused = access->clone();
+          access->getBlock()->getOperations().insert(access->getIterator(), unused);
+          unused->setAttr("kind", mlir::StringAttr::get(&context, "flow"));
+          if (forged) {
+            mlir::NamedAttrList metadata(unused->getAttrOfType<mlir::DictionaryAttr>("metadata"));
+            metadata.set("generated_owner", mlir::StringAttr::get(&context, "wrong-owner"));
+            unused->setAttr("metadata", metadata.getDictionary(&context));
+          }
+        }
+      } else if (forged)
+        lastNode->setAttr("generated_owner", mlir::StringAttr::get(&context, "wrong-owner"));
+      std::string output = forged ? "sentinel" : "";
+      llvm::raw_string_ostream stream(output);
+      const bool emitted =
+          mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
+      stream.flush();
+      if (forged) {
+        if (emitted || output != "sentinel")
+          return fail("widened generated group accepted forged ownership or published output");
+        continue;
+      }
+      if (!emitted || output.find("  electrical n, p;\n") == std::string::npos ||
+          llvm::StringRef(output).count("  electrical ") != width + 1 ||
+          llvm::StringRef(output).count(" <+ ") != width ||
+          llvm::StringRef(output).count("    for (") != 2)
+        return fail("widened generated branch group lost compact topology");
+      for (unsigned index = 2; index < width; ++index) {
+        const std::string name = "extraNode" + std::to_string(index);
+        if (output.find("electrical " + name + "[" + nestedGroupExtent + "]") ==
+                std::string::npos ||
+            output.find("I(" + name + "[" + nestedFlatIndex + "], p) <+ (V(" + name + "[" +
+                        nestedFlatIndex + "], p) / 1000)") == std::string::npos)
+          return fail("widened generated group changed per-branch row-major mapping");
+      }
+      if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
+        return fail("widened generated group failed target reparse");
+      std::string repeated;
+      llvm::raw_string_ostream repeatedStream(repeated);
+      if (mlir::failed(
+              nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, repeatedStream)))
+        return fail("widened generated group repeat emission failed");
+      repeatedStream.flush();
+      if (repeated != output)
+        return fail("widened generated group target is nondeterministic");
+    }
+  }
+
   std::string nestedGeneratedNodeGroupIdtSource = kNestedGeneratedNodeGroupEquationsModule.str();
   auto nestedGroupIdtExpression =
       nestedGeneratedNodeGroupIdtSource.find("          %tap_resistance =");
@@ -1859,10 +1960,13 @@ int main() {
                                             std::string("%tap_branch, %tap_current").size(),
                                             "%tap_branch, %tap_derivative");
 
-  for (llvm::StringRef mutation :
-       {"valid", "operator-owner", "operator-induction", "wrong-branch", "second-operator"}) {
+  for (llvm::StringRef mutation : {"valid", "operator-owner", "operator-induction", "wrong-branch",
+                                   "second-operator", "swapped-branches", "second-operator-owner",
+                                   "direct-second-operator", "direct-swapped-branches"}) {
     std::string source = nestedGeneratedNodeGroupDdtSource;
-    if (mutation == "second-operator") {
+    const bool direct = mutation.starts_with("direct-");
+    if (mutation == "second-operator" || mutation == "swapped-branches" ||
+        mutation == "second-operator-owner" || direct) {
       auto secondExpression = source.find("          %return_resistance =");
       auto secondContribution = source.find("          \"nodal.contribute\"", secondExpression);
       if (secondExpression == std::string::npos || secondContribution == std::string::npos)
@@ -1888,6 +1992,26 @@ int main() {
                      "%return_branch, %return_derivative");
     }
 
+    if (direct) {
+      const size_t outer = source.find("    \"nodal.generate\"");
+      const size_t inner = source.find("      \"nodal.generate\"", outer + 1);
+      const std::string outerClose = "    }) : () -> ()\n";
+      if (outer == std::string::npos || inner == std::string::npos)
+        return fail("direct generated group lost its range anchors");
+      source.erase(outer, inner - outer);
+      const size_t close = source.find(outerClose);
+      if (close == std::string::npos)
+        return fail("direct generated group lost its outer closing anchor");
+      source.erase(close, outerClose.size());
+      const std::string oldOwner = "NestedGeneratedNodeGroupEquations.generate_0.generate_1";
+      const std::string newOwner = "NestedGeneratedNodeGroupEquations.generate_1";
+      size_t position = 0;
+      while ((position = source.find(oldOwner, position)) != std::string::npos) {
+        source.replace(position, oldOwner.size(), newOwner);
+        position += newOwner.size();
+      }
+    }
+
     auto candidate = parse(context, source);
     if (!candidate)
       return fail("could not parse nested generated analog-node group ddt fixture");
@@ -1903,7 +2027,10 @@ int main() {
       else if (name == "nodal.contribute")
         contributions.push_back(operation);
     });
-    const size_t expectedDerivatives = mutation == "second-operator" ? 2 : 1;
+    const bool multipleOperators = mutation == "second-operator" ||
+                                   mutation == "swapped-branches" ||
+                                   mutation == "second-operator-owner" || direct;
+    const size_t expectedDerivatives = multipleOperators ? 2 : 1;
     if (derivatives.size() != expectedDerivatives || branches.size() != 2 ||
         contributions.size() != 2)
       return fail("nested generated analog-node group ddt fixture lost its owned topology");
@@ -1918,27 +2045,42 @@ int main() {
     if (mutation == "wrong-branch")
       contributions.front()->setOperand(0, branches[1]->getResult(0));
 
-    std::string output = mutation == "valid" ? std::string() : std::string("sentinel");
+    if (mutation == "swapped-branches" || mutation == "direct-swapped-branches") {
+      contributions[0]->setOperand(0, branches[1]->getResult(0));
+      contributions[1]->setOperand(0, branches[0]->getResult(0));
+    }
+    if (mutation == "second-operator-owner")
+      derivatives.back()->setAttr(
+          "generated_owner",
+          mlir::StringAttr::get(&context, "NestedGeneratedNodeGroupEquations.generate_0"));
+    const bool valid = mutation == "valid" || mutation == "second-operator" ||
+                       mutation == "direct-second-operator";
+    std::string output = valid ? std::string() : std::string("sentinel");
     llvm::raw_string_ostream stream(output);
     const bool emitted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (!valid) {
       if (emitted)
         return fail("forged nested generated analog-node group ddt ownership passed verification");
       if (output != "sentinel")
         return fail("forged nested generated analog-node group ddt published partial output");
       continue;
     }
+    const std::string expectedIndex = direct ? "((generate_1_index - 2) / 3)" : nestedFlatIndex;
     if (!emitted)
       return fail("nested generated analog-node group ddt emission failed");
-    if (output.find("I(nestedTap[" + nestedFlatIndex + "] , p)") != std::string::npos)
+    if (output.find("I(nestedTap[" + expectedIndex + "] , p)") != std::string::npos)
       return fail("nested generated analog-node group ddt introduced unstable target spacing");
-    if (output.find("I(nestedTap[" + nestedFlatIndex + "], p) <+ ddt(V(nestedTap[" +
-                    nestedFlatIndex + "], p))") == std::string::npos ||
-        output.find("I(nestedReturn[" + nestedFlatIndex + "], n) <+ (V(nestedReturn[" +
-                    nestedFlatIndex + "], n) / 2000)") == std::string::npos)
+    if (output.find("I(nestedTap[" + expectedIndex + "], p) <+ ddt(V(nestedTap[" + expectedIndex +
+                    "], p))") == std::string::npos ||
+        output.find("I(nestedReturn[" + expectedIndex + "], n) <+ " +
+                    (multipleOperators ? "ddt(V(nestedReturn[" : "(V(nestedReturn[") +
+                    expectedIndex + (multipleOperators ? "], n))" : "], n) / 2000)")) ==
+            std::string::npos)
       return fail("nested generated analog-node group ddt lost its independent owned equations");
+    if (llvm::StringRef(output).count("    for (") != (direct ? 1u : 2u))
+      return fail("generated group changed authored dimension count");
     if (mlir::failed(nodal::reparseBackendTarget(output, *configuration)))
       return fail("nested generated analog-node group ddt failed independent target reparse");
     std::string repeated;
@@ -2851,7 +2993,7 @@ int main() {
 
   for (llvm::StringRef mutation :
        {"valid", "access-owner", "access-induction", "operator-owner", "operator-induction",
-        "state", "direct-idt", "escape", "second-access"}) {
+        "state", "direct-idt", "escape", "second-access", "second-live-access"}) {
     std::string source = generatedNodeIdtSource;
     auto candidate = parse(context, source);
     if (!candidate)
@@ -2886,16 +3028,20 @@ int main() {
       integral->setOperand(0, access->getResult(0));
     if (mutation == "escape")
       contribution->setOperand(1, access->getResult(0));
-    if (mutation == "second-access") {
+    if (mutation == "second-access" || mutation == "second-live-access") {
       mlir::Operation *extraAccess = access->clone();
       access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access")
+        integral->getOperand(0).getDefiningOp()->setOperand(1, extraAccess->getResult(0));
     }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
     std::string output = "sentinel";
     llvm::raw_string_ostream stream(output);
     const bool accepted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation != "valid" && mutation != "second-access") {
       if (accepted || output != "sentinel")
         return fail("invalid generated node idt escaped or published partial output");
       continue;
@@ -3121,11 +3267,11 @@ int main() {
       return fail("generated node algebra emission is nondeterministic");
   }
 
-  for (llvm::StringRef mutation :
-       {"valid", "swapped-destinations", "duplicate-access", "owner", "induction", "stateful"}) {
-    auto candidate =
-        parse(context, mutation == "stateful" ? llvm::StringRef(kGeneratedNodeDdtContributionModule)
-                                              : llvm::StringRef(generatedNodeAlgebraSource));
+  for (llvm::StringRef mutation : {"valid", "swapped-destinations", "duplicate-access", "owner",
+                                   "induction", "stateful", "stateful-swapped-destinations"}) {
+    const bool stateful = mutation.starts_with("stateful");
+    auto candidate = parse(context, stateful ? llvm::StringRef(kGeneratedNodeDdtContributionModule)
+                                             : llvm::StringRef(generatedNodeAlgebraSource));
     if (!candidate)
       return fail("could not parse independent generated-node equations");
     mlir::Operation *terminal = nullptr;
@@ -3167,7 +3313,7 @@ int main() {
     insertAfter(secondExpression, secondContribution);
     secondContribution->setOperand(0, secondBranch->getResult(0));
     secondContribution->setOperand(1, secondExpression->getResult(0));
-    if (mutation == "swapped-destinations") {
+    if (mutation == "swapped-destinations" || mutation == "stateful-swapped-destinations") {
       contribution->setOperand(0, secondBranch->getResult(0));
       secondContribution->setOperand(0, branch->getResult(0));
     }
@@ -3187,7 +3333,7 @@ int main() {
                    mlir::StringAttr::get(&context, "forged"));
       secondAccess->setAttr("metadata", metadata.getDictionary(&context));
     }
-    if (mutation == "stateful")
+    if (stateful)
       secondExpression->setAttr(
           "operator_id", mlir::StringAttr::get(&context, "GeneratedNodeDdtContribution.second"));
     std::string output = "sentinel";
@@ -3195,15 +3341,17 @@ int main() {
     const bool accepted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation != "valid" && mutation != "stateful") {
       if (accepted || output != "sentinel")
         return fail("invalid independent generated-node equations published partial output");
       continue;
     }
     const std::string first =
-        "I(tap[generate_0_index], p) <+ (V(tap[generate_0_index], p) / 1000);";
+        stateful ? "I(tap[generate_0_index], p) <+ ddt(V(tap[generate_0_index], p));"
+                 : "I(tap[generate_0_index], p) <+ (V(tap[generate_0_index], p) / 1000);";
     const std::string second =
-        "I(tap[generate_0_index], n) <+ (V(tap[generate_0_index], n) / 1000);";
+        stateful ? "I(tap[generate_0_index], n) <+ ddt(V(tap[generate_0_index], n));"
+                 : "I(tap[generate_0_index], n) <+ (V(tap[generate_0_index], n) / 1000);";
     if (!accepted || output.find(first) == std::string::npos ||
         output.find(second) == std::string::npos || output.find(first) >= output.find(second))
       return fail("independent generated-node equations lost their indexed branches or order");
@@ -3219,7 +3367,8 @@ int main() {
       return fail("independent generated-node equations are nondeterministic");
   }
 
-  for (llvm::StringRef mutation : {"valid", "peer-owner", "peer-induction", "second-access"}) {
+  for (llvm::StringRef mutation :
+       {"valid", "peer-owner", "peer-induction", "second-access", "second-live-access"}) {
     auto candidate = parse(context, generatedNodeAlgebraSource);
     if (!candidate)
       return fail("could not parse generated peer-node algebra fixture");
@@ -3253,16 +3402,27 @@ int main() {
       peer->setAttr("generated_owner", mlir::StringAttr::get(&context, "forged"));
     if (mutation == "peer-induction")
       peer->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
-    if (mutation == "second-access") {
+    if (mutation == "second-access" || mutation == "second-live-access") {
       mlir::Operation *extraAccess = access->clone();
       access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access") {
+        mlir::Operation *originalUser = *access->getResult(0).getUsers().begin();
+        mlir::OperationState deadEndState(access->getLoc(), "nodal.analog_neg");
+        deadEndState.addOperands(extraAccess->getResult(0));
+        deadEndState.addTypes(extraAccess->getResult(0).getType());
+        deadEndState.addAttribute("metadata", access->getAttr("metadata"));
+        mlir::Operation *deadEnd = mlir::Operation::create(deadEndState);
+        access->getBlock()->getOperations().insert(std::next(originalUser->getIterator()), deadEnd);
+      }
     }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
     std::string output = "sentinel";
     llvm::raw_string_ostream stream(output);
     const bool accepted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation != "valid" && mutation != "second-access") {
       if (accepted || output != "sentinel")
         return fail("invalid generated peer-node algebra escaped or published partial output");
       continue;
@@ -3285,7 +3445,7 @@ int main() {
 
   for (llvm::StringRef mutation :
        {"valid", "peer-owner", "peer-induction", "peer-source", "access-owner", "access-induction",
-        "operator-owner", "operator-induction", "escape", "second-access"}) {
+        "operator-owner", "operator-induction", "escape", "second-access", "second-live-access"}) {
     std::string source = kGeneratedNodeDdtContributionModule.str();
     auto range = source.find("lower = 1 : i64, upper = 4 : i64, step = 1 : i64");
     if (range == std::string::npos)
@@ -3345,16 +3505,27 @@ int main() {
       derivative->setAttr("generated_induction", mlir::StringAttr::get(&context, "forged.index"));
     if (mutation == "escape")
       contribution->setOperand(1, access->getResult(0));
-    if (mutation == "second-access") {
+    if (mutation == "second-access" || mutation == "second-live-access") {
       mlir::Operation *extraAccess = access->clone();
       access->getBlock()->getOperations().insert(std::next(access->getIterator()), extraAccess);
+      if (mutation == "second-live-access") {
+        mlir::Operation *originalUser = *access->getResult(0).getUsers().begin();
+        mlir::OperationState deadEndState(access->getLoc(), "nodal.analog_neg");
+        deadEndState.addOperands(extraAccess->getResult(0));
+        deadEndState.addTypes(extraAccess->getResult(0).getType());
+        deadEndState.addAttribute("metadata", access->getAttr("metadata"));
+        mlir::Operation *deadEnd = mlir::Operation::create(deadEndState);
+        access->getBlock()->getOperations().insert(std::next(originalUser->getIterator()), deadEnd);
+      }
     }
+    if (mutation == "second-live-access" && mlir::failed(mlir::verify(*candidate)))
+      return fail("live extra-access regression must reach backend path validation");
     std::string output = "sentinel";
     llvm::raw_string_ostream stream(output);
     const bool accepted =
         mlir::succeeded(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream));
     stream.flush();
-    if (mutation != "valid") {
+    if (mutation != "valid" && mutation != "second-access") {
       if (accepted || output != "sentinel")
         return fail("invalid generated peer-node ddt escaped or published partial output");
       continue;

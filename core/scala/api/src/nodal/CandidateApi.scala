@@ -1219,7 +1219,10 @@ private[nodal] object CandidateRuntime:
     val structuralCarrier =
       value.isInstanceOf[Signal[?]] ||
         (value match
-          case expression: KernelExpr[?] => expression.operation.contains("shape_view")
+          case expression: KernelExpr[?] =>
+            expression.operation.exists(operation =>
+              operation == "shape_view" || operation == "shape_index"
+            )
           case _ => false)
     if structuralCarrier && fixedDimensions.nonEmpty &&
       fixedDimensions.forall(_.nonEmpty)

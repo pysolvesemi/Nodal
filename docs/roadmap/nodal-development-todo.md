@@ -1197,7 +1197,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Focused completion: [F-046 implementation and finite structural dependency](../implementation/increment46-readiness.md); 36 Scala tests, 318 typed native assertions, affected native regressions and 77 actual-source structural replay commands pass. Verified squash integration `5ac3eb845c01f20488be767d0ae3b7ab09442718` preserves tested tree `a448b2c956d7ae53d3f2b5ab4b3d1dfeee74eae3`; parent/G complete. No CI was run.
 
-- [ ] **Increment 47 — Verilog-A capability profile and feature matrix**
+- [x] **Increment 47 — Verilog-A capability profile and feature matrix**
   - [x] **F-047.A — Architecture review, modularity, scalability and extensibility.** Separate language capability from simulator support using existing backend profiles; keep AMS-only features outside the Verilog-A claim.
   - [x] **F-047.B — Implementation and integration.** Publish exact `.va` coverage, reject AMS-only constructs early, document simulator portability, and expose machine-readable features.
   - [x] **F-047.C — Focused positive, negative and predecessor regression.** Test advertised feature positives, unsupported-profile rejection and transitive hierarchy capability leaks.
@@ -1206,9 +1206,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-047.D.2** Later tool handoff: Identify representative witness cases for 48 compile and 49/52 numerical checks, with relevant analyses, references and tolerances. Preserve compiler-only acceptance limits; later tool execution is untested here and does not block this prototype increment.
   - [x] **F-047.E — Optimization review and output quality.** Review capability lookup cost and deterministic readable inventories without introducing emission rewrites. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-047.F — Representative scale, determinism and compatibility.** Exercise feature/profile combinations and manifest compatibility; identical designs must yield identical capability decisions.
-  - [ ] **F-047.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 47; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-047.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 47; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused implementation: [F-047 capability inventory and target-language gate](../implementation/increment47-readiness.md); 64 native capability cases, seven selected native targets, four Scala tests and 22 actual-source replay commands pass. Machine-readable language coverage remains separate from exact compiler observations. Parent/G remain open pending verified integration. No CI was run.
+  - Focused implementation: [F-047 capability inventory and target-language gate](../implementation/increment47-readiness.md); 64 native capability cases, seven selected native targets, four Scala tests and 22 actual-source replay commands pass. Machine-readable language coverage remains separate from exact compiler observations. Verified squash integration `b29513233b7804b913f17e38ce572892224422cc` preserves tested tree `48458741309b9b01d11bbb677c1ecbada70f93b3`; parent/G complete. No CI was run.
 
 ## Phase 3 — Open-source analog validation and testbench support
 

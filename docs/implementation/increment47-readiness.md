@@ -1,7 +1,7 @@
 # Foundation 47 readiness
 
 **Date:** 2026-10-18
-**Status:** Focused implementation complete; A–F checked, parent/G await verified integration.
+**Status:** Complete and integrated; Foundation 47 A–G and parent closed.
 **Branch:** `increment/47-verilog-a-capability-profile`
 **Base:** `81cec5ab4a2c4ac4a7abfe731bf397d527d3afe0`
 
@@ -176,3 +176,10 @@ flattening is performed here. The compiled storage witness's reference is a held
 observed separately. Use the proposed value/time criteria above, preserve analysis
 and initialization conditions, and record numerical execution separately. Neither
 witness has been simulated in this increment.
+
+## Verified integration
+
+PR 143 was squash-integrated as `b29513233b7804b913f17e38ce572892224422cc` with sole parent
+`81cec5ab4a2c4ac4a7abfe731bf397d527d3afe0`. The merge preserves exact tested tree
+`48458741309b9b01d11bbb677c1ecbada70f93b3`; dev and the merge record were verified.
+The merge carries `[skip ci]`, and no Actions run was started.

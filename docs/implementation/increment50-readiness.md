@@ -1,7 +1,9 @@
 # Increment 50 readiness and implementation
 
-Status: implementation and focused local validation complete (A–F, including D.1/D.2).
-Parent and G remain open pending verified integration.
+Status: complete after verified squash integration `9ddc4e3541c17a9edb2aba3f8b43c6a8b9a7775d`.
+The sole parent is `1c3189fb6e6d9fcf09fd2f0e6d112c3f93d018c1`; the integrated
+tree exactly matches tested tree `e83fe48629e6b994770c7d0a27b944daa2bee70e`.
+All F-050 children and the parent are complete. No CI was run.
 
 Base: `1c3189fb6e6d9fcf09fd2f0e6d112c3f93d018c1`, the verified F-049
 post-merge documentation closure. Branch: `increment/50-scala-simulation-api`.
@@ -97,7 +99,23 @@ not a second count of eight distinct tests.
 
 `Increment50SimulationTests.scala` defines the actual public-source fixtures;
 `Increment50SourceReplay.scala` uses only the public API for capture, compilation,
-bench construction, execution, measurements and assertions. The RC fixture has
+bench construction, execution, measurements and assertions. The tested source includes this concrete Nodal Scala fixture:
+
+```scala
+final class Increment50Rc(
+    val resistanceOhms: Double = 1000.0,
+    val capacitanceFarads: Double = 1e-6
+) extends Module:
+  val z = inout(Electrical)
+  val a = inout(Electrical)
+  val R: Param[Real] = param(resistanceOhms.Ohm)
+  val C: Param[Real] = param(capacitanceFarads.F)
+  analog:
+    val voltage = V(z, a)
+    I(z, a) <+ (voltage / R) + (C * ddt(voltage))
+```
+
+The RC fixture has
 R = 1,000 ohm and C = 1 microfarad, with declaration order intentionally different
 from the canonical target ABI. The generated model contains:
 
@@ -199,8 +217,8 @@ A/E: shared capture, canonical ABI, bench, runner, parser and evidence owners ar
 reused; focused architecture review has no remaining blocker. B/C/D: actual public
 source-to-generated-model loading and applicable DC/AC/transient references pass,
 with exact negative controls. F: repeat identities, two-axis sweeps, bounded
-allocation and independent concurrent sessions pass. G and the parent await the
-verified squash integration; no original required feature is waived by this record.
+allocation and independent concurrent sessions pass. G and the parent are complete after the
+verified squash integration above; no original required feature is waived by this record.
 
 Final evidence: `.work/increment50/public-replay/public-replay-14952597584840214923`,
 log `public-source-replay-final.log`. All fifteen retained source files match the

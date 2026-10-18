@@ -1237,7 +1237,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - [x] **F-049.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 49; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
   - Focused implementation and validation: [F-049 readiness](../implementation/increment49-readiness.md). Verified squash integration `9b8c330564098778f0f22e75a5498070ea304a69` preserves tested tree `559f90aade1d26d4e8fd544a8ebeae50034256a5`; parent/G complete. No CI was run.
 
-- [ ] **Increment 50 — Scala simulation API v0.1**
+- [x] **Increment 50 — Scala simulation API v0.1**
   - [x] **F-050.A — Architecture review, modularity, scalability and extensibility.** Keep the public Scala simulation contract independent of simulator syntax; reuse 48-49 process and evidence services.
   - [x] **F-050.B — Implementation and integration.** Add compilation, source creation, clock/reset-domain stimulus, related/asynchronous clocks, analyses, sweeps, measurements, tolerances, and assertions without hiding tool evidence.
   - [x] **F-050.C — Focused positive, negative and predecessor regression.** Exercise source/stimulus creation, clock/reset relationships, analyses, failed measurements and assertion tolerances; reject unsupported requests before execution.
@@ -1246,9 +1246,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-050.D.2** Numerical behavior: Execute the applicable DC, transient and AC cases with declared independent references, units, stimuli and tolerances; add event/noise cases only under an explicitly qualified capability. Record numerical discrepancies and solver failures, not formal equivalence claims.
   - [x] **F-050.E — Optimization review and output quality.** Review repeated compilation and stimulus/result buffering without hiding external commands or changing time ordering. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-050.F — Representative scale, determinism and compatibility.** Exercise repeated runs, sweep dimensions and concurrent independent sessions with deterministic result identities.
-  - [ ] **F-050.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 50; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-050.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 50; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused implementation and validation: [F-050 readiness](../implementation/increment50-readiness.md). A–F complete; parent/G await verified integration. No CI was run.
+  - Focused implementation and validation: [F-050 readiness](../implementation/increment50-readiness.md). Verified squash integration `9ddc4e3541c17a9edb2aba3f8b43c6a8b9a7775d` preserves tested tree `e83fe48629e6b994770c7d0a27b944daa2bee70e`; parent/G complete. No CI was run.
 
 - [ ] **Increment 51 — Waveform and result model**
   - [ ] **F-051.A — Architecture review, modularity, scalability and extensibility.** Model time/frequency/sweep axes and units explicitly; consume 49-50 results without confusing sample order with physical time.

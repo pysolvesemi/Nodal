@@ -208,6 +208,11 @@ private[nodal] object ScalaToMlirBridge:
       ordered.result()
 
     private lazy val structuralShapesByOwner = structuralShapeOperations.groupBy(_.owner)
+    private val conservativeArrayBindingsByOwner = snapshot.conservativeArrayBindings
+      .groupBy(_.owner)
+      .view
+      .mapValues(_.sortBy(_.path))
+      .toMap
     private val topologyByOwner = snapshot.topology
       .groupBy(_.owner)
       .view
@@ -256,7 +261,9 @@ private[nodal] object ScalaToMlirBridge:
       validate()
       canonicalizeModuleDefinitions()
       val body =
-        (standardConservativeDeclarations ++ emittedModules.map(renderModule)).mkString("\n\n")
+        (standardConservativeDeclarations ++ emittedModules.map(module =>
+          renderModule(module)
+        )).mkString("\n\n")
       val attributes = Vector(
         "nodal.bridge.schema" -> quoted(Schema),
         "nodal.bridge.version" -> integer(Version),
@@ -366,7 +373,8 @@ ${indent(body, 2)}
         .toMap
 
     private def normalizedModuleStructure(module: KernelModuleSnapshot): String =
-      val normalizedPath = renderModule(module).replace(module.path, "$module")
+      val normalizedPath =
+        renderModule(module, definitionComparison = true).replace(module.path, "$module")
       val symbolAttribute = "sym_name = " + quoted(moduleSymbols(module.path))
       val position = normalizedPath.indexOf(symbolAttribute)
       if position < 0 then
@@ -381,7 +389,7 @@ ${indent(body, 2)}
     private def standardConservativeDeclarations: Vector[String] =
       val needsElectrical = modules.exists(module =>
         terminalDeclarations(module).nonEmpty ||
-          module.declarations.exists(_.kind == "analog-node-array")
+          module.declarations.exists(isConservativeArray)
       )
       if !needsElectrical then Vector.empty
       else
@@ -686,6 +694,16 @@ ${indent(body, 2)}
         "NODAL-BRIDGE-044",
         "shape-index semantic path"
       )
+      requireUnique(
+        snapshot.conservativeArrayBindings.map(_.path),
+        "NODAL-BRIDGE-050",
+        "conservative array binding identity"
+      )
+      requireUnique(
+        snapshot.conservativeArrayBindings.map(binding => s"${binding.instance}:${binding.port}"),
+        "NODAL-BRIDGE-050",
+        "conservative child array binding"
+      )
       val generatedByPath =
         snapshot.generatedRegions.map(region => region.path -> region).toMap
       snapshot.generatedRegions.foreach: region =>
@@ -830,11 +848,11 @@ ${indent(body, 2)}
           )
       modules.foreach: module =>
         module.declarations.foreach: declaration =>
-          if declaration.kind == "analog-node-array" then validateNodeArray(module, declaration)
+          if isConservativeArray(declaration) then validateNodeArray(module, declaration)
           else if declaration.conservativeDimensions.nonEmpty then
             fail(
               "NODAL-BRIDGE-047",
-              "only node arrays may carry conservative dimensions",
+              "only local or boundary conservative arrays may carry conservative dimensions",
               Some(declaration.path)
             )
       val nodeSelections = mutable.HashMap.empty[String, Vector[(
@@ -892,7 +910,7 @@ ${indent(body, 2)}
           fail(shape.code, "structural shape identity aliases a declaration", Some(shape.path))
         val (dimensions, nodeRoot, projections) =
           module.declarations.find(_.path == shape.input) match
-            case Some(declaration) if declaration.kind == "analog-node-array" =>
+            case Some(declaration) if isConservativeArray(declaration) =>
               (
                 declaration.conservativeDimensions,
                 Some(declaration.path),
@@ -1011,6 +1029,50 @@ ${indent(body, 2)}
               fail("NODAL-BRIDGE-048", error.getMessage, Some(shape.path))
         if shape.dimensions.nonEmpty then
           validatedShapes.update(shape.path, (shape.owner, shape.dimensions, nodeRoot, chain))
+      modules.foreach: module =>
+        module.instances.foreach: instance =>
+          modulesByPath.get(instance.childModule).foreach: child =>
+            child.declarations.filter(declaration =>
+              isConservativeArray(declaration) && declaration.kind != "analog-node-array"
+            ).foreach: port =>
+              if !snapshot.conservativeArrayBindings.exists(binding =>
+                  binding.owner == module.path && binding.instance == instance.path && binding.port == port.path
+                )
+              then
+                fail(
+                  "NODAL-BRIDGE-050",
+                  "child array port requires one whole binding",
+                  Some(port.path)
+                )
+      snapshot.conservativeArrayBindings.foreach: binding =>
+        val module = modulesByPath.getOrElse(
+          binding.owner,
+          fail("NODAL-BRIDGE-050", "array binding has no owning Module", Some(binding.path))
+        )
+        if binding.path.trim != binding.path || !binding.path.startsWith(s"${binding.owner}.") ||
+          !sourceByPath.contains(binding.path) || module.declarations.exists(_.path == binding.path)
+        then
+          fail(
+            "NODAL-BRIDGE-050",
+            "array binding must have a distinct owned source-mapped identity",
+            Some(binding.path)
+          )
+        val dimensions = module.declarations.find(_.path == binding.actual) match
+          case Some(declaration) if isConservativeArray(declaration) =>
+            declaration.conservativeDimensions
+          case _ =>
+            validatedShapes.get(binding.actual) match
+              case Some((owner, dimensions, Some(_), _)) if owner == binding.owner => dimensions
+              case _ =>
+                fail(
+                  "NODAL-BRIDGE-050",
+                  "array binding actual must be an owned conservative root or shaped view",
+                  Some(binding.path)
+                )
+        try StructuralParameterBinding.validate(snapshot, binding, dimensions)
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-BRIDGE-050", error.getMessage, Some(binding.path))
       requireUnique(
         snapshot.sourceMap.map(_.semanticPath),
         "NODAL-BRIDGE-010",
@@ -1092,7 +1154,10 @@ ${indent(body, 2)}
         case Some(value) => fail(code, s"duplicate $label '$value'", Some(value))
         case None => ()
 
-    private def renderModule(module: KernelModuleSnapshot): String =
+    private def renderModule(
+        module: KernelModuleSnapshot,
+        definitionComparison: Boolean = false
+    ): String =
       val body = mutable.ArrayBuffer.empty[String]
       val values = mutable.LinkedHashMap.empty[String, (String, String)]
       val localDomains = module.domains.map(domain =>
@@ -1182,7 +1247,7 @@ ${indent(body, 2)}
           case "input" | "output" =>
             body += renderPort(module, declaration, localDomains)
           case "parameter" =>
-            body ++= renderParameter(declaration)
+            body ++= renderParameter(declaration, definitionComparison)
           case _ => ()
 
       val shapeStaticValues = mutable.LinkedHashMap.empty[String, (String, String)]
@@ -1217,12 +1282,13 @@ ${indent(body, 2)}
                 Some(dimensionPath)
               )
 
-      module.declarations.filter(_.kind == "analog-node-array").sortBy(_.path)
+      module.declarations.filter(isConservativeArray).sortBy(_.path)
         .zipWithIndex.foreach: (declaration, index) =>
-          val result = s"%node_array_$index"
+          val boundary = declaration.kind != "analog-node-array"
+          val result = if boundary then s"%terminal_array_$index" else s"%node_array_$index"
           val resultType = nodeArrayType(declaration)
           body += operation(
-            "nodal.node_array",
+            if boundary then "nodal.terminal_array" else "nodal.node_array",
             results = Vector(result),
             resultTypes = Vector(resultType),
             attributes = Vector(
@@ -1235,7 +1301,10 @@ ${indent(body, 2)}
                   "storage" -> quoted("structural")
                 )
               )
-            ),
+            ) ++ Option.when(boundary)(Vector(
+              "direction" -> quoted(boundaryDirection(declaration)),
+              "flow_orientation" -> quoted("into_component")
+            )).toVector.flatten,
             semanticPath = declaration.path
           )
           values.update(declaration.path, result -> resultType)
@@ -1259,7 +1328,7 @@ ${indent(body, 2)}
               Some(dimensionPath)
             )
         val (inputValue, inputType, elementText) = declarationsByPath.get(shape.input) match
-          case Some(declaration) if declaration.kind == "analog-node-array" =>
+          case Some(declaration) if isConservativeArray(declaration) =>
             val (value, dataType) = values(declaration.path)
             (value, dataType, "!nodal.terminal<\"electrical\">")
           case Some(declaration) =>
@@ -1430,7 +1499,8 @@ ${indent(body, 2)}
                     Option.when(shape.isNodeSelection)(Vector(
                       "selection_kind" -> quoted("node_array"),
                       "storage" -> quoted("structural"),
-                      "source_uses" -> array(index.sourceUses.map(quoted))
+                      "source_uses" -> array(if definitionComparison then Vector.empty
+                      else index.sourceUses.map(quoted))
                     )).toVector.flatten ++
                     Option.when(conservative && !shape.isNodeSelection)(Vector(
                       "storage" -> quoted("structural"),
@@ -1444,13 +1514,50 @@ ${indent(body, 2)}
         else if shape.dimensions.nonEmpty then
           emittedShapes.update(shape.path, (shape.result, resultType, elementText))
 
-      module.instances.sortBy(_.path).zipWithIndex.foreach: (instance, index) =>
+      // Keep one canonical static DAG per module: defaults, dimensions and
+      // instance overrides can share the same authored expression identity.
+      module.declarations.filter(_.kind == "parameter").sortBy(_.path).foreach: declaration =>
+        declaration.attributes.toMap.get("default").filter(value =>
+          declaration.dataType.contains("Integer") && value.toLongOption.isEmpty
+        ).foreach: reference =>
+          val (value, dataType) = emitStaticValue(
+            reference,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            body,
+            shapeStaticValues,
+            () => allocateShapeStaticValue(),
+            requireStructural = false
+          )
+          if dataType != "i64" then
+            fail(
+              "NODAL-BRIDGE-050",
+              "dependent Integer parameter default must have Integer type",
+              Some(declaration.path)
+            )
+          body += operation(
+            "nodal.parameter_value",
+            operands = Vector(value),
+            operandTypes = Vector(dataType),
+            attributes = Vector(
+              "parameter" -> symbolReference(parameterSymbols(declaration.path)),
+              "metadata" -> bridgeMetadata(
+                declaration.path,
+                Vector("source_value" -> quoted(reference))
+              )
+            ),
+            semanticPath = declaration.path
+          )
+
+      module.instances.sortBy(_.path).foreach: instance =>
         body ++= renderInstance(
           instance,
-          index,
           parameterSymbols,
           declarationsByPath,
-          expressionsByPath
+          expressionsByPath,
+          shapeStaticValues,
+          () => allocateShapeStaticValue()
         )
 
       interfaceEntries(module).foreach: entry =>
@@ -1615,6 +1722,70 @@ ${indent(body, 2)}
           semanticPath = path
         )
         values.update(path, result -> resultType)
+
+      conservativeArrayBindingsByOwner.getOrElse(module.path, Vector.empty)
+        .zipWithIndex.foreach: (binding, index) =>
+          val instance = module.instances.find(_.path == binding.instance).getOrElse(
+            fail("NODAL-BRIDGE-050", "array binding instance is unavailable", Some(binding.path))
+          )
+          val declaration = modulesByPath(instance.childModule).declarations
+            .find(_.path == binding.port).getOrElse(
+              fail("NODAL-BRIDGE-050", "array binding port is unavailable", Some(binding.path))
+            )
+          val (actualValue, resultType) = values.get(binding.actual)
+            .orElse(emittedShapes.get(binding.actual).map((value, dataType, _) =>
+              value -> dataType
+            ))
+            .getOrElse(fail(
+              "NODAL-BRIDGE-050",
+              "array binding actual was not emitted before its binding",
+              Some(binding.path)
+            ))
+          val result = s"%instance_terminal_array_$index"
+          body += operation(
+            "nodal.instance_terminal_array",
+            results = Vector(result),
+            resultTypes = Vector(resultType),
+            attributes = Vector(
+              "instance" -> symbolReference(stableLocalSymbol(
+                "instance",
+                lastSegment(instance.path)
+              )),
+              "port" -> quoted(declaration.name),
+              "name" -> quoted(s"${lastSegment(instance.path)}.${declaration.name}"),
+              "direction" -> quoted(boundaryDirection(declaration)),
+              "flow_orientation" -> quoted("out_of_component"),
+              "source_path" -> quoted(declaration.path),
+              "metadata" -> bridgeMetadata(
+                binding.path,
+                Vector(
+                  "instance_path" -> quoted(instance.path),
+                  "child_path" -> quoted(instance.childModule),
+                  "actual_path" -> quoted(binding.actual),
+                  "storage" -> quoted("structural")
+                )
+              )
+            ),
+            semanticPath = binding.path
+          )
+          body += operation(
+            "nodal.connect_array",
+            operands = Vector(actualValue, result),
+            operandTypes = Vector(resultType, resultType),
+            attributes = Vector(
+              "connection_id" -> quoted(binding.path),
+              "source_path" -> quoted(binding.path),
+              "metadata" -> bridgeMetadata(
+                binding.path,
+                Vector(
+                  "instance_path" -> quoted(binding.instance),
+                  "port_path" -> quoted(binding.port),
+                  "actual_path" -> quoted(binding.actual)
+                )
+              )
+            ),
+            semanticPath = binding.path
+          )
 
       topology.foreach: edge =>
         if Set("terminal-connect", "node-connect").contains(edge.kind) then
@@ -2397,7 +2568,8 @@ ${indent(body, 2)}
         )
 
     private def renderParameter(
-        declaration: KernelDeclarationSnapshot
+        declaration: KernelDeclarationSnapshot,
+        definitionComparison: Boolean
     ): Vector[String] =
       val dataType = declaration.dataType
         .map(parseType(_, declaration.path))
@@ -2418,13 +2590,25 @@ ${indent(body, 2)}
       )
       val classification = attributes.getOrElse("classification", "ordinary")
       val parameterSymbol = stableLocalSymbol("parameter", declaration.name)
+      val transportDefault =
+        if dataType == "i64" && defaultValue.toLongOption.isEmpty then
+          try
+            StructuralParameterBinding.defaultInteger(
+              snapshot,
+              resolveOwningModule(declaration.path),
+              defaultValue
+            ).toString
+          catch
+            case error: IllegalArgumentException =>
+              fail("NODAL-BRIDGE-050", error.getMessage, Some(declaration.path))
+        else defaultValue
       val rendered = mutable.ArrayBuffer(
         operation(
           "nodal.parameter",
           attributes = Vector(
             "sym_name" -> quoted(parameterSymbol),
             "type" -> dataType,
-            "default_value" -> typedLiteral(defaultValue, dataType, declaration.path),
+            "default_value" -> typedLiteral(transportDefault, dataType, declaration.path),
             "variability" -> quoted("symbolic"),
             "classification" -> quoted(classification),
             "metadata" -> bridgeMetadata(
@@ -2458,7 +2642,12 @@ ${indent(body, 2)}
             Some(declaration.path)
           )
         )
-        val prefix = stableLocalSymbol("parameter_range", declaration.path)
+        // SSA spellings and occurrence provenance do not distinguish reusable definitions.
+        // The comparison renderer retains every typed operation and declaration attribute.
+        val prefix = stableLocalSymbol(
+          "parameter_range",
+          if definitionComparison then declaration.name else declaration.path
+        )
         val lowerResult = s"%${prefix}_lower"
         val upperResult = s"%${prefix}_upper"
         rendered += operation(
@@ -3160,10 +3349,11 @@ ${indent(body, 2)}
 
     private def renderInstance(
         instance: KernelInstanceSnapshot,
-        instanceIndex: Int,
         parameterSymbols: Map[String, String],
         declarationsByPath: Map[String, KernelDeclarationSnapshot],
-        expressionsByPath: Map[String, KernelParameterExpressionSnapshot]
+        expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
+        staticValues: mutable.LinkedHashMap[String, (String, String)],
+        allocateStaticValue: () => String
     ): Vector[String] =
       val moduleSymbol = moduleSymbols.getOrElse(
         instance.childModule,
@@ -3227,14 +3417,6 @@ ${indent(body, 2)}
           semanticPath = instance.path
         )
       )
-      val staticValues = mutable.LinkedHashMap.empty[String, (String, String)]
-      var nextStaticValue = 0
-
-      def allocateStaticValue(): String =
-        val result = s"%instance_${instanceIndex}_parameter_value_$nextStaticValue"
-        nextStaticValue += 1
-        result
-
       symbolicBindings.zipWithIndex.foreach: (binding, bindingIndex) =>
         val (name, sourcePath, dataType) = binding
         val (value, sourceType) = emitStaticValue(
@@ -3244,7 +3426,7 @@ ${indent(body, 2)}
           expressionsByPath,
           rendered,
           staticValues,
-          () => allocateStaticValue(),
+          allocateStaticValue,
           requireStructural = false
         )
         if sourceType != dataType then
@@ -3294,8 +3476,25 @@ ${indent(body, 2)}
         "conservative-terminal"
       )
       module.declarations.filter(declaration =>
-        terminalKinds.contains(declaration.kind)
+        terminalKinds.contains(declaration.kind) && declaration.conservativeDimensions.isEmpty
       ).sortBy(_.path)
+
+    private def isConservativeArray(declaration: KernelDeclarationSnapshot): Boolean =
+      declaration.kind == "analog-node-array" ||
+        (Set("analog-input", "analog-output", "analog-inout").contains(declaration.kind) &&
+          declaration.conservativeDimensions.nonEmpty)
+
+    private def boundaryDirection(declaration: KernelDeclarationSnapshot): String =
+      declaration.kind match
+        case "analog-input" => "input"
+        case "analog-output" => "output"
+        case "analog-inout" | "conservative-terminal" => "inout"
+        case _ =>
+          fail(
+            "NODAL-BRIDGE-027",
+            "child endpoint is not a boundary terminal",
+            Some(declaration.path)
+          )
 
     private def generatedRegionsFor(
         module: KernelModuleSnapshot

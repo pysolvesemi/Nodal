@@ -253,13 +253,24 @@ native/backend checks and eight actual dual-target models pass; commands and
 limits are in the shape-contract note. Repeated shared-fill live/event consumption remains
 explicitly open until a correct lazy evaluation contract is implemented. Generated
 persistent initialization still needs per-occurrence declaration lifetime.
-The tested shared-layer extension follows
+The shared-layer extension is published as
+`9ab2380787865e17283217912dae14573788c66a`, with exact tested-tree equality
+and no CI, under
 [NodalConservativeNodeArrays-DG-v0.2](../design-gates/NodalConservativeNodeArrays-DG-v0.2.md):
 owned local conservative views and canonical scalar physical endpoint maps.
 Seven new public methods, 13 affected predecessors, nine actual dual-target
 models and focused native/backend checks pass. It preserves local unpacked-net
 layout; boundary vector layout and whole-array
-instance mappings remain subsequent required work.
+instance mappings remain subsequent required work. The next integrated extension
+is governed by
+[NodalConservativeNodeArrays-DG-v0.3](../design-gates/NodalConservativeNodeArrays-DG-v0.3.md):
+boundary arrays, whole-child bindings, exact finalized instance parameter
+substitution and compact noncontiguous structural adapters. This is selected
+implementation scope with focused acceptance now passing: eight new public
+methods, 16 affected predecessors, 49 native binding cases and ten actual
+dual-target models. The shape-contract note records commands, source/output
+examples, architecture review and target-consumer limits. Source-authored
+generated topology remains the next required shared-scope implementation.
 Extra operator/state/result fan-out,
 cross-range storage, broader conservative ports/views and generated
 connections/instances also remain open where not implemented. No required

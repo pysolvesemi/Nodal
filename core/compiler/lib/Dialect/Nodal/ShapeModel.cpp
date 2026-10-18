@@ -387,6 +387,32 @@ void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProj
 }
 } // namespace
 
+LogicalResult verifyInstanceShapeDimension(Operation *instance, const StaticShapeDimension &formal,
+                                           const StaticShapeDimension &parentActual) {
+  auto parent = instance ? instance->getParentOfType<nodal::ModuleOp>() : nodal::ModuleOp();
+  if (!parent)
+    return failure();
+  auto resolve = [&](const StaticShapeDimension &dimension,
+                     bool child) -> FailureOr<InstantiatedIntegerExpression> {
+    if (dimension.parameter)
+      return child ? resolveInstanceIntegerParameter(instance, dimension.parameter)
+                   : resolveOwnedIntegerParameter(parent, dimension.parameter);
+    if (dimension.expression)
+      return child ? resolveInstanceIntegerExpression(instance, dimension.expression)
+                   : resolveOwnedIntegerExpression(parent, dimension.expression);
+    return makeLiteralIntegerExpression(dimension.literal);
+  };
+  auto expected = resolve(formal, true), actual = resolve(parentActual, false);
+  if (failed(expected) || failed(actual))
+    return instance->emitOpError(
+        "NODAL-SHAPE-043-008: finalized instance extent requires an owned all-legal Integer proof");
+  if (expected->bounds.lower <= 0 || actual->bounds.lower <= 0 ||
+      !equivalentInstantiatedIntegerExpressions(*expected, *actual))
+    return instance->emitOpError(
+        "NODAL-SHAPE-043-008: actual extent differs from the exact substituted child extent");
+  return success();
+}
+
 FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, Operation *use) {
   if (!reference || !use)
     return failure();

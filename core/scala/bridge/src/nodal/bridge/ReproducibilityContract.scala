@@ -252,13 +252,14 @@ private[nodal] object ReproducibilityContract:
             declaration.conservativeDimensions.mkString("x")
           else shapeOf(declaration.dataType)),
           "layout" -> string(if declaration.conservativeDimensions.nonEmpty then
-            "conservative-flat-row-major"
+            "conservative-vector-row-major"
           else if declaration.kind == "variable" &&
             declaration.dataType.exists(_.startsWith("Vec(Real;"))
           then
             "procedural-real-flat-row-major"
           else layoutOf(declaration.dataType, backendProfile)),
-          "storage" -> string(if declaration.kind == "variable" &&
+          "storage" -> string(if declaration.conservativeDimensions.nonEmpty then "structural"
+          else if declaration.kind == "variable" &&
             declaration.dataType.exists(_.startsWith("Vec(Real;"))
           then
             "procedural"
@@ -446,6 +447,84 @@ private[nodal] object ReproducibilityContract:
         )
     array(originEntries ++ waiverEntries ++ generatedEntries)
 
+  /** Artifact projection of the authoritative snapshot graph; these fields are provenance, never an
+    * additional binding or shape proof owner.
+    */
+  private def conservativeBindingGraph(snapshot: ConstructionSnapshot)
+      : Vector[(String, JsonValue)] =
+    if snapshot.conservativeArrayBindings.isEmpty then Vector.empty
+    else
+      val declarations =
+        snapshot.modules.flatMap(_.declarations).map(value => value.path -> value).toMap
+      val indices = snapshot.shapeIndices.map(value => value.path -> value).toMap
+      val views = snapshot.shapeViews.map(value => value.path -> value).toMap
+      def dimensions(path: String): Vector[String] =
+        declarations.get(path).map(_.conservativeDimensions)
+          .orElse(indices.get(path).map(_.resultDimensions))
+          .orElse(views.get(path).map(_.dimensions)).getOrElse(Vector.empty)
+      def chain(path: String): Vector[String] =
+        val result = scala.collection.mutable.ArrayBuffer.empty[String]
+        val seen = scala.collection.mutable.HashSet.empty[String]
+        var next = Option(path)
+        while next.nonEmpty do
+          val current = next.get
+          if !seen.add(current) then
+            throw new IllegalArgumentException("cyclic conservative binding artifact graph")
+          result += current
+          next = indices.get(current).map(_.input).orElse(views.get(current).map(_.input))
+        result.reverse.toVector
+      Vector(
+        "conservative_array_bindings" ->
+          array(snapshot.conservativeArrayBindings.sortBy(_.path).map: binding =>
+            val projections = chain(binding.actual)
+            obj(
+              "path" -> string(binding.path),
+              "owner" -> string(binding.owner),
+              "instance" -> string(binding.instance),
+              "port" -> string(binding.port),
+              "actual" -> string(binding.actual),
+              "actual_root" -> string(projections.head),
+              "actual_projection_chain" -> array(projections.tail.map(string)),
+              "formal_dimensions" -> array(dimensions(binding.port).map(string)),
+              "effective_dimensions" -> array(dimensions(binding.actual).map(string)),
+              "vector_orientation" -> string("ascending"),
+              "source" ->
+                source(snapshot.sourceMap.find(_.semanticPath == binding.path).map(_.source))
+            )),
+        "structural_shape_indices" -> array(snapshot.shapeIndices.sortBy(_.path).map: value =>
+          obj(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "input" -> string(value.input),
+            "indices" -> array(value.indices.map(string)),
+            "result_dimensions" -> array(value.resultDimensions.map(string))
+          )),
+        "structural_shape_views" -> array(snapshot.shapeViews.sortBy(_.path).map: value =>
+          obj(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "input" -> string(value.input),
+            "dimensions" -> array(value.dimensions.map(string)),
+            "slice" -> value.slice.map(slice =>
+              obj(
+                "axis" -> number(slice.axis),
+                "lower" -> string(slice.lower),
+                "upper_exclusive" -> string(slice.upperExclusive)
+              )
+            ).getOrElse(JNull)
+          )),
+        "parameter_expressions" -> array(snapshot.parameterExpressions.sortBy(_.path).map: value =>
+          obj(
+            "path" -> string(value.path),
+            "owner" -> string(value.owner),
+            "operation" -> string(value.operation),
+            "operands" -> array(value.operands.map(string)),
+            "data_type" -> string(value.dataType),
+            "literal" -> optionalString(value.literal),
+            "unit" -> optionalString(value.unit)
+          ))
+      )
+
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
     val nodeSelections = snapshot.shapeIndices.filter(_.sourceUses.nonEmpty).sortBy(_.path)
     JObject(Vector(
@@ -585,7 +664,7 @@ private[nodal] object ReproducibilityContract:
           "indices" -> array(selection.indices.map(string)),
           "source_uses" -> array(selection.sourceUses.sorted.map(string))
         ))
-    ).toVector)
+    ).toVector ++ conservativeBindingGraph(snapshot))
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

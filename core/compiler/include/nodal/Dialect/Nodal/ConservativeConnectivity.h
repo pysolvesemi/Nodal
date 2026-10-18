@@ -28,6 +28,29 @@ mlir::FailureOr<ConservativeShape> resolveConservativeShape(mlir::Value value,
 mlir::FailureOr<ConservativeShape> resolveConservativeSelection(mlir::Value value,
                                                                 mlir::Operation *use);
 
+/// One independently verified whole-child relation. Logical child ordinal q
+/// aliases actual.projection(q); no physical lanes are enumerated.
+struct ConservativeArrayBinding {
+  mlir::Operation *operation = nullptr;
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *port = nullptr;
+  mlir::Value child;
+  ConservativeShape actual;
+};
+mlir::FailureOr<ConservativeArrayBinding>
+resolveConservativeArrayBinding(mlir::Operation *operation);
+mlir::LogicalResult verifyConservativeInstanceArray(mlir::Operation *operation);
+mlir::LogicalResult verifyConservativeArrayBindings(mlir::Operation *module);
+
+/// Port incidence is retained independently of physical connectivity aliases.
+struct ConservativePortIncidence {
+  mlir::Operation *declaration = nullptr;
+  mlir::Value reference;
+  std::optional<StaticShapeProjection> projection;
+};
+mlir::FailureOr<ConservativePortIncidence> resolveConservativePortIncidence(mlir::Value value,
+                                                                            mlir::Operation *use);
+
 /// A scalar terminal selection candidate, independently verified by the resolver.
 bool isNodeArraySelection(mlir::Operation *operation);
 

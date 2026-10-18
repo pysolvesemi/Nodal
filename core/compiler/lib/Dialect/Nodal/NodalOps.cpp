@@ -1877,6 +1877,8 @@ LogicalResult nodal::ModuleOp::verify() {
   }
   if (failed(verifyNodeArraySelections(getOperation())))
     return failure();
+  if (failed(verifyConservativeArrayBindings(getOperation())))
+    return failure();
   return verifySingleTopLevelProcedurePerModule(getOperation());
 }
 
@@ -1939,6 +1941,14 @@ LogicalResult nodal::InstanceTerminalOp::verify() {
   if (textAttr(getOperation(), "flow_orientation") != "out_of_component")
     return emitOpError("child terminal flow must be oriented out of the parent component");
   return success();
+}
+
+LogicalResult nodal::InstanceTerminalArrayOp::verify() {
+  return verifyConservativeInstanceArray(getOperation());
+}
+
+LogicalResult nodal::ConnectArrayOp::verify() {
+  return success(succeeded(resolveConservativeArrayBinding(getOperation())));
 }
 
 LogicalResult nodal::InterfaceOp::verify() {
@@ -2357,8 +2367,8 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
       return failure();
   } else if (!owner || operation->getParentOp() != owner || !source ||
              source->getParentOp() != owner ||
-             !llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::ShapeIndexOp,
-                        nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) ||
+             !llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::TerminalArrayOp,
+                        nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) ||
              (llvm::isa<nodal::ShapeViewOp>(source) &&
               textAttr(source, "materialization") != "view"))
     return operation->emitOpError(
@@ -2631,17 +2641,16 @@ LogicalResult nodal::NodeOp::verify() {
   return success();
 }
 
-LogicalResult nodal::NodeArrayOp::verify() {
-  Operation *operation = getOperation();
+static LogicalResult verifyConservativeArrayDeclaration(Operation *operation, bool boundary) {
   auto owner = operation->getParentOfType<nodal::ModuleOp>();
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
   auto terminal =
       shaped ? llvm::dyn_cast<nodal::TerminalType>(shaped.getElementType()) : nodal::TerminalType();
   if (!owner || operation->getParentOp() != owner || !terminal ||
       terminal.getDiscipline() != "electrical" ||
-      failed(resolveDisciplineDeclaration(
+      failed(nodal::resolveDisciplineDeclaration(
           operation, FlatSymbolRefAttr::get(operation->getContext(), terminal.getDiscipline()))))
-    return emitOpError(
+    return operation->emitOpError(
         "NODAL-SHAPE-043-005: node array requires directly owned shaped Electrical terminals");
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
   auto storage = metadata ? metadata.getAs<StringAttr>("storage") : StringAttr();
@@ -2652,22 +2661,37 @@ LogicalResult nodal::NodeArrayOp::verify() {
   if (name.empty() || name != name.trim() || source != (ownerPath + "." + name).str() ||
       metadataSemanticPath(operation) != source || !storage || storage.getValue() != "structural" ||
       operation->hasAttr("dimensions") || operation->hasAttr("generated_owner") ||
-      operation->hasAttr("generated_induction") || operation->hasAttr("direction"))
-    return emitOpError(
+      operation->hasAttr("generated_induction") || (!boundary && operation->hasAttr("direction")))
+    return operation->emitOpError(
         "NODAL-SHAPE-043-005: node array requires canonical structural declaration identity");
+  if (boundary && (!oneOf(textAttr(operation, "direction"), {"input", "output", "inout"}) ||
+                   textAttr(operation, "flow_orientation") != "into_component"))
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-008: boundary array requires conservative direction and inward incidence");
   if (failed(inferStaticShapeMaximumCardinality(owner, shaped.getDimensions())))
-    return emitOpError("NODAL-SHAPE-043-005: node-array dimensions require positive finite owned "
-                       "proofs and signed 64-bit cardinality");
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-005: node-array dimensions require positive finite owned "
+        "proofs and signed 64-bit cardinality");
   for (Operation &candidate : owner->getRegion(0).front()) {
     if (&candidate != operation &&
         (textAttr(&candidate, "name") == name || metadataSemanticPath(&candidate) == source))
-      return emitOpError("NODAL-SHAPE-043-005: node-array declaration identity must be unique");
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-005: node-array declaration identity must be unique");
     if (llvm::isa<nodal::ComponentContractOp>(candidate) &&
         textAttr(&candidate, "kind") == "concrete")
-      return emitOpError("NODAL-SHAPE-043-005: sparse node-array selections do not prove complete "
-                         "component coverage");
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-005: sparse node-array selections do not prove complete "
+          "component coverage");
   }
   return success();
+}
+
+LogicalResult nodal::NodeArrayOp::verify() {
+  return verifyConservativeArrayDeclaration(getOperation(), false);
+}
+
+LogicalResult nodal::TerminalArrayOp::verify() {
+  return verifyConservativeArrayDeclaration(getOperation(), true);
 }
 
 LogicalResult nodal::BranchOp::verify() {

@@ -164,10 +164,11 @@ private[nodal] object ConstructionKernel:
   def declareNodeArray(
       value: NodeArray[?],
       discipline: Discipline,
-      dimensions: Vector[Dimension]
+      dimensions: Vector[Dimension],
+      kind: KernelSignalKind
   ): Unit =
     active.getOrElse(throw new IllegalStateException("node array requires an active Module"))
-      .registerNodeArray(value, discipline, dimensions)
+      .registerNodeArray(value, discipline, dimensions, kind)
 
   def projectNodeArray(value: NodeArray[?], origin: NodeArrayProjection): Unit =
     active.getOrElse(throw new IllegalStateException("node array view requires an active Module"))
@@ -293,6 +294,10 @@ private[nodal] object ConstructionKernel:
 
   def bindNamed(instance: Instance[?], requirement: ClockDomain, domain: ClockDomain): Unit =
     active.foreach(_.bindNamed(instance, requirement, domain))
+
+  def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
+    active.getOrElse(throw new IllegalStateException("array binding requires an active Module"))
+      .connectNodeArrays(left, right)
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     active.foreach(_.connectNodes(left, right))

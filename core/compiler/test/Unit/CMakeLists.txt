@@ -369,3 +369,20 @@ set_tests_properties(nodal.native.typed-control-integration PROPERTIES
   TIMEOUT 60
   ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
+
+add_test(NAME nodal.native.boundary-array-integration
+  COMMAND "${Python3_EXECUTABLE}"
+    "${NODAL_REPOSITORY_ROOT}/tests/compiler/fixtures/increment43/run_boundary_array_matrix.py"
+    --nodalc "$<TARGET_FILE:nodalc>"
+    --work-dir "${CMAKE_BINARY_DIR}/increment43-boundary-array-evidence"
+)
+set_tests_properties(nodal.native.boundary-array-integration PROPERTIES
+  TIMEOUT 60
+  ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)
+
+add_executable(nodal-boundary-array-backend-unit-tests BoundaryArrayBackendTest.cpp)
+llvm_update_compile_flags(nodal-boundary-array-backend-unit-tests)
+target_link_libraries(nodal-boundary-array-backend-unit-tests
+  PRIVATE NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.boundary-array-backend-unit COMMAND nodal-boundary-array-backend-unit-tests)

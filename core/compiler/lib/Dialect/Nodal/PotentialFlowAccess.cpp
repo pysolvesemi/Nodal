@@ -365,9 +365,7 @@ LogicalResult verifyAccessOperation(Operation *operation) {
   if (name == "nodal.port_flow_access") {
     if (kind != "flow")
       return fail(operation, "NODAL-ACCESS-PORT-001", "angle-delimited port access is flow-only");
-    Operation *terminal = operation->getOperand(0).getDefiningOp();
-    if (!isNamed(terminal, "nodal.terminal") ||
-        enclosingNodalModule(terminal) != enclosingNodalModule(operation))
+    if (failed(resolveConservativePortIncidence(operation->getOperand(0), operation)))
       return fail(operation, "NODAL-ACCESS-PORT-001",
                   "port-flow access requires a local boundary terminal");
   }

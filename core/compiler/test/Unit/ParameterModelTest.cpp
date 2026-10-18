@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
@@ -9,6 +10,8 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <limits>
 
 namespace {
 
@@ -189,6 +192,146 @@ module {
 }
 )mlir";
 
+constexpr llvm::StringLiteral kInstanceShapeParameters = R"mlir(
+module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "A", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 5 : i64, metadata = {}, parameter_kind = "integer", sym_name = "B", type = i64, variability = "symbolic"}> : () -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %two = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %twelve = "nodal.const_literal"() <{metadata = {}, spelling = "12", value = 12 : i64}> : () -> i64
+    %a = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @A}> : () -> i64
+    %derived = "nodal.const_expr"(%a, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    "nodal.parameter_value"(%derived) <{metadata = {}, parameter = @B}> : (i64) -> ()
+    "nodal.parameter_constraint"(%one, %twelve) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @A}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%two, %derived) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @B}> : (i64, i64) -> ()
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "N", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "M", type = i64, variability = "symbolic"}> : () -> ()
+    %low = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %high = "nodal.const_literal"() <{metadata = {}, spelling = "6", value = 6 : i64}> : () -> i64
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%low, %high) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @N}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%low, %high) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @M}> : (i64, i64) -> ()
+    %n = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @N}> : () -> i64
+    %m = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @M}> : () -> i64
+    %nplus = "nodal.const_expr"(%n, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    %mplus = "nodal.const_expr"(%m, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {A = 7 : i64, B = 8 : i64}, sym_name = "v"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "d"}> : () -> ()
+    "nodal.parameter_override"(%n) <{instance = @u, parameter = @A, metadata = {}}> : (i64) -> ()
+  }) : () -> ()
+}
+)mlir";
+
+mlir::Operation *namedOperation(mlir::Operation *scope, llvm::StringRef name) {
+  mlir::Operation *found = nullptr;
+  scope->walk([&](mlir::Operation *operation) {
+    auto symbol = operation->getAttrOfType<mlir::StringAttr>("sym_name");
+    if (symbol && symbol.getValue() == name)
+      found = operation;
+  });
+  return found;
+}
+
+int checkInstanceParameterQueries(mlir::MLIRContext &context) {
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(kInstanceShapeParameters, &context);
+  if (!module || mlir::failed(mlir::verify(*module)) ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("finalized dependent-default instance fixture did not verify");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *a = namedOperation(child, "A");
+  auto *b = namedOperation(child, "B");
+  auto *u = namedOperation(parent, "u");
+  auto *v = namedOperation(parent, "v");
+  auto *d = namedOperation(parent, "d");
+  llvm::SmallVector<mlir::Value, 2> expressions;
+  parent->walk(
+      [&](nodal::ConstExprOp operation) { expressions.push_back(operation->getResult(0)); });
+  auto actual = nodal::resolveInstanceIntegerParameter(u, b);
+  auto expected = nodal::resolveOwnedIntegerExpression(parent, expressions[0]);
+  auto independent = nodal::resolveOwnedIntegerExpression(parent, expressions[1]);
+  if (mlir::failed(actual) || mlir::failed(expected) || mlir::failed(independent) ||
+      actual->bounds.lower != 3 || actual->bounds.upper != 7 ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*actual, *expected) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*actual, *independent) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*actual,
+                                                      nodal::makeLiteralIntegerExpression(5)))
+    return fail("dependent instance default lost its actual parent identity or envelope");
+  for (auto entry : {std::make_pair(v, int64_t{8}), std::make_pair(d, int64_t{5})}) {
+    auto value = nodal::resolveInstanceIntegerParameter(entry.first, b);
+    if (mlir::failed(value) || !nodal::equivalentInstantiatedIntegerExpressions(
+                                   *value, nodal::makeLiteralIntegerExpression(entry.second)))
+      return fail("exact instance default/literal override was not folded");
+  }
+  if (mlir::succeeded(nodal::resolveOwnedIntegerParameter(parent, a)) ||
+      mlir::succeeded(nodal::resolveInstanceIntegerParameter(u, namedOperation(parent, "N"))))
+    return fail("foreign formal/owned query was accepted");
+
+  mlir::Operation *defaultDefinition = nullptr;
+  child->walk([&](nodal::ParameterValueOp operation) { defaultDefinition = operation; });
+  const auto originalDefault = defaultDefinition->getOperand(0);
+  defaultDefinition->setOperand(0, expressions[0]);
+  if (mlir::succeeded(nodal::resolveInstanceIntegerParameter(u, b)))
+    return fail("foreign module SSA escaped through a dependent default query");
+  defaultDefinition->setOperand(0, originalDefault);
+
+  // Check arithmetic over the complete actual envelope, independently of the
+  // source's default. Restore the shared literal after each causal mutation.
+  auto *sum = expressions[0].getDefiningOp();
+  auto *one = sum->getOperand(1).getDefiningOp();
+  const auto originalValue = one->getAttr("value");
+  const auto originalOperator = sum->getAttr("operator_name");
+  one->setAttr("value", mlir::IntegerAttr::get(expressions[0].getType(),
+                                               std::numeric_limits<int64_t>::max()));
+  if (mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("symbolic addition overflow was accepted");
+  sum->setAttr("operator_name", mlir::StringAttr::get(&context, "mul"));
+  if (mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("symbolic multiplication overflow was accepted");
+  one->setAttr("value", mlir::IntegerAttr::get(expressions[0].getType(), 0));
+  sum->setAttr("operator_name", mlir::StringAttr::get(&context, "div"));
+  if (mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("zero divisor was accepted");
+  one->setAttr("value", originalValue);
+  sum->setAttr("operator_name", originalOperator);
+
+  auto rejects = [&](llvm::StringRef before, llvm::StringRef after, llvm::StringRef instanceName,
+                     llvm::StringRef formalName) {
+    std::string text = kInstanceShapeParameters.str();
+    auto position = text.find(before.str());
+    if (position == std::string::npos)
+      return false;
+    text.replace(position, before.size(), after.str());
+    auto candidate = mlir::parseSourceString<mlir::ModuleOp>(text, &context);
+    if (!candidate)
+      return false;
+    return mlir::failed(nodal::resolveInstanceIntegerParameter(
+        namedOperation(candidate->getOperation(), instanceName),
+        namedOperation(namedOperation(candidate->getOperation(), "Child"), formalName)));
+  };
+  if (!rejects("spelling = \"6\", value = 6", "spelling = \"14\", value = 14", "u", "B"))
+    return fail("whole actual envelope outside child range was accepted at its default");
+  if (!rejects("parameter_bindings = {A = 7 : i64, B = 8 : i64}",
+               "parameter_bindings = {A = 7 : i64, B = 9 : i64}", "v", "B"))
+    return fail("instantiated dependent upper constraint was ignored");
+  if (!rejects("parameter = @A}> : () -> i64", "parameter = @B}> : () -> i64", "d", "B"))
+    return fail("dependent default cycle was accepted");
+  if (!rejects("sym_name = \"A\", type = i64, variability = \"symbolic\"",
+               "sym_name = \"A\", type = i64, variability = \"fixed\"", "u", "A"))
+    return fail("fixed formal override was accepted by instance query");
+  if (!rejects("parameter_bindings = {}, sym_name = \"u\"",
+               "parameter_bindings = {A = 4 : i64}, sym_name = \"u\"", "u", "A"))
+    return fail("literal binding improperly specialized a symbolic SSA override");
+  if (!rejects("\"nodal.parameter_constraint\"(%two, %derived)",
+               "\"nodal.parameter_constraint\"(%a, %derived)", "u", "B"))
+    return fail("unproved correlated lower bound was accepted");
+  return 0;
+}
+
 } // namespace
 
 int main() {
@@ -196,6 +339,8 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
+  if (checkInstanceParameterQueries(context))
+    return 1;
 
   auto valid = mlir::parseSourceString<mlir::ModuleOp>(kValid, &context);
   if (!valid || mlir::failed(nodal::verifyParameterModel(*valid)) ||

@@ -19,6 +19,12 @@ struct StaticShapeDimension {
   int64_t literal = 0;
 };
 
+/// Compare an exact child formal extent under its finalized instance parameter
+/// environment with an owned parent extent. Physical index identity is separate.
+mlir::LogicalResult verifyInstanceShapeDimension(mlir::Operation *instance,
+                                                 const StaticShapeDimension &formal,
+                                                 const StaticShapeDimension &parentActual);
+
 /// Resolve a canonical dimension without substituting parameter defaults.
 /// Requires positive finite i64 bounds and direct-module structural ownership.
 mlir::FailureOr<StaticShapeDimension> resolveStaticShapeDimension(mlir::Operation *module,

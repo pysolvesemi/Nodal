@@ -9,7 +9,9 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace nodal {
 
@@ -42,6 +44,39 @@ mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value 
 /// Symbolic ranges, exclusive endpoints and intersecting constraints are retained;
 /// an overridable default alone is never a bound.
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter);
+
+/// Immutable, query-local proof DAG. Parent parameters retain declaration identity;
+/// a singleton range or equal default never converts such an atom to a literal.
+struct InstantiatedIntegerNode {
+  enum class Kind { Literal, ParentParameter, Apply };
+  Kind kind;
+  int64_t literal = 0;
+  mlir::Operation *parameter = nullptr;
+  mlir::Operation *origin = nullptr;
+  std::string opcode;
+  std::vector<std::shared_ptr<const InstantiatedIntegerNode>> operands;
+  ParameterIntegerBounds bounds;
+};
+struct InstantiatedIntegerExpression {
+  std::shared_ptr<const InstantiatedIntegerNode> root;
+  ParameterIntegerBounds bounds;
+};
+
+/// Resolve a finalized immediate instance environment, substituting actual SSA
+/// overrides, literal bindings and recursively dependent defaults. Every used
+/// formal is checked against its effective constraints over the whole actual
+/// envelope. Unknown correlation, cycles and overflow fail closed.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerParameter(mlir::Operation *instance, mlir::Operation *childParameter);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerExpression(mlir::Operation *instance, mlir::Value childExpression);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
+InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
+bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,
+                                              const InstantiatedIntegerExpression &right);
 
 /// Render a compile-time expression using retained literal spellings.
 mlir::FailureOr<std::string> renderParameterConstantExpression(mlir::Value value);

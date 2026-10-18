@@ -101,9 +101,12 @@ Verilog-A array or target-layout support; unsupported targets reject explicitly.
 
 ## Additive conservative node arrays
 
-[Conservative node arrays v0.2](../design-gates/NodalConservativeNodeArrays-DG-v0.2.md)
+[Conservative node arrays v0.3](../design-gates/NodalConservativeNodeArrays-DG-v0.3.md)
 adds the module constructor
 `node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]`.
+The required-first-dimension `in(discipline, dimension, dimensions*)`,
+`out(discipline, dimension, dimensions*)`, and `inout(discipline, dimension, dimensions*)`
+overloads declare conservative boundary arrays of the same NodeArray type.
 The existing `node(Electrical): Node[Electrical.type]` scalar form is unchanged.
 NodeArray is a conservative endpoint carrier, not Data, Expr, Signal or Vec(Real).
 
@@ -124,7 +127,7 @@ with bounds proved for every legal parameter value. A final full-rank `at` may
 follow any valid composition. Direct and composed selections share physical
 identity when the canonical maps prove equality; source occurrences remain distinct.
 
-The initial profile uses module-local Electrical declarations and static full-rank
+The implemented profile uses owned local/boundary Electrical declarations and static full-rank
 `at(indices: Dimension*): Node[D]` selections. Positive fixed/bounded symbolic
 shapes and every index must be valid over the complete legal parameter envelope.
 Zero indices are valid. Selections work inside or outside analog; repeated equal
@@ -133,8 +136,24 @@ occurrences retained. Independent symbolic tuples with unproved overlap reject,
 rather than silently becoming separate nets. Selected nodes retain existing
 scalar branch/access/connection semantics and immediate-child scalar connectivity.
 Arrays owned by another Module cannot be selected by bypassing that Module's
-boundary. This does not add conservative array ports, generated selections,
-bulk array connections or writable Real-array storage.
+boundary. Generated selections, bulk local array connections and writable Real-array
+storage are separate capabilities.
+
+Whole immediate-child array ports bind to parent-owned local/boundary roots or views
+through `connect(parentActual, child(_.port))` or `parentActual <> child(_.port)`.
+Either argument order is accepted. Exact rank/extents are checked after all `.param`
+overrides, including overrides authored after connect. Dependent Integer defaults retain
+their actual expression DAG and substitute the finalized instance environment;
+equal defaults, names, envelopes or element counts are not an extent identity proof.
+One whole binding is required per child array port. Parent-side child views, partial
+bindings, child-to-child and bulk local joins remain outside this profile.
+
+The conservative target layout is one ascending vector per root, with logical
+row-major ordinal `k` mapped to vector index `k`. Whole actuals and proven contiguous
+views use vector/part-select connections. Noncontiguous views use a compact
+structural adapter whose generated alias instances share the same internal net;
+no lanes are enumerated by the Scala compiler. Target Integer/genvar carrier limits
+still apply. Internal target parsing is not independent simulator acceptance.
 
 ## Additive writable Real arrays
 

@@ -389,7 +389,7 @@ object Increment43NodeArrayTests extends TestSuite:
       assert(first == second, first == reordered)
       val array = manifestEntry(first.manifest.text, s"${snapshot.root}.tap")
       assert(array.contains("\"shape\": \"2x3\""))
-      assert(array.contains("\"layout\": \"conservative-flat-row-major\""))
+      assert(array.contains("\"layout\": \"conservative-vector-row-major\""))
       assert(array.contains("\"storage\": \"structural\""))
       val scalar = manifestEntry(first.manifest.text, s"${snapshot.root}.scalar")
       assert(scalar.contains("\"shape\": \"connectivity\""))
@@ -541,7 +541,7 @@ object Increment43NodeArrayTests extends TestSuite:
         assert(fixed.text.contains("source_uses = ["))
         val output = emit(fixed, compiler, translator, directory)
         assert(output == emit(fixed, compiler, translator, directory))
-        assert(output.linesIterator.count(_.trim == "electrical tap[0:5];") == 1)
+        assert(output.linesIterator.count(_.trim == "electrical [0:5] tap;") == 1)
         assert(output.contains("I(tap[1], p) <+ (V(tap[1], p) / 1000);"))
         assert(output.contains("V(tap[5], n) <+ 2;"))
         assert(!output.contains("electrical first"), !output.contains("electrical duplicate"))
@@ -551,7 +551,7 @@ object Increment43NodeArrayTests extends TestSuite:
           translator,
           directory
         )
-        assert(symbolic.contains("electrical tap[0:((rows * 3) - 1)];"))
+        assert(symbolic.contains("electrical [0:((rows * 3) - 1)] tap;"))
         assert(
           symbolic.contains("I(tap[((lane * 3) + 2)], p) <+ (V(tap[((lane * 3) + 2)], p) / 2000);")
         )
@@ -568,7 +568,7 @@ object Increment43NodeArrayTests extends TestSuite:
           translator,
           directory
         )
-        assert(literal.contains("electrical tap[0:1];"))
+        assert(literal.contains("electrical [0:1] tap;"))
         assert(literal.contains("I(tap[0], p) <+ (V(tap[0], p) / 1000);"))
 
     test("a child module retains its local array and selected internal target endpoints"):
@@ -583,7 +583,7 @@ object Increment43NodeArrayTests extends TestSuite:
         val document = ScalaToMlirBridge.fromSnapshot(snapshot)
         val output = emit(document, compiler, translator, directory)
         assert(output == emit(document, compiler, translator, directory))
-        assert(output.linesIterator.count(_.trim == "electrical tap[0:1];") == 1)
+        assert(output.linesIterator.count(_.trim == "electrical [0:1] tap;") == 1)
         assert(output.contains("I(p, tap[1]) <+ (V(p, tap[1]) / 1000);"))
         assert(output.contains("I(tap[1], n) <+ (V(tap[1], n) / 2000);"))
 

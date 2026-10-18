@@ -75,6 +75,14 @@ private[nodal] final case class KernelInstanceSnapshot(
     parameterBindings: Vector[(String, String)] = Vector.empty
 )
 
+private[nodal] final case class KernelConservativeArrayBindingSnapshot(
+    path: String,
+    owner: String,
+    instance: String,
+    port: String,
+    actual: String
+)
+
 private[nodal] final case class KernelParameterExpressionSnapshot(
     path: String,
     owner: String,
@@ -265,7 +273,8 @@ private[nodal] final case class ConstructionSnapshot(
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
     generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
     shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
-    shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty
+    shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty,
+    conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty
 )
 
 private final case class DomainRef(module: Long, index: Int)
@@ -302,6 +311,13 @@ private final class GeneratedRegionRecord(
     val maximumTripCount: Int
 ):
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+
+private final case class ConservativeArrayBindingRecord(
+    instanceOrdinal: Int,
+    port: DeclarationRef,
+    actual: DeclarationRef | ExpressionRef,
+    source: Option[SourceSpan]
+)
 
 private final case class NodeArrayProjection(
     input: NodeArray[?],

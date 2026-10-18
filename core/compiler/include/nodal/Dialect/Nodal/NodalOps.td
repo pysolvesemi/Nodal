@@ -167,6 +167,16 @@ def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
   let hasVerifier = 1;
 }
 
+def Nodal_InstanceTerminalArrayOp : Nodal_Op<"instance_terminal_array",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Whole immediate-child conservative array port reference";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port, StrAttr:$name,
+    StrAttr:$direction, StrAttr:$flow_orientation, StrAttr:$source_path,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Interface, role, protocol, and logical ABI model
 //===----------------------------------------------------------------------===//
@@ -665,6 +675,21 @@ def Nodal_NodeArrayOp : Nodal_Op<"node_array", [HasParent<"ModuleOp">]> {
   let summary = "Owned structural array of internal electrical nodes";
   let arguments = (ins StrAttr:$name, StrAttr:$source_path, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_TerminalArrayOp : Nodal_Op<"terminal_array", [HasParent<"ModuleOp">]> {
+  let summary = "Owned structural conservative boundary array";
+  let arguments = (ins StrAttr:$name, StrAttr:$direction, StrAttr:$flow_orientation,
+    StrAttr:$source_path, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_ConnectArrayOp : Nodal_Op<"connect_array", [HasParent<"ModuleOp">]> {
+  let summary = "Exact whole-child conservative array binding";
+  let arguments = (ins AnyType:$actual, AnyType:$child, StrAttr:$connection_id,
+    StrAttr:$source_path, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 

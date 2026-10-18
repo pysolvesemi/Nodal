@@ -194,13 +194,16 @@ final class Node[D <: Discipline] private[nodal] (
 final class NodeArray[D <: Discipline] private[nodal] (
     val discipline: D,
     private[nodal] val dimensions: Vector[Dimension],
-    private[nodal] val projection: Option[NodeArrayProjection] = None
+    private[nodal] val projection: Option[NodeArrayProjection] = None,
+    private[nodal] val declarationKind: KernelSignalKind = KernelSignalKind.AnalogNodeArray
 ):
   projection match
     case None =>
       AnalogProceduralConstruction.requireContinuousContext("conservative array declaration")
-      ConstructionKernel.declareNodeArray(this, discipline, dimensions)
+      ConstructionKernel.declareNodeArray(this, discipline, dimensions, declarationKind)
     case Some(origin) => ConstructionKernel.projectNodeArray(this, origin)
+
+  infix def <>(other: NodeArray[?]): Unit = CandidateRuntime.connectNodeArrays(this, other)
 
   def at(indices: Dimension*): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogNode, Some(this -> indices.toVector))
@@ -392,6 +395,39 @@ abstract class Module:
   protected final def inout[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogInout)
 
+  protected final def in[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      dimension +: dimensions.toVector,
+      declarationKind = KernelSignalKind.AnalogInput
+    )
+
+  protected final def out[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      dimension +: dimensions.toVector,
+      declarationKind = KernelSignalKind.AnalogOutput
+    )
+
+  protected final def inout[D <: Discipline](
+      discipline: D,
+      dimension: Dimension,
+      dimensions: Dimension*
+  ): NodeArray[D] =
+    new NodeArray(
+      discipline,
+      dimension +: dimensions.toVector,
+      declarationKind = KernelSignalKind.AnalogInout
+    )
+
   protected final def node[D <: Discipline](discipline: D): Node[D] =
     new Node(discipline, KernelSignalKind.AnalogNode)
 
@@ -421,6 +457,12 @@ abstract class Module:
 
   protected final def connect[D <: Discipline](left: Node[? <: D], right: Node[? <: D]): Unit =
     CandidateRuntime.connectNodes(left, right)
+
+  protected final def connect[D <: Discipline](
+      left: NodeArray[? <: D],
+      right: NodeArray[? <: D]
+  ): Unit =
+    CandidateRuntime.connectNodeArrays(left, right)
 
 /** Domain-owned state captured at its lexical construction point. */
 final class Register[A <: Data] private[nodal] (
@@ -1597,6 +1639,10 @@ private[nodal] object CandidateRuntime:
   def connectValues(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital connection")
     ConstructionKernel.operation("value-connect", left, right)
+
+  def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("conservative array binding")
+    ConstructionKernel.connectNodeArrays(left, right)
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     AnalogProceduralConstruction.requireContinuousContext("conservative connection")

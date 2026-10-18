@@ -396,7 +396,7 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
   for (std::size_t index = 0; index < ordered.size(); ++index) {
     Block &body = ordered[index]->getRegion(0).front();
     for (Operation &candidate : body) {
-      if (!isNamed(&candidate, "nodal.terminal"))
+      if (!isNamed(&candidate, "nodal.terminal") && !isNamed(&candidate, "nodal.terminal_array"))
         continue;
       auto name = candidate.getAttrOfType<StringAttr>("name");
       auto direction = candidate.getAttrOfType<StringAttr>("direction");
@@ -436,7 +436,8 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
     llvm::StringMap<llvm::StringSet<>> referencedPorts;
     Block &body = ordered[index]->getRegion(0).front();
     for (Operation &endpoint : body) {
-      if (!isNamed(&endpoint, "nodal.instance_terminal"))
+      if (!isNamed(&endpoint, "nodal.instance_terminal") &&
+          !isNamed(&endpoint, "nodal.instance_terminal_array"))
         continue;
       FlatSymbolRefAttr instanceReference = flatReference(&endpoint, "instance");
       auto foundInstance = instanceReference ? instanceByName.find(instanceReference.getValue())
@@ -460,8 +461,11 @@ LogicalResult verifyHierarchy(mlir::ModuleOp module) {
         return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-010",
                            llvm::Twine("duplicate child terminal reference for instance '") +
                                instanceReference.getValue() + "' port '" + port.getValue() + "'");
-      if (endpoint.getNumResults() != 1 || childTerminal->getNumResults() != 1 ||
-          endpoint.getResult(0).getType() != childTerminal->getResult(0).getType())
+      const bool array = isNamed(&endpoint, "nodal.instance_terminal_array");
+      if (array != isNamed(childTerminal, "nodal.terminal_array") ||
+          endpoint.getNumResults() != 1 || childTerminal->getNumResults() != 1 ||
+          (array ? failed(verifyConservativeInstanceArray(&endpoint))
+                 : endpoint.getResult(0).getType() != childTerminal->getResult(0).getType()))
         return emitFailure(&endpoint, "NODAL-VERIFY-HIERARCHY-008",
                            "child terminal reference has an incompatible conservative type");
       if (endpoint.getAttrOfType<StringAttr>("direction") !=
@@ -983,9 +987,11 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
     owner->walk([&](Operation *operation) {
       llvm::StringRef name = operation->getName().getStringRef();
       if (name == "nodal.component_contract" || name == "nodal.terminal" ||
-          name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.node_array" ||
-          isNodeArraySelection(operation) || name == "nodal.connect" || name == "nodal.alias" ||
-          name == "nodal.reference" || name == "nodal.branch" || name == "nodal.connection_set" ||
+          name == "nodal.terminal_array" || name == "nodal.instance_terminal_array" ||
+          name == "nodal.connect_array" || name == "nodal.instance_terminal" ||
+          name == "nodal.node" || name == "nodal.node_array" || isNodeArraySelection(operation) ||
+          name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
+          name == "nodal.branch" || name == "nodal.connection_set" ||
           name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
           name == "nodal.flow_conservation" || name == "nodal.access" ||
           name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||
@@ -1003,8 +1009,9 @@ LogicalResult verifyAnalog(mlir::ModuleOp module) {
         digital = true;
       if (name == "nodal.bridge")
         bridge = true;
-      if ((name == "nodal.terminal" || name == "nodal.instance_terminal" || name == "nodal.node" ||
-           name == "nodal.node_array" || isNodeArraySelection(operation)) &&
+      if ((name == "nodal.terminal" || name == "nodal.terminal_array" ||
+           name == "nodal.instance_terminal_array" || name == "nodal.instance_terminal" ||
+           name == "nodal.node" || name == "nodal.node_array" || isNodeArraySelection(operation)) &&
           operation->getNumResults() == 1 && operation->getResult(0).use_empty() &&
           !observed.contains(operation) && !partial &&
           booleanMetadata(operation, "allow_floating") != std::optional<bool>(true))
@@ -1036,9 +1043,11 @@ LogicalResult verifyCapabilities(mlir::ModuleOp module) {
     llvm::StringRef name = operation->getName().getStringRef();
     const bool analog =
         name == "nodal.component_contract" || name == "nodal.terminal" ||
-        name == "nodal.instance_terminal" || name == "nodal.node" || name == "nodal.node_array" ||
-        isNodeArraySelection(operation) || name == "nodal.connect" || name == "nodal.alias" ||
-        name == "nodal.reference" || name == "nodal.branch" || name == "nodal.connection_set" ||
+        name == "nodal.terminal_array" || name == "nodal.instance_terminal_array" ||
+        name == "nodal.connect_array" || name == "nodal.instance_terminal" ||
+        name == "nodal.node" || name == "nodal.node_array" || isNodeArraySelection(operation) ||
+        name == "nodal.connect" || name == "nodal.alias" || name == "nodal.reference" ||
+        name == "nodal.branch" || name == "nodal.connection_set" ||
         name == "nodal.potential_equality" || name == "nodal.reference_potential" ||
         name == "nodal.flow_conservation" || name == "nodal.access" ||
         name == "nodal.terminal_access" || name == "nodal.port_flow_access" ||

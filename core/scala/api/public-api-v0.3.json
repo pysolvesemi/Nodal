@@ -99,11 +99,11 @@
     ]
   },
   "conservative_node_arrays": {
-    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.2.md",
+    "design_gate": "docs/design-gates/NodalConservativeNodeArrays-DG-v0.3.md",
     "type": "NodeArray[D <: Discipline]",
     "constructor": "Module.node(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
     "selection": "NodeArray.at(indices: Dimension*): Node[D]",
-    "initial_profile": "module-local Electrical; static full-rank selection",
+    "initial_profile": "owned local and boundary Electrical shapes; static selections and whole immediate-child port bindings",
     "is_data_or_expr": false,
     "physical_identity": "owned root declaration and canonical composed row-major map",
     "views": [
@@ -113,7 +113,17 @@
       "NodeArray.flatten: NodeArray[D]",
       "NodeArray.reshape(dimensions: Dimension*): NodeArray[D]"
     ],
-    "scalar_node_overload": "retained"
+    "scalar_node_overload": "retained",
+    "boundary_constructors": [
+      "Module.in(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
+      "Module.out(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]",
+      "Module.inout(discipline: D, dimension: Dimension, dimensions: Dimension*): NodeArray[D]"
+    ],
+    "bindings": [
+      "Module.connect[D <: Discipline](left: NodeArray[? <: D], right: NodeArray[? <: D]): Unit",
+      "NodeArray.<>(other: NodeArray[?]): Unit"
+    ],
+    "target_layout": "ascending conservative vector; row-major logical ordinal"
   },
   "values_and_connectivity": {
     "value_aggregate": "Struct",

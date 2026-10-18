@@ -29,6 +29,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -64,11 +65,14 @@ constexpr llvm::StringLiteral kSupportedOperations[] = {
     "nodal.parameter_envelope",
     "nodal.parameter_override",
     "nodal.terminal",
+    "nodal.terminal_array",
     "nodal.instance",
     "nodal.instance_terminal",
+    "nodal.instance_terminal_array",
     "nodal.node",
     "nodal.node_array",
     "nodal.connect",
+    "nodal.connect_array",
     "nodal.branch",
     "nodal.generate",
     "nodal.analog",
@@ -132,6 +136,10 @@ FailureOr<std::string> requiredString(Operation *operation, llvm::StringRef name
 }
 
 std::string terminalDirection(Operation *operation) {
+  if (auto direction = operation->getAttrOfType<StringAttr>("direction"))
+    if (direction.getValue() == "input" || direction.getValue() == "output" ||
+        direction.getValue() == "inout")
+      return direction.getValue().str();
   auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");
   if (!metadata)
     return {};
@@ -316,7 +324,8 @@ FailureOr<std::string> renderExpression(Value value, ModuleRenderState &state) {
       }
       rendered += ")";
     } else {
-      if (operation->getNumOperands() != 1)
+      if (operation->getNumOperands() != 1 ||
+          failed(resolveConservativePortIncidence(operation->getOperand(0), operation)))
         return failure();
       auto port = state.terminals.find(operation->getOperand(0));
       if (port == state.terminals.end())
@@ -666,6 +675,8 @@ FailureOr<StaticNodeArrayLayout> resolveStaticNodeArray(Operation *operation,
       semanticPath.getValue() != sourcePath.getValue() || !storage ||
       storage.getValue() != "structural")
     return failure();
+  if (failed(resolveConservativeShape(operation->getResult(0), operation)))
+    return failure();
   if (failed(inferStaticShapeMaximumCardinality(definition, shaped.getDimensions())))
     return failure();
   StaticNodeArrayLayout result;
@@ -799,12 +810,14 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
       if (failed(nodeName))
         return failure();
       state.terminals.try_emplace(operation.getResult(0), *nodeName);
-    } else if (name == "nodal.node_array") {
+    } else if (name == "nodal.node_array" || name == "nodal.terminal_array") {
       auto layout = resolveStaticNodeArray(&operation, definition);
       if (failed(layout))
         return emitMappedFailure(&operation, "NODAL-BACKEND-SHAPE-001",
                                  "node array requires owned bounded electrical dimensions");
       nodeArrays.push_back(&operation);
+      if (name == "nodal.terminal_array")
+        ports.push_back(&operation);
       state.nodeArrays.try_emplace(operation.getResult(0), std::move(*layout));
     } else if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation)) {
       auto reference = operation.getNumResults() == 1
@@ -845,8 +858,11 @@ LogicalResult collectModuleState(Operation *definition, ModuleRenderState &state
   // These names share a target namespace even though the source IR uses
   // different declaration kinds. Reject invalid names before publishing HDL.
   llvm::StringSet<> declarations;
+  llvm::DenseSet<Operation *> visitedDeclarations;
   for (const auto *group : {&parameters, &ports, &nodes, &nodeArrays, &namedBranches}) {
     for (Operation *declaration : *group) {
+      if (!visitedDeclarations.insert(declaration).second)
+        continue;
       auto spelling = declaration->getAttrOfType<StringAttr>(
           declaration->getName().getStringRef() == "nodal.parameter" ? "sym_name" : "name");
       if (!spelling || !isPortableVerilogIdentifier(spelling.getValue()))
@@ -1062,8 +1078,141 @@ struct HierarchyInstanceRender {
   std::map<std::string, std::string> parameters;
 };
 
+bool requiresConservativeAdapter(const StaticShapeProjection &projection) {
+  return !projection.wholeRoot && !(projection.contiguousLiteralRegion &&
+                                    projection.literalFirstOffset && projection.literalLastOffset);
+}
+
+std::string reserveStructuralName(ModuleRenderState &state, llvm::StringRef base) {
+  std::string name = base.str();
+  unsigned collision = 0;
+  while (!state.eventState.reserved.insert(name).second)
+    name = (base + "_" + std::to_string(++collision)).str();
+  return name;
+}
+
+void renderConservativeBindingMap(const ConservativeArrayBinding &binding, llvm::StringRef actual,
+                                  llvm::StringRef helper, llvm::StringRef scope,
+                                  const ShapedProjectionProgram *program,
+                                  llvm::raw_ostream &output) {
+  auto sourcePath = [](Operation *operation) -> std::string {
+    if (auto path = operation->getAttrOfType<StringAttr>("source_path"))
+      return path.getValue().str();
+    if (auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata"))
+      if (auto path = metadata.getAs<StringAttr>("semantic_path"))
+        return path.getValue().str();
+    return {};
+  };
+  llvm::json::Array projections;
+  for (Operation *projection : binding.actual.projection.projections)
+    projections.push_back(llvm::json::Object{{"operation", projection->getName().getStringRef()},
+                                             {"source", sourcePath(projection)}});
+  llvm::json::Array stages;
+  if (program)
+    for (const auto &stage : program->steps)
+      stages.push_back(llvm::json::Object{{"name", stage.destination},
+                                          {"expression", stage.expression},
+                                          {"source", sourcePath(stage.projection)}});
+  // Parser locations can name a different transport temporary on every run.
+  // Only retained authored source-map fields belong in deterministic target text.
+  std::string location = "unknown";
+  auto rootModule = binding.operation->getParentOfType<mlir::ModuleOp>();
+  auto sourceMap =
+      rootModule ? rootModule->getAttrOfType<ArrayAttr>("nodal.bridge.source_map") : ArrayAttr();
+  if (sourceMap)
+    for (Attribute attribute : sourceMap) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(attribute);
+      auto semantic = entry ? entry.getAs<StringAttr>("semantic_path") : StringAttr();
+      if (!semantic || semantic.getValue() != sourcePath(binding.operation))
+        continue;
+      auto path = entry.getAs<StringAttr>("source_path");
+      auto line = entry.getAs<IntegerAttr>("source_line");
+      auto column = entry.getAs<IntegerAttr>("source_column");
+      auto endLine = entry.getAs<IntegerAttr>("source_end_line");
+      auto endColumn = entry.getAs<IntegerAttr>("source_end_column");
+      if (path && !path.getValue().empty() && line && line.getInt() > 0 && column &&
+          column.getInt() > 0)
+        location = (path.getValue() + ":" + llvm::Twine(line.getInt()) + ":" +
+                    llvm::Twine(column.getInt()) + "-" +
+                    llvm::Twine(endLine ? endLine.getInt() : line.getInt()) + ":" +
+                    llvm::Twine(endColumn ? endColumn.getInt() : column.getInt()))
+                       .str();
+      break;
+    }
+  llvm::json::Object record{
+      {"binding", sourcePath(binding.operation)},
+      {"source_location", location},
+      {"instance", symbolName(binding.instance)},
+      {"instance_source", sourcePath(binding.instance)},
+      {"formal", sourcePath(binding.port)},
+      {"effective_shape", llvm::cast<ShapedType>(binding.child.getType()).getDimensions()},
+      {"root", sourcePath(binding.actual.declaration)},
+      {"projections", std::move(projections)},
+      {"flow_orientation", "out_of_component"},
+      {"target_actual", actual},
+      {"alias_helper", helper},
+      {"generated_scope", scope},
+      {"stages", std::move(stages)}};
+  // JSON escapes source newlines and control characters. A standalone line
+  // comment makes even comment-delimiter characters harmless target text.
+  output << "  // nodal.array_binding " << llvm::json::Value(std::move(record)) << "\n";
+}
+
+FailureOr<std::string> renderConservativeArrayActual(const ConservativeArrayBinding &binding,
+                                                     ModuleRenderState &state,
+                                                     llvm::StringRef aliasHelper,
+                                                     llvm::raw_ostream &output) {
+  const auto &projection = binding.actual.projection;
+  auto root = state.nodeArrays.find(projection.root);
+  if (root == state.nodeArrays.end())
+    return failure();
+  if (projection.wholeRoot) {
+    renderConservativeBindingMap(binding, root->second.name, "", "", nullptr, output);
+    return root->second.name;
+  }
+  if (!requiresConservativeAdapter(projection)) {
+    std::string actual = root->second.name + "[" + std::to_string(*projection.literalFirstOffset) +
+                         ":" + std::to_string(*projection.literalLastOffset) + "]";
+    renderConservativeBindingMap(binding, actual, "", "", nullptr, output);
+    return actual;
+  }
+
+  auto shape = llvm::dyn_cast<ShapedType>(binding.child.getType());
+  auto module = binding.operation->getParentOfType<nodal::ModuleOp>();
+  auto layout = shape && module ? resolveTargetShapedLayout(module, shape.getDimensions())
+                                : FailureOr<TargetShapedLayout>(failure());
+  if (failed(layout) || aliasHelper.empty())
+    return failure();
+  auto portName = binding.port->getAttrOfType<StringAttr>("name");
+  if (!portName)
+    return failure();
+  const std::string prefix =
+      ("binding_" + symbolName(binding.instance) + "_" + portName.getValue()).str();
+  const std::string bus = reserveStructuralName(state, prefix + "_bus");
+  const std::string lane = reserveStructuralName(state, prefix + "_lane");
+  const std::string scope = reserveStructuralName(state, prefix + "_map");
+  auto program = renderShapedProjectionProgram(projection, lane, [&](unsigned stage) {
+    return reserveStructuralName(state, prefix + "_stage_" + std::to_string(stage));
+  });
+  if (failed(program) || program->root != projection.root)
+    return failure();
+  renderConservativeBindingMap(binding, bus, aliasHelper, scope, &*program, output);
+  output << "  electrical [0:(" << layout->count.text << " - 1)] " << bus << ";\n"
+         << "  genvar " << lane << ";\n"
+         << "  generate\n"
+         << "    for (" << lane << " = 0; " << lane << " < " << layout->count.text << "; " << lane
+         << " = " << lane << " + 1) begin : " << scope << "\n";
+  for (const auto &step : program->steps)
+    output << "      localparam integer " << step.destination << " = " << step.expression << ";\n";
+  output << "      " << aliasHelper << " link(.lhs(" << root->second.name << "[" << program->result
+         << "]), .rhs(" << bus << "[" << lane << "]));\n"
+         << "    end\n"
+         << "  endgenerate\n";
+  return bus;
+}
+
 LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
-                              llvm::raw_ostream &output) {
+                              llvm::StringRef aliasHelper, llvm::raw_ostream &output) {
   Region &region = definition->getRegion(0);
   if (!llvm::hasSingleElement(region))
     return failure();
@@ -1072,6 +1221,8 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
   llvm::SmallVector<Operation *, 16> instanceTerminals;
   llvm::SmallVector<Operation *, 16> connections;
   llvm::SmallVector<Operation *, 8> overrides;
+  llvm::SmallVector<Operation *, 8> arrayConnections;
+  llvm::SmallVector<Operation *, 8> instanceArrays;
   for (Operation &operation : region.front()) {
     llvm::StringRef name = operation.getName().getStringRef();
     if (name == "nodal.instance")
@@ -1082,8 +1233,13 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
       connections.push_back(&operation);
     else if (name == "nodal.parameter_override")
       overrides.push_back(&operation);
+    else if (name == "nodal.connect_array")
+      arrayConnections.push_back(&operation);
+    else if (name == "nodal.instance_terminal_array")
+      instanceArrays.push_back(&operation);
   }
-  if (instances.empty() && instanceTerminals.empty() && connections.empty() && overrides.empty())
+  if (instances.empty() && instanceTerminals.empty() && connections.empty() && overrides.empty() &&
+      arrayConnections.empty() && instanceArrays.empty())
     return success();
 
   llvm::sort(instances, [](Operation *left, Operation *right) {
@@ -1183,11 +1339,31 @@ LogicalResult renderHierarchy(Operation *definition, ModuleRenderState &state,
                                "parent-only connection is not representable by the scalar "
                                "instance profile");
 
+  llvm::DenseSet<Value> boundArrays;
+  for (Operation *connection : arrayConnections) {
+    auto binding = resolveConservativeArrayBinding(connection);
+    if (failed(binding) || !rendered.count(binding->instance) ||
+        !boundArrays.insert(binding->child).second)
+      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-011",
+                               "array binding requires an exactly verified immediate child port");
+    auto actual = renderConservativeArrayActual(*binding, state, aliasHelper, output);
+    auto port = binding->port->getAttrOfType<StringAttr>("name");
+    if (failed(actual) || !port ||
+        !rendered[binding->instance].ports.emplace(port.getValue().str(), *actual).second)
+      return emitMappedFailure(connection, "NODAL-BACKEND-HIERARCHY-012",
+                               "array actual map is duplicated or exceeds the portable target "
+                               "structural Integer profile");
+  }
+  for (Operation *reference : instanceArrays)
+    if (reference->getNumResults() != 1 || !boundArrays.contains(reference->getResult(0)))
+      return emitMappedFailure(reference, "NODAL-BACKEND-HIERARCHY-011",
+                               "child array reference requires one whole-port binding");
+
   for (Operation *instance : instances) {
     auto &entry = rendered[instance];
     std::set<std::string> childPorts;
     for (Operation &operation : entry.child->getRegion(0).front())
-      if (operation.getName().getStringRef() == "nodal.terminal") {
+      if (llvm::isa<TerminalOp, TerminalArrayOp>(operation)) {
         auto name = operation.getAttrOfType<StringAttr>("name");
         if (!name || !isPortableVerilogIdentifier(name.getValue()) ||
             !childPorts.insert(name.getValue().str()).second)
@@ -2386,7 +2562,7 @@ LogicalResult renderNestedGeneratedNodeContributionArray(Operation *generate,
       return emitMappedFailure(&operation, "NODAL-BACKEND-CAPABILITY-001",
                                "nested generated analog-node equation requires an exactly-owned "
                                "electrical node with unique source identity");
-    output << "  electrical " << nodeName.getValue() << "[0:(" << count << " - 1)];\n";
+    output << "  electrical [0:(" << count << " - 1)] " << nodeName.getValue() << ";\n";
   }
   return success();
 }
@@ -2459,14 +2635,14 @@ LogicalResult renderGeneratedNodeArrayTree(Operation *generate, llvm::raw_ostrea
       }
 
       if (layouts.size() == 1) {
-        output << "  electrical " << nodeName.getValue() << "[" << layouts.front().lower << ":"
-               << layouts.front().upper << "];\n";
+        output << "  electrical [" << layouts.front().lower << ":" << layouts.front().upper << "] "
+               << nodeName.getValue() << ";\n";
         continue;
       }
       std::string count = layouts.front().count;
       for (const GeneratedNodeArrayLayout &layout : llvm::drop_begin(layouts))
         count = (llvm::Twine("(") + count + " * " + layout.count + ")").str();
-      output << "  electrical " << nodeName.getValue() << "[0:(" << count << " - 1)];\n";
+      output << "  electrical [0:(" << count << " - 1)] " << nodeName.getValue() << ";\n";
     }
     layouts.pop_back();
     return success();
@@ -2531,13 +2707,14 @@ LogicalResult renderGeneratedNodeArray(Operation *generate, llvm::raw_ostream &o
           "generated analog-node array requires an electrical node with exact owner, induction, "
           "and unique source identity");
 
-    output << "  electrical " << name.getValue() << "[" << layout.lower << ":" << layout.upper
-           << "];\n";
+    output << "  electrical [" << layout.lower << ":" << layout.upper << "] " << name.getValue()
+           << ";\n";
   }
   return success();
 }
 
-LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output) {
+LogicalResult renderDefinition(Operation *definition, llvm::StringRef aliasHelper,
+                               llvm::raw_ostream &output) {
   ModuleRenderState state;
   llvm::SmallVector<Operation *, 8> parameters;
   llvm::SmallVector<Operation *, 8> ports;
@@ -2567,7 +2744,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     if (direction.empty())
       return emitMappedFailure(port, "NODAL-BACKEND-RC-003",
                                "RC terminal requires analog port direction");
-    portsByDirection[direction].push_back(port->getAttrOfType<StringAttr>("name").getValue());
+    if (!state.nodeArrays.count(port->getResult(0)))
+      portsByDirection[direction].push_back(port->getAttrOfType<StringAttr>("name").getValue());
   }
   for (llvm::StringRef direction :
        {llvm::StringRef("input"), llvm::StringRef("output"), llvm::StringRef("inout")}) {
@@ -2579,7 +2757,9 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     output << ";\n";
   }
 
-  if (!ports.empty() || !nodes.empty()) {
+  if (llvm::any_of(ports,
+                   [&](Operation *port) { return !state.nodeArrays.count(port->getResult(0)); }) ||
+      !nodes.empty()) {
     output << "  electrical ";
     bool first = true;
     auto emitElectricalName = [&](Operation *operation) {
@@ -2589,7 +2769,8 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
       output << operation->getAttrOfType<StringAttr>("name").getValue();
     };
     for (Operation *port : ports)
-      emitElectricalName(port);
+      if (!state.nodeArrays.count(port->getResult(0)))
+        emitElectricalName(port);
     for (Operation *node : nodes)
       emitElectricalName(node);
     output << ";\n";
@@ -2672,7 +2853,9 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     const std::string upper = !llvm::StringRef(layout.extent).getAsInteger(10, extent)
                                   ? std::to_string(extent - 1)
                                   : "(" + layout.extent + " - 1)";
-    output << "  electrical " << layout.name << "[0:" << upper << "];\n";
+    if (llvm::isa<TerminalArrayOp>(array))
+      output << "  " << terminalDirection(array) << " [0:" << upper << "] " << layout.name << ";\n";
+    output << "  electrical [0:" << upper << "] " << layout.name << ";\n";
   }
   for (const auto &[name, initializer] : state.nodeMapConstants)
     output << "  localparam integer " << name << " = " << initializer << ";\n";
@@ -2716,7 +2899,7 @@ LogicalResult renderDefinition(Operation *definition, llvm::raw_ostream &output)
     if (hasGeneratedNodeArray(generate) && failed(renderGeneratedNodeArray(generate, output)))
       return failure();
 
-  if (failed(renderHierarchy(definition, state, output)))
+  if (failed(renderHierarchy(definition, state, aliasHelper, output)))
     return failure();
 
   if (failed(prepareAnalogEventBackend(definition, state.eventState, output)))
@@ -2954,6 +3137,23 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
         result = verifyAnalogProcedureTarget(procedure);
       return;
     }
+    if (auto contract = llvm::dyn_cast<ComponentContractOp>(operation)) {
+      result = contract.verify();
+      return;
+    }
+    // Partial topology records describe the source net/branch incidence already
+    // implemented by the target's conservative nets. They are not complete
+    // equations and must never produce additional numeric contributions.
+    if (llvm::isa<ConnectionSetOp, FlowConservationOp>(operation)) {
+      auto owner = operation->getParentOfType<nodal::ModuleOp>();
+      auto complete = operation->getAttrOfType<BoolAttr>("complete");
+      if (owner && isPartialPhysicalComponent(owner) && complete && !complete.getValue()) {
+        result = llvm::isa<ConnectionSetOp>(operation)
+                     ? llvm::cast<ConnectionSetOp>(operation).verify()
+                     : llvm::cast<FlowConservationOp>(operation).verify();
+        return;
+      }
+    }
     if (llvm::isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(operation) &&
         operation->getNumResults() == 1 &&
         succeeded(resolveConservativeShape(operation->getResult(0), operation)))
@@ -2979,6 +3179,23 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
                                      llvm::raw_ostream &output) {
   if (failed(verifyRootExport(definitions)))
     return failure();
+  bool requiresAlias = false;
+  llvm::StringSet<> moduleNames;
+  for (Operation *definition : definitions) {
+    moduleNames.insert(symbolName(definition));
+    for (Operation &operation : definition->getRegion(0).front()) {
+      if (!llvm::isa<ConnectArrayOp>(operation))
+        continue;
+      auto binding = resolveConservativeArrayBinding(&operation);
+      if (failed(binding))
+        return failure();
+      requiresAlias |= requiresConservativeAdapter(binding->actual.projection);
+    }
+  }
+  std::string aliasHelper = "nodal_alias_electrical";
+  unsigned aliasCollision = 0;
+  while (moduleNames.contains(aliasHelper))
+    aliasHelper = "nodal_alias_electrical_" + std::to_string(++aliasCollision);
   output << "/* Nodal backend framework v1\n";
   output << " * profile: " << configuration.profile->id << "\n";
   output << " * check-profile: " << stringifyGateProfile(configuration.checkProfile) << "\n";
@@ -2990,12 +3207,17 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
   output << " */\n";
   output << "`include \"constants.vams\"\n";
   output << "`include \"disciplines.vams\"\n\n";
+  if (requiresAlias)
+    output << "module " << aliasHelper << "(.lhs(n), .rhs(n));\n"
+           << "  inout n;\n"
+           << "  electrical n;\n"
+           << "endmodule\n\n";
   bool firstDefinition = true;
   for (Operation *definition : definitions) {
     if (!firstDefinition)
       output << "\n";
     firstDefinition = false;
-    if (failed(renderDefinition(definition, output)))
+    if (failed(renderDefinition(definition, requiresAlias ? aliasHelper : "", output)))
       return failure();
   }
   return success();
@@ -3230,7 +3452,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   // syntax/identity. Correlated symbolic bounds are proved per axis by the native
   // shape owner and checked again before row-major target arithmetic is emitted.
   auto validEndpoint = [&](llvm::StringRef text, bool allowBranch = false,
-                           bool allowGenerated = false) {
+                           bool allowGenerated = false, bool allowAggregate = false) {
     if (!currentHierarchyModule)
       return false;
     auto endpoint = parseHierarchyEndpoint(text.str());
@@ -3238,10 +3460,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       return false;
     auto array = arrayBounds.find(endpoint->name);
     if (endpoint->index.empty())
-      return array == arrayBounds.end() &&
+      return (array == arrayBounds.end() || allowAggregate) &&
              (hierarchyModules[*currentHierarchyModule].nodes.count(endpoint->name) ||
               (allowBranch && namedBranchNames.contains(endpoint->name)));
-    if (array == arrayBounds.end())
+    if (array == arrayBounds.end() || (!endpoint->partSelectEnd.empty() && !allowAggregate))
       return false;
     auto parameters = hierarchyModules[*currentHierarchyModule].parameters;
     if (allowGenerated)
@@ -3258,8 +3480,22 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (!index.parse())
       return false;
     auto value = index.constantValue();
-    return !value || ((!array->second.first || *value >= *array->second.first) &&
-                      (!array->second.second || *value <= *array->second.second));
+    if (value && ((array->second.first && *value < *array->second.first) ||
+                  (array->second.second && *value > *array->second.second)))
+      return false;
+    if (endpoint->partSelectEnd.empty())
+      return true;
+    GeneratedBoundExpressionParser end(endpoint->partSelectEnd, parameters,
+                                       [&](llvm::StringRef name, std::optional<int64_t> &constant) {
+                                         return structuralInteger(name, structuralParameters.size(),
+                                                                  constant);
+                                       });
+    if (!end.parse())
+      return false;
+    auto last = end.constantValue();
+    return !last || ((!value || *last >= *value) &&
+                     (!array->second.first || *last >= *array->second.first) &&
+                     (!array->second.second || *last <= *array->second.second));
   };
   auto validSelectedEndpoints = [&](llvm::StringRef statement, bool allowGenerated) {
     bool quoted = false;
@@ -3321,8 +3557,10 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       auto arguments = statement.slice(position + 2, close - 1).trim();
       if (statement[position] == 'I' && arguments.starts_with("<") && arguments.ends_with(">")) {
         auto port = arguments.drop_front().drop_back();
-        if (!currentHierarchyModule ||
-            !hierarchyModules[*currentHierarchyModule].ports.count(port.str()))
+        auto endpoint = parseHierarchyEndpoint(port.str());
+        if (!currentHierarchyModule || !endpoint ||
+            !hierarchyModules[*currentHierarchyModule].portDirections.count(endpoint->name) ||
+            !validEndpoint(port, false, allowGenerated))
           return false;
       } else {
         llvm::SmallVector<llvm::StringRef, 2> endpoints;
@@ -3354,28 +3592,21 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
   bool sawModule = false;
   for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex) {
     llvm::StringRef line = lines[lineIndex].trim();
-    if (line.empty() || line.starts_with("/*") || line.starts_with("*") ||
+    if (line.empty() || line.starts_with("//") || line.starts_with("/*") || line.starts_with("*") ||
         line.starts_with("`include "))
       continue;
     if (!insideModule && line.starts_with("module ") && line.ends_with(";")) {
-      llvm::StringRef declaration = line.drop_front(sizeof("module ") - 1).drop_back();
-      size_t open = declaration.find('(');
-      llvm::SmallVector<llvm::StringRef, 8> headerPorts;
-      if (open != llvm::StringRef::npos) {
-        if (!declaration.ends_with(")") ||
-            !validIdentifierList(declaration.slice(open + 1, declaration.size() - 1)))
-          return failure();
-        declaration.slice(open + 1, declaration.size() - 1).split(headerPorts, ',', -1, true);
-        declaration = declaration.take_front(open);
-      }
-      if (!validIdentifierList(declaration))
+      auto header = parseHierarchyModuleHeader(line.str());
+      if (!header)
         return failure();
       HierarchyModuleSyntax hierarchy;
-      hierarchy.name = declaration.str();
-      for (llvm::StringRef port : headerPorts) {
-        hierarchy.ports.insert(port.trim().str());
-        hierarchy.nodes.insert(port.trim().str());
-      }
+      hierarchy.name = header->name;
+      hierarchy.ports = header->ports;
+      hierarchy.portAliases = header->portAliases;
+      for (const auto &[port, internal] : header->portAliases)
+        hierarchy.nodes.insert(internal);
+      if (header->portAliases.empty())
+        hierarchy.nodes = header->ports;
       hierarchyModules.push_back(std::move(hierarchy));
       currentHierarchyModule = hierarchyModules.size() - 1;
       realNames.clear();
@@ -3399,6 +3630,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (line.starts_with("analog function ")) {
       if (insideAnalog)
         return failure();
+      hierarchyModules[*currentHierarchyModule].hasBehavior = true;
       std::string remaining;
       for (size_t i = lineIndex; i < lines.size(); ++i)
         remaining += lines[i].str() + "\n";
@@ -3415,6 +3647,24 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       if (insideAnalog)
         return failure();
       insideAnalog = true;
+      hierarchyModules[*currentHierarchyModule].hasBehavior = true;
+      continue;
+    }
+    if (line == "generate" && !insideAnalog) {
+      std::string block;
+      size_t end = lineIndex;
+      for (; end < lines.size(); ++end) {
+        block += lines[end].str() + "\n";
+        if (lines[end].trim() == "endgenerate")
+          break;
+      }
+      if (end == lines.size())
+        return failure();
+      auto scope = parseStructuralGenerate(block);
+      if (!scope)
+        return failure();
+      hierarchyModules[*currentHierarchyModule].generatedScopes.push_back(std::move(*scope));
+      lineIndex = end;
       continue;
     }
     if (line == "end") {
@@ -3536,6 +3786,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (line.starts_with("real event_") || line.starts_with("integer event_")) {
       if (!eventDeclaration(line))
         return failure();
+      hierarchyModules[*currentHierarchyModule].hasBehavior = true;
       continue;
     }
     if (line.starts_with("genvar ") && line.ends_with(";")) {
@@ -3545,9 +3796,11 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
                .try_emplace(identifier, AnalogEventSymbol{AnalogEventSymbolKind::Integer, true})
                .second)
         return failure();
+      hierarchyModules[*currentHierarchyModule].genvars.insert(identifier.str());
       continue;
     }
     if (line.starts_with("real ") && line.ends_with(";")) {
+      hierarchyModules[*currentHierarchyModule].hasBehavior = true;
       auto identifier = line.drop_front(5).drop_back().trim();
       if (identifier.contains(',') || !validIdentifierList(identifier) ||
           !realNames.insert(identifier).second)
@@ -3556,6 +3809,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       continue;
     }
     if (line.starts_with("branch (") && line.ends_with(";")) {
+      hierarchyModules[*currentHierarchyModule].hasBehavior = true;
       llvm::StringRef declaration = line.drop_front(sizeof("branch (") - 1).drop_back();
       size_t close = declaration.rfind(") ");
       if (close == llvm::StringRef::npos)
@@ -3571,63 +3825,74 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
       eventSymbols.try_emplace(name, AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
       continue;
     }
-    if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ")) &&
-        line.ends_with(";") &&
-        validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back())) {
-      llvm::SmallVector<llvm::StringRef, 8> names;
-      line.drop_front(line.find(' ') + 1).drop_back().split(names, ',', -1, true);
-      for (llvm::StringRef name : names) {
-        hierarchyModules[*currentHierarchyModule].ports.insert(name.trim().str());
-        hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
+    if ((line.starts_with("input ") || line.starts_with("output ") || line.starts_with("inout ") ||
+         line.starts_with("electrical ")) &&
+        line.ends_with(";")) {
+      auto &hierarchy = hierarchyModules[*currentHierarchyModule];
+      const auto kind = line.take_front(line.find(' '));
+      const bool electrical = kind == "electrical";
+      auto declaration = line.drop_front(line.find(' ') + 1).drop_back().trim();
+      std::optional<HierarchyVectorSyntax> vector;
+      ConcreteArrayBounds concrete;
+      if (declaration.starts_with("[")) {
+        size_t close = declaration.find(']');
+        if (close == llvm::StringRef::npos)
+          return failure();
+        auto range = declaration.slice(1, close).split(':');
+        if (range.first.empty() || range.second.empty() || range.second.contains(':'))
+          return failure();
+        auto resolveInteger = [&](llvm::StringRef name, std::optional<int64_t> &value) {
+          return structuralInteger(name, structuralParameters.size(), value);
+        };
+        GeneratedBoundExpressionParser lower(range.first.trim(), hierarchy.parameters,
+                                             resolveInteger);
+        GeneratedBoundExpressionParser upper(range.second.trim(), hierarchy.parameters,
+                                             resolveInteger);
+        if (!lower.parse() || !upper.parse() ||
+            (lower.constantValue() && upper.constantValue() &&
+             *lower.constantValue() > *upper.constantValue()))
+          return failure();
+        vector = HierarchyVectorSyntax{range.first.trim().str(), range.second.trim().str()};
+        concrete = {lower.constantValue(), upper.constantValue()};
+        declaration = declaration.drop_front(close + 1).trim();
+        if (!isPortableVerilogIdentifier(declaration))
+          return failure();
       }
-      continue;
-    }
-    if (line.starts_with("electrical ") && line.ends_with(";") && line.contains('[')) {
-      llvm::StringRef declaration = line.drop_front(line.find(' ') + 1).drop_back().trim();
-      size_t open = declaration.find('[');
-      size_t close = declaration.rfind(']');
-      if (open == llvm::StringRef::npos || close != declaration.size() - 1 || open == 0 ||
-          !isPortableVerilogIdentifier(declaration.take_front(open)) || !currentHierarchyModule)
+      if (!validIdentifierList(declaration))
         return failure();
-      llvm::StringRef bounds = declaration.slice(open + 1, close);
-      auto range = bounds.split(':');
-      if (range.first.empty() || range.second.empty() || range.second.contains(':') ||
-          !validGeneratedBoundExpression(range.first.trim(),
-                                         hierarchyModules[*currentHierarchyModule].parameters) ||
-          !validGeneratedBoundExpression(range.second.trim(),
-                                         hierarchyModules[*currentHierarchyModule].parameters))
-        return failure();
-      const auto &parameters = hierarchyModules[*currentHierarchyModule].parameters;
-      auto resolveInteger = [&](llvm::StringRef name, std::optional<int64_t> &value) {
-        return structuralInteger(name, structuralParameters.size(), value);
-      };
-      GeneratedBoundExpressionParser lower(range.first.trim(), parameters, resolveInteger);
-      GeneratedBoundExpressionParser upper(range.second.trim(), parameters, resolveInteger);
-      if (!lower.parse() || !upper.parse() ||
-          (lower.constantValue() && upper.constantValue() &&
-           *lower.constantValue() > *upper.constantValue()) ||
-          !arrayBounds
-               .try_emplace(declaration.take_front(open),
-                            ConcreteArrayBounds{lower.constantValue(), upper.constantValue()})
-               .second ||
-          !hierarchyModules[*currentHierarchyModule]
-               .nodes.insert(declaration.take_front(open).str())
-               .second)
-        return failure();
-      hierarchyModules[*currentHierarchyModule].arrays.insert(declaration.take_front(open).str());
-      eventSymbols.try_emplace(declaration.take_front(open),
-                               AnalogEventSymbol{AnalogEventSymbolKind::TerminalArray, false,
-                                                 lower.constantValue(), upper.constantValue()});
-      continue;
-    }
-    if (line.starts_with("electrical ") && line.ends_with(";") &&
-        validIdentifierList(line.drop_front(line.find(' ') + 1).drop_back())) {
       llvm::SmallVector<llvm::StringRef, 8> names;
-      line.drop_front(line.find(' ') + 1).drop_back().split(names, ',', -1, true);
-      for (llvm::StringRef name : names) {
-        hierarchyModules[*currentHierarchyModule].nodes.insert(name.trim().str());
-        eventSymbols.try_emplace(name.trim(),
-                                 AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
+      declaration.split(names, ',', -1, true);
+      for (llvm::StringRef raw : names) {
+        const std::string name = raw.trim().str();
+        auto known = hierarchy.vectors.find(name);
+        const bool declaredScalar =
+            known == hierarchy.vectors.end() &&
+            (hierarchy.electricalNodes.count(name) || hierarchy.portDirections.count(name));
+        if (vector && declaredScalar)
+          return failure();
+        if (electrical) {
+          if (!hierarchy.electricalNodes.insert(name).second)
+            return failure();
+          hierarchy.nodes.insert(name);
+        } else {
+          if (!hierarchy.nodes.count(name) ||
+              !hierarchy.portDirections.emplace(name, kind.str()).second)
+            return failure();
+        }
+        if (vector) {
+          if (known != hierarchy.vectors.end() &&
+              (known->second.lower != vector->lower || known->second.upper != vector->upper))
+            return failure();
+          hierarchy.vectors.emplace(name, *vector);
+          hierarchy.arrays.insert(name);
+          arrayBounds.try_emplace(name, concrete);
+          eventSymbols.try_emplace(name, AnalogEventSymbol{AnalogEventSymbolKind::TerminalArray,
+                                                           false, concrete.first, concrete.second});
+        } else {
+          if (known != hierarchy.vectors.end())
+            return failure();
+          eventSymbols.try_emplace(name, AnalogEventSymbol{AnalogEventSymbolKind::Terminal, false});
+        }
       }
       continue;
     }
@@ -3646,8 +3911,11 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
                                                 structuralParameters.size(), initializer.str()})
                .second)
         return failure();
-      if (integer)
+      if (integer) {
         structuralIntegerNames.insert(parameter->first);
+        hierarchyModules[*currentHierarchyModule].integerDeclarations.push_back(
+            {parameter->first, initializer.str(), parameter->second});
+      }
       hierarchyModules[*currentHierarchyModule].parameters.insert(parameter->first);
       eventSymbols.try_emplace(parameter->first,
                                AnalogEventSymbol{line.contains(" integer ")
@@ -3661,7 +3929,7 @@ LogicalResult reparseBackendTarget(llvm::StringRef candidate, const BackendConfi
     if (auto instance = parseHierarchyInstance(line.str())) {
       for (const auto &[port, actual] : instance->ports) {
         (void)port;
-        if (!validEndpoint(actual))
+        if (!validEndpoint(actual, false, false, true))
           return failure();
       }
       hierarchyModules[*currentHierarchyModule].instances.push_back(std::move(*instance));

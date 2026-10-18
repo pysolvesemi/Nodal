@@ -2005,7 +2005,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.mlir.contains("\"nodal.generate\""))
             assert(result.mlir.contains("\"nodal.node\""))
             assert(result.verilogA.contains("parameter integer lanes = 2 from [1:4];"))
-            assert(result.verilogA.contains("electrical tap[0:(lanes - 1)];"))
+            assert(result.verilogA.contains("electrical [0:(lanes - 1)] tap;"))
             assert(!result.verilogA.contains("genvar generate_0_index"))
             assert(!result.verilogA.contains("analog begin"))
           finally delete(directory)
@@ -2094,12 +2094,12 @@ object Increment43RangeConstructionTests extends TestSuite:
             val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
             assert(
               result.verilogA.contains(
-                s"  electrical ${declarationNames.head}[0:$compactUpper];"
+                s"  electrical [0:$compactUpper] ${declarationNames.head};"
               )
             )
             assert(
               result.verilogA.contains(
-                s"  electrical ${declarationNames(1)}[0:(groups - 1)];"
+                s"  electrical [0:(groups - 1)] ${declarationNames(1)};"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -2181,10 +2181,10 @@ object Increment43RangeConstructionTests extends TestSuite:
             val result = compileNested()
             assert(result == compileNested())
             val names = declaredRegions.map(_.declarations.head.split('.').last)
-            assert(result.verilogA.contains(s"  electrical ${names.head}[0:(lanes - 1)];"))
+            assert(result.verilogA.contains(s"  electrical [0:(lanes - 1)] ${names.head};"))
             assert(
               result.verilogA.contains(
-                s"  electrical ${names(1)}[0:(((lanes - 0) * (lanes - 0)) - 1)];"
+                s"  electrical [0:(((lanes - 0) * (lanes - 0)) - 1)] ${names(1)};"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -2294,7 +2294,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             val innerCount = "((((columns - 2) + 3) - 1) / 3)"
             assert(
               result.verilogA.contains(
-                s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 1)
@@ -2397,7 +2397,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
             assert(
               result.verilogA.contains(
-                s"  electrical $nodeName[0:(($outerCount * $innerCount) - 1)];"
+                s"  electrical [0:(($outerCount * $innerCount) - 1)] $nodeName;"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
@@ -2473,17 +2473,28 @@ object Increment43RangeConstructionTests extends TestSuite:
               val name = child.declarations.head.split('.').last
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
-              assert(result.verilogA.contains(s"I($name[$flatIndex], p) <+"))
-              assert(result.verilogA.contains(s"V($name[$flatIndex], p)"))
+              val mappedIndex = flatIndex
+                .replace("generate_0_index", generatedInductionSymbol(first, outer.path))
+                .replace("generate_1_index", generatedInductionSymbol(first, child.path))
+              assert(result.verilogA.contains(s"I($name[$mappedIndex], p) <+"))
+              assert(result.verilogA.contains(s"V($name[$mappedIndex], p)"))
               assert(result.verilogA.linesIterator.count(_.trim.startsWith("for (")) == 2)
-              assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 1)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical [")) == 1)
+              assert(result.verilogA.linesIterator.count(_.trim == "electrical p;") == 1)
+              assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
+              val directSnapshot =
+                ConstructionKernel.inspect(new Increment43GeneratedNodeDdtContribution)
+              val directIndex = generatedInductionSymbol(
+                ScalaToMlirBridge.fromSnapshot(directSnapshot),
+                directSnapshot.generatedRegions.head.path
+              )
               val direct = compile(new Increment43GeneratedNodeDdtContribution)
-              assert(direct.verilogA.contains("electrical tap[1:(lanes - 1)];"))
-              assert(direct.verilogA.contains("I(tap[generate_0_index], p) <+"))
-              assert(direct.verilogA.contains("ddt(V(tap[generate_0_index], p))"))
+              assert(direct.verilogA.contains("electrical [1:(lanes - 1)] tap;"))
+              assert(direct.verilogA.contains(s"I(tap[$directIndex], p) <+"))
+              assert(direct.verilogA.contains(s"ddt(V(tap[$directIndex], p))"))
             finally delete(directory)
           case _ => assert(true)
 
@@ -2618,7 +2629,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -2749,7 +2760,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -2892,7 +2903,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -2980,7 +2991,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("electrical ")) == 2)
@@ -3106,7 +3117,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.contains(s"$outerIndex = -2"))
@@ -3236,7 +3247,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
@@ -3365,7 +3376,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
@@ -3492,7 +3503,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
@@ -3647,7 +3658,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             names.foreach: name =>
               assert(
                 result.verilogA.contains(
-                  s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                  s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                 )
               )
             assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p;") == 1)
@@ -3811,7 +3822,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               names.foreach: name =>
                 assert(
                   result.verilogA.linesIterator.count(
-                    _ == s"  electrical $name[0:(($outerCount * $innerCount) - 1)];"
+                    _ == s"  electrical [0:(($outerCount * $innerCount) - 1)] $name;"
                   ) == 1
                 )
               assert(result.verilogA.linesIterator.count(_.trim == "electrical n, p, q;") == 1)
@@ -3950,7 +3961,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
             assert(
               result.verilogA.contains(
-                s"  electrical $nodeName[0:(($outerCount * $innerCount) - 1)];"
+                s"  electrical [0:(($outerCount * $innerCount) - 1)] $nodeName;"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
@@ -4042,7 +4053,7 @@ object Increment43RangeConstructionTests extends TestSuite:
               s"((((generate_0_index - 1) / 2) * $innerCount) + ((generate_1_index - 2) / 3))"
             assert(
               result.verilogA.contains(
-                s"  electrical $nodeName[0:(($outerCount * $innerCount) - 1)];"
+                s"  electrical [0:(($outerCount * $innerCount) - 1)] $nodeName;"
               )
             )
             assert(result.verilogA.linesIterator.count(_.trim.startsWith("genvar ")) == 2)
@@ -4139,8 +4150,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result == compileRepeated())
             val names = regions.map(_.declarations.head.split('.').last)
             val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(result.verilogA.contains(s"  electrical ${names.head}[0:$compactUpper];"))
-            assert(result.verilogA.contains(s"  electrical ${names(1)}[0:(groups - 1)];"))
+            assert(result.verilogA.contains(s"  electrical [0:$compactUpper] ${names.head};"))
+            assert(result.verilogA.contains(s"  electrical [0:(groups - 1)] ${names(1)};"))
             assert(
               result.verilogA.contains(
                 "for (generate_0_index = 1; generate_0_index < lanes; " +
@@ -4264,8 +4275,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result == compileRepeated())
             val names = regions.map(_.declarations.head.split('.').last)
             val compactUpper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
-            assert(result.verilogA.contains(s"  electrical ${names.head}[0:$compactUpper];"))
-            assert(result.verilogA.contains(s"  electrical ${names(1)}[0:(groups - 1)];"))
+            assert(result.verilogA.contains(s"  electrical [0:$compactUpper] ${names.head};"))
+            assert(result.verilogA.contains(s"  electrical [0:(groups - 1)] ${names(1)};"))
             assert(
               result.verilogA.contains(
                 "for (generate_0_index = 1; generate_0_index < lanes; " +
@@ -4307,7 +4318,11 @@ object Increment43RangeConstructionTests extends TestSuite:
       assert(declarationNames.size == 2)
       assert(declarationNames.count(_ == "tap") == 1)
       val generatedName = declarationNames.find(_ != "tap").get
-      assert(generatedName.startsWith("analog_node_increment43_range_construction_tests_l31_"))
+      assert(generatedName == "returnTap")
+      val declarationSources = region.declarations.map(path =>
+        snapshot.sourceMap.find(_.semanticPath == path).get.source
+      )
+      assert(declarationSources.map(_.line).distinct.size == 2)
       region.declarations.foreach: path =>
         assert(snapshot.sourceMap.exists(_.semanticPath == path))
       assert(snapshot.sourceMap.exists(_.semanticPath == region.induction))
@@ -4337,8 +4352,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("parameter integer lanes = 3 from [2:5];"))
             assert(
               result.verilogA.contains(
-                s"  electrical $generatedName[1:(lanes - 1)];\n" +
-                  "  electrical tap[1:(lanes - 1)];"
+                s"  electrical [1:(lanes - 1)] $generatedName;\n" +
+                  "  electrical [1:(lanes - 1)] tap;"
               )
             )
             assert(
@@ -4384,7 +4399,7 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileMixed()
             assert(result == compileMixed())
-            assert(result.verilogA.contains("  electrical tap[0:(lanes - 1)];"))
+            assert(result.verilogA.contains("  electrical [0:(lanes - 1)] tap;"))
             assert(result.verilogA.contains("  genvar generate_0_index;"))
             assert(result.verilogA.linesIterator.count(
               _.trim == "V(tap[generate_0_index], p) <+ 1;"
@@ -4437,8 +4452,8 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileGroup()
             assert(result == compileGroup())
-            val generatedDeclaration = s"  electrical $generatedName[1:(lanes - 1)];"
-            val tapDeclaration = "  electrical tap[1:(lanes - 1)];"
+            val generatedDeclaration = s"  electrical [1:(lanes - 1)] $generatedName;"
+            val tapDeclaration = "  electrical [1:(lanes - 1)] tap;"
             assert(result.verilogA.contains(generatedDeclaration))
             assert(result.verilogA.contains(tapDeclaration))
             assert(
@@ -4498,8 +4513,8 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileGroup()
             assert(result == compileGroup())
-            val generatedDeclaration = s"  electrical $generatedName[1:(lanes - 1)];"
-            val tapDeclaration = "  electrical tap[1:(lanes - 1)];"
+            val generatedDeclaration = s"  electrical [1:(lanes - 1)] $generatedName;"
+            val tapDeclaration = "  electrical [1:(lanes - 1)] tap;"
             assert(result.verilogA.contains(generatedDeclaration))
             assert(result.verilogA.contains(tapDeclaration))
             assert(result.verilogA.linesIterator.count(
@@ -4565,8 +4580,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             assert(result.verilogA.contains("parameter integer extra = 1 from [1:2];"))
             assert(
               result.verilogA.contains(
-                s"  electrical $generatedName[1:((lanes + extra) - 1)];\n" +
-                  "  electrical tap[1:((lanes + extra) - 1)];"
+                s"  electrical [1:((lanes + extra) - 1)] $generatedName;\n" +
+                  "  electrical [1:((lanes + extra) - 1)] tap;"
               )
             )
             assert(
@@ -4727,7 +4742,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             )
             assert(
               result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+                _.trim == "electrical [0:(((((lanes - 1) + 2) - 1) / 2) - 1)] tap;"
               ) == 1
             )
           finally delete(directory)
@@ -4794,7 +4809,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             )
             assert(
               result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+                _.trim == "electrical [0:(((((lanes - 1) + 2) - 1) / 2) - 1)] tap;"
               ) == 1
             )
           finally delete(directory)
@@ -4862,13 +4877,13 @@ object Increment43RangeConstructionTests extends TestSuite:
             )
             assert(
               result.verilogA.linesIterator.count(
-                _.trim == "electrical tap[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+                _.trim == "electrical [0:(((((lanes - 1) + 2) - 1) / 2) - 1)] tap;"
               ) == 1
             )
             assert(
               result.verilogA.linesIterator.count(
                 _.trim ==
-                  s"electrical $peerName[0:(((((lanes - 1) + 2) - 1) / 2) - 1)];"
+                  s"electrical [0:(((((lanes - 1) + 2) - 1) / 2) - 1)] $peerName;"
               ) == 1
             )
           finally delete(directory)
@@ -4920,7 +4935,7 @@ object Increment43RangeConstructionTests extends TestSuite:
             )
             assert(
               result.verilogA.linesIterator.count(
-                _.trim == s"electrical $nodeName[1:(lanes - 1)];"
+                _.trim == s"electrical [1:(lanes - 1)] $nodeName;"
               ) == 1
             )
           finally delete(directory)
@@ -4944,6 +4959,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       val declarationNames = region.declarations.map(_.split('.').last)
       assert(declarationNames.count(_ == "tap") == 1)
       val peerName = declarationNames.find(_ != "tap").get
+      assert(peerName == "returnTap")
       val first = ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
       assert(
         first == ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeDdtContribution)
@@ -4981,17 +4997,18 @@ object Increment43RangeConstructionTests extends TestSuite:
             val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
             assert(
               result.verilogA.contains(
-                s"  electrical $peerName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
+                s"  electrical [0:$upper] $peerName;\n" +
+                  s"  electrical [0:$upper] tap;"
               )
             )
+            val index = generatedInductionSymbol(first, region.path)
             assert(
               result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
+                s"for ($index = 1; $index < lanes; " +
+                  s"$index = $index + 2)"
               )
             )
-            val mapped = "((generate_0_index - 1) / 2)"
+            val mapped = s"(($index - 1) / 2)"
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains(s"I(tap[$mapped], $peerName[$mapped]) <+") &&
@@ -5039,7 +5056,7 @@ object Increment43RangeConstructionTests extends TestSuite:
                 )
             val result = compileIdt()
             assert(result == compileIdt())
-            assert(result.verilogA.contains("  electrical tap[1:(4 - 1)];"))
+            assert(result.verilogA.contains("  electrical [1:(4 - 1)] tap;"))
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains("V(tap[generate_0_index], p) <+") &&
@@ -5069,6 +5086,7 @@ object Increment43RangeConstructionTests extends TestSuite:
       val declarationNames = region.declarations.map(_.split('.').last)
       assert(declarationNames.count(_ == "tap") == 1)
       val peerName = declarationNames.find(_ != "tap").get
+      assert(peerName == "returnTap")
       val first =
         ScalaToMlirBridge.lower(new Increment43StridedGeneratedPeerNodeIdtContribution)
       assert(
@@ -5107,17 +5125,18 @@ object Increment43RangeConstructionTests extends TestSuite:
             val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
             assert(
               result.verilogA.contains(
-                s"  electrical $peerName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
+                s"  electrical [0:$upper] $peerName;\n" +
+                  s"  electrical [0:$upper] tap;"
               )
             )
+            val index = generatedInductionSymbol(first, region.path)
             assert(
               result.verilogA.contains(
-                "for (generate_0_index = 1; generate_0_index < lanes; " +
-                  "generate_0_index = generate_0_index + 2)"
+                s"for ($index = 1; $index < lanes; " +
+                  s"$index = $index + 2)"
               )
             )
-            val mapped = "((generate_0_index - 1) / 2)"
+            val mapped = s"(($index - 1) / 2)"
             assert(
               result.verilogA.linesIterator.count(line =>
                 line.contains(s"V(tap[$mapped], $peerName[$mapped]) <+") &&
@@ -5236,8 +5255,8 @@ object Increment43RangeConstructionTests extends TestSuite:
             val upper = "(((((lanes - 1) + 2) - 1) / 2) - 1)"
             assert(
               result.verilogA.contains(
-                s"  electrical $generatedName[0:$upper];\n" +
-                  s"  electrical tap[0:$upper];"
+                s"  electrical [0:$upper] $generatedName;\n" +
+                  s"  electrical [0:$upper] tap;"
               )
             )
             assert(

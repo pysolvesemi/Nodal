@@ -258,10 +258,13 @@ private final class ConstructionSession(val options: EmitOptions):
   def registerNodeArray(
       value: NodeArray[?],
       discipline: Discipline,
-      dimensions: Vector[Dimension]
+      dimensions: Vector[Dimension],
+      kind: KernelSignalKind
   ): Unit =
     val module = currentModule
-    if discipline != Electrical || dimensions.isEmpty || analogStack.nonEmpty ||
+    if !conservativeArrayKinds.contains(
+        kind
+      ) || discipline != Electrical || dimensions.isEmpty || analogStack.nonEmpty ||
       analogSemanticContext.nonEmpty
     then
       fail(
@@ -287,7 +290,7 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     registerDeclaration(
       value,
-      KernelSignalKind.AnalogNodeArray,
+      kind,
       None,
       None,
       None,
@@ -297,6 +300,10 @@ private final class ConstructionSession(val options: EmitOptions):
     bounds.flatMap(_.parameters).distinct.foreach: parameter =>
       markStructuralParameterEffect(parameter, "shape")
       markStructuralParameterEffect(parameter, "rank")
+
+  private val conservativePortKinds =
+    Set(KernelSignalKind.AnalogInput, KernelSignalKind.AnalogOutput, KernelSignalKind.AnalogInout)
+  private val conservativeArrayKinds = conservativePortKinds + KernelSignalKind.AnalogNodeArray
 
   private def nodeArrayInput(array: NodeArray[?])
       : (DeclarationRef | ExpressionRef, DeclarationRef) =
@@ -309,8 +316,10 @@ private final class ConstructionSession(val options: EmitOptions):
     def root(reference: DeclarationRef | ExpressionRef): DeclarationRef = reference match
       case declaration: DeclarationRef =>
         if declaration.module != module ||
-          records(declaration.module).declarations(declaration.index).kind !=
-            KernelSignalKind.AnalogNodeArray
+          !conservativeArrayKinds.contains(
+            records(declaration.module).declarations(declaration.index).kind
+          ) ||
+          records(declaration.module).declarations(declaration.index).conservativeDimensions.isEmpty
         then
           fail("NODAL-SHAPE-043-006", "node-array reference must retain its local owned root")
         declaration
@@ -1448,6 +1457,53 @@ private final class ConstructionSession(val options: EmitOptions):
     if requirementReference.module != record.child then
       fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
     record.namedBindings += requirement -> domain
+
+  def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
+    requireNoGeneratedEffect("generated conservative array binding")
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      fail("NODAL-SHAPE-043-007", "conservative array bindings require module scope")
+    val parent = currentModule
+    def childPort(value: NodeArray[?]): Option[(InstanceRecord, DeclarationRef)] =
+      Option(declarationIds.get(value)).flatMap: reference =>
+        val declaration = records(reference.module).declarations(reference.index)
+        parent.instances.find(_.child == reference.module).filter(_ =>
+          records(reference.module).attached && conservativePortKinds.contains(declaration.kind) &&
+            declaration.conservativeDimensions.nonEmpty && value.projection.isEmpty
+        ).map(_ -> reference)
+    val candidates = Vector(
+      childPort(left).map(value => (value, right)),
+      childPort(right).map(value => (value, left))
+    ).flatten
+    if candidates.size != 1 then
+      fail(
+        "NODAL-SHAPE-043-007",
+        "array binding requires one whole port of an attached immediate child and one parent-owned actual"
+      )
+    val ((instance, port), actual) = candidates.head
+    val (reference, _) = nodeArrayInput(actual)
+    if left.discipline != Electrical || right.discipline != Electrical then
+      fail("NODAL-SHAPE-043-007", "array binding requires matching Electrical capabilities")
+    if operations.exists(operation =>
+        operation.owner == parent.handle && operation.kind == "node-array-connect" &&
+          operation.values.exists {
+            case binding: ConservativeArrayBindingRecord => binding.port == port; case _ => false
+          }
+      )
+    then
+      fail(
+        "NODAL-HIERARCHY-043",
+        "child array port is bound more than once",
+        Some(declarationPath(port))
+      )
+    operation(
+      "node-array-connect",
+      ConservativeArrayBindingRecord(
+        instance.ordinal,
+        port,
+        reference,
+        semanticOrigin.captureSemanticSource()
+      )
+    )
 
   def connectNodes(left: AnyRef, right: AnyRef): Unit =
     requireNoGeneratedEffect("generated conservative connection")
@@ -2823,6 +2879,93 @@ private final class ConstructionSession(val options: EmitOptions):
           )
     nets.sortBy(_.path)
 
+  private def conservativeArrayBindingRecords
+      : Vector[(KernelConservativeArrayBindingSnapshot, ConservativeArrayBindingRecord)] =
+    val ordinals = mutable.HashMap.empty[Long, Int]
+    operations.toVector.collect:
+      case operation if operation.kind == "node-array-connect" =>
+        val binding = operation.values match
+          case Vector(value: ConservativeArrayBindingRecord) => value
+          case _ => fail("NODAL-SHAPE-043-007", "array binding lost its typed captured payload")
+        val ordinal = ordinals.getOrElse(operation.owner, 0)
+        ordinals.update(operation.owner, ordinal + 1)
+        val owner = modulePath(operation.owner)
+        KernelConservativeArrayBindingSnapshot(
+          s"$owner.array_binding_$ordinal",
+          owner,
+          instancePath(operation.owner, binding.instanceOrdinal),
+          declarationPath(binding.port),
+          pathOfReference(binding.actual)
+        ) -> binding
+
+  private def markConservativeBindingDependencies(): Unit =
+    operations.filter(_.kind == "node-array-connect").foreach: operation =>
+      val binding = operation.values.head.asInstanceOf[ConservativeArrayBindingRecord]
+      val instance = records(operation.owner).instances(binding.instanceOrdinal)
+      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      def visit(value: Any): Unit = value match
+        case parameter: Param[?]
+            if Option(visited.put(parameter, java.lang.Boolean.TRUE)).isEmpty =>
+          val reference = Option(declarationIds.get(parameter)).getOrElse(
+            fail("NODAL-SHAPE-043-007", "binding parameter dependency has no owned declaration")
+          )
+          markStructuralParameterEffect(reference, "shape")
+          markStructuralParameterEffect(reference, "rank")
+          if reference.module == instance.child then
+            val overrideValue = instance.parameterOverrides.collectFirst:
+              case (target: AnyRef, actual)
+                  if Option(declarationIds.get(target)).contains(reference) => actual
+            visit(overrideValue.getOrElse(parameter.default))
+        case expression: KernelExpr[?]
+            if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
+          expression.operands.foreach(visit)
+        case _ => ()
+      records(
+        binding.port.module
+      ).declarations(binding.port.index).conservativeDimensions.foreach(visit)
+
+  private def finalizeConservativeArrayBindings(snapshot: ConstructionSnapshot): Unit =
+    val dimensions = snapshot.modules.flatMap(_.declarations).map(value =>
+      value.path -> value.conservativeDimensions
+    ).toMap ++
+      snapshot.shapeViews.map(value => value.path -> value.dimensions) ++
+      snapshot.shapeIndices.map(value => value.path -> value.resultDimensions)
+    snapshot.conservativeArrayBindings.foreach: binding =>
+      try
+        StructuralParameterBinding.validate(
+          snapshot,
+          binding,
+          dimensions.getOrElse(binding.actual, Vector.empty)
+        )
+      catch
+        case failure: IllegalArgumentException =>
+          fail("NODAL-SHAPE-043-007", failure.getMessage, Some(binding.path))
+    snapshot.modules.foreach: module =>
+      module.instances.foreach: instance =>
+        val child = snapshot.modules.find(_.path == instance.childModule).getOrElse(
+          fail(
+            "NODAL-SHAPE-043-007",
+            "array binding instance has no child definition",
+            Some(instance.path)
+          )
+        )
+        child.declarations.filter(value =>
+          Set(
+            "analog-input",
+            "analog-output",
+            "analog-inout"
+          ).contains(value.kind) && value.conservativeDimensions.nonEmpty
+        ).foreach: port =>
+          if !snapshot.conservativeArrayBindings.exists(value =>
+              value.instance == instance.path && value.port == port.path
+            )
+          then
+            fail(
+              "NODAL-HIERARCHY-043",
+              "child array port requires one whole binding",
+              Some(port.path)
+            )
+
   private def topology(): Vector[KernelTopologyEdge] =
     val edges = operations.toVector.flatMap: operation =>
       if Set("node-connect", "terminal-connect", "inout-pass-through").contains(operation.kind) &&
@@ -3340,6 +3483,9 @@ private final class ConstructionSession(val options: EmitOptions):
     val roots = rootParameterBindings.iterator.map(_._2) ++ records.valuesIterator.flatMap(
       _.instances.iterator.flatMap(_.parameterOverrides.iterator.map(_._2))
     )
+    val defaultRoots = records.valuesIterator.flatMap(_.declarations.iterator.filter(
+      _.kind == KernelSignalKind.Parameter
+    ).flatMap(_.attributes.collect { case ("default", value) => value }))
     val generatedRoots = records.valuesIterator.flatMap(
       _.generatedRegions.iterator.flatMap(region =>
         Iterator(region.lower, region.upperExclusive, region.step)
@@ -3370,7 +3516,7 @@ private final class ConstructionSession(val options: EmitOptions):
           (if expression.operation.contains("analog_array_fill") then Iterator.empty
            else expression.operands.drop(1).iterator)
     val reachable = capturedExpressionClosure(
-      (lexicalShapeRoots ++ roots ++ generatedRoots ++ structuralShapeExpressionRoots ++
+      (lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
         shapeDimensionExpressionRoots).collect:
         case expression: KernelExpr[?] if expression.literal.isEmpty => expression
     )
@@ -3461,6 +3607,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
     val resolved = resolveDomains()
+    markConservativeBindingDependencies()
     val modules = snapshots(resolved)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
     val endpointSources = shapeIndices.valuesIterator.filter(_.conservative.nonEmpty).flatMap:
@@ -3469,6 +3616,7 @@ private final class ConstructionSession(val options: EmitOptions):
           SourceMapEntry(conservativeEndpointPath(index), source)
         )
     val abi = interfaceAbi(resolved)
+    val arrayBindings = conservativeArrayBindingRecords
     val snapshot = ConstructionSnapshot(
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
@@ -3495,7 +3643,9 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ endpointSources ++ AnalogUserFunctionRuntime.sourceMap(
+        (semantic.sourceMap ++ endpointSources ++ arrayBindings.flatMap((binding, record) =>
+          record.source.map(SourceMapEntry(binding.path, _))
+        ) ++ AnalogUserFunctionRuntime.sourceMap(
           userFunctions.snapshots(modulePath)
         )).sortBy(_.semanticPath),
       analogRegions = analogSnapshots(),
@@ -3512,8 +3662,10 @@ private final class ConstructionSession(val options: EmitOptions):
       waivers = waiverSnapshots(semantic.sourceMap),
       generatedRegions = generatedSnapshots(),
       shapeIndices = shapeIndexSnapshots(),
-      shapeViews = shapeViewSnapshots()
+      shapeViews = shapeViewSnapshots(),
+      conservativeArrayBindings = arrayBindings.map(_._1)
     )
+    finalizeConservativeArrayBindings(snapshot)
     val kind = classify(snapshot)
     val report = DesignReport(
       designKind = kind,

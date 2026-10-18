@@ -558,15 +558,24 @@ LogicalResult materializeModule(Operation *module) {
           "NODAL-CONNECTIVITY-PROVENANCE-001: endpoint names must be canonical and unique "
           "within a physical component");
 
-    const bool terminal =
-        isNamed(&operation, "nodal.terminal") || isNamed(&operation, "nodal.instance_terminal");
+    Operation *incidence = &operation;
+    if (nodal::isNodeArraySelection(&operation)) {
+      auto selected = nodal::resolveConservativeSelection(operation.getResult(0), &operation);
+      if (failed(selected))
+        return failure();
+      if (llvm::isa<nodal::TerminalArrayOp>(selected->declaration))
+        incidence = selected->declaration;
+    }
+    const bool terminal = llvm::isa<nodal::TerminalArrayOp>(incidence) ||
+                          isNamed(&operation, "nodal.terminal") ||
+                          isNamed(&operation, "nodal.instance_terminal");
     if (terminal) {
-      llvm::StringRef direction = textAttr(&operation, "direction");
+      llvm::StringRef direction = textAttr(incidence, "direction");
       if (!oneOf(direction, {"input", "output", "inout"}))
         return operation.emitOpError(
             "NODAL-TERMINAL-DIRECTION-001: conservative terminal direction must be input, "
             "output, or inout");
-      llvm::StringRef orientation = textAttr(&operation, "flow_orientation");
+      llvm::StringRef orientation = textAttr(incidence, "flow_orientation");
       if (!oneOf(orientation, {"into_component", "out_of_component"}))
         return operation.emitOpError(
             "NODAL-TERMINAL-ORIENTATION-001: flow orientation must be into_component or "
@@ -585,7 +594,7 @@ LogicalResult materializeModule(Operation *module) {
     endpointIndex[operation.getResult(0)] = index;
     endpoints.push_back(EndpointInfo{operation.getResult(0), &operation, std::move(path),
                                      std::move(*discipline), terminal,
-                                     textAttr(&operation, "flow_orientation").str()});
+                                     textAttr(incidence, "flow_orientation").str()});
   }
 
   UnionFind sets(static_cast<unsigned>(endpoints.size()));
@@ -1160,11 +1169,12 @@ LogicalResult nodal::FlowConservationOp::verify() {
     if (auto terminal = llvm::dyn_cast<nodal::TerminalType>(term.getType())) {
       discipline = terminal.getDiscipline();
       Operation *definition = term.getDefiningOp();
-      if (!isNamed(definition, "nodal.terminal") || !connectionSetContains(connectionSet, term))
+      auto incidence = nodal::resolveConservativePortIncidence(term, getOperation());
+      if (failed(incidence) || !connectionSetContains(connectionSet, term))
         return emitOpError(
             "NODAL-CONNECTION-FLOW-001: terminal flow terms must be boundary members of the "
             "connection set");
-      llvm::StringRef orientation = textAttr(definition, "flow_orientation");
+      llvm::StringRef orientation = textAttr(incidence->declaration, "flow_orientation");
       const int64_t expectedSign = orientation == "into_component" ? -1 : 1;
       if (!oneOf(orientation, {"into_component", "out_of_component"}) || sign != expectedSign)
         return emitOpError(
@@ -1235,9 +1245,10 @@ FailureOr<nodal::ConservativeShape> nodal::resolveConservativeShape(Value value,
   if (failed(projection))
     return reject("conservative view requires an acyclic verified owned shape map");
   Operation *root = projection->root.getDefiningOp();
-  if (!llvm::isa_and_nonnull<NodeArrayOp>(root) || root->getParentOp() != module ||
-      failed(llvm::cast<NodeArrayOp>(root).verify()))
-    return reject("conservative shape capability requires an actual local node-array root");
+  if (!llvm::isa_and_nonnull<NodeArrayOp, TerminalArrayOp>(root) || root->getParentOp() != module ||
+      failed(llvm::isa<NodeArrayOp>(root) ? llvm::cast<NodeArrayOp>(root).verify()
+                                          : llvm::cast<TerminalArrayOp>(root).verify()))
+    return reject("conservative shape capability requires an actual local conservative array root");
   llvm::StringRef ownerPath = metadataText(module, "semantic_path");
   if (ownerPath.empty())
     ownerPath = textAttr(module, "sym_name");
@@ -1274,6 +1285,215 @@ FailureOr<nodal::ConservativeShape> nodal::resolveConservativeSelection(Value va
   if (!value || !llvm::isa<TerminalType>(value.getType()))
     return failure();
   return resolveConservativeShape(value, use);
+}
+
+namespace {
+struct ResolvedArrayPort {
+  Operation *instance;
+  Operation *port;
+  Operation *parent;
+};
+Operation *lookupInstanceModule(Operation *instance, FlatSymbolRefAttr target) {
+  if (!instance || !target)
+    return nullptr;
+  auto module = instance->getParentOfType<mlir::ModuleOp>();
+  if (!module)
+    return nullptr;
+  // Instance targets name definitions in the builtin module, as in F42 and
+  // ParameterModel. Local parameter/instance symbols cannot shadow that owner.
+  for (Operation &definition : module.getBody()->getOperations())
+    if (llvm::isa<nodal::ModuleOp>(definition) &&
+        textAttr(&definition, SymbolTable::getSymbolAttrName()) == target.getValue())
+      return &definition;
+  return nullptr;
+}
+FailureOr<ResolvedArrayPort> resolveArrayPort(Operation *operation) {
+  auto reject = [&](llvm::StringRef message) -> FailureOr<ResolvedArrayPort> {
+    operation->emitOpError("NODAL-SHAPE-043-008: ") << message;
+    return failure();
+  };
+  if (!llvm::isa_and_nonnull<nodal::InstanceTerminalArrayOp>(operation))
+    return failure();
+  Operation *parent = enclosingNodalModule(operation);
+  if (!parent || operation->getParentOp() != parent)
+    return reject("child array reference must belong directly to its parent module");
+  auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+  Operation *instance = lookupLocalSymbol(operation, reference);
+  if (!llvm::isa_and_nonnull<nodal::InstanceOp>(instance))
+    return reject("child array reference requires an exact immediate instance");
+  auto target = instance->getAttrOfType<FlatSymbolRefAttr>("module");
+  Operation *definition = lookupInstanceModule(instance, target);
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(definition) || definition->getNumRegions() != 1 ||
+      definition->getRegion(0).empty())
+    return reject("child array reference has an unknown module definition");
+  Operation *port = nullptr;
+  for (Operation &candidate : definition->getRegion(0).front()) {
+    if (textAttr(&candidate, "name") != textAttr(operation, "port"))
+      continue;
+    if (!llvm::isa<nodal::TerminalArrayOp>(candidate) || port)
+      return reject("child array reference requires one declared array boundary port");
+    port = &candidate;
+  }
+  if (!port)
+    return reject("child array reference does not name a declared array boundary port");
+  return ResolvedArrayPort{instance, port, parent};
+}
+
+LogicalResult verifyInstantiatedArrayShape(Operation *diagnostic, const ResolvedArrayPort &resolved,
+                                           Type actualType) {
+  auto formal = llvm::dyn_cast<nodal::ShapedType>(resolved.port->getResult(0).getType());
+  auto actual = llvm::dyn_cast<nodal::ShapedType>(actualType);
+  if (!formal || !actual || formal.getElementType() != actual.getElementType() ||
+      !llvm::isa<nodal::TerminalType>(actual.getElementType()))
+    return diagnostic->emitOpError(
+        "NODAL-SHAPE-043-008: child array requires matching conservative element contracts");
+  llvm::SmallVector<llvm::StringRef> expectedDimensions, actualDimensions;
+  formal.getDimensions().split(expectedDimensions, ',', -1, true);
+  actual.getDimensions().split(actualDimensions, ',', -1, true);
+  if (expectedDimensions.size() != actualDimensions.size())
+    return diagnostic->emitOpError(
+        "NODAL-SHAPE-043-008: child array rank must match exactly, not only cardinality");
+  if (failed(nodal::inferStaticShapeMaximumCardinality(resolved.parent, actual.getDimensions())))
+    return diagnostic->emitOpError("NODAL-SHAPE-043-008: effective child array requires owned "
+                                   "positive finite parent dimensions");
+  for (auto [formalToken, actualToken] : llvm::zip(expectedDimensions, actualDimensions)) {
+    auto expected = nodal::resolveStaticShapeDimension(resolved.port->getParentOp(), formalToken);
+    auto actualDimension = nodal::resolveStaticShapeDimension(resolved.parent, actualToken);
+    if (failed(expected) || failed(actualDimension) ||
+        failed(nodal::verifyInstanceShapeDimension(resolved.instance, *expected, *actualDimension)))
+      return diagnostic->emitOpError(
+          "NODAL-SHAPE-043-008: child array extent lacks exact finalized substitution proof");
+  }
+  return success();
+}
+} // namespace
+
+LogicalResult nodal::verifyConservativeInstanceArray(Operation *operation) {
+  auto resolved = resolveArrayPort(operation);
+  if (failed(resolved))
+    return failure();
+  if (failed(llvm::cast<TerminalArrayOp>(resolved->port).verify()))
+    return failure();
+  // Reusable definitions retain their canonical declaration paths, while each
+  // instance can retain a different authored child path. Neither spelling
+  // participates in resolution of the actual instance or declared port.
+  llvm::StringRef authoredChild = metadataText(resolved->instance, "child_path");
+  const std::string expectedSource =
+      authoredChild.empty() ? textAttr(resolved->port, "source_path").str()
+                            : (authoredChild + "." + textAttr(resolved->port, "name")).str();
+  if (!isCanonicalText(textAttr(operation, "name")) ||
+      textAttr(operation, "source_path") != expectedSource ||
+      (!authoredChild.empty() && (!isCanonicalText(authoredChild) ||
+                                  metadataText(operation, "child_path") != authoredChild)) ||
+      textAttr(operation, "direction") != textAttr(resolved->port, "direction") ||
+      textAttr(operation, "flow_orientation") != "out_of_component" ||
+      metadataText(operation, "storage") != "structural" || operation->hasAttr("dimensions") ||
+      operation->hasAttr("generated_owner") || operation->hasAttr("generated_induction"))
+    return operation->emitOpError("NODAL-SHAPE-043-008: child array direction, incidence or "
+                                  "declaration provenance is invalid");
+  if (operation->getNumResults() != 1 ||
+      failed(verifyInstantiatedArrayShape(operation, *resolved, operation->getResult(0).getType())))
+    return failure();
+  for (OpOperand &use : operation->getResult(0).getUses())
+    if (!llvm::isa<ConnectArrayOp>(use.getOwner()) || use.getOperandNumber() != 1 ||
+        use.getOwner()->getParentOp() != resolved->parent)
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-008: child array is a whole binding endpoint, not a parent projection");
+  return success();
+}
+
+FailureOr<nodal::ConservativeArrayBinding>
+nodal::resolveConservativeArrayBinding(Operation *operation) {
+  if (!llvm::isa_and_nonnull<ConnectArrayOp>(operation) || operation->getNumOperands() != 2)
+    return failure();
+  auto reject = [&](llvm::StringRef message) -> FailureOr<ConservativeArrayBinding> {
+    operation->emitOpError("NODAL-SHAPE-043-008: ") << message;
+    return failure();
+  };
+  Operation *parent = enclosingNodalModule(operation);
+  Operation *child = operation->getOperand(1).getDefiningOp();
+  auto resolved = resolveArrayPort(child);
+  if (!parent || operation->getParentOp() != parent || failed(resolved) ||
+      resolved->parent != parent || !child->isBeforeInBlock(operation) ||
+      failed(verifyConservativeInstanceArray(child)))
+    return reject("array binding requires an owned preceding immediate-child port reference");
+  auto actual = resolveConservativeShape(operation->getOperand(0), operation);
+  if (failed(actual) || !llvm::isa<ShapedType>(operation->getOperand(0).getType()) ||
+      failed(
+          verifyInstantiatedArrayShape(operation, *resolved, operation->getOperand(0).getType())))
+    return reject("array binding requires an exact matching parent-owned conservative shape");
+  llvm::StringRef owner = metadataText(parent, "semantic_path");
+  if (owner.empty())
+    owner = textAttr(parent, "sym_name");
+  auto path = textAttr(operation, "source_path");
+  if (!isCanonicalText(path) || !path.starts_with((owner + ".").str()) ||
+      !isCanonicalText(textAttr(operation, "connection_id")) ||
+      metadataText(operation, "semantic_path") != path || operation->hasAttr("generated_owner") ||
+      operation->hasAttr("generated_induction"))
+    return reject("array binding requires owned canonical occurrence provenance");
+  return ConservativeArrayBinding{operation, resolved->instance, resolved->port,
+                                  operation->getOperand(1), std::move(*actual)};
+}
+
+LogicalResult nodal::verifyConservativeArrayBindings(Operation *module) {
+  Block *body = moduleBody(module);
+  if (!body)
+    return success();
+  std::map<std::pair<Operation *, Operation *>, unsigned> bindings;
+  llvm::StringSet<> occurrences, connectionIds;
+  std::map<std::pair<Operation *, Operation *>, Operation *> references;
+  for (Operation &operation : *body) {
+    if (llvm::isa<InstanceTerminalArrayOp>(operation)) {
+      auto resolved = resolveArrayPort(&operation);
+      if (failed(resolved) || failed(verifyConservativeInstanceArray(&operation)))
+        return failure();
+      if (!references.emplace(std::make_pair(resolved->instance, resolved->port), &operation)
+               .second)
+        return operation.emitOpError("NODAL-VERIFY-HIERARCHY-010: duplicate child array reference");
+    }
+    if (!llvm::isa<ConnectArrayOp>(operation))
+      continue;
+    auto relation = resolveConservativeArrayBinding(&operation);
+    if (failed(relation))
+      return failure();
+    if (++bindings[{relation->instance, relation->port}] != 1 ||
+        !occurrences.insert(textAttr(&operation, "source_path")).second ||
+        !connectionIds.insert(textAttr(&operation, "connection_id")).second)
+      return operation.emitOpError(
+          "NODAL-VERIFY-HIERARCHY-010: duplicate whole child array binding or occurrence");
+  }
+  for (Operation &operation : *body) {
+    if (!llvm::isa<InstanceOp>(operation))
+      continue;
+    auto target = operation.getAttrOfType<FlatSymbolRefAttr>("module");
+    Operation *definition = lookupInstanceModule(&operation, target);
+    if (!llvm::isa_and_nonnull<nodal::ModuleOp>(definition))
+      continue; // Existing hierarchy closure owns unknown scalar/module targets.
+    if (definition->getNumRegions() != 1 || !llvm::hasSingleElement(definition->getRegion(0)))
+      return operation.emitOpError(
+          "NODAL-SHAPE-043-008: array boundary inventory requires a valid child module body");
+    for (Operation &port : definition->getRegion(0).front())
+      if (llvm::isa<TerminalArrayOp>(port) && bindings[{&operation, &port}] != 1)
+        return operation.emitOpError(
+            "NODAL-VERIFY-HIERARCHY-012: every child array port requires one whole binding");
+  }
+  return success();
+}
+
+FailureOr<nodal::ConservativePortIncidence>
+nodal::resolveConservativePortIncidence(Value value, Operation *use) {
+  if (!value || !use || !llvm::isa<TerminalType>(value.getType()))
+    return failure();
+  Operation *definition = value.getDefiningOp();
+  auto module = use->getParentOfType<nodal::ModuleOp>();
+  if (llvm::isa_and_nonnull<TerminalOp>(definition) && definition->getParentOp() == module)
+    return ConservativePortIncidence{definition, value, std::nullopt};
+  if (!isNodeArraySelection(definition))
+    return failure();
+  auto selection = resolveConservativeSelection(value, use);
+  if (failed(selection) || !llvm::isa<TerminalArrayOp>(selection->declaration))
+    return failure();
+  return ConservativePortIncidence{selection->declaration, value, std::move(selection->projection)};
 }
 
 bool nodal::isNodeArraySelection(Operation *operation) {

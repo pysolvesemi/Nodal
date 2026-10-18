@@ -1443,15 +1443,15 @@ int main() {
                                       generatedNodeArrayStream)))
     return fail("generated analog-node array emission failed");
   generatedNodeArrayStream.flush();
-  if (generatedNodeArrayOutput.find("  electrical tap[0:(3 - 1)];\n") == std::string::npos ||
+  if (generatedNodeArrayOutput.find("  electrical [0:(3 - 1)] tap;\n") == std::string::npos ||
       generatedNodeArrayOutput.find("genvar generate_0_index") != std::string::npos ||
       generatedNodeArrayOutput.find("analog begin") != std::string::npos)
     return fail("generated analog node was not retained as one legal electrical array");
   if (mlir::failed(nodal::reparseBackendTarget(generatedNodeArrayOutput, *configuration)))
     return fail("generated analog-node array failed independent target reparse");
   for (const auto &mutation :
-       {std::make_pair("electrical tap[0:(3 - 1)];", "electrical tap[0:(3 && 1)];"),
-        std::make_pair("electrical tap[0:(3 - 1)];", "electrical tap[0:MISSING];")}) {
+       {std::make_pair("electrical [0:(3 - 1)] tap;", "electrical [0:(3 && 1)] tap;"),
+        std::make_pair("electrical [0:(3 - 1)] tap;", "electrical [0:MISSING] tap;")}) {
     std::string invalid = generatedNodeArrayOutput;
     auto position = invalid.find(mutation.first);
     if (position == std::string::npos)
@@ -1490,8 +1490,8 @@ int main() {
                                       nestedGeneratedNodeArrayStream)))
     return fail("nested generated analog-node array emission failed");
   nestedGeneratedNodeArrayStream.flush();
-  if (nestedGeneratedNodeArrayOutput.find("  electrical nestedTap[0:((((((8 - 1) + 2) - 1) / 2) * "
-                                          "((((11 - 2) + 3) - 1) / 3)) - 1)];\n") ==
+  if (nestedGeneratedNodeArrayOutput.find("  electrical [0:((((((8 - 1) + 2) - 1) / 2) * "
+                                          "((((11 - 2) + 3) - 1) / 3)) - 1)] nestedTap;\n") ==
           std::string::npos ||
       nestedGeneratedNodeArrayOutput.find("genvar") != std::string::npos ||
       nestedGeneratedNodeArrayOutput.find("analog begin") != std::string::npos)
@@ -1542,9 +1542,9 @@ int main() {
   const std::string nestedFlatIndex =
       "((((generate_0_index - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) + "
       "((generate_1_index - 2) / 3))";
-  if (nestedGeneratedNodeEquationOutput.find(
-          "  electrical nestedTap[0:((((((8 - 1) + 2) - 1) / 2) * "
-          "((((11 - 2) + 3) - 1) / 3)) - 1)];\n") == std::string::npos ||
+  if (nestedGeneratedNodeEquationOutput.find("  electrical [0:((((((8 - 1) + 2) - 1) / 2) * "
+                                             "((((11 - 2) + 3) - 1) / 3)) - 1)] nestedTap;\n") ==
+          std::string::npos ||
       nestedGeneratedNodeEquationOutput.find("I(nestedTap[" + nestedFlatIndex + "], p) <+ ") ==
           std::string::npos ||
       nestedGeneratedNodeEquationOutput.find("V(nestedTap[" + nestedFlatIndex + "], p)") ==
@@ -1620,7 +1620,7 @@ int main() {
     stream.flush();
     const std::string index = test.index;
     const std::string extent = std::string("(") + test.outerCount + " * " + test.innerCount + ")";
-    if (output.find("electrical nestedTap[0:(" + extent + " - 1)];") == std::string::npos ||
+    if (output.find("electrical [0:(" + extent + " - 1)] nestedTap;") == std::string::npos ||
         output.find("I(nestedTap[" + index + "], p) <+ ") == std::string::npos ||
         output.find("V(nestedTap[" + index + "], p)") == std::string::npos)
       return fail("nested unit-step origins did not map to zero-based occurrence ordinals");
@@ -1710,10 +1710,10 @@ int main() {
       return fail("nested peer generated analog-node equation emission failed");
     const std::string nestedExtent =
         "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
-    if (output.find("  electrical nestedTap[" + nestedExtent +
-                    "];\n"
-                    "  electrical nestedReturn[" +
-                    nestedExtent + "];\n") == std::string::npos ||
+    if (output.find("  electrical [" + nestedExtent +
+                    "] nestedTap;\n"
+                    "  electrical [" +
+                    nestedExtent + "] nestedReturn;\n") == std::string::npos ||
         output.find("I(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
                     "]) <+ ") == std::string::npos ||
         output.find("V(nestedTap[" + nestedFlatIndex + "], nestedReturn[" + nestedFlatIndex +
@@ -1745,10 +1745,10 @@ int main() {
   nestedGeneratedNodeGroupEquationsStream.flush();
   const std::string nestedGroupExtent =
       "0:((((((8 - 1) + 2) - 1) / 2) * ((((11 - 2) + 3) - 1) / 3)) - 1)";
-  if (nestedGeneratedNodeGroupEquationsOutput.find("  electrical nestedTap[" + nestedGroupExtent +
-                                                   "];\n"
-                                                   "  electrical nestedReturn[" +
-                                                   nestedGroupExtent + "];\n") ==
+  if (nestedGeneratedNodeGroupEquationsOutput.find("  electrical [" + nestedGroupExtent +
+                                                   "] nestedTap;\n"
+                                                   "  electrical [" +
+                                                   nestedGroupExtent + "] nestedReturn;\n") ==
           std::string::npos ||
       nestedGeneratedNodeGroupEquationsOutput.find(
           "I(nestedTap[" + nestedFlatIndex + "], p) <+ (V(nestedTap[" + nestedFlatIndex + "]") ==
@@ -1818,7 +1818,7 @@ int main() {
     if (mlir::failed(nodal::emitBackend(*candidate, nodal::BackendKind::VerilogA, stream)))
       return fail("deep generated equation chain failed emission");
     stream.flush();
-    if (output.find("electrical nestedTap[0:(" + expectedCount + " - 1)];") == std::string::npos ||
+    if (output.find("electrical [0:(" + expectedCount + " - 1)] nestedTap;") == std::string::npos ||
         output.find("I(nestedTap[" + expectedOrdinal + "], p) <+ (V(nestedTap[" + expectedOrdinal +
                     "], p) / 1000);") == std::string::npos ||
         llvm::StringRef(output).count("    for (") != depth ||
@@ -1995,8 +1995,7 @@ int main() {
         return fail("widened generated branch group lost compact topology");
       for (unsigned index = 2; index < width; ++index) {
         const std::string name = "extraNode" + std::to_string(index);
-        if (output.find("electrical " + name + "[" + nestedGroupExtent + "]") ==
-                std::string::npos ||
+        if (output.find("electrical [" + nestedGroupExtent + "] " + name) == std::string::npos ||
             output.find("I(" + name + "[" + nestedFlatIndex + "], p) <+ (V(" + name + "[" +
                         nestedFlatIndex + "], p) / 1000)") == std::string::npos)
           return fail("widened generated group changed per-branch row-major mapping");
@@ -2892,8 +2891,9 @@ int main() {
     if (!accepted || output.find(equation) == std::string::npos)
       return fail("nested peer scaled idt lost its owned row-major result path");
     if (mutation == "negative-origin" &&
-        (output.find("electrical nestedTap[0:(((2 - -2) * (1 - -3)) - 1)];") == std::string::npos ||
-         output.find("electrical nestedReturn[0:(((2 - -2) * (1 - -3)) - 1)];") ==
+        (output.find("electrical [0:(((2 - -2) * (1 - -3)) - 1)] nestedTap;") ==
+             std::string::npos ||
+         output.find("electrical [0:(((2 - -2) * (1 - -3)) - 1)] nestedReturn;") ==
              std::string::npos))
       return fail("negative-origin nested peer scaled idt lost its zero-based extent");
     std::string target = output.substr(std::string("sentinel").size());
@@ -2943,8 +2943,8 @@ int main() {
       continue;
     }
     if (!emitted ||
-        output.find("  electrical tap[0:(3 - 1)];\n"
-                    "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos ||
+        output.find("  electrical [0:(3 - 1)] tap;\n"
+                    "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos ||
         output.find("genvar") != std::string::npos ||
         output.find("analog begin") != std::string::npos)
       return fail("generated node group did not preserve separate arrays and declaration order");
@@ -3050,17 +3050,17 @@ int main() {
         return fail("invalid generated node contribution was accepted or published output");
       continue;
     }
-    if (!emitted || output.find("  electrical tap[0:(3 - 1)];\n") == std::string::npos ||
+    if (!emitted || output.find("  electrical [0:(3 - 1)] tap;\n") == std::string::npos ||
         output.find("  genvar generate_0_index;\n") == std::string::npos ||
         output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos)
       return fail("generated node contribution lost its array, index, or equation");
     if (mutation == "valid-group" &&
-        output.find("  electrical tap[0:(3 - 1)];\n"
-                    "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos)
+        output.find("  electrical [0:(3 - 1)] tap;\n"
+                    "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos)
       return fail("generated node-group contribution lost declaration order or array bounds");
     if (mutation == "valid-multi" &&
-        (output.find("  electrical tap[0:(3 - 1)];\n"
-                     "  electrical returnTap[0:(3 - 1)];\n") == std::string::npos ||
+        (output.find("  electrical [0:(3 - 1)] tap;\n"
+                     "  electrical [0:(3 - 1)] returnTap;\n") == std::string::npos ||
          output.find("V(returnTap[generate_0_index], p) <+ 1;\n") == std::string::npos ||
          output.find("V(tap[generate_0_index], p) <+ 1;\n") == std::string::npos))
       return fail("generated node-group contributions lost declaration or equation order");
@@ -3096,7 +3096,7 @@ int main() {
                                       generatedNodeDdtStream)))
     return fail("generated node ddt contribution emission failed");
   generatedNodeDdtStream.flush();
-  if (generatedNodeDdtOutput.find("  electrical tap[1:(4 - 1)];\n") == std::string::npos ||
+  if (generatedNodeDdtOutput.find("  electrical [1:(4 - 1)] tap;\n") == std::string::npos ||
       generatedNodeDdtOutput.find(
           "I(tap[generate_0_index], p) <+ ddt(V(tap[generate_0_index], p));\n") ==
           std::string::npos)
@@ -3360,8 +3360,8 @@ int main() {
         "V(tap[generate_0_index], returnTap[generate_0_index]) <+ "
         "idt((V(tap[generate_0_index], returnTap[generate_0_index]) / 1), 0);";
     if (!accepted ||
-        output.find("  electrical tap[1:(4 - 1)];\n"
-                    "  electrical returnTap[1:(4 - 1)];\n") == std::string::npos ||
+        output.find("  electrical [1:(4 - 1)] tap;\n"
+                    "  electrical [1:(4 - 1)] returnTap;\n") == std::string::npos ||
         output.find(equation) == std::string::npos)
       return fail("generated peer-node idt lost its arrays or indexed stateful expression");
     std::string target = output.substr(std::string("sentinel").size());
@@ -3752,7 +3752,7 @@ int main() {
                                       stridedGeneratedNodeStream)))
     return fail("strided generated analog-node emission failed");
   stridedGeneratedNodeStream.flush();
-  if (stridedGeneratedNodeOutput.find("  electrical tap[0:(((((7 - 1) + 2) - 1) / 2) - 1)];\n") ==
+  if (stridedGeneratedNodeOutput.find("  electrical [0:(((((7 - 1) + 2) - 1) / 2) - 1)] tap;\n") ==
           std::string::npos ||
       stridedGeneratedNodeOutput.find("for (generate_0_index = 1; generate_0_index < 7; "
                                       "generate_0_index = generate_0_index + 2)") ==
@@ -7248,8 +7248,8 @@ int main() {
                                       compoundGeneratedNodeStream)))
     return fail("compound generated node contribution emission failed");
   compoundGeneratedNodeStream.flush();
-  if (compoundGeneratedNodeOutput.find("  electrical tap[0:((COUNT + EXTRA) - 1)];\n"
-                                       "  electrical returnTap[0:((COUNT + EXTRA) - 1)];\n") ==
+  if (compoundGeneratedNodeOutput.find("  electrical [0:((COUNT + EXTRA) - 1)] tap;\n"
+                                       "  electrical [0:((COUNT + EXTRA) - 1)] returnTap;\n") ==
           std::string::npos ||
       compoundGeneratedNodeOutput.find("generate_0_index < (COUNT + EXTRA)") == std::string::npos ||
       compoundGeneratedNodeOutput.find("V(tap[generate_0_index], p) <+ 1;\n") ==
@@ -7382,7 +7382,7 @@ int main() {
   const std::string expectedStaticNodeBody = "module ArrayNodes(p);\n"
                                              "  inout p;\n"
                                              "  electrical p;\n"
-                                             "  electrical tap[0:5];\n"
+                                             "  electrical [0:5] tap;\n"
                                              "  branch (tap[1], p) probeBranch;\n"
                                              "\n"
                                              "  analog begin\n"
@@ -7409,7 +7409,7 @@ int main() {
         std::make_pair("tap[4]", "tap[MISSING]"), std::make_pair("tap[4]", "tap[1][1]"),
         std::make_pair("tap[4]", "tap[]"), std::make_pair("tap[4]", "p[1]"),
         std::make_pair("tap[4]", "tap"), std::make_pair("tap[1]", "tap[6]"),
-        std::make_pair("tap[0:5]", "tap[5:0]")}) {
+        std::make_pair("[0:5] tap", "[5:0] tap")}) {
     std::string malformedTarget = staticNodeOutput;
     const size_t position = malformedTarget.find(mutation.first);
     if (position == std::string::npos)
@@ -7449,7 +7449,7 @@ int main() {
     return fail("symbolic static node-array emission failed");
   symbolicNodeStream.flush();
   if (symbolicNodeOutput.find("  parameter integer COUNT = 4 from [2:8];\n"
-                              "  electrical tap[0:((2 * COUNT) - 1)];\n") == std::string::npos ||
+                              "  electrical [0:((2 * COUNT) - 1)] tap;\n") == std::string::npos ||
       symbolicNodeOutput.find("I(tap[(COUNT + 1)], p) <+ (V(tap[(COUNT + 1)], p) / 1000);") ==
           std::string::npos ||
       mlir::failed(nodal::reparseBackendTarget(symbolicNodeOutput, *configuration)))
@@ -7532,7 +7532,7 @@ int main() {
     return fail("compact large node-array emission failed");
   largeNodeStream.flush();
   if (largeNodeOutput.size() > 4096 ||
-      largeNodeOutput.find("electrical tap[0:999999999999];") == std::string::npos ||
+      largeNodeOutput.find("electrical [0:999999999999] tap;") == std::string::npos ||
       largeNodeOutput.find("I(tap[1000001], p)") == std::string::npos)
     return fail("large node-array target lost compact checked row-major arithmetic");
 
@@ -7711,8 +7711,7 @@ int main() {
   if (!emitNodeView(replaceNodeSelection(symbolicNodeSource, "selected", deepViews),
                     deepViewOutput) ||
       llvm::StringRef(deepViewOutput).count("localparam integer node_map_") != 49 ||
-      deepViewOutput.size() > 30000 ||
-      llvm::StringRef(deepViewOutput).count("electrical tap[") != 1)
+      deepViewOutput.size() > 30000 || llvm::StringRef(deepViewOutput).count("] tap;") != 1)
     return fail("deep conservative views expanded previous expressions or physical lanes");
 
   for (const std::string replacement :
@@ -7735,7 +7734,7 @@ int main() {
       return fail("concrete structural localparam endpoint escaped independent array bounds");
   }
   std::string realIndex = symbolicNodeOutput;
-  realIndex.insert(realIndex.find("  electrical tap["), "  parameter real REAL_INDEX = 1.0;\n");
+  realIndex.insert(realIndex.find("  electrical ["), "  parameter real REAL_INDEX = 1.0;\n");
   replaceAll(realIndex, "(COUNT + 1)", "(REAL_INDEX + 1)");
   if (mlir::succeeded(nodal::reparseBackendTarget(realIndex, *configuration)))
     return fail("Real parameter was accepted as a structural endpoint index");

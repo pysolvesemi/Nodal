@@ -1358,3 +1358,196 @@ and overflow remains a causal rejection.
 The shared view/selection profile is complete for this checkpoint. Boundary
 arrays, exact whole-array instance mappings, source-generated topology and other
 remaining F43 capabilities are still open; this does not close the increment.
+
+## Conservative boundary arrays and finalized instance shapes (v0.3)
+
+The [additive gate](../design-gates/NodalConservativeNodeArrays-DG-v0.3.md)
+extends the published local-view checkpoint `9ab2380`. It selects one integrated
+boundary-array/whole-child binding path. Its focused public/native/target
+integration checks pass; the remaining Foundation 43 profiles stay open.
+
+The shared ParameterModel query resolves an actual instance's Integer formal
+through its finalized literal/SSA overrides and recursively retained default
+DAGs. Parent symbolic declarations remain identity-bearing atoms, including
+singleton ranges; their declaration defaults never prove shape equality. The
+query-local immutable DAG shares checked interval arithmetic with existing
+parameter bounds analysis. ShapeModel consumes it for exact extent equality;
+physical conservative selection identity remains a separate contract.
+
+Each used child formal checks its effective range and exclusions against the
+whole substituted actual envelope. Inclusive equality may be proven by exact
+ordered DAG correspondence; other unproved correlations reject. The existing
+scalar default check also now evaluates dependent Integer constraints in the
+finalized instance environment, rather than at unrelated child declaration
+defaults. This does not impose finite symbolic envelopes on the old scalar
+profile. Independently retained numeric default attributes remain transport,
+not instance shape proof.
+
+The parameter-model unit executable passes the new dependent-default/override
+fixture, actual-parent identity and ownership checks, range/fixed/conflict/cycle
+negatives, and addition/multiplication/zero-divisor boundaries, together with
+its inherited cases. The final parameter replay also rejects a forged
+cross-module default operand.
+The native binding matrix passes 49/49 cases through real instance/binding
+verification, with positive roundtrips and the actual default gate. Existing
+NodeArray and descriptor predecessors pass 178/178 and 21/21 respectively; ten
+actual public sources pass plain native verification and the default gate.
+
+```sh
+cmake --build .work/native-release --target nodal-parameter-model-unit-tests \
+  nodal-node-array-unit-tests -j 3
+.work/native-release/core/compiler/test/Unit/nodal-parameter-model-unit-tests
+.work/native-release/core/compiler/test/Unit/nodal-node-array-unit-tests
+```
+
+Logs are `.work/boundary-parameter-build.log`,
+`.work/boundary-parameter-test-final.log`,
+`.work/boundary-node-array-predecessor.log`,
+`.work/boundary-array-native-shadow-fixed.log` and
+`.work/boundary-array-public-native.log`. A focused read-only architecture
+review found no blocker in the parameter query/arithmetic extraction. Query-local
+memoization avoids enumerating lanes or cloning reusable definitions, but
+per-formal module scans and repeated subtree comparison can still be quadratic
+in authored graph size. No whole-pipeline linearity or speedup is claimed. The
+existing 512-active-expression resource boundary remains explicit; this is not
+an unbounded symbolic algebra engine. No CI or independent target consumer was
+run for these checks.
+
+### Target layout, adapter and actual public example
+
+Owned local/boundary conservative arrays now use one ascending vector layout,
+with row-major logical index zero at the left boundary. The earlier unpacked-net
+examples above remain historical output of v0.2. Existing synthesized source-range
+nets retain their nonzero lower/index semantics when moved to vector declaration
+syntax; no coordinate shift is implied. Direct signed64 layouts remain supported.
+Only adapters requiring genvar/Integer stages use the explicit portable signed32
+carrier limit.
+
+Whole actuals use whole vectors; proved contiguous views use ascending part-selects.
+Noncontiguous views reuse the shared projection map in a structural generate loop,
+joining each actual lane to a bridge lane through two named formal expressions
+that refer to the same single internal electrical net. The child itself is
+instantiated once. This preserves physical connectivity without numerical wire
+equations, per-lane source expansion or a second mapping engine. A two-million-lane
+focused witness remains one compact loop; that is an output-structure observation,
+not a measured performance claim.
+
+Actual source from `Increment43BoundaryArrayTests.scala`:
+
+```scala
+final class Increment43GridArrayChild extends Module:
+  val rows: Param[Integer] = param(2.integer, range = 2 to 5)
+  val p = inout(Electrical, rows, 2)
+  analog:
+    I(p.at(0, 0), p.at(0, 1)) <+ V(p.at(0, 0), p.at(0, 1)) / 1.kOhm
+
+final class Increment43NoncontiguousArrayBinding extends Module:
+  val rows: Param[Integer] = param(2.integer, range = 2 to 5)
+  val taps = node(Electrical, rows, 4)
+  val child = instance(new Increment43GridArrayChild)
+  val actual = taps.slice(1, 3, axis = 1).flatten.reshape(rows, 2)
+  connect(actual, child(_.p))
+  child.param(_.rows, rows)
+```
+
+Actual generated Verilog-A below omits only the framework header/includes and
+the long `nodal.array_binding` JSON comment. The comment preserves the actual
+binding/formal/root/projection/stage correspondence; it is not parser proof.
+
+```verilog
+module nodal_alias_electrical(.lhs(n), .rhs(n));
+  inout n;
+  electrical n;
+endmodule
+
+module Increment43NoncontiguousArrayBinding;
+  parameter integer rows = 2 from [2:5];
+  electrical [0:((rows * 4) - 1)] taps;
+  electrical [0:((rows * 2) - 1)] binding_child_instance_p_bus;
+  genvar binding_child_instance_p_lane;
+  generate
+    for (binding_child_instance_p_lane = 0; binding_child_instance_p_lane < (rows * 2); binding_child_instance_p_lane = binding_child_instance_p_lane + 1) begin : binding_child_instance_p_map
+      localparam integer binding_child_instance_p_stage_0 = (((binding_child_instance_p_lane / 2) * 4) + ((binding_child_instance_p_lane % 2) + 1));
+      nodal_alias_electrical link(.lhs(taps[binding_child_instance_p_stage_0]), .rhs(binding_child_instance_p_bus[binding_child_instance_p_lane]));
+    end
+  endgenerate
+  child #(.rows(rows)) child_instance(.p(binding_child_instance_p_bus));
+endmodule
+
+module child(p);
+  parameter integer rows = 2 from [2:5];
+  inout [0:((rows * 2) - 1)] p;
+  electrical [0:((rows * 2) - 1)] p;
+
+  analog begin
+    I(p[0], p[1]) <+ (V(p[0], p[1]) / 1000);
+  end
+endmodule
+```
+
+The exact source/IR artifacts are under `.work/boundary-array-public-final/`; final
+VA/AMS outputs and parity variants are under
+`.work/boundary-arrays-public-final-target/`. The actual generation command is:
+
+```sh
+.work/native-release/bin/nodal-translate --nodal-to-verilog-a \
+  .work/boundary-array-public-final/Increment43NoncontiguousArrayBinding.va.source.mlir \
+  -o .work/boundary-arrays-public-final-target/Increment43NoncontiguousArrayBinding.va.target
+python3 .work/check-boundary-array-targets.py \
+  .work/boundary-array-public-final .work/boundary-arrays-public-final-target
+bash .work/check-boundary-backend-focused.sh
+```
+
+All ten final public models pass both target profiles: 20 source/profile cases
+with exact direct/repeat/default-gate-without-debug-location/renamed-transport
+parity. The boundary backend passes 53 focused checks, hierarchy syntax 138 and
+event reparse 308. Affected backend/writable aggregates pass; all 80 writable
+predecessor artifacts remain byte-identical. The selected port-current witness
+emits `I(sense) <+ I(<p[4]>);` through verified partial derived-connectivity
+records, preserving port incidence separately from physical node aliases.
+
+Focused integration found and repaired two defects rather than weakening tests:
+map division/remainder now reject dense divisor intervals containing zero even
+when endpoints are nonzero, and target correspondence now uses retained authored
+source ranges instead of nondeterministic temporary MLIR parser filenames.
+Comment-only mutation acceptance and actual connection mutation rejection keep
+metadata non-authoritative. A focused read-only review found no further blocker
+in the adapter/parser/provenance delta. These are language/compiler structural
+results under the generic VAMS2023 contract, not independent simulator acceptance.
+The earlier concrete OpenVAF Real-array failures remain a separate F48 handoff;
+no new conservative-vector/helper consumer result is claimed here.
+
+A final ownership audit reproduced a module-name shadowing defect: a local
+instance or parameter could mask the top-level child definition, rejecting a
+valid binding while missing an absent binding. Module targets now resolve only
+typed definitions in the enclosing builtin-module namespace. Four byte-identical
+before/after controls verify both valid and missing-binding cases. The final
+49-case matrix, 178 NodeArray checks, connectivity unit and three affected public
+native/default-gate sources pass with matched rebuilt tools. Evidence is in
+`.work/boundary-module-shadow-before`,
+`.work/boundary-array-native-shadow-fixed.log`,
+`.work/boundary-array-connectivity-predecessor.log` and
+`.work/boundary-module-shadow-public.log`.
+
+The final public Scala suite passes 8/8 methods and all 16 selected directly
+affected predecessor methods pass. After the module-resolution repair, the two
+native/target public methods were replayed with matched tools: all 20 model/profile
+outputs and three causal malformed-native cases still pass. API surface checks
+pass 34/34; pinned formatting and changed-document checks pass. Exact selectors
+and logs are recorded in `.work/scala-validation/boundary-array-scala-handoff.md`,
+with the fresh-tool run in
+`.work/scala-validation/run-boundary-array-final-replay.sh`. Two deterministic
+construction artifacts and 30 retained-reference reconstruction checks also pass.
+
+The affected predecessor replay exposed inherited assertion drift: generated
+induction symbols had changed under the earlier lexical naming implementation,
+and one declaration count omitted an existing scalar boundary. Repairs resolve
+the actual symbol from its exact region identity, retain authored node/source-line
+separation and the stride/row-major equations, and assert one generated vector
+plus one scalar boundary. These are newly executed semantic checks, not a
+retroactive claim about historical runs.
+
+This checkpoint does not complete F43. Source-generated child instances and
+connections, generated persistent-state declaration lifetime, partial child-array
+bindings/broader joins, cross-range storage, remaining operator/state/result
+fan-out and shared-live-fill demand lowering remain open where required.

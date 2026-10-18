@@ -213,7 +213,7 @@ object Increment43DeepGenerationTests extends TestSuite:
         names.zip(Vector(("p", "1e-12"), ("n", "2e-12"))).foreach:
           case (name, (terminal, capacitance)) =>
             assert(result.verilogA.linesIterator.count(
-              _.trim == s"electrical $name[0:($totalCount - 1)];"
+              _.trim == s"electrical [0:($totalCount - 1)] $name;"
             ) == 1)
             val branch = s"$name[$flatIndex], $terminal"
             assert(result.verilogA.linesIterator.count(
@@ -281,7 +281,7 @@ object Increment43DeepGenerationTests extends TestSuite:
           case (previous, (count, ordinal)) => s"(($previous * $count) + $ordinal)"
         val name = regions.last.declarations.head.split('.').last
         assert(result.verilogA.linesIterator.count(
-          _.trim == s"electrical $name[0:($totalCount - 1)];"
+          _.trim == s"electrical [0:($totalCount - 1)] $name;"
         ) == 1)
         val branch = s"$name[$flatIndex], p"
         assert(result.verilogA.linesIterator.count(

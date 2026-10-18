@@ -55,3 +55,9 @@ backend framework. Simulator observations remain separate from language admissio
 [NodalOpenVafValidation-DG-v0.1.md](NodalOpenVafValidation-DG-v0.1.md) defines the
 shared bounded process service, pinned OpenVAF receipts and finite opt-in target
 statement provenance. Consumer limitations do not redefine source semantics.
+
+## Foundation 49 simulator harness
+
+[NodalNgspiceHarness-DG-v0.1.md](NodalNgspiceHarness-DG-v0.1.md) defines the private
+bounded bench, simulator and raw-result boundary over F-048 compiled artifacts.
+Public simulation and general waveform APIs remain with F-050 and F-051.

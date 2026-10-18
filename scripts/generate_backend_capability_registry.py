@@ -18,6 +18,7 @@ CATALOG = Path("core/compiler/backend-profiles-v0.1.json")
 OPERATIONS = Path("core/compiler/include/nodal/Dialect/Nodal/NodalOps.td")
 OUTPUT = Path("core/compiler/include/nodal/Support/BackendCapabilityRegistry.inc")
 SCALA_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/OpenVafProfiles.scala")
+SIMULATOR_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/NgspiceProfiles.scala")
 DOMAINS = {"neutral": "Neutral", "analog": "Analog", "digital": "Digital", "mixed": "Mixed"}
 ADMISSIONS = {"direct": "Direct", "guarded": "Guarded", "normalize": "Normalize",
               "unsupported": "Unsupported"}
@@ -127,6 +128,56 @@ def validate_consumers(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return profiles
 
 
+def validate_simulators(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    simulators = catalog.get("simulator_profiles")
+    require(isinstance(simulators, dict), "simulator_profiles: expected object")
+    require(set(simulators) == {"schema_version", "profile_version", "profiles"},
+            "simulator_profiles: unknown or missing fields")
+    require(type(simulators["schema_version"]) is int and simulators["schema_version"] == 1
+            and simulators["profile_version"] == "1", "simulator_profiles: unsupported schema")
+    profiles = index(records(simulators["profiles"], "simulator_profiles.profiles"),
+                     "id", "simulator_profiles.profiles")
+    for identity, profile in profiles.items():
+        require(set(profile) == {"id", "consumer", "version", "version_stdout",
+                                 "executable_sha256", "platform", "build"},
+                f"{identity}: unknown or missing simulator fields")
+        require(profile["consumer"] == "ngspice" and profile["version"] == "47"
+                and profile["platform"] == "linux-x86_64"
+                and identity == "ngspice-47-local-linux-x86_64",
+                f"{identity}: unsupported simulator profile")
+        version = profile["version_stdout"]
+        require(isinstance(version, str) and "** ngspice-47 : Circuit level simulation program" in
+                version.splitlines() and len(version) <= 4096 and "\0" not in version,
+                f"{identity}: invalid simulator version stdout")
+        require(isinstance(profile["executable_sha256"], str) and
+                re.fullmatch(r"[0-9a-f]{64}", profile["executable_sha256"]) is not None,
+                f"{identity}: invalid simulator executable digest")
+        build = profile["build"]
+        require(isinstance(build, dict) and set(build) == {
+            "kind", "archive_url", "archive_sha256", "source_commit", "compiler", "cflags",
+            "configure_arguments", "object_override", "source_modified"},
+            f"{identity}: incomplete simulator build provenance")
+        require(build["kind"] == "local-release-build-with-preprocessing-override"
+                and build["source_modified"] is False,
+                f"{identity}: unsupported simulator build kind")
+        require(build["archive_url"] ==
+                "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47.tar.gz",
+                f"{identity}: unknown simulator archive")
+        for key, length in (("archive_sha256", 64), ("source_commit", 40)):
+            require(isinstance(build[key], str) and
+                    re.fullmatch(r"[0-9a-f]{" + str(length) + "}", build[key]) is not None,
+                    f"{identity}: invalid simulator {key}")
+        require(build["compiler"] == "GCC 14.2.0" and build["cflags"] == "-O2" and
+                build["configure_arguments"] == ["--without-x", "--with-readline=no",
+                    "--with-editline=no", "--with-fftw3=no", "--disable-klu",
+                    "--disable-openmp", "--enable-osdi", "--disable-debug"] and
+                build["object_override"] == {
+                    "object": "src/xspice/icm/xtradev/seegenerator/cfunc.o",
+                    "cflags": "-O2 -std=gnu11 -include stdlib.h"},
+                f"{identity}: unsupported simulator build configuration")
+    return profiles
+
+
 def observation_profile(observation: dict[str, Any],
                         profiles: dict[str, dict[str, Any]]) -> dict[str, Any]:
     matching = [profile for profile in profiles.values()
@@ -142,6 +193,7 @@ def validate_catalog(catalog: dict[str, Any], root: Path = ROOT) -> dict[str, An
             "catalog: unsupported legacy schema")
     require(catalog.get("version") == "0.1", "catalog: unsupported legacy version")
     consumers = validate_consumers(catalog)
+    validate_simulators(catalog)
     profiles = index(records(catalog.get("profiles"), "profiles"), "id", "profiles")
     inventory = catalog.get("feature_inventory")
     require(isinstance(inventory, dict), "feature_inventory: expected object")
@@ -278,7 +330,8 @@ def outputs(root: Path = ROOT) -> dict[Path, str]:
         lines += [f"    {{{name}, {feature},",
                   f"     BackendOperationDomain::{domain}, BackendOperationAdmission::{admission}}},"]
     lines += ["};", ""]
-    return {OUTPUT: "\n".join(lines), SCALA_OUTPUT: consumer_output(catalog, catalog_bytes)}
+    return {OUTPUT: "\n".join(lines), SCALA_OUTPUT: consumer_output(catalog, catalog_bytes),
+            SIMULATOR_OUTPUT: simulator_output(catalog, catalog_bytes)}
 
 
 def consumer_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
@@ -321,6 +374,27 @@ def consumer_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
         if entries:
             lines += ["      )"]
         lines += ["    )" + ("," if position + 1 < len(profiles) else "")]
+    lines += ["  )", ""]
+    return "\n".join(lines)
+
+
+def simulator_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
+    profiles = validate_simulators(catalog)
+    digest = hashlib.sha256(catalog_bytes).hexdigest()
+    lines = ["package nodal.internal.integrations", "",
+             "// Generated by scripts/generate_backend_capability_registry.py. Do not edit.",
+             "// Source: core/compiler/backend-profiles-v0.1.json, simulator profiles v1.",
+             "private[nodal] object NgspiceProfiles:",
+             "  val all: Vector[NgspiceProfile] = Vector("]
+    for position, (identity, profile) in enumerate(sorted(profiles.items())):
+        lines += ["    NgspiceProfile(",
+                  "      id = " + json.dumps(identity) + ",",
+                  "      version =",
+                  "        " + json.dumps(profile["version_stdout"]) + ",",
+                  "      executableSha256 = " + json.dumps(profile["executable_sha256"]) + ",",
+                  "      platform = " + json.dumps(profile["platform"]) + ",",
+                  "      catalogSha256 = " + json.dumps(digest),
+                  "    )" + ("," if position + 1 < len(profiles) else "")]
     lines += ["  )", ""]
     return "\n".join(lines)
 

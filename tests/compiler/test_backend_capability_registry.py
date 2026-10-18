@@ -98,7 +98,7 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
 
     def test_preserves_all_legacy_profile_fields(self) -> None:
         legacy = {key: value for key, value in self.catalog.items()
-                  if key not in {"feature_inventory", "consumer_profiles"}}
+                  if key not in {"feature_inventory", "consumer_profiles", "simulator_profiles"}}
         self.assertEqual(legacy, LEGACY_CATALOG)
 
     def test_preserves_the_complete_historical_feature_inventory(self) -> None:
@@ -483,6 +483,35 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
                 observation[field] = value
                 self.invalid(message)
             observation[field] = original
+
+    def test_simulator_profile_provenance_and_closed_configuration(self) -> None:
+        profile = self.catalog["simulator_profiles"]["profiles"][0]
+        for field, value, message in (
+            ("executable_sha256", "bad", "invalid simulator executable digest"),
+            ("version_stdout", "ngspice unknown", "invalid simulator version stdout"),
+            ("platform", "other", "unsupported simulator profile"),
+            ("build", {}, "incomplete simulator build provenance"),
+        ):
+            original = profile[field]
+            with self.subTest(field=field):
+                profile[field] = value
+                self.invalid(message)
+            profile[field] = original
+        profile["build"]["source_modified"] = True
+        self.invalid("unsupported simulator build kind")
+
+    def test_simulator_preprocessing_override_is_identity_bearing(self) -> None:
+        profile = self.catalog["simulator_profiles"]["profiles"][0]
+        profile["build"]["object_override"]["cflags"] = "-O2"
+        self.invalid("unsupported simulator build configuration")
+
+    def test_simulator_registry_is_deterministic_and_catalog_bound(self) -> None:
+        data = (ROOT / REGISTRY.CATALOG).read_bytes()
+        generated = REGISTRY.simulator_output(self.catalog, data)
+        self.assertEqual(generated, REGISTRY.simulator_output(copy.deepcopy(self.catalog), data))
+        self.assertIn(hashlib.sha256(data).hexdigest(), generated)
+        self.assertIn("ngspice-47-local-linux-x86_64", generated)
+        self.assertNotIn("OpenVafProfile(", generated)
 
     def test_duplicate_json_keys_reject(self) -> None:
         with self.assertRaisesRegex(REGISTRY.CatalogError, "duplicate key"):

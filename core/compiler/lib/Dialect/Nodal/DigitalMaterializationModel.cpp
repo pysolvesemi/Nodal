@@ -2,6 +2,7 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -234,12 +235,43 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
       return failure();
     return id;
   };
-  llvm::DenseMap<Type, bool> validTypes;
-  auto finiteDigitalType = [&](Type type) {
-    auto known = validTypes.find(type);
-    if (known == validTypes.end())
-      known = validTypes.try_emplace(type, isDigitalCombinationalValueType(type, module)).first;
-    return known->second;
+  // Semantic verification precedes this query. Type identity alone does not
+  // identify dependent collection widths: retain the actual lexical use and
+  // recheck each immutable context. The caches exist only for this analysis.
+  llvm::DenseMap<Type, bool> moduleValidTypes;
+  llvm::DenseMap<std::pair<Type, Operation *>, bool> validTypes;
+  llvm::DenseMap<Block *, llvm::SmallVector<ParameterIntegerEnvironment, 4>> contexts;
+  auto finiteDigitalType = [&](Type type, Operation *use) {
+    const auto key = std::make_pair(type, use);
+    auto known = validTypes.find(key);
+    if (known != validTypes.end())
+      return known->second;
+    bool valid = false;
+    if (!use->getParentOfType<CollectionOp>()) {
+      auto ordinary = moduleValidTypes.find(type);
+      if (ordinary == moduleValidTypes.end())
+        ordinary =
+            moduleValidTypes.try_emplace(type, isDigitalCombinationalValueType(type, module)).first;
+      valid = ordinary->second;
+    } else if (isDigitalScalarType(type) || llvm::isa<EnumType, ShapedType, StructType>(type)) {
+      auto found = contexts.find(use->getBlock());
+      if (found == contexts.end()) {
+        auto candidates = collectionIntegerContextsAtUse(use);
+        if (failed(candidates))
+          return false;
+        found = contexts.try_emplace(use->getBlock(), std::move(*candidates)).first;
+      }
+      valid = !found->second.empty();
+      for (const auto &candidate : found->second) {
+        auto context = candidate.atUse(use);
+        if (failed(context) || !isDigitalCombinationalValueType(type, module, &*context)) {
+          valid = false;
+          break;
+        }
+      }
+    }
+    validTypes.try_emplace(key, valid);
+    return valid;
   };
   llvm::SmallVector<std::pair<std::string, DictionaryAttr>> records;
   unsigned nodes = 0, inputEdges = 0, useEdges = 0, inspectedOperands = 0;
@@ -260,7 +292,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
         (operationName == "nodal.constant" || operationName == "nodal.const_literal");
     const bool valueProducer =
         operation->getNumResults() == 1 &&
-        (staticIndex || finiteDigitalType(operation->getResult(0).getType()));
+        (staticIndex || finiteDigitalType(operation->getResult(0).getType(), operation));
     if (valueProducer && !path(operation).empty()) {
       auto [position, inserted] =
           valueIdentities.try_emplace(path(operation), operation->getResult(0));
@@ -278,7 +310,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
         (void)reject(operation, "materialization operand inspection exceeds its finite budget");
         return WalkResult::interrupt();
       }
-      if (finiteDigitalType(operand.getType())) {
+      if (finiteDigitalType(operand.getType(), operation)) {
         valueConsumer = true;
         break;
       }
@@ -294,7 +326,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     if (!candidate(operation))
       return WalkResult::advance();
     Type resultType = operation->getResult(0).getType();
-    if (!finiteDigitalType(resultType)) {
+    if (!finiteDigitalType(resultType, operation)) {
       (void)reject(operation, "candidate result lacks a finite exact digital type proof");
       return WalkResult::interrupt();
     }
@@ -401,6 +433,22 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     entry.set("decision", builder.getStringAttr(decision));
     entry.set("reasons", builder.getArrayAttr(reasons));
     records.emplace_back(semanticPath.str(), entry.getDictionary(module->getContext()));
+    if (llvm::isa<CollectionOp>(operation)) {
+      // A retained singleton reduction has no callback invocation. Its raw
+      // closure/purity is verified by the collection owner; no body value is
+      // materialized and no fictitious first-combine width proof is invented.
+      if (operation->getNumRegions() != 1 || !llvm::hasSingleElement(operation->getRegion(0)) ||
+          operation->getRegion(0).front().empty())
+        return WalkResult::interrupt();
+      Block &body = operation->getRegion(0).front();
+      auto bodyContexts = collectionIntegerContextsAtUse(&body.front());
+      if (failed(bodyContexts))
+        return WalkResult::interrupt();
+      const bool unreachable = bodyContexts->empty();
+      contexts.try_emplace(&body, std::move(*bodyContexts));
+      if (unreachable)
+        return WalkResult::skip();
+    }
     return WalkResult::advance();
   });
   if (failed(walk))

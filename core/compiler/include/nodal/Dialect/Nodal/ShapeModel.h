@@ -25,30 +25,44 @@ mlir::LogicalResult verifyInstanceShapeDimension(mlir::Operation *instance,
                                                  const StaticShapeDimension &formal,
                                                  const StaticShapeDimension &parentActual);
 
+/// Check canonical static provenance and parameter effect dependencies only.
+/// Arithmetic validity and positivity are separate ParameterModel queries.
+bool hasStaticIntegerEffect(mlir::Value value, mlir::Operation *module,
+                            llvm::StringRef requiredEffect,
+                            const ParameterIntegerEnvironment *environment = nullptr);
+
 /// Resolve a canonical dimension without substituting parameter defaults.
-/// Requires positive finite i64 bounds and direct-module structural ownership.
+/// Requires positive finite i64 bounds and ordinary module ownership, or an
+/// explicitly admitted lexical collection context. Retains the actual SSA Value.
 mlir::FailureOr<StaticShapeDimension>
 resolveStaticShapeDimension(mlir::Operation *module, llvm::StringRef dimension,
-                            llvm::StringRef requiredEffect = "shape");
+                            llvm::StringRef requiredEffect = "shape",
+                            const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Prove a nonempty shape's worst-case cardinality fits positive signed i64.
-mlir::FailureOr<int64_t> inferStaticShapeMaximumCardinality(mlir::Operation *module,
-                                                            llvm::StringRef dimensions);
+mlir::FailureOr<int64_t>
+inferStaticShapeMaximumCardinality(mlir::Operation *module, llvm::StringRef dimensions,
+                                   const ParameterIntegerEnvironment *environment = nullptr);
 
-/// Prove a direct-module static index using the existing literal/i64 carriers.
-mlir::FailureOr<ParameterIntegerBounds> inferStaticShapeIndexBounds(mlir::Operation *module,
-                                                                    mlir::Value value);
+/// Prove an owned static index using the existing literal/i64 carriers, with
+/// explicit admitted collection context when the value is collection-local.
+mlir::FailureOr<ParameterIntegerBounds>
+inferStaticShapeIndexBounds(mlir::Operation *module, mlir::Value value,
+                            const ParameterIntegerEnvironment *environment = nullptr);
 
 struct StaticShapeIndexIdentity {
-  enum Kind { Literal, Parameter, Expression, Induction } kind;
+  // StaticArgument uses the actual collection root and argument ordinal in
+  // literal, preserving identity without treating equal bounds as equality.
+  enum Kind { Literal, Parameter, Expression, Induction, StaticArgument } kind;
   int64_t literal = 0;
   mlir::Operation *root = nullptr;
   bool operator==(const StaticShapeIndexIdentity &other) const {
     return kind == other.kind && literal == other.literal && root == other.root;
   }
 };
-mlir::FailureOr<StaticShapeIndexIdentity> resolveStaticShapeIndexIdentity(mlir::Operation *module,
-                                                                          mlir::Value value);
+mlir::FailureOr<StaticShapeIndexIdentity>
+resolveStaticShapeIndexIdentity(mlir::Operation *module, mlir::Value value,
+                                const ParameterIntegerEnvironment *environment = nullptr);
 
 /// A use-aware static or direct active-induction proof. An empty attained range
 /// means the independently verified generated domain has no occurrences.
@@ -56,9 +70,13 @@ struct ShapeIndexProof {
   StaticShapeIndexIdentity identity;
   std::optional<ParameterIntegerBounds> attainedBounds;
 };
-mlir::FailureOr<ShapeIndexProof> resolveShapeIndexProof(mlir::Value value, mlir::Operation *use);
-mlir::LogicalResult verifyShapeIndexInExtent(mlir::Value value, const StaticShapeDimension &extent,
-                                             mlir::Operation *use);
+mlir::FailureOr<ShapeIndexProof>
+resolveShapeIndexProof(mlir::Value value, mlir::Operation *use,
+                       const ParameterIntegerEnvironment *environment = nullptr);
+mlir::LogicalResult
+verifyShapeIndexInExtent(mlir::Value value, const StaticShapeDimension &extent,
+                         mlir::Operation *use,
+                         const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Element-neutral facts derived from an actual acyclic SSA projection chain.
 /// These establish shape/ordinal mapping, never storage or conservative rights.
@@ -167,9 +185,15 @@ ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeProjection &projec
 
 /// Local transformation proofs shared by operation and storage-map verification.
 /// These do not grant storage capability or establish initialization.
-mlir::LogicalResult verifyShapeIndexMapping(mlir::Operation *operation);
-mlir::LogicalResult verifyShapeViewMapping(mlir::Operation *operation);
-mlir::LogicalResult verifyShapeSliceMapping(mlir::Operation *operation);
+mlir::LogicalResult
+verifyShapeIndexMapping(mlir::Operation *operation,
+                        const ParameterIntegerEnvironment *environment = nullptr);
+mlir::LogicalResult
+verifyShapeViewMapping(mlir::Operation *operation,
+                       const ParameterIntegerEnvironment *environment = nullptr);
+mlir::LogicalResult
+verifyShapeSliceMapping(mlir::Operation *operation,
+                        const ParameterIntegerEnvironment *environment = nullptr);
 
 } // namespace nodal
 

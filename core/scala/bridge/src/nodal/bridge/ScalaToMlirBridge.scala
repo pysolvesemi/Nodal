@@ -160,6 +160,24 @@ private[nodal] object ScalaToMlirBridge:
       .view
       .mapValues(_.map(expression => expression.path -> expression).toMap)
       .toMap
+    private val moduleIntegerQuery = new StructuralParameterBinding.Query(snapshot)
+    private var activeIntegerQuery: Option[StructuralParameterBinding.Query] = None
+    private var enclosingIntegerQuery: Option[StructuralParameterBinding.Query] = None
+    private val staticArguments = snapshot.digitalCollections.flatMap(collection =>
+      collection.arguments.filter(_.dataType == "Integer").map(argument =>
+        argument.path -> collection
+      )
+    ).toMap
+    private def integerQuery: StructuralParameterBinding.Query =
+      activeIntegerQuery.getOrElse(moduleIntegerQuery)
+
+    private lazy val reductionValues = new DigitalReductionMlir(
+      snapshot,
+      digitalValues.expressionType,
+      vecTypeParts,
+      rawDigitalStructParts
+    )
+
     private val generatedRegionsByOwner = snapshot.generatedRegions
       .groupBy(_.owner)
       .view
@@ -1752,12 +1770,15 @@ ${indent(body, 2)}
           .map(value => value.path -> value.dataType) ++
         snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
           .map(value => value.path -> value.dataType)
-      val digitalStaticRoots = digitalTypeRoots.flatMap: (path, dataType) =>
+      val digitalStaticRoots = digitalTypeRoots.filter((path, _) =>
+        digitalValues.valueRegion(path).isEmpty
+      ).flatMap: (path, dataType) =>
         compoundShapeDimensionPaths(dataType, path).map(path -> _)
       val interfaceStaticRoots = snapshot.interfaceContracts.filter(_.owner == module.path)
         .flatMap(value => value.dimensions.filter(expressionsByPath.contains).map(value.path -> _))
       (digitalStaticRoots ++ interfaceStaticRoots).distinct.sortBy(identity).foreach:
         (path, dimensionPath) =>
+          digitalValues.requireVisible(dimensionPath, module.path, None, path)
           val (_, dataType) = emitStaticValue(
             dimensionPath,
             parameterSymbols,
@@ -2179,6 +2200,77 @@ ${indent(body, 2)}
           )
         )
 
+      val scopedStaticValues =
+        mutable.HashMap.empty[Option[String], mutable.LinkedHashMap[String, (String, String)]]
+      scopedStaticValues.update(None, shapeStaticValues)
+      def staticValuesFor(region: Option[String]): mutable.LinkedHashMap[String, (String, String)] =
+        scopedStaticValues.getOrElseUpdate(region, mutable.LinkedHashMap.empty)
+      def renderDigitalStatic(
+          path: String,
+          region: Option[String],
+          output: mutable.ArrayBuffer[String]
+      ): (String, String) =
+        digitalValues.requireVisible(path, module.path, region, path)
+        if region.nonEmpty then
+          val query = integerQuery
+          val _ = query.resolve(module.path, path)
+        emitStaticValue(
+          path,
+          parameterSymbols,
+          declarationsByPath,
+          expressionsByPath,
+          output,
+          staticValuesFor(region),
+          () => allocateShapeStaticValue(),
+          requireStructural = true,
+          region = region
+        )
+      def prepareDigitalType(
+          text: String,
+          path: String,
+          region: Option[String],
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        compoundShapeDimensionPaths(text, path).distinct.foreach: dependency =>
+          val actualRegion = digitalValues.valueRegion(dependency)
+          if actualRegion == region then
+            val _ = renderDigitalStatic(dependency, region, output)
+          else if actualRegion.nonEmpty then
+            fail(
+              "NODAL-BRIDGE-055",
+              "digital type contains an escaped local width identity",
+              Some(path)
+            )
+      def withDigitalCollectionContexts(
+          collection: KernelDigitalCollectionSnapshot,
+          body: () => Unit
+      ): Unit =
+        val previous = activeIntegerQuery
+        val previousParent = enclosingIntegerQuery
+        val parent = previous.getOrElse(moduleIntegerQuery)
+        val contexts = try reductionValues.contexts(collection, parent)
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-BRIDGE-055", error.getMessage, Some(collection.path))
+        val firstStatic = nextShapeStaticValue
+        try
+          contexts.foreach: query =>
+            scopedStaticValues.keys.filter(_.nonEmpty).toVector.foreach: key =>
+              var current = key
+              var inside = false
+              while current.nonEmpty && !inside do
+                inside = current.contains(collection.path)
+                current =
+                  snapshot.digitalCollections.find(_.path == current.get).flatMap(_.parentRegion)
+              if inside then scopedStaticValues.remove(key)
+            nextShapeStaticValue = firstStatic
+            activeIntegerQuery = Some(query)
+            enclosingIntegerQuery = Some(parent)
+            body()
+        finally
+          activeIntegerQuery = previous
+          enclosingIntegerQuery = previousParent
+
       val digital = digitalValues.renderModule(
         module,
         parseType,
@@ -2210,7 +2302,27 @@ ${indent(body, 2)}
             bridgeMetadata(expression.path, Vector.empty),
             location(expression.path)
           ),
-        interfaceValues.roots(module)
+        interfaceValues.roots(module),
+        renderDigitalStatic,
+        prepareDigitalType,
+        (path, value) => staticValuesFor(digitalValues.valueRegion(path)).update(path, value),
+        withDigitalCollectionContexts,
+        reductionValues.arguments,
+        (collection, argument, expected) =>
+          reductionValues.argumentMatches(
+            collection,
+            argument,
+            expected,
+            activeIntegerQuery.get,
+            enclosingIntegerQuery.get
+          ),
+        (collection, yielded) =>
+          reductionValues.resultMatches(
+            collection,
+            yielded,
+            activeIntegerQuery.get,
+            enclosingIntegerQuery.get
+          )
       )
       body ++= digital.lines
       values ++= digital.values
@@ -4019,7 +4131,8 @@ ${indent(body, 2)}
         staticValues: mutable.LinkedHashMap[String, (String, String)],
         allocateStaticValue: () => String,
         requireStructural: Boolean,
-        activeValues: mutable.Set[String] = mutable.Set.empty[String]
+        activeValues: mutable.Set[String] = mutable.Set.empty[String],
+        region: Option[String] = None
     ): (String, String) =
       if activeValues.size >= 512 || !activeValues.add(path) then
         fail(
@@ -4072,6 +4185,12 @@ ${indent(body, 2)}
                   Some(path)
                 )
               )
+              if expression.region != region then
+                fail(
+                  "NODAL-BRIDGE-055",
+                  "static expression escaped its exact lexical region",
+                  Some(path)
+                )
               val dataType = parseType(expression.dataType, expression.path)
               val result = allocateStaticValue()
               expression.literal match
@@ -4094,7 +4213,8 @@ ${indent(body, 2)}
                       staticValues,
                       allocateStaticValue,
                       requireStructural,
-                      activeValues
+                      activeValues,
+                      region
                     )
                   )
                   val operatorName = staticConstantOperator(expression)
@@ -4794,15 +4914,13 @@ ${indent(body, 2)}
     ): Boolean =
       val owner = resolveOwningModule(path)
       try
+        val query = integerQuery
         if offset == 0 then
-          StructuralParameterBinding.sameInteger(snapshot, owner, source.width, result.width)
+          query.resolve(owner, source.width) == query.resolve(owner, result.width)
         else
-          StructuralParameterBinding.sameIntegerOperation(
-            snapshot,
-            owner,
-            result.width,
+          query.resolve(owner, result.width) == query.compose(
             "analog_add",
-            Vector(source.width, offset.toString)
+            Vector(query.resolve(owner, source.width), query.literal(offset.toLong))
           )
       catch
         case error: IllegalArgumentException =>
@@ -4816,26 +4934,35 @@ ${indent(body, 2)}
         path: String
     ): Boolean =
       try
-        StructuralParameterBinding.sameIntegerOperation(
-          snapshot,
-          resolveOwningModule(path),
-          result.width,
-          operation,
-          operands.map(_.width),
-          increment
-        )
+        val query = integerQuery
+        val owner = resolveOwningModule(path)
+        val composed =
+          query.compose(operation, operands.map(value => query.resolve(owner, value.width)))
+        val expected = if increment == 0L then composed
+        else query.compose("analog_add", Vector(composed, query.literal(increment)))
+        query.resolve(owner, result.width) == expected
       catch
         case error: IllegalArgumentException =>
           fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
 
     private def digitalStructParts(text: String, path: String): (String, Vector[(String, String)]) =
       val _ = parseTypeChecked(text, path, 0, Array(65536), storageContext = true)
-      if !text.startsWith("Struct(") then
+      rawDigitalStructParts(text, path)
+
+    private def rawDigitalStructParts(
+        text: String,
+        path: String
+    ): (String, Vector[(String, String)]) =
+      if !text.startsWith("Struct(") || !text.endsWith(")") then
         fail("NODAL-BRIDGE-055", "Struct operation requires an actual Struct type", Some(path))
       val inside = text.drop(7).dropRight(1)
       val open = inside.indexOf('{')
+      if open <= 0 || !inside.endsWith("}") then
+        fail("NODAL-BRIDGE-055", "invalid Struct schema representation", Some(path))
       val fields = splitStructFields(inside.drop(open + 1).dropRight(1), path).map: field =>
         val colon = field.indexOf(':')
+        if colon <= 0 then
+          fail("NODAL-BRIDGE-055", "Struct field has no typed identity", Some(path))
         field.take(colon) -> field.drop(colon + 1)
       inside.take(open) -> fields
 
@@ -4858,7 +4985,9 @@ ${indent(body, 2)}
       val visited = mutable.HashSet.empty[(String, String)]
       var equal = true
       def sameDimension(a: String, b: String): Boolean =
-        try StructuralParameterBinding.sameInteger(snapshot, owner, a, b)
+        try
+          val query = integerQuery
+          query.resolve(owner, a) == query.resolve(owner, b)
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
@@ -5059,7 +5188,10 @@ ${indent(body, 2)}
         .toVector
         .flatMap: module =>
           module.declarations.map(_.name) ++
-            parameterExpressionsByOwner.getOrElse(module.path, Map.empty).keys
+            parameterExpressionsByOwner.getOrElse(module.path, Map.empty).keys ++
+            staticArguments.iterator.collect {
+              case (identity, collection) if collection.owner == module.path => identity
+            }
         .distinct
         .sortBy(identity => -identity.length)
       val dimensions = Vector.newBuilder[String]
@@ -5234,8 +5366,10 @@ ${indent(body, 2)}
 
     private def compoundShapeDimensionPaths(text: String, path: String): Vector[String] =
       val expressions = parameterExpressionsByOwner.getOrElse(resolveOwningModule(path), Map.empty)
+      def known(value: String): Boolean =
+        expressions.contains(value) || staticArguments.contains(value)
       text match
-        case WidthType(_, width) => Vector(width).filter(expressions.contains)
+        case WidthType(_, width) => Vector(width).filter(known)
         case value if value.startsWith("Struct(") && value.endsWith(")") =>
           val inside = value.drop(7).dropRight(1)
           val open = inside.indexOf('{')
@@ -5248,7 +5382,7 @@ ${indent(body, 2)}
             compoundShapeDimensionPaths(field.drop(colon + 1), path)
         case value if value.startsWith("Vec(") && value.endsWith(")") =>
           val (element, dimensions) = vecTypeParts(value, path)
-          dimensions.filter(expressions.contains) ++ compoundShapeDimensionPaths(element, path)
+          dimensions.filter(known) ++ compoundShapeDimensionPaths(element, path)
         case _ => Vector.empty
 
     private def shapeDimensionStaticPath(
@@ -5263,6 +5397,7 @@ ${indent(body, 2)}
           .get(dimension)
           .filter(expression => expression.owner == module.path && expression.path == dimension)
           .map(_.path)
+      .orElse(staticArguments.get(dimension).filter(_.owner == module.path).map(_ => dimension))
 
     private def validateShapeSlice(
         module: KernelModuleSnapshot,
@@ -5449,72 +5584,56 @@ ${indent(body, 2)}
       val expressions = parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
       val declarations =
         module.declarations.map(declaration => declaration.path -> declaration).toMap
-      val cache = mutable.HashMap.empty[String, IterationDomain.Bounds]
-      val active = mutable.HashSet.empty[String]
-
       def invalid(message: String, path: String): Nothing =
         fail(diagnosticCode, message, Some(path))
-
       if value.trim != value || value.isEmpty then
         invalid(s"$subject identity is noncanonical", diagnosticPath)
-
-      def analyze(path: String): IterationDomain.Bounds =
-        path.toLongOption.map(value => IterationDomain.Bounds(value, value)).getOrElse:
-          cache.getOrElseUpdate(
-            path, {
-              if active.size >= 512 || !active.add(path) then
-                invalid("shape index expression is cyclic or exceeds the depth limit", path)
-              try
-                declarations.get(path) match
-                  case Some(declaration) =>
-                    val attributes = declaration.attributes.toMap
-                    if declaration.kind != "parameter" ||
-                      !declaration.dataType.contains("Integer") ||
-                      attributes.get("classification") != Some("structural") ||
-                      !attributes
-                        .get("structural_effects")
-                        .exists(_.split(",").map(_.trim).contains(requiredEffect))
-                    then invalid(s"$subject parameter is not structural Integer data", path)
-                    val lower = attributes.get("integer_range_lower").flatMap(_.toLongOption)
-                      .getOrElse(invalid(s"$subject parameter has no finite lower bound", path))
-                    val upper = attributes.get("integer_range_upper").flatMap(_.toLongOption)
-                      .getOrElse(invalid(s"$subject parameter has no finite upper bound", path))
-                    if lower > upper then
-                      invalid(s"$subject parameter range is not ordered", path)
-                    IterationDomain.Bounds(lower, upper)
-                  case None =>
-                    val expression = expressions.getOrElse(
-                      path,
-                      invalid(s"$subject has no canonical static expression", path)
-                    )
-                    if expression.owner != module.path || expression.dataType != "Integer" ||
-                      expression.unit.exists(_.nonEmpty)
-                    then invalid(s"$subject expression has invalid owner, type or unit", path)
-                    expression.literal.flatMap(_.toLongOption) match
-                      case Some(literal) =>
-                        if expression.operation != "integer" || expression.operands.nonEmpty then
-                          invalid(s"$subject literal has forged operation or operands", path)
-                        IterationDomain.Bounds(literal, literal)
-                      case None =>
-                        val operation = IterationDomain.staticArithmetic(expression.operation)
-                          .getOrElse(invalid(s"$subject uses unsupported Integer arithmetic", path))
-                        val bounds = expression.operands.map(analyze)
-                        if operation == IterationDomain.Arithmetic.Subtract &&
-                          expression.operands.size == 2 && expression.operands(
-                            0
-                          ) == expression.operands(1)
-                        then IterationDomain.Bounds(0L, 0L)
-                        else
-                          IterationDomain.arithmetic(operation, bounds).fold(
-                            problem => invalid(problem.message, path),
-                            identity
-                          )
-              finally
-                val _ = active.remove(path)
-            }
-          )
-
-      analyze(value)
+      val visited = mutable.HashSet.empty[String]
+      val active = mutable.HashSet.empty[String]
+      def check(token: String): Unit =
+        if token.toLongOption.isEmpty && !visited.contains(token) then
+          if active.size >= 512 || visited.size >= 65536 || !active.add(token) then
+            invalid("static dependency is cyclic or exceeds the query budget", diagnosticPath)
+          try
+            declarations.get(token).orElse(module.declarations.find(_.name == token)) match
+              case Some(declaration) =>
+                val attributes = declaration.attributes.toMap
+                if declaration.kind != "parameter" || !declaration.dataType.contains("Integer") ||
+                  attributes.get("classification") != Some("structural") ||
+                  attributes.get("integer_range_lower").isEmpty || attributes.get(
+                    "integer_range_upper"
+                  ).isEmpty ||
+                  !attributes.get(
+                    "structural_effects"
+                  ).exists(_.split(",").map(_.trim).contains(requiredEffect))
+                then
+                  invalid(
+                    s"$subject parameter is not structural Integer data with the required effect",
+                    token
+                  )
+              case None if staticArguments.contains(token) =>
+                val collection = staticArguments(token)
+                val argument = collection.arguments.find(_.path == token).get
+                if argument.role == "static_capture" then
+                  val ordinal = collection.arguments.indexWhere(_.path == token) -
+                    (collection.arguments.size - collection.captures.size)
+                  if ordinal < 0 || ordinal >= collection.captures.size then
+                    invalid("static capture ordinal is outside the actual operand segment", token)
+                  check(collection.captures(ordinal))
+              case None =>
+                val expression = expressions.getOrElse(
+                  token,
+                  invalid(s"$subject has no canonical static expression", token)
+                )
+                expression.operands.foreach(check)
+            visited.add(token)
+          finally { val _ = active.remove(token) }
+      check(value)
+      try
+        val query = integerQuery
+        query.bounds(query.resolve(module.path, value))
+      catch
+        case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)
 
     private def shapeIndexBounds(
         module: KernelModuleSnapshot,

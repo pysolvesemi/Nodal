@@ -108,3 +108,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalWritableSignals-DG v0.1](NodalWritableSignals-DG-v0.1.md): approved F55
   private writable wire/output selections over actual canonical shape edges;
   readonly expressions and register update boundaries remain unchanged.
+- [NodalDigitalReductions-DG v0.1](NodalDigitalReductions-DG-v0.1.md): approved
+  F55/BT ordered left/balanced whole-value reductions with checked finite width
+  transfer, universal intermediate validation and exact contextual type queries.

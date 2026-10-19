@@ -554,6 +554,18 @@ private[nodal] object ReproducibilityContract:
       )
     )
 
+  private def parameterExpressionInventory(snapshot: ConstructionSnapshot): (String, JsonValue) =
+    "parameter_expressions" -> array(snapshot.parameterExpressions.sortBy(_.path).map: value =>
+      obj((Vector(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "operation" -> string(value.operation),
+        "operands" -> array(value.operands.map(string)),
+        "data_type" -> string(value.dataType),
+        "literal" -> optionalString(value.literal),
+        "unit" -> optionalString(value.unit)
+      ) ++ value.region.toVector.map(region => "region" -> string(region)))*))
+
   private def conservativeBindingGraph(snapshot: ConstructionSnapshot)
       : Vector[(String, JsonValue)] =
     if snapshot.conservativeArrayBindings.isEmpty && snapshot.instanceArrayRoots.isEmpty then
@@ -635,16 +647,7 @@ private[nodal] object ReproducibilityContract:
               )
             ).getOrElse(JNull)
           ) ++ generatedScopeFields(value.generatedScope))*)),
-        "parameter_expressions" -> array(snapshot.parameterExpressions.sortBy(_.path).map: value =>
-          obj(
-            "path" -> string(value.path),
-            "owner" -> string(value.owner),
-            "operation" -> string(value.operation),
-            "operands" -> array(value.operands.map(string)),
-            "data_type" -> string(value.dataType),
-            "literal" -> optionalString(value.literal),
-            "unit" -> optionalString(value.unit)
-          ))
+        parameterExpressionInventory(snapshot)
       )
 
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
@@ -811,7 +814,10 @@ private[nodal] object ReproducibilityContract:
             "declarations" -> array(region.declarations.map(string))
           )
         ))
-      ).toVector ++ conservativeBindingGraph(snapshot))
+      ).toVector ++ conservativeBindingGraph(snapshot) ++
+      Option.when(snapshot.conservativeArrayBindings.isEmpty &&
+        snapshot.instanceArrayRoots.isEmpty &&
+        snapshot.parameterExpressions.nonEmpty)(parameterExpressionInventory(snapshot)).toVector)
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

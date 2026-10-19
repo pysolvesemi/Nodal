@@ -103,7 +103,8 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     operands: Vector[String],
     dataType: String,
     literal: Option[String],
-    unit: Option[String]
+    unit: Option[String],
+    region: Option[String] = None
 )
 
 private[nodal] final case class KernelStructOperationSnapshot(
@@ -527,6 +528,7 @@ private final class DigitalCollectionRecord(
   val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
   val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
     mutable.LinkedHashMap.empty
+  var expressionCount: Int = 0
   var yielded: Option[Expr[?]] = None
   var result: Option[KernelExpr[?]] = None
 

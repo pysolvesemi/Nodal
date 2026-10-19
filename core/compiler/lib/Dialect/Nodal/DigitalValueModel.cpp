@@ -9,6 +9,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -86,18 +87,20 @@ bool fits(const llvm::APInt &value, StringRef kind, int64_t width) {
   return !value.isNegative() && static_cast<int64_t>(value.getActiveBits()) <= width;
 }
 
-FailureOr<ParameterIntegerBounds> widthBounds(Type type, Operation *module) {
+FailureOr<ParameterIntegerBounds> widthBounds(Type type, Operation *module,
+                                              const ParameterIntegerEnvironment *environment) {
   if (scalarKind(type).empty())
     return failure();
-  auto bounds = inferDigitalWidthBounds(type, module);
+  auto bounds = inferDigitalWidthBounds(type, module, environment);
   if (failed(bounds) || bounds->lower <= 0 || bounds->upper < bounds->lower)
     return failure();
   return bounds;
 }
 
-bool widthRelated(Type source, Type result, Operation *module, int64_t increment) {
-  auto left = inferDigitalWidthExpression(source, module);
-  auto right = inferDigitalWidthExpression(result, module);
+bool widthRelated(Type source, Type result, Operation *module, int64_t increment,
+                  const ParameterIntegerEnvironment *environment) {
+  auto left = inferDigitalWidthExpression(source, module, environment);
+  auto right = inferDigitalWidthExpression(result, module, environment);
   if (failed(left) || failed(right))
     return false;
   if (increment) {
@@ -111,9 +114,14 @@ bool widthRelated(Type source, Type result, Operation *module, int64_t increment
 
 bool numericKind(StringRef kind) { return kind == "uint" || kind == "sint"; }
 
-bool isBool(Type type) {
-  auto bits = llvm::dyn_cast<BitsType>(type);
-  return bits && bits.getWidth() == 1;
+bool isBool(Type type, Operation *module, const ParameterIntegerEnvironment *environment) {
+  if (auto bits = llvm::dyn_cast<BitsType>(type))
+    return bits.getWidth() == 1;
+  if (!environment || scalarKind(type) != "bits")
+    return false;
+  auto width = inferDigitalWidthExpression(type, module, environment);
+  return succeeded(width) &&
+         equivalentInstantiatedIntegerExpressions(*width, makeLiteralIntegerExpression(1));
 }
 
 unsigned expressionArity(StringRef opcode) {
@@ -134,15 +142,15 @@ unsigned expressionArity(StringRef opcode) {
       .Default(0);
 }
 
-LogicalResult checkLiteral(Operation *operation);
+LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment);
 
 /// A static index is an actual, owned UInt literal SSA value. An invariant
 /// hardware expression or a parameter's default is not a static literal.
-std::optional<int64_t> staticIndex(Value value) {
+std::optional<int64_t> staticIndex(Value value, const ParameterIntegerEnvironment *environment) {
   if (scalarKind(value.getType()) != "uint")
     return std::nullopt;
   Operation *definition = value.getDefiningOp();
-  if (!definition || failed(checkLiteral(definition)))
+  if (!definition || failed(checkLiteral(definition, environment)))
     return std::nullopt;
   auto exact = integerValue(definition->getAttrOfType<IntegerAttr>("value"));
   if (failed(exact) || exact->isNegative() || exact->getActiveBits() > 63)
@@ -150,14 +158,23 @@ std::optional<int64_t> staticIndex(Value value) {
   return exact->getZExtValue();
 }
 
-LogicalResult checkLiteral(Operation *operation) {
+LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment) {
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    auto scoped = environment->atUse(operation);
+    if (failed(scoped))
+      return failure();
+    context.emplace(*scoped);
+    environment = &*context;
+  }
   if (!operation || operation->getNumOperands() != 0 || operation->getNumResults() != 1 ||
       !operation->getAttrOfType<DictionaryAttr>("metadata") || operation->getNumRegions() != 0 ||
       operation->getNumSuccessors() != 0)
     return failure();
   Type type = operation->getResult(0).getType();
   auto value = operation->getAttrOfType<IntegerAttr>("value");
-  if (operation->hasAttr("unit") || !digitalIntegerAttributeFits(value, type, owner(operation)))
+  if (operation->hasAttr("unit") ||
+      !digitalIntegerAttributeFits(value, type, owner(operation), environment))
     return failure();
   auto carrier = llvm::cast<IntegerType>(value.getType());
   const llvm::APInt &bits = value.getValue();
@@ -310,9 +327,31 @@ std::optional<llvm::APInt> convertedConstant(StringRef opcode, StringRef kind,
 
 class ValueVerifier {
 public:
-  explicit ValueVerifier(Operation *module) : module(module) {}
+  explicit ValueVerifier(Operation *module,
+                         const ParameterIntegerEnvironment *environment = nullptr)
+      : module(module), environment(environment) {}
 
   FailureOr<Facts> value(Value input, unsigned depth = 0) {
+    // Captured producer facts use the sealed enclosing context, never the child
+    // binding namespace. Each such query has independent context-local caches.
+    if (environment) {
+      if (auto argument = llvm::dyn_cast<BlockArgument>(input);
+          argument && argument.getOwner() != environment->scope()) {
+        auto enclosing = environment->enclosingAtUse(environment->scope()->getParentOp());
+        if (failed(enclosing))
+          return failure();
+        return ValueVerifier(module, &*enclosing).value(input, depth);
+      }
+      Operation *definition = input.getDefiningOp();
+      if (definition && definition->getBlock() != environment->scope()) {
+        if (definition->getParentOp() == module)
+          return ValueVerifier(module).value(input, depth);
+        auto enclosing = environment->enclosingAtUse(definition);
+        if (failed(enclosing))
+          return failure();
+        return ValueVerifier(module, &*enclosing).value(input, depth);
+      }
+    }
     if (depth > maximumProofDepth || valueOwner(input) != module)
       return failure();
     auto known = facts.find(input);
@@ -329,7 +368,7 @@ public:
     Facts result;
     result.nonnegative = scalarKind(input.getType()) != "sint";
     if (auto argument = llvm::dyn_cast<BlockArgument>(input)) {
-      auto source = digitalCollectionCaptureSource(argument);
+      auto source = digitalCollectionCaptureSource(argument, environment);
       if (failed(source))
         return failure();
       if (*source) {
@@ -347,10 +386,10 @@ public:
           llvm::isa<EnumType>(input.getType())) {
         // Enum data remains opaque to scalar arithmetic, but its exact declared
         // code must still be independently validated before selecting it.
-        if (failed(verifyEnumLiteralOperation(definition)))
+        if (failed(verifyEnumLiteralOperation(definition, environment)))
           return failure();
       } else if (name == "nodal.constant" || name == "nodal.const_literal") {
-        if (failed(checkLiteral(definition)))
+        if (failed(checkLiteral(definition, environment)))
           return failure();
         auto attribute = definition->getAttrOfType<IntegerAttr>("value");
         auto exact = integerValue(attribute);
@@ -386,8 +425,8 @@ public:
                               "ordered operands and exact actual field types");
       return failure();
     };
-    if (!schema || !actual || !isDigitalCombinationalValueType(resultType, module) ||
-        !sameDigitalStorageWidthFamily(schema, actual, module))
+    if (!schema || !actual || !isDigitalCombinationalValueType(resultType, module, environment) ||
+        !sameDigitalStorageWidthFamily(schema, actual, module, environment))
       return invalid();
     if (get) {
       if (operation->getNumOperands() != 1 || !ordinal ||
@@ -397,7 +436,7 @@ public:
       auto field = llvm::cast<DictionaryAttr>(actual.getFields()[ordinal.getInt()]);
       if (field.getAs<StringAttr>("name") != name ||
           !equivalentDigitalStorageTypes(field.getAs<TypeAttr>("type").getValue(), resultType,
-                                         module))
+                                         module, environment))
         return invalid();
     } else {
       if (operation->hasAttr("field_ordinal") || operation->hasAttr("field_name") ||
@@ -406,7 +445,8 @@ public:
       for (unsigned index = 0; index < actual.getFields().size(); ++index) {
         auto field = llvm::cast<DictionaryAttr>(actual.getFields()[index]);
         if (!equivalentDigitalStorageTypes(field.getAs<TypeAttr>("type").getValue(),
-                                           operation->getOperand(index).getType(), module))
+                                           operation->getOperand(index).getType(), module,
+                                           environment))
           return invalid();
       }
     }
@@ -424,6 +464,26 @@ public:
   }
 
   FailureOr<Facts> expression(Operation *operation, unsigned depth = 0) {
+    std::optional<ParameterIntegerEnvironment> context;
+    const auto *previous = environment;
+    auto clearTypeCaches = [&] {
+      widthFacts.clear();
+      validTypes.clear();
+      storageEqualities.clear();
+    };
+    const llvm::scope_exit restore([&] {
+      environment = previous;
+      if (context)
+        clearTypeCaches();
+    });
+    if (environment) {
+      auto scoped = environment->atUse(operation);
+      if (failed(scoped))
+        return failure();
+      context.emplace(*scoped);
+      environment = &*context;
+      clearTypeCaches();
+    }
     if (!module || owner(operation) != module || depth > maximumProofDepth ||
         operation->getName().getStringRef() != "nodal.digital_expr" ||
         operation->getNumResults() != 1 || operation->getNumRegions() != 0 ||
@@ -437,7 +497,7 @@ public:
       return failure();
     }
     for (Value operand : operation->getOperands())
-      if (failed(verifyCollectionValueScope(operand, operation))) {
+      if (failed(verifyCollectionValueScope(operand, operation, environment))) {
         (void)reject(operation,
                      "digital operands require visible owned values and explicit region captures");
         return failure();
@@ -507,16 +567,16 @@ public:
                (source->constant && fits(*source->constant, resultKind, resultWidth->lower)));
     else if (opcode == "digital_to_signed")
       valid = sourceKind == "uint" && resultKind == "sint" &&
-              widthRelated(sourceType, resultType, module, 1);
+              widthRelated(sourceType, resultType, module, 1, environment);
     else if (opcode == "digital_to_unsigned")
       valid = sourceKind == "sint" && resultKind == "uint" && source->nonnegative &&
-              widthRelated(sourceType, resultType, module, 0);
+              widthRelated(sourceType, resultType, module, 0, environment);
     else if (opcode == "digital_reinterpret_signed")
       valid = sourceKind == "uint" && resultKind == "sint" &&
-              widthRelated(sourceType, resultType, module, 0);
+              widthRelated(sourceType, resultType, module, 0, environment);
     else if (opcode == "digital_reinterpret_unsigned")
       valid = sourceKind == "sint" && resultKind == "uint" &&
-              widthRelated(sourceType, resultType, module, 0);
+              widthRelated(sourceType, resultType, module, 0, environment);
     if (!valid) {
       (void)reject(operation,
                    "unsupported conversion or invalid exact kind, width or checked proof");
@@ -539,7 +599,7 @@ private:
     auto found = widthFacts.find(type);
     if (found != widthFacts.end())
       return found->second;
-    auto expression = inferDigitalWidthExpression(type, module);
+    auto expression = inferDigitalWidthExpression(type, module, environment);
     if (succeeded(expression))
       widthFacts.try_emplace(type, *expression);
     return expression;
@@ -558,7 +618,7 @@ private:
       return found->second;
     // Select may carry owned enum/aggregate data. Analog scalar roots and
     // capabilities remain with their distinct semantic owners.
-    bool valid = isDigitalCombinationalValueType(type, module);
+    bool valid = isDigitalCombinationalValueType(type, module, environment);
     validTypes.try_emplace(type, valid);
     return valid;
   }
@@ -577,7 +637,7 @@ private:
     auto found = storageEqualities.find(pair);
     if (found != storageEqualities.end())
       return found->second;
-    bool equal = equivalentDigitalStorageTypes(left, right, module);
+    bool equal = equivalentDigitalStorageTypes(left, right, module, environment);
     storageEqualities.try_emplace(pair, equal);
     return equal;
   }
@@ -612,8 +672,8 @@ private:
     }
     if (opcode == "digital_select") {
       Type branchType = operation->getOperand(1).getType();
-      if (!isBool(operation->getOperand(0).getType()) || !validValueType(resultType) ||
-          !sameStorageType(branchType, resultType) ||
+      if (!isBool(operation->getOperand(0).getType(), module, environment) ||
+          !validValueType(resultType) || !sameStorageType(branchType, resultType) ||
           !sameStorageType(branchType, operation->getOperand(2).getType())) {
         (void)reject(operation,
                      "digital select requires Bits<1> and identical complete storage types");
@@ -696,16 +756,18 @@ private:
               matchesWidth(resultType, *expected);
     } else if (comparison) {
       bool equality = opcode == "digital_eq" || opcode == "digital_ne";
-      valid = sameKinds && isBool(resultType) &&
+      valid = sameKinds && isBool(resultType, module, environment) &&
               (numericKind(kind) || (equality && kind == "bits" && sameWidths));
     } else if (bitwise || boolean) {
       valid =
           sameKinds && sameWidths && resultKind == kind && matchesWidth(resultType, expressions[0]);
       if (boolean)
-        valid &= isBool(resultType) && llvm::all_of(operation->getOperandTypes(), isBool);
+        valid &= isBool(resultType, module, environment) &&
+                 llvm::all_of(operation->getOperandTypes(),
+                              [&](Type type) { return isBool(type, module, environment); });
     } else if (opcode == "digital_shl" || opcode == "digital_shr" ||
                opcode == "digital_logical_shr") {
-      amount = staticIndex(operation->getOperand(1));
+      amount = staticIndex(operation->getOperand(1), environment);
       auto expected = opcode == "digital_shl" && amount && *amount != 0
                           ? composeIntegerExpression(
                                 "add", {expressions[0], makeLiteralIntegerExpression(*amount)})
@@ -713,8 +775,8 @@ private:
       valid = amount && kind == resultKind && succeeded(expected) &&
               matchesWidth(resultType, *expected);
     } else if (opcode == "digital_extract") {
-      lower = staticIndex(operation->getOperand(1));
-      upper = staticIndex(operation->getOperand(2));
+      lower = staticIndex(operation->getOperand(1), environment);
+      upper = staticIndex(operation->getOperand(2), environment);
       valid = lower && upper && *upper > *lower && *upper <= widths[0].lower &&
               resultKind == "bits" &&
               matchesWidth(resultType, makeLiteralIntegerExpression(*upper - *lower));
@@ -769,6 +831,7 @@ private:
   }
 
   Operation *module;
+  const ParameterIntegerEnvironment *environment;
   llvm::DenseMap<Value, Facts> facts;
   llvm::DenseMap<Type, bool> validTypes;
   llvm::DenseMap<Type, InstantiatedIntegerExpression> widthFacts;
@@ -781,20 +844,23 @@ private:
 
 bool isDigitalScalarType(Type type) { return type && !scalarKind(type).empty(); }
 
-bool isDigitalCombinationalValueType(Type type, Operation *module) {
+bool isDigitalCombinationalValueType(Type type, Operation *module,
+                                     const ParameterIntegerEnvironment *environment) {
   if (!type || !llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return false;
   return isDigitalScalarType(type)
-             ? succeeded(inferDigitalWidthExpression(type, module))
+             ? succeeded(inferDigitalWidthExpression(type, module, environment))
              : llvm::isa<EnumType, ShapedType, StructType>(type) && isDigitalStorageType(type) &&
-                   succeeded(inferDigitalStorageMaximumBits(type, module));
+                   succeeded(inferDigitalStorageMaximumBits(
+                       type, environment ? environment->use() : module, environment));
 }
 
-bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module) {
+bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module,
+                                 const ParameterIntegerEnvironment *environment) {
   auto carrier = value ? llvm::dyn_cast<IntegerType>(value.getType()) : IntegerType();
   if (!carrier)
     return false;
-  auto bounds = widthBounds(type, module);
+  auto bounds = widthBounds(type, module, environment);
   if (failed(bounds))
     return false;
   const llvm::APInt &bits = value.getValue();
@@ -807,25 +873,50 @@ bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module
   return (scalarKind(type) == "sint" || !negative) && required <= bounds->lower;
 }
 
-LogicalResult verifyDigitalLiteralOperation(Operation *operation) {
-  if (failed(checkLiteral(operation)))
+LogicalResult verifyDigitalLiteralOperation(Operation *operation,
+                                            const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyDigitalLiteralOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  if (failed(checkLiteral(operation, environment)))
     return reject(operation, "digital literal requires an exact fitting integer and canonical "
                              "spelling over every legal owned width");
   return success();
 }
 
-LogicalResult verifyDigitalValueOperation(Operation *operation) {
-  ValueVerifier verifier(owner(operation));
+LogicalResult verifyDigitalValueOperation(Operation *operation,
+                                          const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyDigitalValueOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  ValueVerifier verifier(owner(operation), environment);
   return success(succeeded(verifier.expression(operation)));
 }
 
-LogicalResult verifyDigitalValueModel(Operation *module) {
+LogicalResult verifyDigitalValueModel(Operation *module, bool includeCollections) {
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
   ValueVerifier verifier(module);
   auto walk = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
+    if (llvm::isa<CollectionOp>(operation)) {
+      if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
     StringRef name = operation->getName().getStringRef();
     if (name == "nodal.digital_expr" && failed(verifier.expression(operation)))
       return WalkResult::interrupt();
@@ -836,5 +927,27 @@ LogicalResult verifyDigitalValueModel(Operation *module) {
     return WalkResult::advance();
   });
   return failure(walk.wasInterrupted());
+}
+} // namespace nodal
+
+// Preserve the ordinary entry-point ABI for existing non-contextual consumers.
+namespace nodal {
+bool isDigitalCombinationalValueType(Type type, Operation *module) {
+  return isDigitalCombinationalValueType(type, module, nullptr);
+}
+bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module) {
+  return digitalIntegerAttributeFits(value, type, module, nullptr);
+}
+LogicalResult verifyDigitalLiteralOperation(Operation *operation) {
+  return verifyDigitalLiteralOperation(operation, nullptr);
+}
+LogicalResult verifyDigitalValueOperation(Operation *operation) {
+  return verifyDigitalValueOperation(operation, nullptr);
+}
+} // namespace nodal
+
+namespace nodal {
+LogicalResult verifyDigitalValueModel(Operation *module) {
+  return verifyDigitalValueModel(module, true);
 }
 } // namespace nodal

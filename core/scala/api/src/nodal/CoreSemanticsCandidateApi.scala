@@ -94,7 +94,9 @@ extension [A <: Data](value: Expr[Vec[A]])
       ConstructionKernel.referencePath(value)
     )
   def reduce(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
-    CandidateRuntime.expr(value, function, "reduce")
+    DigitalCollectionContract.reduce(value, function, balanced = false)
+  def reduceBalancedTree(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
+    DigitalCollectionContract.reduce(value, function, balanced = true)
 
 /** General valid-only transport candidate. */
 final class Valid[A <: Data] private[nodal] (val payload: Expr[A])

@@ -32,44 +32,58 @@ bool isDigitalStorageType(mlir::Type type);
 /// This is not a storage/scalar query; ordinary Struct/Mem/protocol payloads do
 /// not admit these capabilities. Shape proofs remain owned by ShapeModel.
 bool isDigitalControlBoundaryType(mlir::Type type);
-mlir::FailureOr<int64_t> inferDigitalControlMaximumElements(mlir::Type type,
-                                                            mlir::Operation *module);
+mlir::FailureOr<int64_t>
+inferDigitalControlMaximumElements(mlir::Type type, mlir::Operation *module,
+                                   const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Exact scalar width bounds. Symbolic widths use the existing structural
 /// parameter/expression proof without substituting an overridable default.
-mlir::FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(mlir::Type type,
-                                                                mlir::Operation *module);
+mlir::FailureOr<ParameterIntegerBounds>
+inferDigitalWidthBounds(mlir::Type type, mlir::Operation *module,
+                        const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Exact owned scalar-width identity in the canonical static Integer DAG.
 /// Equal bounds/defaults never substitute for parameter or expression identity.
-mlir::FailureOr<InstantiatedIntegerExpression> inferDigitalWidthExpression(mlir::Type type,
-                                                                           mlir::Operation *module);
+mlir::FailureOr<InstantiatedIntegerExpression>
+inferDigitalWidthExpression(mlir::Type type, mlir::Operation *module,
+                            const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Same complete storage type within one actual module: retain scalar kind,
 /// nominal enum/Struct identity, ordered fields and shape rank, while comparing
 /// independently authored width/extent expressions by their exact all-legal DAG.
 /// Both recursive types are validated; capabilities and cross-owner bindings
 /// are excluded. The bounded query memoizes type pairs without physical expansion.
-bool equivalentDigitalStorageTypes(mlir::Type left, mlir::Type right, mlir::Operation *module);
+bool equivalentDigitalStorageTypes(mlir::Type left, mlir::Type right, mlir::Operation *module,
+                                   const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Construction-only width-family relation. Both complete types are validated.
 /// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered
 /// fields and every inner dimension identity remain exact. This never licenses
 /// assignment or port/storage ABI substitution.
-bool sameDigitalStorageWidthFamily(mlir::Type base, mlir::Type instance, mlir::Operation *module);
+bool sameDigitalStorageWidthFamily(mlir::Type base, mlir::Type instance, mlir::Operation *module,
+                                   const ParameterIntegerEnvironment *environment = nullptr);
 
-/// Prove one directionless storage type's worst-case recursive bit footprint,
-/// reusing the module type verifier's checked shape/width arithmetic. The use is
-/// either the owning module or an operation directly in it; diagnostics identify
-/// this actual use. No physical lanes or bits are expanded.
-mlir::FailureOr<int64_t> inferDigitalStorageMaximumBits(mlir::Type type, mlir::Operation *use);
+/// Prove one directionless storage type's worst-case recursive bit footprint.
+/// Without a context the use is the owning module or a direct child. An admitted
+/// context permits an actual same-block collection use. No lanes are expanded.
+mlir::FailureOr<int64_t>
+inferDigitalStorageMaximumBits(mlir::Type type, mlir::Operation *use,
+                               const ParameterIntegerEnvironment *environment = nullptr);
 
-/// Read-only verification of every type use in one owning nodal.module (including
-/// nested attributes, operands, results and block arguments). Nested module
-/// definitions are checked by their own verifier. Memoization is module-local;
-/// recursive shape/cardinality and maximum bit footprints use checked i64
-/// metadata arithmetic without expanding fields by their physical lane count.
-mlir::LogicalResult verifyDigitalTypeModel(mlir::Operation *module);
+/// Verify this actual operation under an optional admitted context. Collection
+/// block arguments and bodies belong to the collection proof coordinator.
+mlir::LogicalResult
+verifyDigitalTypeOperation(mlir::Operation *operation,
+                           const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Verify module-owned type uses, including nested attributes and ordinary block
+/// arguments. Collection bodies are checked separately under admitted contexts;
+/// nested module definitions have their own verifier. Query-local memoization
+/// and checked i64 footprint arithmetic never expand physical lanes or bits.
+/// includeCollections=false is the ordinary-only module orchestration pass; it
+/// does not establish any collection fact. The default delegates collections to
+/// their contextual proof coordinator and preserves the standalone contract.
+mlir::LogicalResult verifyDigitalTypeModel(mlir::Operation *module, bool includeCollections = true);
 
 } // namespace nodal
 

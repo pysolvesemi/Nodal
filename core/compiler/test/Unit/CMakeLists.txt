@@ -604,3 +604,17 @@ target_link_libraries(nodal-digital-collection-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.digital-collection-model-unit COMMAND nodal-digital-collection-model-unit-tests)
 set_tests_properties(nodal.native.digital-collection-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-reduction-model-unit-tests DigitalReductionModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-reduction-model-unit-tests)
+target_link_libraries(nodal-digital-reduction-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-reduction-model-unit COMMAND nodal-digital-reduction-model-unit-tests)
+set_tests_properties(nodal.native.digital-reduction-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-reduction-context-unit-tests DigitalReductionContextTest.cpp)
+llvm_update_compile_flags(nodal-digital-reduction-context-unit-tests)
+target_link_libraries(nodal-digital-reduction-context-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-reduction-context-unit COMMAND nodal-digital-reduction-context-unit-tests)
+set_tests_properties(nodal.native.digital-reduction-context-unit PROPERTIES TIMEOUT 60)

@@ -1,44 +1,100 @@
 #ifndef NODAL_DIALECT_NODAL_DIGITALCOLLECTIONMODEL_H
 #define NODAL_DIALECT_NODAL_DIGITALCOLLECTIONMODEL_H
 
-#include "mlir/IR/Operation.h"
-#include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <memory>
 #include <string>
 
 namespace nodal {
-
-/// Verify an SSA value at its actual lexical use. Collection bodies are isolated:
-/// outer values enter only through explicit operands and matching block arguments.
-/// Argument signature checks do not recurse into opcode or body verification.
-/// Module values retain their existing owners; collection-local arguments and
-/// intermediates cannot escape or bypass an explicit nested capture.
+/// Header/scope-only checks never call full type, opcode or collection verification.
 mlir::LogicalResult verifyCollectionValueScope(mlir::Value value, mlir::Operation *use);
-
-/// Resolve only an actual capture argument through the verified operand segments.
-/// Success with a null value denotes an element/accumulator argument. Malformed
-/// headers or non-dominating/foreign capture sources fail; no supplied facts are used.
+mlir::LogicalResult verifyCollectionValueScope(mlir::Value value, mlir::Operation *use,
+                                               const ParameterIntegerEnvironment *environment);
 mlir::FailureOr<mlir::Value> digitalCollectionCaptureSource(mlir::BlockArgument argument);
-
-/// Read-only conservative dependencies of an actual callback argument. Elements
-/// depend on the complete actual input; captures retain their actual SSA source.
-/// Fold/scan accumulators depend on seed and recurrent input/capture operands,
-/// never on a fictitious immutable block-argument storage root. No lane expansion.
+mlir::FailureOr<mlir::Value>
+digitalCollectionCaptureSource(mlir::BlockArgument argument,
+                               const ParameterIntegerEnvironment *environment);
 mlir::LogicalResult
 digitalCollectionArgumentDependencies(mlir::BlockArgument argument,
                                       llvm::SmallVectorImpl<mlir::Value> &dependencies);
-
-/// Canonical source identity for an actual collection argument, or a producer's
-/// semantic_path. Argument identity is derived from region_id and argument ordinal.
 std::string digitalValueSemanticPath(mlir::Value value);
 
-/// Closed map/zip_with and homogeneous fold_left/scan_left region contracts.
-/// Reuses ordinary digital/enum/shape/type verification without lane expansion.
+/// Resolve an actual local argument/static producer by its canonical identity.
+/// This never searches outer blocks or treats a runtime i64 as a static value.
+mlir::FailureOr<mlir::Value>
+resolveCollectionIntegerTokenValue(mlir::Operation *module, llvm::StringRef token,
+                                   llvm::StringRef requiredEffect,
+                                   const ParameterIntegerEnvironment &environment);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveCollectionIntegerToken(mlir::Operation *module, llvm::StringRef token,
+                              llvm::StringRef requiredEffect,
+                              const ParameterIntegerEnvironment &environment);
+
+/// Conditional raw-header/transfer contexts for an operation-local verifier.
+/// These are never a completed reduction certificate. No global state is retained.
+mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
+collectionIntegerContextsAtUse(mlir::Operation *use);
+
+/// A read-only exact dependent type: complete original skeleton and scalar widths
+/// in selected-leaf order for reductions (all scalar leaves for body values),
+/// with exact inner dimensions in shape postorder. No expression is written into IR.
+struct DigitalReductionType {
+  mlir::Type skeleton;
+  llvm::SmallVector<InstantiatedIntegerExpression, 4> widths;
+  llvm::SmallVector<InstantiatedIntegerExpression, 4> dimensions;
+  int64_t maximumBits = 0;
+};
+struct DigitalReductionBodyType {
+  mlir::Value value;
+  DigitalReductionType type;
+};
+class VerifiedDigitalReduction {
+public:
+  mlir::Operation *operation() const;
+  const InstantiatedIntegerExpression &count() const;
+
+private:
+  struct Storage;
+  explicit VerifiedDigitalReduction(std::shared_ptr<const Storage> storage);
+  std::shared_ptr<const Storage> storage;
+  friend mlir::FailureOr<VerifiedDigitalReduction> analyzeDigitalReduction(mlir::Operation *);
+  friend mlir::FailureOr<DigitalReductionType>
+  digitalReductionFinalType(const VerifiedDigitalReduction &);
+  friend mlir::FailureOr<DigitalReductionType>
+  digitalReductionTypeAtPrefix(const VerifiedDigitalReduction &, int64_t);
+  friend mlir::FailureOr<DigitalReductionType>
+  digitalReductionTypeAtTreeNode(const VerifiedDigitalReduction &, unsigned, int64_t);
+  friend mlir::FailureOr<llvm::SmallVector<DigitalReductionBodyType, 8>>
+  instantiateDigitalReductionBodyTypes(const VerifiedDigitalReduction &, int64_t, int64_t);
+  friend mlir::FailureOr<llvm::SmallVector<DigitalReductionBodyType, 8>>
+  instantiateDigitalReductionBodyTypesAtTreeNode(const VerifiedDigitalReduction &, unsigned,
+                                                 int64_t);
+};
+mlir::FailureOr<VerifiedDigitalReduction> analyzeDigitalReduction(mlir::Operation *operation);
+mlir::FailureOr<DigitalReductionType>
+digitalReductionFinalType(const VerifiedDigitalReduction &facts);
+mlir::FailureOr<DigitalReductionType>
+digitalReductionTypeAtPrefix(const VerifiedDigitalReduction &facts, int64_t elements);
+mlir::FailureOr<DigitalReductionType>
+digitalReductionTypeAtTreeNode(const VerifiedDigitalReduction &facts, unsigned level,
+                               int64_t ordinal);
+mlir::FailureOr<llvm::SmallVector<DigitalReductionBodyType, 8>>
+instantiateDigitalReductionBodyTypes(const VerifiedDigitalReduction &facts, int64_t leftElements,
+                                     int64_t rightElements);
+
+/// A guaranteed-present actual combine; odd carry nodes have no body. Symbolic
+/// tail counts retain their exact checked expression instead of endpoint types.
+mlir::FailureOr<llvm::SmallVector<DigitalReductionBodyType, 8>>
+instantiateDigitalReductionBodyTypesAtTreeNode(const VerifiedDigitalReduction &facts,
+                                               unsigned level, int64_t ordinal);
+
 mlir::LogicalResult verifyDigitalCollectionOperation(mlir::Operation *operation);
+mlir::LogicalResult verifyDigitalCollectionOperation(mlir::Operation *operation,
+                                                     const ParameterIntegerEnvironment *enclosing);
 mlir::LogicalResult verifyDigitalCollectionYield(mlir::Operation *operation);
 mlir::LogicalResult verifyDigitalCollectionModel(mlir::Operation *module);
-
 } // namespace nodal
 #endif

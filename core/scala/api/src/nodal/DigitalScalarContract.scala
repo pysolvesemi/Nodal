@@ -261,3 +261,26 @@ private[nodal] object DigitalScalarContract:
     if widthBounds(source)._2 > 1023L && !knownValue(value).exists(_.toDouble.isFinite) then
       fail(8, "numeric Real conversion requires a proof of finite binary64 representation")
     emit("digital_to_real", value, KernelTypeDescriptor("Real"))
+
+  /** Recheck ordinary conversion obligations under an admitted collection Integer context. */
+  def validateCaptured(expression: KernelExpr[?]): Unit =
+    val value = expression.operands.head.asInstanceOf[Expr[?]]
+    val source = scalarType(value)
+    val (minimum, maximum) = widthBounds(source)
+    val result = expression.resultType.getOrElse(fail(5, "conversion result type is absent"))
+    val operation = expression.operation.getOrElse("")
+    val resultBounds = if result.kind == "Real" then (0L, 0L) else widthBounds(result)
+    operation match
+      case "digital_extend" if resultBounds._1 < maximum =>
+        fail(7, "extend narrows in a reachable reduction context")
+      case "digital_truncate" if resultBounds._2 > minimum =>
+        fail(7, "truncate widens in a reachable reduction context")
+      case "digital_resize_checked"
+          if resultBounds._1 < maximum &&
+            !knownValue(value).exists(requiredWidth(source.kind, _) <= resultBounds._1) =>
+        fail(8, "checked resize is unproved in a reachable reduction context")
+      case "digital_to_unsigned" if !nonnegative(value) =>
+        fail(8, "unsigned conversion is unproved in a reachable reduction context")
+      case "digital_to_real" if maximum > 1023L && !knownValue(value).exists(_.toDouble.isFinite) =>
+        fail(8, "Real conversion is unproved in a reachable reduction context")
+      case _ => ()

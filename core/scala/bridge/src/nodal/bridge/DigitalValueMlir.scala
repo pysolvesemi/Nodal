@@ -59,13 +59,38 @@ private[nodal] object DigitalValueMlir:
       collection.arguments.map(argument => argument.path -> (collection, argument))
     ).toMap
     private val byRegion = snapshot.digitalExpressions.groupBy(_.region)
+    private val staticExpressions =
+      snapshot.parameterExpressions.map(value => value.path -> value).toMap
+    private val staticByRegion = snapshot.parameterExpressions.groupBy(_.region)
+    private val childrenByRegion = snapshot.digitalCollections.groupBy(_.parentRegion)
+    private val argumentsByRegion = snapshot.digitalCollections.map(value =>
+      value.path -> value.arguments.map(_.path)
+    ).toMap
+    private def bodyValuePaths(region: String): Vector[String] =
+      val pending = mutable.ArrayDeque(region)
+      val result = mutable.ArrayBuffer.empty[String]
+      var scopes = 0
+      while pending.nonEmpty do
+        val current = pending.removeLast()
+        scopes += 1
+        requireValid(
+          scopes <= 65536,
+          "collection scope traversal exceeds its bounded graph",
+          region
+        )
+        result ++= byRegion.getOrElse(Some(current), Vector.empty).map(_.path)
+        result ++= argumentsByRegion.getOrElse(current, Vector.empty)
+        pending ++= childrenByRegion.getOrElse(Some(current), Vector.empty).map(_.path)
+      result.toVector
 
     def valueOwner(path: String): Option[String] =
-      expressions.get(path).map(_.owner).orElse(declarations.get(path).map(_._1))
+      expressions.get(path).map(_.owner).orElse(staticExpressions.get(path).map(_.owner))
+        .orElse(declarations.get(path).map(_._1))
         .orElse(arguments.get(path).map(_._1.owner))
 
     def valueRegion(path: String): Option[String] =
-      expressions.get(path).flatMap(_.region).orElse(arguments.get(path).map(_._1.path))
+      expressions.get(path).flatMap(_.region).orElse(staticExpressions.get(path).flatMap(_.region))
+        .orElse(arguments.get(path).map(_._1.path))
 
     def requireVisible(
         path: String,
@@ -134,6 +159,36 @@ private[nodal] object DigitalValueMlir:
       )
 
     requireValid(
+      snapshot.parameterExpressions.size <= 65536 &&
+        staticExpressions.size == snapshot.parameterExpressions.size,
+      "duplicate or excessive static expression identities",
+      snapshot.root
+    )
+    snapshot.parameterExpressions.foreach: expression =>
+      requireValid(
+        !expressions.contains(expression.path) && !arguments.contains(expression.path) &&
+          !declarations.contains(expression.path),
+        "static and digital identities must be distinct",
+        expression.path
+      )
+      expression.region.foreach: region =>
+        val pure = expression.literal match
+          case Some(_) => expression.operation == "integer" && expression.operands.isEmpty
+          case None => IterationDomain.staticArithmetic(expression.operation).exists(_.arity ==
+              expression.operands.size)
+        requireValid(
+          collections.get(region).exists(_.owner == expression.owner) &&
+            expression.dataType == "Integer" && expression.unit.forall(_.isEmpty) && pure,
+          "collection static expressions require an exact region and pure dimensionless Integer operation",
+          expression.path
+        )
+      expression.operands.foreach: input =>
+        if expression.region.nonEmpty || arguments.contains(input) ||
+          staticExpressions.get(input).exists(_.region.nonEmpty)
+        then
+          requireVisible(input, expression.owner, expression.region, expression.path)
+
+    requireValid(
       snapshot.digitalExpressions.size <= 65536 &&
         expressions.size == snapshot.digitalExpressions.size,
       "duplicate or excessive digital expression identities",
@@ -181,6 +236,13 @@ private[nodal] object DigitalValueMlir:
         "collection kind, identity, operand segments or argument count is invalid",
         path
       )
+      requireValid(
+        byRegion.getOrElse(Some(path), Vector.empty).size.toLong +
+          staticByRegion.getOrElse(Some(path), Vector.empty).size.toLong +
+          collection.arguments.size <= 4098L,
+        "collection values, static expressions and arguments exceed the bounded region budget",
+        path
+      )
       val operands = collection.inputs ++ collection.seed ++ collection.captures
       requireValid(
         expressions.get(path).exists(value =>
@@ -195,7 +257,7 @@ private[nodal] object DigitalValueMlir:
       collection.arguments.zipWithIndex.foreach: (argument, index) =>
         requireValid(
           argument.path == s"$path.arg$index" && !expressions.contains(argument.path) &&
-            !declarations.contains(argument.path),
+            !declarations.contains(argument.path) && !staticExpressions.contains(argument.path),
           "collection argument identity must be canonical and distinct from all values",
           path
         )
@@ -306,7 +368,8 @@ private[nodal] object DigitalValueMlir:
         scalarLiteral(literal, scalarType)._1
 
     def expressionType(path: String): String =
-      expressions.get(path).map(_.dataType).orElse(declarations.get(path).flatMap(_._2.dataType))
+      expressions.get(path).map(_.dataType).orElse(staticExpressions.get(path).map(_.dataType))
+        .orElse(declarations.get(path).flatMap(_._2.dataType))
         .orElse(arguments.get(path).map(_._2.dataType))
         .getOrElse(fail("digital operand requires an exact type", path))
 
@@ -691,7 +754,18 @@ private[nodal] object DigitalValueMlir:
             String,
             Vector[(String, String)]
         ) => Projection,
-        additionalRoots: Vector[String]
+        additionalRoots: Vector[String],
+        staticValue: (String, Option[String], mutable.ArrayBuffer[String]) => (String, String),
+        prepareType: (String, String, Option[String], mutable.ArrayBuffer[String]) => Unit,
+        bindStaticArgument: (String, (String, String)) => Unit,
+        withCollectionContexts: (KernelDigitalCollectionSnapshot, () => Unit) => Unit,
+        reductionArguments: KernelDigitalCollectionSnapshot => Option[Vector[(String, String)]],
+        collectionArgumentMatches: (
+            KernelDigitalCollectionSnapshot,
+            KernelDigitalRegionArgument,
+            String
+        ) => Boolean,
+        collectionResultMatches: (KernelDigitalCollectionSnapshot, String) => Boolean
     ): Rendered =
       val lines = mutable.ArrayBuffer.empty[String]
       val values = mutable.HashMap.empty[String, (String, String)]
@@ -712,390 +786,425 @@ private[nodal] object DigitalValueMlir:
       ): (String, String) =
         requireValid(depth <= 128, "digital expression graph exceeds depth limit", path)
         requireVisible(path, module.path, region, path)
-        values.get(path) match
-          case Some(value) =>
-            requireValid(
-              depth + heights(path) <= 128,
-              "digital expression graph exceeds depth limit",
-              path
-            )
-            value
-          case None =>
-            requireValid(active.add(path), "digital expression graph contains a cycle", path)
-            val result = s"%digital_value_$ordinal"
-            var actualResult = result
-            ordinal += 1
-            val sourceType = expressionType(path)
-            requireValid(
-              region.isEmpty || (sourceType != "Integer" && sourceType != "Real"),
-              "collection expressions require finite digital values",
-              path
-            )
-            val payloadType =
-              if expressions.get(path).exists(_.operation != "shape_reference") then
-                computedType(sourceType, path)
-              else nativeType(sourceType, path)
-            val dataType = declarations.get(path).map(value =>
-              declarationNativeType(value._2, payloadType)
-            ).getOrElse(payloadType)
-            val unsigned = scalarType(sourceType, path).exists(_.kind != "SInt")
-            val (text, height, proof) = expressions.get(path) match
-              case Some(expression) =>
-                val operands = expression.operands.map(emit(_, depth + 1, region, output))
-                val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
-                val specialized =
-                  DigitalInterfaceContract.ValueOperations.contains(expression.operation)
-                if !specialized then
-                  expression.operands.zip(operands).foreach: (input, actual) =>
-                    requireValid(
-                      actual._2 == nativeType(expressionType(input), input),
-                      "a digital capability cannot be used as an ordinary typed value",
-                      path
-                    )
-                if expression.operation == DigitalCollectionContract.Operation then
-                  val collection = collections(path)
-                  val vectors =
-                    collection.inputs.map(input => vectorType(expressionType(input), path))
-                  def shaped(element: String, dimensions: Vector[String]): String =
-                    s"Vec($element;${dimensions.mkString("x")})"
-                  if collection.kind == "zip_with" then
-                    requireValid(
-                      exactValueType(
-                        shaped("Bool", vectors(0)._2),
-                        shaped("Bool", vectors(1)._2),
-                        path
-                      ),
-                      "collection zip requires identical complete dimensions",
-                      path
-                    )
-                  val primary = collection.seed match
-                    case Some(seed) =>
-                      Vector(expressionType(seed) -> "accumulator", vectors.head._1 -> "element")
-                    case None => vectors.zipWithIndex.map((value, index) =>
-                        value._1 -> (if vectors.size == 1 then "element" else s"element$index")
-                      )
-                  val expected = primary ++
-                    collection.captures.map(input => expressionType(input) -> "capture")
-                  requireValid(
-                    collection.arguments.size == expected.size,
-                    "collection block arguments do not match operand segments",
-                    path
-                  )
-                  val local = mutable.ArrayBuffer.empty[String]
-                  val blockArguments = collection.arguments.zip(expected).zipWithIndex.map:
-                    case ((argument, (expectedType, role)), index) =>
+        if staticExpressions.contains(path) ||
+          declarations.get(path).exists(value =>
+            value._2.kind == "parameter" && value._2.dataType.contains("Integer")
+          )
+        then
+          val value = staticValue(path, region, output)
+          values.update(path, value)
+          heights.update(path, 0)
+          proofs.update(path, Unknown)
+          value
+        else
+          values.get(path) match
+            case Some(value) =>
+              requireValid(
+                depth + heights(path) <= 128,
+                "digital expression graph exceeds depth limit",
+                path
+              )
+              value
+            case None =>
+              requireValid(active.add(path), "digital expression graph contains a cycle", path)
+              val result = s"%digital_value_$ordinal"
+              var actualResult = result
+              ordinal += 1
+              val sourceType = expressionType(path)
+              requireValid(
+                region.isEmpty || (sourceType != "Integer" && sourceType != "Real"),
+                "collection expressions require finite digital values",
+                path
+              )
+              prepareType(sourceType, path, region, output)
+              expressions.get(path).flatMap(_.structure).foreach(value =>
+                prepareType(value.schemaType, path, region, output)
+              )
+              val payloadType =
+                if expressions.get(path).exists(_.operation != "shape_reference") then
+                  computedType(sourceType, path)
+                else nativeType(sourceType, path)
+              val dataType = declarations.get(path).map(value =>
+                declarationNativeType(value._2, payloadType)
+              ).getOrElse(payloadType)
+              val unsigned = scalarType(sourceType, path).exists(_.kind != "SInt")
+              val (text, height, proof) = expressions.get(path) match
+                case Some(expression) =>
+                  val operands = expression.operands.map(emit(_, depth + 1, region, output))
+                  val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
+                  val specialized =
+                    DigitalInterfaceContract.ValueOperations.contains(expression.operation)
+                  if !specialized then
+                    expression.operands.zip(operands).foreach: (input, actual) =>
                       requireValid(
-                        argument.role == role &&
-                          exactValueType(argument.dataType, expectedType, path) &&
-                          argument.dataType != "Integer" && argument.dataType != "Real",
-                        "collection block argument must retain the complete finite operand type and role",
-                        argument.path
-                      )
-                      val name = s"${result}_arg$index"
-                      val argumentType = computedType(argument.dataType, argument.path)
-                      values.update(argument.path, name -> argumentType)
-                      // Only immutable explicit capture edges carry facts. An element
-                      // or recurrence accumulator remains unknown, even with a literal seed.
-                      val capture = collection.captures.lift(index - primary.size)
-                      heights.update(argument.path, capture.map(heights(_) + 1).getOrElse(0))
-                      proofs.update(
-                        argument.path,
-                        capture.map(proofs).getOrElse(Proof(
-                          None,
-                          scalarType(argument.dataType, argument.path).exists(_.kind != "SInt")
-                        ))
-                      )
-                      s"$name: $argumentType"
-                  val bodyExpressions = byRegion.getOrElse(Some(path), Vector.empty)
-                  bodyExpressions.filterNot(value =>
-                    DigitalCombinationalContract.ReachableBooleanOperations.contains(
-                      value.operation
-                    )
-                  ).sortBy(_.path).foreach(value => emit(value.path, depth + 1, Some(path), local))
-                  val yielded = emit(collection.yieldValue, depth + 1, Some(path), local)
-                  val yieldedType = expressionType(collection.yieldValue)
-                  requireValid(
-                    yieldedType != "Integer" && yieldedType != "Real",
-                    "collection yield requires a finite digital value",
-                    path
-                  )
-                  collection.seed.foreach(seed =>
-                    requireValid(
-                      exactValueType(expressionType(seed), yieldedType, path),
-                      "collection fold/scan yield must exactly match the complete seed type",
-                      path
-                    )
-                  )
-                  val expectedResult = if collection.kind == "fold_left" then yieldedType
-                  else shaped(yieldedType, vectors.head._2)
-                  requireValid(
-                    exactValueType(expression.dataType, expectedResult, path),
-                    "collection result must retain exact element type and every input dimension",
-                    path
-                  )
-                  bodyExpressions.filter(value =>
-                    DigitalCombinationalContract.ReachableBooleanOperations.contains(
-                      value.operation
-                    )
-                  ).foreach(value =>
-                    requireValid(
-                      values.contains(value.path),
-                      "ordinary Boolean operations require a reachable digital value root",
-                      value.path
-                    )
-                  )
-                  local +=
-                    s"${quoted("nodal.collection_yield")}(${yielded._1}) <{metadata = ${metadata(path, false)}}> : (${yielded._2}) -> ()${sourceLocation(path)}"
-                  val attributes =
-                    s"{kind = ${quoted(collection.kind)}, region_id = ${quoted(path)}, " +
-                      s"operandSegmentSizes = array<i32: ${collection.inputs.size}, ${collection.seed.size}, ${collection.captures.size}>, metadata = ${metadata(path, true)}}"
-                  val block = s"^bb0(${blockArguments.mkString(", ")}):\n" + local.mkString("\n")
-                  val nested = block.linesIterator.map("  " + _).mkString("\n")
-                  val text =
-                    s"$result = ${quoted("nodal.collection")}(${operands.map(_._1).mkString(", ")}) <$attributes> ({\n$nested\n}) : " +
-                      s"(${operands.map(_._2).mkString(", ")}) -> $dataType${sourceLocation(path)}"
-                  (
-                    Vector(text),
-                    math.max(height, heights(collection.yieldValue) + 1),
-                    Proof(None, unsigned)
-                  )
-                else if specialized then
-                  requireValid(
-                    region.isEmpty,
-                    "interface effects are not pure collection operations",
-                    path
-                  )
-                  val projected = specializedValue(expression, result, dataType, operands)
-                  requireValid(
-                    projected.value._2 == dataType,
-                    "specialized digital result differs from its exact source type",
-                    path
-                  )
-                  actualResult = projected.value._1
-                  (projected.lines, height, Proof(None, unsigned))
-                else if expression.operation == "shape_reference" then
-                  requireValid(
-                    expression.operands.isEmpty && expression.literal.isEmpty &&
-                      expression.enumIdentity.isEmpty && expression.caseIds.isEmpty &&
-                      shapeByPath.get(path).exists(_._1 == module.path),
-                    "digital projection must name one authoritative owned shape record",
-                    path
-                  )
-                  val dependencies = mutable.ArrayBuffer.empty[String]
-                  val projected = projectionValue(
-                    path,
-                    dependency =>
-                      requireValid(
-                        shapeByPath(path)._2 == dependency,
-                        "shape resolver requested a different immediate input",
+                        actual._2 == nativeType(expressionType(input), input),
+                        "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                      dependencies += dependency
-                      emit(dependency, depth + 1, region, output)
-                  )
-                  requireValid(
-                    dependencies.toVector == Vector(shapeByPath(path)._2) &&
-                      projected.value._2 == dataType,
-                    "digital projection result or dependency differs from its exact source contract",
-                    path
-                  )
-                  actualResult = projected.value._1
-                  (projected.lines, dependencies.map(heights).max + 1, Proof(None, unsigned))
-                else if expression.operation.startsWith("enum_") then
-                  enums.validateExpression(
-                    expression,
-                    expression.operands.map(expressionType),
-                    exactUnsignedWidth
-                  )
-                  (
-                    Vector(enums.renderExpression(
-                      expression,
-                      result,
-                      dataType,
-                      operands,
-                      sourceLocation(path)
-                    )),
-                    height,
-                    Proof(None, unsigned)
-                  )
-                else if DigitalAggregateContract.Operations.contains(expression.operation) then
-                  val evidence = expression.structure.get
-                  def finite(dataType: String): Boolean =
-                    dataType == "Bool" || scalarType(dataType, path).nonEmpty ||
-                      dataType.startsWith("Enum(") || dataType.startsWith("Vec(") ||
-                      dataType.startsWith("Struct(")
-                  requireValid(
-                    finite(expression.dataType) &&
-                      expression.operands.forall(input => finite(expressionType(input))),
-                    "Struct operations cannot expose standalone Real or Integer leaves",
-                    path
-                  )
-                  val schema = structType(evidence.schemaType, path)
-                  requireValid(
-                    expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
-                      expression.caseIds.isEmpty,
-                    "Struct operations cannot carry scalar or enum facts",
-                    path
-                  )
-                  val fieldAttributes = if expression.operation == "digital_struct_get" then
-                    requireValid(
-                      expression.operands.size == 1 && evidence.ordinal.nonEmpty &&
-                        evidence.name.nonEmpty,
-                      "Struct get requires one receiver and an exact member",
-                      path
-                    )
-                    val receiver = expressionType(expression.operands.head)
-                    val fields = structType(receiver, path)._2
-                    val index = evidence.ordinal.get
-                    requireValid(
-                      widthFamily(evidence.schemaType, receiver, path) && index >= 0 &&
-                        index < fields.size && fields(index)._1 == evidence.name.get &&
-                        schema._2(index)._1 == evidence.name.get &&
-                        exactValueType(fields(index)._2, expression.dataType, path),
-                      "Struct get schema, ordinal, name or actual field result type differs",
-                      path
-                    )
-                    s", field_ordinal = $index : i64, field_name = ${quoted(evidence.name.get)}"
-                  else
-                    val fields = structType(expression.dataType, path)._2
-                    requireValid(
-                      evidence.ordinal.isEmpty && evidence.name.isEmpty &&
-                        widthFamily(evidence.schemaType, expression.dataType, path) &&
-                        expression.operands.size == fields.size &&
-                        fields.zip(expression.operands).forall((field, input) =>
-                          exactValueType(field._2, expressionType(input), path)
-                        ),
-                      "Struct make requires the declared family and exact ordered field operands",
-                      path
-                    )
-                    ""
-                  val attributes = s"{operator_name = ${quoted(expression.operation)}, " +
-                    s"struct_schema = ${nativeType(evidence.schemaType, path)}$fieldAttributes, " +
-                    s"metadata = ${metadata(path, true)}}"
-                  (
-                    Vector(operation(
-                      "nodal.digital_expr",
-                      result,
-                      dataType,
-                      operands,
-                      attributes,
-                      sourceLocation(path)
-                    )),
-                    height,
-                    Proof(None, unsigned)
-                  )
-                else if expression.operation.startsWith("digital_") ||
-                  DigitalCombinationalContract.ReachableBooleanOperations.contains(
-                    expression.operation
-                  )
-                then
-                  val proof =
-                    if expression.operation == DigitalMaterializationContract.Operation then
+                  if expression.operation == DigitalCollectionContract.Operation then
+                    val collection = collections(path)
+                    val vectors =
+                      collection.inputs.map(input => vectorType(expressionType(input), path))
+                    def shaped(element: String, dimensions: Vector[String]): String =
+                      s"Vec($element;${dimensions.mkString("x")})"
+                    if collection.kind == "zip_with" then
                       requireValid(
                         exactValueType(
-                          expressionType(expression.operands.head),
-                          expression.dataType,
+                          shaped("Bool", vectors(0)._2),
+                          shaped("Bool", vectors(1)._2),
                           path
-                        ) &&
-                          (expression.dataType == "Bool" ||
-                            scalarType(expression.dataType, path).nonEmpty ||
-                            expression.dataType.startsWith("Enum(") ||
-                            expression.dataType.startsWith("Vec(") ||
-                            expression.dataType.startsWith("Struct(")),
-                        "digital alias must preserve one exact complete finite value type",
+                        ),
+                        "collection zip requires identical complete dimensions",
                         path
                       )
-                      proofs(expression.operands.head)
-                    else if DigitalScalarContract.Operations.contains(expression.operation) then
+                    val reduction = reductionArguments(collection)
+                    val primary = reduction.getOrElse(collection.seed match
+                      case Some(seed) =>
+                        Vector(expressionType(seed) -> "accumulator", vectors.head._1 -> "element")
+                      case None => vectors.zipWithIndex.map((value, index) =>
+                          value._1 -> (if vectors.size == 1 then "element" else s"element$index")
+                        ))
+                    val expected = primary ++ collection.captures.map: input =>
+                      val dataType = expressionType(input)
+                      dataType -> (if dataType == "Integer" then "static_capture" else "capture")
+                    requireValid(
+                      collection.arguments.size == expected.size,
+                      "collection block arguments do not match operand segments",
+                      path
+                    )
+                    val local = mutable.ArrayBuffer.empty[String]
+                    var blockArguments = Vector.empty[String]
+                    var yielded = "" -> ""
+                    val startOrdinal = ordinal
+                    val bodyPaths = bodyValuePaths(path)
+                    withCollectionContexts(
+                      collection,
+                      () => {
+                        ordinal = startOrdinal
+                        local.clear()
+                        bodyPaths.foreach: identity =>
+                          values.remove(identity)
+                          heights.remove(identity)
+                          proofs.remove(identity)
+                        blockArguments = collection.arguments.zip(expected).zipWithIndex.map:
+                          case ((argument, (expectedType, role)), index) =>
+                            requireValid(
+                              argument.role == role &&
+                                collectionArgumentMatches(collection, argument, expectedType) &&
+                                argument.dataType != "Real" &&
+                                (argument.dataType != "Integer" || role == "static_capture" ||
+                                  role.startsWith("left_width:") ||
+                                  role.startsWith("right_width:")),
+                              "collection block argument must retain the complete finite operand type and canonical role",
+                              argument.path
+                            )
+                            val name = s"${result}_arg$index"
+                            val argumentType = computedType(argument.dataType, argument.path)
+                            values.update(argument.path, name -> argumentType)
+                            if argument.dataType == "Integer" then
+                              bindStaticArgument(argument.path, name -> argumentType)
+                            val capture = collection.captures.lift(index - primary.size)
+                            heights.update(argument.path, capture.map(heights(_) + 1).getOrElse(0))
+                            proofs.update(
+                              argument.path,
+                              capture.map(proofs).getOrElse(Proof(
+                                None,
+                                scalarType(argument.dataType, argument.path).exists(_.kind !=
+                                  "SInt")
+                              ))
+                            )
+                            s"$name: $argumentType"
+                        val bodyExpressions = byRegion.getOrElse(Some(path), Vector.empty)
+                        // Retained unused static operations are part of the closed pure body too.
+                        staticByRegion.getOrElse(Some(path), Vector.empty).sortBy(_.path).foreach(
+                          value =>
+                            staticValue(value.path, Some(path), local)
+                        )
+                        bodyExpressions.filterNot(value =>
+                          DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                            value.operation
+                          )
+                        ).sortBy(_.path).foreach(value =>
+                          emit(value.path, depth + 1, Some(path), local)
+                        )
+                        yielded = emit(collection.yieldValue, depth + 1, Some(path), local)
+                        val yieldedType = expressionType(collection.yieldValue)
+                        requireValid(
+                          yieldedType != "Integer" && yieldedType != "Real",
+                          "collection yield requires a finite digital value",
+                          path
+                        )
+                        if reduction.isEmpty then
+                          requireValid(
+                            collectionResultMatches(collection, yieldedType),
+                            "collection result must retain exact element type, complete seed type and every input dimension",
+                            path
+                          )
+                        bodyExpressions.filter(value =>
+                          DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                            value.operation
+                          )
+                        ).foreach(value =>
+                          requireValid(
+                            values.contains(value.path),
+                            "ordinary Boolean operations require a reachable digital value root",
+                            value.path
+                          )
+                        )
+                        local +=
+                          s"${quoted("nodal.collection_yield")}(${yielded._1}) <{metadata = ${metadata(path, false)}}> : (${yielded._2}) -> ()${sourceLocation(path)}"
+                      }
+                    )
+                    val attributes =
+                      s"{kind = ${quoted(collection.kind)}, region_id = ${quoted(path)}, " +
+                        s"operandSegmentSizes = array<i32: ${collection.inputs.size}, ${collection.seed.size}, ${collection.captures.size}>, metadata = ${metadata(path, true)}}"
+                    val block = s"^bb0(${blockArguments.mkString(", ")}):\n" + local.mkString("\n")
+                    val nested = block.linesIterator.map("  " + _).mkString("\n")
+                    val text =
+                      s"$result = ${quoted("nodal.collection")}(${operands.map(_._1).mkString(", ")}) <$attributes> ({\n$nested\n}) : " +
+                        s"(${operands.map(_._2).mkString(", ")}) -> $dataType${sourceLocation(path)}"
+                    (
+                      Vector(text),
+                      math.max(height, heights(collection.yieldValue) + 1),
+                      Proof(None, unsigned)
+                    )
+                  else if specialized then
+                    requireValid(
+                      region.isEmpty,
+                      "interface effects are not pure collection operations",
+                      path
+                    )
+                    val projected = specializedValue(expression, result, dataType, operands)
+                    requireValid(
+                      projected.value._2 == dataType,
+                      "specialized digital result differs from its exact source type",
+                      path
+                    )
+                    actualResult = projected.value._1
+                    (projected.lines, height, Proof(None, unsigned))
+                  else if expression.operation == "shape_reference" then
+                    requireValid(
+                      expression.operands.isEmpty && expression.literal.isEmpty &&
+                        expression.enumIdentity.isEmpty && expression.caseIds.isEmpty &&
+                        shapeByPath.get(path).exists(_._1 == module.path),
+                      "digital projection must name one authoritative owned shape record",
+                      path
+                    )
+                    val dependencies = mutable.ArrayBuffer.empty[String]
+                    val projected = projectionValue(
+                      path,
+                      dependency =>
+                        requireValid(
+                          shapeByPath(path)._2 == dependency,
+                          "shape resolver requested a different immediate input",
+                          path
+                        )
+                        dependencies += dependency
+                        emit(dependency, depth + 1, region, output)
+                    )
+                    requireValid(
+                      dependencies.toVector == Vector(shapeByPath(path)._2) &&
+                        projected.value._2 == dataType,
+                      "digital projection result or dependency differs from its exact source contract",
+                      path
+                    )
+                    actualResult = projected.value._1
+                    (projected.lines, dependencies.map(heights).max + 1, Proof(None, unsigned))
+                  else if expression.operation.startsWith("enum_") then
+                    enums.validateExpression(
+                      expression,
+                      expression.operands.map(expressionType),
+                      exactUnsignedWidth
+                    )
+                    (
+                      Vector(enums.renderExpression(
+                        expression,
+                        result,
+                        dataType,
+                        operands,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Proof(None, unsigned)
+                    )
+                  else if DigitalAggregateContract.Operations.contains(expression.operation) then
+                    val evidence = expression.structure.get
+                    def finite(dataType: String): Boolean =
+                      dataType == "Bool" || scalarType(dataType, path).nonEmpty ||
+                        dataType.startsWith("Enum(") || dataType.startsWith("Vec(") ||
+                        dataType.startsWith("Struct(")
+                    requireValid(
+                      finite(expression.dataType) &&
+                        expression.operands.forall(input => finite(expressionType(input))),
+                      "Struct operations cannot expose standalone Real or Integer leaves",
+                      path
+                    )
+                    val schema = structType(evidence.schemaType, path)
+                    requireValid(
+                      expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+                        expression.caseIds.isEmpty,
+                      "Struct operations cannot carry scalar or enum facts",
+                      path
+                    )
+                    val fieldAttributes = if expression.operation == "digital_struct_get" then
                       requireValid(
-                        expression.operands.size == 1,
-                        "digital conversion requires one operand",
+                        expression.operands.size == 1 && evidence.ordinal.nonEmpty &&
+                          evidence.name.nonEmpty,
+                        "Struct get requires one receiver and an exact member",
                         path
                       )
-                      scalarConversion(
-                        expression,
-                        expressionType(expression.operands.head),
-                        proofs(expression.operands.head),
-                        scalarType,
-                        widthRelation
+                      val receiver = expressionType(expression.operands.head)
+                      val fields = structType(receiver, path)._2
+                      val index = evidence.ordinal.get
+                      requireValid(
+                        widthFamily(evidence.schemaType, receiver, path) && index >= 0 &&
+                          index < fields.size && fields(index)._1 == evidence.name.get &&
+                          schema._2(index)._1 == evidence.name.get &&
+                          exactValueType(fields(index)._2, expression.dataType, path),
+                        "Struct get schema, ordinal, name or actual field result type differs",
+                        path
                       )
+                      s", field_ordinal = $index : i64, field_name = ${quoted(evidence.name.get)}"
                     else
-                      combinational(
-                        expression,
-                        expression.operands.map(proofs),
-                        scalarType,
-                        widthRelation,
-                        widthFormula,
-                        exactValueType
+                      val fields = structType(expression.dataType, path)._2
+                      requireValid(
+                        evidence.ordinal.isEmpty && evidence.name.isEmpty &&
+                          widthFamily(evidence.schemaType, expression.dataType, path) &&
+                          expression.operands.size == fields.size &&
+                          fields.zip(expression.operands).forall((field, input) =>
+                            exactValueType(field._2, expressionType(input), path)
+                          ),
+                        "Struct make requires the declared family and exact ordered field operands",
+                        path
                       )
-                  val attributes =
-                    s"{operator_name = ${quoted(expression.operation)}, metadata = ${metadata(path, true)}}"
-                  (
-                    Vector(operation(
-                      "nodal.digital_expr",
-                      result,
-                      dataType,
-                      operands,
-                      attributes,
-                      sourceLocation(path)
-                    )),
-                    height,
-                    proof
-                  )
-                else
-                  val (literal, proof) = scalarLiteral(expression, scalarType)
-                  val spelling = if expression.dataType == "Bool" then
-                    if expression.literal.contains("true") then "1" else "0"
-                  else expression.literal.get
-                  val attributes =
-                    s"{value = $literal, spelling = ${quoted(spelling)}, metadata = ${metadata(path, false)}}"
-                  (
-                    Vector(operation(
-                      "nodal.const_literal",
-                      result,
-                      dataType,
-                      Vector.empty,
-                      attributes,
-                      sourceLocation(path)
-                    )),
-                    height,
-                    proof
-                  )
-              case None =>
-                val declaration = declarations(path)._2
-                requireValid(
-                  declaration.generatedScope.isEmpty,
-                  "digital operand cannot escape a generated declaration scope",
-                  path
-                )
-                val initialPath = declarationInitializer(declaration)
-                initialPath.foreach: input =>
-                  val inputOwner =
-                    expressions.get(input).map(_.owner).orElse(declarations.get(input).map(_._1))
+                      ""
+                    val attributes = s"{operator_name = ${quoted(expression.operation)}, " +
+                      s"struct_schema = ${nativeType(evidence.schemaType, path)}$fieldAttributes, " +
+                      s"metadata = ${metadata(path, true)}}"
+                    (
+                      Vector(operation(
+                        "nodal.digital_expr",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Proof(None, unsigned)
+                    )
+                  else if expression.operation.startsWith("digital_") ||
+                    DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                      expression.operation
+                    )
+                  then
+                    val proof =
+                      if expression.operation == DigitalMaterializationContract.Operation then
+                        requireValid(
+                          exactValueType(
+                            expressionType(expression.operands.head),
+                            expression.dataType,
+                            path
+                          ) &&
+                            (expression.dataType == "Bool" ||
+                              scalarType(expression.dataType, path).nonEmpty ||
+                              expression.dataType.startsWith("Enum(") ||
+                              expression.dataType.startsWith("Vec(") ||
+                              expression.dataType.startsWith("Struct(")),
+                          "digital alias must preserve one exact complete finite value type",
+                          path
+                        )
+                        proofs(expression.operands.head)
+                      else if DigitalScalarContract.Operations.contains(expression.operation) then
+                        requireValid(
+                          expression.operands.size == 1,
+                          "digital conversion requires one operand",
+                          path
+                        )
+                        scalarConversion(
+                          expression,
+                          expressionType(expression.operands.head),
+                          proofs(expression.operands.head),
+                          scalarType,
+                          widthRelation
+                        )
+                      else
+                        combinational(
+                          expression,
+                          expression.operands.map(proofs),
+                          scalarType,
+                          widthRelation,
+                          widthFormula,
+                          exactValueType
+                        )
+                    val attributes =
+                      s"{operator_name = ${quoted(expression.operation)}, metadata = ${metadata(path, true)}}"
+                    (
+                      Vector(operation(
+                        "nodal.digital_expr",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      proof
+                    )
+                  else
+                    val (literal, proof) = scalarLiteral(expression, scalarType)
+                    val spelling = if expression.dataType == "Bool" then
+                      if expression.literal.contains("true") then "1" else "0"
+                    else expression.literal.get
+                    val attributes =
+                      s"{value = $literal, spelling = ${quoted(spelling)}, metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.const_literal",
+                        result,
+                        dataType,
+                        Vector.empty,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      proof
+                    )
+                case None =>
+                  val declaration = declarations(path)._2
                   requireValid(
-                    inputOwner.contains(module.path),
-                    "digital initializer must belong to its exact module",
+                    declaration.generatedScope.isEmpty,
+                    "digital operand cannot escape a generated declaration scope",
                     path
                   )
-                  requireValid(
-                    exactValueType(expressionType(input), sourceType, path),
-                    "digital initializer requires the exact storage type",
-                    path
+                  val initialPath = declarationInitializer(declaration)
+                  initialPath.foreach: input =>
+                    val inputOwner =
+                      expressions.get(input).map(_.owner).orElse(declarations.get(input).map(_._1))
+                    requireValid(
+                      inputOwner.contains(module.path),
+                      "digital initializer must belong to its exact module",
+                      path
+                    )
+                    requireValid(
+                      exactValueType(expressionType(input), sourceType, path),
+                      "digital initializer requires the exact storage type",
+                      path
+                    )
+                  val initial = initialPath.map(emit(_, depth + 1, region, output))
+                  val height = initialPath.map(heights(_) + 1).getOrElse(0)
+                  (
+                    declarationValue(declaration, result, dataType, initial),
+                    height,
+                    Proof(None, unsigned)
                   )
-                val initial = initialPath.map(emit(_, depth + 1, region, output))
-                val height = initialPath.map(heights(_) + 1).getOrElse(0)
-                (
-                  declarationValue(declaration, result, dataType, initial),
-                  height,
-                  Proof(None, unsigned)
-                )
-            output ++= text
-            val value = actualResult -> dataType
-            values.update(path, value)
-            heights.update(path, height)
-            proofs.update(path, proof)
-            active.remove(path)
-            value
+              output ++= text
+              val value = actualResult -> dataType
+              values.update(path, value)
+              heights.update(path, height)
+              proofs.update(path, proof)
+              active.remove(path)
+              value
       val moduleExpressions = byOwner.getOrElse(module.path, Vector.empty).filter(_.region.isEmpty)
       moduleExpressions.filterNot(value =>
         DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)

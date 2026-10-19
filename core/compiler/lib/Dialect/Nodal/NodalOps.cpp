@@ -185,10 +185,37 @@ FailureOr<int64_t> staticShapeLiteral(Value value) {
   return literal.getValue().getSExtValue();
 }
 
-bool hasStaticShapeIndexDependencies(Value value, Operation *module,
-                                     llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
-                                     bool directModule = false,
-                                     llvm::StringRef requiredEffect = "shape") {
+bool hasStaticShapeIndexDependencies(
+    Value value, Operation *module, llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
+    bool directModule = false, llvm::StringRef requiredEffect = "shape",
+    const nodal::ParameterIntegerEnvironment *environment = nullptr, unsigned *work = nullptr) {
+  if (!value || depth >= 512 || (work && ++*work > nodal::digitalTypeMaximumNodes))
+    return false;
+  if (environment && value.getDefiningOp() && value.getDefiningOp()->getParentOp() == module)
+    environment = nullptr; // Module static dependencies retain their ordinary effect policy.
+  if (environment) {
+    if (environment->module() != module ||
+        failed(nodal::verifyCollectionValueScope(value, environment->use(), environment)))
+      return false;
+    if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+      if (argument.getOwner() != environment->scope() ||
+          (!environment->binding(value) && !environment->domain(value)))
+        return false;
+      auto capture = nodal::digitalCollectionCaptureSource(argument, environment);
+      if (failed(capture))
+        return false;
+      if (!*capture)
+        return true; // Only the sealed admission owner binds width formals.
+      Operation *source = capture->getDefiningOp();
+      if (source && source->getParentOp() == module)
+        return hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, true,
+                                               requiredEffect, nullptr, work);
+      auto enclosing = environment->enclosingAtUse(argument.getOwner()->getParentOp());
+      return succeeded(enclosing) &&
+             hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, false,
+                                             requiredEffect, &*enclosing, work);
+    }
+  }
   Operation *operation = value.getDefiningOp();
   if (!operation || operation->getParentOfType<nodal::ModuleOp>() != module || depth >= 512 ||
       (directModule && operation->getParentOp() != module) || !active.insert(operation).second)
@@ -206,8 +233,13 @@ bool hasStaticShapeIndexDependencies(Value value, Operation *module,
   if (!llvm::isa<nodal::ConstExprOp>(operation))
     return false;
   return llvm::all_of(operation->getOperands(), [&](Value operand) {
-    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule,
-                                           requiredEffect);
+    if (!environment)
+      return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule,
+                                             requiredEffect, nullptr, work);
+    auto atProducer = environment->atUse(operation);
+    return succeeded(atProducer) &&
+           hasStaticShapeIndexDependencies(operand, module, active, depth + 1, false,
+                                           requiredEffect, &*atProducer, work);
   });
 }
 
@@ -291,8 +323,15 @@ inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool dir
   return *bounds;
 }
 
-FailureOr<int64_t> inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension) {
+FailureOr<int64_t>
+inferShapeDimensionMinimum(Operation *module, llvm::StringRef dimension,
+                           const nodal::ParameterIntegerEnvironment *environment = nullptr) {
   auto bounds = inferShapeDimensionBounds(module, dimension);
+  if (environment) {
+    auto proof = nodal::resolveStaticShapeDimension(module, dimension, "shape", environment);
+    bounds = succeeded(proof) ? FailureOr<nodal::ParameterIntegerBounds>(proof->bounds)
+                              : FailureOr<nodal::ParameterIntegerBounds>(failure());
+  }
   if (failed(bounds))
     return failure();
   return bounds->lower;
@@ -320,12 +359,14 @@ bool isStorageType(Type type) {
   return llvm::isa<nodal::VariableType>(type);
 }
 
-LogicalResult verifyDigitalShapeValueScope(Operation *operation) {
+LogicalResult
+verifyDigitalShapeValueScope(Operation *operation,
+                             const nodal::ParameterIntegerEnvironment *environment = nullptr) {
   if (!operation->getNumOperands() ||
       !nodal::isDigitalStorageType(operation->getOperand(0).getType()))
     return success();
   for (Value value : operation->getOperands())
-    if (failed(nodal::verifyCollectionValueScope(value, operation)))
+    if (failed(nodal::verifyCollectionValueScope(value, operation, environment)))
       return operation->emitOpError(
           "NODAL-SHAPE-043-002: digital projection requires visible owned SSA values");
   return success();
@@ -1806,14 +1847,48 @@ LogicalResult nodal::verifyGeneratedAnalogOwnership(Operation *operation) {
   return verifyGeneratedAnalogOwnershipImpl(operation);
 }
 
+bool nodal::hasStaticIntegerEffect(Value value, Operation *module, llvm::StringRef requiredEffect,
+                                   const ParameterIntegerEnvironment *environment) {
+  if ((requiredEffect != "shape" && requiredEffect != "width") ||
+      !llvm::isa_and_nonnull<nodal::ModuleOp>(module) ||
+      (environment && environment->module() != module))
+    return false;
+  llvm::SmallPtrSet<Operation *, 16> active;
+  unsigned work = 0;
+  return hasStaticShapeIndexDependencies(value, module, active, 0, !environment, requiredEffect,
+                                         environment, &work);
+}
+
 FailureOr<nodal::StaticShapeDimension>
 nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension,
-                                   llvm::StringRef requiredEffect) {
+                                   llvm::StringRef requiredEffect,
+                                   const ParameterIntegerEnvironment *environment) {
   if (requiredEffect != "shape" && requiredEffect != "width")
     return failure();
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || dimension.empty() ||
       dimension != dimension.trim())
     return failure();
+  if (environment) {
+    if (environment->module() != module)
+      return failure();
+    auto expression =
+        resolveCollectionIntegerToken(module, dimension, requiredEffect, *environment);
+    if (failed(expression) || expression->bounds.lower <= 0 ||
+        expression->bounds.upper < expression->bounds.lower)
+      return failure();
+    StaticShapeDimension result{expression->bounds};
+    if (!dimension.getAsInteger(10, result.literal))
+      return result;
+    result.parameter = findDirectModuleParameter(module, dimension);
+    if (!result.parameter) {
+      auto value =
+          resolveCollectionIntegerTokenValue(module, dimension, requiredEffect, *environment);
+      if (failed(value))
+        return failure();
+      result.expression = *value;
+    }
+    return result;
+  }
   auto bounds = inferShapeDimensionBounds(module, dimension, true, requiredEffect);
   if (failed(bounds))
     return failure();
@@ -1826,8 +1901,9 @@ nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension,
   return result;
 }
 
-FailureOr<int64_t> nodal::inferStaticShapeMaximumCardinality(Operation *module,
-                                                             llvm::StringRef dimensions) {
+FailureOr<int64_t>
+nodal::inferStaticShapeMaximumCardinality(Operation *module, llvm::StringRef dimensions,
+                                          const ParameterIntegerEnvironment *environment) {
   llvm::SmallVector<llvm::StringRef> tokens;
   dimensions.split(tokens, ',', -1, true);
   llvm::StringMap<ParameterIntegerBounds> proven;
@@ -1835,7 +1911,7 @@ FailureOr<int64_t> nodal::inferStaticShapeMaximumCardinality(Operation *module,
   for (llvm::StringRef token : tokens) {
     auto found = proven.find(token);
     if (found == proven.end()) {
-      auto dimension = resolveStaticShapeDimension(module, token);
+      auto dimension = resolveStaticShapeDimension(module, token, "shape", environment);
       if (failed(dimension))
         return failure();
       found = proven.try_emplace(token, dimension->bounds).first;
@@ -1849,8 +1925,28 @@ FailureOr<int64_t> nodal::inferStaticShapeMaximumCardinality(Operation *module,
   return static_cast<int64_t>(maximum);
 }
 
-FailureOr<nodal::ParameterIntegerBounds> nodal::inferStaticShapeIndexBounds(Operation *module,
-                                                                            Value value) {
+FailureOr<nodal::ParameterIntegerBounds>
+nodal::inferStaticShapeIndexBounds(Operation *module, Value value,
+                                   const ParameterIntegerEnvironment *environment) {
+  if (environment) {
+    if (environment->module() != module || !value ||
+        failed(verifyCollectionValueScope(value, environment->use(), environment)))
+      return failure();
+    if (value.getType().isIndex()) {
+      auto number = staticShapeLiteral(value);
+      if (failed(number))
+        return failure();
+      return ParameterIntegerBounds{*number, *number};
+    }
+    if (!value.getType().isSignlessInteger(64))
+      return failure();
+    if (!hasStaticIntegerEffect(value, module, "shape", environment))
+      return failure();
+    auto expression = resolveOwnedIntegerExpression(module, value, *environment);
+    if (failed(expression))
+      return failure();
+    return expression->bounds;
+  }
   Operation *definition = value ? value.getDefiningOp() : nullptr;
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || !definition ||
       definition->getParentOp() != module)
@@ -1868,10 +1964,16 @@ FailureOr<nodal::ParameterIntegerBounds> nodal::inferStaticShapeIndexBounds(Oper
   return inferParameterIntegerBounds(value);
 }
 
-FailureOr<nodal::StaticShapeIndexIdentity> nodal::resolveStaticShapeIndexIdentity(Operation *module,
-                                                                                  Value value) {
-  if (failed(inferStaticShapeIndexBounds(module, value)))
+FailureOr<nodal::StaticShapeIndexIdentity>
+nodal::resolveStaticShapeIndexIdentity(Operation *module, Value value,
+                                       const ParameterIntegerEnvironment *environment) {
+  if (failed(inferStaticShapeIndexBounds(module, value, environment)))
     return failure();
+  if (environment)
+    if (auto argument = llvm::dyn_cast<BlockArgument>(value))
+      return StaticShapeIndexIdentity{StaticShapeIndexIdentity::StaticArgument,
+                                      static_cast<int64_t>(argument.getArgNumber()),
+                                      argument.getOwner()->getParentOp()};
   Operation *definition = value.getDefiningOp();
   if (llvm::isa<ConstantOp, ConstLiteralOp>(definition)) {
     auto number = staticShapeLiteral(value);
@@ -1891,12 +1993,24 @@ FailureOr<nodal::StaticShapeIndexIdentity> nodal::resolveStaticShapeIndexIdentit
   return StaticShapeIndexIdentity{StaticShapeIndexIdentity::Expression, 0, definition};
 }
 
-FailureOr<nodal::ShapeIndexProof> nodal::resolveShapeIndexProof(Value value, Operation *use) {
+FailureOr<nodal::ShapeIndexProof>
+nodal::resolveShapeIndexProof(Value value, Operation *use,
+                              const ParameterIntegerEnvironment *environment) {
   if (!value || !use)
     return failure();
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
+  if (environment) {
+    auto context = environment->atUse(use);
+    if (failed(context))
+      return failure();
+    auto identity = resolveStaticShapeIndexIdentity(module, value, &*context);
+    auto bounds = inferStaticShapeIndexBounds(module, value, &*context);
+    if (failed(identity) || failed(bounds))
+      return failure();
+    return ShapeIndexProof{*identity, *bounds};
+  }
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
     auto generated = llvm::dyn_cast_or_null<nodal::GenerateOp>(argument.getOwner()->getParentOp());
     if (!generated || argument.getArgNumber() != 0 || !value.getType().isInteger(64) ||
@@ -1929,12 +2043,13 @@ FailureOr<nodal::ShapeIndexProof> nodal::resolveShapeIndexProof(Value value, Ope
 }
 
 LogicalResult nodal::verifyShapeIndexInExtent(Value value, const StaticShapeDimension &extent,
-                                              Operation *use) {
+                                              Operation *use,
+                                              const ParameterIntegerEnvironment *environment) {
   auto reject = [&]() {
     return use->emitOpError(
         "NODAL-SHAPE-043-002: index is not in bounds for every legal shape and active occurrence");
   };
-  auto proof = resolveShapeIndexProof(value, use);
+  auto proof = resolveShapeIndexProof(value, use, environment);
   if (failed(proof) || extent.bounds.lower <= 0)
     return reject();
   if (proof->identity.kind != StaticShapeIndexIdentity::Induction)
@@ -2028,10 +2143,10 @@ LogicalResult nodal::ModuleOp::verify() {
   if (failed(requireSingleBlock(getOperation())))
     return failure();
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
-      failed(verifyDigitalTypeModel(getOperation())) ||
+      failed(verifyDigitalTypeModel(getOperation(), false)) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
-      failed(verifyEnumValueModel(getOperation())) ||
-      failed(verifyDigitalValueModel(getOperation())) ||
+      failed(verifyEnumValueModel(getOperation(), false)) ||
+      failed(verifyDigitalValueModel(getOperation(), false)) ||
       failed(verifyDigitalCollectionModel(getOperation())) ||
       failed(verifyDigitalMaterializationReport(getOperation())))
     return failure();
@@ -2258,8 +2373,26 @@ LogicalResult nodal::ConstantOp::verify() {
   return success();
 }
 
-LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
-  if (failed(verifyDigitalShapeValueScope(operation)))
+LogicalResult nodal::verifyShapeIndexMapping(Operation *operation,
+                                             const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyShapeIndexMapping(operation, &context)))
+        return failure();
+    return success();
+  }
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    auto scoped = environment->atUse(operation);
+    if (failed(scoped))
+      return failure();
+    context.emplace(*scoped);
+    environment = &*context;
+  }
+  if (failed(verifyDigitalShapeValueScope(operation, environment)))
     return failure();
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   if (!shaped)
@@ -2278,7 +2411,8 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
   auto module = operation->getParentOfType<nodal::ModuleOp>();
   const bool digital = nodal::isDigitalStorageType(shaped);
   auto equalElement = [&](Type left, Type right) {
-    return digital ? nodal::equivalentDigitalStorageTypes(left, right, module) : left == right;
+    return digital ? nodal::equivalentDigitalStorageTypes(left, right, module, environment)
+                   : left == right;
   };
   if (indices == rank) {
     if (!equalElement(operation->getResult(0).getType(), shaped.getElementType()))
@@ -2300,7 +2434,7 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
                                                shaped.getElementType()),
                         nodal::ShapedType::get(operation->getContext(), dimensions[axis + indices],
                                                shaped.getElementType()),
-                        module)
+                        module, environment)
                   : resultDimensions[axis].trim() != dimensions[axis + indices].trim())
         return operation->emitOpError(
             "NODAL-SHAPE-043-002: prefix result dimensions must match the unselected input axes");
@@ -2317,7 +2451,7 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
     if (cached != symbolicMinima.end()) {
       minimumExtent = cached->second;
     } else {
-      auto inferred = inferShapeDimensionMinimum(owner, dimension);
+      auto inferred = inferShapeDimensionMinimum(owner, dimension, environment);
       if (failed(inferred))
         return operation->emitOpError("NODAL-SHAPE-043-002: dimension has no proven finite extent");
       minimumExtent = *inferred;
@@ -2325,8 +2459,16 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
     }
     Value indexValue = operation->getOperand(axis + 1);
     if (conservative) {
-      auto extent = resolveStaticShapeDimension(owner, dimension);
-      if (failed(extent) || failed(verifyShapeIndexInExtent(indexValue, *extent, operation)))
+      auto extent = resolveStaticShapeDimension(owner, dimension, "shape", environment);
+      if (failed(extent) ||
+          failed(verifyShapeIndexInExtent(indexValue, *extent, operation, environment)))
+        return failure();
+      continue;
+    }
+    if (environment) {
+      auto extent = resolveStaticShapeDimension(owner, dimension, "shape", environment);
+      if (failed(extent) ||
+          failed(verifyShapeIndexInExtent(indexValue, *extent, operation, environment)))
         return failure();
       continue;
     }
@@ -2338,7 +2480,7 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
     int64_t lower = 0;
     int64_t upper = 0;
     if (conservative || isStorageType(shaped)) {
-      auto bounds = inferStaticShapeIndexBounds(owner, indexValue);
+      auto bounds = inferStaticShapeIndexBounds(owner, indexValue, environment);
       if (failed(bounds))
         return operation->emitOpError(
             "NODAL-SHAPE-043-002: node-array index requires a directly owned static Integer proof");
@@ -2395,8 +2537,26 @@ LogicalResult nodal::ShapeFlattenOp::verify() {
   return requireText(getOperation(), "layout", "layout policy");
 }
 
-LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
-  if (failed(verifyDigitalShapeValueScope(operation)))
+LogicalResult nodal::verifyShapeViewMapping(Operation *operation,
+                                            const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyShapeViewMapping(operation, &context)))
+        return failure();
+    return success();
+  }
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    auto scoped = environment->atUse(operation);
+    if (failed(scoped))
+      return failure();
+    context.emplace(*scoped);
+    environment = &*context;
+  }
+  if (failed(verifyDigitalShapeValueScope(operation, environment)))
     return failure();
   if (failed(requireText(operation, "dimensions", "dimensions")) ||
       failed(requireText(operation, "origin", "origin")) ||
@@ -2422,7 +2582,7 @@ LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
   const bool digital = input && nodal::isDigitalStorageType(input);
   if (!input || !result ||
       (digital ? !nodal::equivalentDigitalStorageTypes(input.getElementType(),
-                                                       result.getElementType(), owner)
+                                                       result.getElementType(), owner, environment)
                : input.getElementType() != result.getElementType()))
     return operation->emitOpError(
         "NODAL-SHAPE-043-003: fixed shape view requires shaped input/result with equal element "
@@ -2450,6 +2610,31 @@ LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
   if (!inputIdentity.empty() && textAttr(operation, "origin") != inputIdentity)
     return operation->emitOpError(
         "NODAL-SHAPE-043-003: digital view origin must match its actual input identity");
+  if (environment) {
+    auto cardinality = [&](llvm::StringRef dimensions) -> FailureOr<InstantiatedIntegerExpression> {
+      InstantiatedIntegerExpression result = makeLiteralIntegerExpression(1);
+      llvm::SmallVector<llvm::StringRef> tokens;
+      dimensions.split(tokens, ',', -1, true);
+      if (tokens.empty() || tokens.size() > digitalTypeMaximumNodes)
+        return failure();
+      for (auto token : tokens) {
+        auto extent = resolveStaticShapeDimension(owner, token, "shape", environment);
+        auto expression = resolveCollectionIntegerToken(owner, token, "shape", *environment);
+        if (failed(extent) || failed(expression))
+          return failure();
+        auto product = composeIntegerExpression("mul", {result, *expression});
+        if (failed(product))
+          return failure();
+        result = *product;
+      }
+      return result;
+    };
+    auto left = cardinality(input.getDimensions()), right = cardinality(result.getDimensions());
+    if (failed(left) || failed(right) || !equivalentInstantiatedIntegerExpressions(*left, *right))
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-003: shape view requires exact equal contextual cardinalities");
+    return success();
+  }
   auto shapeSignature = [&](llvm::StringRef dimensions)
       -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
@@ -2594,8 +2779,26 @@ LogicalResult nodal::ShapeViewOp::verify() {
   return success();
 }
 
-LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
-  if (failed(verifyDigitalShapeValueScope(operation)))
+LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
+                                             const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyShapeSliceMapping(operation, &context)))
+        return failure();
+    return success();
+  }
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    auto scoped = environment->atUse(operation);
+    if (failed(scoped))
+      return failure();
+    context.emplace(*scoped);
+    environment = &*context;
+  }
+  if (failed(verifyDigitalShapeValueScope(operation, environment)))
     return failure();
   auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
@@ -2603,7 +2806,7 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   const bool digital = input && nodal::isDigitalStorageType(input);
   if (!input || !result ||
       (digital ? !nodal::equivalentDigitalStorageTypes(input.getElementType(),
-                                                       result.getElementType(), owner)
+                                                       result.getElementType(), owner, environment)
                : input.getElementType() != result.getElementType()))
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice requires shaped input/result with equal element types");
@@ -2631,7 +2834,9 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
     // Existing structural roots retain their checked identity. Additional
     // computed roots come from the shared digital capability registry, rather
     // than granting every shaped neutral operation readable-value authority.
-    if (!owner || failed(nodal::verifyCollectionValueScope(operation->getOperand(0), operation)) ||
+    if (!owner ||
+        failed(
+            nodal::verifyCollectionValueScope(operation->getOperand(0), operation, environment)) ||
         (source && !structuralSource &&
          !nodal::isDigitalBackendOperation(source->getName().getStringRef())))
       return operation->emitOpError(
@@ -2689,15 +2894,27 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   if (axis < 0 || static_cast<uint64_t>(axis) >= inputDimensions.size() ||
       inputDimensions.size() != resultDimensions.size())
     return operation->emitOpError("NODAL-SHAPE-043-004: slice axis or result rank is invalid");
-  for (unsigned index = 0; index < inputDimensions.size(); ++index)
-    if (index != static_cast<uint64_t>(axis) && inputDimensions[index] != resultDimensions[index])
+  for (unsigned index = 0; index < inputDimensions.size(); ++index) {
+    if (index == static_cast<uint64_t>(axis))
+      continue;
+    bool equal = inputDimensions[index] == resultDimensions[index];
+    if (environment) {
+      auto left =
+          resolveCollectionIntegerToken(owner, inputDimensions[index], "shape", *environment);
+      auto right =
+          resolveCollectionIntegerToken(owner, resultDimensions[index], "shape", *environment);
+      equal = succeeded(left) && succeeded(right) &&
+              equivalentInstantiatedIntegerExpressions(*left, *right);
+    }
+    if (!equal)
       return operation->emitOpError(
           "NODAL-SHAPE-043-004: slice must preserve every unselected axis");
+  }
 
   // Reuse the shape/parameter bounds owner for every dimension. No reshape
   // count-equality rule applies: a slice changes the selected axis length.
-  if (failed(inferStaticShapeMaximumCardinality(owner, input.getDimensions())) ||
-      failed(inferStaticShapeMaximumCardinality(owner, result.getDimensions())))
+  if (failed(inferStaticShapeMaximumCardinality(owner, input.getDimensions(), environment)) ||
+      failed(inferStaticShapeMaximumCardinality(owner, result.getDimensions(), environment)))
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice dimensions require positive finite structural proofs and "
         "signed 64-bit cardinality");
@@ -2720,6 +2937,11 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
     return reference ? findDirectModuleParameter(owner, reference.getValue()) : nullptr;
   };
   auto sameIdentity = [&](Value left, Value right) {
+    if (environment) {
+      auto a = resolveOwnedIntegerExpression(owner, left, *environment);
+      auto b = resolveOwnedIntegerExpression(owner, right, *environment);
+      return succeeded(a) && succeeded(b) && equivalentInstantiatedIntegerExpressions(*a, *b);
+    }
     if (auto number = literal(left))
       return literal(right) == number;
     if (Operation *declaration = parameter(left))
@@ -2727,6 +2949,11 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
     return left == right;
   };
   auto dimensionMatches = [&](llvm::StringRef dimension, Value value) {
+    if (environment) {
+      auto a = resolveCollectionIntegerToken(owner, dimension, "shape", *environment);
+      auto b = resolveOwnedIntegerExpression(owner, value, *environment);
+      return succeeded(a) && succeeded(b) && equivalentInstantiatedIntegerExpressions(*a, *b);
+    }
     if (auto number = literal(value))
       return *number > 0 && dimension == std::to_string(*number);
     if (Operation *declaration = parameter(value))
@@ -2736,12 +2963,14 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
            findDirectModuleStaticValue(owner, dimension) == value;
   };
   auto staticBounds = [&](Value value) -> FailureOr<nodal::ParameterIntegerBounds> {
+    if (environment)
+      return inferStaticShapeIndexBounds(owner, value, environment);
     llvm::SmallPtrSet<Operation *, 16> active;
     const bool localDigitalSelector =
         nodal::isDigitalStorageType(input) &&
         operation->getParentOp()->getName().getStringRef() == "nodal.collection" &&
         llvm::isa_and_nonnull<nodal::ConstLiteralOp>(value.getDefiningOp()) &&
-        succeeded(nodal::verifyCollectionValueScope(value, operation));
+        succeeded(nodal::verifyCollectionValueScope(value, operation, environment));
     if (!value.getType().isInteger(64) ||
         !hasStaticShapeIndexDependencies(value, owner, active, 0, !localDigitalSelector))
       return failure();
@@ -2785,7 +3014,9 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
         "NODAL-SHAPE-043-004: result extent must retain the exact canonical upper-minus-lower "
         "length identity");
   if (!dimensionMatches(inputDimensions[axis], upper) &&
-      upperBounds->upper > resolveStaticShapeDimension(owner, inputDimensions[axis])->bounds.lower)
+      upperBounds->upper >
+          resolveStaticShapeDimension(owner, inputDimensions[axis], "shape", environment)
+              ->bounds.lower)
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice upper endpoint exceeds a legal source-axis extent");
   return success();
@@ -3984,3 +4215,38 @@ LogicalResult nodal::NetPassThroughOp::verify() {
 LogicalResult nodal::NetSplitOp::verify() {
   return verifyDigitalInterfaceOperation(getOperation());
 }
+
+// Preserve the ordinary entry-point ABI for existing non-contextual consumers.
+namespace nodal {
+FailureOr<StaticShapeDimension>
+resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension, llvm::StringRef effect) {
+  return resolveStaticShapeDimension(module, dimension, effect, nullptr);
+}
+FailureOr<int64_t> inferStaticShapeMaximumCardinality(Operation *module,
+                                                      llvm::StringRef dimensions) {
+  return inferStaticShapeMaximumCardinality(module, dimensions, nullptr);
+}
+FailureOr<ParameterIntegerBounds> inferStaticShapeIndexBounds(Operation *module, Value value) {
+  return inferStaticShapeIndexBounds(module, value, nullptr);
+}
+FailureOr<StaticShapeIndexIdentity> resolveStaticShapeIndexIdentity(Operation *module,
+                                                                    Value value) {
+  return resolveStaticShapeIndexIdentity(module, value, nullptr);
+}
+FailureOr<ShapeIndexProof> resolveShapeIndexProof(Value value, Operation *use) {
+  return resolveShapeIndexProof(value, use, nullptr);
+}
+LogicalResult verifyShapeIndexInExtent(Value value, const StaticShapeDimension &extent,
+                                       Operation *use) {
+  return verifyShapeIndexInExtent(value, extent, use, nullptr);
+}
+LogicalResult verifyShapeIndexMapping(Operation *operation) {
+  return verifyShapeIndexMapping(operation, nullptr);
+}
+LogicalResult verifyShapeViewMapping(Operation *operation) {
+  return verifyShapeViewMapping(operation, nullptr);
+}
+LogicalResult verifyShapeSliceMapping(Operation *operation) {
+  return verifyShapeSliceMapping(operation, nullptr);
+}
+} // namespace nodal

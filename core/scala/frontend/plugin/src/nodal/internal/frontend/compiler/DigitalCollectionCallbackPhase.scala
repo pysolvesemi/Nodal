@@ -47,7 +47,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
   private def initializeProfile()(using Context): Unit =
     val owner = requiredModule("nodal.CoreSemanticsCandidateApi$package")
-    collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce")
+    collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce", "reduceBalancedTree")
     pureModules += owner
     factories = methods(requiredModule("nodal.DigitalCollectionCallback"), "checked1", "checked2")
     pureMethods =

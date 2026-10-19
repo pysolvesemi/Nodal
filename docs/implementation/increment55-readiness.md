@@ -470,3 +470,84 @@ and proportional to authored projection depth per assignment; downstream physica
 proof budgets remain unchanged. No target execution or whole-pipeline scaling
 claim is made. Widening reduction proof/integration and bounded hardware iteration
 remain open, as do the F55 parent and all linked BT acceptance decisions.
+
+## Widening reduction checkpoint
+
+The approved [reduction gate](../design-gates/NodalDigitalReductions-DG-v0.1.md)
+preserves ordered reduce and adds adjacent-pair reduceBalancedTree with odd carry,
+singleton bypass and one actual whole-value callback DAG. Private checked formal
+contexts preserve raw width identity while validating every reachable intermediate
+body/type obligation. Exact complete ABI, inner shapes, enum identity and source
+Bool semantics remain binding. Finite transfer and proof-resource limits are
+explicit; no parameter default or first/final-only sampling establishes validity.
+
+The native integration builds successfully and passes 1,155 focused cases across
+12 reduction/context/collection/type/value/enum/shape/storage/Interface/
+materialization/bounds/nonzero binaries, plus ParameterModel. The initial
+coordinated Scala replay passes 143 groups covering reductions, arithmetic,
+writable storage, driver graphs, collections, Struct/materialization, interfaces
+and selected shape predecessors.
+
+An additional enum replay found that requiring semantic identity equality against
+a literal ABI width rejected a lawful singleton-domain parameter. Source and
+bridge now reuse checked singleton-domain width proof at every actual reduction
+context. The final repaired-tree replay passes all 56 reduction/enum/writable
+source, bridge and native groups, including 35 public witnesses with normalization
+round trips, seven exact forged-IR outcomes and a new N=2-valid/N=3-forged-later
+context enum rejection for both topologies. Counts overlap the initial replay;
+they are not added as distinct tests. The separate expanded isolated predecessor
+selection remains 54/55, with the existing CDC receipt failure documented above;
+that fixture is unchanged and is not counted as passed.
+
+A focused native review also found a causal first-valid/later-changing inner Vec
+shape defect in the stage. The same forged artifact passed its frozen prior
+verifier and rejects after universal paired-template/yield shape checks; the
+first-context N=2 control remains valid. Both controls pass in the rebuilt live
+reduction suite. Exact source hashes, commands and failed-attempt logs remain under
+`.work/increment55/reduction-live`. Frozen native compiler SHA-256 is
+`79244afa9124682549e7d7484efcb21324476f41d4c3a3f19c3f7fec8f8d2b55`.
+
+The public callback harness passes typed positives, 20 source-located negatives,
+bounded traversal, two capability negatives, the actual runtime path and
+uninstrumented rejection. Formatting and whitespace checks pass. Syntactic lint
+retains exactly three unchanged baseline return/throw diagnostics in the affected
+files, with no new finding; full lint is not reported passing.
+
+The actual public `PublicWideningSums` fixture includes:
+
+```scala
+val width = param(4.integer, range = 2 to 8)
+val count = param(5.integer, range = 1 to 1000000)
+val input = in(Vec(UInt(width), count))
+val left = input.reduce((a, b) => a + b)
+val balanced = input.reduceBalancedTree((a, b) => a + b)
+val product = input.reduceBalancedTree((a, b) => a * b)
+val fixed = input.reduceBalancedTree((a, b) => (a + b).wrap(8))
+```
+
+Whole-record witnesses preserve nominal fields, nested vectors, enum/Bool values
+and one shared selection predicate. Counts 5 and 1,000,000 both retain one callback,
+one region, two digital snapshot values and eight static nodes; emitted graphs
+retain one collection, one digital expression and five constant expressions.
+Singletons invoke no callback. Proof-only query arithmetic no longer enters
+source/name metadata; the same symbolic witness text decreases from 2,025,424 to
+116,926 bytes and whole-record text from 924,052 to 167,525 bytes. These are bounded
+representation measurements, not timing or whole-pipeline linearity claims.
+
+Architecture review: shared ParameterModel/StructuralParameterBinding arithmetic,
+actual typed capture/formal identities and canonical complete-type comparators
+remain authoritative. Universal checks reuse existing value/enum/shape/collection
+rules; source callback replay and per-lane expansion are absent. Read-only exact
+prefix/tree/body queries invalidate with mutation. Resource bounds and downstream
+F58/F65 lowering ownership remain explicit in the gate. Bounded hardware iteration
+and the F55/BT acceptance decisions remain open.
+
+Remaining shared output-observability work: current coverage roots are explicit
+consumers, so a partially written shaped output with no internal reader can pass
+its target-eligibility check. Before F55 closure, ordinary and loop-driven output
+roots participating in executable writes must gain whole-output final-read
+coverage obligations through DigitalAssignmentModel. Preserve untouched
+output-declaration fixtures. The existing native one-lane output eligibility
+case must gain a genuinely fully driven positive and an exact missing-lane
+negative; zero-iteration loop output gaps must also reject. This is required
+shared coverage work, not completed by the writable capability checkpoint.

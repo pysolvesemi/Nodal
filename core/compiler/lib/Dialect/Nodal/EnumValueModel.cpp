@@ -130,7 +130,8 @@ std::string computeHash(const Definition &definition) {
 
 class ValueVerifier {
 public:
-  explicit ValueVerifier(Operation *scope) : root(scope->getParentOfType<mlir::ModuleOp>()) {}
+  explicit ValueVerifier(Operation *scope, const ParameterIntegerEnvironment *environment = nullptr)
+      : root(scope->getParentOfType<mlir::ModuleOp>()), environment(environment) {}
 
   FailureOr<Definition *> resolve(Operation *use, StringRef symbol) {
     auto known = definitions.find(symbol);
@@ -237,7 +238,7 @@ public:
     if (!operation->getParentOfType<nodal::ModuleOp>())
       return reject(operation, "enum expression requires an owning nodal module");
     for (Value operand : operation->getOperands())
-      if (failed(verifyCollectionValueScope(operand, operation)))
+      if (failed(verifyCollectionValueScope(operand, operation, environment)))
         return reject(operation,
                       "enum operands require visible owned values and explicit region captures");
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("enum_ref");
@@ -266,8 +267,12 @@ public:
     auto enumType = EnumType::get(operation->getContext(), reference.getValue(), definition.width);
     auto bitsType = BitsType::get(operation->getContext(), definition.width);
     const Type result = operation->getResult(0).getType();
-    const bool booleanResult = result == IntegerType::get(operation->getContext(), 1) ||
-                               result == BitsType::get(operation->getContext(), 1);
+    const bool booleanResult =
+        result == IntegerType::get(operation->getContext(), 1) ||
+        result == BitsType::get(operation->getContext(), 1) ||
+        (environment &&
+         equivalentDigitalStorageTypes(result, BitsType::get(operation->getContext(), 1),
+                                       environment->module(), environment));
     const StringRef opcode = text(operation, "operator_name");
     const unsigned count = operation->getNumOperands();
     auto operand = [&](unsigned index, Type expected) {
@@ -283,7 +288,7 @@ public:
       if (!symbolic || (symbolic.getKind() != "bits" && symbolic.getKind() != "uint"))
         return false;
       auto owner = operation->getParentOfType<nodal::ModuleOp>();
-      auto width = inferDigitalWidthBounds(input, owner);
+      auto width = inferDigitalWidthBounds(input, owner, environment);
       return succeeded(width) && width->lower == definition.width &&
              width->upper == definition.width;
     };
@@ -303,7 +308,8 @@ public:
       valid = count == 1 && operand(0, enumType) && booleanResult;
     else if (opcode == "enum_select") {
       auto module = operation->getParentOfType<nodal::ModuleOp>();
-      if (!isDigitalStorageType(result) || !equivalentDigitalStorageTypes(result, result, module))
+      if (!isDigitalStorageType(result) ||
+          !equivalentDigitalStorageTypes(result, result, module, environment))
         return reject(
             operation,
             "enum selection requires directionless storage data, not Clock/Reset capabilities");
@@ -313,9 +319,9 @@ public:
         for (unsigned index = 0; index < ids.size(); ++index)
           valid &= llvm::cast<StringAttr>(ids[index]).getValue() == definition.cases[index].id;
         for (unsigned index = 1; index < count; ++index)
-          valid &=
-              operand(index, result) ||
-              equivalentDigitalStorageTypes(operation->getOperand(index).getType(), result, module);
+          valid &= operand(index, result) ||
+                   equivalentDigitalStorageTypes(operation->getOperand(index).getType(), result,
+                                                 module, environment);
       }
     } else {
       return reject(operation, "unsupported closed enum operation");
@@ -332,6 +338,7 @@ public:
 
 private:
   mlir::ModuleOp root;
+  const ParameterIntegerEnvironment *environment;
   llvm::StringMap<Definition> definitions;
   llvm::DenseSet<Type> types;
   llvm::DenseSet<Attribute> attributes;
@@ -403,12 +410,44 @@ LogicalResult verifyEnumDefinitionAbi(Operation *definition) {
   return success();
 }
 
-LogicalResult verifyEnumValueOperation(Operation *operation) {
+LogicalResult verifyEnumValueOperation(Operation *operation,
+                                       const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyEnumValueOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  if (environment) {
+    auto context = environment->atUse(operation);
+    if (failed(context))
+      return failure();
+    return ValueVerifier(operation, &*context).expression(operation);
+  }
   ValueVerifier verifier(operation);
   return verifier.expression(operation);
 }
 
-LogicalResult verifyEnumLiteralOperation(Operation *operation) {
+LogicalResult verifyEnumLiteralOperation(Operation *operation,
+                                         const ParameterIntegerEnvironment *environment) {
+  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyEnumLiteralOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  if (environment) {
+    auto context = environment->atUse(operation);
+    if (failed(context))
+      return failure();
+    return ValueVerifier(operation, &*context).literal(operation);
+  }
   ValueVerifier verifier(operation);
   return verifier.literal(operation);
 }
@@ -423,7 +462,47 @@ LogicalResult verifyEnumParameterValue(Operation *parameter, Attribute value) {
   return verifier.parameter(parameter, value);
 }
 
-LogicalResult verifyEnumValueModel(Operation *module) {
+LogicalResult verifyEnumTypeOperation(Operation *operation,
+                                      const ParameterIntegerEnvironment *environment) {
+  if (!operation)
+    return failure();
+  if (!environment && operation->getParentOfType<CollectionOp>()) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyEnumTypeOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    auto scoped = environment->atUse(operation);
+    if (failed(scoped) || scoped->module() != operation->getParentOfType<nodal::ModuleOp>())
+      return failure();
+    context.emplace(*scoped);
+    environment = &*context;
+  }
+  ValueVerifier verifier(operation, environment);
+  bool valid = true;
+  for (Type type : operation->getOperandTypes())
+    valid &= succeeded(verifier.checkType(operation, type));
+  for (Type type : operation->getResultTypes())
+    valid &= succeeded(verifier.checkType(operation, type));
+  if (!llvm::isa<CollectionOp>(operation))
+    for (Region &region : operation->getRegions())
+      for (Block &block : region)
+        for (BlockArgument argument : block.getArguments())
+          valid &= succeeded(verifier.checkType(operation, argument.getType()));
+  for (NamedAttribute attribute : operation->getAttrs()) {
+    if (llvm::isa<FsmOp>(operation) && attribute.getName() == "state_type")
+      continue;
+    valid &= succeeded(verifier.checkAttribute(operation, attribute.getValue()));
+  }
+  return success(valid);
+}
+
+LogicalResult verifyEnumValueModel(Operation *module, bool includeCollections) {
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
   ValueVerifier verifier(module);
@@ -435,10 +514,11 @@ LogicalResult verifyEnumValueModel(Operation *module) {
       valid &= succeeded(verifier.checkType(operation, type));
     for (Type type : operation->getResultTypes())
       valid &= succeeded(verifier.checkType(operation, type));
-    for (Region &region : operation->getRegions())
-      for (Block &block : region)
-        for (BlockArgument argument : block.getArguments())
-          valid &= succeeded(verifier.checkType(operation, argument.getType()));
+    if (!llvm::isa<CollectionOp>(operation))
+      for (Region &region : operation->getRegions())
+        for (Block &block : region)
+          for (BlockArgument argument : block.getArguments())
+            valid &= succeeded(verifier.checkType(operation, argument.getType()));
     for (NamedAttribute attribute : operation->getAttrs()) {
       if (llvm::isa<FsmOp>(operation) && attribute.getName() == "state_type")
         continue;
@@ -450,8 +530,29 @@ LogicalResult verifyEnumValueModel(Operation *module) {
       valid &= succeeded(verifier.parameter(operation, operation->getAttr("default_value")));
     if (operation->getName().getStringRef() == "nodal.enum_expr")
       valid &= succeeded(verifier.expression(operation));
-    return valid ? WalkResult::advance() : WalkResult::interrupt();
+    if (!valid)
+      return WalkResult::interrupt();
+    if (llvm::isa<CollectionOp>(operation)) {
+      if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
+    return WalkResult::advance();
   });
   return failure(walk.wasInterrupted());
 }
+} // namespace nodal
+
+// Preserve the ordinary entry-point ABI for existing non-contextual consumers.
+namespace nodal {
+LogicalResult verifyEnumValueOperation(Operation *operation) {
+  return verifyEnumValueOperation(operation, nullptr);
+}
+LogicalResult verifyEnumLiteralOperation(Operation *operation) {
+  return verifyEnumLiteralOperation(operation, nullptr);
+}
+} // namespace nodal
+
+namespace nodal {
+LogicalResult verifyEnumValueModel(Operation *module) { return verifyEnumValueModel(module, true); }
 } // namespace nodal

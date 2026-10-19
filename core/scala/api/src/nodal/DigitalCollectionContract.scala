@@ -6,7 +6,8 @@ package nodal
 private[nodal] object DigitalCollectionContract:
   val Operation = "digital_collection"
   val Argument = "collection_argument"
-  val Kinds: Set[String] = Set("map", "zip_with", "fold_left", "scan_left")
+  val Kinds: Set[String] = Set("map", "zip_with", "fold_left", "scan_left") ++
+    DigitalReductionContract.Kinds
 
   def fail(number: Int, message: String, semanticPath: Option[String] = None): Nothing =
     scala.util.Failure[Nothing](
@@ -108,3 +109,17 @@ private[nodal] object DigitalCollectionContract:
       Some(seed)
     ): arguments =>
       function(arguments(0).asInstanceOf[Expr[B]], arguments(1).asInstanceOf[Expr[A]])
+
+  def reduce[A <: Data](
+      value: Expr[Vec[A]],
+      function: (Expr[A], Expr[A]) => Expr[A],
+      balanced: Boolean
+  ): Expr[A] =
+    DigitalCollectionCallback.requireChecked(function)
+    ConstructionKernel.collection(
+      if balanced then "reduce_balanced" else "reduce_left",
+      Vector(value),
+      None
+    ): arguments =>
+      function(arguments(0).asInstanceOf[Expr[A]], arguments(1).asInstanceOf[Expr[A]])
+    .asInstanceOf[Expr[A]]

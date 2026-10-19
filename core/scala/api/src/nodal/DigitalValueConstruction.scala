@@ -25,7 +25,7 @@ private[nodal] object DigitalValueConstruction:
       valueRoots: Vector[Expr[?]],
       projectionPaths: Set[String],
       expressions: Vector[(KernelExpr[?], String, String, Long)],
-      renderType: (DataType[?], Long) => String,
+      renderType: (DataType[?], Long, Option[String]) => String,
       regionOf: KernelExpr[?] => Option[String],
       operandPath: (KernelExpr[?], Any) => Option[String],
       argumentPaths: Set[String]
@@ -110,7 +110,9 @@ private[nodal] object DigitalValueConstruction:
             expression.operands.take(1)
           else expression.operands
           operands.foreach:
-            case operand: KernelExpr[?] => pending.append((operand, depth + 1))
+            case operand: KernelExpr[?]
+                if !operand.resultType.contains(KernelTypeDescriptor("Integer")) =>
+              pending.append((operand, depth + 1))
             case _ => ()
 
     val snapshots = expressions.collect:
@@ -165,7 +167,7 @@ private[nodal] object DigitalValueConstruction:
             )
           ,
           operands,
-          renderType(dataType, handle),
+          renderType(dataType, handle, regionOf(expression)),
           expression.literal.map(_.value),
           metadata.headOption.map(_.abi.identity),
           metadata.headOption.map(_.caseIds).getOrElse(Vector.empty),
@@ -173,7 +175,7 @@ private[nodal] object DigitalValueConstruction:
           materializationIntent = expression.materializationIntent,
           structure = structure.headOption.map(value =>
             KernelStructOperationSnapshot(
-              renderType(value.schema, handle),
+              renderType(value.schema, handle, None),
               value.ordinal,
               value.name
             )

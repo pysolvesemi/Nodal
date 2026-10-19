@@ -181,6 +181,14 @@ private[nodal] object ScalaToMlirBridge:
       Vector(value.trueArm, value.falseArm).map(arm =>
         StaticRegion(arm.path, value.owner, arm.arguments, arm.captures)
       )
+    ) ++ snapshot.flatFsms.flatMap(value =>
+      value.actions.map(action =>
+        StaticRegion(action.path, value.owner, action.arguments.drop(3), action.captures)
+      )
+    ) ++ snapshot.enumSwitches.flatMap(value =>
+      (value.arms :+ value.invalidArm).map(arm =>
+        StaticRegion(arm.path, value.owner, arm.arguments, arm.captures)
+      )
     ) ++
       snapshot.generatedRegions.flatMap(value =>
         value.digitalBody.map(body =>
@@ -190,7 +198,7 @@ private[nodal] object ScalaToMlirBridge:
     private val staticArguments = staticRegions.flatMap(region =>
       region.arguments.filter(argument =>
         argument.dataType == "Integer" &&
-          argument.role != "induction" && argument.role != "index_capture"
+          argument.role == "static_capture"
       ).map(argument => argument.path -> region)
     ).toMap
     private val ordinaryCollectionsByPath = snapshot.digitalCollections.filterNot(value =>
@@ -218,6 +226,23 @@ private[nodal] object ScalaToMlirBridge:
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value.parentRegion, arm))
     ).toMap ++ snapshot.behavioralIfs.flatMap(value =>
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value.parentRegion, arm))
+    )
+    private val sequentialArmsByPath = snapshot.flatFsms.flatMap(value =>
+      value.actions.map(action =>
+        action.path -> (
+          value.parentRegion,
+          KernelStructuralArmSnapshot(
+            action.path,
+            action.captures,
+            action.arguments.drop(3),
+            None
+          )
+        )
+      )
+    ).toMap ++ snapshot.enumSwitches.flatMap(value =>
+      (value.arms :+ value.invalidArm).map(arm =>
+        arm.path -> (value.parentRegion, arm)
+      )
     )
     private val digitalGeneratedByPath = snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .map(value => value.path -> value).toMap
@@ -278,7 +303,7 @@ private[nodal] object ScalaToMlirBridge:
       activeIntegerQuery.filter(_.scope.contains(region)).getOrElse {
         val parent =
           digitalValues.parentRegion(region).map(regionalQuery).getOrElse(moduleIntegerQuery)
-        conditionalArmsByPath.get(region) match
+        conditionalArmsByPath.get(region).orElse(sequentialArmsByPath.get(region)) match
           case Some((conditional, arm)) => armQuery(conditional, arm, parent)
           case None if digitalGeneratedByPath.contains(region) =>
             generatedQuery(digitalGeneratedByPath(region), parent)
@@ -2598,6 +2623,16 @@ ${indent(body, 2)}
             location(expression.path)
           ),
         interfaceValues.roots(module) ++ sequential.roots,
+        path =>
+          "@" + quoted(stableLocalSymbol(
+            "domain",
+            module.domains.find(_.path == path)
+              .getOrElse(fail(
+                "NODAL-BRIDGE-056-SEQUENTIAL",
+                "machine domain is absent",
+                Some(path)
+              )).name
+          )),
         renderDigitalStatic,
         prepareDigitalType,
         (path, value) => staticValuesFor(digitalValues.valueRegion(path)).update(path, value),

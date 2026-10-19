@@ -216,6 +216,61 @@ private[nodal] final case class KernelBehavioralIfSnapshot(
     root: String
 )
 
+private[nodal] final case class KernelFlatFsmCode(caseId: String, code: String)
+private[nodal] final case class KernelFlatFsmState(
+    caseId: String,
+    terminal: Boolean,
+    sourceOrdinal: Int
+)
+private[nodal] final case class KernelFlatFsmTransition(
+    sourceCase: String,
+    destinationCase: String,
+    mode: String,
+    guard: String,
+    sourceOrdinal: Int
+)
+private[nodal] final case class KernelFlatFsmAction(
+    path: String,
+    phase: String,
+    ownerCase: Option[String],
+    transitionOrdinal: Option[Int],
+    sourceOrdinal: Int,
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument]
+)
+private[nodal] final case class KernelFlatFsmSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    domain: String,
+    storage: String,
+    enumIdentity: String,
+    requestedEncoding: String,
+    resolvedEncoding: String,
+    localWidth: Int,
+    initialCase: String,
+    localCodes: Vector[KernelFlatFsmCode],
+    illegalState: String,
+    states: Vector[KernelFlatFsmState],
+    transitions: Vector[KernelFlatFsmTransition],
+    actions: Vector[KernelFlatFsmAction],
+    nextLocal: String,
+    transitionTaken: String,
+    sourceOrdinal: Int
+)
+private[nodal] final case class KernelEnumSwitchSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    selector: String,
+    enumIdentity: String,
+    caseIds: Vector[String],
+    arms: Vector[KernelStructuralArmSnapshot],
+    invalidArm: KernelStructuralArmSnapshot,
+    sourceOrdinal: Int,
+    root: String
+)
+
 private[nodal] final case class KernelDigitalGeneratedBody(
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument],
@@ -423,6 +478,8 @@ private[nodal] final case class ConstructionSnapshot(
     staticPredicates: Vector[KernelStaticPredicateSnapshot] = Vector.empty,
     structuralIfs: Vector[KernelStructuralIfSnapshot] = Vector.empty,
     behavioralIfs: Vector[KernelBehavioralIfSnapshot] = Vector.empty,
+    flatFsms: Vector[KernelFlatFsmSnapshot] = Vector.empty,
+    enumSwitches: Vector[KernelEnumSwitchSnapshot] = Vector.empty,
     emitQuality: EmitQuality = EmitQuality()
 )
 
@@ -596,7 +653,7 @@ private final case class Operation(
 
 /** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
 private enum DigitalRegionKind:
-  case Collection, BoundedLoop, Generate, StructuralArm, BehavioralArm
+  case Collection, BoundedLoop, Generate, StructuralArm, BehavioralArm, FsmAction, SwitchArm
 
 private final case class StructuralArmHeader(conditional: ExpressionRef, whenTrue: Boolean)
 
@@ -633,11 +690,15 @@ private final class DigitalValueRegionRecord(
     val seed: Option[Expr[?]],
     val loop: Option[DigitalLoopHeader] = None,
     val structuralArm: Option[StructuralArmHeader] = None,
-    val behavioralArm: Option[BehavioralArmHeader] = None
+    val behavioralArm: Option[BehavioralArmHeader] = None,
+    val fsmAction: Option[FlatFsmActionHeader] = None,
+    val switchArm: Option[EnumSwitchArmHeader] = None
 ):
   var structuralGenerate: Boolean = false
   def regionKind: DigitalRegionKind =
-    if behavioralArm.nonEmpty then DigitalRegionKind.BehavioralArm
+    if fsmAction.nonEmpty then DigitalRegionKind.FsmAction
+    else if switchArm.nonEmpty then DigitalRegionKind.SwitchArm
+    else if behavioralArm.nonEmpty then DigitalRegionKind.BehavioralArm
     else if structuralArm.nonEmpty then DigitalRegionKind.StructuralArm
     else if structuralGenerate then DigitalRegionKind.Generate
     else if loop.nonEmpty then DigitalRegionKind.BoundedLoop
@@ -645,7 +706,7 @@ private final class DigitalValueRegionRecord(
   def isLoop: Boolean = regionKind == DigitalRegionKind.BoundedLoop ||
     regionKind == DigitalRegionKind.Generate
   def permitsAssignment: Boolean = regionKind match
-    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm | DigitalRegionKind.BehavioralArm =>
+    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm | DigitalRegionKind.BehavioralArm | DigitalRegionKind.FsmAction | DigitalRegionKind.SwitchArm =>
       true
     case DigitalRegionKind.Collection => false
   val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty

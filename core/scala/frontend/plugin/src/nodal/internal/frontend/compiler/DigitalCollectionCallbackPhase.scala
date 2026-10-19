@@ -29,6 +29,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private val values = mutable.HashMap.empty[Symbol, ValDef]
   private val templates = mutable.HashMap.empty[Symbol, Template]
   private val sourceDefinitions = mutable.HashMap.empty[Symbol, (Tree, Context)]
+  // Reuse successful native-enum Pure proofs within this immutable compilation. Retain the
+  // dependency records and proof-resource admission with the verdict. Deeper callers revalidate;
+  // failures are never cached without diagnostics.
+  private val enumPureProofs = mutable.HashMap.empty[Symbol, (Int, Int, Int, Set[String])]
   private var scanned = false
   private var collections = Set.empty[Symbol]
   private var pureMethods = Set.empty[Symbol]
@@ -54,6 +58,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var sequentialKernelMethods = Set.empty[Symbol]
   private var sequentialWrites = Set.empty[Symbol]
   private var sequentialModules = Set.empty[Symbol]
+  private var flatGraphRuntime = Set.empty[Symbol]
+  private val flatFsm = new FlatFsmCapture
   private val structural = new StructuralIfCapture
   private val behavioral = new BehavioralGuardCapture(structural)
 
@@ -108,6 +114,25 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       requiredModule("nodal.ConstructionKernel"),
       "behavioralBranch",
       "behavioralComparison"
+    )
+    val flatRuntime = requiredModule("nodal.FlatFsmRuntime")
+    sequentialModules += flatRuntime
+    sequentialBranches ++=
+      methods(flatRuntime, "action", "transitionAction", "switchCase", "switchEnum")
+    flatGraphRuntime = methods(flatRuntime, "switchEnum")
+    sequentialKernelMethods ++= methods(
+      requiredModule("nodal.ConstructionKernel"),
+      "flatFsm",
+      "flatFsmState",
+      "flatFsmTerminal",
+      "flatFsmTransition",
+      "flatFsmAction",
+      "flatFsmStateView",
+      "flatFsmEvent",
+      "flatFsmTaken",
+      "flatFsmCompleted",
+      "enumSwitch",
+      "enumSwitchCase"
     )
     sequentialWrites = methods(requiredClass("nodal.Register"), ":=")
     factories ++= sequentialFactories
@@ -168,8 +193,29 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           "keep"
         ) ++
         moduleMethods("nodal.CandidateApi$package", "U", "B", "integer", "&&", "||", "unary_!") ++
-        moduleMethods("nodal.DigitalEnumApi$package", "asBits", "isValid", "===") ++
-        moduleMethods("scala.<:<", "refl")
+        moduleMethods(
+          "nodal.DigitalEnumApi$package",
+          "asBits",
+          "isValid",
+          "===",
+          "enumLiteral",
+          "isOneOf",
+          "decodeEnum"
+        ) ++
+        moduleMethods("scala.<:<", "refl") ++
+        moduleMethods("scala.Predef", "summon") ++
+        methods(
+          requiredClass("nodal.FsmBuilder"),
+          "currentState",
+          "nextState",
+          "entering",
+          "exiting",
+          "transitionTaken",
+          "completed"
+        )
+    pureModules += requiredModule("nodal.TransitionMode")
+    pureMethods ++=
+      defaultGetters(methods(requiredClass("nodal.StateBuilder"), "on", "onWithAction"))
     val arithmetic = moduleMethods("nodal.CandidateApi$package", "+", "-", "*", "/", "unary_-")
     pureMethods = pureMethods ++ arithmetic.filter { symbol =>
       symbol.info.finalResultType.dealias match
@@ -484,13 +530,25 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               if parameter.is(HasDefault) &&
                 symbol.name == DefaultGetterName(nme.CONSTRUCTOR, index) => cls
 
+  private def enumCompanion(symbol: Symbol)(using Context): Boolean =
+    symbol.is(ModuleClass) && symbol.companionClass.exists && symbol.companionClass.is(Enum)
+
+  private def enumEvidence(symbol: Symbol)(using Context): Boolean =
+    enumCompanion(symbol.owner) && symbol.is(Given) &&
+      (symbol.info.finalResultType.widen.dealias match
+        case AppliedType(base, argument :: Nil) =>
+          base.typeSymbol == requiredClass("nodal.HwEnum") &&
+          argument.typeSymbol == symbol.owner.companionClass
+        case _ => false)
+
   private def effectKind(symbol: Symbol)(using Context): Option[String] =
     if symbol.isClass then
       if symbol.derivesFrom(requiredClass("nodal.Module")) &&
         symbol.hasAnnotation(requiredClass("nodal.ConstructorSchema"))
       then Some("constructor")
       else if symbol.is(ModuleClass) &&
-        symbol.info.parents.forall(_.typeSymbol == requiredClass("java.lang.Object"))
+        (enumCompanion(symbol) ||
+          symbol.info.parents.forall(_.typeSymbol == requiredClass("java.lang.Object")))
       then Some("singleton")
       else None
     else if defaultConstructor(symbol).nonEmpty then Some("default")
@@ -501,6 +559,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
+          symbol.info.finalResultType.typeSymbol.is(Enum) ||
           symbol.info.finalResultType =:= defn.UnitType
       )
     then Some("helper")
@@ -648,7 +708,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         if new Validation(Profile.Sequential, new Budget).sequentialGuard(guard, 0) then
           behavioral.lower(guard)
         else tree
-      case None => transformCollection(tree)
+      case None => flatFsm.call(tree) match
+          case Some(call) =>
+            if new Validation(
+                Profile.Sequential,
+                new Budget
+              ).flatCall(call, 0, graphBoundary = true)
+            then
+              flatFsm.lower(call)
+            else tree
+          case None => transformCollection(tree)
 
   private def transformCollection(tree: Apply)(using Context): Tree =
     val symbol = tree.fun.symbol
@@ -731,21 +800,67 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       else true
 
     private def immutable(symbol: Symbol, tree: Tree): Boolean =
-      if symbol.is(Mutable) || (symbol.is(Lazy) && !symbol.is(Module)) || symbol.isSetter then
+      if symbol.is(Mutable) || (symbol.is(Lazy) && !symbol.is(Module) && !enumEvidence(symbol)) ||
+        symbol.isSetter
+      then
         fail("MUTABLE", "callback cannot read or write mutable or lazy Scala state", tree)
       else if symbol.is(Accessor) then
         val field = symbol.accessedFieldOrGetter
-        if field.exists && field != symbol && (field.is(Mutable) || field.is(Lazy)) then
+        if field.exists && field != symbol &&
+          (field.is(Mutable) || (field.is(Lazy) && !enumEvidence(field)))
+        then
           fail("MUTABLE", "callback cannot read mutable or lazy Scala fields", tree)
         else true
       else true
 
     private def moduleReference(symbol: Symbol, tree: Tree, depth: Int): Boolean =
       if trustedModule(symbol) || checkedModules(symbol) then true
+      else if profile == Profile.Pure && enumPureProofs.get(symbol).exists:
+          case (_, provedDepth, helperDepth, _) => depth <= provedDepth &&
+            active.size <= helperDepth
+      then
+        val (cost, _, _, dependencies) = enumPureProofs(symbol)
+        sharedBudget.visitedNodes += cost
+        importedDependencies ++= dependencies
+        checkedModules += symbol
+        (sharedBudget.visitedNodes <= 8192 && dependenciesWithinBudget) ||
+        fail("LIMIT", "enum initialization proof exceeds the bounded summary profile", tree)
       else if activeModules(symbol) then
         fail("CYCLE", "callback reaches cyclic singleton initialization", tree)
       else
         templates.get(symbol.moduleClass) match
+          case Some(template) if enumCompanion(symbol.moduleClass) =>
+            activeModules += symbol
+            val before = sharedBudget.visitedNodes
+            // Keep the memo's dependency set local to this proof. Reusing the caller's set
+            // would incorrectly make an enum depend on earlier, unrelated operand helpers.
+            val proof = if profile == Profile.Pure then
+              new Validation(
+                profile,
+                sharedBudget,
+                reportErrors,
+                structuralDiagnostic,
+                sequentialDiagnostic
+              )
+            else this
+            if proof ne this then
+              proof.active ++= active
+              proof.activeModules ++= activeModules
+            val valid = proof.enumInitialization(symbol.moduleClass, template, tree, depth + 1) &&
+              proof.dependenciesWithinBudget
+            importedDependencies ++= proof.importedDependencies
+            activeModules -= symbol
+            if valid then
+              checkedModules += symbol
+              if profile == Profile.Pure then
+                enumPureProofs(symbol) =
+                  (
+                    sharedBudget.visitedNodes - before,
+                    depth,
+                    active.size,
+                    proof.importedDependencies.toSet
+                  )
+            valid
           case Some(_)
               if symbol.moduleClass.info.parents.exists(
                 _.typeSymbol != requiredClass("java.lang.Object")
@@ -768,10 +883,100 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             valid
           case None => importedSummary(symbol.moduleClass, "singleton", tree)
 
+    // Scala owns the native enum scaffold, but authored enum/companion initialization still
+    // executes eagerly on a case/evidence read. Attest that initialization through the existing
+    // singleton summary, including its dependency list, rather than trusting enum names.
+    private def enumInitialization(owner: Symbol, template: Template, tree: Tree, depth: Int)
+        : Boolean =
+      val enumClass = owner.companionClass
+      val classParents =
+        Set[Symbol](requiredClass("java.lang.Object"), requiredClass("scala.reflect.Enum"))
+      val companionParents =
+        Set[Symbol](requiredClass("java.lang.Object"), requiredClass("scala.deriving.Mirror.Sum"))
+      if !enumClass.info.parents.forall(parent => classParents(parent.typeSymbol)) ||
+        !owner.info.parents.forall(parent => companionParents(parent.typeSymbol))
+      then
+        fail("EFFECT", "native enum initialization has unsupported authored inheritance", tree)
+      else
+        def derived(definition: ValDef): Boolean = definition.rhs match
+          case Apply(TypeApply(function, argument :: Nil), List(TypeApply(cast: Select, _)))
+              if function.symbol == requiredMethod("nodal.HwEnum.derived") &&
+                argument.tpe.typeSymbol == enumClass && cast.symbol == defn.Any_typeCast &&
+                cast.qualifier.symbol == owner.sourceModule &&
+                methods(owner, "ordinal").exists(symbol =>
+                  symbol.is(Synthetic) && symbol.owner == owner
+                ) => true
+          case _ => false
+        def generatedCall(function: Tree, ownerName: String): Boolean = function match
+          case identifier: Ident => methods(requiredModule(ownerName), "apply")(identifier.symbol)
+          case selection: Select =>
+            selection.qualifier.isInstanceOf[RefTree] &&
+            selection.qualifier.symbol == requiredModule(ownerName) &&
+            methods(requiredModule(ownerName), "apply")(selection.symbol)
+          case _ => false
+        def inventory(definition: ValDef): Boolean =
+          def cases(tree: Tree): Boolean = tree match
+            case Typed(expression, _) => cases(expression)
+            case SeqLiteral(elements, _) => elements.forall: element =>
+                budget(element, depth + 1) &&
+                  (element match
+                    case selection: Select =>
+                      selection.qualifier.isInstanceOf[This] &&
+                      selection.symbol.owner == owner && selection.symbol.is(Enum)
+                    case _ => false)
+            case _ => false
+          definition.rhs match
+            case Apply(
+                  Apply(TypeApply(array, argument :: Nil), List(sequence)),
+                  List(Apply(
+                    TypeApply(classTag, classArgument :: Nil),
+                    List(TypeApply(classOf, classType :: Nil))
+                  ))
+                ) =>
+              generatedCall(array, "scala.Array") && argument.tpe.typeSymbol == enumClass &&
+              cases(sequence) && generatedCall(classTag, "scala.reflect.ClassTag") &&
+              classArgument.tpe.typeSymbol == enumClass &&
+              classOf.symbol == defn.Predef_classOf && classType.tpe.typeSymbol == enumClass
+            case _ => false
+        def singleton(definition: ValDef): Boolean = definition.rhs match
+          case Apply(function, arguments)
+              if function.symbol.is(Synthetic) && function.symbol.owner == owner &&
+                function.symbol.info.finalResultType.typeSymbol == enumClass &&
+                arguments.forall(_.isInstanceOf[Literal]) => true
+          case _ => false
+        val classValid = templates.get(enumClass).exists: enumTemplate =>
+          enumTemplate.body.forall:
+            case _: DefDef | _: TypeDef | _: Import => true
+            case other => check(other, depth + 1)
+        val companionValid = template.body.map:
+          case _: DefDef | _: TypeDef | _: Import => true
+          case definition: ValDef if definition.symbol.is(Enum) =>
+            singleton(definition) ||
+            fail("EFFECT", "enum singleton has unsupported initialization", definition)
+          case definition: ValDef if definition.symbol.is(Synthetic) =>
+            inventory(definition) ||
+            fail("EFFECT", "enum inventory has unsupported initialization", definition)
+          case definition: ValDef if enumEvidence(definition.symbol) =>
+            derived(definition) ||
+            fail("EFFECT", "enum evidence must use the owned native derivation", definition)
+          case other => check(other, depth + 1)
+        .forall(identity)
+        classValid && companionValid
+
     private def reference(tree: RefTree, depth: Int): Boolean =
       val symbol = tree.symbol
       if !symbol.exists then fail("UNKNOWN", "callback contains an unresolved reference", tree)
       else if !immutable(symbol, tree) then false
+      else if enumEvidence(symbol) then moduleReference(symbol.owner.sourceModule, tree, depth)
+      else if symbol.is(Synthetic) && !symbol.is(Method) && symbol.owner.isTerm &&
+        values.get(symbol).exists(!_.rhs.isEmpty)
+      then
+        if active(symbol) then fail("CYCLE", "cyclic eager argument spills are unsupported", tree)
+        else
+          active += symbol
+          val valid = check(values(symbol).rhs, depth + 1)
+          active -= symbol
+          valid
       else if symbol.is(Module) then moduleReference(symbol, tree, depth)
       else if symbol.is(Method) then
         if sanctioned(symbol) then true
@@ -814,6 +1019,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if !budget(tree, depth) then false
       else
         tree match
+          case Inlined(_, bindings, expansion) =>
+            bindings.forall(check(_, depth + 1)) && callback(expansion, depth + 1)
           case Typed(expression, _) => callback(expression, depth + 1)
           case NamedArg(_, argument) => callback(argument, depth + 1)
           case Block(statements, expression) =>
@@ -1005,7 +1212,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               fail("EFFECT", "nested effectful digital iteration is unsupported", application)
             else
               applied(application.fun, depth + 1) && application.args.forall: argument =>
-                if sequentialBranches(symbol) &&
+                if flatGraphRuntime(symbol) && callbackArity(argument) == 1 then
+                  callback(argument, depth + 1)
+                else if sequentialBranches(symbol) &&
                   !argument.tpe.widen.dealias.derivesFrom(requiredClass("scala.Function0"))
                 then
                   pureOperands(List(argument), depth + 1, sequential = true)
@@ -1069,6 +1278,20 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         trees.head
       ))
 
+    def flatCall(call: flatFsm.Call, depth: Int, graphBoundary: Boolean = false): Boolean =
+      if !budget(call.original, depth) then false
+      else if !graphBoundary && (profile != Profile.Sequential || call.graphOnly) then
+        fail(
+          "EFFECT",
+          "FSM graph construction is unsupported in this callback profile",
+          call.original
+        )
+      else
+        val operandsValid = pureOperands(call.operands, depth + 1, sequential = true)
+        val bodiesValid = call.bodies.map(check(_, depth + 1)).forall(identity)
+        val graphValid = graphBoundary || call.graph.forall(callback(_, depth + 1))
+        operandsValid && bodiesValid && graphValid
+
     def sequentialGuard(guard: behavioral.Guard, depth: Int): Boolean =
       if !budget(guard.original, depth) then false
       else if profile != Profile.Sequential then
@@ -1122,8 +1345,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             check(selection.qualifier, depth + 1) && reference(selection, depth + 1)
           case application: Apply => behavioral.guard(application) match
               case Some(guard) => sequentialGuard(guard, depth + 1)
-              case None => applied(application, depth + 1)
+              case None => flatFsm.call(application) match
+                  case Some(call) => flatCall(call, depth + 1)
+                  case None => applied(application, depth + 1)
           case application: TypeApply => applied(application, depth + 1)
+          case Inlined(_, bindings, expansion) =>
+            bindings.forall(check(_, depth + 1)) && check(expansion, depth + 1)
           case Typed(expression, _) => check(expression, depth + 1)
           case NamedArg(_, argument) => check(argument, depth + 1)
           case SeqLiteral(elements, _) => elements.forall(check(_, depth + 1))

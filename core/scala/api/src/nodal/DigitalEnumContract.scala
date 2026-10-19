@@ -24,6 +24,13 @@ private[nodal] final case class ResolvedEnumCase(
     source: Option[SourceSpan]
 )
 
+private[nodal] final case class ResolvedEnumCodeMap(
+    identity: String,
+    width: Int,
+    cases: Vector[ResolvedEnumCase],
+    source: Option[SourceSpan]
+)
+
 /** Sole immutable ABI owner. Host enum instances never enter the expression graph. */
 private[nodal] final case class ResolvedEnumAbi(
     identity: String,
@@ -106,11 +113,11 @@ private[nodal] object DigitalEnumContract:
     MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8))
       .map(value => f"${value & 0xff}%02x").mkString
 
-  def dataType[A](
+  def codeMap[A](
       evidence: HwEnum[A],
       policy: String,
       custom: Option[(Int, EnumEncoding[A])] = None
-  ): DataType[EnumValue[A]] =
+  ): ResolvedEnumCodeMap =
     val owner = declaration(evidence)
     val count = owner.cases.size
     val width = policy match
@@ -141,13 +148,21 @@ private[nodal] object DigitalEnumContract:
       fail(3, s"enum codes exceed the $MaximumCodeBits-bit metadata budget")
     val cases = owner.cases.zip(codes).map: (value, code) =>
       ResolvedEnumCase(value.id, value.name, code, value.source)
+    ResolvedEnumCodeMap(owner.identity, width, cases, owner.source)
+
+  def dataType[A](
+      evidence: HwEnum[A],
+      policy: String,
+      custom: Option[(Int, EnumEncoding[A])] = None
+  ): DataType[EnumValue[A]] =
+    val resolved = codeMap(evidence, policy, custom)
     val abi = ResolvedEnumAbi(
-      owner.identity,
+      resolved.identity,
       policy,
-      width,
-      cases,
-      abiHash(owner.identity, width, cases),
-      owner.source
+      resolved.width,
+      resolved.cases,
+      abiHash(resolved.identity, resolved.width, resolved.cases),
+      resolved.source
     )
     new KernelDataType[EnumValue[A]](KernelTypeDescriptor("Enum", Vector(abi)))
 
@@ -256,7 +271,7 @@ private[nodal] object DigitalEnumContract:
   def sameWidthFamily(left: KernelTypeDescriptor, right: KernelTypeDescriptor): Boolean =
     compareType(left, right, None, widthFamily = true)
 
-  private def selectedCase[A](value: A, evidence: HwEnum[A], resolved: ResolvedEnumAbi): String =
+  def selectedCase[A](value: A, evidence: HwEnum[A], resolved: ResolvedEnumAbi): String =
     val owner = declaration(evidence)
     if owner.identity != resolved.identity then
       fail(4, "enum case identity does not match its type")
@@ -385,6 +400,11 @@ private[nodal] object DigitalEnumContract:
           case _ => ()
     visit(descriptor, 0)
 
+  def completeSelection(ids: Vector[String], resolved: ResolvedEnumAbi): Unit =
+    if ids.distinct.size != ids.size then fail(15, "enum selection repeats a case")
+    if ids.toSet != resolved.caseIds then
+      fail(16, "enum selection must cover every legal case exactly once")
+
   def select[A, B <: Data](
       selector: Expr[EnumValue[A]],
       invalidResult: Expr[B],
@@ -393,9 +413,7 @@ private[nodal] object DigitalEnumContract:
   ): Expr[B] =
     val resolved = abi(selector)
     val ids = cases.map((value, _) => selectedCase(value, evidence, resolved))
-    if ids.distinct.size != ids.size then fail(15, "enum selection repeats a case")
-    if ids.toSet != resolved.caseIds then
-      fail(16, "enum selection must cover every legal case exactly once")
+    completeSelection(ids, resolved)
     val resultType = descriptor(invalidResult)
     validateSelectionResult(resultType)
     if cases.exists((_, value) => !sameType(descriptor(value), resultType)) then

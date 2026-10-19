@@ -4,6 +4,8 @@
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -220,6 +222,12 @@ public:
 
   LogicalResult verify(Operation *use) {
     currentUse = use;
+    // Diagnose malformed isolated ingress before descending into block types;
+    // otherwise a failed scoped environment can hide the actual header error.
+    if (llvm::isa<FlatFSMOp>(use) && failed(inspectFlatFSMHeader(use)))
+      return verifyFlatFSMOperation(use);
+    if (llvm::isa<EnumSwitchOp>(use) && failed(inspectEnumSwitchHeader(use)))
+      return verifyEnumSwitchOperation(use);
     bool capability = false;
     auto verifyType = [&](Type type) {
       auto result = check(type);
@@ -276,6 +284,10 @@ public:
       return verifyLocalDomainBinding(use);
     if (llvm::isa<SequentialUpdateOp>(use))
       return verifySequentialUpdate(use);
+    if (llvm::isa<ResetAssertedOp>(use))
+      return verifyResetAsserted(use);
+    if (llvm::isa<SequentialAssertOp>(use))
+      return verifySequentialAssertion(use);
     if (llvm::isa<PortValueOp, ShapeIndexOp, ShapeSliceOp, ShapeFlattenOp, ShapeViewOp,
                   DigitalAssignOp>(use))
       return success();

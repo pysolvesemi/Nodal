@@ -14,6 +14,8 @@ add_mlir_dialect_library(NodalDialect
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
   SequentialModel.cpp
+  FlatFSMModel.cpp
+  EnumSwitchModel.cpp
   DigitalLoopModel.cpp
   DigitalLoopPlanningModel.cpp
   DigitalAssignmentModel.cpp

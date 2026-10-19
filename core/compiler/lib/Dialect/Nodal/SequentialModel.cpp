@@ -8,7 +8,9 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
@@ -125,7 +127,7 @@ FailureOr<BehavioralIfHeader> inspectBehavioralIfHeader(Operation *op) {
       !closed(op, {"operandSegmentSizes", "contract_version", "region_id", "metadata"}))
     return failure();
   Operation *m = op->getParentOfType<nodal::ModuleOp>();
-  if (!m || !llvm::isa<ModuleOp, BehavioralIfOp>(op->getParentOp()))
+  if (!m || !llvm::isa<ModuleOp, BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(op->getParentOp()))
     return failure();
   StringRef modulePath = path(m).empty() ? text(m, "sym_name") : path(m);
   if (!text(op, "region_id").starts_with((modulePath + ".").str()))
@@ -180,8 +182,9 @@ public:
       if (failed(source) || failed(verifyDigitalValueScope(*source, h.operation)))
         return failure();
       auto facts = resolveBehavioralIntegerExpression(*source, h.operation);
+      // Runtime Integer captures are storage values, never static proof bindings.
       if (failed(facts) || !facts->expression)
-        return failure();
+        continue;
       bindings.push_back({arg, *facts->expression, *source});
     }
     return ParameterIntegerEnvironment::create(
@@ -197,8 +200,8 @@ behavioralIntegerContextsAtUse(Operation *use) {
     return failure();
   unsigned arm = use->getBlock() == h->bodies[0] ? 0 : 1;
   SmallVector<ParameterIntegerEnvironment, 4> result;
-  if (llvm::isa<BehavioralIfOp>(h->operation->getParentOp())) {
-    auto outer = behavioralIntegerContextsAtUse(h->operation);
+  if (isDigitalRegionOwner(h->operation->getParentOp())) {
+    auto outer = digitalIntegerContextsAtUse(h->operation);
     if (failed(outer) || outer->size() != 1)
       return failure();
     auto context =
@@ -255,33 +258,70 @@ LogicalResult verifyBehavioralIfOperation(Operation *op) {
     if (failed(verifyDigitalValueScope(capture, op)))
       return reject(op, "behavioral captures must retain actual lexical ownership");
   for (Block *body : h->bodies)
-    for (Operation &nested : *body) {
-      if (llvm::isa<BehavioralIfOp>(nested))
-        continue;
-      if (llvm::isa<StructuralIfOp, CollectionOp>(nested)) {
-        // Existing value-region owners retain all type/shape/proof obligations.
-        // Behavioral use admits only a pure result, never structural writes.
-        bool pure = nested.getNumResults() == 1;
-        nested.walk([&](Operation *child) {
-          if (llvm::isa<DigitalAssignOp, BehavioralIfOp, DigitalStorageOp, LocalDomainBindingOp>(
-                  child))
-            pure = false;
-        });
-        if (!pure ||
-            failed(llvm::isa<StructuralIfOp>(nested) ? verifyStructuralIfOperation(&nested)
-                                                     : verifyDigitalCollectionOperation(&nested)))
-          return reject(&nested, "behavioral value region must retain a verified read-only result");
-        continue;
-      }
-      if (llvm::isa<DigitalAssignOp>(nested)) {
-        if (text(&nested, "kind") != "register_next")
-          return reject(&nested, "behavioral arms update only domain-owned registers");
-      } else if (!allowedPure(&nested) || nested.getNumRegions() || nested.getNumSuccessors() ||
-                 nested.getNumResults() != 1)
-        return reject(&nested, "behavioral arms cannot create structure or untracked effects");
-    }
+    if (failed(verifySequentialBody(body)))
+      return failure();
   return success();
 }
+LogicalResult verifySequentialBody(Block *body) {
+  for (Operation &nested : *body) {
+    if (llvm::isa<BehavioralIfOp, EnumSwitchOp>(nested))
+      continue;
+    if (llvm::isa<StructuralIfOp, CollectionOp>(nested)) {
+      // Existing value-region owners retain all type/shape/proof obligations.
+      // Behavioral use admits only a pure result, never structural writes.
+      bool pure = nested.getNumResults() == 1;
+      nested.walk([&](Operation *child) {
+        if (llvm::isa<DigitalAssignOp, BehavioralIfOp, DigitalStorageOp, LocalDomainBindingOp>(
+                child))
+          pure = false;
+      });
+      if (!pure ||
+          failed(llvm::isa<StructuralIfOp>(nested) ? verifyStructuralIfOperation(&nested)
+                                                   : verifyDigitalCollectionOperation(&nested)))
+        return reject(&nested, "behavioral value region must retain a verified read-only result");
+      continue;
+    }
+    if (llvm::isa<DigitalAssignOp>(nested)) {
+      if (text(&nested, "kind") != "register_next")
+        return reject(&nested, "behavioral arms update only domain-owned registers");
+    } else if (!allowedPure(&nested) || nested.getNumRegions() || nested.getNumSuccessors() ||
+               nested.getNumResults() != 1)
+      return reject(&nested, "behavioral arms cannot create structure or untracked effects");
+  }
+  return success();
+}
+LogicalResult verifyResetAsserted(Operation *op) {
+  if (!llvm::isa_and_nonnull<ResetAssertedOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
+      op->getNumOperands() != 1 || op->getNumResults() != 1 ||
+      !boolean(op->getResult(0).getType()) || op->getNumRegions() || op->getNumSuccessors() ||
+      !closed(op, {"domain", "reset_polarity", "metadata"}) || !canonical(path(op)))
+    return reject(op, "reset assertion requires exact actual Reset and Bool result");
+  Operation *binding = bindingOf(op);
+  if (!binding || failed(verifyLocalDomainBinding(binding)) || binding->getNumOperands() != 2 ||
+      op->getOperand(0) != binding->getOperand(1) ||
+      op->getAttr("reset_polarity") != binding->getAttr("reset_polarity") ||
+      failed(verifyDigitalValueScope(op->getOperand(0), op)))
+    return reject(op, "reset assertion must retain its exact physical binding and polarity");
+  return success();
+}
+LogicalResult verifySequentialAssertion(Operation *op) {
+  if (!llvm::isa_and_nonnull<SequentialAssertOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
+      op->getNumOperands() != 2 || op->getNumResults() || op->getNumRegions() ||
+      op->getNumSuccessors() || !boolean(op->getOperand(0).getType()) ||
+      !canonical(text(op, "root_id")) || !closed(op, {"domain", "edge", "root_id", "metadata"}) ||
+      !canonical(path(op)))
+    return reject(op, "sampled assertion requires actual Bool, Clock and source identity");
+  Operation *binding = bindingOf(op);
+  if (!binding || failed(verifyLocalDomainBinding(binding)) ||
+      op->getOperand(1) != binding->getOperand(0) ||
+      op->getAttr("edge") != domainOf(binding)->getAttr("edge"))
+    return reject(op, "sampled assertion requires its exact physical domain clock and edge");
+  for (Value operand : op->getOperands())
+    if (failed(verifyDigitalValueScope(operand, op)))
+      return reject(op, "sampled assertion operands must retain actual lexical ownership");
+  return success();
+}
+
 LogicalResult verifySequentialSelect(Operation *op) {
   if (!llvm::isa_and_nonnull<SequentialSelectOp>(op) || op->getNumOperands() != 3 ||
       op->getNumResults() != 1 || op->getNumRegions() || op->getNumSuccessors() ||
@@ -467,7 +507,42 @@ struct Model {
       for (Operation &op : *scope.body) {
         if (++work > limits.maximumOperations)
           return reject(&op, "sequential model operation budget exceeded");
-        if (llvm::isa<BehavioralIfOp>(op)) {
+        if (llvm::isa<FlatFSMOp>(op)) {
+          auto h = inspectFlatFSMHeader(&op);
+          if (failed(h) || failed(verifyFlatFSMOperation(&op)) ||
+              scope.depth >= limits.maximumDepth)
+            return failure();
+          if (!identities.insert(text(&op, "machine_id")).second)
+            return reject(&op, "FSM identities must be unique within their module");
+          for (Block *body : h->bodies)
+            if (!identities.insert(digitalRegionSemanticPath(body)).second)
+              return reject(&op, "FSM action identities must be unique within their module");
+          Value state = op.getOperand(0);
+          auto inserted = roots.try_emplace(state, &op);
+          if (!inserted.second && inserted.first->second != &op)
+            return reject(&op, "private FSM state has an unrelated writer");
+          for (unsigned g = 0; g < h->guards; ++g)
+            if (failed(sampled(op.getOperand(1 + g), op.getAttr("domain"), &op)))
+              return failure();
+          for (Block *body : h->bodies)
+            scopes.push_back({body, &op, scope.depth + 1});
+        } else if (llvm::isa<EnumSwitchOp>(op)) {
+          auto h = inspectEnumSwitchHeader(&op);
+          if (failed(h) || failed(verifyEnumSwitchOperation(&op)) ||
+              scope.depth >= limits.maximumDepth)
+            return failure();
+          if (!identities.insert(text(&op, "region_id")).second)
+            return reject(&op, "switch identities must be unique within their module");
+          for (Block *body : h->bodies) {
+            if (!identities.insert(digitalRegionSemanticPath(body)).second)
+              return reject(&op, "switch arm identities must be unique within their module");
+            scopes.push_back({body, scope.root ? scope.root : &op, scope.depth + 1});
+          }
+        } else if (llvm::isa<SequentialAssertOp>(op)) {
+          if (failed(verifySequentialAssertion(&op)) ||
+              failed(sampled(op.getOperand(0), op.getAttr("domain"), &op)))
+            return failure();
+        } else if (llvm::isa<BehavioralIfOp>(op)) {
           if (scope.depth >= limits.maximumDepth ||
               op.getNumOperands() - 1 > limits.maximumCaptures)
             return reject(&op, "behavioral region exceeds its finite depth/capture budget");
@@ -488,6 +563,12 @@ struct Model {
           if (failed(target))
             return reject(&op, "sequential update must target one whole owned register");
           Operation *reg = target->getDefiningOp();
+          if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
+              *target == scope.root->getOperand(0))
+            return reject(&op, "an action cannot directly write private FSM storage");
+          if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
+              reg->getAttr("domain") != scope.root->getAttr("domain"))
+            return reject(&op, "FSM actions must update registers in their actual owning domain");
           if (!bindingOf(reg)) {
             if (scope.root || llvm::isa<SequentialUpdateOp>(op))
               return reject(
@@ -503,7 +584,7 @@ struct Model {
             return failure();
           for (Operation *ancestor = op.getParentOp(); ancestor != module;
                ancestor = ancestor->getParentOp())
-            if (llvm::isa<BehavioralIfOp>(ancestor) &&
+            if (llvm::isa<BehavioralIfOp, EnumSwitchOp>(ancestor) &&
                 failed(sampled(ancestor->getOperand(0), reg->getAttr("domain"), ancestor)))
               return failure();
           Operation *root = scope.root ? scope.root : &op;
@@ -686,9 +767,16 @@ LogicalResult normalizeSequentialModel(Operation *module, SequentialModelLimits 
   IRMapping mapping;
   Operation *copy = root->clone(mapping);
   Operation *candidate = mapping.lookupOrDefault(module);
-  Model model{candidate, limits};
+  unsigned generated = 0;
   bool valid =
-      succeeded(model.verify()) && succeeded(Normalizer(model).run()) && succeeded(verify(copy));
+      succeeded(expandFlatFSMModel(candidate, generated, limits.maximumNormalizedOperations)) &&
+      succeeded(expandEnumSwitchModel(candidate, generated, limits.maximumNormalizedOperations));
+  if (valid) {
+    limits.maximumNormalizedOperations -= generated;
+    Model model{candidate, limits};
+    valid =
+        succeeded(model.verify()) && succeeded(Normalizer(model).run()) && succeeded(verify(copy));
+  }
   if (valid)
     module->getRegion(0).takeBody(candidate->getRegion(0));
   copy->destroy();

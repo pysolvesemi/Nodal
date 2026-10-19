@@ -151,7 +151,7 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp"]>]> {
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -1861,5 +1861,41 @@ def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleO
     Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
     StrAttr:$edge, StrAttr:$reset_policy, StrAttr:$reset_polarity,
     StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F56 v0.2: executable closed action ingress; F19 descriptors remain unchanged.
+def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
+    IsolatedFromAbove, NoTerminator]> {
+  let summary = "Checked flat state graph with actual guard and action edges";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$contract_version,
+    StrAttr:$machine_id, FlatSymbolRefAttr:$enum_ref, FlatSymbolRefAttr:$domain,
+    StrAttr:$initial_case, StrAttr:$requested_encoding, StrAttr:$resolved_encoding,
+    I64Attr:$local_width, ArrayAttr:$case_ids, ArrayAttr:$local_codes,
+    StrAttr:$illegal_policy, ArrayAttr:$states, ArrayAttr:$transitions,
+    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$next, AnyType:$taken);
+  let regions = (region VariadicRegion<AnyRegion>:$action_bodies);
+  let hasVerifier = 1;
+}
+def Nodal_EnumSwitchOp : Nodal_Op<"enum_switch", [IsolatedFromAbove, NoTerminator]> {
+  let summary = "Exact exhaustive enum action choice with explicit invalid arm";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$contract_version,
+    StrAttr:$region_id, FlatSymbolRefAttr:$enum_ref, ArrayAttr:$case_ids,
+    DenseI32ArrayAttr:$capture_counts, ArrayAttr:$arm_ids, DictionaryAttr:$metadata);
+  let regions = (region VariadicRegion<AnyRegion>:$arms);
+  let hasVerifier = 1;
+}
+def Nodal_ResetAssertedOp : Nodal_Op<"reset_asserted", [HasParent<"ModuleOp">]> {
+  let summary = "Actual bound reset capability and polarity as a Boolean";
+  let arguments = (ins AnyType:$reset, FlatSymbolRefAttr:$domain,
+    StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleOp">]> {
+  let summary = "Actual clock sampled property with exact owning domain";
+  let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }

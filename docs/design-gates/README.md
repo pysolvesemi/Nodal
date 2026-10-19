@@ -121,3 +121,15 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalSequentialState-DG v0.1](NodalSequentialState-DG-v0.1.md): approved
   first F56 register/behavioral-guard contract with actual local bindings and
   sequential normalization; remaining flat-FSM and memory work stays open.
+
+- [NodalSequentialState-DG v0.2](NodalSequentialState-DG-v0.2.md): approved
+  additive exhaustive actions and flat-FSM contract, including local encoding,
+  actual action captures, observations and illegal-state behavior; implementation
+  and focused checks remain pending.
+- [NodalSequentialState-DG v0.3](NodalSequentialState-DG-v0.3.md): approved
+  finite whole-module register/flat-FSM CIRCT profile with exact reset, feedback
+  and clocked assertion semantics; implementation and focused checks pending.
+
+- [NodalSequentialState-DG v0.4](NodalSequentialState-DG-v0.4.md): approved
+  bounded owned memory-port semantics, masks, ordering, collision and domain
+  verification; implementation and focused checks pending.

@@ -217,5 +217,178 @@ Strict owner compilation and formatting passed. The source lint comparison
 retains nine unchanged baseline return/throw violations and introduces none; it
 is not a claim that the whole existing lint suite passes. Focused Markdown,
 backend-registry regeneration and whitespace checks pass. No CI was run.
-The remaining required FSM, switch, encoding, memory-port and approved CIRCT
-features listed above still prevent F56 completion or merge-ready status.
+At this first checkpoint, the remaining FSM, switch, encoding, memory-port and
+approved CIRCT features prevented F56 completion. The subsequent checkpoint below
+implements FSM/switch/encoding and the finite CIRCT adapter; memory remains open.
+
+## Subsequent checkpoint contracts
+
+[Gate v0.2](../design-gates/NodalSequentialState-DG-v0.2.md) freezes exhaustive
+action switching and flat-FSM capture/verification/normalization. It preserves
+frozen Unit-returning APIs, adds a scoped switch and typed custom local encoding,
+and records the real exhaustive-host-match compatibility change for Custom.
+Typed switch inventory reaches native validation before behavioral normalization;
+FSM actions reuse the sequential root rather than a second scheduler.
+
+[Gate v0.3](../design-gates/NodalSequentialState-DG-v0.3.md) selects the finite
+whole-module fixed-scalar register/flat-FSM CIRCT profile, with actual feedback,
+synchronous reset and owning-clock assertion semantics. The pinned handwritten
+CIRCT probes established feasibility only; the integrated implementation and
+actual source-to-target results are recorded below. Memory ports remain a required
+Nodal semantic owner under v0.4. These checkpoints do not close the full F56 parent.
+
+[Gate v0.4](../design-gates/NodalSequentialState-DG-v0.4.md) selects owned memory
+ports with whole-element storage compatibility, explicit byte masks, real
+ordering/collision/domain semantics and bounded address proofs. Read construction
+is initially module-level and continuously enabled; read values remain usable
+in branches/actions. This gate is preparation, not completed implementation.
+
+## Flat-FSM and fixed-scalar target integration
+
+The second checkpoint adds the v0.2 flat-FSM/action-switch owner and v0.3
+whole-module CIRCT adapter. Memory-port implementation remains separate under
+v0.4; this checkpoint does not complete F56.
+
+### Shared owners and trust boundaries
+
+Source construction records actual enum, machine, action, transition and register
+identities. The existing checked Sequential callback carrier owns action effects;
+transition arguments and enum initialization use the shared Pure proof machinery.
+Successful enum proofs replay their original charged work and imported dependencies;
+reuse is restricted to no-deeper tree/helper contexts. Deeper uses revalidate.
+There is no callback replay or package/name-based effect exemption.
+
+The canonical FlatFSMModel validates exhaustive states, local encoding, transition
+policy and explicit region captures. SequentialModel retains register/domain and
+sampled-input ownership. Both source and native ingress reject action targets in a
+foreign clock domain, including constant RHS values under nested when/switch arms.
+Normalization preserves phase-first action order, priority self-edge behavior,
+reset suppression and actual next/taken observations. The complete cloned module
+is committed only after validation; malformed siblings cannot leave partial output.
+
+SequentialToCIRCT consumes the same normalized facts, assignment dependency graph
+and materialization analysis. Typed backedges preserve physical register feedback.
+Reset-free compregs plus explicit synchronous reset muxes preserve reset priority
+without hidden initialization or history. Actual Error properties become labeled,
+owning-edge clocked assertions. The finite adapter rejects unsupported parameters,
+aggregates, hierarchy, interfaces, memory and reset policies transactionally rather
+than specializing defaults. The admitted scalar inventory and bounds are listed
+in the v0.3 gate and production adapter.
+
+Repeated child definitions retain the existing canonical reuse path. Expression
+collision keys are local to the actual module namespace, rather than accidentally
+including an occurrence handle; full source paths and semantic metadata remain
+unchanged. The causal controls include repeated pure-expression and FSM children,
+different bodies/edges and quoted source metadata. Runtime Integer/Real storage
+captures remain distinct from static parameter proofs. Scalar assignments use the
+shared chronological operation stream.
+
+### Integrated native replay
+
+The release build passes 59 flat-FSM, 62 CIRCT-adapter and 71 sequential-model
+cases. Directly affected predecessors pass: digital types 103, values 362,
+storage 119, enums 68, assignment guards 34, materialization 40, structural-if 69,
+parameter integer bounds 58 and target capabilities 79. Logs are under
+`.work/increment56/flat-fsm-live/logs/`; the release `nodalc` SHA256 is
+`7e823debc0308c3f4abe1de6b61f1f6af45a42d1b743e732a90977e063fd5414`.
+The initially mistyped build target is retained as a failed setup attempt, not a
+semantic test. The corrected build and post-domain-repair rebuild both pass.
+
+Maintained Scala compilation and 83 focused cases pass: flat-FSM source/bridge,
+sequential source/bridge, structural-if and analog-event review suites. The 17
+selected source-origin/discovery/bridge/capture predecessors also pass. Its first
+compile correctly rejected a raw test-only compiler-owned call and host conditionals placed
+directly inside checked transition arguments. The raw boundary probe now uses the
+existing explicitly reflective test adapter; construction-time fixture selection
+occurs before the transition call. Production plugin restrictions are unchanged.
+No failed intermediate run is counted as acceptance.
+
+The final maintained API/plugin/bridge artifacts regenerate 13 public Nodal
+witnesses. All normalize and reparse; six independently mutated native inputs
+reject with diagnostics, and exact authored machine root/next/taken identities
+survive normalization. The runner also passes 27 bridge/affected-waveform groups.
+Four actual public designs (enabled register, full flat FSM, Error and recovery)
+pass `--nodal-sequential-to-circt`, byte-identical target reparse, pinned CIRCT
+verification and real SystemVerilog export. The parameter-bearing nested fixture
+normalizes in Nodal and rejects at the finite CIRCT capability boundary with
+`NODAL-CIRCT-056-001`; its parameter default is not substituted.
+
+### Public source-to-target example
+
+The maintained `nodal_external.Increment56EnabledRegisterSource` uses the actual
+public API and compiler plugin:
+
+```scala
+val core = ClockDomain.from(
+  clock, reset, ClockEdge.Rising, ResetPolicy.Sync,
+  ResetPolarity.ActiveHigh, 100.MHz, "core"
+)
+core:
+  val stored = Reg(0.U(8))
+  when(enable):
+    stored := input
+  output := stored
+```
+
+Its emitted target has one positive-edge register, no initial value and an
+explicit `reset ? 0 : enable ? input : stored` next-state expression. The full
+FSM witness retains three registers and an owning-edge labeled Error assertion.
+The generated `.mlir` and `.sv` artifacts are in
+`.work/increment56/flat-fsm-live/public/`. Reproduction after the maintained Scala
+export, for `name=public-enabled-register` or `public-flat-fsm`:
+
+```sh
+out=.work/increment56/flat-fsm-live/public
+.work/increment56/flat-fsm-live/bin/nodalc "$out/$name.mlir" \
+  --nodal-sequential-to-circt -o "$out/$name.circt.mlir"
+.work/circt-toolchain/firtool-1.154.0/bin/circt-opt \
+  "$out/$name.circt.mlir" --verify-each --verify-clocked-assert-like \
+  --lower-seq-to-sv --lower-verif-to-sv --export-verilog -o /dev/null \
+  > "$out/$name.sv"
+```
+
+The scratch public runner initially omitted its own allocation-site plugin and
+included an obsolete duplicate Scala library from the inherited broad classpath.
+Both setup failures are retained separately; final execution uses the maintained
+plugin and one pinned Scala library. Neither failure was counted as a semantic
+pass. Successful export is not a claim of downstream synthesis, formal
+equivalence or HDL simulation; F65/F66/F67/F72 retain those original consumers.
+
+### Output-quality, scale and later-consumer handoff
+
+No extra state optimization is needed for this semantic checkpoint. Private local
+encoding remains independent of canonical enum values; the target emits only
+actual registers and the required Error property. It adds no hidden boot, reset
+history or action-enable state. Existing required-materialization analysis remains
+the sole owner; unsupported intent without its quality context rejects.
+
+A source 64/256-state pair retains 645/2,565 expression nodes at maximum expression
+depth 11/13. A native 65-state/256-priority-transition case normalizes to 1,886
+operations. Exact 51-operation expansion succeeds and a 50-operation budget fails
+transactionally; a 401-transition Exclusive fixture exhausts the shared 65,536
+proof-work limit normally. These are bounded representation/budget witnesses, not
+whole-pipeline timing or linear-complexity claims. Component elapsed-time samples
+are retained in scratch logs and include contention; no speedup is claimed.
+
+The required later-consumer cases are concrete: F65/F66 should parse and simulate
+the emitted enabled-register reset/enable/hold fixture, both physical clock edges,
+flat-FSM ordered self-transitions, terminal completion, Error and recovery, plus
+memory-port collision cases once that owner is complete. F67 should compare the
+same verified private state/next-data graph and canonical enum boundary behavior
+under declared reset assumptions, without inventing startup state. F72 should
+retain the physical domain/port identity at the digital/analog boundary and reject
+unsupported combined profiles explicitly. Those consumers retain their own
+execution and acceptance; this checkpoint's actual CIRCT verification/export is
+not their completion.
+
+The final integrated frontend harness also passes: 23 exact source-located
+negative fixtures, public positives, genuine separate-JAR summaries and impure/
+missing replacements, no-plugin rejection and runtime attestation/poison controls.
+Its immutable result is `flat-fsm-live/frontend/run-kcfk214e/manifest.json`; the
+maintained plugin jar SHA256 is
+`2c93de69e31d27c9bd71718a31e52d9d4507e6595745bf8a65e9a974b998d339`.
+The earlier component behavioral/structural compiler harnesses retain their own
+passing artifact-bound results; final source domain checks were replayed with the
+maintained API. Focused Markdown, registry generation, formatting and whitespace
+checks pass. No CI was run. B.1 and B.3 are complete for their stated deliverables;
+B.2 and the F56 parent remain open for memory and final increment integration.

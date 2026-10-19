@@ -23,7 +23,9 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
@@ -4374,3 +4376,10 @@ LogicalResult nodal::BehavioralIfOp::verify() {
 }
 LogicalResult nodal::SequentialSelectOp::verify() { return verifySequentialSelect(getOperation()); }
 LogicalResult nodal::SequentialUpdateOp::verify() { return verifySequentialUpdate(getOperation()); }
+
+LogicalResult nodal::FlatFSMOp::verify() { return verifyFlatFSMOperation(getOperation()); }
+LogicalResult nodal::EnumSwitchOp::verify() { return verifyEnumSwitchOperation(getOperation()); }
+LogicalResult nodal::ResetAssertedOp::verify() { return verifyResetAsserted(getOperation()); }
+LogicalResult nodal::SequentialAssertOp::verify() {
+  return verifySequentialAssertion(getOperation());
+}

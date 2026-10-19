@@ -49,7 +49,9 @@ private[nodal] object StructuralParameterBinding:
     if snapshot.parameterExpressions.size > 65536 ||
       snapshot.digitalCollections.size + snapshot.digitalLoops.size +
         (snapshot.structuralIfs.size + snapshot.behavioralIfs.size) * 2 +
-        snapshot.generatedRegions.count(_.digitalBody.nonEmpty) > 65536
+        snapshot.generatedRegions.count(_.digitalBody.nonEmpty) +
+        snapshot.flatFsms.map(_.actions.size).sum +
+        snapshot.enumSwitches.map(value => value.arms.size + 1).sum > 65536
     then
       invalid("static snapshot exceeds the bounded definition budget")
     private val sourceSnapshot = snapshot
@@ -68,7 +70,15 @@ private[nodal] object StructuralParameterBinding:
           Vector(value.trueArm, value.falseArm).map(value.owner -> _)
         ) ++ snapshot.behavioralIfs.flatMap(value =>
           Vector(value.trueArm, value.falseArm).map(value.owner -> _)
-        )
+        ) ++ snapshot.flatFsms.flatMap(machine =>
+          machine.actions.map(action =>
+            machine.owner ->
+              KernelStructuralArmSnapshot(action.path, action.captures, action.arguments, None)
+          )
+        ) ++
+          snapshot.enumSwitches.flatMap(value =>
+            (value.arms :+ value.invalidArm).map(value.owner -> _)
+          )
       )
     private val arguments
         : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
@@ -106,7 +116,7 @@ private[nodal] object StructuralParameterBinding:
       val (collection, argument) =
         arguments.getOrElse(path, invalid("Integer binding is not an actual block argument"))
       if !scope.contains(collection.path) || argument.dataType != "Integer" ||
-        argument.role == "index_capture" ||
+        Set("capture", "index_capture")(argument.role) ||
         (argument.role == "induction" && !generatedDomains.contains(path))
       then
         invalid("Integer binding belongs to another lexical scope or type")
@@ -121,7 +131,7 @@ private[nodal] object StructuralParameterBinding:
       (snapshot.digitalCollections.flatMap(value =>
         value.arguments.takeRight(value.captures.size).map(_.path).zip(value.captures)
       ) ++ conditionalArms.flatMap((_, arm) =>
-        arm.arguments.map(_.path).zip(arm.captures)
+        arm.arguments.takeRight(arm.captures.size).map(_.path).zip(arm.captures)
       ) ++ snapshot.generatedRegions.flatMap(value =>
         value.digitalBody.toVector.flatMap(body =>
           body.arguments.drop(1).map(_.path).zip(body.captures)
@@ -403,8 +413,8 @@ private[nodal] object StructuralParameterBinding:
                 val result = arguments.get(token) match
                   case Some((collection, argument)) =>
                     if defaults || collection.owner != owner || !scope.contains(collection.path) ||
-                      argument.dataType != "Integer"
-                    then invalid("Integer formal escaped its admitted lexical scope")
+                      argument.dataType != "Integer" || argument.role == "capture"
+                    then invalid("Integer formal escaped its admitted lexical static scope")
                     captures.get(token).map(source =>
                       val parent = enclosing.get
                       importValue(owner, parent.exportValues(Vector(parent.resolve(owner, source))))

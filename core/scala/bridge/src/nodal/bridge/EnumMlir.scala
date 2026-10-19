@@ -120,6 +120,10 @@ private[nodal] object EnumMlir:
     private def sourceType(value: ResolvedEnumAbi): String =
       s"Enum(${value.identity},${value.width},${value.hash})"
 
+    def reference(identity: String, path: String): String =
+      val value = definition(identity, path)
+      "@" + quoted(symbolByIdentity(value.identity))
+
     def parseType(text: String, path: String): String =
       requireValid(text.startsWith("Enum(") && text.endsWith(")"), "malformed enum type", path)
       val fields = text.drop(5).dropRight(1).split(",", -1).toVector

@@ -11,6 +11,9 @@
   "families": {
     "sequential-state": [
       "NODAL-SEQUENTIAL-056-001",
+      "NODAL-SEQUENTIAL-056-002",
+      "NODAL-FSM-056-001",
+      "NODAL-CIRCT-056-001",
       "NODAL-STATE-001",
       "NODAL-CDC-001"
     ],
@@ -292,6 +295,8 @@
   "preserved_prefixes": [
     "NODAL-DIGITAL-",
     "NODAL-SEQUENTIAL-",
+    "NODAL-FSM-",
+    "NODAL-CIRCT-",
     "NODAL-SHAPE-",
     "NODAL-ITERATION-",
     "NODAL-BRIDGE-",

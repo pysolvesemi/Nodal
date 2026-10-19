@@ -71,3 +71,21 @@ def selectEnum[A, B <: Data](selector: Expr[EnumValue[A]], invalidResult: Expr[B
     cases: (A, Expr[B])*
 )(using evidence: HwEnum[A]): Expr[B] =
   DigitalEnumContract.select(selector, invalidResult, cases.toVector, evidence)
+
+/** Exhaustive statement selection with a separately checked invalid-encoding action. */
+final class EnumSwitchBuilder[S] private[nodal] (private[nodal] val record: EnumSwitchRecord[S]):
+  @scala.annotation.compileTimeOnly(
+    "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+  )
+  def is(value: S)(body: => Unit): Unit =
+    val _ = value
+    FlatFsmRuntime.unchecked(() => body)
+
+@scala.annotation.compileTimeOnly(
+  "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+)
+def switchEnum[S](selector: Expr[EnumValue[S]])(invalid: => Unit)(
+    body: EnumSwitchBuilder[S] => Unit
+)(using evidence: HwEnum[S]): Unit =
+  val _ = (selector, body, evidence)
+  FlatFsmRuntime.unchecked(() => invalid)

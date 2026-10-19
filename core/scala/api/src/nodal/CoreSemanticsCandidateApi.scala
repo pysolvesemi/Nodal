@@ -244,7 +244,7 @@ final case class EmitQuality(
 )
 
 enum FsmEncoding:
-  case Compact, OneHot, Gray, Auto
+  case Compact, OneHot, Gray, Auto, Custom
 
 enum TransitionMode:
   case Exclusive, Priority
@@ -252,34 +252,89 @@ enum TransitionMode:
 enum IllegalStatePolicy:
   case Error, RecoverToInitial
 
-final class FsmDefinition[S] private[nodal] (val name: String)
+final class FsmDefinition[S] private[nodal] (
+    val name: String,
+    private[nodal] val canonicalType: DataType[EnumValue[S]]
+)
 
 object FsmDefinition:
   def apply[S](name: String)(using evidence: HwEnum[S]): FsmDefinition[S] =
-    val _ = evidence
-    new FsmDefinition(name)
+    apply(name, EnumType[S]())
+
+  def apply[S](name: String, canonicalType: DataType[EnumValue[S]])(using
+      evidence: HwEnum[S]
+  ): FsmDefinition[S] =
+    FlatFsmRuntime.definition(name, canonicalType, evidence)
+
+final class FsmLocalEncoding[S] private[nodal] (
+    private[nodal] val codes: ResolvedEnumCodeMap
+)
+
+object FsmLocalEncoding:
+  def custom[S](width: Int, encoding: EnumEncoding[S])(using
+      evidence: HwEnum[S]
+  ): FsmLocalEncoding[S] =
+    if width <= 0 || width > FlatFsmRuntime.MaximumWidth then
+      FlatFsmRuntime.fail("local encoding width must be between 1 and 4096")
+    new FsmLocalEncoding(DigitalEnumContract.codeMap(evidence, "custom", Some(width -> encoding)))
 
 final class FsmBuilder[S] private[nodal] (
     val definition: FsmDefinition[S],
     val initial: S,
     val encoding: FsmEncoding,
-    val illegalState: IllegalStatePolicy
+    val illegalState: IllegalStatePolicy,
+    private[nodal] val record: FlatFsmRecord[S]
 ):
   def state(value: S)(body: StateBuilder[S] => Unit): Unit =
-    CandidateRuntime.statement(value, body)
-  def parallel(name: String)(body: => Unit): Unit = CandidateRuntime.statement(name, body)
+    ConstructionKernel.flatFsmState(this, value, body)
+  def parallel(name: String)(body: => Unit): Unit =
+    val _ = (name, () => body)
+    FlatFsmRuntime.unsupported()
   def submachine(name: String, definition: FsmDefinition[S]): Unit =
-    CandidateRuntime.statement(name, definition)
-  def boundedCallStack(depth: Int): Unit = CandidateRuntime.statement(depth)
+    val _ = (name, definition)
+    FlatFsmRuntime.unsupported()
+  def boundedCallStack(depth: Int): Unit =
+    val _ = depth
+    FlatFsmRuntime.unsupported()
+  def currentState: DecodedEnum[Expr[EnumValue[S]]] =
+    ConstructionKernel.flatFsmStateView(this, next = false)
+  def nextState: DecodedEnum[Expr[EnumValue[S]]] =
+    ConstructionKernel.flatFsmStateView(this, next = true)
+  def entering(state: S): Expr[Bool] = ConstructionKernel.flatFsmEvent(this, state, entering = true)
+  def exiting(state: S): Expr[Bool] = ConstructionKernel.flatFsmEvent(this, state, entering = false)
+  def transitionTaken: Expr[Bool] = ConstructionKernel.flatFsmTaken(this)
+  def completed: Expr[Bool] = ConstructionKernel.flatFsmCompleted(this)
 
-final class StateBuilder[S] private[nodal] ():
-  def entry(body: => Unit): Unit = CandidateRuntime.statement(body)
-  def active(body: => Unit): Unit = CandidateRuntime.statement(body)
-  def exit(body: => Unit): Unit = CandidateRuntime.statement(body)
+final class StateBuilder[S] private[nodal] (
+    private[nodal] val machine: FsmBuilder[S],
+    private[nodal] val record: FlatFsmStateRecord
+):
+  @scala.annotation.compileTimeOnly(
+    "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+  )
+  def entry(body: => Unit): Unit = FlatFsmRuntime.unchecked(() => body)
+  @scala.annotation.compileTimeOnly(
+    "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+  )
+  def active(body: => Unit): Unit = FlatFsmRuntime.unchecked(() => body)
+  @scala.annotation.compileTimeOnly(
+    "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+  )
+  def exit(body: => Unit): Unit = FlatFsmRuntime.unchecked(() => body)
   def on(condition: Expr[Bool], mode: TransitionMode = TransitionMode.Exclusive)(to: S): Unit =
-    CandidateRuntime.statement(condition, mode, to)
-  def after(cycles: Int)(to: S): Unit = CandidateRuntime.statement(cycles, to)
-  def terminal(): Unit = CandidateRuntime.statement("terminal")
+    ConstructionKernel.flatFsmTransition(this, condition, mode, to, None)
+  @scala.annotation.compileTimeOnly(
+    "NODAL-SEQUENTIAL-056-MISSING: action requires the Nodal compiler plugin"
+  )
+  def onWithAction(condition: Expr[Bool], mode: TransitionMode = TransitionMode.Exclusive)(to: S)(
+      body: => Unit
+  ): Unit =
+    val _ = (condition, mode, to)
+    FlatFsmRuntime.unchecked(() => body)
+  def after(cycles: Int)(to: S): Unit =
+    val _ = (cycles, to)
+    FlatFsmRuntime.unsupported()
+  def terminal(): Unit = ConstructionKernel.flatFsmTerminal(this)
 
 def fsm[S](
     definition: FsmDefinition[S],
@@ -287,6 +342,25 @@ def fsm[S](
     encoding: FsmEncoding = FsmEncoding.Compact,
     illegalState: IllegalStatePolicy = IllegalStatePolicy.Error
 )(body: FsmBuilder[S] => Unit)(using evidence: HwEnum[S]): Unit =
-  val _ = evidence
-  val builder = new FsmBuilder(definition, initial, encoding, illegalState)
-  CandidateRuntime.statement(builder, body)
+  ConstructionKernel.flatFsm(definition, initial, encoding, None, illegalState, body, evidence)
+
+def fsm[S](definition: FsmDefinition[S], initial: S, encoding: FsmLocalEncoding[S])(
+    body: FsmBuilder[S] => Unit
+)(using evidence: HwEnum[S]): Unit =
+  fsm(definition, initial, encoding, IllegalStatePolicy.Error)(body)
+
+def fsm[S](
+    definition: FsmDefinition[S],
+    initial: S,
+    encoding: FsmLocalEncoding[S],
+    illegalState: IllegalStatePolicy
+)(body: FsmBuilder[S] => Unit)(using evidence: HwEnum[S]): Unit =
+  ConstructionKernel.flatFsm(
+    definition,
+    initial,
+    FsmEncoding.Custom,
+    Some(encoding),
+    illegalState,
+    body,
+    evidence
+  )

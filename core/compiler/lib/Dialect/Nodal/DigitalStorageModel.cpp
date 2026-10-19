@@ -167,7 +167,7 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *root = projection->root.getDefiningOp();
   if (!root || root->getParentOp() != module)
     return reject(operation, "digital assignment target root belongs to another module");
-  if (scoped && !llvm::isa<BehavioralIfOp>(parent) &&
+  if (scoped && !llvm::isa<BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(parent) &&
       (control || text(operation, "kind") != "continuous"))
     return reject(operation, "bounded loop writes require continuous ordinary digital storage");
   if (control) {

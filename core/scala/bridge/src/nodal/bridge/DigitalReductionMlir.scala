@@ -28,9 +28,15 @@ private[nodal] final class DigitalReductionMlir(
     Vector(value.trueArm.path -> value.parentRegion, value.falseArm.path -> value.parentRegion)
   ).toMap ++ snapshot.behavioralIfs.flatMap(value =>
     Vector(value.trueArm.path -> value.parentRegion, value.falseArm.path -> value.parentRegion)
-  ) ++ snapshot.generatedRegions.filter(_.digitalBody.nonEmpty).map(value =>
-    value.path -> value.parent
-  )
+  ) ++ snapshot.flatFsms.flatMap(value =>
+    value.actions.map(action => action.path -> value.parentRegion)
+  ) ++
+    snapshot.enumSwitches.flatMap(value =>
+      (value.arms :+ value.invalidArm).map(arm => arm.path -> value.parentRegion)
+    ) ++
+    snapshot.generatedRegions.filter(_.digitalBody.nonEmpty).map(value =>
+      value.path -> value.parent
+    )
   private val parameters = snapshot.parameterExpressions.map(value => value.path -> value).toMap
   private val parameterRegions = snapshot.parameterExpressions.groupBy(_.region)
   private val expressionRegions = snapshot.digitalExpressions.groupBy(_.region)

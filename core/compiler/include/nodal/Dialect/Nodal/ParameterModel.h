@@ -104,6 +104,8 @@ class CollectionIntegerEnvironmentAdmission;
 class LoopIntegerEnvironmentAdmission;
 class StructuralIfIntegerEnvironmentAdmission;
 class BehavioralIntegerEnvironmentAdmission;
+class FlatFSMIntegerEnvironmentAdmission;
+class EnumSwitchIntegerEnvironmentAdmission;
 class DigitalGenerateIntegerEnvironmentAdmission;
 } // namespace detail
 
@@ -170,6 +172,8 @@ private:
   friend class detail::LoopIntegerEnvironmentAdmission;
   friend class detail::StructuralIfIntegerEnvironmentAdmission;
   friend class detail::BehavioralIntegerEnvironmentAdmission;
+  friend class detail::FlatFSMIntegerEnvironmentAdmission;
+  friend class detail::EnumSwitchIntegerEnvironmentAdmission;
   friend class detail::DigitalGenerateIntegerEnvironmentAdmission;
 };
 

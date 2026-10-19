@@ -1,4 +1,7 @@
+#include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/Seq/SeqDialect.h"
+#include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Version.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -17,7 +20,8 @@ int main(int argc, char **argv) {
   llvm::setBugReportMsg("PLEASE submit a Nodal issue and include the crash backtrace.\n");
 
   mlir::DialectRegistry registry;
-  registry.insert<circt::hw::HWDialect, nodal::NodalDialect>();
+  registry.insert<circt::hw::HWDialect, circt::comb::CombDialect, circt::seq::SeqDialect,
+                  circt::verif::VerifDialect, nodal::NodalDialect>();
   nodal::registerNodalDiagnosticPasses();
   nodal::registerNodalPasses();
   mlir::registerPass([] { return mlir::createCanonicalizerPass(); });

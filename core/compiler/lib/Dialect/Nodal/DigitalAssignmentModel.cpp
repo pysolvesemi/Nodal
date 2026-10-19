@@ -4,6 +4,8 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -653,6 +655,15 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
       return read(node, *access, use);
     }
   }
+  if (llvm::isa<FlatFSMOp>(definition)) {
+    SmallVector<Value, 8> dependencies;
+    if (failed(flatFSMResultDependencies(value, dependencies)))
+      return reject(definition, "flat FSM result lacks checked input dependencies");
+    for (Value input : dependencies)
+      if (failed(depend(node, input, definition)))
+        return failure();
+    return success();
+  }
   if (named(definition, "nodal.structural_if")) {
     auto header = inspectStructuralIfHeader(definition);
     auto id = choice(definition);
@@ -686,7 +697,7 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
                     name == "nodal.const_expr" || name == "nodal.const_parameter_ref" ||
                     name == "nodal.iteration_index" || name == "nodal.static_compare" ||
                     name == "nodal.static_logic" || name == "nodal.behavioral_predicate" ||
-                    name == "nodal.sequential_select";
+                    name == "nodal.sequential_select" || name == "nodal.reset_asserted";
   if (!pure || definition->getNumRegions() || definition->getNumSuccessors() ||
       definition->getNumResults() != 1 || definition->hasAttr("unit"))
     return reject(definition,
@@ -800,6 +811,28 @@ LogicalResult AssignmentQuery::verify() {
       } else if (llvm::isa<SequentialUpdateOp>(operation)) {
         if (failed(verifySequentialUpdate(&operation)) ||
             failed(assignmentNode(&operation, nullptr, 0)))
+          return failure();
+      } else if (llvm::isa<FlatFSMOp>(operation)) {
+        auto header = inspectFlatFSMHeader(&operation);
+        if (failed(header) || failed(verifyFlatFSMOperation(&operation)) ||
+            scope.depth >= limits.maximumGuardDepth)
+          return failure();
+        for (unsigned i = 0; i < header->guards; ++i)
+          if (failed(valueNode(operation.getOperand(1 + i), &operation)))
+            return failure();
+        for (Block *body : header->bodies)
+          scopes.push_back({body, scope.iteration, scope.depth + 1});
+      } else if (llvm::isa<EnumSwitchOp>(operation)) {
+        auto header = inspectEnumSwitchHeader(&operation);
+        if (failed(header) || failed(verifyEnumSwitchOperation(&operation)) ||
+            scope.depth >= limits.maximumGuardDepth ||
+            failed(valueNode(operation.getOperand(0), &operation)))
+          return failure();
+        for (Block *body : header->bodies)
+          scopes.push_back({body, scope.iteration, scope.depth + 1});
+      } else if (llvm::isa<SequentialAssertOp>(operation)) {
+        if (failed(verifySequentialAssertion(&operation)) ||
+            failed(valueNode(operation.getOperand(0), &operation)))
           return failure();
       } else if (llvm::isa<BehavioralIfOp>(operation)) {
         auto header = inspectBehavioralIfHeader(&operation);

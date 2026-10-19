@@ -1327,9 +1327,10 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - Original scope retained: Implement `Reg`, `RegNext`, reset/uninitialized state, enum registers, exhaustive switches, `when` priority, enables, manual FSMs, concise high-level flat FSMs, entry/active/exit/transition actions, exclusive/priority transitions, terminal/completion states, local compact/one-hot/Gray/custom/Auto encoding, illegal-state policies, graph diagnostics, memory-port ownership, and CIRCT/Nodal sequential lowering without exposing normal `always` syntax or hidden boot state.
   - [ ] **F-056.A — Architecture review, modularity, scalability and extensibility.** Reuse explicit domain/state ownership and canonical enum ABI; separate local FSM encoding from external values.
   - [ ] **F-056.B — Implementation and integration**
-    - [ ] **F-056.B.1** Implement public/frontend state, enum/FSM and priority construction with explicit reset/domain ownership.
+    - [x] **F-056.B.1** Implement public/frontend state, enum/FSM and priority construction with explicit reset/domain ownership.
     - [ ] **F-056.B.2** Integrate native state/transition/action, encoding and memory-port verification, preserving canonical external enum ABI.
-    - [ ] **F-056.B.3** Lower the approved sequential profile through Nodal/CIRCT with retained action/reset/illegal-state behavior and source identities.
+    - [x] **F-056.B.3** Lower the approved sequential profile through Nodal/CIRCT with retained action/reset/illegal-state behavior and source identities.
+  - Focused checkpoint acceptance: [flat-FSM source/native and actual CIRCT target replay](../implementation/increment56-readiness.md#flat-fsm-and-fixed-scalar-target-integration). B.2 memory ports and full increment acceptance remain open.
   - [ ] **F-056.C — Focused positive, negative and predecessor regression.** Test reset/enable priority, uninitialized state, illegal encodings, overlapping transitions, incomplete actions and multiple drivers.
   - [ ] **F-056.D — Focused local validation and applicability**
     - [ ] **F-056.D.1** Compiler and target witnesses: Retain actual construction/IR and any generated HDL promised here, with source maps and structural checks at the implemented boundary. A future backend is not an executed tool result.

@@ -25,6 +25,9 @@ behavioralIntegerContextsAtUse(mlir::Operation *use);
 mlir::LogicalResult verifyLocalDomainBinding(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralPredicate(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralIfOperation(mlir::Operation *operation);
+mlir::LogicalResult verifySequentialBody(mlir::Block *body);
+mlir::LogicalResult verifyResetAsserted(mlir::Operation *operation);
+mlir::LogicalResult verifySequentialAssertion(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialSelect(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialUpdate(mlir::Operation *operation);
 /// F19 and unbound F54 descriptor-only intent remains non-executable. Actual

@@ -150,6 +150,7 @@ private[nodal] final class SemanticOriginBuilder:
     "AnalogUserFunctionRuntime.scala",
     "StructuralIfRuntime.scala",
     "SequentialRuntime.scala",
+    "FlatFsmRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
@@ -994,7 +995,9 @@ private[nodal] final class SemanticOriginBuilder:
           .getOrElse(
             s"${operation}_${sourceSuffix(capture.site)}" -> "source-digest"
           )
-        val key = s"${capture.module}:${capture.index}"
+        // Collision allocation is local to this module. A session-wide module handle
+        // must not change otherwise identical reusable definition-local identities.
+        val key = capture.index.toString
         val base = cleanIdentifier(selected._1, "expression")
         var salt = 0
         var name = base

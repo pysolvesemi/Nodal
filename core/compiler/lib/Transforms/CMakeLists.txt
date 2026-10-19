@@ -2,6 +2,7 @@ add_mlir_library(NodalTransforms
   Passes.cpp
   DigitalMaterialization.cpp
   SequentialNormalization.cpp
+  SequentialToCIRCT.cpp
   DigitalLoopPlanning.cpp
   AnalogCanonicalization.cpp
   AnalogSemanticLint.cpp
@@ -12,6 +13,11 @@ add_mlir_library(NodalTransforms
   LINK_LIBS PUBLIC
     NodalDiagnostics
     NodalDialect
+    CIRCTHW
+    CIRCTComb
+    CIRCTSeq
+    CIRCTVerif
+    CIRCTSupport
     MLIRIR
     MLIRParser
     MLIRPass

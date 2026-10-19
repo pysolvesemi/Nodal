@@ -349,6 +349,25 @@ private:
 };
 } // namespace
 
+FailureOr<CanonicalEnumDefinition> inspectCanonicalEnumDefinition(Operation *use,
+                                                                  FlatSymbolRefAttr reference) {
+  if (!use || !reference)
+    return failure();
+  ValueVerifier verifier(use);
+  auto definition = verifier.resolve(use, reference.getValue());
+  if (failed(definition))
+    return failure();
+  CanonicalEnumDefinition result{
+      (*definition)->operation,
+      EnumType::get(use->getContext(), reference.getValue(), (*definition)->width),
+      {},
+      {}};
+  for (const auto &entry : (*definition)->cases) {
+    result.caseIds.push_back(StringAttr::get(use->getContext(), entry.id));
+    result.codes.push_back(entry.code);
+  }
+  return result;
+}
 LogicalResult verifyEnumDefinitionAbi(Operation *definition) {
   auto metadata = definition->getAttrOfType<DictionaryAttr>("metadata");
   if (!metadata)

@@ -2682,7 +2682,9 @@ FailureOr<nodal::ParameterIntegerEnvironment> nodal::ParameterIntegerEnvironment
     }
   }
   if (region->kind == nodal::DigitalRegionKind::StructuralArm ||
-      region->kind == nodal::DigitalRegionKind::BehavioralArm) {
+      region->kind == nodal::DigitalRegionKind::BehavioralArm ||
+      region->kind == nodal::DigitalRegionKind::FlatFSMAction ||
+      region->kind == nodal::DigitalRegionKind::EnumSwitchArm) {
     for (const auto &binding : bindings) {
       auto source = nodal::digitalRegionCaptureSource(binding.argument);
       if (failed(source) || !*source || binding.captureSource != *source)

@@ -42,6 +42,7 @@ object SimulationSource:
     val supported = Set(
       "metadata",
       "analog-contribute",
+      "analog-assignment",
       "node-connect",
       "terminal-connect",
       "node-array-connect",
@@ -116,6 +117,10 @@ object SimulationSource:
           Option(error.getMessage).getOrElse(error.getClass.getName)
         ))
 
+/** Named emission is preserved unless finite whole-graph materialization is selected explicitly. */
+enum AnalogHierarchyMode:
+  case PreserveNamed, MaterializeScalar
+
 /** Explicit tools and evidence location; no PATH lookup or hidden profile fallback. */
 final case class CompilationTools(
     nodalc: Path,
@@ -124,7 +129,8 @@ final case class CompilationTools(
     compilerProfile: String,
     evidenceRoot: Path,
     timeout: Duration = Duration.ofSeconds(30),
-    sourceRevision: Option[String] = None
+    sourceRevision: Option[String] = None,
+    hierarchy: AnalogHierarchyMode = AnalogHierarchyMode.PreserveNamed
 )
 
 final case class CommandEvidence(
@@ -155,7 +161,7 @@ final class CompiledSimulationModel private[sim] (
     val moduleName: String,
     val portsInTargetOrder: Vector[ModelPort],
     val evidence: CompilationEvidence,
-    private[sim] val compiled: OpenVafCompileResult
+    private[nodal] val compiled: OpenVafCompileResult
 )
 
 final case class CompilationResult(
@@ -310,7 +316,10 @@ object SimulationCompiler:
               digest(normalized)
             ),
             tools.translator,
-            Vector("--nodal-to-verilog-a"),
+            Vector(tools.hierarchy match
+              case AnalogHierarchyMode.PreserveNamed => "--nodal-to-verilog-a"
+              case AnalogHierarchyMode.MaterializeScalar =>
+                "--nodal-to-verilog-a-scalar-hierarchy"),
             "translator"
           )
         yield (normalized, target)

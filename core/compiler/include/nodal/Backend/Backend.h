@@ -29,6 +29,11 @@ enum class NamingPolicy {
   Semantic,
 };
 
+enum class HierarchyEmission {
+  NamedModules,
+  MaterializedScalar,
+};
+
 struct BackendProfile {
   BackendKind kind;
   llvm::StringRef id;
@@ -77,7 +82,8 @@ const TargetVerificationHooks &getBuiltinTargetVerificationHooks();
 /// Clone, semantically verify, capability-check, render, target-verify,
 /// structurally reparse, and only then publish deterministic target bytes.
 mlir::LogicalResult emitBackend(mlir::ModuleOp module, BackendKind kind, llvm::raw_ostream &output,
-                                const TargetVerificationHooks *hooks = nullptr);
+                                const TargetVerificationHooks *hooks = nullptr,
+                                HierarchyEmission hierarchy = HierarchyEmission::NamedModules);
 
 /// Register the built-in `nodal-to-verilog-a` and
 /// `nodal-to-verilog-ams` MLIR translations.

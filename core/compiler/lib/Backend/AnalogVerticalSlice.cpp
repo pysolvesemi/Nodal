@@ -3730,6 +3730,39 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
                                      llvm::raw_ostream &output) {
   if (failed(verifyRootExport(definitions)))
     return failure();
+  llvm::SmallVector<std::string> hierarchyCorrespondence;
+  if (!definitions.empty()) {
+    auto root = definitions.front()->getParentOfType<mlir::ModuleOp>();
+    Attribute raw = root->getAttr("nodal.backend.hierarchy_correspondence");
+    if (raw) {
+      auto entries = llvm::dyn_cast<ArrayAttr>(raw);
+      auto profile = root->getAttrOfType<StringAttr>("nodal.backend.hierarchy_materialization");
+      if (!entries || !profile || profile.getValue() != "scalar-v1" || definitions.size() != 1)
+        return emitMappedFailure(root, "NODAL-BACKEND-HIERARCHY-MATERIALIZE-003",
+                                 "invalid scalar hierarchy correspondence inventory");
+      llvm::StringSet<> identities;
+      for (Attribute entry : entries) {
+        auto dictionary = llvm::dyn_cast<DictionaryAttr>(entry);
+        auto source = dictionary ? dictionary.getAs<StringAttr>("source") : StringAttr();
+        auto target = dictionary ? dictionary.getAs<StringAttr>("target") : StringAttr();
+        auto kind = dictionary ? dictionary.getAs<StringAttr>("kind") : StringAttr();
+        if (!source || !target || !kind || !validCanonicalCommentText(source.getValue()) ||
+            !isPortableVerilogIdentifier(target.getValue()) ||
+            (kind.getValue() != "instance" && kind.getValue() != "terminal" &&
+             kind.getValue() != "parameter") ||
+            !identities.insert((source.getValue() + ":" + kind.getValue()).str()).second)
+          return emitMappedFailure(root, "NODAL-BACKEND-HIERARCHY-MATERIALIZE-003",
+                                   "malformed scalar hierarchy correspondence entry");
+        std::string encoded;
+        llvm::raw_string_ostream stream(encoded);
+        stream << llvm::json::Value(llvm::json::Object{{"source", source.getValue()},
+                                                       {"target", target.getValue()},
+                                                       {"kind", kind.getValue()}});
+        stream.flush();
+        hierarchyCorrespondence.push_back(llvm::encodeBase64(encoded));
+      }
+    }
+  }
   // Rendering is also a direct boundary: independently validate normalized
   // physical groups and their exact active support placements before emitting
   // any declaration. A derived record's name or owner attributes are not proof.
@@ -3817,6 +3850,12 @@ LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
   output << " */\n";
   output << "`include \"constants.vams\"\n";
   output << "`include \"disciplines.vams\"\n\n";
+  if (!hierarchyCorrespondence.empty()) {
+    output << "// nodal.hierarchy_materialization scalar-v1\n";
+    for (const auto &entry : hierarchyCorrespondence)
+      output << "// nodal.hierarchy_correspondence " << entry << "\n";
+    output << "\n";
+  }
   if (requiresAlias)
     output << "module " << aliasHelper << "(.lhs(n), .rhs(n));\n"
            << "  inout n;\n"

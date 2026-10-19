@@ -4,6 +4,7 @@ add_mlir_library(NodalBackend
   AnalogUserFunctionBackend.cpp
   AnalogVerticalSlice.cpp
   Backend.cpp
+  ScalarHierarchyMaterialization.cpp
   ShapedValueBackend.cpp
 
   ADDITIONAL_HEADER_DIRS

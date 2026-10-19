@@ -3050,7 +3050,7 @@ private final class ConstructionSession(val options: EmitOptions):
     ).contains(kind)
     if !generatedAnalogContribution && !structuralTopology then
       requireNoGeneratedEffect(s"generated '$kind' effect")
-    if kind == "assignment" then
+    if kind == "assignment" || kind == "analog-assignment" then
       analogSemanticContext.foreach: context =>
         if context.kind != AnalogEquationRuntime.RegionKind.Procedural then
           fail(
@@ -3080,7 +3080,13 @@ private final class ConstructionSession(val options: EmitOptions):
       )
       operations += captured
       moduleStack.lastOption.foreach(module =>
-        semanticOrigin.captureOperation(module.handle, kind, captured.values)
+        // Admission distinguishes analog storage effects; source naming retains
+        // the shared assignment sink-affinity semantics for both kinds.
+        semanticOrigin.captureOperation(
+          module.handle,
+          if kind == "analog-assignment" then "assignment" else kind,
+          captured.values
+        )
       )
 
   private def provisionalModulePath(handle: Long): String =

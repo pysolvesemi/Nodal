@@ -513,6 +513,121 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
         self.assertIn("ngspice-47-local-linux-x86_64", generated)
         self.assertNotIn("OpenVafProfile(", generated)
 
+    def vacask(self) -> dict:
+        return next(profile for profile in self.catalog["simulator_profiles"]["profiles"]
+                    if profile["consumer"] == "VACASK")
+
+    def test_vacask_is_independent_and_preserves_ngspice_pin(self) -> None:
+        data = (ROOT / REGISTRY.CATALOG).read_bytes()
+        ngspice = REGISTRY.simulator_output(self.catalog, data)
+        vacask = REGISTRY.vacask_output(self.catalog, data)
+        self.assertNotIn("vacask-", ngspice)
+        self.assertNotIn("ngspice-", vacask)
+        self.assertIn("bb606780f55d0b4f4b0e50503381d991cd2fd12298f85563bb4438b33c1abb13", vacask)
+        self.assertIn("ba254f361c728f70cbb09293750d93f541f26c256d56286ddfb755d0d2793711", ngspice)
+        self.assertIn(hashlib.sha256(data).hexdigest(), vacask)
+        self.assertIn("runtimeLibraries = Vector(", vacask)
+        original = copy.deepcopy(self.catalog)
+        self.catalog["simulator_profiles"]["profiles"].reverse()
+        self.vacask()["build"]["runtime_libraries"].reverse()
+        self.assertEqual(REGISTRY.vacask_output(self.catalog, data), vacask)
+        self.assertEqual(REGISTRY.simulator_output(self.catalog, data), ngspice)
+        # Neither simulator changes the independently frozen admission facts.
+        self.catalog = original
+        self.catalog["simulator_profiles"]["profiles"].remove(self.vacask())
+        self.assertEqual(self.generated()[REGISTRY.OUTPUT], REGISTRY.outputs()[REGISTRY.OUTPUT])
+        self.assertNotIn("VacaskProfile(\n", REGISTRY.vacask_output(self.catalog, data))
+
+    def test_simulator_pins_match_the_selected_independent_artifacts(self) -> None:
+        ngspice = next(p for p in self.catalog["simulator_profiles"]["profiles"]
+                       if p["consumer"] == "ngspice")
+        encoded = json.dumps(ngspice, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(),
+                         "06cb66b1b9f4303da903b0261b10a3e0a35fd662e99a7800533cc5350273cfc1")
+        expected = {
+            "libamd.so.3": "a4654cdedb47d7806a0c0ede323e40d152b2f1de6f52a22dfa763b8c9a7b4be8",
+            "libbtf.so.2": "65e3168fc81f33fdfed4c5c966f945d984ce269b252593066943e1d8b417e5c6",
+            "libcolamd.so.3": "35f564c522b6fb9b72e71014dd1e43da7f12b2d73fbd117ae5aaba635a8759d6",
+            "libklu.so.2": "9c26bf11c72d86696b6104261d6213258388aa95ce53d38d57c44a7815ff3672",
+            "libopenblas.so.0": "10d1c640ecccd21063a7d80f90e949b1d48202830b6ec0b52b2796c5d0fbce63",
+            "libsuitesparseconfig.so.7": "133ec1f1a0655f5b2fc43b43605a0c2986ba00addad144bb3096a99045bfb155",
+        }
+        actual = {entry["soname"]: entry["sha256"]
+                  for entry in self.vacask()["build"]["runtime_libraries"]}
+        self.assertEqual(actual, expected)
+        generated = REGISTRY.outputs()[REGISTRY.VACASK_OUTPUT]
+        for soname, digest in expected.items():
+            self.assertIn(json.dumps(soname), generated)
+            self.assertIn(json.dumps(digest), generated)
+
+    def test_vacask_release_identity_rejects_unrelated_or_modified_tools(self) -> None:
+        profile = self.vacask()
+        for field, value, message in (
+            ("consumer", "Xyce", "unsupported simulator profile"),
+            ("id", "vacask-latest", "unsupported VACASK profile"),
+            ("version", "0.3.5", "unsupported VACASK profile"),
+            ("platform", "linux-aarch64", "unsupported VACASK profile"),
+            ("version_stdout", profile["version_stdout"] + "\n", "invalid VACASK help stdout"),
+            ("version_stdout", None, "invalid VACASK help stdout"),
+            ("executable_sha256", "0" * 64, "invalid VACASK executable digest"),
+            ("build", {}, "incomplete VACASK build provenance"),
+        ):
+            original = profile[field]
+            with self.subTest(field=field):
+                profile[field] = value
+                self.invalid(message)
+            profile[field] = original
+        build = profile["build"]
+        for field, value, message in (
+            ("kind", "locally-patched", "unsupported VACASK build kind"),
+            ("source_modified", True, "unsupported VACASK build kind"),
+            ("binary_modified", True, "unsupported VACASK build kind"),
+            ("archive_url", "https://example.com/vacask.tar.gz", "invalid VACASK release provenance"),
+            ("archive_sha256", "0" * 64, "invalid VACASK release provenance"),
+            ("source_commit", "0" * 40, "invalid VACASK release provenance"),
+        ):
+            original = build[field]
+            with self.subTest(field=field):
+                build[field] = value
+                self.invalid(message)
+            build[field] = original
+        build["compiler_flags"] = "-O3"
+        self.invalid("incomplete VACASK build provenance")
+
+    def test_vacask_runtime_manifest_rejects_missing_duplicate_or_unknown_libraries(self) -> None:
+        build = self.vacask()["build"]
+        libraries = copy.deepcopy(build["runtime_libraries"])
+        for value, message in (
+            (None, "expected list"), ([], "expected list"), ([1], "expected objects"),
+            (libraries[:-1], "unsupported VACASK runtime libraries"),
+            (libraries + [libraries[0]], "duplicate soname"),
+            ([dict(libraries[0], soname="../lib.so")] + libraries[1:],
+             "unsupported VACASK runtime libraries"),
+        ):
+            with self.subTest(value=value):
+                build["runtime_libraries"] = value
+                self.invalid(message)
+        build["runtime_libraries"] = libraries
+
+    def test_vacask_runtime_provenance_rejects_malformed_package_or_hash(self) -> None:
+        library = self.vacask()["build"]["runtime_libraries"][0]
+        for field, value, message in (
+            ("package", "other", "unsupported runtime package provenance"),
+            ("version", "latest", "unsupported runtime package provenance"),
+            ("architecture", "arm64", "unsupported runtime package provenance"),
+            ("archive_url", "https://example.com/lib.deb", "unsupported runtime package provenance"),
+            ("sha256", "A" * 64, "invalid runtime sha256"),
+            ("sha256", None, "invalid runtime sha256"),
+            ("archive_sha256", "f" * 63, "invalid runtime archive_sha256"),
+        ):
+            original = library[field]
+            with self.subTest(field=field):
+                library[field] = value
+                self.invalid(message)
+            library[field] = original
+        library["search_path"] = "/usr/lib"
+        self.invalid("incomplete runtime provenance")
+
     def test_duplicate_json_keys_reject(self) -> None:
         with self.assertRaisesRegex(REGISTRY.CatalogError, "duplicate key"):
             json.loads('{"schema":1,"schema":2}', object_pairs_hook=REGISTRY.reject_duplicate_keys)

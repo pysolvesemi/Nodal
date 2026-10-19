@@ -227,7 +227,9 @@ object SimulationBench:
         ),
         options = solverTolerances.lowered
       )
-      NgspiceBench.generate(lowered).left.map(message => SimulationError("SIM-BENCH", message))
+      AnalogCircuitValidation.validate(lowered).left.map(message =>
+        SimulationError("SIM-BENCH", message)
+      )
         .map(_ => new SimulationBench(model, sources, analysis, probes, lowered))
     catch
       case NonFatal(error) => Left(SimulationError(
@@ -235,11 +237,16 @@ object SimulationBench:
           Option(error.getMessage).getOrElse(error.getClass.getName)
         ))
 
+enum SimulatorBackend:
+  case Ngspice, Vacask
+
 final case class SimulatorTools(
     executable: Path,
     profile: String,
     evidenceRoot: Path,
-    timeout: Duration = Duration.ofSeconds(30)
+    timeout: Duration = Duration.ofSeconds(30),
+    backend: SimulatorBackend = SimulatorBackend.Ngspice,
+    runtimeLibraryDirectories: Vector[Path] = Vector.empty
 )
 
 final case class SimulationEvidence(
@@ -366,24 +373,36 @@ final class SimulationResult private[sim] (
 
 object SimulationSession:
   def run(bench: SimulationBench, tools: SimulatorTools): SimulationResult =
-    val result = NgspiceSimulator.simulate(NgspiceCircuitSimulateRequest(
-      tools.executable,
-      tools.evidenceRoot,
-      tools.profile,
-      bench.model.compiled,
-      bench.lowered,
-      runTimeout = tools.timeout
-    ))
-    new SimulationResult(
-      evidence(result),
-      Option.when(result.outcome != NgspiceOutcome.Simulated)(SimulationError(
-        result.diagnosticCode,
-        result.message
-      )),
-      axisUnit(bench),
-      bench.probes,
-      result.plot
-    )
+    SimulationExecution.admit(bench.lowered, tools) match
+      case Left(error) =>
+        new SimulationResult(
+          SimulationEvidence(
+            None,
+            "UnsupportedCapability",
+            error.message,
+            None,
+            bench.model.compiled.identity.modelSha256,
+            bench.model.compiled.artifact.map(_.sha256),
+            None,
+            None,
+            None,
+            None,
+            None
+          ),
+          Some(error),
+          axisUnit(bench),
+          bench.probes,
+          None
+        )
+      case Right(_) =>
+        val result = SimulationExecution.run(bench, tools)
+        new SimulationResult(
+          result.evidence,
+          result.error,
+          axisUnit(bench),
+          bench.probes,
+          result.plot
+        )
 
   /** Compares a fresh simulation without retaining its plot rows. */
   def compare[A, D](
@@ -396,6 +415,28 @@ object SimulationSession:
       alignment: WaveformAlignment = WaveformAlignment.Exact
   ): StreamingComparisonResult =
     WaveformSimulation.compare(bench, tools, probe, reference, tolerance, component, alignment)
+
+  /** Runs both explicit consumers on the same artifact; disagreement is a completed result. */
+  def compareTools[A, D](
+      bench: SimulationBench,
+      referenceTools: SimulatorTools,
+      candidateTools: SimulatorTools,
+      axis: WaveformAxis[A],
+      probe: Probe[D],
+      tolerance: Tolerance[D],
+      component: ComplexComponent = ComplexComponent.Real,
+      alignment: WaveformAlignment = WaveformAlignment.Exact
+  ): CrossToolComparisonResult =
+    CrossToolComparison.run(
+      bench,
+      referenceTools,
+      candidateTools,
+      axis,
+      probe,
+      tolerance,
+      component,
+      alignment
+    )
 
   private[sim] def evidence(result: NgspiceSimulationResult): SimulationEvidence =
     val command = result.simulation.map(value =>

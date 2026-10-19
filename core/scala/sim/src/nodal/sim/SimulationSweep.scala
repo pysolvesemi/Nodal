@@ -4,7 +4,7 @@ import java.nio.charset.StandardCharsets
 import scala.util.control.NonFatal
 
 import nodal.Quantity
-import nodal.internal.integrations.{NgspiceAnalysisKind, NgspiceBench, OpenVafDiagnosticMapper}
+import nodal.internal.integrations.{NgspiceAnalysisKind, OpenVafDiagnosticMapper}
 
 /** A finite source-DC axis; values retain the source's electrical dimension. */
 final class SweepAxis private[sim] (
@@ -57,7 +57,7 @@ object SimulationSweep:
       axes.foreach: axis =>
         require(count <= 128 / axis.values.size, "Cartesian sweep exceeds 128 runs")
         count *= axis.values.size
-      val baseBench = NgspiceBench.generate(bench.lowered).toOption
+      val baseBench = SimulationExecution.admit(bench.lowered, tools).toOption
       require(baseBench.nonEmpty, "base sweep bench is outside the supported profile")
       // DC/AC have exact validated row counts. Adaptive transient rows can reach
       // the parser ceiling, so use that worst case rather than the nominal grid.
@@ -69,7 +69,8 @@ object SimulationSweep:
         "sweep worst-case retained values exceed 4000000 cells"
       )
       val baseIdentity = OpenVafDiagnosticMapper.sha256((
-        bench.model.evidence.modelSha256.getOrElse("") + "|" + baseBench.get.deck
+        bench.model.evidence.modelSha256.getOrElse("") + "|" + tools.backend.toString + "|" +
+          tools.profile + "|" + baseBench.get.deck
       ).getBytes(StandardCharsets.UTF_8).toVector)
       // Preflight every bounded point before launching any process. Invalid late points
       // cannot leave a partially executed sweep masquerading as an admitted request.
@@ -91,7 +92,7 @@ object SimulationSweep:
           )
         )
         require(
-          NgspiceBench.generate(lowered).isRight,
+          SimulationExecution.admit(lowered, tools).isRight,
           "sweep point is outside supported bench profile"
         )
         val pointBench =

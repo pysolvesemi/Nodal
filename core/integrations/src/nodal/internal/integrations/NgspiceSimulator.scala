@@ -1,9 +1,8 @@
 package nodal.internal.integrations
 
-import java.io.{ByteArrayOutputStream, DataOutputStream, InputStream}
+import java.io.{ByteArrayOutputStream, DataOutputStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
-import java.security.MessageDigest
 import java.time.Duration
 
 import scala.util.boundary
@@ -395,47 +394,7 @@ private[nodal] object NgspiceSimulator:
   private def stageArtifact(
       compiled: OpenVafCompileResult,
       destination: Path
-  ): Either[String, Unit] =
-    def successful(value: Option[ToolProcessResult]): Boolean =
-      value.exists(result => result.failure.isEmpty && result.exitCode.contains(0))
-    if compiled.outcome != OpenVafOutcome.Compiled || !successful(compiled.compilation) ||
-      !successful(compiled.versionProbe) || !compiled.identity.requestSha256.exists(sha256) ||
-      !sha256(compiled.identity.modelSha256) || compiled.identity.languageProfile != "verilog-a"
-    then
-      Left("simulation requires a successful identified OpenVAF compile result")
-    else
-      compiled.artifact match
-        case None => Left("successful compile result has no OSDI artifact")
-        case Some(artifact) =>
-          if !artifact.path.isAbsolute || artifact.size < 64 || artifact.size > MaxArtifactBytes ||
-            !sha256(artifact.sha256) ||
-            !Files.isRegularFile(artifact.path, LinkOption.NOFOLLOW_LINKS)
-          then
-            Left("compiled artifact must be a regular bounded OSDI file with a valid identity")
-          else if Files.size(artifact.path) != artifact.size then
-            Left("compiled artifact size changed")
-          else
-            val input = Files.newInputStream(artifact.path)
-            val output = Files.newOutputStream(destination, StandardOpenOption.CREATE_NEW)
-            val hash = MessageDigest.getInstance("SHA-256")
-            var count = 0L
-            try
-              val buffer = new Array[Byte](65536)
-              var read = input.read(buffer)
-              while read != -1 && count <= artifact.size do
-                count += read
-                if count <= artifact.size then
-                  hash.update(buffer, 0, read)
-                  output.write(buffer, 0, read)
-                if count <= artifact.size then read = input.read(buffer)
-            finally
-              try input.close()
-              finally output.close()
-            if count != artifact.size ||
-              hash.digest().map(b => f"${b & 0xff}%02x").mkString != artifact.sha256
-            then
-              Left("compiled artifact content does not match the compile result")
-            else Right(())
+  ): Either[String, Unit] = OsdiArtifact.stage(compiled, destination)
 
   private def unchangedInputs(
       identity: NgspiceIdentity,
@@ -460,54 +419,12 @@ private[nodal] object NgspiceSimulator:
     OpenVafDiagnosticMapper.sha256(bytes.toByteArray.toVector)
 
   private def hashFile(path: Path, maximum: Long = Long.MaxValue): String =
-    val hash = MessageDigest.getInstance("SHA-256")
-    val input = Files.newInputStream(path)
-    var total = 0L
-    try
-      val buffer = new Array[Byte](65536)
-      var read = input.read(buffer)
-      while read != -1 && total <= maximum do
-        total += read
-        if total <= maximum then hash.update(buffer, 0, read)
-        if total <= maximum then read = input.read(buffer)
-    finally input.close()
-    if total > maximum then "" else hash.digest().map(b => f"${b & 0xff}%02x").mkString
+    AnalogRawEvidence.hashFile(path, maximum)
 
   private final case class RawRead[A](
       artifact: Option[NgspiceRawArtifact],
       result: Either[(NgspiceOutcome, String), (NgspiceRawSchema, A)]
   )
-
-  /** Counts and hashes the very bytes consumed by the parser, including bounded error draining. */
-  private final class RawInput(source: InputStream) extends InputStream:
-    private val hash = MessageDigest.getInstance("SHA-256")
-    var count = 0L
-    var ascii = true
-    var ended = false
-    override def read(): Int =
-      val byte = new Array[Byte](1)
-      if read(byte, 0, 1) == -1 then -1 else byte(0) & 0xff
-    override def read(buffer: Array[Byte], offset: Int, length: Int): Int =
-      if length == 0 then 0
-      else if count > MaxRawBytes then -1
-      else
-        val size =
-          source.read(buffer, offset, math.min(length.toLong, MaxRawBytes + 1L - count).toInt)
-        if size == -1 then ended = true
-        else
-          count += size
-          hash.update(buffer, offset, size)
-          var index = offset
-          while index < offset + size do
-            if (buffer(index) & 0xff) > 127 then ascii = false
-            index += 1
-        size
-    def drain(): Unit =
-      val buffer = new Array[Byte](8192)
-      while !ended && count <= MaxRawBytes do
-        val _ = read(buffer, 0, buffer.length)
-    def sha256: String = hash.digest().map(byte => f"${byte & 0xff}%02x").mkString
-    override def close(): Unit = source.close()
 
   private def readRaw[A](
       path: Path,
@@ -515,59 +432,23 @@ private[nodal] object NgspiceSimulator:
       initialize: NgspiceRawSchema => Either[String, A],
       consume: (A, Int, Vector[NgspiceComplex]) => Either[String, A]
   ): RawRead[A] =
-    def invalid(message: String): RawRead[A] =
-      RawRead(None, Left(NgspiceOutcome.InvalidRaw -> message))
-    if !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) == 0 then
-      invalid("successful exit did not produce a fresh nonempty regular raw output")
-    else if Files.size(path) > MaxRawBytes then invalid(s"raw output exceeds $MaxRawBytes bytes")
-    else
-      val input = new RawInput(Files.newInputStream(path))
-      val validator = new RequestedGrid(bench)
-      var schema = Option.empty[NgspiceRawSchema]
-      var aggregate = Option.empty[A]
-      var consumerError = Option.empty[String]
-      def accept(value: => Either[String, A]): Unit =
-        try
-          value match
-            case Left(message) => consumerError = Some(message)
-            case Right(result) => aggregate = Some(result)
-        catch
-          case NonFatal(error) => consumerError = Some(
-              s"raw consumer failed: ${Option(error.getMessage).getOrElse(error.getClass.getSimpleName)}"
-            )
-      val parsed = try
-        val result = NgspiceRaw.fold(input, bench.kind, asciiOnly = true)(value =>
-          schema = Some(value)
-          validator.initialize(value)
-          if validator.error.isEmpty then accept(initialize(value))
-          Right(())
-        ): (_, index, row) =>
-          validator.consume(index, row.head.real)
-          if validator.error.isEmpty && consumerError.isEmpty then
-            aggregate.foreach(value => accept(consume(value, index, row)))
-          Right(())
-        // A malformed suffix must never leave a successful prefix or a prefix-only artifact hash.
-        input.drain()
-        result
-      finally input.close()
-      if input.count == 0 || input.count > MaxRawBytes || !input.ended then
-        invalid("raw output is empty or exceeds its byte bound")
-      else if !input.ascii then invalid("raw output must use the pinned ASCII protocol")
-      else
-        val artifact = NgspiceRawArtifact(path, input.sha256, input.count)
-        val result =
-          for
-            _ <- parsed.left.map(NgspiceOutcome.InvalidRaw -> _)
-            _ <- validator.finish().toLeft(()).left.map(NgspiceOutcome.InvalidRaw -> _)
-            _ <- Either.cond(
-              Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
-                Files.size(path) == artifact.size && hashFile(path, MaxRawBytes) == artifact.sha256,
-              (),
-              NgspiceOutcome.InvalidRaw -> "raw output changed while it was being parsed"
-            )
-            _ <- consumerError.toLeft(()).left.map(NgspiceOutcome.ConsumerFailure -> _)
-          yield (schema.get, aggregate.get)
-        RawRead(Some(artifact), result)
+    val validator = new RequestedGrid(bench)
+    val read = AnalogRawEvidence.read(
+      path,
+      (input, init, next) => NgspiceRaw.fold(input, bench.kind, asciiOnly = true)(init)(next),
+      schema => { validator.initialize(schema); validator.error },
+      (index, row) => { validator.consume(index, row.head.real); validator.error },
+      () => validator.finish(),
+      initialize,
+      consume
+    )
+    RawRead(
+      read.artifact.map(value => NgspiceRawArtifact(value.path, value.sha256, value.size)),
+      read.result.left.map((failure, message) =>
+        (if failure == AnalogRawEvidence.Failure.InvalidRaw then NgspiceOutcome.InvalidRaw
+         else NgspiceOutcome.ConsumerFailure) -> message
+      )
+    )
 
   private def processFailure(result: ToolProcessResult): Option[(NgspiceOutcome, String)] =
     result.failure.map: failure =>

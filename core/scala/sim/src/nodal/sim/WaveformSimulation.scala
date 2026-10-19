@@ -1,7 +1,5 @@
 package nodal.sim
 
-import nodal.internal.integrations.*
-
 /** Completed comparison evidence is released only after the entire simulator output validates. */
 final case class StreamingComparisonResult(
     evidence: Option[SimulationEvidence],
@@ -29,25 +27,20 @@ private[sim] object WaveformSimulation:
       rejected("reference axis does not match the requested analysis")
     else if reference.unit.symbol != probe.unit then
       rejected("reference signal unit does not match the requested probe")
+    else if SimulationExecution.admit(bench.lowered, tools).isLeft then
+      rejected(SimulationExecution.admit(bench.lowered, tools).left.toOption.get.message)
     else
       val reducer = WaveformComparison.reducer(reference, tolerance, component, alignment)
-      val result = NgspiceSimulator.fold(NgspiceCircuitSimulateRequest(
-        tools.executable,
-        tools.evidenceRoot,
-        tools.profile,
-        bench.model.compiled,
-        bench.lowered,
-        runTimeout = tools.timeout
-      ))(_ => Right(reducer))((state, _, row) =>
+      val result = SimulationExecution.fold(bench, tools)(_ => Right(reducer))((state, _, row) =>
         state.addSi(row.head.real, row(column).real, row(column).imaginary)
           .left.map(error => s"${error.code}: ${error.message}")
           .map(_ => state)
       )
-      val evidence = Some(SimulationSession.evidence(result.receipt))
-      if result.receipt.outcome != NgspiceOutcome.Simulated then
+      val evidence = Some(result.evidence)
+      if result.error.nonEmpty then
         StreamingComparisonResult(
           evidence,
-          Some(SimulationError(result.receipt.diagnosticCode, result.receipt.message)),
+          result.error,
           0,
           None
         )

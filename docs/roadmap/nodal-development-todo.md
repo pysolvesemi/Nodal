@@ -1277,16 +1277,17 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - Focused implementation and validation: [F-052 readiness](../implementation/increment52-readiness.md). Verified squash integration `f8bb457819983ba703e01109cbc00668ae5058a9` preserves tested tree `ef78ce962990e2e46f9cabc9e7d50fcde04f868e`; parent/G complete for the explicit finite consumer profile. No CI was run.
 
 - [ ] **Increment 53 — Cross-tool analog portability checks**
-  - [ ] **F-053.A — Architecture review, modularity, scalability and extensibility.** Keep second-tool support optional and separately capability-qualified; compare only shared language and analysis semantics.
-  - [ ] **F-053.B — Implementation and integration.** Add an optional second tool adapter, tolerance-based comparisons, and language-versus-tool failure classification.
-  - [ ] **F-053.C — Focused positive, negative and predecessor regression.** Test disagreement, unsupported analysis, tolerance violation and adapter error classifications with common-model fixtures.
-  - [ ] **F-053.D — Focused local validation and applicability**
-    - [ ] **F-053.D.1** Required baseline: Retain the applicable generated-model compile and numerical evidence from 48-52 with declared reference/tolerance contracts.
-    - [ ] **F-053.D.2** Optional second-tool applicability: Record the selected second adapter, supported shared profile and capability limits. Optional use of that adapter does not waive the existing requirement to deliver and qualify its advertised functionality.
-    - [ ] **F-053.D.3** Selected cross-tool execution: Run the selected shared generated models on the delivered second adapter and compare declared metrics/tolerances; retain unsupported and disagreement results separately. Only actually executed cases support an execution claim; untested profiles do not create a full-qualification merge gate.
-  - [ ] **F-053.E — Optimization review and output quality.** Review portable model normalization without rewriting unsupported constructs into approximations. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-053.F — Representative scale, determinism and compatibility.** Compare supported tool/version/profile combinations and repeatable cross-tool result alignment.
+  - [x] **F-053.A — Architecture review, modularity, scalability and extensibility.** Keep second-tool support optional and separately capability-qualified; compare only shared language and analysis semantics.
+  - [x] **F-053.B — Implementation and integration.** Add an optional second tool adapter, tolerance-based comparisons, and language-versus-tool failure classification.
+  - [x] **F-053.C — Focused positive, negative and predecessor regression.** Test disagreement, unsupported analysis, tolerance violation and adapter error classifications with common-model fixtures.
+  - [x] **F-053.D — Focused local validation and applicability**
+    - [x] **F-053.D.1** Required baseline: Retain the applicable generated-model compile and numerical evidence from 48-52 with declared reference/tolerance contracts.
+    - [x] **F-053.D.2** Optional second-tool applicability: Record the selected second adapter, supported shared profile and capability limits. Optional use of that adapter does not waive the existing requirement to deliver and qualify its advertised functionality.
+    - [x] **F-053.D.3** Selected cross-tool execution: Run the selected shared generated models on the delivered second adapter and compare declared metrics/tolerances; retain unsupported and disagreement results separately. Only actually executed cases support an execution claim; untested profiles do not create a full-qualification merge gate.
+  - [x] **F-053.E — Optimization review and output quality.** Review portable model normalization without rewriting unsupported constructs into approximations. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-053.F — Representative scale, determinism and compatibility.** Compare supported tool/version/profile combinations and repeatable cross-tool result alignment.
   - [ ] **F-053.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 53; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - Focused implementation, actual dual-consumer execution, retained disagreement and capability limits: [F-053 readiness](../implementation/increment53-readiness.md). A–F complete for the explicit profile; parent/G await verified integration. No CI was run.
 
 ## Phase 4 — Digital semantics, portable Verilog, open-source verification, mixed signal, and Verilog-AMS
 

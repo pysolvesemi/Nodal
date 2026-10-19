@@ -2,94 +2,60 @@ package nodal.internal.integrations
 
 import java.util.Locale
 
-/** IDs belong to a declared finite bench; no caller text becomes a SPICE node or source name. */
-private[nodal] enum NgspiceNode:
-  case Ground
-  case Node(id: Int)
+private[nodal] type NgspiceNode = AnalogNode
+private[nodal] val NgspiceNode = AnalogNode
 
-private[nodal] final case class NgspiceSourceId(value: Int)
-private[nodal] enum NgspiceSourceKind:
-  case Voltage, Current
+private[nodal] type NgspiceSourceId = AnalogSourceId
+private[nodal] val NgspiceSourceId = AnalogSourceId
 
-private[nodal] final case class NgspiceAcExcitation(magnitude: Double, phaseDegrees: Double = 0)
-private[nodal] enum NgspiceTransientWaveform:
-  case Pulse(
-      initial: Double,
-      pulsed: Double,
-      delaySeconds: Double,
-      riseSeconds: Double,
-      fallSeconds: Double,
-      widthSeconds: Double,
-      periodSeconds: Double
-  )
-  case Pwl(points: Vector[(Double, Double)])
+private[nodal] type NgspiceSourceKind = AnalogSourceKind
+private[nodal] val NgspiceSourceKind = AnalogSourceKind
 
-private[nodal] final case class NgspiceSource(
-    id: NgspiceSourceId,
-    kind: NgspiceSourceKind,
-    positive: NgspiceNode,
-    negative: NgspiceNode,
-    dc: Double = 0,
-    ac: Option[NgspiceAcExcitation] = None,
-    transient: Option[NgspiceTransientWaveform] = None
-)
+private[nodal] type NgspiceAcExcitation = AnalogAcExcitation
+private[nodal] val NgspiceAcExcitation = AnalogAcExcitation
 
-/** Terminals follow the actual emitted module declaration, including repeated node bindings. */
-private[nodal] final case class NgspiceCircuitBinding(
-    moduleName: String,
-    terminals: Vector[NgspiceNode],
-    parameters: Vector[(String, Double)] = Vector.empty
-)
+private[nodal] type NgspiceTransientWaveform = AnalogTransientWaveform
+private[nodal] val NgspiceTransientWaveform = AnalogTransientWaveform
 
-private[nodal] enum NgspiceCircuitAnalysis:
-  case DcSweep(source: NgspiceSourceId, start: Double, stop: Double, step: Double)
-  case AcLinearSweep(points: Int, startHz: Double, stopHz: Double)
-  case AcDecadeSweep(pointsPerDecade: Int, startHz: Double, stopHz: Double)
-  case Transient(stepSeconds: Double, stopSeconds: Double, useInitialConditions: Boolean)
+private[nodal] type NgspiceSource = AnalogSource
+private[nodal] val NgspiceSource = AnalogSource
 
-  def kind: NgspiceAnalysisKind = this match
-    case DcSweep(_, _, _, _) => NgspiceAnalysisKind.Dc
-    case AcLinearSweep(_, _, _) | AcDecadeSweep(_, _, _) => NgspiceAnalysisKind.Ac
-    case Transient(_, _, _) => NgspiceAnalysisKind.Transient
+private[nodal] type NgspiceCircuitBinding = AnalogCircuitBinding
+private[nodal] val NgspiceCircuitBinding = AnalogCircuitBinding
 
-private[nodal] enum NgspiceProbe:
-  case Voltage(node: NgspiceNode)
-  case Current(source: NgspiceSourceId)
+private[nodal] type NgspiceCircuitAnalysis = AnalogCircuitAnalysis
+private[nodal] val NgspiceCircuitAnalysis = AnalogCircuitAnalysis
 
-private[nodal] final case class NgspiceInitialCondition(node: NgspiceNode, volts: Double)
+private[nodal] type NgspiceProbe = AnalogProbe
+private[nodal] val NgspiceProbe = AnalogProbe
 
-/** One OSDI DUT and bounded independent sources; this is not an arbitrary circuit/deck API. */
-private[nodal] final case class NgspiceCircuitBench(
-    model: NgspiceCircuitBinding,
-    nodes: Vector[NgspiceNode],
-    sources: Vector[NgspiceSource],
-    analysis: NgspiceCircuitAnalysis,
-    probes: Vector[NgspiceProbe],
-    initialConditions: Vector[NgspiceInitialCondition] = Vector.empty,
-    options: NgspiceSolverOptions = NgspiceSolverOptions()
-)
+private[nodal] type NgspiceInitialCondition = AnalogInitialCondition
+private[nodal] val NgspiceInitialCondition = AnalogInitialCondition
 
-/** Shared axis contract consumed by the same independent raw validator for old and new benches. */
-private[nodal] enum NgspiceAxis:
-  case Dc(start: Double, stop: Double, step: Double)
-  case AcLinear(points: Int, start: Double, stop: Double)
-  case AcDecade(pointsPerDecade: Int, start: Double, stop: Double)
-  case Transient(step: Double, stop: Double)
+private[nodal] type NgspiceCircuitBench = AnalogCircuitBench
+private[nodal] val NgspiceCircuitBench = AnalogCircuitBench
+
+private[nodal] type NgspiceAxis = AnalogAxis
+private[nodal] val NgspiceAxis = AnalogAxis
 
 private[integrations] object NgspiceCircuitRenderer:
-  import NgspiceBench.{check, number, positive, nonnegative}
+  import NgspiceBench.{check, number}
+  import AnalogCircuitValidation.{
+    validateTopologyIdentity, validateTopologyConnections, validateSources, validateAnalysis, axis
+  }
 
   private val MaxNodes = 63
-  private val MaxSources = 63
-  private val MaxTerminals = 64
-  private val MaxProbes = 63
-  private val MaxWaveformPoints = 100000
 
   def generate(bench: NgspiceCircuitBench): Either[String, NgspiceGeneratedBench] =
     for
       _ <- NgspiceBench.validateParameters(bench.model.moduleName, bench.model.parameters)
       _ <- NgspiceBench.validateOptions(bench.options)
-      _ <- validateTopology(bench)
+      _ <- validateTopologyIdentity(bench)
+      _ <- check(
+        bench.nodes.size + bench.sources.count(_.kind == NgspiceSourceKind.Current) <= MaxNodes,
+        s"declared and current-sensor nodes together exceed $MaxNodes"
+      )
+      _ <- validateTopologyConnections(bench)
       grid = axis(bench.analysis)
       count <- NgspiceBench.validateGrid(grid, bench.options)
       _ <- check(
@@ -140,171 +106,6 @@ private[integrations] object NgspiceCircuitRenderer:
         axis +: probeNames,
         grid
       )
-
-  private def validateTopology(bench: NgspiceCircuitBench): Either[String, Unit] =
-    for
-      _ <- check(
-        bench.nodes.nonEmpty && bench.nodes.size <= MaxNodes,
-        s"declared node count must be 1 to $MaxNodes"
-      )
-      nodes = bench.nodes.toSet
-      declared = (node: NgspiceNode) => node == NgspiceNode.Ground || nodes.contains(node)
-      _ <- check(
-        bench.nodes.forall:
-          case NgspiceNode.Node(id) => id >= 0 && id < MaxNodes
-          case NgspiceNode.Ground => false
-        ,
-        "declared nodes must have bounded non-ground IDs"
-      )
-      _ <- check(nodes.size == bench.nodes.size, "duplicate declared node ID")
-      _ <- check(
-        bench.model.terminals.nonEmpty && bench.model.terminals.size <= MaxTerminals,
-        s"terminal count must be 1 to $MaxTerminals"
-      )
-      _ <- check(bench.model.terminals.forall(declared), "terminal references an undeclared node")
-      _ <- check(
-        bench.sources.nonEmpty && bench.sources.size <= MaxSources,
-        s"source count must be 1 to $MaxSources"
-      )
-      sourceIds = bench.sources.map(_.id)
-      _ <- check(
-        sourceIds.forall(id => id.value >= 0 && id.value < MaxSources),
-        "source IDs must be bounded"
-      )
-      _ <- check(sourceIds.distinct.size == sourceIds.size, "duplicate source ID")
-      _ <- check(
-        bench.nodes.size + bench.sources.count(_.kind == NgspiceSourceKind.Current) <= MaxNodes,
-        s"declared and current-sensor nodes together exceed $MaxNodes"
-      )
-      _ <- check(
-        bench.sources.forall(source => declared(source.positive) && declared(source.negative)),
-        "source references an undeclared node"
-      )
-      _ <- check(
-        bench.sources.forall(source => source.positive != source.negative),
-        "source terminals must be distinct"
-      )
-      usedNodes = bench.model.terminals.toSet ++ bench.sources.flatMap(source =>
-        Vector(source.positive, source.negative)
-      )
-      _ <- check(nodes.subsetOf(usedNodes), "declared node has no DUT or source connection")
-      _ <- check(
-        bench.probes.nonEmpty && bench.probes.size <= MaxProbes,
-        s"probe count must be 1 to $MaxProbes"
-      )
-      _ <- check(bench.probes.distinct.size == bench.probes.size, "duplicate probe schema")
-      _ <- check(
-        bench.probes.forall:
-          case NgspiceProbe.Voltage(node) => node != NgspiceNode.Ground && nodes.contains(node)
-          case NgspiceProbe.Current(id) => sourceIds.contains(id)
-        ,
-        "probe references ground, an undeclared node or a missing source"
-      )
-      _ <- check(
-        bench.initialConditions.size <= MaxNodes,
-        s"initial condition count exceeds $MaxNodes"
-      )
-      _ <- check(
-        bench.initialConditions.forall(condition =>
-          condition.node != NgspiceNode.Ground && nodes.contains(condition.node) &&
-            condition.volts.isFinite
-        ),
-        "initial conditions need declared non-ground nodes and finite voltages"
-      )
-      _ <- check(
-        bench.initialConditions.map(_.node).distinct.size == bench.initialConditions.size,
-        "duplicate initial condition node"
-      )
-      _ <- check(
-        bench.initialConditions.isEmpty || bench.analysis.kind == NgspiceAnalysisKind.Transient,
-        "initial conditions require a transient analysis"
-      )
-    yield ()
-
-  private def validateSources(bench: NgspiceCircuitBench): Either[String, Unit] =
-    val pwlCount = bench.sources.foldLeft(0L): (count, source) =>
-      count +
-        (source.transient match
-          case Some(NgspiceTransientWaveform.Pwl(points)) => points.size.toLong
-          case _ => 0L)
-    for
-      _ <- check(
-        pwlCount <= MaxWaveformPoints,
-        s"total PWL points exceed $MaxWaveformPoints"
-      )
-      _ <- check(bench.sources.forall(_.dc.isFinite), "DC source values must be finite")
-      _ <- check(
-        bench.sources.forall(_.ac.forall(ac =>
-          nonnegative(ac.magnitude) && ac.phaseDegrees.isFinite
-        )),
-        "AC source magnitude must be finite nonnegative and phase finite"
-      )
-      _ <- bench.sources.foldLeft[Either[String, Unit]](Right(())): (result, source) =>
-        result.flatMap: _ =>
-          source.transient match
-            case None => Right(())
-            case Some(NgspiceTransientWaveform.Pwl(points)) =>
-              check(
-                points.size >= 2 &&
-                  points.forall((time, value) => nonnegative(time) && value.isFinite) &&
-                  points.sliding(2).forall(pair => pair(1)._1 > pair(0)._1),
-                "PWL needs at least two finite values with strictly increasing nonnegative times"
-              )
-            case Some(NgspiceTransientWaveform.Pulse(
-                  initial,
-                  pulsed,
-                  delay,
-                  rise,
-                  fall,
-                  width,
-                  period
-                )) =>
-              val duration = rise + width + fall
-              val stop = bench.analysis match
-                case NgspiceCircuitAnalysis.Transient(_, value, _) => Some(value)
-                case _ => None
-              for
-                _ <- check(
-                  initial.isFinite && pulsed.isFinite && nonnegative(delay) &&
-                    positive(rise) && positive(fall) && positive(width) && positive(period) &&
-                    duration.isFinite && period >= duration &&
-                    (delay + duration).isFinite &&
-                    delay + rise > delay && delay + rise + width > delay + rise &&
-                    delay + duration > delay + rise + width,
-                  "pulse amplitudes and ordered durations must be finite and fit the period"
-                )
-                _ <-
-                  check(stop.forall(end => delay < end), "pulse delay must precede transient stop")
-                _ <- check(
-                  stop.forall(end =>
-                    ((BigDecimal.decimal(end) - BigDecimal.decimal(delay)) /
-                      BigDecimal.decimal(period))
-                      .setScale(0, BigDecimal.RoundingMode.CEILING) * 4 <= MaxWaveformPoints
-                  ),
-                  s"pulse requested transitions exceed $MaxWaveformPoints"
-                )
-              yield ()
-    yield ()
-
-  private def validateAnalysis(bench: NgspiceCircuitBench): Either[String, Unit] =
-    bench.analysis match
-      case NgspiceCircuitAnalysis.DcSweep(id, _, _, _) =>
-        check(bench.sources.exists(_.id == id), "DC sweep references a missing source")
-      case NgspiceCircuitAnalysis.AcLinearSweep(_, _, _) |
-          NgspiceCircuitAnalysis.AcDecadeSweep(_, _, _) =>
-        check(
-          bench.sources.exists(_.ac.exists(_.magnitude > 0)),
-          "AC analysis needs nonzero AC excitation"
-        )
-      case NgspiceCircuitAnalysis.Transient(_, _, _) => Right(())
-
-  private def axis(analysis: NgspiceCircuitAnalysis): NgspiceAxis = analysis match
-    case NgspiceCircuitAnalysis.DcSweep(_, start, stop, step) => NgspiceAxis.Dc(start, stop, step)
-    case NgspiceCircuitAnalysis.AcLinearSweep(points, start, stop) =>
-      NgspiceAxis.AcLinear(points, start, stop)
-    case NgspiceCircuitAnalysis.AcDecadeSweep(points, start, stop) =>
-      NgspiceAxis.AcDecade(points, start, stop)
-    case NgspiceCircuitAnalysis.Transient(step, stop, _) => NgspiceAxis.Transient(step, stop)
 
   private def nodeName(node: NgspiceNode): String = node match
     case NgspiceNode.Ground => "0"

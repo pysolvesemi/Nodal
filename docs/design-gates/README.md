@@ -75,3 +75,7 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [Analog regression and scalar hierarchy simulation v0.1](NodalAnalogRegression-DG-v0.1.md):
   Foundation 52 maintained numerical cases, represented analog assignment admission
   and explicit canonical whole-graph scalar hierarchy materialization.
+
+- [NodalCrossToolPortability-DG-v0.1](NodalCrossToolPortability-DG-v0.1.md):
+  approved additive F53 optional second-consumer, shared finite bench and explicit
+  cross-tool comparison contract.

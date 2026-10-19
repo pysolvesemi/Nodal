@@ -19,6 +19,7 @@ OPERATIONS = Path("core/compiler/include/nodal/Dialect/Nodal/NodalOps.td")
 OUTPUT = Path("core/compiler/include/nodal/Support/BackendCapabilityRegistry.inc")
 SCALA_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/OpenVafProfiles.scala")
 SIMULATOR_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/NgspiceProfiles.scala")
+VACASK_OUTPUT = Path("core/integrations/src/nodal/internal/integrations/VacaskProfiles.scala")
 DOMAINS = {"neutral": "Neutral", "analog": "Analog", "digital": "Digital", "mixed": "Mixed"}
 ADMISSIONS = {"direct": "Direct", "guarded": "Guarded", "normalize": "Normalize",
               "unsupported": "Unsupported"}
@@ -141,6 +142,9 @@ def validate_simulators(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
         require(set(profile) == {"id", "consumer", "version", "version_stdout",
                                  "executable_sha256", "platform", "build"},
                 f"{identity}: unknown or missing simulator fields")
+        if profile["consumer"] == "VACASK":
+            validate_vacask(identity, profile)
+            continue
         require(profile["consumer"] == "ngspice" and profile["version"] == "47"
                 and profile["platform"] == "linux-x86_64"
                 and identity == "ngspice-47-local-linux-x86_64",
@@ -176,6 +180,60 @@ def validate_simulators(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     "cflags": "-O2 -std=gnu11 -include stdlib.h"},
                 f"{identity}: unsupported simulator build configuration")
     return profiles
+
+
+def validate_vacask(identity: str, profile: dict[str, Any]) -> None:
+    """Closed release identity; runtime pins do not imply general tool support."""
+    require(identity == "vacask-0.3.4-linux-x86_64" and profile["version"] == "0.3.4"
+            and profile["platform"] == "linux-x86_64",
+            f"{identity}: unsupported VACASK profile")
+    version = profile["version_stdout"]
+    require(isinstance(version, str) and hashlib.sha256(version.encode()).hexdigest() ==
+            "5dec5ccc7c8933c5b72a9ca082a9a9c3fdd30861e18d7e21e9a651002fef0083",
+            f"{identity}: invalid VACASK help stdout")
+    require(profile["executable_sha256"] ==
+            "bb606780f55d0b4f4b0e50503381d991cd2fd12298f85563bb4438b33c1abb13",
+            f"{identity}: invalid VACASK executable digest")
+    build = profile["build"]
+    require(isinstance(build, dict) and set(build) == {
+        "kind", "archive_url", "archive_sha256", "source_commit", "source_modified",
+        "binary_modified", "runtime_libraries"},
+        f"{identity}: incomplete VACASK build provenance")
+    require(build["kind"] == "official-release-binary-with-local-runtime-libraries"
+            and build["source_modified"] is False and build["binary_modified"] is False,
+            f"{identity}: unsupported VACASK build kind")
+    require(build["archive_url"] ==
+            "https://codeberg.org/arpadbuermen/VACASK/releases/download/_0.3.4/"
+            "vacask_0.3.4_linux-x86_64.tar.gz"
+            and build["archive_sha256"] ==
+            "780949fc75181d5839cc8c8091e05c2ca2e70a73c9f920e88553228061c44027"
+            and build["source_commit"] == "c1a1c84f1b2b9aa71c0cddf06e555441434db7b7",
+            f"{identity}: invalid VACASK release provenance")
+    libraries = index(records(build["runtime_libraries"], "VACASK runtime libraries"),
+                      "soname", "VACASK runtime libraries")
+    packages = {
+        "libklu.so.2": "libklu2", "libopenblas.so.0": "libopenblas0-pthread",
+        "libamd.so.3": "libamd3", "libcolamd.so.3": "libcolamd3",
+        "libbtf.so.2": "libbtf2", "libsuitesparseconfig.so.7": "libsuitesparseconfig7",
+    }
+    require(set(libraries) == set(packages), f"{identity}: unsupported VACASK runtime libraries")
+    for soname, library in libraries.items():
+        require(set(library) == {"soname", "sha256", "package", "version", "architecture",
+                                "archive_url", "archive_sha256"},
+                f"{soname}: incomplete runtime provenance")
+        package = packages[soname]
+        openblas = package == "libopenblas0-pthread"
+        version = "0.3.29+ds-3" if openblas else "1:7.10.1+dfsg-1"
+        source = "o/openblas" if openblas else "s/suitesparse"
+        url = ("https://deb.debian.org/debian/pool/main/" + source + "/" + package + "_" +
+               version.removeprefix("1:") + "_amd64.deb")
+        require(library["package"] == package and library["version"] == version
+                and library["architecture"] == "amd64" and library["archive_url"] == url,
+                f"{soname}: unsupported runtime package provenance")
+        for key in ("sha256", "archive_sha256"):
+            require(isinstance(library[key], str) and
+                    re.fullmatch(r"[0-9a-f]{64}", library[key]) is not None,
+                    f"{soname}: invalid runtime {key}")
 
 
 def observation_profile(observation: dict[str, Any],
@@ -331,7 +389,8 @@ def outputs(root: Path = ROOT) -> dict[Path, str]:
                   f"     BackendOperationDomain::{domain}, BackendOperationAdmission::{admission}}},"]
     lines += ["};", ""]
     return {OUTPUT: "\n".join(lines), SCALA_OUTPUT: consumer_output(catalog, catalog_bytes),
-            SIMULATOR_OUTPUT: simulator_output(catalog, catalog_bytes)}
+            SIMULATOR_OUTPUT: simulator_output(catalog, catalog_bytes),
+            VACASK_OUTPUT: vacask_output(catalog, catalog_bytes)}
 
 
 def consumer_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
@@ -379,7 +438,8 @@ def consumer_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
 
 
 def simulator_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
-    profiles = validate_simulators(catalog)
+    profiles = {identity: profile for identity, profile in validate_simulators(catalog).items()
+                if profile["consumer"] == "ngspice"}
     digest = hashlib.sha256(catalog_bytes).hexdigest()
     lines = ["package nodal.internal.integrations", "",
              "// Generated by scripts/generate_backend_capability_registry.py. Do not edit.",
@@ -395,6 +455,39 @@ def simulator_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
                   "      platform = " + json.dumps(profile["platform"]) + ",",
                   "      catalogSha256 = " + json.dumps(digest),
                   "    )" + ("," if position + 1 < len(profiles) else "")]
+    lines += ["  )", ""]
+    return "\n".join(lines)
+
+
+def vacask_output(catalog: dict[str, Any], catalog_bytes: bytes) -> str:
+    profiles = {identity: profile for identity, profile in validate_simulators(catalog).items()
+                if profile["consumer"] == "VACASK"}
+    digest = hashlib.sha256(catalog_bytes).hexdigest()
+    lines = ["package nodal.internal.integrations", "",
+             "// Generated by scripts/generate_backend_capability_registry.py. Do not edit.",
+             "// Source: core/compiler/backend-profiles-v0.1.json, simulator profiles v1.",
+             "private[nodal] object VacaskProfiles:",
+             "  val all: Vector[VacaskProfile] = Vector("]
+    for position, (identity, profile) in enumerate(sorted(profiles.items())):
+        lines += ["    VacaskProfile(",
+                  "      id = " + json.dumps(identity) + ",",
+                  "      version =",
+                  "        " + json.dumps(profile["version_stdout"]) + ",",
+                  "      executableSha256 = " + json.dumps(profile["executable_sha256"]) + ",",
+                  "      platform = " + json.dumps(profile["platform"]) + ",",
+                  "      catalogSha256 = " + json.dumps(digest) + ",",
+                  "      runtimeLibraries = Vector("]
+        libraries = sorted(profile["build"]["runtime_libraries"], key=lambda entry: entry["soname"])
+        for offset, library in enumerate(libraries):
+            suffix = "," if offset + 1 < len(libraries) else ""
+            soname, sha256 = json.dumps(library["soname"]), json.dumps(library["sha256"])
+            compact = "        (" + soname + ", " + sha256 + ")" + suffix
+            if len(compact) <= 100:
+                lines.append(compact)
+            else:
+                lines += ["        (", "          " + soname + ",",
+                          "          " + sha256, "        )" + suffix]
+        lines += ["      )", "    )" + ("," if position + 1 < len(profiles) else "")]
     lines += ["  )", ""]
     return "\n".join(lines)
 

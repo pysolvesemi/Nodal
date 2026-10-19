@@ -1565,6 +1565,78 @@
           },
           "source_modified": false
         }
+      },
+      {
+        "id": "vacask-0.3.4-linux-x86_64",
+        "consumer": "VACASK",
+        "version": "0.3.4",
+        "version_stdout": "This is vacask 0.3.4.\n(c)2023-2026 EDA Lab FE Uni-Lj, Arpad Buermen\nhttps://codeberg.org/arpadbuermen/VACASK\n  OpenMP parallel processing\n  SuperLU_MT parallel linear solver\n  Cadnip foreign parsers\n\nUsage: vacask [options] [<filename>]\n\nOptions:\n  -h, --help          print help and exit\n  -dp, --dump-paths   print location of simulator's components\n  -df, --debug-files  turn on debug output for file operations\n  -dt, --dump-tables  dump parser tables\n  -se, --skip-embed   do not dump embedded files\n  -sp, --skip-postprocess\n                      do not run postprocessing steps\n       --extra-tomlfile <file>\n                      addittionally load specified toml file as last\n       --tomlfile <file>\n                      skip loading all toml files, except this one\n  -qp, --quiet-progress\n                      turn off progress messages\n       --no-output    suppress output of result files\n  -n <n>, --ncpu <n>  number of CPUs to use (1)\n                      <=0 .. autodetect, take OMP_NUM_THREADS into account\n                      or use all available CPUs (default)\n  -b <n>, --blas-ncpu <n>\n                      number of CPUs to assign to OpenBLAS (1)\n                      <=0 .. use OpenBLAS autodetect",
+        "executable_sha256": "bb606780f55d0b4f4b0e50503381d991cd2fd12298f85563bb4438b33c1abb13",
+        "platform": "linux-x86_64",
+        "build": {
+          "kind": "official-release-binary-with-local-runtime-libraries",
+          "archive_url": "https://codeberg.org/arpadbuermen/VACASK/releases/download/_0.3.4/vacask_0.3.4_linux-x86_64.tar.gz",
+          "archive_sha256": "780949fc75181d5839cc8c8091e05c2ca2e70a73c9f920e88553228061c44027",
+          "source_commit": "c1a1c84f1b2b9aa71c0cddf06e555441434db7b7",
+          "source_modified": false,
+          "binary_modified": false,
+          "runtime_libraries": [
+            {
+              "soname": "libamd.so.3",
+              "sha256": "a4654cdedb47d7806a0c0ede323e40d152b2f1de6f52a22dfa763b8c9a7b4be8",
+              "package": "libamd3",
+              "version": "1:7.10.1+dfsg-1",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/s/suitesparse/libamd3_7.10.1+dfsg-1_amd64.deb",
+              "archive_sha256": "2afe52d511404ba372f4a26675866ddd9e5a207fdec19639cfaf5b6a9c97d65e"
+            },
+            {
+              "soname": "libbtf.so.2",
+              "sha256": "65e3168fc81f33fdfed4c5c966f945d984ce269b252593066943e1d8b417e5c6",
+              "package": "libbtf2",
+              "version": "1:7.10.1+dfsg-1",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/s/suitesparse/libbtf2_7.10.1+dfsg-1_amd64.deb",
+              "archive_sha256": "9bf184ab7b22cfef7b6fb0a38f474702ce74e2668ee847f705af542658016333"
+            },
+            {
+              "soname": "libcolamd.so.3",
+              "sha256": "35f564c522b6fb9b72e71014dd1e43da7f12b2d73fbd117ae5aaba635a8759d6",
+              "package": "libcolamd3",
+              "version": "1:7.10.1+dfsg-1",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/s/suitesparse/libcolamd3_7.10.1+dfsg-1_amd64.deb",
+              "archive_sha256": "d7c29037782075ffa73e9414af4e95a3ee2dc0dc35443cae7de04ba1d66de277"
+            },
+            {
+              "soname": "libklu.so.2",
+              "sha256": "9c26bf11c72d86696b6104261d6213258388aa95ce53d38d57c44a7815ff3672",
+              "package": "libklu2",
+              "version": "1:7.10.1+dfsg-1",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/s/suitesparse/libklu2_7.10.1+dfsg-1_amd64.deb",
+              "archive_sha256": "ed35201bf329dee5e849a46b13a025bf0cde4c50e6f68c66138b5a71c5d0d88e"
+            },
+            {
+              "soname": "libopenblas.so.0",
+              "sha256": "10d1c640ecccd21063a7d80f90e949b1d48202830b6ec0b52b2796c5d0fbce63",
+              "package": "libopenblas0-pthread",
+              "version": "0.3.29+ds-3",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/o/openblas/libopenblas0-pthread_0.3.29+ds-3_amd64.deb",
+              "archive_sha256": "e3541ee2c956c64383054ba116fb6ef86bbaf40035d64e1795185029fdcf0807"
+            },
+            {
+              "soname": "libsuitesparseconfig.so.7",
+              "sha256": "133ec1f1a0655f5b2fc43b43605a0c2986ba00addad144bb3096a99045bfb155",
+              "package": "libsuitesparseconfig7",
+              "version": "1:7.10.1+dfsg-1",
+              "architecture": "amd64",
+              "archive_url": "https://deb.debian.org/debian/pool/main/s/suitesparse/libsuitesparseconfig7_7.10.1+dfsg-1_amd64.deb",
+              "archive_sha256": "a2e1b39c3a99510765edea933127c501941311801edc917b8e84a5b5db347530"
+            }
+          ]
+        }
       }
     ]
   }

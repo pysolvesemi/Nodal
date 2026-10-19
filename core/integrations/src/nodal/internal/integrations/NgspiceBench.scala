@@ -12,13 +12,8 @@ private[nodal] final case class NgspiceModuleBinding(
     parameters: Vector[(String, Double)] = Vector.empty
 )
 
-private[nodal] final case class NgspiceSolverOptions(
-    reltol: Double = 1e-6,
-    abstol: Double = 1e-12,
-    vntol: Double = 1e-9,
-    temp: Double = 27,
-    tnom: Double = 27
-)
+private[nodal] type NgspiceSolverOptions = AnalogSolverOptions
+private[nodal] val NgspiceSolverOptions = AnalogSolverOptions
 
 private[nodal] enum NgspiceCurrentStimulus:
   case Ramp(finalAmps: Double, delaySeconds: Double, riseSeconds: Double)
@@ -47,14 +42,8 @@ private[nodal] enum NgspiceAnalysis:
     case AcLinearSweep(_, _, _) | AcDecadeSweep(_, _, _) => NgspiceAnalysisKind.Ac
     case TransientCurrent(_, _, _) => NgspiceAnalysisKind.Transient
 
-/** requestedPoints is the nominal grid size, not an adaptive transient output guarantee. */
-private[nodal] final case class NgspiceGeneratedBench(
-    deck: String,
-    kind: NgspiceAnalysisKind,
-    requestedPoints: Int,
-    expectedVariables: Vector[(String, String)],
-    axis: NgspiceAxis
-)
+private[nodal] type NgspiceGeneratedBench = AnalogGeneratedBench
+private[nodal] val NgspiceGeneratedBench = AnalogGeneratedBench
 
 /** Finite typed ngspice 47 benches, with a byte-stable F49 two-terminal compatibility path.
   *
@@ -64,9 +53,6 @@ private[nodal] final case class NgspiceGeneratedBench(
   */
 private[nodal] object NgspiceBench:
   private val MaxPoints = 100000
-  private val MaxParameters = 128
-  private val MaxIdentifierLength = 128
-  private val Identifier = "[A-Za-z_][A-Za-z0-9_]*".r
   private val DcStopSlack = Math.ulp(1.0) * 1000
 
   def generate(bench: NgspiceCircuitBench): Either[String, NgspiceGeneratedBench] =
@@ -132,31 +118,10 @@ private[nodal] object NgspiceBench:
   private[integrations] def validateParameters(
       moduleName: String,
       parameters: Vector[(String, Double)]
-  ): Either[String, Unit] =
-    for
-      _ <- check(validIdentifier(moduleName), "invalid module identifier")
-      _ <- check(parameters.size <= MaxParameters, s"parameter count exceeds $MaxParameters")
-      _ <-
-        check(parameters.forall((name, _) => validIdentifier(name)), "invalid parameter identifier")
-      _ <- check(parameters.forall((_, value) => value.isFinite), "parameters must be finite")
-      names = parameters.map(_._1.toLowerCase(Locale.ROOT))
-      _ <-
-        check(names.distinct.size == names.size, "duplicate case-insensitive parameter identifier")
-    yield ()
+  ): Either[String, Unit] = AnalogCircuitValidation.validateParameters(moduleName, parameters)
 
   private[integrations] def validateOptions(options: NgspiceSolverOptions): Either[String, Unit] =
-    for
-      _ <- check(
-        positive(options.reltol) && options.reltol <= 1e-3 &&
-          positive(options.abstol) && positive(options.vntol),
-        "solver tolerances must be finite and positive, with reltol <= 0.001"
-      )
-      _ <- check(
-        options.temp.isFinite && options.temp > -273.15 &&
-          options.tnom.isFinite && options.tnom > -273.15,
-        "temp and tnom must be finite Celsius temperatures above absolute zero"
-      )
-    yield ()
+    AnalogCircuitValidation.validateOptions(options)
 
   private[integrations] def validateAnalysis(
       analysis: NgspiceAnalysis,
@@ -324,9 +289,6 @@ private[nodal] object NgspiceBench:
       positive(start) && positive(stop) && stop >= start,
       "AC frequencies must be finite, positive and nondecreasing"
     )
-
-  private def validIdentifier(value: String): Boolean =
-    Option(value).exists(name => name.length <= MaxIdentifierLength && Identifier.matches(name))
 
   private[integrations] def positive(value: Double): Boolean = value.isFinite && value > 0
   private[integrations] def nonnegative(value: Double): Boolean = value.isFinite && value >= 0

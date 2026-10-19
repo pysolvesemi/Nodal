@@ -20,7 +20,7 @@ private[nodal] object OpenVafProfiles:
         "-O",
         "3"
       ),
-      catalogSha256 = "aae343432ca9d15f8ccb4ab0b94333e2a306afdaa2080c93818e166c8fa23580",
+      catalogSha256 = "a5ba6ab5a9e2c44cc72ca70b865ab722d3cb594aa1f3d3f2e260a3161d0bc97a",
       observations = Vector.empty
     ),
     OpenVafProfile(
@@ -38,7 +38,7 @@ private[nodal] object OpenVafProfiles:
         "-O",
         "3"
       ),
-      catalogSha256 = "aae343432ca9d15f8ccb4ab0b94333e2a306afdaa2080c93818e166c8fa23580",
+      catalogSha256 = "a5ba6ab5a9e2c44cc72ca70b865ab722d3cb594aa1f3d3f2e260a3161d0bc97a",
       observations = Vector(
         OpenVafObservation(
           id = "f047-openvaf-reloaded-analog-hierarchy",

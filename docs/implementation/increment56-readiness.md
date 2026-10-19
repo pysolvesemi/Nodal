@@ -1,7 +1,7 @@
 # Increment 56 readiness and implementation
 
-Status: scoped implementation and focused acceptance checks complete; A–F and
-F-056.B.1.1 are complete. G and the parent await verified integration.
+Status: complete. A–G, F-056.B.1.1 and the parent are complete after verified
+PR152 squash integration `a652a916c0e63a84beda8b459f39e9499b346740`.
 Base: `b0fa301533b52bc3e0f150c54d3af498ced3f3b5`, the verified F55 documentation
 closure after PR151. Branch: `increment/56-sequential-fsm`.
 
@@ -404,7 +404,7 @@ passing artifact-bound results; final source domain checks were replayed with th
 maintained API. Focused Markdown, registry generation, formatting and whitespace
 checks pass. No CI was run. B.1 and B.3 are complete for their stated deliverables;
 At that checkpoint B.2 and the F56 parent remained open. The final memory
-checkpoint below completes B.2; G and the parent await verified integration.
+checkpoint below completes B.2; verified integration is recorded at the end.
 
 ## Final owned memory-port integration
 
@@ -440,7 +440,7 @@ Interface/requirement provenance and transactional budget/ownership negatives.
 Actual public guarded/FSM replay caught the late-clock producer placement defect
 that the first unit fixtures missed; the unchanged public witness and strict
 future-clock negative now pass in the component build. Final integrated main-tree memory replay and the directly affected F55 bridge
-repairs now pass. The parent remains open until verified integration.
+repairs now pass. Verified integration is recorded at the end.
 
 ### Concrete memory consumer handoff
 
@@ -605,8 +605,8 @@ profiles. Earlier register/FSM/CIRCT evidence remains the evidence for those
 unchanged production paths; the final memory checkpoint and shared bridge repair
 results above cover their affected consumers. Native and source architecture
 reviews found no remaining concrete blocker after the causal fixes. There is no
-known required in-scope failure left. G and the parent stay open until the exact
-tested tree is squash-merged and independently verified.
+known required in-scope failure left. G and the parent are complete following the
+verified exact-tree squash integration recorded below.
 
 The maintained validation used pinned local toolchains, selected suite runners
 and `NODAL_NODALC=.work/increment56/memory-live/bin/nodalc`; complete commands and
@@ -624,3 +624,15 @@ The final native SHA256 is
 The final memory frontend harness used plugin SHA256
 `589adeeaed2a7ccf7ddcfeecc6fb5e179e9a8dbdbe66e82f18c23a0ed4e03b15`.
 No CI, simulator RAM execution or later consumer qualification is claimed.
+
+## Verified integration and completion
+
+PR152 was squash-merged as `a652a916c0e63a84beda8b459f39e9499b346740` into `dev`.
+The merge has sole parent `b0fa301533b52bc3e0f150c54d3af498ced3f3b5`
+and exact tested tree `078530fc61b6da92c36f237429c7838e362ecae1`. The branch
+head, merged/closed PR state, merge parent/tree and `dev` ref were independently
+verified. The actual merge message contains `[skip ci]` and `skip-checks: true`;
+the merge SHA has zero Actions runs. A–G, the mandatory behavioral-guard amendment
+and the F56 parent are complete. This documentation-only closure does not alter
+production sources or require production requalification. F57 and later
+Foundation obligations retain their own open checklists and finite-profile limits.

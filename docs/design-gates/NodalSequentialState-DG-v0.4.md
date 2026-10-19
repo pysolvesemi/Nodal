@@ -12,7 +12,7 @@ This gate selects the bounded missing port semantics; it does not assert that
 the user separately selected each signature or policy detail. The prototype
 policy applies. Implementation and focused acceptance are recorded in the
 [increment readiness note](../implementation/increment56-readiness.md#final-owned-memory-port-integration);
-parent completion still requires verified integration.
+parent completion follows verified PR152 squash `a652a916c0e63a84beda8b459f39e9499b346740`.
 
 [ADR0009 memory contracts](../architecture/0009-core-semantic-contracts.md#memory-contracts)
 requires explicit latency, masks, port domains, ordering/collisions and supported

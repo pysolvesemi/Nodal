@@ -211,6 +211,11 @@ int main() {
         true);
   check("assignment-exact-aggregate", port(record) + storage(record) + assign(record, record),
         true);
+  const std::string widerRecord = replace(record, "!nodal.sint<8>", "!nodal.sint<9>");
+  check("assignment-Struct-width-family-is-not-ABI-equality",
+        port(widerRecord) + storage(record) + assign(record, widerRecord), false);
+  check("assignment-reconstructed-exact-Struct-remains-valid",
+        port(widerRecord) + storage(widerRecord) + assign(widerRecord, widerRecord), true);
   check("assignment-readonly-input", port(sint) + assign(sint, sint, "source"), false);
   check("assignment-readonly-expression",
         literal(sint, "1", "source") + assign(sint, sint, "source"), false);

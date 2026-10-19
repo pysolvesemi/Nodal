@@ -371,6 +371,58 @@ public:
     return result;
   }
 
+  FailureOr<Facts> structure(Operation *operation, unsigned depth) {
+    auto schemaAttribute = operation->getAttrOfType<TypeAttr>("struct_schema");
+    auto schema =
+        schemaAttribute ? llvm::dyn_cast<StructType>(schemaAttribute.getValue()) : nullptr;
+    auto ordinal = operation->getAttrOfType<IntegerAttr>("field_ordinal");
+    auto name = operation->getAttrOfType<StringAttr>("field_name");
+    const bool get = text(operation, "operator_name") == "digital_struct_get";
+    Type resultType = operation->getResult(0).getType();
+    auto actual = llvm::dyn_cast<StructType>(
+        get && operation->getNumOperands() == 1 ? operation->getOperand(0).getType() : resultType);
+    auto invalid = [&]() -> FailureOr<Facts> {
+      (void)reject(operation, "Struct operation requires independently verified schema family, "
+                              "ordered operands and exact actual field types");
+      return failure();
+    };
+    if (!schema || !actual || !isDigitalCombinationalValueType(resultType, module) ||
+        !sameDigitalStorageWidthFamily(schema, actual, module))
+      return invalid();
+    if (get) {
+      if (operation->getNumOperands() != 1 || !ordinal ||
+          !ordinal.getType().isSignlessInteger(64) || !name || ordinal.getInt() < 0 ||
+          static_cast<uint64_t>(ordinal.getInt()) >= actual.getFields().size())
+        return invalid();
+      auto field = llvm::cast<DictionaryAttr>(actual.getFields()[ordinal.getInt()]);
+      if (field.getAs<StringAttr>("name") != name ||
+          !equivalentDigitalStorageTypes(field.getAs<TypeAttr>("type").getValue(), resultType,
+                                         module))
+        return invalid();
+    } else {
+      if (operation->hasAttr("field_ordinal") || operation->hasAttr("field_name") ||
+          operation->getNumOperands() != actual.getFields().size())
+        return invalid();
+      for (unsigned index = 0; index < actual.getFields().size(); ++index) {
+        auto field = llvm::cast<DictionaryAttr>(actual.getFields()[index]);
+        if (!equivalentDigitalStorageTypes(field.getAs<TypeAttr>("type").getValue(),
+                                           operation->getOperand(index).getType(), module))
+          return invalid();
+      }
+    }
+    Facts result;
+    for (Value input : operation->getOperands()) {
+      auto proof = value(input, depth + 1);
+      if (failed(proof))
+        return invalid();
+      result.height = std::max(result.height, proof->height + 1);
+    }
+    if (depth + result.height - 1 > maximumProofDepth)
+      return invalid();
+    result.nonnegative = scalarKind(resultType) != "sint";
+    return result;
+  }
+
   FailureOr<Facts> expression(Operation *operation, unsigned depth = 0) {
     if (!module || owner(operation) != module || depth > maximumProofDepth ||
         operation->getName().getStringRef() != "nodal.digital_expr" ||
@@ -393,6 +445,13 @@ public:
     if (failed(verifyDigitalMaterializationIntent(operation)))
       return failure();
     StringRef opcode = text(operation, "operator_name");
+    if (opcode == "digital_struct_get" || opcode == "digital_struct_make")
+      return structure(operation, depth);
+    if (operation->hasAttr("struct_schema") || operation->hasAttr("field_ordinal") ||
+        operation->hasAttr("field_name")) {
+      (void)reject(operation, "only Struct value operations carry schema and member evidence");
+      return failure();
+    }
     unsigned arity = expressionArity(opcode);
     if (!arity || operation->getNumOperands() != arity) {
       (void)reject(operation, "digital expression requires a supported opcode and exact arity");

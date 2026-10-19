@@ -418,6 +418,35 @@ int main() {
          succeeded(firstWidth) && succeeded(secondWidth) &&
              nodal::equivalentInstantiatedIntegerExpressions(*firstWidth, *secondWidth));
 
+  auto family = [&](StringRef name, StringRef left, StringRef right, bool expected) {
+    Type a = parseType(left), b = parseType(right);
+    bool result = a && b && nodal::sameDigitalStorageWidthFamily(a, b, identityOwner) == expected &&
+                  nodal::sameDigitalStorageWidthFamily(b, a, identityOwner) == expected;
+    report(name, result && identityBefore == print(identityModel->getOperation()));
+  };
+  const auto narrow = structure(field("score", digital("W", "sint")) + ", " +
+                                field("payload", shape("W,2", digital("W"))));
+  const auto wide = structure(field("score", digital("V", "sint")) + ", " +
+                              field("payload", shape("W,2", digital("V"))));
+  family("width-family-keeps-independent-symbolic-widths", narrow, wide, true);
+  equivalent("width-specializations-remain-distinct-complete-ABI", narrow, wide, false);
+  family("width-family-reconstructed-semantic-schema", narrow, narrow, true);
+  family("width-family-rejects-kind-change", digital("W", "sint"), digital("V", "uint"), false);
+  family("width-family-keeps-inner-parameter-identity", shape("W", digital("W")),
+         shape("V", digital("W")), false);
+  family("width-family-keeps-inner-rank", shape("2,3", digital("W")), shape("6", digital("V")),
+         false);
+  family("width-family-keeps-field-order",
+         structure(field("x", digital()) + ", " + field("y", digital())),
+         structure(field("y", digital()) + ", " + field("x", digital())), false);
+  family("width-family-keeps-nominal-name", structure(field("x", digital()), "A"),
+         structure(field("x", digital()), "B"), false);
+  family("width-family-keeps-enum-identity", "!nodal.enum<\"Mode\", 2>", "!nodal.bits<2>", false);
+  family("width-family-keeps-invariant-real-integer-kind", "f64", "i64", false);
+  family("width-family-rejects-control-capability", "!nodal.capability<\"clock\">",
+         "!nodal.capability<\"clock\">", false);
+  family("width-family-rejects-invalid-width", digital("missing"), digital("W"), false);
+
   llvm::outs() << "DIGITAL_TYPE_MODEL_SUMMARY " << (cases - failures) << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

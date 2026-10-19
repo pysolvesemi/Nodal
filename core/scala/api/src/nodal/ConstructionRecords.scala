@@ -106,6 +106,12 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     unit: Option[String]
 )
 
+private[nodal] final case class KernelStructOperationSnapshot(
+    schemaType: String,
+    ordinal: Option[Int],
+    name: Option[String]
+)
+
 private[nodal] final case class KernelDigitalExpressionSnapshot(
     path: String,
     owner: String,
@@ -116,7 +122,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     enumIdentity: Option[String],
     caseIds: Vector[String],
     region: Option[String] = None,
-    materializationIntent: Option[KernelDigitalIntent] = None
+    materializationIntent: Option[KernelDigitalIntent] = None,
+    structure: Option[KernelStructOperationSnapshot] = None
 )
 
 private[nodal] final case class KernelDigitalRegionArgument(

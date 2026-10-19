@@ -99,3 +99,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalStaticWidthArithmetic-DG v0.1](NodalStaticWidthArithmetic-DG-v0.1.md):
   approved F55 shared static width primitives and explicit mathematical signed-64
   proof mode; scoped reduction formals and target support remain separate.
+- [NodalDigitalStructValues-DG v0.1](NodalDigitalStructValues-DG-v0.1.md):
+  approved F55/BT typed record handles and actual get/make value DAGs; canonical
+  width families do not weaken complete ABI equality.

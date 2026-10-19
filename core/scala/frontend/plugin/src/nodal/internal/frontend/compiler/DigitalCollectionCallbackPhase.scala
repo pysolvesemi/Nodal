@@ -82,6 +82,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         moduleMethods("nodal.Bits", ">>") ++
         moduleMethods("nodal.UInt") ++
         moduleMethods("nodal.DigitalCombinationalApi$package", "select") ++
+        moduleMethods("nodal.DigitalAggregateApi$package", "field", "value", "member") ++
+        methods(requiredClass("nodal.StructMember"), "bind") ++
         methods(
           owner,
           "S",

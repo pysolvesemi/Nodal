@@ -14,6 +14,7 @@ private[nodal] object DigitalValueConstruction:
         DigitalScalarContract.Operations.contains(operation) ||
         operation == DigitalMaterializationContract.Operation ||
         DigitalCombinationalContract.Operations.contains(operation) ||
+        DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
         operation == DigitalCollectionContract.Operation
@@ -54,6 +55,8 @@ private[nodal] object DigitalValueConstruction:
       CandidateRuntime.expressionDataType(expression).foreach(value => types.append((value, 0)))
       expression.operands.collect { case metadata: EnumOperationMetadata => metadata }
         .foreach(value => register(value.abi))
+      expression.operands.collect { case metadata: StructOperationMetadata => metadata }
+        .foreach(value => types.append((value.schema, 0)))
     var typeNodes = 0
     while types.nonEmpty do
       val (current, depth) = types.removeLast()
@@ -83,6 +86,7 @@ private[nodal] object DigitalValueConstruction:
             DigitalScalarContract.Operations.contains(operation) ||
             operation == DigitalMaterializationContract.Operation ||
             DigitalCombinationalContract.Operations.contains(operation) ||
+            DigitalAggregateContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
             operation == DigitalCollectionContract.Operation
         )
@@ -113,6 +117,11 @@ private[nodal] object DigitalValueConstruction:
       case (expression, path, owner, handle)
           if reachable.containsKey(expression) && !argumentPaths.contains(path) =>
         val metadata = expression.operands.collect { case value: EnumOperationMetadata => value }
+        val structure = expression.operands.collect { case value: StructOperationMetadata => value }
+        val isStruct = expression.operation.exists(DigitalAggregateContract.Operations.contains)
+        if isStruct != structure.nonEmpty || structure.size > 1 ||
+          (isStruct && expression.operands.lastOption != structure.headOption)
+        then fail("Struct operation requires one final schema evidence record")
         val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix))
         val isProjection = projectionPaths.contains(path)
         if expression.operation.contains(DigitalMaterializationContract.Operation) !=
@@ -128,7 +137,10 @@ private[nodal] object DigitalValueConstruction:
         if !isEnum && metadata.nonEmpty then fail("non-enum expression carries enum metadata")
         val operands = if expression.literal.nonEmpty || isProjection then Vector.empty
         else
-          expression.operands.filterNot(_.isInstanceOf[EnumOperationMetadata]).map: operand =>
+          expression.operands.filterNot(value =>
+            value.isInstanceOf[EnumOperationMetadata] ||
+              value.isInstanceOf[StructOperationMetadata]
+          ).map: operand =>
             operand match
               case candidate: KernelExpr[?] =>
                 val captured = Option(byExpression.get(candidate)).getOrElse(
@@ -158,6 +170,13 @@ private[nodal] object DigitalValueConstruction:
           metadata.headOption.map(_.abi.identity),
           metadata.headOption.map(_.caseIds).getOrElse(Vector.empty),
           regionOf(expression),
-          expression.materializationIntent
+          materializationIntent = expression.materializationIntent,
+          structure = structure.headOption.map(value =>
+            KernelStructOperationSnapshot(
+              renderType(value.schema, handle),
+              value.ordinal,
+              value.name
+            )
+          )
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

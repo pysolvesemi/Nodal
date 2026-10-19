@@ -52,6 +52,12 @@ mlir::FailureOr<InstantiatedIntegerExpression> inferDigitalWidthExpression(mlir:
 /// are excluded. The bounded query memoizes type pairs without physical expansion.
 bool equivalentDigitalStorageTypes(mlir::Type left, mlir::Type right, mlir::Operation *module);
 
+/// Construction-only width-family relation. Both complete types are validated.
+/// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered
+/// fields and every inner dimension identity remain exact. This never licenses
+/// assignment or port/storage ABI substitution.
+bool sameDigitalStorageWidthFamily(mlir::Type base, mlir::Type instance, mlir::Operation *module);
+
 /// Prove one directionless storage type's worst-case recursive bit footprint,
 /// reusing the module type verifier's checked shape/width arithmetic. The use is
 /// either the owning module or an operation directly in it; diagnostics identify

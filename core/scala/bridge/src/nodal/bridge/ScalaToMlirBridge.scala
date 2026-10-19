@@ -1745,7 +1745,9 @@ ${indent(body, 2)}
               )
 
       val digitalTypeRoots = snapshot.digitalExpressions.filter(_.owner == module.path)
-        .map(value => value.path -> value.dataType) ++
+        .flatMap(value =>
+          (value.dataType +: value.structure.toVector.map(_.schemaType)).map(value.path -> _)
+        ) ++
         snapshot.digitalCollections.filter(_.owner == module.path).flatMap(_.arguments)
           .map(value => value.path -> value.dataType) ++
         snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
@@ -2185,6 +2187,8 @@ ${indent(body, 2)}
         digitalWidthRelation,
         digitalWidthFormula,
         exactDigitalValueType,
+        (left, right, path) => compareDigitalValueType(left, right, path, widthFamily = true),
+        digitalStructParts,
         vecTypeParts,
         renderDigitalDeclarationValue,
         DigitalStorageMlir.initializer,
@@ -4818,7 +4822,26 @@ ${indent(body, 2)}
         case error: IllegalArgumentException =>
           fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
 
+    private def digitalStructParts(text: String, path: String): (String, Vector[(String, String)]) =
+      val _ = parseTypeChecked(text, path, 0, Array(65536), storageContext = true)
+      if !text.startsWith("Struct(") then
+        fail("NODAL-BRIDGE-055", "Struct operation requires an actual Struct type", Some(path))
+      val inside = text.drop(7).dropRight(1)
+      val open = inside.indexOf('{')
+      val fields = splitStructFields(inside.drop(open + 1).dropRight(1), path).map: field =>
+        val colon = field.indexOf(':')
+        field.take(colon) -> field.drop(colon + 1)
+      inside.take(open) -> fields
+
     private def exactDigitalValueType(left: String, right: String, path: String): Boolean =
+      compareDigitalValueType(left, right, path, widthFamily = false)
+
+    private def compareDigitalValueType(
+        left: String,
+        right: String,
+        path: String,
+        widthFamily: Boolean
+    ): Boolean =
       // Validate through the existing type owner before comparing semantic dimensions.
       val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext = true)
       val _ = parseTypeChecked(right, path, 0, Array(65536), storageContext = true)
@@ -4831,13 +4854,6 @@ ${indent(body, 2)}
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
-      def structParts(text: String): (String, Vector[(String, String)]) =
-        val inside = text.drop(7).dropRight(1)
-        val open = inside.indexOf('{')
-        val fields = splitStructFields(inside.drop(open + 1).dropRight(1), path).map: field =>
-          val colon = field.indexOf(':')
-          field.take(colon) -> field.drop(colon + 1)
-        inside.take(open) -> fields
       while pending.nonEmpty && equal do
         val (a, b, depth) = pending.removeLast()
         if depth > 128 || visited.size >= 65536 then
@@ -4845,7 +4861,7 @@ ${indent(body, 2)}
         if visited.add(a -> b) && a != b then
           (a, b) match
             case (WidthType(aKind, aWidth), WidthType(bKind, bWidth)) =>
-              equal = aKind == bKind && sameDimension(aWidth, bWidth)
+              equal = aKind == bKind && (widthFamily || sameDimension(aWidth, bWidth))
             case _ if a.startsWith("Vec(") && b.startsWith("Vec(") =>
               val (aElement, aDimensions) = vecTypeParts(a, path)
               val (bElement, bDimensions) = vecTypeParts(b, path)
@@ -4853,8 +4869,8 @@ ${indent(body, 2)}
                 aDimensions.zip(bDimensions).forall((x, y) => sameDimension(x, y))
               pending.append((aElement, bElement, depth + 1))
             case _ if a.startsWith("Struct(") && b.startsWith("Struct(") =>
-              val (aName, aFields) = structParts(a)
-              val (bName, bFields) = structParts(b)
+              val (aName, aFields) = digitalStructParts(a, path)
+              val (bName, bFields) = digitalStructParts(b, path)
               equal = aName == bName && aFields.map(_._1) == bFields.map(_._1)
               aFields.zip(bFields).foreach: (x, y) =>
                 pending.append((x._2, y._2, depth + 1))

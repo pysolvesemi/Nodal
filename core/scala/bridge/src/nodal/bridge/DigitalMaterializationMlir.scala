@@ -70,6 +70,7 @@ private[nodal] object DigitalMaterializationMlir:
     private def candidate(value: KernelDigitalExpressionSnapshot): Boolean =
       (value.operation == DigitalMaterializationContract.Operation ||
         DigitalCombinationalContract.Operations.contains(value.operation) ||
+        DigitalAggregateContract.Operations.contains(value.operation) ||
         DigitalScalarContract.Operations.contains(value.operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation) ||
         value.operation == DigitalCollectionContract.Operation ||

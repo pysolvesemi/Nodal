@@ -133,6 +133,12 @@ private[nodal] object DigitalValueMlir:
     snapshot.digitalExpressions.foreach: expression =>
       DigitalMaterializationMlir.validate(expression)
       requireValid(
+        DigitalAggregateContract.Operations.contains(expression.operation) ==
+          expression.structure.nonEmpty,
+        "only Struct operations carry schema evidence",
+        expression.path
+      )
+      requireValid(
         modules.contains(expression.owner) && expression.path.startsWith(expression.owner + ".") &&
           !declarations.contains(expression.path) && expression.operands.size <= 4098,
         "digital expression has invalid module ownership, identity or operand count",
@@ -656,6 +662,8 @@ private[nodal] object DigitalValueMlir:
         widthRelation: (ScalarType, ScalarType, Int, String) => Boolean,
         widthFormula: (ScalarType, String, Vector[ScalarType], Long, String) => Boolean,
         exactValueType: (String, String, String) => Boolean,
+        widthFamily: (String, String, String) => Boolean,
+        structType: (String, String) => (String, Vector[(String, String)]),
         vectorType: (String, String) => (String, Vector[String]),
         declarationValue: (
             KernelDeclarationSnapshot,
@@ -896,6 +904,72 @@ private[nodal] object DigitalValueMlir:
                       result,
                       dataType,
                       operands,
+                      sourceLocation(path)
+                    )),
+                    height,
+                    Proof(None, unsigned)
+                  )
+                else if DigitalAggregateContract.Operations.contains(expression.operation) then
+                  val evidence = expression.structure.get
+                  def finite(dataType: String): Boolean =
+                    dataType == "Bool" || scalarType(dataType, path).nonEmpty ||
+                      dataType.startsWith("Enum(") || dataType.startsWith("Vec(") ||
+                      dataType.startsWith("Struct(")
+                  requireValid(
+                    finite(expression.dataType) &&
+                      expression.operands.forall(input => finite(expressionType(input))),
+                    "Struct operations cannot expose standalone Real or Integer leaves",
+                    path
+                  )
+                  val schema = structType(evidence.schemaType, path)
+                  requireValid(
+                    expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+                      expression.caseIds.isEmpty,
+                    "Struct operations cannot carry scalar or enum facts",
+                    path
+                  )
+                  val fieldAttributes = if expression.operation == "digital_struct_get" then
+                    requireValid(
+                      expression.operands.size == 1 && evidence.ordinal.nonEmpty &&
+                        evidence.name.nonEmpty,
+                      "Struct get requires one receiver and an exact member",
+                      path
+                    )
+                    val receiver = expressionType(expression.operands.head)
+                    val fields = structType(receiver, path)._2
+                    val index = evidence.ordinal.get
+                    requireValid(
+                      widthFamily(evidence.schemaType, receiver, path) && index >= 0 &&
+                        index < fields.size && fields(index)._1 == evidence.name.get &&
+                        schema._2(index)._1 == evidence.name.get &&
+                        exactValueType(fields(index)._2, expression.dataType, path),
+                      "Struct get schema, ordinal, name or actual field result type differs",
+                      path
+                    )
+                    s", field_ordinal = $index : i64, field_name = ${quoted(evidence.name.get)}"
+                  else
+                    val fields = structType(expression.dataType, path)._2
+                    requireValid(
+                      evidence.ordinal.isEmpty && evidence.name.isEmpty &&
+                        widthFamily(evidence.schemaType, expression.dataType, path) &&
+                        expression.operands.size == fields.size &&
+                        fields.zip(expression.operands).forall((field, input) =>
+                          exactValueType(field._2, expressionType(input), path)
+                        ),
+                      "Struct make requires the declared family and exact ordered field operands",
+                      path
+                    )
+                    ""
+                  val attributes = s"{operator_name = ${quoted(expression.operation)}, " +
+                    s"struct_schema = ${nativeType(evidence.schemaType, path)}$fieldAttributes, " +
+                    s"metadata = ${metadata(path, true)}}"
+                  (
+                    Vector(operation(
+                      "nodal.digital_expr",
+                      result,
+                      dataType,
+                      operands,
+                      attributes,
                       sourceLocation(path)
                     )),
                     height,

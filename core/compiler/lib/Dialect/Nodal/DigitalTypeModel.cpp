@@ -190,10 +190,10 @@ public:
     return result->maximumBits;
   }
 
-  bool equivalentStorageTypes(Type left, Type right) {
+  bool equivalentStorageTypes(Type left, Type right, bool widthFamily = false) {
     if (failed(storageMaximumBits(left, module)) || failed(storageMaximumBits(right, module)))
       return false;
-    return equivalentStoragePair(left, right, 1);
+    return equivalentStoragePair(left, right, 1, widthFamily);
   }
 
   LogicalResult verify(Operation *use) {
@@ -250,7 +250,7 @@ public:
   }
 
 private:
-  bool equivalentStoragePair(Type left, Type right, unsigned depth) {
+  bool equivalentStoragePair(Type left, Type right, unsigned depth, bool widthFamily) {
     if (depth > digitalTypeMaximumDepth || ++comparisonWork > digitalTypeMaximumNodes)
       return false;
     const auto pair = std::make_pair(left, right);
@@ -260,8 +260,8 @@ private:
     StringRef kind = scalarKind(left);
     if (!equal && !kind.empty() && kind == scalarKind(right)) {
       auto lhs = widthExpression(left), rhs = widthExpression(right);
-      equal =
-          succeeded(lhs) && succeeded(rhs) && equivalentInstantiatedIntegerExpressions(*lhs, *rhs);
+      equal = succeeded(lhs) && succeeded(rhs) &&
+              (widthFamily || equivalentInstantiatedIntegerExpressions(*lhs, *rhs));
     } else if (!equal) {
       if (auto lhs = llvm::dyn_cast<nodal::ShapedType>(left)) {
         auto rhs = llvm::dyn_cast<nodal::ShapedType>(right);
@@ -270,7 +270,8 @@ private:
           lhs.getDimensions().split(a, ',');
           rhs.getDimensions().split(b, ',');
           equal = a.size() == b.size() &&
-                  equivalentStoragePair(lhs.getElementType(), rhs.getElementType(), depth + 1);
+                  equivalentStoragePair(lhs.getElementType(), rhs.getElementType(), depth + 1,
+                                        widthFamily);
           for (unsigned index = 0; equal && index < a.size(); ++index) {
             if (++comparisonWork > digitalTypeMaximumNodes)
               return false;
@@ -287,9 +288,10 @@ private:
         for (unsigned index = 0; equal && index < lhs.getFields().size(); ++index) {
           auto a = llvm::cast<DictionaryAttr>(lhs.getFields()[index]);
           auto b = llvm::cast<DictionaryAttr>(rhs.getFields()[index]);
-          equal = a.getAs<StringAttr>("name") == b.getAs<StringAttr>("name") &&
-                  equivalentStoragePair(a.getAs<TypeAttr>("type").getValue(),
-                                        b.getAs<TypeAttr>("type").getValue(), depth + 1);
+          equal =
+              a.getAs<StringAttr>("name") == b.getAs<StringAttr>("name") &&
+              equivalentStoragePair(a.getAs<TypeAttr>("type").getValue(),
+                                    b.getAs<TypeAttr>("type").getValue(), depth + 1, widthFamily);
         }
       }
     }
@@ -549,6 +551,13 @@ bool equivalentDigitalStorageTypes(Type left, Type right, Operation *module) {
     return false;
   ModuleTypeVerifier verifier(module);
   return verifier.equivalentStorageTypes(left, right);
+}
+
+bool sameDigitalStorageWidthFamily(Type base, Type instance, Operation *module) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  ModuleTypeVerifier verifier(module);
+  return verifier.equivalentStorageTypes(base, instance, true);
 }
 
 LogicalResult verifyDigitalTypeModel(Operation *module) {

@@ -1676,9 +1676,16 @@ def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
     digital_to_real accepts UInt and produces f64 using nearest-ties-even
     binary64 rounding, with an independent finite-result proof. Symbolic widths
     retain exact owned structural identity rather than an overridable default.
+    digital_struct_get retains one actual Struct operand and a checked nominal
+    schema, field ordinal and name. Its result is the receiver's exact field type.
+    digital_struct_make retains one operand per ordered result field. Schema and
+    result must have the same independently verified width family; every operand
+    has the exact corresponding result field type. Width families never relax
+    storage or assignment equality.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$operator_name,
-    DictionaryAttr:$metadata);
+    DictionaryAttr:$metadata, OptionalAttr<TypeAttr>:$struct_schema,
+    OptionalAttr<I64Attr>:$field_ordinal, OptionalAttr<StrAttr>:$field_name);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

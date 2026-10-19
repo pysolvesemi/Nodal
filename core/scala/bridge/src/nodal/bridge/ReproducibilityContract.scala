@@ -357,7 +357,7 @@ private[nodal] object ReproducibilityContract:
 
   private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = obj(
     "expressions" -> array(snapshot.digitalExpressions.sortBy(_.path).map(value =>
-      obj(
+      JObject(Vector(
         "path" -> string(value.path),
         "owner" -> string(value.owner),
         "operation" -> string(value.operation),
@@ -368,7 +368,13 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
-      )
+      ) ++ value.structure.toVector.map(evidence =>
+        "structure" -> obj(
+          "schema_type" -> string(evidence.schemaType),
+          "ordinal" -> evidence.ordinal.map(number).getOrElse(JNull),
+          "name" -> optionalString(evidence.name)
+        )
+      ))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
       obj(

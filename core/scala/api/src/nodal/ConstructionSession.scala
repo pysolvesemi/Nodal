@@ -253,6 +253,7 @@ private final class ConstructionSession(val options: EmitOptions):
         DigitalScalarContract.Operations.contains(operation) ||
         operation == DigitalMaterializationContract.Operation ||
         DigitalCombinationalContract.Operations.contains(operation) ||
+        DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
         knownArgument || knownCollection
@@ -1801,13 +1802,21 @@ private final class ConstructionSession(val options: EmitOptions):
             DigitalEnumContract.Prefix
           ) || DigitalScalarContract.Operations.contains(operation) ||
             operation == DigitalMaterializationContract.Operation ||
-            DigitalCombinationalContract.Operations.contains(operation)
+            DigitalCombinationalContract.Operations.contains(operation) ||
+            DigitalAggregateContract.Operations.contains(operation)
         ) =>
       if activeGeneratedRegion.nonEmpty then
         fail(
           "NODAL-ENUM-054-020",
           "digital expressions in generated scopes require the digital generation profile"
         )
+      expression.operands.collect { case metadata: StructOperationMetadata => metadata.schema }
+        .foreach(validateShapeType(
+          _,
+          currentModule.handle,
+          cardinality = true,
+          storageContext = true
+        ))
       val _ = captureExpression(value)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
@@ -4812,6 +4821,7 @@ private final class ConstructionSession(val options: EmitOptions):
             ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
               operation == DigitalMaterializationContract.Operation ||
               DigitalCombinationalContract.Operations.contains(operation) ||
+              DigitalAggregateContract.Operations.contains(operation) ||
               DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
           ) => expression)
     DigitalValueConstruction.snapshot(
@@ -4882,7 +4892,11 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     val interfaceTypeRoots = additionalTypes.iterator.flatMap(shapeDimensionRoots)
     val expressionTypeRoots = expressionValues.valuesIterator.flatMap(expression =>
-      CandidateRuntime.expressionDataType(expression).iterator.flatMap(shapeDimensionRoots)
+      (CandidateRuntime.expressionDataType(
+        expression
+      ).iterator ++ expression.operands.iterator.collect {
+        case metadata: StructOperationMetadata => metadata.schema
+      }).flatMap(shapeDimensionRoots)
     )
     val lexicalShapeRoots = expressionValues.valuesIterator
       .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>

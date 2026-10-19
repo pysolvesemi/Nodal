@@ -319,3 +319,49 @@ text before rendering; this is a resource bound, not a whole-pipeline speedup cl
 F55 and its linked BT children remain open. Scoped formal-width environments, typed
 Struct value integration, driver validation and actual reduction/loop semantics
 remain required follow-on work.
+
+## Typed Struct value prerequisite checkpoint
+
+The approved [Struct value gate](../design-gates/NodalDigitalStructValues-DG-v0.1.md)
+adds private typed member/binding handles and real record get/make operations to the
+existing digital value DAG. Equivalent reconstructed semantic schemas remain
+compatible; host-object identity is not an ABI. Construction/projection may use the
+checked width-family relation, while each resulting complete type retains actual
+width expressions and all ordinary assignment/layout equality stays exact.
+Whole-record selection and one shared cross-field predicate are actual DAG cases,
+not separate per-field callbacks. Materialization metadata/classification and source
+origin handling are integrated through their existing owners.
+
+Integrated checks pass six tracked-source Struct cases and 101 affected source
+predecessors. Ten additional selected checks produce nine passes and the same
+retained CDC receipt failure documented in the materialization checkpoint; it is
+not counted as passing. Native value 362/362, type 103/103, storage 68/68,
+collection 76/76, materialization 40/40, enum 68/68, integer bounds 58/58 and target
+capability 74/74 pass; ParameterModel also passes. Formatting is clean. Syntactic
+lint retains the same three unchanged ConstructionSession/ReproducibilityContract
+findings and introduces no new diagnostic.
+
+Actual tracked source spans and native source maps retain the authored fixture
+path. InlineSafe, Readable and Debug native replays each retain 59 inventory
+records, including 28 gets and two makes. Actual SSA inspection confirms the two
+whole-record winners and shared comparison inputs for cross-field construction,
+including callback ownership. All three outputs normalize idempotently; a
+same-typed changed operand under the old inventory rejects. Schema-only static
+width expressions are included in the existing digital type-root schedule, fixing
+a captured-but-unemitted metadata dependency discovered by the integrated witness.
+
+Source MLIR SHA-256 is
+`1a5732cd09054b03d132d5f11e9434e2f5ecce0fd1b122ca40353709bd0e85df`;
+normalized MLIR SHA-256 is
+`7d97f91d82bd049d6d6fcd7ba00b0551dca46bc6dc4a41c282fdf41de464ba69`.
+The native compiler SHA-256 is
+`7e276d8d1d94329de74785e3c55a72ad8ae3f94680b746193bcd58de49d0f3b4`.
+Exact commands, frozen source/test hashes and all policy artifacts are retained
+under `.work/increment55/struct-value-stage/integrated-results`.
+
+The architecture preserves exact complete ABI and existing source Bool/native
+Bits<1> representation, with no generative schema registry or per-field callback
+replay. Bounded shared type/DAG traversal is reused; representative sharing checks
+do not establish a whole-pipeline scaling claim. These are verified native MLIR
+witnesses, not generated HDL. F55/BT remains open for scoped reduction proof/capture,
+driver validation and bounded writable iteration.

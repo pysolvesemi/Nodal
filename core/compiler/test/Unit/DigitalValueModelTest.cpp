@@ -1070,6 +1070,175 @@ int main() {
         << "standalone-fanout-node-budget-overflow\n";
   }
 
+  // Whole records retain their actual scalar widths and nested element/shape identities.
+  auto record = [](StringRef score, StringRef tag, StringRef payload,
+                   StringRef nominal = "Candidate") {
+    return "!nodal.struct<\"" + nominal.str() + "\", [{name = \"score\", type = " + score.str() +
+           "}, {name = \"tag\", type = " + tag.str() +
+           "}, {name = \"payload\", type = " + payload.str() + "}]>";
+  };
+  auto getField = [](StringRef source, StringRef result, StringRef schema,
+                     StringRef field = "score", int64_t ordinal = 0) {
+    return "%field = \"nodal.digital_expr\"(%input) <{operator_name = \"digital_struct_get\", "
+           "metadata = {}, struct_schema = " +
+           schema.str() + ", field_ordinal = " + std::to_string(ordinal) +
+           " : i64, field_name = \"" + field.str() + "\"}> : (" + source.str() + ") -> " +
+           result.str() + "\n";
+  };
+  const std::string nested = "!nodal.shaped<\"2,3\", !nodal.uint<4>>";
+  const std::string base = record("!nodal.sint<4>", "!nodal.bits<3>", nested);
+  const std::string widened = record("!nodal.sint<5>", "!nodal.bits<3>", nested);
+  check("struct-get-equivalent-reconstructed-schema",
+        model(input(base) + getField(base, "!nodal.sint<4>", base)), true);
+  const std::string unsignedRecord = record("!nodal.uint<4>", "!nodal.bits<3>", nested);
+  check(
+      "struct-get-preserves-unsigned-proof-through-alias",
+      model(
+          input(unsignedRecord) + getField(unsignedRecord, "!nodal.uint<4>", unsignedRecord) +
+          expression("to_signed", "!nodal.uint<4>", "!nodal.sint<5>", "%field", "signedField") +
+          "%namedField = \"nodal.digital_expr\"(%signedField) <{operator_name = \"digital_alias\", "
+          "metadata = {digital_intent = {kind = \"named\", value = \"unsigned_field\"}}}> : "
+          "(!nodal.sint<5>) -> !nodal.sint<5>\n" +
+          expression("to_unsigned", "!nodal.sint<5>", "!nodal.uint<5>", "%namedField")),
+      true);
+  check("struct-get-derived-actual-field-width",
+        model(input(widened) + getField(widened, "!nodal.sint<5>", base)), true);
+  check("struct-get-reject-stale-schema-width",
+        model(input(widened) + getField(widened, "!nodal.sint<4>", base)), false);
+  check("struct-get-nested-vector", model(input(base) + getField(base, nested, base, "payload", 2)),
+        true);
+  check("struct-get-wrong-name", model(input(base) + getField(base, "!nodal.sint<4>", base, "tag")),
+        false);
+  check("struct-get-negative-ordinal",
+        model(input(base) + getField(base, "!nodal.sint<4>", base, "score", -1)), false);
+  check("struct-get-outside-ordinal",
+        model(input(base) + getField(base, "!nodal.sint<4>", base, "score", 3)), false);
+  check("struct-get-wrong-scalar-kind",
+        model(input(base) +
+              getField(base, "!nodal.sint<4>", record("!nodal.uint<4>", "!nodal.bits<3>", nested))),
+        false);
+  check("struct-get-wrong-nominal-schema",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     record("!nodal.sint<4>", "!nodal.bits<3>", nested, "Other"))),
+        false);
+  check("struct-get-wrong-inner-layout",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     record("!nodal.sint<4>", "!nodal.bits<3>",
+                                            "!nodal.shaped<\"3,2\", !nodal.uint<4>>"))),
+        false);
+  const auto make =
+      [&](StringRef result, StringRef operands = "%score, %tag, %payload",
+          StringRef types =
+              "!nodal.sint<5>, !nodal.bits<3>, !nodal.shaped<\"2,3\", !nodal.uint<4>>") {
+        return "%made = \"nodal.digital_expr\"(" + operands.str() +
+               ") <{operator_name = \"digital_struct_make\", metadata = {}, struct_schema = " +
+               base + "}> : (" + types.str() + ") -> " + result.str() + "\n";
+      };
+  const std::string inputs =
+      input("!nodal.sint<5>", "score") + input("!nodal.bits<3>", "tag") + input(nested, "payload");
+  check("struct-make-whole-typed-record", model(inputs + make(widened)), true);
+  check("struct-make-stale-result-width", model(inputs + make(base)), false);
+  check("struct-make-missing-field",
+        model(inputs + make(widened, "%score, %tag", "!nodal.sint<5>, !nodal.bits<3>")), false);
+  check("struct-make-wrong-order",
+        model(inputs +
+              make(widened, "%tag, %score, %payload",
+                   "!nodal.bits<3>, !nodal.sint<5>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+  check("struct-make-duplicate-field",
+        model(inputs +
+              make(widened, "%score, %score, %payload",
+                   "!nodal.sint<5>, !nodal.sint<5>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+  const std::string symbolicBase = record(symbolic("sint", "W"), "!nodal.bits<3>", nested);
+  const std::string symbolicActual = record(symbolic("sint", "X"), "!nodal.bits<3>", nested);
+  check("struct-independent-symbolic-width-instance",
+        model(parameter("W") + parameter("X") + input(symbolicActual) +
+              getField(symbolicActual, symbolic("sint", "X"), symbolicBase)),
+        true);
+  check("struct-equal-defaults-cannot-replace-actual-width",
+        model(parameter("W") + parameter("X") + input(symbolicActual) +
+              getField(symbolicActual, symbolic("sint", "W"), symbolicBase)),
+        false);
+  const std::string countBase =
+      record("!nodal.sint<4>", "!nodal.bits<3>", "!nodal.shaped<\"C\", !nodal.uint<4>>");
+  const std::string countActual =
+      record("!nodal.sint<4>", "!nodal.bits<3>", "!nodal.shaped<\"D\", !nodal.uint<4>>");
+  const std::string counts = replace(parameter("C", 2, 4), "[\"width\"]", "[\"shape\"]") +
+                             replace(parameter("D", 2, 4), "[\"width\"]", "[\"shape\"]");
+  check("struct-equal-defaults-cannot-replace-inner-dimension",
+        model(counts + input(countActual) + getField(countActual, "!nodal.sint<4>", countBase)),
+        false);
+
+  const std::string opaque = record("f64", "i64", nested);
+  check("struct-preserves-opaque-whole-record",
+        model(input(opaque) + input(opaque, "right") +
+              literal("!nodal.bits<1>", "1", "i64", "predicate") +
+              expression("select", "!nodal.bits<1>, " + opaque + ", " + opaque, opaque,
+                         "%predicate, %input, %right")),
+        true);
+  check("struct-get-real-leaf-is-outside-digital-profile",
+        model(input(opaque) + getField(opaque, "f64", opaque)), false);
+  check("struct-get-integer-leaf-is-outside-digital-profile",
+        model(input(opaque) + getField(opaque, "i64", opaque, "tag", 1)), false);
+  const auto get = input(base) + getField(base, "!nodal.sint<4>", base);
+  check("struct-get-missing-schema", model(replace(get, ", struct_schema = " + base, "")), false);
+  check("struct-get-non-Struct-schema",
+        model(replace(get, "struct_schema = " + base, "struct_schema = !nodal.uint<4>")), false);
+  const std::string enumRecord = record("!nodal.sint<4>", enumType, nested);
+  check("struct-preserves-enum-field-identity",
+        model(input(enumRecord) + getField(enumRecord, enumType, enumRecord, "tag", 1),
+              enumDefinition),
+        true);
+  check("struct-rejects-enum-as-bits-schema",
+        model(input(enumRecord) + getField(enumRecord, "!nodal.sint<4>",
+                                           record("!nodal.sint<4>", "!nodal.bits<2>", nested)),
+              enumDefinition),
+        false);
+
+  std::string otherEnumDefinition = enumDefinition;
+  for (std::size_t index = 0;
+       (index = otherEnumDefinition.find("Mode", index)) != std::string::npos;) {
+    otherEnumDefinition.replace(index, 4, "Other");
+    index += 5;
+  }
+  otherEnumDefinition = replace(otherEnumDefinition,
+                                "df5b4a51f3fade96f1ab8a106bbcb0114b5d4601e4e2c6aebcf38763dd61e66a",
+                                "7de2dab05dffe94f634c7f1131e3140b2307c3a8bbc79e7ff11e9d0affb682da");
+  const std::string otherEnumRecord = record("!nodal.sint<4>", "!nodal.enum<\"Other\", 2>", nested);
+  check("struct-other-enum-schema-is-independently-valid",
+        model(input(otherEnumRecord) + getField(otherEnumRecord, "!nodal.sint<4>", otherEnumRecord),
+              otherEnumDefinition),
+        true);
+  check("struct-rejects-distinct-enum-identity",
+        model(input(otherEnumRecord) + getField(otherEnumRecord, "!nodal.sint<4>", enumRecord),
+              enumDefinition + otherEnumDefinition),
+        false);
+  check("struct-rejects-schema-field-name",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     replace(base, "name = \"score\"", "name = \"other\""))),
+        false);
+
+  auto reordered = replace(base, "name = \"score\"", "name = \"tag\"");
+  reordered = replace(reordered, "name = \"tag\", type = !nodal.bits<3>",
+                      "name = \"score\", type = !nodal.bits<3>");
+  check("struct-rejects-schema-field-order",
+        model(input(base) + getField(base, "!nodal.sint<4>", reordered)), false);
+
+  check("struct-make-extra-field",
+        model(inputs + make(widened, "%score, %tag, %payload, %payload",
+                            "!nodal.sint<5>, !nodal.bits<3>, !nodal.shaped<\"2,3\", "
+                            "!nodal.uint<4>>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+
+  check("struct-make-cannot-expose-opaque-scalar-operands",
+        model(input("f64", "real") + input("i64", "integer") + input(nested, "payload") +
+              "%made = \"nodal.digital_expr\"(%real, %integer, %payload) <{operator_name = "
+              "\"digital_struct_make\", "
+              "metadata = {}, struct_schema = " +
+              opaque + "}> : (f64, i64, " + nested + ") -> " + opaque + "\n"),
+        false);
+
   llvm::outs() << "DIGITAL_VALUE_MODEL_SUMMARY " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

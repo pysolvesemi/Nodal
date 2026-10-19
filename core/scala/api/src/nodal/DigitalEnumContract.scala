@@ -169,6 +169,13 @@ private[nodal] object DigitalEnumContract:
       left: KernelTypeDescriptor,
       right: KernelTypeDescriptor,
       integerIdentity: Option[(Dimension, Dimension) => Boolean] = None
+  ): Boolean = compareType(left, right, integerIdentity, widthFamily = false)
+
+  private def compareType(
+      left: KernelTypeDescriptor,
+      right: KernelTypeDescriptor,
+      integerIdentity: Option[(Dimension, Dimension) => Boolean],
+      widthFamily: Boolean
   ): Boolean =
     val memo =
       new java.util.IdentityHashMap[AnyRef, java.util.IdentityHashMap[AnyRef, java.lang.Boolean]]()
@@ -217,7 +224,11 @@ private[nodal] object DigitalEnumContract:
             row.put(br, java.lang.Boolean.FALSE)
             val result = (a, b) match
               case (x: KernelTypeDescriptor, y: KernelTypeDescriptor) =>
-                x.kind == y.kind && same(x.arguments, y.arguments, depth + 1)
+                x.kind == y.kind &&
+                (if widthFamily && Set("Bits", "UInt", "SInt").contains(x.kind) then
+                   x.arguments.size == 1 && y.arguments.size == 1 &&
+                   dimension(x.arguments.head).nonEmpty && dimension(y.arguments.head).nonEmpty
+                 else same(x.arguments, y.arguments, depth + 1))
               case (x: DataType[?], y: DataType[?]) =>
                 same(
                   CandidateRuntime.typeDescriptor(x),
@@ -238,6 +249,12 @@ private[nodal] object DigitalEnumContract:
             row.put(br, java.lang.Boolean.valueOf(result))
             result
     same(left, right, 0)
+
+  /** Construction-only relation: erase scalar width leaves, preserve every other exact identity.
+    * This is never storage/assignment equality, and never evaluates a parameter default.
+    */
+  def sameWidthFamily(left: KernelTypeDescriptor, right: KernelTypeDescriptor): Boolean =
+    compareType(left, right, None, widthFamily = true)
 
   private def selectedCase[A](value: A, evidence: HwEnum[A], resolved: ResolvedEnumAbi): String =
     val owner = declaration(evidence)

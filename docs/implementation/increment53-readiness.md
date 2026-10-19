@@ -1,7 +1,9 @@
 # Increment 53 readiness and implementation
 
-Status: implementation, focused validation and publication checks complete;
-ready for verified integration. Parent/G remain open pending verified integration. Base `c5be30eeebb7c90a3cf12e979cd960a16284f57b` is the verified F52
+Status: complete. PR149 was squash-integrated as
+`54d958d68593f66f0a653ec328009fef55a94b85`, preserving tested tree
+`19ab31427399067363237672f2456e2827385696`. Parent/G are complete for the
+explicit finite profile. Base `c5be30eeebb7c90a3cf12e979cd960a16284f57b` is the verified F52
 documentation closure. Branch: `increment/53-cross-tool-portability`.
 
 ## Selected architecture
@@ -213,3 +215,8 @@ unique run identities and both retained receipts.
 Final Scalafmt, syntactic Scalafix, package visibility, architecture,
 contribution policy, generated registry freshness and whitespace checks passed.
 Raw local logs remain under `.work/increment53/`; no CI was launched.
+
+Verified integration: PR149 is merged; dev matched the squash SHA, its sole parent
+is `c5be30eeebb7c90a3cf12e979cd960a16284f57b`, and the exact tested tree is unchanged.
+The merge message includes `[skip ci]`; Actions inventory was zero. This closure
+changes documentation only and does not imply additional production qualification.

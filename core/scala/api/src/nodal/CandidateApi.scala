@@ -1712,12 +1712,20 @@ private[nodal] object CandidateRuntime:
         ConstructionKernel.captureAnalogProceduralSource
       )
     else
-      ConstructionKernel.operation("assignment", left, right)
-      AnalogProceduralConstruction.assign(
-        left,
-        right,
-        ConstructionKernel.captureAnalogProceduralSource
-      )
+      // This effect is represented by the procedural recorder below. Keep digital
+      // assignments distinct so simulation admission cannot silently discard them.
+      ConstructionKernel.operation("analog-assignment", left, right)
+      try
+        AnalogProceduralConstruction.assign(
+          left,
+          right,
+          ConstructionKernel.captureAnalogProceduralSource
+        )
+      catch
+        case scala.util.control.NonFatal(error) =>
+          // A caught recorder error must not publish an attributed but unrepresented effect.
+          ConstructionKernel.poisonConstructor(error, ConstructionKernel.currentModulePath)
+          scala.util.Failure[Unit](error).get
 
   def assign(left: AnyRef, right: Any): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital assignment")

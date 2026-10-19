@@ -540,3 +540,11 @@ target_link_libraries(nodal-statement-provenance-unit-tests PRIVATE
   NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.statement-provenance-unit COMMAND nodal-statement-provenance-unit-tests)
 set_tests_properties(nodal.native.statement-provenance-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-scalar-hierarchy-materialization-unit-tests ScalarHierarchyMaterializationTest.cpp)
+llvm_update_compile_flags(nodal-scalar-hierarchy-materialization-unit-tests)
+target_link_libraries(nodal-scalar-hierarchy-materialization-unit-tests PRIVATE
+  NodalBackend NodalDialect CIRCTHW MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.scalar-hierarchy-materialization-unit
+  COMMAND nodal-scalar-hierarchy-materialization-unit-tests)
+set_tests_properties(nodal.native.scalar-hierarchy-materialization-unit PROPERTIES TIMEOUT 30)

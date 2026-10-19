@@ -71,3 +71,7 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [Typed waveform results and bounded streaming v0.1](NodalWaveformResults-DG-v0.1.md):
   Foundation 51 public typed axes, interpolation/comparison and shared bounded
   streaming protocol/simulator ownership; preserves Foundation 50 compatibility.
+
+- [Analog regression and scalar hierarchy simulation v0.1](NodalAnalogRegression-DG-v0.1.md):
+  Foundation 52 maintained numerical cases, represented analog assignment admission
+  and explicit canonical whole-graph scalar hierarchy materialization.

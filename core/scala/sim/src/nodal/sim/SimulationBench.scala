@@ -135,13 +135,37 @@ final case class SimulationInitialCondition(
     voltage: Quantity[VoltageDimension]
 )
 
+/** Simulator convergence tolerances, independent of measurement acceptance tolerances. */
+final case class SolverTolerances(
+    relative: Double = 1e-6,
+    currentAbsolute: Quantity[CurrentDimension] = 1e-12.amps,
+    voltageAbsolute: Quantity[VoltageDimension] = 1e-9.volts
+):
+  require(
+    relative.isFinite && relative > 0 && relative <= 1e-3 &&
+      currentAbsolute.siValue.isFinite && currentAbsolute.siValue > 0 &&
+      voltageAbsolute.siValue.isFinite && voltageAbsolute.siValue > 0,
+    "solver tolerances must be finite and positive, with relative <= 0.001"
+  )
+
+  private[nodal] def lowered: NgspiceSolverOptions = NgspiceSolverOptions(
+    reltol = relative,
+    abstol = currentAbsolute.siValue,
+    vntol = voltageAbsolute.siValue
+  )
+
 final class SimulationBench private[sim] (
     val model: CompiledSimulationModel,
     val sources: Vector[SimulationSourceDrive],
     val analysis: SimulationAnalysis,
     val probes: Vector[SimulationProbe],
     private[sim] val lowered: NgspiceCircuitBench
-)
+):
+  val solverTolerances: SolverTolerances = SolverTolerances(
+    lowered.options.reltol,
+    lowered.options.abstol.amps,
+    lowered.options.vntol.volts
+  )
 
 object SimulationBench:
   def create(
@@ -150,7 +174,8 @@ object SimulationBench:
       sources: Vector[SimulationSourceDrive],
       analysis: SimulationAnalysis,
       probes: Vector[SimulationProbe],
-      initialConditions: Vector[SimulationInitialCondition] = Vector.empty
+      initialConditions: Vector[SimulationInitialCondition] = Vector.empty,
+      solverTolerances: SolverTolerances = SolverTolerances()
   ): Either[SimulationError, SimulationBench] =
     try
       require(bindings.nonEmpty && bindings.size <= 32, "bind between one and 32 ports")
@@ -199,7 +224,8 @@ object SimulationBench:
         probes.map(_.lowered),
         initialConditions.map(value =>
           NgspiceInitialCondition(SimulationNode.lower(value.node), value.voltage.siValue)
-        )
+        ),
+        options = solverTolerances.lowered
       )
       NgspiceBench.generate(lowered).left.map(message => SimulationError("SIM-BENCH", message))
         .map(_ => new SimulationBench(model, sources, analysis, probes, lowered))

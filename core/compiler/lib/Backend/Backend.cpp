@@ -7,6 +7,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
+#include "nodal/Backend/ScalarHierarchyMaterialization.h"
 #include "nodal/Diagnostics/DiagnosticMapping.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/TargetCapabilities.h"
@@ -401,6 +402,11 @@ LogicalResult translateVerilogAMS(ModuleOp module, llvm::raw_ostream &output) {
   return emitBackend(module, BackendKind::VerilogAMS, output);
 }
 
+LogicalResult translateScalarHierarchy(ModuleOp module, llvm::raw_ostream &output) {
+  return emitBackend(module, BackendKind::VerilogA, output, nullptr,
+                     HierarchyEmission::MaterializedScalar);
+}
+
 } // namespace
 
 bool isPortableVerilogIdentifier(llvm::StringRef value) { return isIdentifier(value); }
@@ -503,7 +509,7 @@ const TargetVerificationHooks &getBuiltinTargetVerificationHooks() {
 }
 
 LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &output,
-                          const TargetVerificationHooks *hooks) {
+                          const TargetVerificationHooks *hooks, HierarchyEmission hierarchy) {
   OwningOpRef<ModuleOp> working(llvm::cast<ModuleOp>(module.getOperation()->clone()));
 
   FailureOr<BackendConfiguration> configuration = resolveBackendConfiguration(*working, kind);
@@ -514,6 +520,16 @@ LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &
       failed(runNodalPipelineTransaction(*working, configuration->checkProfile)) ||
       failed(verifySupportedOperations(*working, *configuration->profile)))
     return failure();
+
+  if (hierarchy == HierarchyEmission::MaterializedScalar) {
+    if (kind != BackendKind::VerilogA)
+      return emitMappedFailure(module, "NODAL-BACKEND-HIERARCHY-MATERIALIZE-001",
+                               "scalar hierarchy materialization requires the Verilog-A backend");
+    if (failed(materializeScalarElectricalHierarchy(*working)) ||
+        failed(runNodalPipelineTransaction(*working, configuration->checkProfile)) ||
+        failed(verifySupportedOperations(*working, *configuration->profile)))
+      return failure();
+  }
 
   llvm::SmallVector<Operation *, 8> definitions;
   if (failed(collectDefinitions(*working, definitions)))
@@ -549,8 +565,13 @@ void registerNodalBackendTranslations() {
       kVerilogAMSTranslation,
       "Translate accepted Nodal IR to deterministic Verilog-AMS framework output",
       translateVerilogAMS, registerDialects);
+  static TranslateFromMLIRRegistration scalarHierarchy(
+      "nodal-to-verilog-a-scalar-hierarchy",
+      "Materialize a bounded scalar electrical root graph and emit verified Verilog-A",
+      translateScalarHierarchy, registerDialects);
   (void)verilogA;
   (void)verilogAMS;
+  (void)scalarHierarchy;
 }
 
 } // namespace nodal

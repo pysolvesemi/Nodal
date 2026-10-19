@@ -426,3 +426,47 @@ The `register-rhs-*` logs in the same local evidence directory retain the causal
 before/after check, fresh source artifacts, native replay and unchanged-binary
 hash. Register priority and execution remain F56-owned; consumed-source
 definedness is part of this F55 combinational graph contract.
+
+## Writable Signal selection checkpoint
+
+The approved [writable selection gate](../design-gates/NodalWritableSignals-DG-v0.1.md)
+adds Signal.writable and a private SignalSelection with value plus canonical shape
+views. It supplies actual selected assignment operands while preserving readonly
+Expr projections. Source, bridge and native checks retain the original wire/output
+root, direction, lexical/module ownership, exact complete ABI and all-legal bounds.
+The driver graph independently proves coverage, overlap and dependencies.
+
+Fresh integrated checks pass 84 selected Scala cases and 905 native checks.
+The 19 actual public source→bridge→native graphs include 14 positives and five
+exact-cause driver negatives; positives normalize idempotently. Native storage
+passes all 118 cases, including the 106 published driver predecessors.
+The maintained callback harness passes its typed positives, 20 source-located
+callback negatives, two private/computed capability negatives and traversal/runtime
+predecessors. Isolated stage results remain separately labeled historical evidence. Pure collection callbacks still
+forbid writes; register projections and computed/alias roots gain no write
+capability. Bounded loop induction and cross-iteration proof remain required work.
+
+The actual public surface supports, for example,
+`lanes.writable.at(0) := input.at(0)` and the corresponding lane 1 assignment,
+followed by `output := lanes`. Native acceptance requires actual disjoint physical
+regions and complete output-read coverage. Rows, planes, slices, noncontiguous
+columns, composed views, symbolic bounds/widths and whole Struct lanes are tested.
+Forged root/direction/shape records, overlap/cycles/uncovered reads, wrong ABI and
+projected register updates reject at their independent owners. Ordinary root
+register_next and its consumed-RHS coverage remain passing.
+
+Formatting and whitespace checks pass. Syntactic lint retains exactly ten
+unchanged ConstructionSession/ElaborationConstructionKernel baseline diagnostics,
+with no new diagnostic; full lint is not reported passing. Fresh Struct replay
+retains shared predicates, materialization inventory, idempotence and stale-edge
+rejection. The frozen native compiler SHA-256 is
+`fc0e88ac549f23feb24444eec58c0a2506a3f6f282e0c9ed5cc8b3849f839a8b`.
+Exact source hashes, commands and artifacts are retained under
+`.work/increment55/writable-signal-stage/live`.
+
+The architecture adds a private capability over existing shape/assignment owners,
+not another coordinate engine or writable Expr type. Source ancestry is bounded
+and proportional to authored projection depth per assignment; downstream physical
+proof budgets remain unchanged. No target execution or whole-pipeline scaling
+claim is made. Widening reduction proof/integration and bounded hardware iteration
+remain open, as do the F55 parent and all linked BT acceptance decisions.

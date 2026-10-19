@@ -418,4 +418,7 @@ private[nodal] object ConstructionKernel:
 
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
 
+  def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
+    active.foreach(_.assignSignalSelection(left, right))
+
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

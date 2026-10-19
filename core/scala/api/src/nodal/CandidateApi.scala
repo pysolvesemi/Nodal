@@ -119,6 +119,39 @@ final class Signal[A <: Data] private[nodal] (
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
+  def writable: SignalSelection[A] = new SignalSelection(this)
+
+/** Explicit write capability retaining an actual signal or canonical structural projection. The
+  * expression remains a read-only value; assignment independently validates its owned root.
+  */
+final class SignalSelection[A <: Data] private[nodal] (
+    private[nodal] val expression: Expr[A]
+):
+  def value: Expr[A] = expression
+
+  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assignSignalSelection(expression, value)
+
+object SignalSelection:
+  extension [A <: Data](selection: SignalSelection[Vec[A]])
+    def at(indices: Dimension*): SignalSelection[A] =
+      new SignalSelection(CandidateRuntime.shapeIndex(selection.value, indices.toVector))
+    def row(index: Dimension): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeRow(selection.value, index))
+    def plane(index: Dimension): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapePlane(selection.value, index))
+    def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0)
+        : SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeSlice(
+        selection.value,
+        lower,
+        upperExclusive,
+        axis
+      ))
+    def flatten: SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeFlatten(selection.value))
+    def reshape(dimensions: Dimension*): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeView(selection.value, dimensions.toVector))
+
 /** Component-local variable visible to analog procedural blocks. */
 final class Variable[A <: Data] private[nodal] (
     val dataType: DataType[A],
@@ -1764,6 +1797,10 @@ private[nodal] object CandidateRuntime:
           // A caught recorder error must not publish an attributed but unrepresented effect.
           ConstructionKernel.poisonConstructor(error, ConstructionKernel.currentModulePath)
           scala.util.Failure[Unit](error).get
+
+  def assignSignalSelection[A <: Data](left: Expr[A], right: Expr[A]): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("digital assignment")
+    ConstructionKernel.assignSignalSelection(left, right)
 
   def assign(left: AnyRef, right: Any): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital assignment")

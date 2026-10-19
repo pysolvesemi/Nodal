@@ -82,6 +82,9 @@ private[nodal] object DigitalValueMlir:
       snapshot.shapeIndices.map(value => value.path -> (value.owner, value.input)) ++
         snapshot.shapeViews.map(value => value.path -> (value.owner, value.input))
     private val shapeByPath = shapeInputs.toMap
+    private val generatedShapePaths =
+      snapshot.shapeIndices.filter(_.generatedScope.nonEmpty).map(_.path).toSet ++
+        snapshot.shapeViews.filter(_.generatedScope.nonEmpty).map(_.path)
     private val assignmentsByOwner = snapshot.digitalAssignments.groupBy(_.owner)
 
     private def assignmentRoot(path: String, owner: String, depth: Int = 0): String =
@@ -89,6 +92,12 @@ private[nodal] object DigitalValueMlir:
       shapeByPath.get(path) match
         case Some((shapeOwner, input)) =>
           requireValid(shapeOwner == owner, "digital assignment projection has another owner", path)
+          requireVisible(path, owner, None, path)
+          requireValid(
+            !generatedShapePaths.contains(path),
+            "digital assignment projection requires direct-module scope",
+            path
+          )
           assignmentRoot(input, owner, depth + 1)
         case None => path
 
@@ -116,11 +125,11 @@ private[nodal] object DigitalValueMlir:
         .getOrElse(fail("digital assignment target requires an owned declaration", assignment.path))
       val valid = assignment.kind match
         case "continuous" => Set("wire", "output").contains(target.kind)
-        case "register_next" => target.kind == "register"
+        case "register_next" => target.kind == "register" && assignment.target == target.path
         case _ => false
       requireValid(
-        valid,
-        "digital assignment kind differs from its exact sink kind",
+        valid && target.generatedScope.isEmpty,
+        "digital assignment kind differs from its exact sink kind or uses an unsupported projected register update",
         assignment.path
       )
 

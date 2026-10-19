@@ -88,10 +88,23 @@ def main() -> None:
         expected = re.search(r"// Expected: (NODAL-COLLECTION-CALLBACK-[A-Z]+)", source.read_text())
         if expected is None:
             raise RuntimeError(f"negative fixture lacks a diagnostic expectation: {source}")
+        detail = re.search(r"// Expected detail: (.+)", source.read_text())
         if not any(f"/{source.name}:" in block and f"{expected[1]}:" in block
-                   for block in diagnostics):
+                   and (detail is None or detail[1] in block) for block in diagnostics):
             raise RuntimeError(f"missing source-located {expected[1]} for {source.name}\n"
                                + diagnostic_output)
+
+    # Source capability privacy is checked separately so an unrelated callback failure cannot
+    # hide an accidentally public constructor or writable computed expression.
+    capability_sources = sorted((HERE / "fixtures/capability-negative").glob("*.scala"))
+    for source in capability_sources:
+        expected = re.search(r"// Expected detail: (.+)", source.read_text())
+        if expected is None:
+            raise RuntimeError(f"capability fixture lacks a diagnostic expectation: {source}")
+        _, output = compile_sources("capability-" + source.stem, [source], negative=True)
+        if f"/{source.name}:" not in output or expected[1] not in output:
+            raise RuntimeError(f"missing source-located capability diagnostic for {source.name}\n"
+                               + output)
 
     # An adversarially deep helper graph must fail at the explicit frontend bound, not recurse
     # until a JVM/compiler failure. Generated test source stays in the ignored output directory.
@@ -117,7 +130,8 @@ def main() -> None:
     if "DIGITAL_COLLECTION_CALLBACK_PASS checked-public-source uninstrumented-rejection" not in result:
         raise RuntimeError("public-path runtime witness did not publish its success sentinel")
     print(f"PASS typed positives, {len(negative_sources)} source-located negatives, bounded traversal, "
-          f"public runtime path, and uninstrumented rejection; logs: {out}")
+          f"{len(capability_sources)} capability negatives, public runtime path, "
+          f"and uninstrumented rejection; logs: {out}")
 
 
 if __name__ == "__main__":

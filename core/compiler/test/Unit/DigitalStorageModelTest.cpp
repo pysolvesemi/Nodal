@@ -526,6 +526,106 @@ int main() {
   }
   report("graph-deep-shared-query-no-recursion", deepGood);
   report("graph-node-budget-fails-closed", budgetGood);
+  // Write authority follows actual SSA storage roots; neither metadata nor a shape label is proof.
+  auto writableTarget = [&](StringRef name, const std::string &body, StringRef diagnostic = "") {
+    std::string messages;
+    ScopedDiagnosticHandler capture(&context, [&](Diagnostic &value) {
+      llvm::raw_string_ostream stream(messages);
+      value.print(stream);
+      return success();
+    });
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(body), ParserConfig(&context, false));
+    bool passed = false;
+    if (parsed) {
+      std::string before = print(parsed->getOperation());
+      bool valid = succeeded(verify(parsed->getOperation()));
+      passed =
+          before == print(parsed->getOperation()) &&
+          (diagnostic.empty() ? valid
+                              : !valid && messages.find(diagnostic.str()) != std::string::npos);
+      if (passed && diagnostic.empty()) {
+        auto roundtrip = parseSourceString<mlir::ModuleOp>(before, ParserConfig(&context, false));
+        passed = roundtrip && succeeded(verify(roundtrip->getOperation())) &&
+                 before == print(roundtrip->getOperation());
+      }
+    }
+    if (!passed)
+      llvm::errs() << messages;
+    report(name, passed);
+  };
+  const std::string targetShape = "!nodal.shaped<\"2\", !nodal.uint<8>>";
+  auto targetLane = [&](StringRef root = "cells", StringRef position = "0") {
+    return literal("i64", position, "position") + "%lane = \"nodal.shape_index\"(%" + root.str() +
+           ", %position) <{metadata = {writable = true, target_kind = \"wire\"}}> : (" +
+           targetShape + ", i64) -> !nodal.uint<8>\n";
+  };
+  const std::string laneWrite = port(uint) + assign(uint, uint, "lane");
+  writableTarget("writable-selection-wire-positive",
+                 storage(targetShape, "cells") + targetLane() + laneWrite);
+  writableTarget("writable-selection-output-positive",
+                 port(targetShape, "cells", "output") + targetLane() + laneWrite);
+  writableTarget(
+      "writable-selection-input-forged-labels",
+      port(targetShape, "cells") + targetLane() + laneWrite,
+      "NODAL-DIGITAL-054-010: digital assignment port target must be an exact writable output");
+  writableTarget(
+      "writable-selection-inout-forged-labels",
+      port(targetShape, "cells", "inout") + targetLane() + laneWrite,
+      "NODAL-DIGITAL-054-010: digital assignment port target must be an exact writable output");
+  const std::string state = domain() + storage(targetShape, "cells", "register", "", "", "clock");
+  writableTarget("writable-selection-register-next-rejected",
+                 state + targetLane() + port(uint) +
+                     assign(uint, uint, "lane", "source", "register_next"),
+                 "NODAL-DIGITAL-054-010: projected register updates are unsupported");
+  writableTarget("writable-selection-register-continuous-rejected",
+                 state + targetLane() + laneWrite,
+                 "NODAL-DIGITAL-054-010: projected register updates are unsupported");
+  writableTarget("writable-selection-register-whole-view-rejected",
+                 state +
+                     "%view = \"nodal.shape_view\"(%cells) <{dimensions = \"2\", materialization = "
+                     "\"view\", observability = \"source_mapped\", origin = \"cells\", metadata = "
+                     "{writable = true, storage = \"structural\"}}> : (" +
+                     targetShape + ") -> " + targetShape + "\n" + port(targetShape) +
+                     assign(targetShape, targetShape, "view", "source", "register_next"),
+                 "NODAL-DIGITAL-054-010: projected register updates are unsupported");
+  writableTarget("writable-selection-root-register-predecessor",
+                 state + port(targetShape) +
+                     assign(targetShape, targetShape, "cells", "source", "register_next"));
+  writableTarget("writable-selection-out-of-bounds-forged-labels",
+                 storage(targetShape, "cells") + targetLane("cells", "2") + laneWrite,
+                 "NODAL-SHAPE-043-002");
+  writableTarget("writable-selection-exact-rhs-abi",
+                 storage(targetShape, "cells") + targetLane() + port(sint) +
+                     assign(uint, sint, "lane"),
+                 "NODAL-DIGITAL-054-010: digital assignment requires exactly matching recursive "
+                 "storage types");
+  writableTarget(
+      "writable-selection-computed-alias-root",
+      port(targetShape, "input") +
+          "%cells = \"nodal.digital_expr\"(%input) <{operator_name = \"digital_alias\", metadata = "
+          "{writable = true}}> : (" +
+          targetShape + ") -> " + targetShape + "\n" + targetLane() + laneWrite,
+      "NODAL-DIGITAL-054-010: digital assignment target must be a wire, output or register");
+  {
+    const std::string escaped = storage(targetShape, "cells") + targetLane() +
+                                "\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({" +
+                                laneWrite + "}) : () -> ()\n";
+    std::string messages;
+    ScopedDiagnosticHandler capture(&context, [&](Diagnostic &value) {
+      llvm::raw_string_ostream stream(messages);
+      value.print(stream);
+      return success();
+    });
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(escaped), ParserConfig(&context, false));
+    bool rejected = false;
+    if (parsed)
+      parsed->walk([&](nodal::DigitalAssignOp assignment) {
+        rejected = failed(nodal::verifyDigitalAssignmentOperation(assignment));
+      });
+    report("writable-selection-actual-foreign-owner",
+           rejected && messages.find("NODAL-DIGITAL-054-010: digital assignment operands must "
+                                     "belong to the same module") != std::string::npos);
+  }
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

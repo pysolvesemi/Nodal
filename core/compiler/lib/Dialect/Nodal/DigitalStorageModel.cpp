@@ -182,6 +182,9 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   if (llvm::isa<DigitalStorageOp>(root)) {
     if (failed(verifyDigitalStorageOperation(root)))
       return failure();
+    if (text(root, "kind") == "register" && target != projection->root)
+      return reject(operation,
+                    "projected register updates are unsupported; use the owned root state update");
     requiredKind = text(root, "kind") == "register" ? "register_next" : "continuous";
   } else if (llvm::isa<PortValueOp>(root)) {
     auto reference = root->getAttrOfType<FlatSymbolRefAttr>("port");

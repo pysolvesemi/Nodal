@@ -4747,6 +4747,100 @@ private final class ConstructionSession(val options: EmitOptions):
     then
       fail("NODAL-DIGITAL-054-018", "capability source requires a same-owner/domain input boundary")
 
+  private def assignmentReference(value: Any): DeclarationRef | ExpressionRef = value match
+    case reference: AnyRef =>
+      Option(declarationIds.get(reference)).map(identity[DeclarationRef | ExpressionRef])
+        .orElse(Option(expressionIds.get(reference))).getOrElse(
+          fail("NODAL-DIGITAL-054-010", "digital assignment value has no captured identity")
+        )
+    case _ => fail("NODAL-DIGITAL-054-010", "digital assignment requires an actual typed value")
+
+  /** Resolve only actual canonical shape edges, never an operation spelling or materialized alias.
+    */
+  private def digitalAssignmentRoot(
+      value: Any,
+      owner: Long,
+      allowRootRegister: Boolean
+  ): DeclarationRef =
+    val selected = assignmentReference(value)
+    var current = selected
+    val visited = mutable.HashSet.empty[ExpressionRef]
+    while current.isInstanceOf[ExpressionRef] do
+      val reference = current.asInstanceOf[ExpressionRef]
+      if reference.module != owner || expressionRegions.contains(reference) ||
+        !visited.add(reference) || visited.size > 128
+      then
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment projection has foreign, cyclic or excessive scope"
+        )
+      val index = shapeIndices.get(reference)
+      val view = shapeViews.get(reference)
+      if index.flatMap(_.generatedScope).nonEmpty || view.flatMap(_.generatedScope).nonEmpty then
+        fail("NODAL-DIGITAL-054-010", "digital assignment projection requires direct-module scope")
+      val input = index.map(_.input).orElse(view.map(_.input)).getOrElse(
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment target is not an actual storage projection"
+        )
+      )
+      val expression = expressionValues.getOrElse(
+        reference,
+        fail("NODAL-DIGITAL-054-010", "digital assignment projection has no actual expression")
+      )
+      val operation = if index.nonEmpty then "shape_index"
+      else if view.exists(_.slice.nonEmpty) then "shape_slice" else "shape_view"
+      if !expression.operation.contains(operation) ||
+        !expression.operands.headOption.exists(value => assignmentReference(value) == input)
+      then
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment projection differs from its actual input edge"
+        )
+      current = input
+    val root = current.asInstanceOf[DeclarationRef]
+    val declaration = records(root.module).declarations(root.index)
+    val direct = !records(root.module).generatedRegions.exists(_.declarations.contains(root))
+    val writable = Set(KernelSignalKind.Wire, KernelSignalKind.Output).contains(declaration.kind)
+    val rootRegister = allowRootRegister && selected == root &&
+      declaration.kind == KernelSignalKind.Register
+    if root.module != owner || !direct || (!writable && !rootRegister) then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment target requires an owned wire/output; projected register updates are unsupported"
+      )
+    root
+
+  def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
+    requireNoCollectionEffect("digital selection assignment")
+    requireNoGeneratedEffect("digital selection assignment")
+    validateCollectionDependencies(Vector(left, right))
+    val owner = currentModule.handle
+    val _ = digitalAssignmentRoot(left, owner, allowRootRegister = false)
+    val source = assignmentReference(right)
+    val sourceOwner = source match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    if sourceOwner != owner || valueRegion(source).nonEmpty then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment source must belong to the exact module scope"
+      )
+    val exact =
+      for
+        targetType <- CandidateRuntime.expressionDataType(left)
+        sourceType <- CandidateRuntime.expressionDataType(right)
+      yield DigitalEnumContract.sameType(
+        CandidateRuntime.typeDescriptor(targetType),
+        CandidateRuntime.typeDescriptor(sourceType)
+      )
+    if !exact.contains(true) then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment requires exactly matching recursive storage types"
+      )
+    operation("assignment", left, right)
+
   private def digitalAssignmentSnapshots(
       resolved: Map[DomainRef, String]
   ): Vector[KernelDigitalAssignmentSnapshot] =
@@ -4756,11 +4850,11 @@ private final class ConstructionSession(val options: EmitOptions):
     ).map: operation =>
       if operation.generatedScope.nonEmpty || operation.values.size != 2 then
         fail("NODAL-DIGITAL-054-010", "digital assignment requires a direct-module sink and value")
-      val target = operation.values.head match
-        case reference: AnyRef => Option(declarationIds.get(reference)).getOrElse(
-            fail("NODAL-DIGITAL-054-010", "digital assignment sink has no owned declaration")
-          )
-        case _ => fail("NODAL-DIGITAL-054-010", "digital assignment sink is not a declaration")
+      val target = digitalAssignmentRoot(
+        operation.values.head,
+        operation.owner,
+        allowRootRegister = true
+      )
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)
       val owner = modulePath(operation.owner)
@@ -4774,7 +4868,10 @@ private final class ConstructionSession(val options: EmitOptions):
       KernelDigitalAssignmentSnapshot(
         s"$owner.digital_assignment_$ordinal",
         owner,
-        declarationPath(target),
+        pathOf(operation.values.head).getOrElse(fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment target has no captured identity"
+        )),
         pathOf(operation.values(1)).getOrElse(fail(
           "NODAL-DIGITAL-054-010",
           "digital assignment value has no captured identity"

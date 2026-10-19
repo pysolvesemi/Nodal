@@ -105,3 +105,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalDigitalDrivers-DG v0.1](NodalDigitalDrivers-DG-v0.1.md): approved F55
   canonical combinational dependency, ordinary driver and physical coverage
   verification; bounded-loop order/domain proofs remain separate.
+- [NodalWritableSignals-DG v0.1](NodalWritableSignals-DG-v0.1.md): approved F55
+  private writable wire/output selections over actual canonical shape edges;
+  readonly expressions and register update boundaries remain unchanged.

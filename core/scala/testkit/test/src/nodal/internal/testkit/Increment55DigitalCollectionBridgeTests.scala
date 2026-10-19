@@ -150,13 +150,20 @@ object Increment55DigitalCollectionBridgeTests extends TestSuite:
       assert(document.text.contains("nodal.shape_index"))
       assert(document.text.indexOf("nodal.collection") < document.text.indexOf("nodal.shape_slice"))
 
-    test(
-      "module-static selectors retain identity and reject the current literal-only body profile"
-    ):
+    test("module-static selectors retain actual explicit captures and reject forged omission"):
       val snapshot = ConstructionKernel.inspect(new DigitalCollectionStaticSelectorBridgeSource)
-      assert(snapshot.digitalCollections.head.captures.isEmpty)
-      assert(snapshot.shapeIndices.head.indices == Vector(snapshot.root + ".position"))
-      rejected(snapshot, "collection index currently requires a static literal")
+      val collection = snapshot.digitalCollections.head
+      assert(collection.captures == Vector(snapshot.root + ".position"))
+      val argument = collection.arguments.last
+      assert(argument.role == "static_capture")
+      assert(snapshot.shapeIndices.head.indices == Vector(argument.path))
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      assert(document.text.contains("parameter = @position"))
+      assert(document.text.contains("nodal.shape_index"))
+      rejected(
+        updateCollection(snapshot, collection.path)(_.copy(captures = Vector.empty)),
+        "capture"
+      )
 
     test("forged region escape sibling capture parent cycle and missing explicit captures reject"):
       val snapshot = ConstructionKernel.inspect(new DigitalCollectionNestedSource)
@@ -365,6 +372,7 @@ object Increment55DigitalCollectionBridgeTests extends TestSuite:
         "symbolic" -> (() => new DigitalCollectionSymbolicSource),
         "identity" -> (() => new DigitalCollectionIdentitySource),
         "projections" -> (() => new DigitalCollectionProjectionBridgeSource),
+        "static-selector" -> (() => new DigitalCollectionStaticSelectorBridgeSource),
         "repeated-child" -> (() => new DigitalCollectionRepeatedChildBridgeSource),
         "captured-proof" -> (() => new DigitalCollectionCapturedProofBridgeSource)
       )

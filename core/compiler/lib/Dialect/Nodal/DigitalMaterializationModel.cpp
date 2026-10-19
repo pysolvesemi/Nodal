@@ -4,8 +4,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -89,6 +91,7 @@ bool candidate(Operation *operation) {
     return false;
   StringRef name = operation->getName().getStringRef();
   return name == "nodal.digital_expr" || name == "nodal.collection" ||
+         name == "nodal.structural_if" ||
          (name == "nodal.enum_expr" && text(operation, "operator_name") != "enum_literal");
 }
 
@@ -117,11 +120,11 @@ FailureOr<std::string> identity(Value value, Operation *module) {
   }
   auto argument = llvm::dyn_cast<BlockArgument>(value);
   Operation *region = argument ? argument.getOwner()->getParentOp() : nullptr;
-  if (!region || owner(region) != module ||
-      (region->getName().getStringRef() != "nodal.collection" && !isBoundedDigitalLoop(region)) ||
-      !canonicalText(path(region), maximumIdentityBytes))
+  if (!region || owner(region) != module || !isDigitalRegionOwner(region))
     return failure();
-  return (path(region) + ".arg" + llvm::Twine(argument.getArgNumber())).str();
+  auto result = digitalValueSemanticPath(value);
+  return canonicalText(result, maximumIdentityBytes) ? FailureOr<std::string>(result)
+                                                     : FailureOr<std::string>(failure());
 }
 
 /// Iterative preorder traversal with explicit budgets, even for malformed input.
@@ -248,7 +251,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     if (known != validTypes.end())
       return known->second;
     bool valid = false;
-    if (!use->getParentOfType<CollectionOp>() && !isBoundedDigitalLoop(use->getParentOp())) {
+    if (!isDigitalRegionOwner(use->getParentOp())) {
       auto ordinary = moduleValidTypes.find(type);
       if (ordinary == moduleValidTypes.end())
         ordinary =
@@ -274,8 +277,104 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     validTypes.try_emplace(key, valid);
     return valid;
   };
+  bool structural = false;
+  if (failed(walkOwned(module, [&](Operation *operation) {
+        structural |= llvm::isa<StructuralIfOp, StaticCompareOp, StaticLogicOp>(operation);
+        return WalkResult::advance();
+      })))
+    return failure();
+  llvm::SmallVector<std::pair<std::string, DictionaryAttr>> structuralRecords;
+  llvm::StringSet<> structuralIdentities;
   llvm::SmallVector<std::pair<std::string, DictionaryAttr>> records;
   unsigned nodes = 0, inputEdges = 0, useEdges = 0, inspectedOperands = 0;
+  // Structural evidence describes retained authored IR, even inside a singleton
+  // reducer with no callback occurrence. It must not disappear when the decision
+  // walk deliberately skips unreachable materialization candidates below.
+  if (structural && failed(walkOwned(module, [&](Operation *operation) {
+        const StringRef operationName = operation->getName().getStringRef();
+        const bool staticIndex = operation->getNumResults() == 1 &&
+                                 operation->getResult(0).getType().isSignlessInteger(64) &&
+                                 llvm::isa<ConstantOp, ConstLiteralOp, ConstParameterRefOp,
+                                           ConstExprOp, IterationIndexOp>(operation);
+        if (structural &&
+            (staticIndex || (llvm::isa<GenerateOp>(operation) && isDigitalRegionOwner(operation)) ||
+             llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp, StructuralYieldOp>(
+                 operation))) {
+          if (!canonicalText(path(operation), maximumIdentityBytes) ||
+              !structuralIdentities.insert(path(operation)).second ||
+              structuralRecords.size() >= maximumNodes) {
+            (void)reject(operation,
+                         "structural inventory requires unique bounded real SSA identities");
+            return WalkResult::interrupt();
+          }
+          NamedAttrList entry;
+          entry.set("path", builder.getStringAttr(path(operation)));
+          entry.set("operation", builder.getStringAttr(operationName));
+          entry.set("region",
+                    builder.getStringAttr(operation->getParentOp() == module
+                                              ? ""
+                                              : digitalRegionSemanticPath(operation->getBlock())));
+          llvm::SmallVector<Attribute> inputs;
+          for (Value value : operation->getOperands()) {
+            auto id = rememberValue(value);
+            if (failed(id) || ++inputEdges > maximumEdges)
+              return WalkResult::interrupt();
+            inputs.push_back(builder.getStringAttr(*id));
+          }
+          entry.set("inputs", builder.getArrayAttr(inputs));
+          // Closed operation attributes retain comparison/operator/literal/parameter
+          // identity as well as the exact two capture partitions. They are report
+          // evidence only: verification always recomputes from actual SSA.
+          NamedAttrList raw;
+          for (NamedAttribute attribute : operation->getAttrs())
+            if (attribute.getName() != "metadata")
+              raw.set(attribute.getName(), attribute.getValue());
+          entry.set("attributes", raw.getDictionary(module->getContext()));
+          llvm::SmallVector<Attribute> types;
+          for (Type type : operation->getResultTypes())
+            types.push_back(TypeAttr::get(type));
+          entry.set("result_types", builder.getArrayAttr(types));
+          if (llvm::isa<GenerateOp>(operation)) {
+            llvm::SmallVector<Attribute> arguments;
+            for (BlockArgument argument : operation->getRegion(0).front().getArguments()) {
+              NamedAttrList record;
+              record.set("path", builder.getStringAttr(digitalValueSemanticPath(argument)));
+              record.set("type", TypeAttr::get(argument.getType()));
+              arguments.push_back(record.getDictionary(module->getContext()));
+            }
+            entry.set("induction_arguments", builder.getArrayAttr(arguments));
+          }
+          if (llvm::isa<StructuralIfOp>(operation)) {
+            auto header = inspectStructuralIfHeader(operation);
+            if (failed(header))
+              return WalkResult::interrupt();
+            llvm::SmallVector<Attribute> arms;
+            for (unsigned arm = 0; arm < 2; ++arm) {
+              Block *body = header->bodies[arm];
+              if (body->empty() || !llvm::isa<StructuralYieldOp>(body->back()))
+                return WalkResult::interrupt();
+              NamedAttrList record;
+              record.set("region", builder.getStringAttr(digitalRegionSemanticPath(body)));
+              record.set("yield", builder.getStringAttr(path(&body->back())));
+              llvm::SmallVector<Attribute> arguments;
+              for (BlockArgument argument : body->getArguments()) {
+                NamedAttrList argumentRecord;
+                argumentRecord.set("path",
+                                   builder.getStringAttr(digitalValueSemanticPath(argument)));
+                argumentRecord.set("type", TypeAttr::get(argument.getType()));
+                arguments.push_back(argumentRecord.getDictionary(module->getContext()));
+              }
+              record.set("arguments", builder.getArrayAttr(arguments));
+              arms.push_back(record.getDictionary(module->getContext()));
+            }
+            entry.set("arms", builder.getArrayAttr(arms));
+          }
+          structuralRecords.emplace_back(path(operation).str(),
+                                         entry.getDictionary(module->getContext()));
+        }
+        return WalkResult::advance();
+      })))
+    return failure();
   auto walk = walkOwned(module, [&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
@@ -291,6 +390,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
         operation->getNumResults() == 1 &&
         llvm::isa<IntegerType>(operation->getResult(0).getType()) &&
         (operationName == "nodal.constant" || operationName == "nodal.const_literal" ||
+         operationName == "nodal.const_parameter_ref" || operationName == "nodal.const_expr" ||
          operationName == "nodal.iteration_index");
     const bool valueProducer =
         operation->getNumResults() == 1 &&
@@ -346,14 +446,12 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     std::string region;
     Operation *parent = operation->getParentOp();
     if (parent != module) {
-      if (!parent ||
-          (parent->getName().getStringRef() != "nodal.collection" &&
-           !isBoundedDigitalLoop(parent)) ||
-          !canonicalText(path(parent), maximumIdentityBytes)) {
+      if (!parent || !isDigitalRegionOwner(parent) ||
+          !canonicalText(digitalRegionSemanticPath(operation->getBlock()), maximumIdentityBytes)) {
         (void)reject(operation, "candidate has an unsupported lexical scope");
         return WalkResult::interrupt();
       }
-      region = path(parent).str();
+      region = digitalRegionSemanticPath(operation->getBlock());
     }
     llvm::SmallVector<Attribute> inputs;
     for (Value operand : operation->getOperands()) {
@@ -464,8 +562,15 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
   for (const auto &record : records)
     decisions.push_back(record.second);
   NamedAttrList result;
-  result.set("version", builder.getI64IntegerAttr(1));
-  result.set("algorithm", builder.getStringAttr("digital-ssa-v1"));
+  result.set("version", builder.getI64IntegerAttr(structural ? 2 : 1));
+  result.set("algorithm", builder.getStringAttr(structural ? "digital-ssa-v2" : "digital-ssa-v1"));
+  if (structural) {
+    llvm::sort(structuralRecords, [](const auto &a, const auto &b) { return a.first < b.first; });
+    llvm::SmallVector<Attribute> entries;
+    for (const auto &record : structuralRecords)
+      entries.push_back(record.second);
+    result.set("structural_choices", builder.getArrayAttr(entries));
+  }
   result.set("stage", builder.getStringAttr("target-neutral"));
   result.set("target_requirements", builder.getStringAttr("pending"));
   result.set("owner", builder.getStringAttr(modulePath));

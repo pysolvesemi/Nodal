@@ -3,9 +3,11 @@
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
@@ -876,9 +878,7 @@ bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module
 
 LogicalResult verifyDigitalLiteralOperation(Operation *operation,
                                             const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -895,9 +895,7 @@ LogicalResult verifyDigitalLiteralOperation(Operation *operation,
 
 LogicalResult verifyDigitalValueOperation(Operation *operation,
                                           const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -917,6 +915,11 @@ LogicalResult verifyDigitalValueModel(Operation *module, bool includeCollections
   auto walk = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
+    if (llvm::isa<StructuralIfOp>(operation)) {
+      if (includeCollections && failed(verifyStructuralIfOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
     if (llvm::isa<CollectionOp>(operation)) {
       if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
         return WalkResult::interrupt();
@@ -924,7 +927,7 @@ LogicalResult verifyDigitalValueModel(Operation *module, bool includeCollections
     }
     StringRef name = operation->getName().getStringRef();
     if (name == "nodal.digital_expr" &&
-        failed(isBoundedDigitalLoop(operation->getParentOp())
+        failed(isDigitalRegionOwner(operation->getParentOp())
                    ? verifyDigitalValueOperation(operation)
                    : success(succeeded(verifier.expression(operation)))))
       return WalkResult::interrupt();

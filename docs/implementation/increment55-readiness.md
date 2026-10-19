@@ -1,6 +1,7 @@
 # Increment 55 readiness and implementation
 
-Status: in progress; every F-055 child and parent remains open. Base
+Status: implementation and focused acceptance complete; F-055.G and the parent
+remain open pending verified integration. Base
 `ec307cef5e11e2a852131fb8e16aa93195f397e4` is the verified F54 documentation closure.
 Branch: `increment/55-digital-expressions-iteration`.
 
@@ -22,8 +23,9 @@ proof consumers. No full later parent is a reverse prerequisite.
 The approved [Area/symbolic-conditional amendment](../roadmap/areas-symbolic-conditionals-v0.1-plan.md#existing-owners-and-new-descendants)
 also assigns **F-055.B.1.1** here: structural parameter/index predicates, Boolean
 composition and statement/value-producing `if/else` with exact branch results and
-lexical lifetime. This child remains open after the arithmetic, collection,
-reduction and bounded-loop checkpoints. Its minimum additive syntax/gate dependency
+lexical lifetime. This child is implemented and focused-tested by the structural checkpoint below,
+following the arithmetic, collection, reduction and bounded-loop checkpoints. Its
+minimum additive syntax/gate dependency
 is F-058.A.1; complete Area/hierarchy and mixed sequential integration remain with
 F58/F159. Ordinary Scala equality, default-value branch selection, a runtime mux or
 analog procedural control is not evidence of this structural conditional feature.
@@ -655,6 +657,211 @@ syntactic lint over all changed Scala paths retains exactly 28 identical baselin
 findings and introduces none; full lint is not claimed passing. Formatting,
 Markdown, generated capability registry and whitespace checks pass.
 
-F55 remains open for the mandatory structural predicate/branch amendment,
-minimum F58 gate dependency and final original-checklist reconciliation. Full
-Area/hierarchy and downstream digital execution remain with their owning increments.
+At this historical bounded-loop checkpoint, F55 remained open for the mandatory
+structural predicate/branch amendment and final reconciliation. The following
+checkpoint implements that required feature. Full Area/hierarchy and downstream
+digital execution remain with their owning increments.
+
+## Structural predicate amendment checkpoint
+
+The published bounded-iteration checkpoint is
+`538fbc9cce950c62eaf56234f8db450860539d0a`. The original amendment
+[F-055.B.1.1](../roadmap/areas-symbolic-conditionals-v0.1-plan.md#existing-owners-and-new-descendants)
+is required before F55 closure and is now implemented. The approved
+[NodalStructuralIf-DG v0.1](../design-gates/NodalStructuralIf-DG-v0.1.md)
+records the minimum F58 gate dependency, ordinary Scala `if` syntax, explicit
+read-only result typing and compatibility limits. The production paths now retain
+actual predicates, isolated alternatives, captures and both yield edges. Final
+focused results are recorded below; verified branch integration remains open.
+
+Implementation is divided at existing semantic owners: the frontend captures
+closed parameter/index predicates without invoking host equality or evaluating
+parameter defaults; the existing construction session owns both branch captures
+and lexical lifetime; isolated native regions independently verify predicates,
+captures and complete result ABI. Shared ParameterModel, DigitalTypeModel,
+ShapeModel and the assignment graph continue to own static facts, type identity,
+physical images and drivers. A narrow neutral region-scope utility may factor the
+existing collection/loop checks; no second type, shape or mutable capture registry
+is introduced.
+
+A structural index must come from actual Generate ownership. A procedural loop
+argument cannot become static by carrying a generated-region label. Opposite
+branches exclude each other only for the same generated occurrence: writes to the
+same physical lane from different occurrences can still conflict. The finite
+initial proof profile therefore requires checked per-occurrence images and
+same-occurrence overlap proofs, retaining guard context through dependency and
+coverage analysis. Both arms remain structurally and type-correct even when an
+invariant predicate proves one arm inactive. Unsupported guard/image proofs must
+reject rather than erase possible writers.
+
+Focused acceptance must cover parameter overrides, actual generated indices,
+Boolean composition, nested/else-if results, exact aggregate/enum ABI, host
+Boolean compatibility, branch-local escape, read-only joins, complementary write
+coverage, missing coverage and real or infeasible cycles. Inferred writable joins
+must produce the gate's precise Expr-ascription diagnostic. Cross-lane writes
+under opposite arms require a causal duplicate-driver negative. Resource limits
+apply before expansion; no exhaustive parameter enumeration or whole-pipeline
+linearity is claimed. The implemented positive and negative cases run through the maintained source,
+bridge and independent native suites. Final affected replay is recorded below.
+
+The final original-checklist reconciliation will retain compiler-boundary public
+Scala/IR demonstrations and explicit downstream cases for 65/66 (branch and lane
+mapping under parameter overrides), 67 (driver/coverage and equivalence of legal
+unrolled versus preserved plans), and 72 (whole mixed-design capability boundaries).
+Those future executions are not current passing results. Full Area/hierarchy,
+generated Area results and behavioral `when` remain their existing owners; this
+checkpoint does not complete their parents or F-058.A.1.
+
+### Concrete downstream handoff cases
+
+The maintained source fixtures are inputs for later consumers, rather than
+claims that those consumers have run:
+
+- F65/66: carry the static, symbolic, empty, strided and seeded dependency cases
+  from `Increment55DigitalLoopBridgeTests`, including its configured native
+  planning test, into strict target parse and independent lane-value simulation.
+  Compare preserved and legally unrolled plans using the same source, bounds and
+  expected values; retain the whole-model mixed-target rejection control.
+- F65/66: carry the public widening witnesses in
+  `Increment55WideningReductionNativeTests` into signed/unsigned arithmetic and
+  whole-record simulations. Preserve left versus adjacent-pair balanced grouping,
+  singleton bypass, odd carry and parameter-dependent complete result widths.
+  The forged final/intermediate-width controls must remain rejected before target
+  execution.
+- F67: use `Increment55DigitalDriverTests` and the bounded-loop guard/coverage
+  witnesses for independent missing-driver, duplicate-driver and combinational
+  cycle checks. Use `Increment55DigitalMaterializationTests` aliases, keep intents
+  and actual-edge reports to check preservation and equivalence without inferring
+  source identity from emitted spelling or reassociating arithmetic.
+- F72: reuse the whole-model target-boundary controls from
+  `Increment55DigitalLoopBridgeTests` when a real AMS digital consumer exists.
+  Analog-only compilation of a selected leaf is not evidence of faithful mixed
+  model lowering. Carry `Increment55StructuralIfBridgeTests` parameter/default,
+  generated-lane, procedural-loop, missing-alternative, duplicate-driver and
+  feasible/infeasible-cycle cases through that same whole-model boundary.
+
+These test files reside in `core/scala/testkit/test/src/nodal/internal/testkit/`.
+The handoff preserves source identities, exact parameters, plan reasons and
+independent expected behavior. It does not add a later full-tool campaign as an
+earlier acceptance prerequisite.
+
+## Final structural checkpoint acceptance
+
+The integrated tree passes 107 maintained Scala tests across structural source,
+bridge, materialization and directly affected loop, collection, widening-reduction,
+writable-selection and driver suites. Both native tools are explicitly configured;
+the structural bridge executes 16 accepted public models and five causal rejected
+models, with no optional-native skips. Both alternatives, actual Generate domains,
+procedural selector captures, complete result types and source identities remain
+in verified output. The final native replay passes 1,527 counted cases across 18
+suites plus ParameterModel (19 executables total). This includes 69 structural
+cases and 34 guarded-assignment cases. Selections overlap earlier checkpoints and
+are not added to historical totals.
+
+The maintained frontend harness also passes against the actual live API/plugin:
+eight successful compilation commands, 19 expected compiler rejections, separate
+producer/consumer proof substitutions, ordinary host runtime and bytecode checks.
+The direct predicate-write, erased equality-evidence-write and separate-JAR
+write-helper negatives close a discovered effect-profile hole: predicate/evidence
+validation is pure, while supported arm bodies retain continuous-write capability.
+Generic enum constants in native arms now use the canonical enum membership owner;
+legal sparse codes pass and illegal width-fitting codes reject.
+
+Actual source integration additionally checks parameter-only structural branches
+inside procedural loops, arm-local affine selectors, ordered conditional events,
+value-producing alternatives with continuous writes and pure callback restrictions.
+Procedural index captures never become structural predicate/type facts. A retained
+conditional makes the existing planner conservatively preserve the procedural
+loop rather than apply an unroller that cannot retain its complete region contract.
+The final default materialization pipeline records statement-only choices even
+when its value-decision list is empty, through the existing quality opt-in.
+
+Affected replay found an inherited analog range-query admission gap. The exact
+published-baseline plugin reproduces four errors on unchanged F44 source. The
+shared range profile now admits only the already-supported temperature, nominal
+temperature and time queries; pure digital alternatives still reject them. The
+original F44 example strictly compiles and runs. Historical failed execution is
+not relabeled passing. Shared static capture transport also supersedes the old
+literal-only collection-selector rejection: the unchanged parameter-selector
+source now verifies through the native boundary, and an omitted real capture is
+an explicit negative. Its query uses the actual collection context, never a
+parameter default or representative reducer width.
+
+Architecture review confirms one capture registry, one neutral lexical-region
+owner, shared static/type/image proofs and one guard-aware assignment graph.
+Guard contexts retain actual branch identities and generated-occurrence relations;
+complementary arms cannot erase cross-lane conflicts or feasible cycles. All
+alternatives remain type/effect checked, including inactive/empty supports.
+Materialization records actual predicate/capture/yield edges and recomputes attached
+reports. No additional arithmetic reassociation, name-based identity inference or
+speculative optimizer is needed. The guarded graph has checked limits of 4,096
+contexts, 128 levels and 262,144 guard-work units, alongside existing graph and
+shape budgets. This is a finite proof profile, not arbitrary Boolean theorem
+solving or a whole-pipeline linearity claim.
+
+Two versus 1,000,000 generated lanes retain exactly two predicates, two conditions,
+six digital values, two assignments, four selectors and six Generate arguments.
+The isolated observation used 174,900 KiB peak JVM RSS and about 5.23 seconds for
+the combined captures; it establishes compact representation, not a speedup.
+All 51 changed Scala files pass formatting. Focused syntactic lint introduces no
+new finding; the runtime comparison retains nine inherited findings versus ten
+on the baseline, and the parent-updated predecessor test is clean. Full lint is
+not claimed passing. Markdown, generated registry and whitespace checks pass.
+The earlier unrelated CDC receipt limitation remains explicitly unchanged.
+
+Exact final commands, binary hashes, logs and preserved public artifacts are under
+`.work/increment55/structural-if-live/`; failed setup and intermediate runs remain
+separate. The final native compiler SHA-256 is
+`4cd1e5e3d5cb7a41aba6ec2339bc8ca8c5f0aa533642b5c87f60224515cd8331`.
+No CI, broad qualification, target execution or full F58/BT cross-owner closure is
+claimed. Original F55 A–F and amendment B.1.1 are complete at the implemented
+compiler boundary; G and the parent await verified integration.
+
+### Actual public source and IR demonstration
+
+The current increment does not affect generated Verilog-*.
+F55 supplies verified digital IR and deterministic lowering/materialization plans;
+F65–67 own target HDL emission, simulation and equivalence. Whole-model unsupported
+target controls reject rather than emitting a partial model.
+
+This is the maintained `PublicStructuralValue` source in
+`core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala`:
+
+```scala
+final class PublicStructuralValue(val defaultMode: Int) extends Module, StructuralIfClock:
+  val MODE = param(defaultMode.integer)
+  val first = in(Bits(8))
+  val second = in(Bits(8))
+  val output = out(Bits(8))
+  val selected: Expr[Bits] = if MODE == 0 then ~first else second
+  output := selected
+```
+
+`StructuralIfClock` is the fixture's explicit external domain. The bridge lowers
+this source with both default 0 and default 1 while retaining the symbolic predicate
+and both read-only alternatives. The configured maintained test command is:
+
+```sh
+NODAL_NODALC=/absolute/path/to/nodalc NODAL_TRANSLATE=/absolute/path/to/nodal-translate \
+  ./mill --jobs 1 core.scala.testkit.test.testOnly \
+  nodal.internal.testkit.Increment55StructuralIfBridgeTests
+```
+
+The native invocation uses
+`--pass-pipeline=builtin.module(nodal-plan-digital-loops,nodal-plan-digital-materialization)`.
+The test writes `value-default0.source.mlir` and `value-default0.planned.mlir` under
+its working directory's `.work/increment55-structural-if-bridge/`. The final local
+replay preserves those files under
+`.work/increment55/structural-if-live/final-witnesses/`. The following is a verbatim
+excerpt of the actual generated source IR, including both yielded edges:
+
+```mlir
+    %digital_if_1 = "nodal.structural_if"(%static_predicate_0, %digital_value_2, %digital_value_3) <{contract_version = "structural-if-v1", region_id = "PublicStructuralValue.selected_56ecdd40", operandSegmentSizes = array<i32: 1, 1, 1>, metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, digital_source = {aliases = [], name = "selected_56ecdd40", provenance = "scala-declaration"}, semantic_path = "PublicStructuralValue.selected_56ecdd40", source_end_column = 66 : i64, source_end_line = 20 : i64}}> ({
+      ^bb0(%structural_arm_4_arg0: !nodal.bits<8>):
+      %digital_value_5 = "nodal.digital_expr"(%structural_arm_4_arg0) <{operator_name = "digital_not", metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, digital_source = {aliases = [], name = "selected_5d6d4b57", provenance = "scala-declaration"}, semantic_path = "PublicStructuralValue.selected_5d6d4b57", source_end_column = 66 : i64, source_end_line = 20 : i64}}> : (!nodal.bits<8>) -> !nodal.bits<8> loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
+      "nodal.structural_yield"(%digital_value_5) <{metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "PublicStructuralValue.selected_56ecdd40.then.yield", source_end_column = 66 : i64, source_end_line = 20 : i64}}> : (!nodal.bits<8>) -> () loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
+    }, {
+      ^bb0(%structural_arm_6_arg0: !nodal.bits<8>):
+      "nodal.structural_yield"(%structural_arm_6_arg0) <{metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "PublicStructuralValue.selected_56ecdd40.else.yield", source_end_column = 66 : i64, source_end_line = 20 : i64}}> : (!nodal.bits<8>) -> () loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
+    }) : (!nodal.static_predicate, !nodal.bits<8>, !nodal.bits<8>) -> !nodal.bits<8> loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
+```

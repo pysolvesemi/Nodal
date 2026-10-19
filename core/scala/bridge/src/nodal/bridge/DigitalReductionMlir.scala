@@ -24,6 +24,11 @@ private[nodal] final class DigitalReductionMlir(
   private val scalar = raw"(Bits|UInt|SInt)\(([^)]+)\)".r
   private val collections = snapshot.digitalCollections.map(value => value.path -> value).toMap
   private val loopPaths = snapshot.digitalLoops.iterator.map(_.path).toSet
+  private val regionalParents = snapshot.structuralIfs.flatMap(value =>
+    Vector(value.trueArm.path -> value.parentRegion, value.falseArm.path -> value.parentRegion)
+  ).toMap ++ snapshot.generatedRegions.filter(_.digitalBody.nonEmpty).map(value =>
+    value.path -> value.parent
+  )
   private val parameters = snapshot.parameterExpressions.map(value => value.path -> value).toMap
   private val parameterRegions = snapshot.parameterExpressions.groupBy(_.region)
   private val expressionRegions = snapshot.digitalExpressions.groupBy(_.region)
@@ -109,6 +114,17 @@ private[nodal] final class DigitalReductionMlir(
         af.zip(ef).forall((a, e) => sameAcross(a._2, e._2, owner, child, parent, includeWidths))
       case (Shape.Invariant(a), Shape.Invariant(e)) => a == e
       case _ => false
+
+  def exactAcross(
+      actual: String,
+      expected: String,
+      owner: String,
+      path: String,
+      child: Query,
+      parent: Query
+  ): Boolean =
+    if actual == "Integer" || expected == "Integer" then actual == expected
+    else sameAcross(parse(actual, path), parse(expected, path), owner, child, parent)
 
   private def headerType(shape: Shape, collection: KernelDigitalCollectionSnapshot): Unit =
     def check(token: String): Unit =
@@ -237,7 +253,7 @@ private[nodal] final class DigitalReductionMlir(
       case (source, argument) if argument.dataType == "Integer" =>
         if argument.role != "static_capture" || valueType(source) != "Integer" then
           fail("static capture requires its exact Integer operand and role", path)
-        argument.path -> parent.exportValues(Vector(parent.resolve(collection.owner, source)))
+        argument.path -> source
     val captureBindings = captures.toMap
     if !Kinds.contains(collection.kind) then
       charge(
@@ -249,7 +265,7 @@ private[nodal] final class DigitalReductionMlir(
       Vector(new Query(
         snapshot,
         scope = Some(path),
-        exact = captureBindings,
+        captures = captureBindings,
         enclosing = Some(parent)
       ))
     else
@@ -261,6 +277,8 @@ private[nodal] final class DigitalReductionMlir(
               fail("a reduction nested inside a reduction is outside the initial profile", path)
             ancestor = outer.parentRegion
           case None if loopPaths.contains(ancestor.get) => ancestor = None
+          case None if regionalParents.contains(ancestor.get) =>
+            ancestor = regionalParents(ancestor.get)
           case None => fail("reduction lexical parent is absent", path)
       val (elementText, dimensions) = vectorType(valueType(collection.inputs.head), path)
       val initialShape = parse(elementText, path)
@@ -290,7 +308,7 @@ private[nodal] final class DigitalReductionMlir(
       val raw = new Query(
         snapshot,
         scope = Some(path),
-        exact = captureBindings,
+        captures = captureBindings,
         domains = rawDomains,
         enclosing = Some(parent)
       )
@@ -337,7 +355,7 @@ private[nodal] final class DigitalReductionMlir(
         parameterRegions.getOrElse(Some(path), Vector.empty).size + collection.arguments.size
       charge(reachable.size.toLong * (regionNodes.toLong + m.toLong), path)
       reachable.map: (left, right) =>
-        val exact = mutable.Map.from(captureBindings)
+        val exact = mutable.Map.empty[String, StructuralParameterBinding.ResolvedDimensions]
         val domains = mutable.Map.empty[String, IterationDomain.Bounds]
         Vector(left, right).zipWithIndex.foreach: (range, side) =>
           profiles.zipWithIndex.foreach: (profile, index) =>
@@ -359,6 +377,7 @@ private[nodal] final class DigitalReductionMlir(
           snapshot,
           scope = Some(path),
           exact = exact.toMap,
+          captures = captureBindings,
           domains = domains.toMap,
           enclosing = Some(parent)
         )

@@ -1,6 +1,6 @@
 package nodal
 
-import scala.annotation.targetName
+import scala.annotation.{compileTimeOnly, targetName}
 import scala.language.implicitConversions
 
 /** Public marker hierarchy frozen by Nodal API v0.2. Implementations remain inert. */
@@ -15,7 +15,24 @@ sealed trait Clock extends Data
 sealed trait Reset extends Data
 
 /** Backend-neutral expression node. Construction metadata remains private to Nodal. */
-sealed trait Expr[+A <: Data]
+sealed trait Expr[+A <: Data]:
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  final def ==(right: Int)(using A <:< Integer): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  final def !=(right: Int)(using A <:< Integer): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
 
 private[nodal] final case class KernelLiteral(
     kind: String,
@@ -927,6 +944,46 @@ extension (left: Expr[Real])
     CandidateRuntime.analogContribution(left, value)
 
 extension (left: Expr[Integer])
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralLess")
+  def <(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralLessEqual")
+  def <=(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralGreater")
+  def >(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralGreaterEqual")
+  def >=(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
   @targetName("integerAddition")
   def +(right: Expr[Integer]): Expr[Integer] =
     CandidateRuntime.integerExpr("analog_add", left, right)

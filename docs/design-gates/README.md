@@ -115,3 +115,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
   approved F55 ordered finite loop templates, shared physical coverage and verified
   unrolled/procedural plans; checked callback and separate-library effect proofs
   preserve the unified range contract.
+- [NodalStructuralIf-DG v0.1](NodalStructuralIf-DG-v0.1.md): approved bounded
+  F55 structural predicates, read-only branch results and guard-qualified writes;
+  supplies only the required symbolic-if portion of the F58 gate.

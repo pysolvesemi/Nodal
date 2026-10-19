@@ -19,6 +19,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopPlanningModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
@@ -27,6 +28,8 @@
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StaticPredicateModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
 #include "nodal/Support/BackendCapabilityRegistry.h"
 
@@ -2003,8 +2006,8 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
-  if (isBoundedDigitalLoop(use->getParentOp())) {
-    auto affine = resolveDigitalIterationIndex(value, use);
+  if (isDigitalRegionOwner(use->getParentOp())) {
+    auto affine = resolveStaticShapeIterationIndex(value, use);
     if (succeeded(affine)) {
       auto definition = value.getDefiningOp();
       return ShapeIndexProof{{definition ? StaticShapeIndexIdentity::IterationAffine
@@ -2026,7 +2029,8 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
         return ShapeIndexProof{{StaticShapeIndexIdentity::Literal, integer->root->literal, nullptr},
                                integer->bounds};
     }
-    return failure();
+    if (isBoundedDigitalLoop(use->getParentOp()))
+      return failure();
   }
   if (environment) {
     auto context = environment->atUse(use);
@@ -2039,6 +2043,25 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
     return ShapeIndexProof{*identity, *bounds};
   }
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+    // Captures are lexical aliases, never fresh selector facts. Re-query their
+    // actual source at the owner boundary rather than trust a caller's context.
+    if (!llvm::isa<GenerateOp>(argument.getOwner()->getParentOp())) {
+      Value source = value;
+      Operation *boundary = use;
+      unsigned depth = 0;
+      while (auto captured = llvm::dyn_cast<BlockArgument>(source)) {
+        if (llvm::isa<GenerateOp>(captured.getOwner()->getParentOp()))
+          break;
+        if (++depth > 64 || failed(verifyDigitalValueScope(source, boundary)))
+          return failure();
+        auto actual = digitalRegionCaptureSource(captured);
+        if (failed(actual) || !*actual)
+          return failure();
+        boundary = captured.getOwner()->getParentOp();
+        source = *actual;
+      }
+      return resolveShapeIndexProof(source, boundary);
+    }
     auto generated = llvm::dyn_cast_or_null<nodal::GenerateOp>(argument.getOwner()->getParentOp());
     if (!generated || argument.getArgNumber() != 0 || !value.getType().isInteger(64) ||
         generated->getParentOfType<nodal::ModuleOp>() != module ||
@@ -2076,8 +2099,8 @@ LogicalResult nodal::verifyShapeIndexInExtent(Value value, const StaticShapeDime
     return use->emitOpError(
         "NODAL-SHAPE-043-002: index is not in bounds for every legal shape and active occurrence");
   };
-  if (isBoundedDigitalLoop(use->getParentOp())) {
-    auto affine = resolveDigitalIterationIndex(value, use);
+  if (isDigitalRegionOwner(use->getParentOp())) {
+    auto affine = resolveStaticShapeIterationIndex(value, use);
     if (succeeded(affine)) {
       if (extent.bounds.lower <= 0)
         return reject();
@@ -2197,6 +2220,7 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
+      failed(verifyStructuralIfModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation(), false)) ||
       failed(verifyDigitalValueModel(getOperation(), false)) ||
@@ -2429,9 +2453,7 @@ LogicalResult nodal::ConstantOp::verify() {
 
 LogicalResult nodal::verifyShapeIndexMapping(Operation *operation,
                                              const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -2595,9 +2617,7 @@ LogicalResult nodal::ShapeFlattenOp::verify() {
 
 LogicalResult nodal::verifyShapeViewMapping(Operation *operation,
                                             const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -2839,9 +2859,7 @@ LogicalResult nodal::ShapeViewOp::verify() {
 
 LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
                                              const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -3143,7 +3161,8 @@ LogicalResult nodal::GenerateOp::verify() {
     if (failed(resolveGeneratedDomain(getOperation())))
       return failure();
   }
-  if (failed(verifyNodeArraySelections(getOperation())))
+  if (failed(verifyDigitalGenerateBody(getOperation())) ||
+      failed(verifyNodeArraySelections(getOperation())))
     return failure();
   return success(succeeded(resolveConservativeStructuralScope(getOperation())));
 }
@@ -4328,3 +4347,16 @@ LogicalResult verifyShapeSliceMapping(Operation *operation) {
   return verifyShapeSliceMapping(operation, nullptr);
 }
 } // namespace nodal
+
+LogicalResult nodal::StaticCompareOp::verify() {
+  return verifyStaticPredicateOperation(getOperation());
+}
+LogicalResult nodal::StaticLogicOp::verify() {
+  return verifyStaticPredicateOperation(getOperation());
+}
+LogicalResult nodal::StructuralIfOp::verify() {
+  return verifyStructuralIfOperation(getOperation());
+}
+LogicalResult nodal::StructuralYieldOp::verify() {
+  return verifyStructuralYieldOperation(getOperation());
+}

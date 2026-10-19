@@ -6,6 +6,7 @@
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -185,7 +186,7 @@ class ModuleTypeVerifier {
 public:
   explicit ModuleTypeVerifier(Operation *module,
                               const ParameterIntegerEnvironment *environment = nullptr)
-      : module(module), environment(environment) {}
+      : module(module), environment(environment), rightEnvironment(environment) {}
 
   FailureOr<int64_t> storageMaximumBits(Type type, Operation *use) {
     currentUse = use;
@@ -206,6 +207,16 @@ public:
     return equivalentStoragePair(left, right, 1, widthFamily);
   }
 
+  bool equivalentStorageTypesAcross(Type left, Type right,
+                                    const ParameterIntegerEnvironment *rightContext) {
+    ModuleTypeVerifier other(module, rightContext);
+    if (failed(storageMaximumBits(left, environment ? environment->use() : module)) ||
+        failed(other.storageMaximumBits(right, rightContext ? rightContext->use() : module)))
+      return false;
+    rightEnvironment = rightContext;
+    return equivalentStoragePair(left, right, 1, false);
+  }
+
   LogicalResult verify(Operation *use) {
     currentUse = use;
     bool capability = false;
@@ -223,7 +234,7 @@ public:
         return failure();
     // A collection owns dependent block-argument types; its coordinator checks
     // them under each admitted body context.
-    if (!llvm::isa<CollectionOp>(use))
+    if (!llvm::isa<CollectionOp, StructuralIfOp>(use))
       for (Region &region : use->getRegions())
         for (Block &block : region)
           for (BlockArgument argument : block.getArguments())
@@ -277,10 +288,11 @@ private:
     const auto pair = std::make_pair(left, right);
     if (equivalentPairs.contains(pair))
       return true;
-    bool equal = left == right;
+    bool equal = left == right && environment == rightEnvironment;
     StringRef kind = scalarKind(left);
     if (!equal && !kind.empty() && kind == scalarKind(right)) {
-      auto lhs = widthExpression(left), rhs = widthExpression(right);
+      auto lhs = widthExpression(left);
+      auto rhs = inferDigitalWidthExpression(right, module, rightEnvironment);
       equal = succeeded(lhs) && succeeded(rhs) &&
               (widthFamily || equivalentInstantiatedIntegerExpressions(*lhs, *rhs));
     } else if (!equal) {
@@ -297,7 +309,7 @@ private:
             if (++comparisonWork > digitalTypeMaximumNodes)
               return false;
             auto x = dimensionExpression(module, a[index], "shape", environment);
-            auto y = dimensionExpression(module, b[index], "shape", environment);
+            auto y = dimensionExpression(module, b[index], "shape", rightEnvironment);
             equal =
                 succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
           }
@@ -314,6 +326,8 @@ private:
               equivalentStoragePair(a.getAs<TypeAttr>("type").getValue(),
                                     b.getAs<TypeAttr>("type").getValue(), depth + 1, widthFamily);
         }
+      } else {
+        equal = left == right;
       }
     }
     if (equal)
@@ -369,6 +383,12 @@ private:
       return reject("missing recursive digital type");
     if (depth > digitalTypeMaximumDepth)
       return reject("recursive type nesting exceeds the finite metadata limit");
+    // Token admissibility depends on the actual consumer, so it must be
+    // checked before the structural-type memo (which is shared across uses).
+    if (llvm::isa<StaticPredicateType>(type) &&
+        (storageContext || !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp>(currentUse)))
+      return reject(
+          "static predicate tokens cannot be stored or manufactured by runtime operations");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));
     auto found = facts.find(key);
     if (found != facts.end()) {
@@ -379,6 +399,11 @@ private:
     if (++work > digitalTypeMaximumNodes || !active.insert(key).second)
       return reject("recursive type graph exceeds the finite metadata limit or contains a cycle");
     TypeFacts result;
+    if (llvm::isa<StaticPredicateType>(type)) {
+      active.erase(key);
+      facts.try_emplace(key, result);
+      return result;
+    }
     auto width = inferDigitalWidthBounds(type, module, environment);
     if (succeeded(width)) {
       result.containsDigital =
@@ -466,6 +491,7 @@ private:
 
   Operation *module;
   const ParameterIntegerEnvironment *environment;
+  const ParameterIntegerEnvironment *rightEnvironment;
   Operation *currentUse = nullptr;
   unsigned work = 0;
   unsigned comparisonWork = 0;
@@ -592,6 +618,16 @@ bool sameDigitalStorageWidthFamily(Type base, Type instance, Operation *module,
   return verifier.equivalentStorageTypes(base, instance, true);
 }
 
+bool equivalentDigitalStorageTypesAcross(Type left, const ParameterIntegerEnvironment *leftContext,
+                                         Type right,
+                                         const ParameterIntegerEnvironment *rightContext,
+                                         Operation *module) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  return ModuleTypeVerifier(module, leftContext)
+      .equivalentStorageTypesAcross(left, right, rightContext);
+}
+
 LogicalResult verifyDigitalTypeOperation(Operation *operation,
                                          const ParameterIntegerEnvironment *environment) {
   if (!operation)
@@ -601,8 +637,7 @@ LogicalResult verifyDigitalTypeOperation(Operation *operation,
                           : operation->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
-  if (!environment && (operation->getParentOfType<CollectionOp>() ||
-                       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -627,10 +662,15 @@ LogicalResult verifyDigitalTypeModel(Operation *module, bool includeCollections)
   auto result = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
-    if (failed(isBoundedDigitalLoop(operation->getParentOp())
+    if (failed(isDigitalRegionOwner(operation->getParentOp())
                    ? verifyDigitalTypeOperation(operation)
                    : verifier.verify(operation)))
       return WalkResult::interrupt();
+    if (llvm::isa<StructuralIfOp>(operation)) {
+      if (includeCollections && failed(verifyStructuralIfOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
     if (llvm::isa<CollectionOp>(operation)) {
       if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
         return WalkResult::interrupt();

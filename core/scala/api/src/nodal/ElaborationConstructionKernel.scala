@@ -185,6 +185,21 @@ private[nodal] object ConstructionKernel:
     case None =>
       scala.util.Failure[Nothing](new IllegalStateException("loop requires an active Module")).get
 
+  def staticPredicate(operation: String, operands: Vector[Any]): StaticPredicate = active match
+    case Some(session) => session.captureStaticPredicate(operation, operands)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "structural predicate requires an active Module"
+      )).get
+
+  def structuralIf(predicate: StaticPredicate, hasResult: Boolean)(
+      whenTrue: () => Option[Expr[?]],
+      whenFalse: () => Option[Expr[?]]
+  ): Option[Expr[?]] = active match
+    case Some(session) => session.captureStructuralIf(predicate, hasResult)(whenTrue, whenFalse)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "structural if requires an active Module"
+      )).get
+
   def collection(
       kind: String,
       inputs: Vector[Expr[?]],

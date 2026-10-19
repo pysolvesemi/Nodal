@@ -16,12 +16,17 @@ mlir::LogicalResult verifyDigitalStorageModel(mlir::Operation *module);
 /// ShapeModel owns physical overlap proofs; InterfaceModel owns connectivity.
 /// Limits bound the actual authored SSA graph and relation queries, not lanes.
 /// Registers terminate reads; register_next is not combinational execution.
-/// Future loop integration must add verified iteration/ordering facts here.
+/// Loop order remains distinct from generated occurrence identity. Structural
+/// alternatives qualify graph nodes and coverage; their finite context/work
+/// budgets are checked before expansion and never enumerate parameter settings.
 struct DigitalAssignmentProofLimits {
   unsigned maximumNodes = 65536;
   unsigned maximumEdges = 262144;
   unsigned maximumRelations = 16384;
   unsigned maximumShapeWork = 4096;
+  unsigned maximumGuardContexts = 4096;
+  unsigned maximumGuardDepth = 128;
+  unsigned maximumGuardWork = 262144;
 };
 mlir::LogicalResult verifyDigitalAssignmentModel(mlir::Operation *module,
                                                  DigitalAssignmentProofLimits limits = {});

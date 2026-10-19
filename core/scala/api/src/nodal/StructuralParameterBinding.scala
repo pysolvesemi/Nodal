@@ -42,10 +42,14 @@ private[nodal] object StructuralParameterBinding:
       val scope: Option[String] = None,
       exact: Map[String, ResolvedDimensions] = Map.empty,
       domains: Map[String, IterationDomain.Bounds] = Map.empty,
-      enclosing: Option[Query] = None
+      enclosing: Option[Query] = None,
+      generatedDomains: Map[String, IterationDomain.Structural] = Map.empty,
+      captures: Map[String, String] = Map.empty
   ):
     if snapshot.parameterExpressions.size > 65536 ||
-      snapshot.digitalCollections.size + snapshot.digitalLoops.size > 65536
+      snapshot.digitalCollections.size + snapshot.digitalLoops.size +
+        snapshot.structuralIfs.size * 2 +
+        snapshot.generatedRegions.count(_.digitalBody.nonEmpty) > 65536
     then
       invalid("static snapshot exceeds the bounded definition budget")
     private val sourceSnapshot = snapshot
@@ -70,17 +74,34 @@ private[nodal] object StructuralParameterBinding:
             value.arguments.map(argument =>
               argument.path -> (RegionOwner(value.path, value.owner), argument)
             )
+          ) ++ snapshot.structuralIfs.flatMap(value =>
+            Vector(value.trueArm, value.falseArm).flatMap(arm =>
+              arm.arguments.map(argument =>
+                argument.path -> (RegionOwner(arm.path, value.owner), argument)
+              )
+            )
+          ) ++ snapshot.generatedRegions.flatMap(value =>
+            value.digitalBody.toVector.flatMap(body =>
+              body.arguments.map(argument =>
+                argument.path -> (RegionOwner(value.path, value.owner), argument)
+              )
+            )
           ),
           "lexical region argument"
         )
       )
-    if exact.keySet.intersect(domains.keySet).nonEmpty || exact.size + domains.size > 4098 then
+    private val bindingKeys =
+      Vector(exact.keySet, domains.keySet, generatedDomains.keySet, captures.keySet)
+    if bindingKeys.map(_.size).sum != bindingKeys.flatten.toSet.size ||
+      bindingKeys.map(_.size).sum > 4098
+    then
       invalid("overlapping or excessive scoped Integer bindings")
-    (exact.keySet ++ domains.keySet).foreach: path =>
+    (exact.keySet ++ domains.keySet ++ generatedDomains.keySet ++ captures.keySet).foreach: path =>
       val (collection, argument) =
         arguments.getOrElse(path, invalid("Integer binding is not an actual block argument"))
       if !scope.contains(collection.path) || argument.dataType != "Integer" ||
-        argument.role == "induction"
+        argument.role == "index_capture" ||
+        (argument.role == "induction" && !generatedDomains.contains(path))
       then
         invalid("Integer binding belongs to another lexical scope or type")
       if domains.contains(path) && !argument.role.startsWith("left_width:") &&
@@ -90,6 +111,46 @@ private[nodal] object StructuralParameterBinding:
     domains.values.foreach: value =>
       if value.lower <= 0L || value.upper < value.lower then
         invalid("formal width domain must be positive and ordered")
+    private val rawCaptures =
+      (snapshot.digitalCollections.flatMap(value =>
+        value.arguments.takeRight(value.captures.size).map(_.path).zip(value.captures)
+      ) ++ snapshot.structuralIfs.flatMap(value =>
+        Vector(value.trueArm, value.falseArm).flatMap(arm =>
+          arm.arguments.map(_.path).zip(arm.captures)
+        )
+      ) ++ snapshot.generatedRegions.flatMap(value =>
+        value.digitalBody.toVector.flatMap(body =>
+          body.arguments.drop(1).map(_.path).zip(body.captures)
+        )
+      )).toMap
+    captures.foreach: (argument, source) =>
+      if !rawCaptures.get(argument).contains(source) || enclosing.isEmpty then
+        invalid("Integer capture differs from its actual parent operand")
+    generatedDomains.foreach: (path, supplied) =>
+      val generated = snapshot.generatedRegions.find(value =>
+        value.induction == path &&
+          scope.contains(value.path) &&
+          value.digitalBody.exists(_.arguments.headOption.exists(_.path == path))
+      )
+        .getOrElse(invalid("Integer domain requires an actual Generate induction"))
+      val parent =
+        enclosing.getOrElse(invalid("Generate domain requires its enclosing static context"))
+      val lower = parent.bounds(parent.resolve(generated.owner, generated.lower))
+      val upper = parent.bounds(parent.resolve(generated.owner, generated.upperExclusive))
+      val step = parent.bounds(parent.resolve(generated.owner, generated.step))
+      val checked = IterationDomain.structural(
+        lower,
+        upper,
+        step,
+        generated.maximum,
+        identicalBounds = parent.resolve(generated.owner, generated.lower) ==
+          parent.resolve(generated.owner, generated.upperExclusive) ||
+          (lower.lower == lower.upper && upper.lower == upper.upper && lower.lower >= upper.upper)
+      )
+        .fold(problem => invalid(problem.message), identity)
+      if checked != supplied || checked.maximumTripCount != generated.maximumTripCount then
+        invalid("Generate domain differs from its actual retained bound operands")
+
     private val facts = mutable.ArrayBuffer.empty[Fact]
     private val ids = mutable.HashMap.empty[Key, Int]
     private val memo = mutable.HashMap.empty[(String, String, Boolean), Int]
@@ -299,7 +360,12 @@ private[nodal] object StructuralParameterBinding:
                     val parent = enclosing.getOrElse(
                       invalid("exact binding contains an unadmitted formal atom")
                     )
-                    val checked = parent.resolve(collection.owner, path)
+                    // A captured ancestor induction retains its original identity after passing
+                    // through an arm. It must already be an admitted atom in the parent query;
+                    // do not pretend that its original block argument belongs to this arm.
+                    val checked = parent.ids.get(Key.Parameter(path)).getOrElse(
+                      parent.resolve(collection.owner, path)
+                    )
                     if parent.bounds(checked) != source.bounds then
                       invalid("formal atom bounds differ from enclosing proof")
                     // A parent's exact replacement must not be relabeled as an opaque atom.
@@ -335,9 +401,15 @@ private[nodal] object StructuralParameterBinding:
                     if defaults || collection.owner != owner || !scope.contains(collection.path) ||
                       argument.dataType != "Integer"
                     then invalid("Integer formal escaped its admitted lexical scope")
-                    exact.get(token).map(importValue(owner, _)).orElse(
+                    captures.get(token).map(source =>
+                      val parent = enclosing.get
+                      importValue(owner, parent.exportValues(Vector(parent.resolve(owner, source))))
+                    ).orElse(exact.get(token).map(importValue(owner, _))).orElse(
                       domains.get(token).map(bounds => intern(Key.Parameter(token), bounds))
-                    ).getOrElse(invalid("Integer formal has no admitted exact binding or domain"))
+                    ).orElse(generatedDomains.get(token).flatMap(IterationDomain.attainedBounds)
+                      .map(bounds => intern(Key.Parameter(token), bounds))).getOrElse(invalid(
+                      "Integer formal has no admitted exact binding or domain"
+                    ))
                   case None => declaration(owner, token) match
                       case Some(value) => parameter(owner, value, defaults)
                       case None =>
@@ -353,6 +425,47 @@ private[nodal] object StructuralParameterBinding:
                 memo.update(cacheKey, result)
                 result
               finally { val _ = active.remove(cacheKey) }
+
+    /** Validate every raw dependency, without inventing an attained value for empty Generate.
+      * Numeric/type callers keep using resolve, which fails if an attained value is necessary.
+      */
+    def resolveIfAttained(owner: String, token: String): Option[Int] =
+      val visited = mutable.HashMap.empty[String, Option[Int]]
+      val visiting = mutable.HashSet.empty[String]
+      def visit(path: String): Option[Int] = visited.getOrElseUpdate(
+        path, {
+          if visiting.size >= 128 || visited.size >= 65536 || !visiting.add(path) then
+            invalid("static predicate dependency is cyclic or exceeds its finite budget")
+          try
+            captures.get(path) match
+              case Some(source) =>
+                val parent = enclosing.get
+                parent.resolveIfAttained(owner, source).map(value =>
+                  importValue(owner, parent.exportValues(Vector(value)))
+                )
+              case None if generatedDomains.contains(path) =>
+                generatedDomains.get(path).flatMap(IterationDomain.attainedBounds)
+                  .map(bounds => intern(Key.Parameter(path), bounds))
+              case None => expressions.get(path) match
+                  case Some(expression) if expression.literal.isEmpty =>
+                    if expression.owner != owner ||
+                      expression.region.nonEmpty && expression.region != scope ||
+                      expression.dataType != "Integer" || expression.unit.exists(_.nonEmpty)
+                    then
+                      invalid("predicate Integer expression has invalid scope, type or units")
+                    val operation = IterationDomain.staticArithmetic(expression.operation)
+                      .getOrElse(invalid("predicate Integer expression has unsupported arithmetic"))
+                    if expression.operands.size != operation.arity then
+                      invalid("predicate Integer expression has wrong arity")
+                    val operands = expression.operands.map(visit)
+                    if operands.forall(_.nonEmpty) then
+                      Some(compose(expression.operation, operands.flatten))
+                    else None
+                  case _ => Some(resolve(owner, path))
+          finally visiting.remove(path)
+        }
+      )
+      visit(token)
 
     def checkedLiteral(owner: String, reference: String): Long =
       facts(resolve(owner, reference, defaults = true)).key match

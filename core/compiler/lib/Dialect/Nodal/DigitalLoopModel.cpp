@@ -2,12 +2,15 @@
 
 #include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StaticPredicateModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -52,7 +55,7 @@ struct LoopIntegerQuery {
     auto compute = [&]() -> FailureOr<InstantiatedIntegerExpression> {
       Operation *module = use->getParentOfType<ModuleOp>();
       if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-        auto source = digitalLoopCaptureSource(argument);
+        auto source = digitalRegionCaptureSource(argument);
         if (failed(source) || !*source)
           return failure();
         return staticInteger(*source, argument.getOwner()->getParentOp(), depth + 1);
@@ -63,7 +66,7 @@ struct LoopIntegerQuery {
       if (definition->getParentOp() == module)
         return resolveOwnedIntegerExpression(module, value,
                                              ParameterIntegerMode::MathematicalSigned64);
-      if (isBoundedDigitalLoop(definition->getParentOp()) && llvm::isa<ConstExprOp>(definition)) {
+      if (isDigitalRegionOwner(definition->getParentOp()) && llvm::isa<ConstExprOp>(definition)) {
         if (definition->getNumRegions() || definition->getNumSuccessors() ||
             definition->getNumResults() != 1 || failed(mlir::verify(definition, false)))
           return failure();
@@ -76,7 +79,7 @@ struct LoopIntegerQuery {
         }
         return composeIntegerExpression(text(definition, "operator_name"), operands);
       }
-      if (!isBoundedDigitalLoop(definition->getParentOp()) ||
+      if (!isDigitalRegionOwner(definition->getParentOp()) ||
           !llvm::isa<ConstantOp, ConstLiteralOp>(definition) || definition->getNumOperands() ||
           definition->getNumRegions() || definition->getNumResults() != 1 ||
           failed(mlir::verify(definition, false)))
@@ -103,8 +106,13 @@ struct LoopIntegerQuery {
     auto compute = [&]() -> FailureOr<DigitalIterationIndex> {
       if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
         auto header = inspectDigitalLoopHeader(argument.getOwner()->getParentOp());
-        if (failed(header) || header->body != argument.getOwner() || argument != header->induction)
-          return failure();
+        if (failed(header) || header->body != argument.getOwner() ||
+            argument != header->induction) {
+          auto source = digitalRegionCaptureSource(argument);
+          if (failed(source) || !*source)
+            return failure();
+          return iterationIndex(*source, argument.getOwner()->getParentOp(), depth + 1);
+        }
         auto domain = resolveBoundedIterationDomain(header->operation);
         if (failed(domain))
           return failure();
@@ -115,7 +123,7 @@ struct LoopIntegerQuery {
       if (!operation || !llvm::isa<IterationIndexOp>(operation) ||
           operation->getNumOperands() != 2 || operation->getNumResults() != 1 ||
           operation->getNumRegions() || operation->getNumSuccessors() ||
-          operation->hasAttr("unit") || !isBoundedDigitalLoop(operation->getParentOp()) ||
+          operation->hasAttr("unit") || !isDigitalRegionOwner(operation->getParentOp()) ||
           (text(operation, "operator_name") != "add" && text(operation, "operator_name") != "sub"))
         return failure();
       // Subtraction preserves its authored operand order. Addition may use either
@@ -128,7 +136,7 @@ struct LoopIntegerQuery {
         affine = iterationIndex(operation->getOperand(1), operation, depth + 1);
         offset = staticInteger(operation->getOperand(0), operation, depth + 1);
       }
-      if (failed(affine) || failed(offset) || affine->loop != operation->getParentOp())
+      if (failed(affine) || failed(offset) || !affine->loop->isProperAncestor(operation))
         return failure();
       auto composed =
           composeIntegerExpression(text(operation, "operator_name"), {affine->offset, *offset});
@@ -220,7 +228,7 @@ LogicalResult verifyDigitalIterationIndexOperation(Operation *operation) {
     return failure();
   // Resolve at a later synthetic-free actual use when available; the recursive
   // verifier cannot ask that a value dominate its own definition.
-  if (!isBoundedDigitalLoop(operation->getParentOp()) || operation->getNumOperands() != 2)
+  if (!isDigitalRegionOwner(operation->getParentOp()) || operation->getNumOperands() != 2)
     return reject(operation, "iteration index requires the actual bounded loop scope");
   Operation *next = operation->getNextNode();
   if (!next || failed(resolveDigitalIterationIndex(operation->getResult(0), next)))
@@ -301,6 +309,19 @@ LogicalResult verifyDigitalLoopOperation(Operation *operation) {
         if (!retained.getType().isSignlessInteger(64) || retained.getInt() != ordinal)
           return reject(&body, "assignment source ordinal differs from its actual body position");
       ++ordinal;
+    } else if (llvm::isa<StructuralIfOp>(body)) {
+      if (failed(verifyStructuralIfOperation(&body, &*context)))
+        return failure();
+      // A retained conditional is one authored scope event regardless of its
+      // result arity; its arm-local effects have their own lexical order.
+      auto metadata = body.getAttrOfType<DictionaryAttr>("metadata");
+      if (auto retained = metadata ? metadata.getAs<IntegerAttr>("source_ordinal") : IntegerAttr())
+        if (!retained.getType().isSignlessInteger(64) || retained.getInt() != ordinal)
+          return reject(&body, "conditional source ordinal differs from its actual body position");
+      ++ordinal;
+    } else if (llvm::isa<StaticCompareOp, StaticLogicOp>(body)) {
+      if (failed(verifyStaticPredicateOperation(&body)))
+        return failure();
     } else if (llvm::isa<CollectionOp>(body)) {
       if (failed(verifyDigitalCollectionOperation(&body)))
         return failure();
@@ -315,7 +336,8 @@ LogicalResult verifyDigitalLoopOperation(Operation *operation) {
         return failure();
     }
     for (Value result : body.getResults()) {
-      if (!isDigitalCombinationalValueType(result.getType(), header->module, &*context) &&
+      if (!llvm::isa<StaticPredicateType>(result.getType()) &&
+          !isDigitalCombinationalValueType(result.getType(), header->module, &*context) &&
           !(result.getType().isSignlessInteger(64) &&
             (llvm::isa<IterationIndexOp>(body) ||
              succeeded(resolveDigitalLoopStaticInteger(result, body.getNextNode())))))

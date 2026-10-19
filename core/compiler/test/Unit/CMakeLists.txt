@@ -639,3 +639,17 @@ target_link_libraries(nodal-shape-iteration-image-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.shape-iteration-image-unit COMMAND nodal-shape-iteration-image-unit-tests)
 set_tests_properties(nodal.native.shape-iteration-image-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-assignment-guard-unit-tests DigitalAssignmentGuardTest.cpp)
+llvm_update_compile_flags(nodal-digital-assignment-guard-unit-tests)
+target_link_libraries(nodal-digital-assignment-guard-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-assignment-guard-unit COMMAND nodal-digital-assignment-guard-unit-tests)
+set_tests_properties(nodal.native.digital-assignment-guard-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-structural-if-model-unit-tests StructuralIfModelTest.cpp)
+llvm_update_compile_flags(nodal-structural-if-model-unit-tests)
+target_link_libraries(nodal-structural-if-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.structural-if-model-unit COMMAND nodal-structural-if-model-unit-tests)
+set_tests_properties(nodal.native.structural-if-model-unit PROPERTIES TIMEOUT 60)

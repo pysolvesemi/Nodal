@@ -15,6 +15,11 @@ class Nodal_Type<string name, string typeMnemonic>
   let mnemonic = typeMnemonic;
 }
 
+def Nodal_StaticPredicateType : Nodal_Type<"StaticPredicate", "static_predicate"> {
+  let summary = "Owned elaboration-time predicate token, never runtime storage";
+  let assemblyFormat = "";
+}
+
 def Nodal_BitsType : Nodal_Type<"Bits", "bits"> {
   let summary = "Signless finite-width bit container";
   let parameters = (ins "int64_t":$width);

@@ -44,9 +44,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var rangeClosures = Set.empty[Symbol]
   private var selectionMethods = Set.empty[Symbol]
   private var constructorClosures = Set.empty[Symbol]
+  private var structuralMethods = Set.empty[Symbol]
+  private var structuralBranches = Set.empty[Symbol]
+  private var structuralFactories = Set.empty[Symbol]
+  private var structuralModules = Set.empty[Symbol]
+  private val structural = new StructuralIfCapture
 
   private enum Profile:
-    case Pure, Loop, Range, StructuralRange, Selection
+    case Pure, Loop, Range, StructuralRange, Selection, StructuralIf
 
   private final class Budget:
     var visitedNodes = 0
@@ -70,6 +75,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce", "reduceBalancedTree")
     pureModules += owner
     factories = methods(requiredModule("nodal.DigitalCollectionCallback"), "checked1", "checked2")
+    val structuralRuntime = requiredModule("nodal.StructuralIfRuntime")
+    structuralModules += structuralRuntime
+    structuralModules += requiredModule("nodal.DigitalCollectionCallback")
+    structuralMethods = methods(structuralRuntime, "compare", "integerOperand", "and", "or", "not")
+    structuralBranches = methods(structuralRuntime, "value", "statement")
+    structuralFactories = methods(requiredModule("nodal.DigitalCollectionCallback"), "checked0")
+    factories ++= structuralFactories
     pureMethods =
       methods(
         requiredClass("nodal.DigitalBitsOperators"),
@@ -127,7 +139,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           "keep"
         ) ++
         moduleMethods("nodal.CandidateApi$package", "U", "B", "integer", "&&", "||", "unary_!") ++
-        moduleMethods("nodal.DigitalEnumApi$package", "asBits", "isValid", "===")
+        moduleMethods("nodal.DigitalEnumApi$package", "asBits", "isValid", "===") ++
+        moduleMethods("scala.<:<", "refl")
     val arithmetic = moduleMethods("nodal.CandidateApi$package", "+", "-", "*", "/", "unary_-")
     pureMethods = pureMethods ++ arithmetic.filter { symbol =>
       symbol.info.finalResultType.dealias match
@@ -283,6 +296,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         "analogBreak",
         "analogContinue"
       ) ++
+      // Runtime analog context reads are existing range effects, never static/pure
+      // predicate evidence or digital structural branch effects.
+      rangeModule("nodal.EnvironmentContext", "temperature", "nominalTemperature") ++
+      rangeModule("nodal.AnalysisContext", "time") ++
       rangeModule("nodal.AnalogTransferApi$package", "laplaceNd", "ziNd") ++
       rangeModule(
         "nodal.AnalogMath",
@@ -356,14 +373,25 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           override def traverse(current: Tree)(using Context): Unit =
             current match
               case definition: DefDef =>
+                structural.admitResult(definition.rhs, definition.tpt.tpe)
                 definitions(definition.symbol) = definition
                 sourceDefinitions(definition.symbol) = ((definition, ctx))
-              case definition: ValDef => values(definition.symbol) = definition
+              case definition: ValDef =>
+                structural.admitResult(definition.rhs, definition.tpt.tpe)
+                values(definition.symbol) = definition
+              case typed: Typed => structural.admitResult(typed.expr, typed.tpt.tpe)
               case definition: TypeDef => definition.rhs match
                   case template: Template =>
                     templates(definition.symbol) = template
                     sourceDefinitions(definition.symbol) = ((definition, ctx))
                   case _ => ()
+              case reference: RefTree
+                  if structuralMethods(reference.symbol) || structuralBranches(reference.symbol) ||
+                    structuralFactories(reference.symbol) =>
+                report.error(
+                  "NODAL-STRUCTURAL-055-FORGED: source must not call compiler-owned structural capture or attestation methods",
+                  reference.srcPos
+                )
               case reference: RefTree if iterationFactories(reference.symbol) =>
                 report.error(
                   "NODAL-ITERATION-CALLBACK-FORGED: source must not call compiler-owned callback attestation factories",
@@ -429,6 +457,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       closedDispatch(symbol) &&
       symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Module"))
     then Some("factory")
+    else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
+      closedDispatch(symbol) && (
+        symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
+          symbol.info.finalResultType =:= defn.UnitType
+      )
+    then Some("helper")
     else None
 
   private def effectSignature(symbol: Symbol, kind: String)(using Context): Option[String] =
@@ -471,11 +505,20 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     val fields = encoded.split("\t", -1).toList
     fields match
       case kind :: locator :: member :: signature :: profile :: Nil
-          if profile == "1" || profile == "3" =>
+          if Set("1", "3", "4", "8")(profile) =>
         val owner = if locator.startsWith("module:") then
-          val module = getModuleIfDefined(locator.stripPrefix("module:"))
-          if module.exists then module.moduleClass else NoSymbol
-        else if locator.startsWith("class:") then getClassIfDefined(locator.stripPrefix("class:"))
+          val name = locator.stripPrefix("module:")
+          val direct = getModuleIfDefined(name)
+          // Symbol.fullName omits the empty-package owner; staticRef starts at the root
+          // package. Resolve that exact owner explicitly for separately compiled local examples.
+          val module = if direct.exists || name.contains('.') then direct
+          else defn.EmptyPackageClass.info.member(termName(name)).symbol
+          if module.exists && module.is(Module) then module.moduleClass else NoSymbol
+        else if locator.startsWith("class:") then
+          val name = locator.stripPrefix("class:")
+          val direct = getClassIfDefined(name)
+          if direct.exists || name.contains('.') then direct
+          else defn.EmptyPackageClass.info.member(typeName(name)).symbol
         else NoSymbol
         if !owner.exists then None
         else
@@ -495,7 +538,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       given Context = context
       effectKind(symbol).foreach: kind =>
         effectSignature(symbol, kind).foreach: signature =>
-          val checked = List(Profile.StructuralRange, Profile.Range).iterator.flatMap: profile =>
+          val profiles = if kind == "helper" then List(Profile.Pure, Profile.StructuralIf)
+          else if kind == "singleton" then
+            List(Profile.Pure, Profile.StructuralIf, Profile.StructuralRange, Profile.Range)
+          else List(Profile.StructuralRange, Profile.Range)
+          val checked = profiles.iterator.flatMap: profile =>
             val validation = new Validation(profile, new Budget, reportErrors = false)
             if validation.summary(symbol, kind, tree) && validation.dependenciesWithinBudget then
               Some((profile, validation.dependencies))
@@ -508,11 +555,35 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 Literal(Constant(1)),
                 Literal(Constant(kind)),
                 Literal(Constant(signature)),
-                Literal(Constant(if profile == Profile.StructuralRange then 1 else 3)),
+                Literal(Constant(profile match
+                  case Profile.Pure => 4
+                  case Profile.StructuralIf => 8
+                  case Profile.StructuralRange => 1
+                  case _ => 3)),
                 Literal(Constant(dependencies))
               ),
               tree.span
             ))
+
+  override def prepareForValDef(tree: ValDef)(using Context): Context =
+    structural.admitResult(tree.rhs, tree.tpt.tpe)
+    ctx
+
+  override def prepareForDefDef(tree: DefDef)(using Context): Context =
+    structural.admitResult(tree.rhs, tree.tpt.tpe)
+    ctx
+
+  override def prepareForTyped(tree: Typed)(using Context): Context =
+    structural.admitResult(tree.expr, tree.tpt.tpe)
+    ctx
+
+  override def transformIf(tree: If)(using Context): Tree =
+    if !structural.moduleContext || !structural.symbolic(tree.cond) then tree
+    else
+      val validation = new Validation(Profile.StructuralIf, new Budget)
+      if validation.structuralIf(tree, 0) then
+        structural.lower(tree, structural.predicate(tree.cond).get, structural.resultType(tree).get)
+      else tree
 
   private def callbackArity(tree: Tree)(using Context): Int =
     if tree.tpe.widen.dealias.derivesFrom(requiredClass("scala.Function1")) then 1
@@ -550,19 +621,26 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private final class Validation(
       profile: Profile,
       sharedBudget: Budget,
-      reportErrors: Boolean = true
+      reportErrors: Boolean = true,
+      structuralDiagnostic: Boolean = false
   )(using Context):
     private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange
-    private val permitsWrites = profile == Profile.Loop || profile == Profile.Range
+    private val permitsWrites = profile == Profile.Loop || profile == Profile.Range ||
+      profile == Profile.StructuralIf
     private def sanctioned(symbol: Symbol): Boolean = pureMethods(symbol) ||
+      structuralMethods(symbol) || structuralBranches(symbol) || structuralFactories(symbol) ||
       (permitsWrites && loopMethods(symbol)) || (permitsStructure && rangeMethods(symbol)) ||
       (profile == Profile.Selection && selectionMethods(symbol))
     private def trustedModule(symbol: Symbol): Boolean = pureModules(symbol) ||
+      structuralModules(symbol) ||
       (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
     private def fail(code: String, message: String, tree: Tree): Boolean =
       if !reportErrors then false
-      else if profile == Profile.Pure then
+      else if profile == Profile.Pure && !structuralDiagnostic then
         DigitalCollectionCallbackPhase.this.fail(code, message, tree)
+      else if profile == Profile.StructuralIf || structuralDiagnostic then
+        report.error(s"NODAL-STRUCTURAL-055-$code: $message", tree.srcPos)
+        false
       else
         report.error(s"NODAL-ITERATION-CALLBACK-$code: $message", tree.srcPos)
         false
@@ -655,7 +733,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             valid
           case _ =>
             effectKind(symbol) match
-              case Some(kind) if kind == "factory" || kind == "default" =>
+              case Some(kind) if kind == "factory" || kind == "default" || kind == "helper" =>
                 importedSummary(symbol, kind, tree)
               case _ => fail(
                   "UNAVAILABLE",
@@ -672,7 +750,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           case NamedArg(_, argument) => callback(argument, depth + 1)
           case Block(statements, expression) =>
             statements.forall:
-              case _: DefDef => true
+              case definition: DefDef =>
+                definitions.getOrElseUpdate(definition.symbol, definition)
+                true
               case other => check(other, depth + 1)
             && callback(expression, depth + 1)
           case closure: Closure =>
@@ -715,12 +795,18 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     private def nestedCallback(tree: Tree, nested: Profile, depth: Int): Boolean =
       if nested == profile then callback(tree, depth)
-      else new Validation(nested, sharedBudget, reportErrors).callback(tree, depth)
+      else
+        val validation = new Validation(nested, sharedBudget, reportErrors, structuralDiagnostic)
+        val valid = validation.callback(tree, depth)
+        importedDependencies ++= validation.importedDependencies
+        valid &&
+        (dependenciesWithinBudget ||
+          fail("LIMIT", "callback effect dependencies exceed the bounded summary profile", tree))
 
     def summary(symbol: Symbol, kind: String, tree: Tree): Boolean = kind match
       case "constructor" => constructor(symbol.primaryConstructor, tree, 0)
       case "singleton" => moduleReference(symbol.sourceModule, tree, 0)
-      case "factory" | "default" => helper(symbol, tree, 0)
+      case "factory" | "default" | "helper" => helper(symbol, tree, 0)
       case _ => false
 
     private def importedSummary(
@@ -729,13 +815,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         tree: Tree,
         expectedProfile: Option[Int] = None
     ): Boolean =
-      if !permitsStructure then
-        fail(
-          "UNAVAILABLE",
-          "compiled constructor effects are unavailable in this callback profile",
-          tree
-        )
-      else if !budget(tree, activeSummaries.size + 1) then false
+      if !budget(tree, activeSummaries.size + 1) then false
       else if activeSummaries(symbol) then
         fail("SUMMARY", "cyclic constructor effect-summary dependency", tree)
       else if checkedSummaries.contains(symbol) then
@@ -756,7 +836,15 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             val signature = annotation.argumentConstantString(2)
             val effects = annotation.argumentConstant(3).map(_.value)
             val dependencyText = annotation.argumentConstantString(4)
-            val compatible = effects.contains(1) || (effects.contains(3) && permitsWrites)
+            // The original allocation profiles (1, 3) never attest a structural branch.
+            // Profile 4 is read-only; 8 permits the bounded digital branch/write effects.
+            val helperKind = kind == "helper" || kind == "singleton"
+            val compatible =
+              (helperKind &&
+                (effects.contains(4) ||
+                  (effects.contains(8) && permitsWrites))) ||
+                (kind != "helper" && permitsStructure &&
+                  (effects.contains(1) || (effects.contains(3) && permitsWrites)))
             val expected = expectedProfile.forall(profile => effects.contains(profile))
             if annotation.arguments.size != 5 || !version.contains(1) ||
               !effectKind(symbol).contains(kind) || !declaredKind.contains(kind) ||
@@ -766,7 +854,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             then
               fail("SUMMARY", "stale, malformed or incompatible constructor effect summary", tree)
             else
-              val profile = if effects.contains(1) then 1 else 3
+              val profile = List(1, 3, 4, 8).find(effects.contains).get
               val records = if dependencyText.get.isEmpty then Nil
               else dependencyText.get.split("\n", -1).toList
               activeSummaries += symbol
@@ -783,7 +871,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                       importedSummary(dependency, dependencyKind, tree, Some(dependencyProfile))
                     case None => fail(
                         "SUMMARY",
-                        "constructor effect dependency no longer matches its symbol signature",
+                        "constructor effect dependency no longer matches its symbol signature: " +
+                          record,
                         tree
                       )
               activeSummaries -= symbol
@@ -833,7 +922,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               fail("EFFECT", "nested effectful digital iteration is unsupported", application)
             else
               applied(application.fun, depth + 1) && application.args.forall: argument =>
-                if collections(symbol) && callbackArity(argument) > 0 then
+                if (structuralBranches(symbol) || structuralFactories(symbol)) &&
+                  argument.tpe.widen.dealias.derivesFrom(requiredClass("scala.Function0"))
+                then
+                  argument match
+                    case Apply(function, List(closure)) if structuralFactories(function.symbol) =>
+                      callback(closure, depth + 1)
+                    case _ => callback(argument, depth + 1)
+                else if collections(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.Pure, depth + 1)
                 else if ranges(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.StructuralRange, depth + 1)
@@ -856,6 +952,46 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           case identifier: Ident => collections(identifier.symbol) ||
             (permitsStructure && ranges(identifier.symbol)) || reference(identifier, depth + 1)
           case _ => fail("UNKNOWN", "unsupported callback call target", tree)
+
+    def structuralIf(tree: If, depth: Int): Boolean =
+      if !budget(tree, depth) then false
+      else
+        val resultValid = structural.resultType(tree).nonEmpty
+        if !resultValid && reportErrors then
+          report.error(
+            "NODAL-STRUCTURAL-055-001: structural if result must be a read-only Expr; add an explicit Expr[A] ascription",
+            tree.srcPos
+          )
+        val predicateValid = structural.predicate(tree.cond) match
+          case Some(predicate) =>
+            // Operands and erased equality evidence must be read-only, even when the arms
+            // permit continuous writes. Share the same work budget and imported proof graph.
+            val validation = new Validation(
+              Profile.Pure,
+              sharedBudget,
+              reportErrors,
+              structuralDiagnostic = true
+            )
+            val valid = predicate.operands.map(validation.check(_, depth + 1)).forall(identity)
+            importedDependencies ++= validation.importedDependencies
+            valid &&
+            (dependenciesWithinBudget || fail(
+              "LIMIT",
+              "predicate effect dependencies exceed the bounded summary profile",
+              tree.cond
+            ))
+          case None =>
+            if reportErrors then
+              report.error(
+                "NODAL-STRUCTURAL-055-CONDITION: structural if requires a closed direct Integer predicate; mixed host conditions and predicate aliases are unsupported",
+                tree.cond.srcPos
+              )
+            false
+        // Both authored arms are checked even when an earlier check fails. No runtime callback
+        // exists until this shared validation has succeeded for the whole conditional.
+        val trueValid = check(tree.thenp, depth + 1)
+        val falseValid = check(tree.elsep, depth + 1)
+        resultValid && predicateValid && trueValid && falseValid
 
     private def check(tree: Tree, depth: Int): Boolean =
       if !budget(tree, depth) then false
@@ -884,6 +1020,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           case Match(selector, CaseDef(Ident(name), guard, Literal(constant)) :: Nil)
               if profile != Profile.Pure && name == nme.WILDCARD && guard.isEmpty &&
                 constant.value == () => check(selector, depth + 1)
+          case conditional: If if structural.symbolic(conditional.cond) =>
+            structuralIf(conditional, depth + 1)
           case _: If | _: Match | _: WhileDo =>
             fail(
               "TOPOLOGY",

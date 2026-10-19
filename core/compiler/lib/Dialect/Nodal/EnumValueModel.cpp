@@ -4,8 +4,10 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -413,9 +415,7 @@ LogicalResult verifyEnumDefinitionAbi(Operation *definition) {
 
 LogicalResult verifyEnumValueOperation(Operation *operation,
                                        const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -436,9 +436,7 @@ LogicalResult verifyEnumValueOperation(Operation *operation,
 
 LogicalResult verifyEnumLiteralOperation(Operation *operation,
                                          const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation &&
-      (operation->getParentOfType<CollectionOp>() ||
-       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -471,8 +469,7 @@ LogicalResult verifyEnumTypeOperation(Operation *operation,
                                       const ParameterIntegerEnvironment *environment) {
   if (!operation)
     return failure();
-  if (!environment && (operation->getParentOfType<CollectionOp>() ||
-                       isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!environment && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -495,7 +492,7 @@ LogicalResult verifyEnumTypeOperation(Operation *operation,
     valid &= succeeded(verifier.checkType(operation, type));
   for (Type type : operation->getResultTypes())
     valid &= succeeded(verifier.checkType(operation, type));
-  if (!llvm::isa<CollectionOp>(operation))
+  if (!llvm::isa<CollectionOp, StructuralIfOp>(operation))
     for (Region &region : operation->getRegions())
       for (Block &block : region)
         for (BlockArgument argument : block.getArguments())
@@ -520,7 +517,7 @@ LogicalResult verifyEnumValueModel(Operation *module, bool includeCollections) {
       valid &= succeeded(verifier.checkType(operation, type));
     for (Type type : operation->getResultTypes())
       valid &= succeeded(verifier.checkType(operation, type));
-    if (!llvm::isa<CollectionOp>(operation))
+    if (!llvm::isa<CollectionOp, StructuralIfOp>(operation))
       for (Region &region : operation->getRegions())
         for (Block &block : region)
           for (BlockArgument argument : block.getArguments())
@@ -538,6 +535,11 @@ LogicalResult verifyEnumValueModel(Operation *module, bool includeCollections) {
       valid &= succeeded(verifier.expression(operation));
     if (!valid)
       return WalkResult::interrupt();
+    if (llvm::isa<StructuralIfOp>(operation)) {
+      if (includeCollections && failed(verifyStructuralIfOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
     if (llvm::isa<CollectionOp>(operation)) {
       if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
         return WalkResult::interrupt();

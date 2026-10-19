@@ -56,6 +56,14 @@ inferDigitalWidthExpression(mlir::Type type, mlir::Operation *module,
 bool equivalentDigitalStorageTypes(mlir::Type left, mlir::Type right, mlir::Operation *module,
                                    const ParameterIntegerEnvironment *environment = nullptr);
 
+/// Exact complete ABI across two independently admitted lexical contexts.
+/// Both types are validated before comparison; no width-family coercion.
+bool equivalentDigitalStorageTypesAcross(mlir::Type left,
+                                         const ParameterIntegerEnvironment *leftContext,
+                                         mlir::Type right,
+                                         const ParameterIntegerEnvironment *rightContext,
+                                         mlir::Operation *module);
+
 /// Construction-only width-family relation. Both complete types are validated.
 /// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered
 /// fields and every inner dimension identity remain exact. This never licenses

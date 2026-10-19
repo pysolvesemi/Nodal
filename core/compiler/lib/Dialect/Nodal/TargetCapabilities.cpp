@@ -40,7 +40,7 @@ public:
       if (!types.empty()) {
         Type type = types.pop_back_val();
         if (llvm::isa<BitsType, UIntType, SIntType, EnumType, DomainType, ResolvedType, DriverType,
-                      StreamType, ValidType, ControlCapabilityType>(type))
+                      StreamType, ValidType, ControlCapabilityType, StaticPredicateType>(type))
           return true;
         // ShapedType, builtin containers and future structural wrappers expose
         // their actual element types through MLIR's canonical subelement API.

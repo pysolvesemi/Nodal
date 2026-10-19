@@ -355,7 +355,7 @@ private[nodal] object ReproducibilityContract:
     ))
   )
 
-  private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = obj(
+  private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = JObject(Vector(
     "expressions" -> array(snapshot.digitalExpressions.sortBy(_.path).map(value =>
       JObject(Vector(
         "path" -> string(value.path),
@@ -438,7 +438,65 @@ private[nodal] object ReproducibilityContract:
         "data_type" -> string(value.dataType)
       )
     ))
-  )
+  ) ++ Option.when(snapshot.staticPredicates.nonEmpty)("static_predicates" ->
+    array(snapshot.staticPredicates.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "region" -> optionalString(value.region),
+        "operation" -> string(value.operation),
+        "operands" -> array(value.operands.map(string))
+      )
+    ))).toVector ++ Option.when(snapshot.structuralIfs.nonEmpty)("structural_ifs" ->
+    array(snapshot.structuralIfs.sortBy(_.path).map(value =>
+      def arm(value: KernelStructuralArmSnapshot): JsonValue = obj(
+        "path" -> string(value.path),
+        "captures" -> array(value.captures.map(string)),
+        "arguments" -> array(value.arguments.map(argument =>
+          obj(
+            "path" -> string(argument.path),
+            "data_type" -> string(argument.dataType),
+            "role" -> string(argument.role)
+          )
+        )),
+        "yield" -> optionalString(value.yieldValue)
+      )
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "predicate" -> string(value.predicate),
+        "true_arm" -> arm(value.trueArm),
+        "false_arm" -> arm(value.falseArm),
+        "data_type" -> optionalString(value.dataType),
+        "source_ordinal" -> number(value.sourceOrdinal)
+      )
+    ))).toVector ++ Option.when(snapshot.generatedRegions.exists(_.digitalBody.nonEmpty))(
+    "digital_generates" -> array(snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
+      .sortBy(_.path).map(value =>
+        val body = value.digitalBody.get
+        obj(
+          "path" -> string(value.path),
+          "owner" -> string(value.owner),
+          "parent_region" -> optionalString(value.parent),
+          "induction" -> string(value.induction),
+          "lower" -> string(value.lower),
+          "upper_exclusive" -> string(value.upperExclusive),
+          "step" -> string(value.step),
+          "maximum" -> value.maximum.map(number).getOrElse(JNull),
+          "maximum_trip_count" -> number(value.maximumTripCount),
+          "source_ordinal" -> number(body.sourceOrdinal),
+          "captures" -> array(body.captures.map(string)),
+          "arguments" -> array(body.arguments.map(argument =>
+            obj(
+              "path" -> string(argument.path),
+              "data_type" -> string(argument.dataType),
+              "role" -> string(argument.role)
+            )
+          ))
+        )
+      ))
+  ).toVector)
 
   private def semanticNames(snapshot: ConstructionSnapshot): JsonValue =
     val declared = snapshot.names

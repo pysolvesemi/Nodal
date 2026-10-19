@@ -3,6 +3,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -133,7 +134,8 @@ LogicalResult verifyDigitalMemoryOperation(Operation *operation) {
 LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *parent = operation->getParentOp();
   const bool loop = isBoundedDigitalLoop(parent);
-  Operation *module = loop ? parent->getParentOp() : parent;
+  const bool scoped = isDigitalRegionOwner(parent);
+  Operation *module = scoped ? operation->getParentOfType<nodal::ModuleOp>() : parent;
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || operation->getNumResults() ||
       operation->getNumOperands() != 2 || operation->getNumRegions() ||
       (loop && failed(inspectDigitalLoopHeader(parent))))
@@ -142,11 +144,11 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Value target = operation->getOperand(0), value = operation->getOperand(1);
   const bool control = isDigitalControlBoundaryType(target.getType());
   std::optional<ParameterIntegerEnvironment> context;
-  if (loop) {
-    auto scoped = digitalLoopIntegerContextAtUse(operation);
-    if (failed(scoped))
+  if (scoped) {
+    auto contexts = digitalIntegerContextsAtUse(operation);
+    if (failed(contexts) || contexts->size() != 1)
       return failure();
-    context.emplace(*scoped);
+    context.emplace(contexts->front());
   }
   if (control ? target.getType() != value.getType()
               : !equivalentDigitalStorageTypes(target.getType(), value.getType(), module,
@@ -165,7 +167,7 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *root = projection->root.getDefiningOp();
   if (!root || root->getParentOp() != module)
     return reject(operation, "digital assignment target root belongs to another module");
-  if (loop && (control || text(operation, "kind") != "continuous"))
+  if (scoped && (control || text(operation, "kind") != "continuous"))
     return reject(operation, "bounded loop writes require continuous ordinary digital storage");
   if (control) {
     auto source = resolveStaticShapeProjection(value, operation);

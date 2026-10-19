@@ -1,6 +1,7 @@
 #ifndef NODAL_DIALECT_NODAL_SHAPEMODEL_H
 #define NODAL_DIALECT_NODAL_SHAPEMODEL_H
 
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -109,6 +110,7 @@ struct StaticShapeRegionAxis {
 /// axis means root row-major ordinals. The region must never be treated as a
 /// filled box/interval while stride is greater than one.
 struct StaticShapeIterationImage {
+  /// Actual bounded-loop or Generate owner; only the former grants ordering.
   mlir::Operation *loop = nullptr;
   GeneratedDomain domain;
   InstantiatedIntegerExpression offset;
@@ -145,17 +147,28 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(mlir::Value root,
                                                         mlir::Operation *use,
                                                         ShapeRegionProofLimits limits = {});
 
-/// Exact all-legal pairwise relation. Unknown (including unsupported mapping)
-/// cannot establish independent writers. Actual SSA chains are rechecked, and
-/// physical selector identities are preserved; no supplied flags are trusted.
-/// Resolve the aggregate image of one actual loop-selected projection. Success
+/// Resolve an actual affine index from either an ordered bounded loop or a
+/// Generate. Captures retain the original induction identity; Generate arithmetic
+/// is independently admitted by ParameterModel before affine decomposition.
+mlir::FailureOr<DigitalIterationIndex> resolveStaticShapeIterationIndex(mlir::Value value,
+                                                                        mlir::Operation *use);
+
+/// Resolve the aggregate image of one actual iteration-selected projection. Success
 /// establishes per-iteration injectivity, including empty domains; ordinary or
 /// invariant projections return Unsupported. The returned iteration facts retain
-/// actual loop/domain/offset identity for ordered-dependence proofs.
+/// actual iteration/domain/offset identity. Ordering remains loop-only.
 ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProjection &projection,
                                                         mlir::Operation *use,
                                                         StaticShapeRegion &result,
                                                         ShapeRegionProofLimits limits = {});
+
+/// Prove that overlapping images identify the same actual occurrence. Requires
+/// one common actual iteration owner and identical injective per-occurrence maps.
+/// This does not grant ordering to a Generate or refine any predicate by lanes.
+ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjection &left,
+                                                      const StaticShapeProjection &right,
+                                                      mlir::Operation *use,
+                                                      ShapeRegionProofLimits limits = {});
 
 /// Exact occurrence displacement: read(q) equals write(q + result). Only the
 /// same actual loop and identical canonical physical per-occurrence map qualify.
@@ -177,6 +190,9 @@ struct StaticShapeOverlap {
   ShapeRegionProofStatus status = ShapeRegionProofStatus::Unsupported;
   ShapeRegionOverlap overlap = ShapeRegionOverlap::Unknown;
 };
+/// Exact all-legal pairwise relation. Unknown (including unsupported mapping)
+/// cannot establish independent writers. Actual SSA chains are rechecked, and
+/// physical selector identities are preserved; no supplied flags are trusted.
 StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &left,
                                                  const StaticShapeProjection &right,
                                                  mlir::Operation *use,

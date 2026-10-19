@@ -178,6 +178,38 @@ private[nodal] final case class KernelIterationIndexSnapshot(
     operands: Vector[String]
 )
 
+private[nodal] final case class KernelStaticPredicateSnapshot(
+    path: String,
+    owner: String,
+    region: Option[String],
+    operation: String,
+    operands: Vector[String]
+)
+
+private[nodal] final case class KernelStructuralArmSnapshot(
+    path: String,
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    yieldValue: Option[String]
+)
+
+private[nodal] final case class KernelStructuralIfSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    predicate: String,
+    trueArm: KernelStructuralArmSnapshot,
+    falseArm: KernelStructuralArmSnapshot,
+    dataType: Option[String],
+    sourceOrdinal: Int
+)
+
+private[nodal] final case class KernelDigitalGeneratedBody(
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    sourceOrdinal: Int
+)
+
 private[nodal] final case class KernelGeneratedRegionSnapshot(
     path: String,
     owner: String,
@@ -188,7 +220,8 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     step: String,
     maximum: Option[Int],
     maximumTripCount: Int,
-    declarations: Vector[String]
+    declarations: Vector[String],
+    digitalBody: Option[KernelDigitalGeneratedBody] = None
 )
 
 private[nodal] final case class KernelShapeIndexSnapshot(
@@ -375,6 +408,8 @@ private[nodal] final case class ConstructionSnapshot(
     digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
     digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
     iterationIndices: Vector[KernelIterationIndexSnapshot] = Vector.empty,
+    staticPredicates: Vector[KernelStaticPredicateSnapshot] = Vector.empty,
+    structuralIfs: Vector[KernelStructuralIfSnapshot] = Vector.empty,
     emitQuality: EmitQuality = EmitQuality()
 )
 
@@ -546,6 +581,22 @@ private final case class Operation(
     sourceOrdinal: Int = 0
 )
 
+/** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
+private enum DigitalRegionKind:
+  case Collection, BoundedLoop, Generate, StructuralArm
+
+private final case class StructuralArmHeader(conditional: ExpressionRef, whenTrue: Boolean)
+
+private final class StructuralIfRecord(
+    val reference: ExpressionRef,
+    val parent: Option[DigitalValueRegionRecord],
+    val predicate: StaticPredicate,
+    val trueArm: DigitalValueRegionRecord,
+    val falseArm: DigitalValueRegionRecord,
+    val sourceOrdinal: Int
+):
+  var result: Option[KernelExpr[?]] = None
+
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
 private final class DigitalValueRegionRecord(
     val reference: ExpressionRef,
@@ -553,9 +604,21 @@ private final class DigitalValueRegionRecord(
     val kind: String,
     val inputs: Vector[Expr[?]],
     val seed: Option[Expr[?]],
-    val loop: Option[DigitalLoopHeader] = None
+    val loop: Option[DigitalLoopHeader] = None,
+    val structuralArm: Option[StructuralArmHeader] = None
 ):
-  def isLoop: Boolean = loop.nonEmpty
+  var structuralGenerate: Boolean = false
+  def regionKind: DigitalRegionKind =
+    if structuralArm.nonEmpty then DigitalRegionKind.StructuralArm
+    else if structuralGenerate then DigitalRegionKind.Generate
+    else if loop.nonEmpty then DigitalRegionKind.BoundedLoop
+    else DigitalRegionKind.Collection
+  def isLoop: Boolean = regionKind == DigitalRegionKind.BoundedLoop ||
+    regionKind == DigitalRegionKind.Generate
+  def permitsAssignment: Boolean = regionKind match
+    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm =>
+      true
+    case DigitalRegionKind.Collection => false
   val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
   val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
     mutable.LinkedHashMap.empty

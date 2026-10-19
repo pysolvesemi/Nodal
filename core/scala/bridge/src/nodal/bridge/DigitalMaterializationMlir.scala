@@ -74,6 +74,7 @@ private[nodal] object DigitalMaterializationMlir:
         DigitalScalarContract.Operations.contains(value.operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation) ||
         value.operation == DigitalCollectionContract.Operation ||
+        value.operation == "structural_if" ||
         (value.operation.startsWith("enum_") && value.operation != "enum_literal")) &&
         value.operation != "digital_to_real"
 

@@ -2,6 +2,7 @@
 
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -472,9 +473,7 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     if (auto argument = llvm::dyn_cast<BlockArgument>(current)) {
       if (++captureDepth > 512 || !argument.getOwner()->getParentOp()->isProperAncestor(use))
         return failure();
-      auto source = isBoundedDigitalLoop(argument.getOwner()->getParentOp())
-                        ? digitalLoopCaptureSource(argument)
-                        : digitalCollectionCaptureSource(argument);
+      auto source = digitalRegionCaptureSource(argument);
       if (failed(source) || !*source || source->getType() != current.getType())
         return failure();
       current = *source;
@@ -924,7 +923,8 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
   if ((iterationImages || iterationStart) && !projection.projections.empty()) {
     Operation *last = projection.projections.back();
     for (Operation *scope = last->getParentOp(); scope; scope = scope->getParentOp())
-      if (isBoundedDigitalLoop(scope)) {
+      if (isBoundedDigitalLoop(scope) || llvm::isa<GenerateOp>(scope) ||
+          scope->getName().getStringRef() == "nodal.structural_if") {
         proofUse = last;
         break;
       }
@@ -1003,7 +1003,7 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
       for (Value index : operation->getOperands().drop_front()) {
         std::optional<IntegerExpression> position, end;
         auto affine = (iterationImages || iterationStart)
-                          ? resolveDigitalIterationIndex(index, operation)
+                          ? resolveStaticShapeIterationIndex(index, operation)
                           : FailureOr<DigitalIterationIndex>(failure());
         if (succeeded(affine)) {
           if (iteration)
@@ -1394,6 +1394,102 @@ RegionStatus coalesceResidues(llvm::ArrayRef<StaticShapeRegion> input, RegionQue
 
 } // namespace
 
+namespace {
+/// The arithmetic proof remains in ParameterModel. This small recognizer only
+/// extracts the shared one-varying-axis map from that already-checked SSA DAG.
+class IterationMapQuery {
+public:
+  FailureOr<DigitalIterationIndex> resolve(Value value, Operation *use, unsigned depth = 0) {
+    if (++work > 65536 || depth > 128 || !value || !use ||
+        failed(verifyDigitalValueScope(value, use)))
+      return failure();
+    if (auto found = memo.find(value); found != memo.end())
+      return found->second;
+    auto result = compute(value, use, depth);
+    if (succeeded(result))
+      memo.try_emplace(value, *result);
+    return result;
+  }
+
+private:
+  bool invariant(const InstantiatedIntegerExpression &expression) {
+    SmallVector<std::shared_ptr<const InstantiatedIntegerNode>, 8> pending{expression.root};
+    llvm::SmallPtrSet<const InstantiatedIntegerNode *, 16> visited;
+    while (!pending.empty()) {
+      auto node = pending.pop_back_val();
+      if (!node || ++work > 65536)
+        return false;
+      if (!visited.insert(node.get()).second)
+        continue;
+      if (node->kind == InstantiatedIntegerNode::Kind::OpaqueValue)
+        return false;
+      pending.append(node->operands.begin(), node->operands.end());
+    }
+    return true;
+  }
+  FailureOr<DigitalIterationIndex> compute(Value value, Operation *use, unsigned depth) {
+    if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+      Operation *owner = argument.getOwner()->getParentOp();
+      if (llvm::isa<GenerateOp>(owner)) {
+        auto domain = resolveGeneratedDomain(owner);
+        if (failed(domain) || domain->induction != value)
+          return failure();
+        return DigitalIterationIndex{owner, *domain, makeLiteralIntegerExpression(0),
+                                     domain->attainedInductionBounds};
+      }
+      auto source = digitalRegionCaptureSource(argument);
+      if (failed(source) || !*source)
+        return failure();
+      return resolve(*source, owner, depth + 1);
+    }
+    Operation *operation = value.getDefiningOp();
+    if (!llvm::isa_and_nonnull<ConstExprOp>(operation) || operation->getNumOperands() != 2)
+      return failure();
+    auto attr = operation->getAttrOfType<StringAttr>("operator_name");
+    StringRef opcode = attr ? attr.getValue() : StringRef();
+    if (opcode != "add" && opcode != "sub")
+      return failure();
+    auto affine = resolve(operation->getOperand(0), operation, depth + 1);
+    auto offset = resolveStructuralIntegerExpression(operation->getOperand(1), operation);
+    if (failed(affine) || failed(offset) || !offset->expression ||
+        !invariant(*offset->expression)) {
+      if (opcode != "add")
+        return failure();
+      affine = resolve(operation->getOperand(1), operation, depth + 1);
+      offset = resolveStructuralIntegerExpression(operation->getOperand(0), operation);
+    }
+    if (failed(affine) || failed(offset) || !offset->expression || !invariant(*offset->expression))
+      return failure();
+    auto composed = composeIntegerExpression(opcode, {affine->offset, *offset->expression});
+    if (failed(composed))
+      return failure();
+    auto lower = composeIntegerExpression("add", {affine->domain.lower, *composed});
+    auto upper = composeIntegerExpression("add", {affine->domain.upperExclusive, *composed});
+    if (failed(lower) || failed(upper))
+      return failure();
+    affine->offset = *composed;
+    auto checked = resolveStructuralIntegerExpression(value, use);
+    if (failed(checked))
+      return failure();
+    affine->attainedBounds =
+        checked->expression ? std::optional<ParameterIntegerBounds>(checked->expression->bounds)
+                            : std::nullopt;
+    return *affine;
+  }
+  unsigned work = 0;
+  llvm::DenseMap<Value, DigitalIterationIndex> memo;
+};
+} // namespace
+
+FailureOr<DigitalIterationIndex> resolveStaticShapeIterationIndex(Value value, Operation *use) {
+  if (auto loop = resolveDigitalIterationIndex(value, use); succeeded(loop))
+    return loop;
+  // Validate the complete raw Integer DAG before extracting its affine map.
+  if (failed(resolveStructuralIntegerExpression(value, use)))
+    return failure();
+  return IterationMapQuery().resolve(value, use);
+}
+
 ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &projection,
                                                 Operation *use, StaticShapeRegion &result,
                                                 ShapeRegionProofLimits limits) {
@@ -1415,6 +1511,24 @@ ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProject
   return RegionStatus::Proved;
 }
 
+ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjection &left,
+                                                      const StaticShapeProjection &right,
+                                                      Operation *use,
+                                                      ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  StaticShapeRegion a, b;
+  auto first = deriveRegion(left, query, a, true, std::nullopt, true);
+  if (first != RegionStatus::Proved)
+    return first;
+  auto second = deriveRegion(right, query, b, true, std::nullopt, true);
+  if (second != RegionStatus::Proved)
+    return second;
+  if (!a.iteration || !b.iteration || a.iteration->loop != b.iteration->loop ||
+      !sameImage(a, b, query) || !query.equal(a.iteration->offset, b.iteration->offset))
+    return query.failedStatus();
+  return query.status;
+}
+
 FailureOr<int64_t> compareStaticShapeIterationPositions(const StaticShapeProjection &read,
                                                         const StaticShapeProjection &write,
                                                         Operation *use,
@@ -1423,8 +1537,9 @@ FailureOr<int64_t> compareStaticShapeIterationPositions(const StaticShapeProject
   StaticShapeRegion a, b;
   if (deriveRegion(read, query, a, true, std::nullopt, true) != RegionStatus::Proved ||
       deriveRegion(write, query, b, true, std::nullopt, true) != RegionStatus::Proved ||
-      !a.iteration || !b.iteration || a.iteration->loop != b.iteration->loop ||
-      a.iteration->stride != b.iteration->stride || !sameInvariantAxes(a, b, query))
+      !a.iteration || !b.iteration || !isBoundedDigitalLoop(a.iteration->loop) ||
+      a.iteration->loop != b.iteration->loop || a.iteration->stride != b.iteration->stride ||
+      !sameInvariantAxes(a, b, query))
     return failure();
   auto first = imageAxes(a, query), second = imageAxes(b, query);
   auto displacement =

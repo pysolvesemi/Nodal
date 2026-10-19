@@ -151,7 +151,7 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp"]>]> {
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -1635,6 +1635,37 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
     APIntAttr:$value,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+// F55: static choices retain both authored alternatives and all real SSA edges.
+def Nodal_StaticCompareOp : Nodal_Op<"static_compare"> {
+  let summary = "Closed comparison of owned static Integer expressions";
+  let arguments = (ins I64:$lhs, I64:$rhs, StrAttr:$comparison, DictionaryAttr:$metadata);
+  let results = (outs Nodal_StaticPredicateType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_StaticLogicOp : Nodal_Op<"static_logic"> {
+  let summary = "Closed bounded composition of actual static predicates";
+  let arguments = (ins Variadic<Nodal_StaticPredicateType>:$inputs,
+    StrAttr:$operator_name, DictionaryAttr:$metadata);
+  let results = (outs Nodal_StaticPredicateType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_StructuralIfOp : Nodal_Op<"structural_if",
+    [IsolatedFromAbove, SingleBlock, AttrSizedOperandSegments]> {
+  let summary = "Isolated static choice with separate captures and exact read-only yields";
+  let arguments = (ins Nodal_StaticPredicateType:$predicate,
+    Variadic<AnyType>:$true_captures, Variadic<AnyType>:$false_captures,
+    StrAttr:$contract_version, StrAttr:$region_id, DictionaryAttr:$metadata);
+  let results = (outs Optional<AnyType>:$result);
+  let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
+  let hasVerifier = 1;
+}
+def Nodal_StructuralYieldOp : Nodal_Op<"structural_yield",
+    [HasParent<"StructuralIfOp">, Terminator]> {
+  let summary = "Zero or one exact read-only branch result";
+  let arguments = (ins Optional<AnyType>:$value, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 

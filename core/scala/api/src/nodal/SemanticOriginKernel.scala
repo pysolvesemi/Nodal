@@ -148,6 +148,7 @@ private[nodal] final class SemanticOriginBuilder:
     "ConstructionInterfaceLayout.scala",
     "DigitalAggregateContract.scala",
     "AnalogUserFunctionRuntime.scala",
+    "StructuralIfRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(

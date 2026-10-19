@@ -6,6 +6,8 @@
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StaticPredicateModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Support/BackendCapabilityRegistry.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -88,8 +90,7 @@ FailureOr<Signature> signature(Operation *operation) {
   h.operation = operation;
   h.module = owner(operation);
   Operation *parent = operation->getParentOp();
-  if (!h.module || (!llvm::isa_and_nonnull<ModuleOp>(parent) &&
-                    !named(parent, "nodal.collection") && !isBoundedDigitalLoop(parent)))
+  if (!h.module || (!llvm::isa_and_nonnull<ModuleOp>(parent) && !isDigitalRegionOwner(parent)))
     return failure();
   unsigned depth = 0, reductions = isReduction(text(operation, "kind")) ? 1 : 0;
   for (Operation *scope = parent; named(scope, "nodal.collection"); scope = scope->getParentOp()) {
@@ -338,9 +339,14 @@ public:
             enclosing ? resolveOwnedIntegerExpression(h.module, source, *enclosing,
                                                       ParameterIntegerMode::MathematicalSigned64)
                       : resolveDigitalLoopStaticInteger(source, h.operation);
-        if (failed(expression))
-          return failure();
-        bindings.push_back({argument, *expression, source});
+        if (failed(expression)) {
+          // A real Generate capture remains available to predicates/selectors,
+          // including an empty template. It never becomes a width formal.
+          if (failed(resolveStructuralIntegerExpression(source, h.operation)))
+            return failure();
+        } else {
+          bindings.push_back({argument, *expression, source});
+        }
       } else if (source.getType().isSignlessInteger(64))
         return failure();
     }
@@ -827,46 +833,7 @@ bool equivalentAcross(Type a, const ParameterIntegerEnvironment *ea, Type b,
                       unsigned depth = 0) {
   if (depth >= digitalTypeMaximumDepth || ++work > maximumAnalysisWork)
     return false;
-  if (!kind(a).empty()) {
-    if (kind(a) != kind(b))
-      return false;
-    auto x = inferDigitalWidthExpression(a, module, ea),
-         y = inferDigitalWidthExpression(b, module, eb);
-    return succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
-  }
-  if (auto x = llvm::dyn_cast<ShapedType>(a)) {
-    auto y = llvm::dyn_cast<ShapedType>(b);
-    if (!y)
-      return false;
-    SmallVector<StringRef, 4> p, q;
-    x.getDimensions().split(p, ',');
-    y.getDimensions().split(q, ',');
-    if (p.size() != q.size())
-      return false;
-    for (unsigned i = 0; i < p.size(); ++i) {
-      auto u = tokenExpression(module, p[i], "shape", ea),
-           v = tokenExpression(module, q[i], "shape", eb);
-      if (failed(u) || failed(v) || !equivalentInstantiatedIntegerExpressions(*u, *v))
-        return false;
-    }
-    return equivalentAcross(x.getElementType(), ea, y.getElementType(), eb, module, work,
-                            depth + 1);
-  }
-  if (auto x = llvm::dyn_cast<StructType>(a)) {
-    auto y = llvm::dyn_cast<StructType>(b);
-    if (!y || x.getName() != y.getName() || x.getFields().size() != y.getFields().size())
-      return false;
-    for (unsigned i = 0; i < x.getFields().size(); ++i) {
-      auto p = llvm::cast<DictionaryAttr>(x.getFields()[i]),
-           q = llvm::cast<DictionaryAttr>(y.getFields()[i]);
-      if (p.getAs<StringAttr>("name") != q.getAs<StringAttr>("name") ||
-          !equivalentAcross(p.getAs<TypeAttr>("type").getValue(), ea,
-                            q.getAs<TypeAttr>("type").getValue(), eb, module, work, depth + 1))
-        return false;
-    }
-    return true;
-  }
-  return a == b;
+  return equivalentDigitalStorageTypesAcross(a, ea, b, eb, module);
 }
 
 bool expectedType(Type input, Type left, Type right, Type actual, ArrayRef<Expr> widths,
@@ -1040,6 +1007,13 @@ public:
       if (!descriptor || isAnalogBackendOperation(descriptor->operation) ||
           definition->hasAttr("unit"))
         return false;
+      if (llvm::isa<StructuralIfOp>(definition)) {
+        if (failed(verifyStructuralIfOperation(definition, environment)))
+          return false;
+        active.erase(value);
+        finished.insert(value);
+        return true;
+      }
       bool projection =
           named(definition, "nodal.shape_index") || named(definition, "nodal.shape_slice");
       // A collection's private operands are checked by its own body coordinator.
@@ -1089,6 +1063,13 @@ LogicalResult verifyBodyOperation(Operation *operation,
                     "invalid nested collection header, captures or finite reduction profile");
     return verifyCandidate(*child, budget);
   }
+  if (llvm::isa<StructuralIfOp>(operation)) {
+    if (operation->getNumResults() != 1)
+      return reject(operation, "collection requires a pure value conditional");
+    return verifyStructuralIfOperation(operation, &*at);
+  }
+  if (llvm::isa<StaticCompareOp, StaticLogicOp>(operation))
+    return verifyStaticPredicateOperation(operation);
   if (named(operation, "nodal.collection_yield"))
     return verifyDigitalCollectionYield(operation);
   if (operation->getNumRegions() || operation->getNumSuccessors() ||
@@ -1122,8 +1103,9 @@ LogicalResult verifyBodyOperation(Operation *operation,
     Operation *next = operation->getNextNode();
     auto after = next ? environment.atUse(next) : FailureOr<ParameterIntegerEnvironment>(failure());
     if (failed(after) ||
-        failed(resolveOwnedIntegerExpression(environment.module(), result, *after,
-                                             ParameterIntegerMode::MathematicalSigned64)))
+        (failed(resolveOwnedIntegerExpression(environment.module(), result, *after,
+                                              ParameterIntegerMode::MathematicalSigned64)) &&
+         failed(resolveStructuralIntegerExpression(result, next))))
       return reject(operation,
                     "static body expression is invalid over a reachable reduction context");
     if (name == "nodal.const_literal")
@@ -1168,7 +1150,7 @@ LogicalResult verifyCandidate(Candidate &c, VerificationBudget &budget) {
           outer ? resolveOwnedIntegerExpression(h.module, value, *outer,
                                                 ParameterIntegerMode::MathematicalSigned64)
                 : resolveDigitalLoopStaticInteger(value, h.operation);
-      if (failed(expression))
+      if (failed(expression) && failed(resolveStructuralIntegerExpression(value, h.operation)))
         return reject(h.operation, "static capture is not an owned static Integer");
     } else if (!boundary.verify(value))
       return reject(h.operation,
@@ -1185,8 +1167,9 @@ LogicalResult verifyCandidate(Candidate &c, VerificationBudget &budget) {
   if (failed(first))
     return failure();
   for (BlockArgument arg : h.body->getArguments()) {
-    if (arg.getType().isSignlessInteger(64) && first->binding(arg))
-      continue;
+    if (arg.getType().isSignlessInteger(64) &&
+        (first->binding(arg) || arg.getArgNumber() >= h.ordinaryArguments))
+      continue; // Captures were independently admitted above; no fabricated width binding.
     if (!isDigitalCombinationalValueType(arg.getType(), h.module, &*first))
       return reject(h.operation, "collection argument requires a complete finite digital type");
   }
@@ -1288,41 +1271,12 @@ LogicalResult verifyCandidate(Candidate &c, VerificationBudget &budget) {
 }
 } // namespace
 
-LogicalResult verifyCollectionValueScope(Value value, Operation *use,
-                                         const ParameterIntegerEnvironment *) {
-  if (!value || !use || !use->getBlock())
-    return failure();
-  Operation *module = owner(use);
-  if (!module)
-    return failure();
-  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-    Block *block = argument.getOwner();
-    if (block != use->getBlock())
-      return failure();
-    if (isBoundedDigitalLoop(block->getParentOp()))
-      return success(succeeded(inspectDigitalLoopHeader(block->getParentOp())));
-    if (!named(block->getParentOp(), "nodal.collection"))
-      return failure();
-    return success(succeeded(inspect(block->getParentOp())));
-  }
-  Operation *definition = value.getDefiningOp();
-  if (!definition || owner(definition) != module || definition == use)
-    return failure();
-  Operation *visibleUse = use;
-  while (visibleUse && visibleUse->getBlock() != definition->getBlock()) {
-    Operation *parent = visibleUse->getParentOp();
-    if (!parent || named(parent, "nodal.collection") || isBoundedDigitalLoop(parent) ||
-        parent == module)
-      return failure();
-    visibleUse = parent;
-  }
-  return success(visibleUse && definition != visibleUse && definition->isBeforeInBlock(visibleUse));
+LogicalResult inspectDigitalCollectionRegion(Block *body) {
+  auto h = body ? signature(body->getParentOp()) : FailureOr<Signature>(failure());
+  return success(succeeded(h) && h->body == body);
 }
-FailureOr<Value> digitalCollectionCaptureSource(BlockArgument argument,
-                                                const ParameterIntegerEnvironment *) {
-  if (isBoundedDigitalLoop(argument.getOwner()->getParentOp()))
-    return digitalLoopCaptureSource(argument);
-  auto h = inspect(argument.getOwner()->getParentOp());
+FailureOr<Value> collectionCaptureSource(BlockArgument argument) {
+  auto h = signature(argument.getOwner()->getParentOp());
   if (failed(h) || h->body != argument.getOwner())
     return failure();
   unsigned ordinal = argument.getArgNumber();
@@ -1333,17 +1287,9 @@ FailureOr<Value> digitalCollectionCaptureSource(BlockArgument argument,
     return failure();
   return source;
 }
-LogicalResult digitalCollectionArgumentDependencies(BlockArgument argument,
-                                                    SmallVectorImpl<Value> &dependencies) {
-  if (isBoundedDigitalLoop(argument.getOwner()->getParentOp())) {
-    auto source = digitalLoopCaptureSource(argument);
-    if (failed(source))
-      return failure();
-    if (*source)
-      dependencies.push_back(*source);
-    return success();
-  }
-  auto h = inspect(argument.getOwner()->getParentOp());
+LogicalResult collectionArgumentDependencies(BlockArgument argument,
+                                             SmallVectorImpl<Value> &dependencies) {
+  auto h = signature(argument.getOwner()->getParentOp());
   if (failed(h) || h->body != argument.getOwner())
     return failure();
   SmallVector<Value, 4> sources;
@@ -1365,31 +1311,15 @@ LogicalResult digitalCollectionArgumentDependencies(BlockArgument argument,
   dependencies.append(sources.begin(), sources.end());
   return success();
 }
-std::string digitalValueSemanticPath(Value value) {
-  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-    Operation *scope = argument.getOwner()->getParentOp();
-    return (named(scope, "nodal.collection") || isBoundedDigitalLoop(scope))
-               ? (text(scope, "region_id") + ".arg" + std::to_string(argument.getArgNumber())).str()
-               : std::string();
-  }
-  return path(value.getDefiningOp()).str();
-}
 FailureOr<Value>
 resolveCollectionIntegerTokenValue(Operation *module, StringRef token, StringRef effect,
                                    const ParameterIntegerEnvironment &environment) {
   if (module != environment.module() || (effect != "width" && effect != "shape") ||
       !isCanonicalDigitalWidthToken(token))
     return failure();
-  Operation *scope = environment.scope()->getParentOp();
-  if (isBoundedDigitalLoop(scope)) {
-    auto header = inspectDigitalLoopHeader(scope);
-    if (failed(header) || header->body != environment.scope())
-      return failure();
-  } else {
-    auto header = inspect(scope);
-    if (failed(header) || header->body != environment.scope())
-      return failure();
-  }
+  auto header = inspectDigitalRegion(environment.scope());
+  if (failed(header) || header->module != module)
+    return failure();
   auto value = localToken(environment.scope(), token);
   if (failed(value)) {
     Value result;
@@ -1435,19 +1365,12 @@ FailureOr<Expr> resolveCollectionIntegerToken(Operation *module, StringRef token
                                                         : ParameterIntegerMode::Storage);
 }
 FailureOr<SmallVector<ParameterIntegerEnvironment, 4>>
-collectionIntegerContextsAtUse(Operation *use) {
-  if (use && isBoundedDigitalLoop(use->getParentOp())) {
-    auto context = digitalLoopIntegerContextAtUse(use);
-    if (failed(context))
-      return failure();
-    return SmallVector<ParameterIntegerEnvironment, 4>{*context};
-  }
+collectionOwnIntegerContextsAtUse(Operation *use) {
   if (!use || !named(use->getParentOp(), "nodal.collection"))
     return failure();
   Operation *collection = use->getParentOp();
   SmallVector<ParameterIntegerEnvironment, 4> result;
-  if (named(collection->getParentOp(), "nodal.collection") ||
-      isBoundedDigitalLoop(collection->getParentOp())) {
+  if (isDigitalRegionOwner(collection->getParentOp())) {
     auto parents = collectionIntegerContextsAtUse(collection);
     if (failed(parents))
       return failure();
@@ -1821,12 +1744,6 @@ instantiateDigitalReductionBodyTypesAtTreeNode(const VerifiedDigitalReduction &f
   return bodyTypesForSizes(c, *left, *right);
 }
 
-LogicalResult verifyCollectionValueScope(Value value, Operation *use) {
-  return verifyCollectionValueScope(value, use, nullptr);
-}
-FailureOr<Value> digitalCollectionCaptureSource(BlockArgument argument) {
-  return digitalCollectionCaptureSource(argument, nullptr);
-}
 LogicalResult verifyDigitalCollectionOperation(Operation *operation) {
   return verifyDigitalCollectionOperation(operation, nullptr);
 }

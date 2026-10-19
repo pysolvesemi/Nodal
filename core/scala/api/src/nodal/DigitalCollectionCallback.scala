@@ -7,6 +7,20 @@ package nodal
   * The compiler rejects authored references to the checked factories before injecting its calls.
   */
 private[nodal] object DigitalCollectionCallback:
+  // Structural callbacks carry a distinct profile. A checked collection function cannot attest
+  // a branch, and an ordinary Function0 cannot bypass validation of either authored arm.
+  private final class Checked0[A](function: () => A) extends (() => A):
+    def apply(): A = function()
+
+  def checked0[A](function: () => A): () => A = new Checked0(function)
+
+  def requireStructuralChecked(function: AnyRef): Unit = function match
+    case _: Checked0[?] => ()
+    case _ =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-STRUCTURAL-055-MISSING",
+        "structural branch requires typed effect validation by the Nodal compiler plugin"
+      ))).get
   private final class Checked1[A, B](function: A => B) extends (A => B):
     def apply(value: A): B = function(value)
 

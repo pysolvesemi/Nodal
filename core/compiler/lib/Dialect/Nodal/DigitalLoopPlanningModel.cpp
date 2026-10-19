@@ -88,6 +88,26 @@ FailureOr<Cost> cost(Operation *loop, const GeneratedDomain &domain) {
   if (!invariant(domain.lower) || !invariant(domain.upperExclusive) || !invariant(domain.step))
     return result;
   result.iterations = domain.maximumTripCount;
+  bool structuralChoice = false;
+  SmallVector<std::pair<Operation *, unsigned>, 8> pending{{loop, 0}};
+  uint64_t inspected = 0;
+  while (!pending.empty()) {
+    auto [operation, depth] = pending.pop_back_val();
+    if (++inspected > maxNodes || depth >= 128)
+      return failure();
+    structuralChoice |= llvm::isa<StructuralIfOp>(operation);
+    for (Region &region : operation->getRegions())
+      for (Block &block : region)
+        for (Operation &child : block) {
+          if (pending.size() >= maxNodes)
+            return failure();
+          pending.emplace_back(&child, depth + 1);
+        }
+  }
+  if (structuralChoice) {
+    result.reason = "structural-choice-retains-regions";
+    return result;
+  }
   for (Operation &operation : loop->getRegion(0).front())
     if (llvm::isa<IterationIndexOp>(operation)) {
       auto affine = resolveDigitalIterationIndex(operation.getResult(0), operation.getNextNode());
@@ -198,6 +218,11 @@ FailureOr<Inventory> inventory(Operation *module) {
     NamedAttrList rec;
     rec.set("id", b.getI64IntegerAttr(result.operations.lookup(op)));
     rec.set("operation", b.getStringAttr(op->getName().getStringRef()));
+    rec.set("parent", b.getI64IntegerAttr(
+                          op->getParentOp() == module
+                              ? -1
+                              : static_cast<int64_t>(result.operations.lookup(op->getParentOp()))));
+    rec.set("region", b.getI64IntegerAttr(op->getParentRegion()->getRegionNumber()));
     SmallVector<Attribute> inputs, types;
     for (Value value : op->getOperands()) {
       auto found = result.values.find(value);

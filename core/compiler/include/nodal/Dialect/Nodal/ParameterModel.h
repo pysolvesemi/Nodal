@@ -102,6 +102,8 @@ struct InstantiatedIntegerExpression {
 namespace detail {
 class CollectionIntegerEnvironmentAdmission;
 class LoopIntegerEnvironmentAdmission;
+class StructuralIfIntegerEnvironmentAdmission;
+class DigitalGenerateIntegerEnvironmentAdmission;
 } // namespace detail
 
 /// One checked substitution for an actual static collection block argument.
@@ -165,6 +167,8 @@ private:
   mlir::Operation *lexicalUse;
   friend class detail::CollectionIntegerEnvironmentAdmission;
   friend class detail::LoopIntegerEnvironmentAdmission;
+  friend class detail::StructuralIfIntegerEnvironmentAdmission;
+  friend class detail::DigitalGenerateIntegerEnvironmentAdmission;
 };
 
 /// Environment-bearing queries require explicit collection or bounded-loop admission.
@@ -239,6 +243,16 @@ bool proveIntegerExpressionLess(const InstantiatedIntegerExpression &left,
                                 const InstantiatedIntegerExpression &right, bool inclusive = false);
 bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpression &left,
                                               const InstantiatedIntegerExpression &right);
+
+/// Static-predicate use admission follows actual explicit captures and Generate
+/// ownership. Missing expression means a checked empty generated occurrence;
+/// it never invents an attained index or a reduction width-formal fact.
+struct StructuralIntegerFacts {
+  std::optional<InstantiatedIntegerExpression> expression;
+};
+mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir::Value value,
+                                                                           mlir::Operation *use);
+mlir::LogicalResult verifyStructuralIntegerOperation(mlir::Operation *operation);
 
 /// Resolve only a direct instance in the use's immediate Module/Generate scope.
 /// Module definitions and parameter declarations have separate owner namespaces.

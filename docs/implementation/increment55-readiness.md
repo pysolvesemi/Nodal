@@ -181,3 +181,57 @@ this checkpoint. Formatting, affected syntactic lint, generated capability
 registry consistency, Markdown and whitespace checks pass, with the ten inherited
 shared construction lint diagnostics described above unchanged. No F55 checklist
 child is closed by this intermediate checkpoint.
+
+## Remaining shared owners after collection integration
+
+The required loop/assignment tranche must add global ordinary wiring checks;
+current per-assignment checks alone do not prove absence of competing wire/output
+writers, undriven consumed regions or combinational feedback. The shared storage,
+Interface and Shape owners must cover those cases, including Interface/net-only
+feedback, before F55 closure. Isolated staged implementations are not integrated
+acceptance evidence.
+
+BT record witnesses also require typed Struct field reads and whole-value
+construction. Existing whole-record selection with an external flag does not
+establish score-based winner or shared cross-field callbacks. The extension uses
+canonical semantic schema identity and an explicit width-family relation while
+preserving exact instantiated ABI equality. It does not invent host-object
+identity or a global schema registry. Widening reductions must prove actual
+intermediate types, singleton and odd-carry behavior over legal count/width
+envelopes; a final width formula alone is insufficient.
+
+## Bounded arithmetic checkpoint
+
+The approved [arithmetic v0.2 gate](../design-gates/NodalDigitalArithmetic-DG-v0.2.md)
+is integrated through the existing scalar source, bridge and native owners.
+Same-kind UInt/SInt division and remainder accept an arbitrary runtime numerator
+and an independently proven exact nonzero divisor. This includes computed and
+explicitly captured immutable divisors. A parameter default alone is not proof;
+zero, unproved runtime divisors and cross-kind operands reject. SInt quotient
+width is numerator width plus one, preserving minimum/-1; remainder retains the
+numerator width and sign under truncation toward zero. UInt results retain
+numerator width. Min/max use exact same-kind mathematical comparison and canonical
+maximum operand width. Enum values do not enter this scalar arithmetic profile.
+No latency or numerical fallback is invented.
+
+Native checks pass scalar values 330/330, collection 76/76 and enum values 68/68.
+The seven-suite Scala replay passes 62/62, including arithmetic 8/8 and collection
+bridge 13/13. Actual public arithmetic source and normalized native artifacts are
+retained with hashes under `.work/increment55-arithmetic`; final witness digests
+are in `.work/increment55/arithmetic-final-witnesses.sha256`. The native replay
+binary SHA-256 is
+`ee723e0bbe66db3bdb8f9413f343f3ff8a5479753a923d5db2b3c12b89310ae9`.
+Three directly affected source-origin predecessor tests also pass. Focused
+formatting and syntactic lint pass for all changed Scala files.
+
+A directly affected source-discovery defect was discovered during replay:
+repository scratch copies under `.work` participated in authored-source matching.
+Equal-scoring copies made source locations unavailable and changed child-definition
+provenance/canonicalization. The shared locator now excludes only the detected
+repository's root `.work` subtree. Authored nested `.work` directories and explicit
+external roots retain discovery; absent source still reports an unavailable span.
+The new unique-file regression demonstrably failed under the old policy and now
+passes. The original repeated-child assertions pass unchanged; no semantic
+metadata was stripped and no module-count assertion was weakened. Focused review
+found no remaining concrete defect in the arithmetic or locator delta. F55 and its
+linked reduction/iteration obligations remain open.

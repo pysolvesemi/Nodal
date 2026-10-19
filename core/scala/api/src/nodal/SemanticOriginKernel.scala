@@ -444,6 +444,12 @@ private[nodal] final class SemanticOriginBuilder:
     if !Files.isDirectory(root) then None
     else
       val candidates = mutable.ArrayBuffer.empty[Path]
+      // Ignore only this repository's generated scratch subtree. An explicitly selected
+      // external root may itself live under .work, and authored nested .work paths remain valid.
+      val generatedScratch = Option.when(
+        Files.isRegularFile(root.resolve("build.mill")) &&
+          Files.isDirectory(root.resolve("core/scala")) && Files.isDirectory(root.resolve("docs"))
+      )(root.resolve(".work"))
       try
         val _ = Files.walkFileTree(
           root,
@@ -454,7 +460,8 @@ private[nodal] final class SemanticOriginBuilder:
             ): FileVisitResult =
               if directory != root &&
                 attributes.isDirectory &&
-                ignoredSourceSegments.contains(directory.getFileName.toString)
+                (generatedScratch.contains(directory) ||
+                  ignoredSourceSegments.contains(directory.getFileName.toString))
               then FileVisitResult.SKIP_SUBTREE
               else FileVisitResult.CONTINUE
 

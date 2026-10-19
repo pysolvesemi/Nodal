@@ -123,6 +123,7 @@ unsigned expressionArity(StringRef opcode) {
              1)
       .Cases({"digital_to_real", "digital_neg", "digital_not", "bool_not"}, 1)
       .Cases({"digital_add", "digital_sub", "digital_mul"}, 2)
+      .Cases({"digital_div", "digital_rem", "digital_min", "digital_max"}, 2)
       .Cases({"digital_eq", "digital_ne", "digital_lt", "digital_le"}, 2)
       .Cases({"digital_gt", "digital_ge", "digital_and", "digital_or"}, 2)
       .Cases({"digital_xor", "digital_concat", "digital_shl", "digital_shr"}, 2)
@@ -203,7 +204,10 @@ std::optional<llvm::APInt> boundedConstant(llvm::APInt value) {
 std::optional<llvm::APInt> binaryConstant(StringRef opcode, const llvm::APInt &left,
                                           const llvm::APInt &right) {
   unsigned bits = std::max(left.getBitWidth(), right.getBitWidth());
-  if (opcode == "digital_add" || opcode == "digital_sub")
+  if (opcode == "digital_add" || opcode == "digital_sub" || opcode == "digital_div" ||
+      opcode == "digital_rem")
+    // Division needs an extra sign bit for the signed minimum divided by -1,
+    // including srem's internal quotient. These are proof widths, not storage widths.
     ++bits;
   else if (opcode == "digital_mul")
     bits = left.getBitWidth() + right.getBitWidth();
@@ -216,6 +220,15 @@ std::optional<llvm::APInt> binaryConstant(StringRef opcode, const llvm::APInt &l
     return boundedConstant(a - b);
   if (opcode == "digital_mul")
     return boundedConstant(a * b);
+  if (opcode == "digital_div" || opcode == "digital_rem") {
+    if (b.isZero())
+      return std::nullopt;
+    return boundedConstant(opcode == "digital_div" ? a.sdiv(b) : a.srem(b));
+  }
+  if (opcode == "digital_min")
+    return boundedConstant(a.slt(b) ? a : b);
+  if (opcode == "digital_max")
+    return boundedConstant(a.sgt(b) ? a : b);
   if (opcode == "digital_and" || opcode == "bool_and")
     return boundedConstant(a & b);
   if (opcode == "digital_or" || opcode == "bool_or")
@@ -586,6 +599,22 @@ private:
       valid = succeeded(expected) && matchesWidth(resultType, *expected) &&
               (opcode == "digital_concat" ? resultKind == "bits"
                                           : numericKind(kind) && sameKinds && resultKind == kind);
+    } else if (opcode == "digital_div" || opcode == "digital_rem") {
+      if (!inputs[1].constant || inputs[1].constant->isZero()) {
+        (void)reject(operation,
+                     "division/remainder require a bounded exact nonzero divisor from actual SSA");
+        return failure();
+      }
+      auto expected =
+          opcode == "digital_div" && kind == "sint"
+              ? composeIntegerExpression("add", {expressions[0], makeLiteralIntegerExpression(1)})
+              : FailureOr<InstantiatedIntegerExpression>(expressions[0]);
+      valid = numericKind(kind) && sameKinds && resultKind == kind && succeeded(expected) &&
+              matchesWidth(resultType, *expected);
+    } else if (opcode == "digital_min" || opcode == "digital_max") {
+      auto expected = composeIntegerExpression("max", {expressions[0], expressions[1]});
+      valid = numericKind(kind) && sameKinds && resultKind == kind && succeeded(expected) &&
+              matchesWidth(resultType, *expected);
     } else if (opcode == "digital_neg") {
       auto expected =
           composeIntegerExpression("add", {expressions[0], makeLiteralIntegerExpression(1)});

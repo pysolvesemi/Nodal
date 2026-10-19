@@ -28,6 +28,14 @@ private[nodal] trait DigitalNumericOperators[A <: Data] extends DigitalBitsOpera
   extension (left: Expr[A])
     def *(right: Expr[A]): Expr[A] =
       DigitalCombinationalContract.arithmetic("digital_mul", left, right)
+    def /(right: Expr[A]): Expr[A] =
+      DigitalCombinationalContract.arithmetic("digital_div", left, right)
+    def %(right: Expr[A]): Expr[A] =
+      DigitalCombinationalContract.arithmetic("digital_rem", left, right)
+    def min(right: Expr[A]): Expr[A] =
+      DigitalCombinationalContract.arithmetic("digital_min", left, right)
+    def max(right: Expr[A]): Expr[A] =
+      DigitalCombinationalContract.arithmetic("digital_max", left, right)
     def unary_- : Expr[SInt] = DigitalCombinationalContract.negate(left)
     def <(right: Expr[A]): Expr[Bool] =
       DigitalCombinationalContract.compare("digital_lt", left, right)

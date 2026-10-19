@@ -449,7 +449,8 @@ private[nodal] object DigitalValueMlir:
         case "digital_add" | "digital_sub" | "digital_mul" | "digital_eq" | "digital_ne" |
             "digital_lt" | "digital_le" | "digital_gt" | "digital_ge" | "digital_and" |
             "digital_or" | "digital_xor" | "digital_concat" | "digital_shl" | "digital_shr" |
-            "digital_logical_shr" | "bool_and" | "bool_or" => 2
+            "digital_logical_shr" | "digital_div" | "digital_rem" | "digital_min" |
+            "digital_max" | "bool_and" | "bool_or" => 2
         case "digital_extract" | "digital_select" => 3
         case _ => 0
       requireValid(
@@ -545,6 +546,19 @@ private[nodal] object DigitalValueMlir:
           case "digital_mul" =>
             numeric(source.kind) && sources(1).kind == source.kind && result.kind == source.kind &&
             formula("analog_add", sources)
+          case "digital_div" | "digital_rem" =>
+            requireValid(
+              inputs(1).constant.exists(_ != 0),
+              "division and remainder require an independently proven exact nonzero divisor",
+              path
+            )
+            numeric(source.kind) && sources(1).kind == source.kind && result.kind == source.kind &&
+            (if operation == "digital_div" && source.kind == "SInt" then
+               widthRelation(source, result, 1, path)
+             else equalWidth(source, result))
+          case "digital_min" | "digital_max" =>
+            numeric(source.kind) && sources(1).kind == source.kind && result.kind == source.kind &&
+            formula("static_integer_max", sources)
           case "digital_neg" =>
             numeric(source.kind) && result.kind == "SInt" &&
             formula("analog_add", Vector(source, literalWidth(1)))
@@ -592,6 +606,10 @@ private[nodal] object DigitalValueMlir:
           case "digital_add" => pair(_ + _)
           case "digital_sub" => pair(_ - _)
           case "digital_mul" => pair(_ * _)
+          case "digital_div" => pair(_ / _)
+          case "digital_rem" => pair(_ % _)
+          case "digital_min" => pair(_.min(_))
+          case "digital_max" => pair(_.max(_))
           case "digital_neg" => at(0).map(-_)
           case "digital_eq" => test(_ == _)
           case "digital_ne" => test(_ != _)

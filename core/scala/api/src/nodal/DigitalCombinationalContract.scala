@@ -8,6 +8,10 @@ private[nodal] object DigitalCombinationalContract:
     "digital_add",
     "digital_sub",
     "digital_mul",
+    "digital_div",
+    "digital_rem",
+    "digital_min",
+    "digital_max",
     "digital_neg",
     "digital_eq",
     "digital_ne",
@@ -92,6 +96,13 @@ private[nodal] object DigitalCombinationalContract:
       case "digital_add" | "digital_sub" =>
         addWidths(StaticIntegerExpression.maximum(width(a), width(b)), 1)
       case "digital_mul" => addWidths(width(a), width(b))
+      case "digital_div" | "digital_rem" =>
+        if !DigitalScalarContract.knownValue(right).exists(_ != 0) then
+          fail(5, "division and remainder require a bounded exact nonzero divisor proof")
+        if operation == "digital_div" && a.kind == "SInt" then addWidths(width(a), 1)
+        else width(a)
+      case "digital_min" | "digital_max" =>
+        StaticIntegerExpression.maximum(width(a), width(b))
       case _ => fail(1, "unsupported digital arithmetic operation")
     val kind = if operation == "digital_sub" then "SInt" else a.kind
     emit(operation, KernelTypeDescriptor(kind, Vector(resultWidth)), left, right)
@@ -183,8 +194,9 @@ private[nodal] object DigitalCombinationalContract:
       fail(3, "digital selection branches require identical complete types")
     emit("digital_select", result, condition, whenTrue, whenFalse)
 
-  /** A bounded proof used by explicit checked conversions. Values remain DAG nodes: successful
-    * constant reasoning never substitutes parameter defaults or erases operand/source identity.
+  /** A bounded proof used by checked conversions and exact-divisor arithmetic. Values remain DAG
+    * nodes: successful constant reasoning never substitutes parameter defaults or erases
+    * operand/source identity.
     */
   def constantValue(
       expression: KernelExpr[?],
@@ -213,6 +225,12 @@ private[nodal] object DigitalCombinationalContract:
         case "digital_add" => pair(_ + _)
         case "digital_sub" => pair(_ - _)
         case "digital_mul" => pair(_ * _)
+        case "digital_div" if operands.size == 2 =>
+          for left <- at(0); right <- at(1) if right != 0 yield left / right
+        case "digital_rem" if operands.size == 2 =>
+          for left <- at(0); right <- at(1) if right != 0 yield left % right
+        case "digital_min" => pair(_.min(_))
+        case "digital_max" => pair(_.max(_))
         case "digital_neg" if operands.size == 1 => at(0).map(-_)
         case "digital_eq" => test(_ == _)
         case "digital_ne" => test(_ != _)

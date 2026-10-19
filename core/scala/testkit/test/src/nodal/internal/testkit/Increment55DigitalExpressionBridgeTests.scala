@@ -28,6 +28,10 @@ final class DigitalCombinationalBridgeSource extends Module:
   val sum = left + right
   val difference = left - right
   val product = left * right
+  val quotient = left / 2.U(2)
+  val remainder = left % 2.U(2)
+  val minimum = left.min(right)
+  val maximum = left.max(right)
   val negative = -left
   val equal = left === right
   val unequal = left =/= right

@@ -67,6 +67,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         methods(
           requiredClass("nodal.DigitalNumericOperators"),
           "*",
+          "/",
+          "%",
+          "min",
+          "max",
           "unary_-",
           "<",
           "<=",

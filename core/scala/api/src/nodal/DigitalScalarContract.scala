@@ -61,7 +61,7 @@ private[nodal] object DigitalScalarContract:
     * patterns are not allocated just to prove a conversion; an absent proof rejects checked
     * narrowing. The finite traversal bound matches the captured digital expression profile.
     */
-  private def knownValue(value: Expr[?]): Option[BigInt] =
+  def knownValue(value: Expr[?]): Option[BigInt] =
     val cache = new IdentityHashMap[Expr[?], Option[BigInt]]()
     val active = new IdentityHashMap[Expr[?], java.lang.Boolean]()
     var remaining = 65536

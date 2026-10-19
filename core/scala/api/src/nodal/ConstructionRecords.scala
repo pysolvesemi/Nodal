@@ -115,7 +115,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     literal: Option[String],
     enumIdentity: Option[String],
     caseIds: Vector[String],
-    region: Option[String] = None
+    region: Option[String] = None,
+    materializationIntent: Option[KernelDigitalIntent] = None
 )
 
 private[nodal] final case class KernelDigitalRegionArgument(
@@ -339,7 +340,8 @@ private[nodal] final case class ConstructionSnapshot(
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
     digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
-    digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty
+    digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
+    emitQuality: EmitQuality = EmitQuality()
 )
 
 /** Immutable selected facts. Operand tags prevent authored strings from posing as references. */

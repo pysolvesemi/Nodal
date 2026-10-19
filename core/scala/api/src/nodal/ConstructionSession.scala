@@ -257,6 +257,7 @@ private final class ConstructionSession(val options: EmitOptions):
         operation == DigitalCollectionContract.Operation
       val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
         DigitalScalarContract.Operations.contains(operation) ||
+        operation == DigitalMaterializationContract.Operation ||
         DigitalCombinationalContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
@@ -1799,6 +1800,7 @@ private final class ConstructionSession(val options: EmitOptions):
           operation.startsWith(
             DigitalEnumContract.Prefix
           ) || DigitalScalarContract.Operations.contains(operation) ||
+            operation == DigitalMaterializationContract.Operation ||
             DigitalCombinationalContract.Operations.contains(operation)
         ) =>
       if activeGeneratedRegion.nonEmpty then
@@ -4799,6 +4801,7 @@ private final class ConstructionSession(val options: EmitOptions):
             ) || DigitalScalarContract.Operations.contains(
               operation
             ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
+              operation == DigitalMaterializationContract.Operation ||
               DigitalCombinationalContract.Operations.contains(operation) ||
               DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
           ) => expression)
@@ -5095,6 +5098,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(
+      emitQuality = options.quality,
       digitalAssignments = digitalAssignmentSnapshots(resolved),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,

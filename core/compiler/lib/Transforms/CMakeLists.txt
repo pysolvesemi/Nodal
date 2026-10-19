@@ -1,5 +1,6 @@
 add_mlir_library(NodalTransforms
   Passes.cpp
+  DigitalMaterialization.cpp
   AnalogCanonicalization.cpp
   AnalogSemanticLint.cpp
 

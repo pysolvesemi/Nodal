@@ -235,3 +235,45 @@ passes. The original repeated-child assertions pass unchanged; no semantic
 metadata was stripped and no module-count assertion was weakened. Focused review
 found no remaining concrete defect in the arithmetic or locator delta. F55 and its
 linked reduction/iteration obligations remain open.
+
+## Target-neutral materialization checkpoint
+
+The approved [materialization v0.1 gate](../design-gates/NodalDigitalMaterialization-DG-v0.1.md)
+preserves the frozen naming, keep and quality forms through typed aliases and one
+native actual-use inventory. Shared values and explicit keep boundaries require
+materialization; source naming and Debug policy add their documented reasons.
+The report preserves exact types, lexical identities and individual operand edges,
+with stale-report rejection and transactional replacement. It does not emit wires
+or establish target-specific optimization equivalence. F65/72 must add their actual
+type, signed-view, depth, procedural and tool-legality requirements before emission.
+
+Integrated native checks pass materialization 40/40, scalar value 330/330,
+collection 76/76 and enum value 68/68. The combined Scala replay passes 78 cases,
+including seven new source/bridge/native materialization cases. The actual default
+normalization gate is invoked explicitly; parse-only acceptance is not counted as
+planning evidence. Additional naming predecessors pass 3/3 and reproducibility
+predecessors pass 2/3. The directly affected native RcFilter normalization,
+Verilog-A/golden and manifest-repeatability case also passes 1/1 with the rebuilt
+translator. Source and normalized witnesses are retained under
+`.work/increment55/materialization-final-witnesses`. The pinned native binary
+SHA-256 is `c5e65026bc32a14762aac8e78deaac4a17f24e53ae80f75c7fa0302cb18d827a`.
+
+The remaining reproducibility fixture fails on its CDC-waived Bool assignment:
+its RHS has no value in the typed digital schedule, before planning runs. Rebuilding
+all bridge sources from the preceding checkpoint reproduces the exact
+`NODAL-BRIDGE-054-ENUM` failure at
+`ReproducibilityDomainFixture.digital_assignment_0` against the current captured
+fixture. That is a bridge control, not a full historical API replay. The failing
+case is retained and is not claimed passed; no fabricated CDC value is added.
+
+Fresh private reproducibility receipts use schema v2 for requested quality,
+provenance-only source decisions and normalized-artifact inventory references.
+Historical fixtures/receipts and analog decisions are unchanged. Requested checks
+or waivers are not relabeled as executed checks. The reviewed planner preserves
+actual SSA operand occurrences, source aliases and complete types without arithmetic
+reassociation; target-specific legality and physical emission remain pending.
+Focused formatting and whitespace checks pass. Syntactic lint retains exactly
+three unchanged baseline diagnostics: ConstructionSession's existing return/throw
+and ReproducibilityContract's existing throw. No new lint violation is introduced;
+the full lint invocation is not labeled passing. No F55 parent or child is closed
+by this checkpoint.

@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -117,6 +118,7 @@ bool isBool(Type type) {
 
 unsigned expressionArity(StringRef opcode) {
   return llvm::StringSwitch<unsigned>(opcode)
+      .Case("digital_alias", 1)
       .Cases({"digital_extend", "digital_truncate", "digital_wrap"}, 1)
       .Cases({"digital_saturate", "digital_resize_checked", "digital_to_signed"}, 1)
       .Cases({"digital_to_unsigned", "digital_reinterpret_signed", "digital_reinterpret_unsigned"},
@@ -388,13 +390,16 @@ public:
                      "digital operands require visible owned values and explicit region captures");
         return failure();
       }
+    if (failed(verifyDigitalMaterializationIntent(operation)))
+      return failure();
     StringRef opcode = text(operation, "operator_name");
     unsigned arity = expressionArity(opcode);
     if (!arity || operation->getNumOperands() != arity) {
       (void)reject(operation, "digital expression requires a supported opcode and exact arity");
       return failure();
     }
-    if (arity != 1 || opcode == "digital_neg" || opcode == "digital_not" || opcode == "bool_not")
+    if (arity != 1 || opcode == "digital_alias" || opcode == "digital_neg" ||
+        opcode == "digital_not" || opcode == "bool_not")
       return combinational(operation, depth);
     Value input = operation->getOperand(0);
     Type sourceType = input.getType(), resultType = operation->getResult(0).getType();
@@ -535,6 +540,16 @@ private:
     if (depth + result.height - 1 > maximumProofDepth) {
       (void)reject(operation, "digital expression graph exceeds its finite depth budget");
       return failure();
+    }
+    if (opcode == "digital_alias") {
+      if (!validValueType(resultType) ||
+          !sameStorageType(operation->getOperand(0).getType(), resultType)) {
+        (void)reject(operation, "digital alias requires the exact complete input value type");
+        return failure();
+      }
+      result.constant = inputs.front().constant;
+      result.nonnegative = inputs.front().nonnegative;
+      return result;
     }
     if (opcode == "digital_select") {
       Type branchType = operation->getOperand(1).getType();

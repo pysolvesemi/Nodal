@@ -570,6 +570,13 @@ target_link_libraries(nodal-enum-value-model-unit-tests PRIVATE
 add_test(NAME nodal.native.enum-value-model-unit COMMAND nodal-enum-value-model-unit-tests)
 set_tests_properties(nodal.native.enum-value-model-unit PROPERTIES TIMEOUT 30)
 
+add_executable(nodal-digital-materialization-model-unit-tests DigitalMaterializationModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-materialization-model-unit-tests)
+target_link_libraries(nodal-digital-materialization-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-materialization-model-unit COMMAND nodal-digital-materialization-model-unit-tests)
+set_tests_properties(nodal.native.digital-materialization-model-unit PROPERTIES TIMEOUT 30)
+
 add_executable(nodal-digital-value-model-unit-tests DigitalValueModelTest.cpp)
 llvm_update_compile_flags(nodal-digital-value-model-unit-tests)
 target_link_libraries(nodal-digital-value-model-unit-tests PRIVATE

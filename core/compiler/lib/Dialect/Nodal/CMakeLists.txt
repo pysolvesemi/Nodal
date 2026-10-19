@@ -14,6 +14,7 @@ add_mlir_dialect_library(NodalDialect
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
   DigitalValueModel.cpp
+  DigitalMaterializationModel.cpp
   DigitalCollectionModel.cpp
   EnumValueModel.cpp
   TargetCapabilities.cpp

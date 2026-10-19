@@ -16,6 +16,7 @@
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
@@ -2026,7 +2027,8 @@ LogicalResult nodal::ModuleOp::verify() {
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation())) ||
       failed(verifyDigitalValueModel(getOperation())) ||
-      failed(verifyDigitalCollectionModel(getOperation())))
+      failed(verifyDigitalCollectionModel(getOperation())) ||
+      failed(verifyDigitalMaterializationReport(getOperation())))
     return failure();
   // Captured region and induction identities are module-local semantic keys.
   // Check each once; independent nested module definitions own their own keys.

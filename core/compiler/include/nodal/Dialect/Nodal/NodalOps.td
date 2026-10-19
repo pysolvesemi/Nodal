@@ -1663,6 +1663,9 @@ def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
     and logical_shr zero-fills. extract takes UInt literal lower-inclusive and
     upper-exclusive bounds and returns Bits of their difference. bool_and/or/not
     require Bits<1>. Division, remainder and dynamic shifts are unsupported.
+    digital_alias retains one exact complete digital input type and one typed
+    named/keep intent record. Its metadata is a target-neutral semantic boundary,
+    not an emitted wire or a reassociation/duplication permission.
     Closed unary
     digital_extend/truncate/wrap/saturate/resize_checked operations retain kind;
     truncation keeps low bits, wrapping is modulo 2^width, and saturation clamps

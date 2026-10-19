@@ -131,6 +131,7 @@ private[nodal] object DigitalValueMlir:
       snapshot.root
     )
     snapshot.digitalExpressions.foreach: expression =>
+      DigitalMaterializationMlir.validate(expression)
       requireValid(
         modules.contains(expression.owner) && expression.path.startsWith(expression.owner + ".") &&
           !declarations.contains(expression.path) && expression.operands.size <= 4098,
@@ -663,7 +664,7 @@ private[nodal] object DigitalValueMlir:
             Option[(String, String)]
         ) => Vector[String],
         declarationInitializer: KernelDeclarationSnapshot => Option[String],
-        metadata: String => String,
+        metadata: (String, Boolean) => String,
         sourceLocation: String => String,
         projectionValue: (String, String => (String, String)) => Projection,
         declarationNativeType: (KernelDeclarationSnapshot, String) => String,
@@ -827,10 +828,10 @@ private[nodal] object DigitalValueMlir:
                     )
                   )
                   local +=
-                    s"${quoted("nodal.collection_yield")}(${yielded._1}) <{metadata = ${metadata(path)}}> : (${yielded._2}) -> ()${sourceLocation(path)}"
+                    s"${quoted("nodal.collection_yield")}(${yielded._1}) <{metadata = ${metadata(path, false)}}> : (${yielded._2}) -> ()${sourceLocation(path)}"
                   val attributes =
                     s"{kind = ${quoted(collection.kind)}, region_id = ${quoted(path)}, " +
-                      s"operandSegmentSizes = array<i32: ${collection.inputs.size}, ${collection.seed.size}, ${collection.captures.size}>, metadata = ${metadata(path)}}"
+                      s"operandSegmentSizes = array<i32: ${collection.inputs.size}, ${collection.seed.size}, ${collection.captures.size}>, metadata = ${metadata(path, true)}}"
                   val block = s"^bb0(${blockArguments.mkString(", ")}):\n" + local.mkString("\n")
                   val nested = block.linesIterator.map("  " + _).mkString("\n")
                   val text =
@@ -906,7 +907,23 @@ private[nodal] object DigitalValueMlir:
                   )
                 then
                   val proof =
-                    if DigitalScalarContract.Operations.contains(expression.operation) then
+                    if expression.operation == DigitalMaterializationContract.Operation then
+                      requireValid(
+                        exactValueType(
+                          expressionType(expression.operands.head),
+                          expression.dataType,
+                          path
+                        ) &&
+                          (expression.dataType == "Bool" ||
+                            scalarType(expression.dataType, path).nonEmpty ||
+                            expression.dataType.startsWith("Enum(") ||
+                            expression.dataType.startsWith("Vec(") ||
+                            expression.dataType.startsWith("Struct(")),
+                        "digital alias must preserve one exact complete finite value type",
+                        path
+                      )
+                      proofs(expression.operands.head)
+                    else if DigitalScalarContract.Operations.contains(expression.operation) then
                       requireValid(
                         expression.operands.size == 1,
                         "digital conversion requires one operand",
@@ -929,7 +946,7 @@ private[nodal] object DigitalValueMlir:
                         exactValueType
                       )
                   val attributes =
-                    s"{operator_name = ${quoted(expression.operation)}, metadata = ${metadata(path)}}"
+                    s"{operator_name = ${quoted(expression.operation)}, metadata = ${metadata(path, true)}}"
                   (
                     Vector(operation(
                       "nodal.digital_expr",
@@ -948,7 +965,7 @@ private[nodal] object DigitalValueMlir:
                     if expression.literal.contains("true") then "1" else "0"
                   else expression.literal.get
                   val attributes =
-                    s"{value = $literal, spelling = ${quoted(spelling)}, metadata = ${metadata(path)}}"
+                    s"{value = $literal, spelling = ${quoted(spelling)}, metadata = ${metadata(path, false)}}"
                   (
                     Vector(operation(
                       "nodal.const_literal",

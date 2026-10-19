@@ -38,7 +38,7 @@ private[nodal] final case class ReproducibilityBundle(
   */
 private[nodal] object ReproducibilityContract:
   val Schema: String = "nodal.reproducibility"
-  val Version: Int = 1
+  val Version: Int = 2
   val PublicApi: String = "0.3"
 
   private val VerificationPattern =
@@ -106,7 +106,8 @@ private[nodal] object ReproducibilityContract:
                 source.text,
                 normalizedText,
                 emitted.normalizedMlir,
-                "verilog-a"
+                "verilog-a",
+                nativeNormalized = true
               )
             )
 
@@ -132,7 +133,8 @@ private[nodal] object ReproducibilityContract:
       sourceMlir: String,
       normalizedMlir: String,
       hdl: String,
-      backendProfile: String
+      backendProfile: String,
+      nativeNormalized: Boolean = false
   ): ReproducibilityBundle =
     val construction = canonicalSnapshot(snapshot)
     val source = normalizeArtifact(sourceMlir)
@@ -146,7 +148,8 @@ private[nodal] object ReproducibilityContract:
           source,
           normalized,
           target,
-          backendProfile
+          backendProfile,
+          nativeNormalized
         )
       )
     )
@@ -190,7 +193,8 @@ private[nodal] object ReproducibilityContract:
       sourceMlir: String,
       normalizedMlir: String,
       hdl: String,
-      backendProfile: String
+      backendProfile: String,
+      nativeNormalized: Boolean
   ): JsonValue =
     val artifacts = Vector(
       artifact("construction.json", "application/json", construction),
@@ -211,6 +215,15 @@ private[nodal] object ReproducibilityContract:
       "artifacts" -> array(artifacts.map(artifactJson)),
       "shape_layout_storage" -> shapeLayoutStorage(snapshot, backendProfile),
       "materialization" -> materialization(snapshot),
+      "digital_materialization" -> obj(
+        "decision_status" -> string(if snapshot.digitalExpressions.isEmpty then "not-applicable"
+        else if nativeNormalized then "see-normalized-mlir" else "not-run"),
+        "target_requirements" -> string("pending"),
+        "inventory_locator" -> string("nodal.module[*].nodal.digital.materialization"),
+        "inventory_artifact" -> string("normalized.mlir"),
+        "inventory_artifact_sha256" -> string(digest(normalizedMlir)),
+        "requested_quality" -> qualityRequested(snapshot.emitQuality)
+      ),
       "semantic_names" -> semanticNames(snapshot),
       "expression_source_map" -> expressionSourceMap(snapshot),
       "check_inventory" -> checkInventory(sourceMlir, normalizedMlir),
@@ -298,23 +311,95 @@ private[nodal] object ReproducibilityContract:
     case _ => "value"
 
   private def materialization(snapshot: ConstructionSnapshot): JsonValue =
-    val entries = snapshot.origins
-      .filter(_.kind == "expression")
+    val digital = snapshot.digitalExpressions.map(_.path).toSet
+    val legacy = snapshot.origins
+      .filter(origin => origin.kind == "expression" && !digital.contains(origin.semanticPath))
       .sortBy(origin => (origin.semanticPath, origin.id))
       .map: origin =>
         obj(
           "origin_id" -> string(origin.id),
           "semantic_path" -> string(origin.semanticPath),
           "decision" -> string(if origin.inlined then "inline" else "materialize"),
-          "reason" -> string(
-            if origin.inlined then "semantic-origin-safe-inline"
-            else "semantic-origin-retained"
-          ),
+          "reason" -> string(if origin.inlined then "semantic-origin-safe-inline"
+          else "semantic-origin-retained"),
           "operation" -> string(origin.operation),
           "parents" -> array(origin.parents.sorted.map(string)),
           "sink" -> optionalString(origin.sink)
         )
-    array(entries)
+    val authored = snapshot.digitalExpressions.sortBy(_.path).map: expression =>
+      obj(
+        "semantic_path" -> string(expression.path),
+        "operation" -> string(expression.operation),
+        "decision" -> string("not-evaluated-by-source"),
+        "reason" -> string("authored-intent-only"),
+        "intent" -> expression.materializationIntent.map(intentJson).getOrElse(JNull)
+      )
+    array(legacy ++ authored)
+
+  private def intentJson(intent: KernelDigitalIntent): JsonValue = intent match
+    case KernelDigitalIntent.Named(name) =>
+      obj("kind" -> string("named"), "value" -> string(name))
+    case KernelDigitalIntent.Keep(reason) =>
+      obj("kind" -> string("keep"), "value" -> string(reason))
+
+  private def qualityRequested(quality: EmitQuality): JsonValue = obj(
+    "temporaries" -> string(quality.temporaries.toString),
+    "naming" -> string(quality.naming.toString),
+    "checks_requested" -> string(quality.checks.toString),
+    "waivers_requested" -> array(quality.waivers.toVector.map(waiver =>
+      obj(
+        "id" -> string(waiver.id),
+        "reason" -> string(waiver.reason),
+        "check" -> string(waiver.check)
+      )
+    ))
+  )
+
+  private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = obj(
+    "expressions" -> array(snapshot.digitalExpressions.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "operation" -> string(value.operation),
+        "operands" -> array(value.operands.map(string)),
+        "data_type" -> string(value.dataType),
+        "literal" -> optionalString(value.literal),
+        "enum_identity" -> optionalString(value.enumIdentity),
+        "case_ids" -> array(value.caseIds.map(string)),
+        "region" -> optionalString(value.region),
+        "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      )
+    )),
+    "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "target" -> string(value.target),
+        "value" -> string(value.value),
+        "kind" -> string(value.kind)
+      )
+    )),
+    "collections" -> array(snapshot.digitalCollections.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "kind" -> string(value.kind),
+        "inputs" -> array(value.inputs.map(string)),
+        "seed" -> optionalString(value.seed),
+        "captures" -> array(value.captures.map(string)),
+        "arguments" -> array(value.arguments.map(argument =>
+          obj(
+            "path" -> string(argument.path),
+            "data_type" -> string(argument.dataType),
+            "role" -> string(argument.role)
+          )
+        )),
+        "yield" -> string(value.yieldValue),
+        "data_type" -> string(value.dataType)
+      )
+    ))
+  )
 
   private def semanticNames(snapshot: ConstructionSnapshot): JsonValue =
     val declared = snapshot.names
@@ -325,7 +410,8 @@ private[nodal] object ReproducibilityContract:
           "name" -> string(entry.name),
           "category" -> string(entry.category),
           "provenance" -> string(entry.provenance),
-          "source" -> source(entry.source)
+          "source" -> source(entry.source),
+          "aliases" -> array(entry.aliases.sorted.map(string))
         )
     val generated = snapshot.generatedNames
       .sortBy(entry => (entry.owner, entry.category, entry.name, entry.origin))
@@ -342,18 +428,21 @@ private[nodal] object ReproducibilityContract:
     )
 
   private def expressionSourceMap(snapshot: ConstructionSnapshot): JsonValue =
+    val digital = snapshot.digitalExpressions.map(_.path).toSet
     val entries = snapshot.origins
       .filter(_.kind == "expression")
       .sortBy(origin => (origin.semanticPath, origin.id))
       .map: origin =>
-        obj(
+        obj((Vector(
           "origin_id" -> string(origin.id),
           "semantic_path" -> string(origin.semanticPath),
           "source" -> source(origin.source),
           "parents" -> array(origin.parents.sorted.map(string)),
-          "sink" -> optionalString(origin.sink),
-          "inlined" -> bool(origin.inlined)
-        )
+          "sink" -> optionalString(origin.sink)
+        ) ++
+          (if digital.contains(origin.semanticPath) then
+             Vector("emission_status" -> string("pending-target"))
+           else Vector("inlined" -> bool(origin.inlined))))*)
     array(entries)
 
   private def checkInventory(
@@ -554,8 +643,11 @@ private[nodal] object ReproducibilityContract:
 
   private def snapshotJson(snapshot: ConstructionSnapshot): JsonValue =
     val nodeSelections = snapshot.shapeIndices.filter(_.sourceUses.nonEmpty).sortBy(_.path)
+    val digitalPaths = snapshot.digitalExpressions.iterator.map(_.path).toSet
     JObject(Vector(
       "root" -> string(snapshot.root),
+      "emit_quality_requested" -> qualityRequested(snapshot.emitQuality),
+      "digital_graph" -> digitalGraph(snapshot),
       "modules" -> array(
         snapshot.modules.sortBy(_.path).map: module =>
           obj(
@@ -641,7 +733,9 @@ private[nodal] object ReproducibilityContract:
               "source" -> source(origin.source),
               "parents" -> array(origin.parents.sorted.map(string)),
               "sink" -> optionalString(origin.sink),
-              "inlined" -> bool(origin.inlined)
+              (if digitalPaths.contains(origin.semanticPath) then
+                 "origin_inlined_hint"
+               else "inlined") -> bool(origin.inlined)
             )
       ),
       "source_map" -> array(

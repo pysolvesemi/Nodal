@@ -16,7 +16,8 @@ private[nodal] final case class KernelNameSnapshot(
     name: String,
     category: String,
     provenance: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    aliases: Vector[String] = Vector.empty
 )
 
 private[nodal] final case class KernelOriginSnapshot(
@@ -745,10 +746,15 @@ private[nodal] final class SemanticOriginBuilder:
   private def explicitExpressionName(
       capture: OriginExpressionCapture
   ): Option[String] =
-    if capture.operands.lastOption.contains("named") then
-      capture.operands.dropRight(1).lastOption.collect:
-        case name: String => cleanIdentifier(name, "expression")
-    else None
+    val typed = capture.value match
+      case expression: KernelExpr[?] => expression.materializationIntent.collect:
+          case KernelDigitalIntent.Named(name) => name
+      case _ => None
+    typed.orElse:
+      if capture.operands.lastOption.contains("named") then
+        capture.operands.dropRight(1).lastOption.collect:
+          case name: String => cleanIdentifier(name, "expression")
+      else None
 
   private def shapeName(
       capture: OriginExpressionCapture,
@@ -1042,7 +1048,18 @@ private[nodal] final class SemanticOriginBuilder:
         expressionNames(key),
         "expression",
         expressionProvenance(key),
-        capture.site.span
+        capture.site.span,
+        aliases = capture.value match
+          case expression: KernelExpr[?]
+              if expression.materializationIntent.exists(
+                _.isInstanceOf[KernelDigitalIntent.Named]
+              ) =>
+            (expressionBinding(capture.site).orElse(memberBinding(
+              members,
+              capture.value
+            )).toVector ++
+              explicitExpressionName(capture).toVector).distinct.sorted
+          case _ => Vector.empty
       )
 
     val origins = mutable.ArrayBuffer.empty[KernelOriginSnapshot]

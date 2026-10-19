@@ -12,6 +12,7 @@ private[nodal] object DigitalValueConstruction:
     expression.literal.nonEmpty || expression.operation.exists(operation =>
       operation.startsWith(DigitalEnumContract.Prefix) ||
         DigitalScalarContract.Operations.contains(operation) ||
+        operation == DigitalMaterializationContract.Operation ||
         DigitalCombinationalContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
@@ -80,6 +81,7 @@ private[nodal] object DigitalValueConstruction:
       if expression.operation.exists(operation =>
           operation.startsWith(DigitalEnumContract.Prefix) ||
             DigitalScalarContract.Operations.contains(operation) ||
+            operation == DigitalMaterializationContract.Operation ||
             DigitalCombinationalContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
             operation == DigitalCollectionContract.Operation
@@ -113,6 +115,10 @@ private[nodal] object DigitalValueConstruction:
         val metadata = expression.operands.collect { case value: EnumOperationMetadata => value }
         val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix))
         val isProjection = projectionPaths.contains(path)
+        if expression.operation.contains(DigitalMaterializationContract.Operation) !=
+            expression.materializationIntent.nonEmpty
+        then fail("one typed intent is required exactly on a digital alias")
+        expression.materializationIntent.foreach(DigitalMaterializationContract.validate)
         if isEnum && (metadata.size != 1 || expression.operands.lastOption != metadata.headOption)
         then
           fail("enum expression requires one final resolved ABI record")
@@ -151,6 +157,7 @@ private[nodal] object DigitalValueConstruction:
           expression.literal.map(_.value),
           metadata.headOption.map(_.abi.identity),
           metadata.headOption.map(_.caseIds).getOrElse(Vector.empty),
-          regionOf(expression)
+          regionOf(expression),
+          expression.materializationIntent
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

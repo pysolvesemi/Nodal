@@ -41,8 +41,8 @@ extension [A <: Data](value: Expr[A])
   def saturate(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "saturate")
   def resizeChecked(width: Int): Expr[A] =
     DigitalScalarContract.resize(value, width, "resize_checked")
-  def named(name: String): Expr[A] = CandidateRuntime.expr(value, name, "named")
-  def keep(reason: String): Expr[A] = CandidateRuntime.expr(value, reason, "keep")
+  def named(name: String): Expr[A] = DigitalMaterializationContract.named(value, name)
+  def keep(reason: String): Expr[A] = DigitalMaterializationContract.keep(value, reason)
 
 extension (value: Expr[UInt])
   def toSigned: Expr[SInt] = DigitalScalarContract.toSigned(value)

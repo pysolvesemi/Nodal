@@ -27,7 +27,8 @@ private[nodal] final class KernelExpr[A <: Data](
     val operands: Vector[Any],
     val resultType: Option[KernelTypeDescriptor] = None,
     val literal: Option[KernelLiteral] = None,
-    val operation: Option[String] = None
+    val operation: Option[String] = None,
+    val materializationIntent: Option[KernelDigitalIntent] = None
 ) extends Expr[A]
 
 /** Candidate declaration-time type descriptor. */

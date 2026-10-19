@@ -93,3 +93,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalDigitalArithmetic-DG v0.2](NodalDigitalArithmetic-DG-v0.2.md): approved
   additive F55 bounded division/remainder and exact numeric minimum/maximum;
   dynamic numerators with proven nonzero constant divisors and explicit limits.
+- [NodalDigitalMaterialization-DG v0.1](NodalDigitalMaterialization-DG-v0.1.md):
+  approved F55 typed naming/keep intent and verified target-neutral decisions over
+  actual SSA uses; target emission legality remains with its backend owner.

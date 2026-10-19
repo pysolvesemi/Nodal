@@ -139,7 +139,12 @@ private[nodal] object ScalaToMlirBridge:
       sourceProvenance: Boolean
   ):
     private val sourceEquations = new AnalogEquationMlir.Plan(snapshot)
-    private val enumValues = new EnumMlir.Plan(snapshot.enumDefinitions, snapshot.root)
+    private val digitalMaterialization = new DigitalMaterializationMlir.Plan(snapshot)
+    private val enumValues = new EnumMlir.Plan(
+      snapshot.enumDefinitions,
+      snapshot.root,
+      digitalMaterialization.metadata
+    )
     private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues)
     private val interfaceValues = new InterfaceMlir.Plan(snapshot)
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
@@ -443,6 +448,9 @@ private[nodal] object ScalaToMlirBridge:
         ),
         "nodal.backend.naming" -> quoted("semantic")
       ) ++
+        Option.when(snapshot.digitalExpressions.nonEmpty)(
+          "nodal.digital.quality" -> digitalMaterialization.quality
+        ) ++
         Option.when(sourceProvenance)("nodal.backend.source_provenance" -> "true") ++
         (if snapshot.transferOperators.isEmpty then Vector.empty
          else
@@ -2180,7 +2188,11 @@ ${indent(body, 2)}
         vecTypeParts,
         renderDigitalDeclarationValue,
         DigitalStorageMlir.initializer,
-        path => bridgeMetadata(path, Vector.empty),
+        (path, authored) =>
+          bridgeMetadata(
+            path,
+            if authored then digitalMaterialization.metadata(path) else Vector.empty
+          ),
         location,
         renderDigitalProjection,
         interfaceValues.declarationType,
@@ -5673,7 +5685,8 @@ ${indent(body, 2)}
               "path" -> quoted(entry.semanticPath),
               "name" -> quoted(entry.name),
               "category" -> quoted(entry.category),
-              "provenance" -> quoted(entry.provenance)
+              "provenance" -> quoted(entry.provenance),
+              "aliases" -> array(entry.aliases.sorted.map(quoted))
             ) ++ entry.source.toVector.flatMap(source => sourceFields(source))
           )
       )
@@ -5689,7 +5702,9 @@ ${indent(body, 2)}
               "operation" -> quoted(entry.operation),
               "parents" -> array(entry.parents.sorted.map(quoted)),
               "sink" -> optionalString(entry.sink),
-              "inlined" -> boolean(entry.inlined)
+              (if digitalMaterialization.contains(entry.semanticPath) then
+                 "origin_inlined_hint"
+               else "inlined") -> boolean(entry.inlined)
             ) ++ entry.source.toVector.flatMap(source => sourceFields(source))
           )
       )

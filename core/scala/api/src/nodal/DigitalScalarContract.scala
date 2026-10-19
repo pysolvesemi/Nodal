@@ -91,6 +91,12 @@ private[nodal] object DigitalScalarContract:
                   case "false" => Some(BigInt(0))
                   case _ => None
               case None
+                  if expression.operation.contains(DigitalMaterializationContract.Operation) &&
+                    expression.operands.size == 1 =>
+                expression.operands.head match
+                  case operand: Expr[?] => visit(operand, depth + 1)
+                  case _ => None
+              case None
                   if expression.operation.exists(operation =>
                     DigitalCombinationalContract.Operations.contains(operation) ||
                       DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
@@ -151,7 +157,10 @@ private[nodal] object DigitalScalarContract:
             case expression: KernelExpr[?] if expression.operands.size == 1 =>
               expression.operation match
                 case Some("digital_to_signed") => result = Some(true)
-                case Some("digital_extend" | "digital_resize_checked" | "digital_saturate") =>
+                case Some(
+                      "digital_extend" | "digital_resize_checked" | "digital_saturate" |
+                      "digital_alias"
+                    ) =>
                   expression.operands.head match
                     case operand: Expr[?] => current = operand
                     case _ => result = Some(false)

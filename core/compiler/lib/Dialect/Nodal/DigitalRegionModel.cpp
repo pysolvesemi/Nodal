@@ -2,7 +2,10 @@
 
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 using namespace mlir;
 namespace nodal {
@@ -23,7 +26,8 @@ Operation *owner(Operation *op) {
 } // namespace
 bool isDigitalRegionOwner(Operation *op) {
   return named(op, "nodal.collection") || isBoundedDigitalLoop(op) ||
-         named(op, "nodal.structural_if") ||
+         named(op, "nodal.structural_if") || named(op, "nodal.behavioral_if") ||
+         named(op, "nodal.flat_fsm") || named(op, "nodal.enum_switch") ||
          (named(op, "nodal.generate") && op->getNumRegions() == 1 &&
           op->getRegion(0).hasOneBlock() && op->getNumOperands() == 3 &&
           op->getRegion(0).front().getNumArguments() == 1);
@@ -41,6 +45,27 @@ FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body) {
     auto h = inspectDigitalLoopHeader(op);
     if (succeeded(h) && h->body == body)
       return DigitalRegionHeader{op, module, body, DigitalRegionKind::BoundedLoop, 0, true};
+  }
+  if (named(op, "nodal.flat_fsm")) {
+    auto h = inspectFlatFSMHeader(op);
+    if (succeeded(h))
+      for (unsigned i = 0; i < h->bodies.size(); ++i)
+        if (h->bodies[i] == body)
+          return DigitalRegionHeader{op, module, body, DigitalRegionKind::FlatFSMAction, i, true};
+  }
+  if (named(op, "nodal.enum_switch")) {
+    auto h = inspectEnumSwitchHeader(op);
+    if (succeeded(h))
+      for (unsigned i = 0; i < h->bodies.size(); ++i)
+        if (h->bodies[i] == body)
+          return DigitalRegionHeader{op, module, body, DigitalRegionKind::EnumSwitchArm, i, true};
+  }
+  if (named(op, "nodal.behavioral_if")) {
+    auto h = inspectBehavioralIfHeader(op);
+    if (succeeded(h))
+      for (unsigned arm = 0; arm < 2; ++arm)
+        if (h->bodies[arm] == body)
+          return DigitalRegionHeader{op, module, body, DigitalRegionKind::BehavioralArm, arm, true};
   }
   if (named(op, "nodal.structural_if")) {
     auto h = inspectStructuralIfHeader(op);
@@ -114,6 +139,12 @@ FailureOr<Value> digitalRegionCaptureSource(BlockArgument arg,
     return digitalLoopCaptureSource(arg);
   case DigitalRegionKind::StructuralArm:
     return structuralIfCaptureSource(arg);
+  case DigitalRegionKind::BehavioralArm:
+    return behavioralCaptureSource(arg);
+  case DigitalRegionKind::FlatFSMAction:
+    return flatFSMCaptureSource(arg);
+  case DigitalRegionKind::EnumSwitchArm:
+    return enumSwitchCaptureSource(arg);
   case DigitalRegionKind::Generate:
     return Value();
   }
@@ -125,6 +156,8 @@ LogicalResult digitalRegionArgumentDependencies(BlockArgument arg, SmallVectorIm
     return failure();
   if (h->kind == DigitalRegionKind::Collection)
     return collectionArgumentDependencies(arg, deps);
+  if (h->kind == DigitalRegionKind::FlatFSMAction)
+    return flatFSMArgumentDependencies(arg, deps);
   auto source = digitalRegionCaptureSource(arg);
   if (failed(source))
     return failure();
@@ -136,8 +169,17 @@ std::string digitalRegionSemanticPath(Block *body) {
   auto h = inspectDigitalRegion(body);
   if (failed(h))
     return {};
+  if (h->kind == DigitalRegionKind::FlatFSMAction) {
+    auto a =
+        llvm::cast<DictionaryAttr>(h->operation->getAttrOfType<ArrayAttr>("actions")[h->ordinal]);
+    return a.getAs<StringAttr>("region_id").getValue().str();
+  }
+  if (h->kind == DigitalRegionKind::EnumSwitchArm)
+    return llvm::cast<StringAttr>(h->operation->getAttrOfType<ArrayAttr>("arm_ids")[h->ordinal])
+        .getValue()
+        .str();
   std::string result = text(h->operation, "region_id").str();
-  if (h->kind == DigitalRegionKind::StructuralArm)
+  if (h->kind == DigitalRegionKind::StructuralArm || h->kind == DigitalRegionKind::BehavioralArm)
     result += h->ordinal ? ".else" : ".then";
   return result;
 }
@@ -150,6 +192,10 @@ std::string digitalValueSemanticPath(Value value) {
       return text(h->operation, "induction_path").str();
     return digitalRegionSemanticPath(arg.getOwner()) + ".arg" + std::to_string(arg.getArgNumber());
   }
+  if (auto result = llvm::dyn_cast<OpResult>(value);
+      result && llvm::isa<FlatFSMOp>(result.getOwner()) &&
+      succeeded(inspectFlatFSMHeader(result.getOwner())))
+    return (path(result.getOwner()) + (result.getResultNumber() ? ".taken" : ".next")).str();
   return path(value.getDefiningOp()).str();
 }
 namespace detail {
@@ -177,6 +223,12 @@ FailureOr<SmallVector<ParameterIntegerEnvironment, 4>> digitalIntegerContextsAtU
     return collectionOwnIntegerContextsAtUse(use);
   if (h->kind == DigitalRegionKind::StructuralArm)
     return structuralIfIntegerContextsAtUse(use);
+  if (h->kind == DigitalRegionKind::BehavioralArm)
+    return behavioralIntegerContextsAtUse(use);
+  if (h->kind == DigitalRegionKind::FlatFSMAction)
+    return flatFSMIntegerContextsAtUse(use);
+  if (h->kind == DigitalRegionKind::EnumSwitchArm)
+    return enumSwitchIntegerContextsAtUse(use);
   auto context = h->kind == DigitalRegionKind::Generate ? digitalGenerateIntegerContextAtUse(use)
                                                         : digitalLoopIntegerContextAtUse(use);
   if (failed(context))

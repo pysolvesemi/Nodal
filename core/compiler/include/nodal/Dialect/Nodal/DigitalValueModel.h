@@ -5,6 +5,10 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/APInt.h"
+
+#include <optional>
+
 namespace nodal {
 
 class ParameterIntegerEnvironment;
@@ -25,6 +29,13 @@ bool isDigitalCombinationalValueType(mlir::Type type, mlir::Operation *module,
 /// read-only fit query, not constant evaluation or parameter specialization.
 bool digitalIntegerAttributeFits(mlir::IntegerAttr value, mlir::Type type, mlir::Operation *module,
                                  const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Exact bounded mathematical integer fact from the existing closed digital
+/// value proof. A successful empty optional is runtime/unknown; failure denotes
+/// invalid ownership, expression or exhausted proof. Never evaluates defaults.
+mlir::FailureOr<std::optional<llvm::APInt>>
+inferDigitalConstantInteger(mlir::Value value, mlir::Operation *use,
+                            const ParameterIntegerEnvironment *environment = nullptr);
 
 /// Shared exact literal validation for nodal.constant and nodal.const_literal.
 /// Symbolic widths use the owning module's all-legal bounds, never its default.

@@ -7,6 +7,11 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <memory>
+namespace mlir {
+class Pass;
+}
+
 namespace nodal {
 
 enum class GateProfile {
@@ -16,6 +21,9 @@ enum class GateProfile {
 };
 
 llvm::StringRef stringifyGateProfile(GateProfile profile);
+
+/// Lower the verified finite sequential profile transactionally to CIRCT.
+std::unique_ptr<mlir::Pass> createSequentialToCIRCTPass();
 
 /// Register every mandatory verifier pass and the named gate pipelines.
 void registerNodalPasses();

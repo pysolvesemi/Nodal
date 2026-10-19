@@ -167,7 +167,8 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *root = projection->root.getDefiningOp();
   if (!root || root->getParentOp() != module)
     return reject(operation, "digital assignment target root belongs to another module");
-  if (scoped && (control || text(operation, "kind") != "continuous"))
+  if (scoped && !llvm::isa<BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(parent) &&
+      (control || text(operation, "kind") != "continuous"))
     return reject(operation, "bounded loop writes require continuous ordinary digital storage");
   if (control) {
     auto source = resolveStaticShapeProjection(value, operation);
@@ -201,7 +202,7 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   if (llvm::isa<DigitalStorageOp>(root)) {
     if (failed(verifyDigitalStorageOperation(root)))
       return failure();
-    if (text(root, "kind") == "register" && target != projection->root)
+    if (text(root, "kind") == "register" && !projection->projections.empty())
       return reject(operation,
                     "projected register updates are unsupported; use the owned root state update");
     requiredKind = text(root, "kind") == "register" ? "register_next" : "continuous";

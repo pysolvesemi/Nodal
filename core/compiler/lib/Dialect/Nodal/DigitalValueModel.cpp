@@ -876,6 +876,23 @@ bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module
   return (scalarKind(type) == "sint" || !negative) && required <= bounds->lower;
 }
 
+FailureOr<std::optional<llvm::APInt>>
+inferDigitalConstantInteger(Value value, Operation *use,
+                            const ParameterIntegerEnvironment *environment) {
+  if (!value || !use || !isDigitalScalarType(value.getType()) ||
+      failed(verifyDigitalValueScope(value, use)))
+    return failure();
+  if (!environment && isDigitalRegionOwner(use->getParentOp())) {
+    auto contexts = digitalIntegerContextsAtUse(use);
+    if (failed(contexts) || contexts->size() != 1)
+      return failure();
+    return inferDigitalConstantInteger(value, use, &contexts->front());
+  }
+  auto facts = ValueVerifier(owner(use), environment).value(value);
+  return failed(facts) ? FailureOr<std::optional<llvm::APInt>>(failure())
+                       : FailureOr<std::optional<llvm::APInt>>(facts->constant);
+}
+
 LogicalResult verifyDigitalLiteralOperation(Operation *operation,
                                             const ParameterIntegerEnvironment *environment) {
   if (!environment && operation && isDigitalRegionOwner(operation->getParentOp())) {

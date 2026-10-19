@@ -149,6 +149,8 @@ private[nodal] final class SemanticOriginBuilder:
     "DigitalAggregateContract.scala",
     "AnalogUserFunctionRuntime.scala",
     "StructuralIfRuntime.scala",
+    "SequentialRuntime.scala",
+    "FlatFsmRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
@@ -327,11 +329,7 @@ private[nodal] final class SemanticOriginBuilder:
       observedLine: Int
   ): (SourceSpan, Option[String]) =
     val line = math.max(1, observedLine)
-    val cacheKey = fileName -> ownerClass
-    val source = sourceCache.getOrElseUpdate(
-      cacheKey,
-      locateSource(fileName, ownerClass)
-    )
+    val source = locateSource(fileName, ownerClass)
     source match
       case Some(path) =>
         try
@@ -443,7 +441,12 @@ private[nodal] final class SemanticOriginBuilder:
           Files.isDirectory(candidate.resolve("docs"))
       .getOrElse(workingDirectory)
 
+  // Constructor selection and span lookup share one transaction-owned cache, including misses.
+  // Synthesized region captures must not re-walk the source tree at every dependency edge.
   private def locateSource(fileName: String, ownerClass: String): Option[Path] =
+    sourceCache.getOrElseUpdate(fileName -> ownerClass, findSource(fileName, ownerClass))
+
+  private def findSource(fileName: String, ownerClass: String): Option[Path] =
     val root = repositoryRoot
     if !Files.isDirectory(root) then None
     else
@@ -721,6 +724,34 @@ private[nodal] final class SemanticOriginBuilder:
       resolved.update(candidate.key, ResolvedName(selected, candidate.provenance))
     resolved.toMap
 
+  /** Allocate snapshot-only effect identities in the completed semantic namespace. Authored
+    * declarations and expressions keep their names regardless of whether they precede an effect.
+    * Reuse the canonical allocator; this creates no second reservation registry.
+    */
+  def auxiliaryPaths(
+      semantic: SemanticOriginResult,
+      bases: Map[Long, Vector[String]]
+  ): Map[Long, Vector[String]] =
+    if bases.isEmpty then Map.empty
+    else
+      val owners = semantic.modulePaths.map(_.swap)
+      val paths = semantic.modulePaths.valuesIterator ++ semantic.domainPaths.valuesIterator ++
+        semantic.declarationPaths.valuesIterator ++ semantic.expressionPaths.valuesIterator ++
+        semantic.instancePaths.valuesIterator
+      val namespaces = paths.flatMap: path =>
+        val boundary = path.lastIndexOf('.')
+        owners.get(path.take(boundary)).map(owner => owner -> path.drop(boundary + 1))
+      .toVector.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+      bases.map: (module, names) =>
+        val prefix = semantic.modulePaths(module) + "."
+        val allocated = allocate(
+          names.zipWithIndex.map((base, index) =>
+            NameCandidate(index.toString, base, "auxiliary-effect")
+          ),
+          namespaces.getOrElse(module, Set.empty)
+        )
+        module -> names.indices.map(index => prefix + allocated(index.toString).name).toVector
+
   private def objectPath(
       paths: IdentityHashMap[AnyRef, String],
       value: Any
@@ -992,7 +1023,9 @@ private[nodal] final class SemanticOriginBuilder:
           .getOrElse(
             s"${operation}_${sourceSuffix(capture.site)}" -> "source-digest"
           )
-        val key = s"${capture.module}:${capture.index}"
+        // Collision allocation is local to this module. A session-wide module handle
+        // must not change otherwise identical reusable definition-local identities.
+        val key = capture.index.toString
         val base = cleanIdentifier(selected._1, "expression")
         var salt = 0
         var name = base

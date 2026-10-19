@@ -4,7 +4,11 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -60,6 +64,21 @@ public:
   AssignmentQuery(Operation *module, DigitalAssignmentProofLimits limits)
       : module(module), limits(limits) {}
   LogicalResult verify();
+  FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds) {
+    DigitalDependencyGraph result;
+    for (auto [value, use] : seeds) {
+      auto root = valueNode(value, use);
+      if (failed(root))
+        return failure();
+      result.roots.push_back(*root);
+    }
+    if (failed(verify()))
+      return failure();
+    for (Node &node : nodes)
+      result.nodes.push_back({node.value, node.use, std::move(node.dependencies),
+                              interfaceDomains.lookup(node.value)});
+    return result;
+  }
 
 private:
   FailureOr<unsigned> valueNode(Value value, Operation *use, Operation *family = nullptr,
@@ -137,6 +156,7 @@ private:
   llvm::DenseMap<std::pair<Value, std::pair<Operation *, unsigned>>, unsigned> values;
   llvm::DenseMap<Operation *, SmallVector<unsigned, 2>> writers;
   llvm::DenseMap<Value, SmallVector<std::pair<Value, Operation *>, 2>> interfaceDependencies;
+  llvm::DenseMap<Value, FlatSymbolRefAttr> interfaceDomains;
   llvm::DenseMap<std::pair<Value, Value>, bool> relations;
 };
 
@@ -285,7 +305,9 @@ LogicalResult AssignmentQuery::depend(unsigned node, Value value, Operation *use
   // Verify each actual edge's use, even when its value node is already cached.
   // Synthetic roots below are separately certified by the interface owner.
   if (failed(verifyDigitalValueScope(value, use)))
-    return reject(use, "dependency value must retain exact module and lexical ownership");
+    return use->emitOpError("NODAL-DIGITAL-055-010: dependency value must retain exact module and "
+                            "lexical ownership: ")
+           << value;
   auto dependency = valueNode(value, use, nodes[node].family, nodes[node].guard);
   if (failed(dependency))
     return failure();
@@ -606,7 +628,9 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
   }
   Operation *definition = value.getDefiningOp();
   if (!definition || definition->getParentOfType<ModuleOp>() != module)
-    return reject(use, "dependency value must retain exact module and lexical ownership");
+    return use->emitOpError("NODAL-DIGITAL-055-010: dependency value must retain exact module and "
+                            "lexical ownership: ")
+           << value;
   auto interface = interfaceDependencies.find(value);
   if (interface != interfaceDependencies.end()) {
     for (auto [source, at] : interface->second)
@@ -615,7 +639,9 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     return success();
   }
   if (failed(verifyDigitalValueScope(value, use)))
-    return reject(use, "dependency value must retain exact module and lexical ownership");
+    return use->emitOpError("NODAL-DIGITAL-055-010: dependency value must retain exact module and "
+                            "lexical ownership: ")
+           << value;
   const bool projected = projection(definition);
   if (llvm::isa<DigitalStorageOp, PortValueOp>(definition) || projected) {
     auto access = resolveStaticShapeProjection(value, use);
@@ -629,6 +655,23 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
             return failure();
       return read(node, *access, use);
     }
+  }
+  if (llvm::isa<MemoryReadOp>(definition)) {
+    auto port = inspectMemoryPort(definition);
+    if (failed(port))
+      return failure();
+    // Synchronous response is state. Its sampled address is checked separately
+    // by the same sampling owner; async response keeps its address edge here.
+    return port->latency ? success() : depend(node, definition->getOperand(0), definition);
+  }
+  if (llvm::isa<FlatFSMOp>(definition)) {
+    SmallVector<Value, 8> dependencies;
+    if (failed(flatFSMResultDependencies(value, dependencies)))
+      return reject(definition, "flat FSM result lacks checked input dependencies");
+    for (Value input : dependencies)
+      if (failed(depend(node, input, definition)))
+        return failure();
+    return success();
   }
   if (named(definition, "nodal.structural_if")) {
     auto header = inspectStructuralIfHeader(definition);
@@ -662,7 +705,8 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
                     name == "nodal.constant" || name == "nodal.const_literal" ||
                     name == "nodal.const_expr" || name == "nodal.const_parameter_ref" ||
                     name == "nodal.iteration_index" || name == "nodal.static_compare" ||
-                    name == "nodal.static_logic";
+                    name == "nodal.static_logic" || name == "nodal.behavioral_predicate" ||
+                    name == "nodal.sequential_select" || name == "nodal.reset_asserted";
   if (!pure || definition->getNumRegions() || definition->getNumSuccessors() ||
       definition->getNumResults() != 1 || definition->hasAttr("unit"))
     return reject(definition,
@@ -773,6 +817,40 @@ LogicalResult AssignmentQuery::verify() {
         if (scope.depth >= limits.maximumGuardDepth)
           return reject(&operation, "digital assignment scope exceeds its finite depth budget");
         scopes.push_back({&operation.getRegion(0).front(), &operation, scope.depth + 1});
+      } else if (llvm::isa<SequentialUpdateOp>(operation)) {
+        if (failed(verifySequentialUpdate(&operation)) ||
+            failed(assignmentNode(&operation, nullptr, 0)))
+          return failure();
+      } else if (llvm::isa<FlatFSMOp>(operation)) {
+        auto header = inspectFlatFSMHeader(&operation);
+        if (failed(header) || failed(verifyFlatFSMOperation(&operation)) ||
+            scope.depth >= limits.maximumGuardDepth)
+          return failure();
+        for (unsigned i = 0; i < header->guards; ++i)
+          if (failed(valueNode(operation.getOperand(1 + i), &operation)))
+            return failure();
+        for (Block *body : header->bodies)
+          scopes.push_back({body, scope.iteration, scope.depth + 1});
+      } else if (llvm::isa<EnumSwitchOp>(operation)) {
+        auto header = inspectEnumSwitchHeader(&operation);
+        if (failed(header) || failed(verifyEnumSwitchOperation(&operation)) ||
+            scope.depth >= limits.maximumGuardDepth ||
+            failed(valueNode(operation.getOperand(0), &operation)))
+          return failure();
+        for (Block *body : header->bodies)
+          scopes.push_back({body, scope.iteration, scope.depth + 1});
+      } else if (llvm::isa<SequentialAssertOp>(operation)) {
+        if (failed(verifySequentialAssertion(&operation)) ||
+            failed(valueNode(operation.getOperand(0), &operation)))
+          return failure();
+      } else if (llvm::isa<BehavioralIfOp>(operation)) {
+        auto header = inspectBehavioralIfHeader(&operation);
+        if (failed(header) || scope.depth >= limits.maximumGuardDepth)
+          return reject(&operation, "behavioral dependency scope exceeds finite budget");
+        if (failed(valueNode(operation.getOperand(0), &operation)))
+          return failure();
+        for (Block *body : header->bodies)
+          scopes.push_back({body, scope.iteration, scope.depth + 1});
       } else if (named(&operation, "nodal.structural_if")) {
         auto header = inspectStructuralIfHeader(&operation);
         if (failed(header) || failed(verifyStructuralIfOperation(&operation)) ||
@@ -805,6 +883,8 @@ LogicalResult AssignmentQuery::verify() {
     return failure();
   for (auto &entry : interface) {
     interfaceDependencies.try_emplace(entry.value, std::move(entry.sources));
+    if (entry.domain)
+      interfaceDomains.try_emplace(entry.value, entry.domain);
     // Actual typed member/net values are graph roots even without an ordinary
     // digital_assign consumer. Otherwise standalone drive/read feedback would
     // disappear. InterfaceModel already certified each root's ownership and
@@ -849,6 +929,12 @@ LogicalResult AssignmentQuery::verify() {
 }
 } // namespace
 
+FailureOr<DigitalDependencyGraph>
+analyzeDigitalAssignmentDependencies(Operation *module,
+                                     ArrayRef<std::pair<Value, Operation *>> seeds,
+                                     DigitalAssignmentProofLimits limits) {
+  return AssignmentQuery(module, limits).graph(seeds);
+}
 LogicalResult verifyDigitalAssignmentModel(Operation *module, DigitalAssignmentProofLimits limits) {
   return AssignmentQuery(module, limits).verify();
 }

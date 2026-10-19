@@ -17,7 +17,7 @@ private[compiler] final class StructuralIfCapture:
 
   sealed trait Predicate:
     def operands: List[Tree]
-    def lower(using Context): Tree
+    def lower(behavioral: Boolean = false)(using Context): Tree
 
   private final case class Comparison(
       left: Tree,
@@ -26,24 +26,36 @@ private[compiler] final class StructuralIfCapture:
       evidence: List[Tree] = Nil
   ) extends Predicate:
     def operands: List[Tree] = left :: right :: evidence
-    def lower(using Context): Tree =
-      val rhs = runtime("integerOperand").appliedTo(right)
-      runtime("compare").appliedToArgs(List(left, rhs, Literal(Constant(operation))))
+    def lower(behavioral: Boolean = false)(using Context): Tree =
+      val rhs = runtime("integerOperand", behavioral).appliedTo(right)
+      runtime(if behavioral then "staticCompare" else "compare", behavioral)
+        .appliedToArgs(List(left, rhs, Literal(Constant(operation))))
 
   private final case class Binary(left: Predicate, right: Predicate, operation: String)
       extends Predicate:
     def operands: List[Tree] = left.operands ++ right.operands
-    def lower(using Context): Tree =
-      runtime(operation).appliedToArgs(List(left.lower, right.lower))
+    def lower(behavioral: Boolean = false)(using Context): Tree =
+      runtime(
+        operation,
+        behavioral
+      ).appliedToArgs(List(left.lower(behavioral), right.lower(behavioral)))
 
   private final case class Negated(value: Predicate) extends Predicate:
     def operands: List[Tree] = value.operands
-    def lower(using Context): Tree = runtime("not").appliedTo(value.lower)
+    def lower(behavioral: Boolean = false)(using Context): Tree =
+      runtime("not", behavioral).appliedTo(value.lower(behavioral))
+
+  private final case class RuntimeBool(value: Tree) extends Predicate:
+    def operands: List[Tree] = List(value)
+    def lower(behavioral: Boolean = false)(using Context): Tree =
+      assert(behavioral)
+      value
 
   private def exprClass(using Context): ClassSymbol = requiredClass("nodal.Expr")
   private def integerClass(using Context): ClassSymbol = requiredClass("nodal.Integer")
-  private def runtime(name: String)(using Context): Tree =
-    ref(requiredMethod("nodal.StructuralIfRuntime." + name))
+  private def runtime(name: String, behavioral: Boolean = false)(using Context): Tree =
+    val owner = if behavioral then "nodal.SequentialRuntime." else "nodal.StructuralIfRuntime."
+    ref(requiredMethod(owner + name))
   private def methods(owner: Symbol, names: String*)(using Context): Set[Symbol] =
     names.flatMap(name => owner.info.member(termName(name)).alternatives.map(_.symbol)).toSet
   private def compileTimeOnly(symbol: Symbol)(using Context): Boolean =
@@ -63,6 +75,22 @@ private[compiler] final class StructuralIfCapture:
     tpe.widen.dealias.baseType(exprClass) match
       case AppliedType(_, List(kind)) => kind =:= integerClass.typeRef
       case _ => false
+  private def runtimeBool(tpe: Type)(using Context): Boolean =
+    tpe.widen.dealias.baseType(exprClass) match
+      case AppliedType(_, List(kind)) => kind =:= requiredClass("nodal.Bool").typeRef
+      case _ => false
+  private def mixedMarkers(using Context): Set[Symbol] =
+    val owner = requiredModule("nodal.CandidateApi$package").moduleClass
+    methods(owner, "&&", "||").filter(symbol =>
+      symbol.owner == owner && compileTimeOnly(symbol)
+    )
+  private def booleanOperators(using Context): Set[Symbol] =
+    val owner = requiredModule("nodal.CandidateApi$package").moduleClass
+    methods(owner, "&&", "||", "unary_!").filter(symbol =>
+      symbol.owner == owner && symbol.paramSymss.flatten.headOption.exists(parameter =>
+        runtimeBool(parameter.info)
+      )
+    )
   private def legacy(tree: Tree)(using Context): Boolean = tree match
     case Apply(select: Select, List(right)) =>
       methods(defn.AnyClass, "==", "!=")(select.symbol) &&
@@ -80,7 +108,7 @@ private[compiler] final class StructuralIfCapture:
     scan.traverse(tree)
     found
 
-  def predicate(tree: Tree)(using Context): Option[Predicate] =
+  def predicate(tree: Tree, behavioral: Boolean = false)(using Context): Option[Predicate] =
     var work = 0
     def parse(current: Tree, depth: Int): Option[Predicate] =
       work += 1
@@ -109,6 +137,17 @@ private[compiler] final class StructuralIfCapture:
               right,
               if select.name.toString == "==" then "eq" else "ne"
             ))
+          case Apply(Apply(function, List(left)), List(right))
+              if behavioral &&
+                (mixedMarkers(function.symbol) || booleanOperators(function.symbol)) =>
+            for
+              lhs <- parse(left, depth + 1)
+              rhs <- parse(right, depth + 1)
+            yield Binary(lhs, rhs, if function.symbol.name.toString == "&&" then "and" else "or")
+          case Apply(function, List(value))
+              if behavioral && booleanOperators(function.symbol) &&
+                function.symbol.name.toString == "unary_!" =>
+            parse(value, depth + 1).map(Negated.apply)
           case Apply(select: Select, List(right))
               if methods(defn.BooleanClass, "&&", "||")(select.symbol) =>
             for
@@ -117,6 +156,7 @@ private[compiler] final class StructuralIfCapture:
             yield Binary(left, other, if select.name.toString == "&&" then "and" else "or")
           case select: Select if methods(defn.BooleanClass, "unary_!")(select.symbol) =>
             parse(select.qualifier, depth + 1).map(Negated.apply)
+          case value if behavioral && runtimeBool(value.tpe) => Some(RuntimeBool(value))
           case _ => None
     parse(tree, 0)
 
@@ -154,7 +194,7 @@ private[compiler] final class StructuralIfCapture:
       val closure = Lambda(MethodType(Nil)(_ => Nil, _ => result), _ => body)
       ref(requiredMethod("nodal.DigitalCollectionCallback.checked0"))
         .appliedToType(result).appliedTo(closure)
-    val arguments = List(predicate.lower, branch(tree.thenp), branch(tree.elsep))
+    val arguments = List(predicate.lower(), branch(tree.thenp), branch(tree.elsep))
     val call = if result =:= defn.UnitType then runtime("statement")
     else
       result.dealias match

@@ -191,6 +191,97 @@ private[nodal] object ConstructionKernel:
         "structural predicate requires an active Module"
       )).get
 
+  def behavioralComparison(
+      left: Expr[Integer],
+      right: Expr[Integer],
+      operation: String
+  ): Expr[Bool] = active match
+    case Some(session) => session.captureBehavioralComparison(left, right, operation)
+    case None => SequentialRuntime.missing()
+
+  def behavioralBranch(kind: String, condition: Option[Expr[Bool]], body: () => Unit): Unit =
+    try
+      DigitalCollectionCallback.requireSequentialChecked(body)
+      active match
+        case Some(session) => session.captureBehavioralBranch(kind, condition, body)
+        case None => SequentialRuntime.missing()
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "behavioral guard")
+        scala.util.Failure[Nothing](failure).get
+
+  private def flatFsmSession: ConstructionSession =
+    active.getOrElse(FlatFsmRuntime.fail("flat FSM and action switch require an active Module"))
+
+  def flatFsm[S](
+      definition: FsmDefinition[S],
+      initial: S,
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      body: FsmBuilder[S] => Unit,
+      evidence: HwEnum[S]
+  ): Unit = flatFsmSession.captureFlatFsm(
+    definition,
+    initial,
+    encoding,
+    custom,
+    illegalState,
+    body,
+    evidence
+  )
+
+  def flatFsmState[S](builder: FsmBuilder[S], value: S, body: StateBuilder[S] => Unit): Unit =
+    flatFsmSession.captureFlatFsmState(builder, value, body)
+
+  def flatFsmTerminal[S](builder: StateBuilder[S]): Unit =
+    flatFsmSession.captureFlatFsmTerminal(builder)
+
+  private def checkedFsmAction(body: () => Unit): Unit =
+    try DigitalCollectionCallback.requireSequentialChecked(body)
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "flat FSM action")
+        scala.util.Failure[Nothing](failure).get
+
+  def flatFsmAction[S](builder: StateBuilder[S], phase: String, body: () => Unit): Unit =
+    checkedFsmAction(body)
+    flatFsmSession.captureFlatFsmAction(builder, phase, body)
+
+  def flatFsmTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S,
+      body: Option[() => Unit]
+  ): Unit =
+    body.foreach(checkedFsmAction)
+    flatFsmSession.captureFlatFsmTransition(builder, condition, mode, to, body)
+
+  def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
+    flatFsmSession.flatFsmStateView(builder, next)
+
+  def flatFsmEvent[S](builder: FsmBuilder[S], state: S, entering: Boolean): Expr[Bool] =
+    flatFsmSession.flatFsmEvent(builder, state, entering)
+
+  def flatFsmTaken[S](builder: FsmBuilder[S]): Expr[Bool] = flatFsmSession.flatFsmTaken(builder)
+
+  def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
+    flatFsmSession.flatFsmCompleted(builder)
+
+  def enumSwitch[S](
+      selector: Expr[EnumValue[S]],
+      invalid: () => Unit,
+      body: EnumSwitchBuilder[S] => Unit,
+      evidence: HwEnum[S]
+  ): Unit =
+    checkedFsmAction(invalid)
+    flatFsmSession.captureEnumSwitch(selector, invalid, body, evidence)
+
+  def enumSwitchCase[S](builder: EnumSwitchBuilder[S], value: S, body: () => Unit): Unit =
+    checkedFsmAction(body)
+    flatFsmSession.captureEnumSwitchCase(builder, value, body)
+
   def structuralIf(predicate: StaticPredicate, hasResult: Boolean)(
       whenTrue: () => Option[Expr[?]],
       whenFalse: () => Option[Expr[?]]
@@ -440,5 +531,24 @@ private[nodal] object ConstructionKernel:
 
   def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
     active.foreach(_.assignSignalSelection(left, right))
+
+  def memoryRead[A <: Data](memory: Mem[A], address: Expr[UInt]): Expr[A] = active match
+    case Some(session) => session.memoryRead(memory, address)
+    case None => scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-MEMORY-056-001",
+        "memory read requires an active owning Module"
+      ))).get
+
+  def memoryWrite[A <: Data](
+      memory: Mem[A],
+      address: Expr[UInt],
+      value: Expr[A],
+      mask: Expr[Bits]
+  ): Unit = active match
+    case Some(session) => session.memoryWrite(memory, address, value, mask)
+    case None => scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-MEMORY-056-001",
+        "memory write requires an active owning Module"
+      ))).get
 
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

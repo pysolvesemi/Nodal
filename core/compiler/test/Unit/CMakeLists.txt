@@ -653,3 +653,32 @@ target_link_libraries(nodal-structural-if-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.structural-if-model-unit COMMAND nodal-structural-if-model-unit-tests)
 set_tests_properties(nodal.native.structural-if-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-sequential-model-unit-tests SequentialModelTest.cpp)
+llvm_update_compile_flags(nodal-sequential-model-unit-tests)
+target_link_libraries(nodal-sequential-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.sequential-model-unit COMMAND nodal-sequential-model-unit-tests)
+set_tests_properties(nodal.native.sequential-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-flat-fsm-model-unit-tests FlatFSMModelTest.cpp)
+llvm_update_compile_flags(nodal-flat-fsm-model-unit-tests)
+target_link_libraries(nodal-flat-fsm-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.flat-fsm-model-unit COMMAND nodal-flat-fsm-model-unit-tests)
+set_tests_properties(nodal.native.flat-fsm-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-sequential-circt-unit-tests SequentialCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-sequential-circt-unit-tests)
+target_link_libraries(nodal-sequential-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.sequential-circt-unit COMMAND nodal-sequential-circt-unit-tests)
+set_tests_properties(nodal.native.sequential-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-memory-model-unit-tests MemoryModelTest.cpp)
+llvm_update_compile_flags(nodal-memory-model-unit-tests)
+target_link_libraries(nodal-memory-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.memory-model-unit COMMAND nodal-memory-model-unit-tests)
+set_tests_properties(nodal.native.memory-model-unit PROPERTIES TIMEOUT 60)

@@ -18,7 +18,9 @@ private[nodal] object DigitalValueConstruction:
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
         (operation == DigitalCollectionContract.Operation ||
-          operation == StructuralIfRuntime.Operation)
+          operation == StructuralIfRuntime.Operation ||
+          operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+          FlatFsmRuntime.Operations(operation))
     )
 
   def snapshot(
@@ -29,7 +31,8 @@ private[nodal] object DigitalValueConstruction:
       renderType: (DataType[?], Long, Option[String]) => String,
       regionOf: KernelExpr[?] => Option[String],
       operandPath: (KernelExpr[?], Any) => Option[String],
-      argumentPaths: Set[String]
+      argumentPaths: Set[String],
+      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -90,7 +93,9 @@ private[nodal] object DigitalValueConstruction:
             DigitalAggregateContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
             (operation == DigitalCollectionContract.Operation ||
-              operation == StructuralIfRuntime.Operation)
+              operation == StructuralIfRuntime.Operation ||
+              operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+              FlatFsmRuntime.Operations(operation))
         )
       then
         pending.append((expression, 0))
@@ -120,19 +125,33 @@ private[nodal] object DigitalValueConstruction:
     val snapshots = expressions.collect:
       case (expression, path, owner, handle)
           if reachable.containsKey(expression) && !argumentPaths.contains(path) =>
-        val metadata = expression.operands.collect { case value: EnumOperationMetadata => value }
+        val completion = expression.operands.collect { case value: FlatFsmCompletionMetadata =>
+          value
+        }
+        val metadata = expression.operands.collect { case value: EnumOperationMetadata => value } ++
+          completion.map(value =>
+            EnumOperationMetadata(
+              value.record.canonical,
+              value.record.states.filter(_.terminal).map(_.caseId).toVector.sorted
+            )
+          )
         val structure = expression.operands.collect { case value: StructOperationMetadata => value }
         val isStruct = expression.operation.exists(DigitalAggregateContract.Operations.contains)
         if isStruct != structure.nonEmpty || structure.size > 1 ||
           (isStruct && expression.operands.lastOption != structure.headOption)
         then fail("Struct operation requires one final schema evidence record")
-        val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix))
+        val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix)) ||
+          completion.nonEmpty
         val isProjection = projectionPaths.contains(path)
         if expression.operation.contains(DigitalMaterializationContract.Operation) !=
             expression.materializationIntent.nonEmpty
         then fail("one typed intent is required exactly on a digital alias")
         expression.materializationIntent.foreach(DigitalMaterializationContract.validate)
-        if isEnum && (metadata.size != 1 || expression.operands.lastOption != metadata.headOption)
+        if isEnum &&
+          (metadata.size != 1 ||
+            (completion.isEmpty && expression.operands.lastOption != metadata.headOption) ||
+            (completion.nonEmpty &&
+              (completion.size != 1 || expression.operands.lastOption != completion.headOption)))
         then
           fail("enum expression requires one final resolved ABI record")
         if !isEnum && !isProjection && !isDigitalValue(expression)
@@ -143,7 +162,8 @@ private[nodal] object DigitalValueConstruction:
         else
           expression.operands.filterNot(value =>
             value.isInstanceOf[EnumOperationMetadata] ||
-              value.isInstanceOf[StructOperationMetadata]
+              value.isInstanceOf[StructOperationMetadata] ||
+              value.isInstanceOf[FlatFsmCompletionMetadata] || value.isInstanceOf[MemoryPortCapture]
           ).map: operand =>
             operand match
               case candidate: KernelExpr[?] =>
@@ -163,6 +183,7 @@ private[nodal] object DigitalValueConstruction:
           path,
           owner,
           if isProjection then "shape_reference"
+          else if completion.nonEmpty then "enum_is_one_of"
           else
             expression.operation.orElse(expression.literal.map(_.kind)).getOrElse(
               fail("digital operand has no operation")
@@ -181,6 +202,7 @@ private[nodal] object DigitalValueConstruction:
               value.ordinal,
               value.name
             )
-          )
+          ),
+          memory = memoryPort(expression)
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

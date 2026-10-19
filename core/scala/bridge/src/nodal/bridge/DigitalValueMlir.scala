@@ -9,6 +9,9 @@ import scala.collection.mutable
   * in EnumMlir.
   */
 private[nodal] object DigitalValueMlir:
+  enum StaticPurpose:
+    case RuntimeValue, Structural, TypeArithmetic
+
   final case class ScalarType(kind: String, width: String, lower: Long, upper: Long)
   final case class Rendered(lines: Vector[String], values: Map[String, (String, String)])
   final case class Projection(lines: Vector[String], value: (String, String))
@@ -61,11 +64,63 @@ private[nodal] object DigitalValueMlir:
     private val loopsByOwner = snapshot.digitalLoops.groupBy(_.owner)
     private val predicates = snapshot.staticPredicates.map(value => value.path -> value).toMap
     private val predicatesByRegion = snapshot.staticPredicates.groupBy(_.region)
-    private val conditionals = snapshot.structuralIfs.map(value => value.path -> value).toMap
+    private final case class Conditional(
+        path: String,
+        owner: String,
+        parentRegion: Option[String],
+        predicate: String,
+        trueArm: KernelStructuralArmSnapshot,
+        falseArm: KernelStructuralArmSnapshot,
+        dataType: Option[String],
+        sourceOrdinal: Int,
+        behavioralRoot: Option[String]
+    )
+    private val conditionalRecords = snapshot.structuralIfs.map(value =>
+      Conditional(
+        value.path,
+        value.owner,
+        value.parentRegion,
+        value.predicate,
+        value.trueArm,
+        value.falseArm,
+        value.dataType,
+        value.sourceOrdinal,
+        None
+      )
+    ) ++ snapshot.behavioralIfs.map(value =>
+      Conditional(
+        value.path,
+        value.owner,
+        value.parentRegion,
+        value.predicate,
+        value.trueArm,
+        value.falseArm,
+        None,
+        value.sourceOrdinal,
+        Some(value.root)
+      )
+    )
+    private val conditionals = conditionalRecords.map(value => value.path -> value).toMap
     private val conditionalsByRegion =
-      snapshot.structuralIfs.groupBy(value => value.owner -> value.parentRegion)
-    private val arms = snapshot.structuralIfs.flatMap(value =>
+      conditionalRecords.groupBy(value => value.owner -> value.parentRegion)
+    private val arms = conditionalRecords.flatMap(value =>
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
+    ).toMap
+    private val machines = snapshot.flatFsms.map(value => value.path -> value).toMap
+    private val privateMachineStorage = snapshot.flatFsms.map(_.storage).toSet
+    private val enumDefinitions =
+      snapshot.enumDefinitions.map(value => value.identity -> value).toMap
+    private val machineResults = snapshot.flatFsms.flatMap(value =>
+      Vector(value.nextLocal -> value, value.transitionTaken -> value)
+    ).toMap
+    private val actions = snapshot.flatFsms.flatMap(value =>
+      value.actions.map(action => action.path -> (value, action))
+    ).toMap
+    private val switches = snapshot.enumSwitches.map(value => value.path -> value).toMap
+    private val switchesByRegion =
+      snapshot.enumSwitches.groupBy(value => value.owner -> value.parentRegion)
+    private val switchArms = snapshot.enumSwitches.flatMap(value =>
+      (value.arms :+ value.invalidArm).map(arm => arm.path -> (value, arm))
     ).toMap
     private val generated = snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .map(value => value.path -> value).toMap
@@ -84,6 +139,10 @@ private[nodal] object DigitalValueMlir:
       Region(value.path, value.owner, None, value.arguments, value.captures)
     ) ++ arms.valuesIterator.map((value, arm) =>
       Region(arm.path, value.owner, value.parentRegion, arm.arguments, arm.captures)
+    ) ++ actions.valuesIterator.map((machine, action) =>
+      Region(action.path, machine.owner, machine.parentRegion, action.arguments, action.captures)
+    ) ++ switchArms.valuesIterator.map((value, arm) =>
+      Region(arm.path, value.owner, value.parentRegion, arm.arguments, arm.captures)
     ) ++ generated.valuesIterator.map(value =>
       Region(
         value.path,
@@ -93,6 +152,26 @@ private[nodal] object DigitalValueMlir:
         value.digitalBody.get.captures
       )
     )).map(value => value.path -> value).toMap
+    private def hasBehavioralAncestor(region: String): Boolean =
+      var current = Option(region)
+      val seen = mutable.HashSet.empty[String]
+      while current.nonEmpty do
+        val path = current.get
+        requireValid(
+          seen.add(path) && seen.size <= 128,
+          "conditional lexical scope contains a cycle or exceeds depth limit",
+          region
+        )
+        if sequentialRoot(path).nonEmpty then return true
+        current =
+          regions.getOrElse(path, fail("conditional lexical scope is absent", region)).parentRegion
+      false
+
+    private def sequentialRoot(region: String): Option[String] =
+      arms.get(region).flatMap(_._1.behavioralRoot)
+        .orElse(actions.get(region).map(_._1.path))
+        .orElse(switchArms.get(region).map(_._1.root))
+
     private val arguments = regions.valuesIterator.flatMap(region =>
       region.arguments.map(argument => argument.path -> (region, argument))
     ).toMap
@@ -159,6 +238,29 @@ private[nodal] object DigitalValueMlir:
         snapshot.shapeViews.filter(_.generatedScope.nonEmpty).map(_.path)
     private val assignmentsByRegion =
       snapshot.digitalAssignments.groupBy(value => value.owner -> value.region)
+    private val assignmentPaths = snapshot.digitalAssignments.map(_.path).toSet
+    private val memoryPortTargets = mutable.HashMap.empty[
+      (String, String, String),
+      (KernelDeclarationSnapshot, KernelDomainSnapshot)
+    ]
+    def memoryPort(
+        owner: String,
+        memory: String,
+        domain: String,
+        path: String
+    ): (KernelDeclarationSnapshot, KernelDomainSnapshot) =
+      memoryPortTargets.getOrElseUpdate(
+        (owner, memory, domain),
+        DigitalStorageMlir.memoryPort(modules(owner), memory, domain, path)
+      )
+    private val memoryWritesByRegion =
+      snapshot.memoryWrites.groupBy(value => value.owner -> value.region)
+    private val memoryPathsByOwner = (snapshot.digitalExpressions.flatMap(value =>
+      value.memory.map(port => value.owner -> port.memory)
+    ) ++ snapshot.memoryWrites.map(value => value.owner -> value.memory))
+      .groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+    def accessedMemories(owner: String): Set[String] =
+      memoryPathsByOwner.getOrElse(owner, Set.empty)
     private val selectorsByPath =
       (snapshot.shapeIndices.map(value => value.path -> value.indices) ++
         snapshot.shapeViews.map(value =>
@@ -169,7 +271,7 @@ private[nodal] object DigitalValueMlir:
 
     requireValid(
       loops.size == snapshot.digitalLoops.size && loops.size <= 65536 &&
-        regions.size == collections.size + loops.size + arms.size + generated.size &&
+        regions.size == collections.size + loops.size + arms.size + generated.size + actions.size + switchArms.size &&
         iterationIndices.size == snapshot.iterationIndices.size && iterationIndices.size <= 65536,
       "duplicate or excessive digital loop, region or index identities",
       snapshot.root
@@ -309,12 +411,36 @@ private[nodal] object DigitalValueMlir:
 
     requireValid(
       predicates.size == snapshot.staticPredicates.size && predicates.size <= 65536 &&
-        conditionals.size == snapshot.structuralIfs.size && conditionals.size <= 65536 &&
+        conditionals.size == conditionalRecords.size && conditionals.size <= 65536 &&
         arms.size == 2 * conditionals.size,
       "duplicate or excessive structural predicate, conditional or arm identities",
       snapshot.root
     )
-    private def requireStaticPredicateInput(path: String, owner: String): Unit =
+    private def predicateDependencies(roots: Vector[String]): Set[String] =
+      val pending = mutable.ArrayDeque.from(roots)
+      val seen = mutable.HashSet.empty[String]
+      while pending.nonEmpty do
+        val path = pending.removeHead()
+        if seen.add(path) then
+          requireValid(seen.size <= 65536, "predicate consumer graph exceeds its budget", path)
+          predicates.get(path).foreach(value =>
+            pending ++= value.operands.filter(predicates.contains)
+          )
+      seen.toSet
+    private val structuralPredicates =
+      predicateDependencies(snapshot.structuralIfs.map(_.predicate))
+    private val behavioralPredicates = predicateDependencies(snapshot.digitalExpressions
+      .filter(_.operation == "behavioral_predicate").flatMap(_.operands))
+    private def requiresTopology(path: String): Boolean =
+      structuralPredicates.contains(path) || !behavioralPredicates.contains(path)
+
+    private def requireStaticPredicateInput(
+        path: String,
+        owner: String,
+        topology: Boolean,
+        structural: Boolean = false,
+        admittedWidthFormal: String => Boolean = _ => false
+    ): Unit =
       val pending = mutable.ArrayDeque(path)
       val seen = mutable.HashSet.empty[String]
       while pending.nonEmpty do
@@ -324,6 +450,10 @@ private[nodal] object DigitalValueMlir:
           arguments.get(input) match
             case Some((scope, argument))
                 if generated.contains(scope.path) && argument.role == "induction" => ()
+            case Some((_, argument))
+                if admittedWidthFormal(input) &&
+                  (argument.role.startsWith("left_width:") ||
+                    argument.role.startsWith("right_width:")) => ()
             case Some((scope, argument)) =>
               val capture = scope.arguments.indexWhere(
                 _.path == input
@@ -357,13 +487,34 @@ private[nodal] object DigitalValueMlir:
                   val attributes = declaration.attributes.toMap
                   requireValid(
                     declaration.kind == "parameter" && declaration.dataType.contains("Integer") &&
-                      attributes.get("classification").contains("structural") &&
-                      attributes.get(
-                        "structural_effects"
-                      ).exists(_.split(",").contains("topology")),
+                      (!(topology || structural) || attributes.get(
+                        "classification"
+                      ).contains("structural") &&
+                        (!topology || attributes.get(
+                          "structural_effects"
+                        ).exists(_.split(",").contains("topology")))),
                     "static predicate parameter requires actual structural topology classification",
                     path
                   )
+
+    private val admittedStructuralInputs = mutable.HashSet.empty[(String, String, StaticPurpose)]
+    def requireStructuralStaticInput(
+        path: String,
+        owner: String,
+        purpose: StaticPurpose,
+        admittedWidthFormal: String => Boolean
+    ): Unit =
+      val key = (owner, path, purpose)
+      if !admittedStructuralInputs.contains(key) then
+        requireStaticPredicateInput(
+          path,
+          owner,
+          topology = false,
+          structural = true,
+          admittedWidthFormal =
+            if purpose == StaticPurpose.TypeArithmetic then admittedWidthFormal else _ => false
+        )
+        admittedStructuralInputs.add(key)
 
     snapshot.staticPredicates.foreach: predicate =>
       val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(predicate.operation)
@@ -385,7 +536,8 @@ private[nodal] object DigitalValueMlir:
           "static predicate operand has the wrong stage or type",
           predicate.path
         )
-        if comparison then requireStaticPredicateInput(input, predicate.owner)
+        if comparison then
+          requireStaticPredicateInput(input, predicate.owner, requiresTopology(predicate.path))
     snapshot.structuralIfs.foreach: conditional =>
       requireValid(
         modules.contains(
@@ -393,7 +545,8 @@ private[nodal] object DigitalValueMlir:
         ) && conditional.path.startsWith(conditional.owner + ".") &&
           conditional.sourceOrdinal >= 0 &&
           conditional.parentRegion.forall(path =>
-            regions.get(path).exists(_.owner == conditional.owner)
+            regions.get(path).exists(_.owner == conditional.owner) &&
+              (!hasBehavioralAncestor(path) || conditional.dataType.nonEmpty)
           ) &&
           predicates.get(conditional.predicate).exists(value =>
             value.owner == conditional.owner &&
@@ -464,6 +617,73 @@ private[nodal] object DigitalValueMlir:
               parent.get,
               fail("structural parent scope is absent", arm.path)
             ).parentRegion
+    snapshot.behavioralIfs.foreach: conditional =>
+      requireValid(
+        modules.contains(
+          conditional.owner
+        ) && conditional.path.startsWith(conditional.owner + ".") &&
+          conditional.sourceOrdinal >= 0 && !expressions.contains(conditional.path) &&
+          !predicates.contains(conditional.path) && !declarations.contains(conditional.path) &&
+          !staticExpressions.contains(conditional.path) && !arguments.contains(conditional.path) &&
+          conditional.parentRegion.forall(path =>
+            regions.get(path).exists(_.owner == conditional.owner)
+          ) &&
+          (if conditional.parentRegion.isEmpty then conditional.root == conditional.path
+           else conditional.parentRegion.flatMap(sequentialRoot).contains(conditional.root)),
+        "behavioral if requires one owned outer update root and a behavioral lexical parent",
+        conditional.path
+      )
+      requireVisible(
+        conditional.predicate,
+        conditional.owner,
+        conditional.parentRegion,
+        conditional.path
+      )
+      requireValid(
+        expressionType(conditional.predicate) == "Bool",
+        "behavioral if requires an actual canonical Bool predicate",
+        conditional.path
+      )
+      Vector(conditional.trueArm -> "then", conditional.falseArm -> "else").foreach:
+        (arm, suffix) =>
+          requireValid(
+            arm.path == s"${conditional.path}.$suffix" && arm.arguments.size == arm.captures.size &&
+              arm.captures.distinct.size == arm.captures.size && arm.arguments.size <= 4098 &&
+              arm.yieldValue.isEmpty,
+            "behavioral arm requires canonical identity, unique captures and no yield",
+            arm.path
+          )
+          arm.captures.foreach(requireVisible(
+            _,
+            conditional.owner,
+            conditional.parentRegion,
+            arm.path
+          ))
+          arm.arguments.zipWithIndex.foreach: (argument, index) =>
+            val expected = expressionType(arm.captures(index))
+            requireValid(
+              argument.path == s"${arm.path}.arg$index" &&
+                argument.role == sequentialCaptureRole(arm.captures(index)) &&
+                (Set("Integer", "Real")(expected) || finiteType(expected)) &&
+                !expressions.contains(argument.path) && !staticExpressions.contains(
+                  argument.path
+                ) &&
+                !declarations.contains(argument.path) && !predicates.contains(argument.path),
+              "behavioral arm argument requires its actual finite capture and canonical identity",
+              argument.path
+            )
+          var ancestor = conditional.parentRegion
+          val visited = mutable.HashSet(arm.path)
+          while ancestor.nonEmpty do
+            requireValid(
+              visited.add(ancestor.get) && visited.size <= 128,
+              "behavioral lexical scope contains a cycle or exceeds depth limit",
+              arm.path
+            )
+            ancestor = regions.getOrElse(
+              ancestor.get,
+              fail("behavioral parent scope is absent", arm.path)
+            ).parentRegion
     expressions.valuesIterator.filter(_.operation == "structural_if").foreach(value =>
       requireValid(
         conditionals.contains(value.path),
@@ -472,6 +692,11 @@ private[nodal] object DigitalValueMlir:
       )
     )
     generated.valuesIterator.foreach: value =>
+      requireValid(
+        !value.parent.exists(hasBehavioralAncestor),
+        "behavioral body cannot create generated structure",
+        value.path
+      )
       val body = value.digitalBody.get
       requireValid(
         body.arguments.size == body.captures.size + 1 && body.arguments.size <= 4098 &&
@@ -517,7 +742,8 @@ private[nodal] object DigitalValueMlir:
               requireValid(
                 (loops.contains(scope.path) || arms.contains(scope.path) || generated.contains(
                   scope.path
-                )) &&
+                ) ||
+                  actions.contains(scope.path) || switchArms.contains(scope.path)) &&
                   capture >= 0 && capture < scope.captures.size,
                 "digital assignment requires an actual regional capture of writable storage",
                 path
@@ -525,10 +751,330 @@ private[nodal] object DigitalValueMlir:
               assignmentRoot(scope.captures(capture), owner, scope.parentRegion, depth + 1)
             case None => path
 
+    private def wholeRegisterTarget(path: String, depth: Int = 0): Boolean =
+      requireValid(depth <= 128, "register capture chain exceeds depth limit", path)
+      !shapeByPath.contains(path) && (arguments.get(path) match
+        case Some((scope, argument)) =>
+          val index = scope.arguments.indexWhere(_.path == argument.path) -
+            (scope.arguments.size - scope.captures.size)
+          scope.captures.lift(index).exists(wholeRegisterTarget(_, depth + 1))
+        case None => declarations.get(path).exists(_._2.kind == "register"))
+
     def boundaryRoot(path: String, owner: String): KernelDeclarationSnapshot =
       val root = assignmentRoot(path, owner)
       declarations.get(root).filter(_._1 == owner).map(_._2).getOrElse(
         fail("capability wiring requires an actual owned boundary declaration", path)
+      )
+
+    private def sequentialCaptureRole(path: String): String =
+      val isStatic = expressionType(path) == "Integer" &&
+        (staticExpressions.contains(path) || declarations.get(path).exists(value =>
+          value._2.kind == "parameter"
+        ) || arguments.get(path).exists(_._2.role == "static_capture"))
+      if isStatic then "static_capture" else "capture"
+
+    private def validateSequentialArm(
+        owner: String,
+        parent: Option[String],
+        path: String,
+        captures: Vector[String],
+        regionArguments: Vector[KernelDigitalRegionArgument],
+        prefix: Vector[(String, String)]
+    ): Unit =
+      requireValid(
+        path.startsWith(owner + ".") && captures.distinct.size == captures.size &&
+          regionArguments.size == captures.size + prefix.size && regionArguments.size <= 4098,
+        "sequential region requires unique captures and its exact bounded context prefix",
+        path
+      )
+      captures.foreach(requireVisible(_, owner, parent, path))
+      regionArguments.zipWithIndex.foreach: (argument, index) =>
+        val (expected, role) = prefix.lift(index).getOrElse {
+          val dataType = expressionType(captures(index - prefix.size))
+          dataType -> sequentialCaptureRole(captures(index - prefix.size))
+        }
+        requireValid(
+          argument.path == s"$path.arg$index" && argument.role == role &&
+            prefix.lift(index).forall(_._1 == argument.dataType) &&
+            (Set("Integer", "Real")(expected) || finiteType(expected)) &&
+            !expressions.contains(argument.path) && !declarations.contains(argument.path) &&
+            !staticExpressions.contains(argument.path) && !predicates.contains(argument.path),
+          "sequential argument requires its canonical identity, role and exact actual capture type",
+          argument.path
+        )
+
+    requireValid(
+      machines.size == snapshot.flatFsms.size && machines.size <= 4096 &&
+        switches.size == snapshot.enumSwitches.size && switches.size <= 65536 &&
+        machineResults.size == 2 * machines.size &&
+        snapshot.flatFsms.map(_.storage).distinct.size == machines.size &&
+        actions.size == snapshot.flatFsms.map(_.actions.size).sum &&
+        switchArms.size == snapshot.enumSwitches.map(value => value.arms.size + 1).sum,
+      "duplicate or excessive FSM, result, action or switch identities",
+      snapshot.root
+    )
+    private var sequentialDependencyWork = 0
+    snapshot.flatFsms.foreach: machine =>
+      val path = machine.path
+      val canonical = enumDefinitions.get(machine.enumIdentity).getOrElse(
+        fail("flat FSM canonical enum is absent", path)
+      )
+      val cases = canonical.cases.map(_.id)
+      val caseSet = cases.toSet
+      val domain =
+        modules.get(machine.owner).toVector.flatMap(_.domains).find(_.path == machine.domain)
+      requireValid(
+        modules.contains(machine.owner) && path.startsWith(machine.owner + ".") &&
+          machine.parentRegion.isEmpty && machine.sourceOrdinal >= 0 && machine.localWidth > 0 &&
+          machine.localWidth <= 4096 && machine.states.nonEmpty && machine.states.size <= 4096 &&
+          machine.transitions.size.toLong + machine.actions.size <= 65536 &&
+          machine.actions.map(_.captures.size.toLong).sum <= 8192 &&
+          Set("error", "recover_to_initial")(machine.illegalState) &&
+          domain.exists(value =>
+            Set("bound", "external")(value.kind) &&
+              value.resetPolicy.exists(Set("none", "sync", "async")) &&
+              value.attributes.exists(_._1 == "clock_source")
+          ) &&
+          !expressions.contains(path) && !declarations.contains(path) && !regions.contains(path) &&
+          !conditionals.contains(path) && !switches.contains(path),
+        "flat FSM requires one bounded owned direct physical-domain machine",
+        path
+      )
+      requireVisible(machine.storage, machine.owner, None, path)
+      requireValid(
+        declarations.get(machine.storage).exists((owner, value) =>
+          owner == machine.owner && value.kind == "register" && value.generatedScope.isEmpty &&
+            value.dataType.contains(s"Bits(${machine.localWidth})") &&
+            (value.domain.contains(machine.domain) || value.attributes.contains(
+              "declared_domain" -> machine.domain
+            ))
+        ),
+        "flat FSM storage must be an actual whole local Bits register in its exact domain",
+        path
+      )
+      requireValid(
+        machine.nextLocal == path + ".next" && machine.transitionTaken == path + ".taken",
+        "flat FSM results must retain canonical next and taken identities",
+        path
+      )
+      Vector(
+        (machine.nextLocal, "flat_fsm_next", s"Bits(${machine.localWidth})"),
+        (machine.transitionTaken, "flat_fsm_taken", "Bool")
+      ).foreach: (result, operation, dataType) =>
+        requireValid(
+          expressions.get(result).exists(value =>
+            value.owner == machine.owner &&
+              value.region.isEmpty && value.operation == operation && value.dataType == dataType &&
+              value.operands == Vector(
+                machine.storage
+              ) && value.literal.isEmpty && value.enumIdentity.isEmpty &&
+              value.caseIds.isEmpty && value.structure.isEmpty && value.materializationIntent.isEmpty
+          ),
+          "flat FSM projection requires its actual storage, type and canonical operation",
+          result
+        )
+      requireValid(
+        machine.localCodes.map(_.caseId) == cases && caseSet(machine.initialCase) &&
+          machine.states.map(_.caseId).distinct.size == cases.size && machine.states.map(
+            _.caseId
+          ).toSet == cases.toSet,
+        "flat FSM must retain complete canonical enum case and state inventories",
+        path
+      )
+      val codes = machine.localCodes.map: entry =>
+        requireValid(
+          entry.code.length <= 1234 && entry.code.matches("0|[1-9][0-9]*"),
+          "flat FSM local code must be bounded canonical unsigned decimal",
+          path
+        )
+        val code = BigInt(entry.code)
+        requireValid(
+          code.bitLength <= machine.localWidth,
+          "flat FSM local code exceeds local width",
+          path
+        )
+        code
+      requireValid(
+        codes.distinct.size == codes.size && codes.map(_.bitLength.toLong.max(1)).sum <= 16777216,
+        "flat FSM local codes must be unique and within metadata budget",
+        path
+      )
+      val codeByCase = cases.zip(codes).toMap
+      val transitionOrdinals = machine.transitions.map(_.sourceOrdinal).toSet
+      val initial = DigitalStorageMlir.initializer(declarations(machine.storage)._2)
+      requireValid(
+        if domain.get.resetPolicy.contains("none") then initial.isEmpty
+        else
+          initial.flatMap(expressions.get).exists(value =>
+            value.owner == machine.owner &&
+              value.region.isEmpty && value.dataType == s"Bits(${machine.localWidth})" && value.operation == "integer" &&
+              value.operands.isEmpty && value.literal.contains(
+                codeByCase(machine.initialCase).toString
+              )
+          )
+        ,
+        "flat FSM storage reset initializer must match its exact local initial code",
+        path
+      )
+      val compact = math.max(1, BigInt(cases.size - 1).bitLength)
+      val policy = machine.requestedEncoding match
+        case "compact" | "auto" => machine.localWidth == compact &&
+          codes == cases.indices.map(BigInt(_)).toVector && machine.resolvedEncoding ==
+            (if machine.requestedEncoding == "auto" then "auto-compact-v1" else "compact")
+        case "one_hot" => machine.localWidth == cases.size &&
+          codes == cases.indices.map(index =>
+            BigInt(1) << index
+          ).toVector && machine.resolvedEncoding == "one_hot"
+        case "gray" => machine.localWidth == compact &&
+          codes == cases.indices.map(index =>
+            BigInt(index ^ (index >> 1))
+          ).toVector && machine.resolvedEncoding == "gray"
+        case "custom" => machine.resolvedEncoding == "custom"
+        case _ => false
+      requireValid(policy, "flat FSM encoding policy disagrees with actual local width/codes", path)
+      val ordinals = machine.states.map(_.sourceOrdinal) ++ machine.transitions.map(
+        _.sourceOrdinal
+      ) ++ machine.actions.map(_.sourceOrdinal)
+      requireValid(
+        ordinals.sorted == ordinals.indices.toVector &&
+          machine.states.map(_.sourceOrdinal) == machine.states.map(_.sourceOrdinal).sorted &&
+          machine.transitions.map(_.sourceOrdinal) == machine.transitions.map(
+            _.sourceOrdinal
+          ).sorted &&
+          machine.actions.map(_.sourceOrdinal) == machine.actions.map(_.sourceOrdinal).sorted,
+        "flat FSM state, transition and action source order must be exact and unique",
+        path
+      )
+      val outgoing = machine.transitions.groupBy(_.sourceCase)
+      machine.states.foreach: state =>
+        val edges = outgoing.getOrElse(state.caseId, Vector.empty)
+        requireValid(
+          state.terminal == edges.isEmpty && edges.map(_.mode).distinct.size <= 1,
+          "flat FSM terminal/dead-end or transition-mode inventory is inconsistent",
+          path
+        )
+      machine.transitions.foreach: edge =>
+        requireVisible(edge.guard, machine.owner, None, path)
+        requireValid(
+          caseSet(edge.sourceCase) && caseSet(edge.destinationCase) &&
+            Set("exclusive", "priority")(edge.mode) && expressionType(edge.guard) == "Bool",
+          "flat FSM transition requires exact states and an actual Bool guard",
+          path
+        )
+        if machine.requestedEncoding == "gray" && edge.sourceCase != edge.destinationCase then
+          requireValid(
+            (codeByCase(edge.sourceCase) ^ codeByCase(edge.destinationCase)).bitCount == 1,
+            "flat FSM Gray transition must change exactly one local bit",
+            path
+          )
+      val reached = mutable.HashSet(machine.initialCase)
+      val pending = mutable.ArrayDeque(machine.initialCase)
+      while pending.nonEmpty do
+        outgoing.getOrElse(pending.removeHead(), Vector.empty).foreach: edge =>
+          if reached.add(edge.destinationCase) then pending.append(edge.destinationCase)
+      requireValid(
+        reached.toSet == cases.toSet,
+        "flat FSM contains structurally unreachable states",
+        path
+      )
+      machine.actions.foreach: action =>
+        val statePhase = Set("active", "entry", "exit")(action.phase)
+        requireValid(
+          action.path == s"$path.action${action.sourceOrdinal}" &&
+            (statePhase && action.ownerCase.exists(
+              cases.contains
+            ) && action.transitionOrdinal.isEmpty ||
+              action.phase == "transition" && action.ownerCase.isEmpty && action.transitionOrdinal.exists(
+                ordinal =>
+                  transitionOrdinals(ordinal)
+              )),
+          "flat FSM action phase and owner must match exact source inventory",
+          action.path
+        )
+        validateSequentialArm(
+          machine.owner,
+          None,
+          action.path,
+          action.captures,
+          action.arguments,
+          Vector(
+            s"Bits(${machine.localWidth})" -> "current_local",
+            s"Bits(${machine.localWidth})" -> "next_local",
+            "Bool" -> "transition_taken"
+          )
+        )
+      // A result depends on storage/guards, never action captures. Detect actual graph feedback
+      // before rendering and do not specialize static predicates to their declared defaults.
+      val seen = mutable.HashSet.empty[String]
+      val frontier = mutable.ArrayDeque.from(
+        machine.transitions.map(_.guard) ++ machine.actions.flatMap(_.captures)
+      )
+      while frontier.nonEmpty do
+        val input = frontier.removeHead()
+        if seen.add(input) then
+          sequentialDependencyWork += 1
+          requireValid(
+            sequentialDependencyWork <= 65536 && input != machine.nextLocal && input != machine.transitionTaken,
+            "flat FSM guard/action capture has a forward dependency on its own next/taken result",
+            path
+          )
+          expressions.get(input).foreach(value => frontier ++= value.operands)
+          predicates.get(input).foreach(value => frontier ++= value.operands)
+          staticExpressions.get(input).foreach(value => frontier ++= value.operands)
+    expressions.valuesIterator.filter(value =>
+      Set("flat_fsm_next", "flat_fsm_taken")(value.operation)
+    ).foreach: value =>
+      requireValid(
+        machineResults.contains(value.path),
+        "flat FSM projection has no actual machine owner",
+        value.path
+      )
+    snapshot.enumSwitches.foreach: value =>
+      val canonical = enumDefinitions.get(value.enumIdentity).getOrElse(
+        fail("enum switch canonical enum is absent", value.path)
+      )
+      requireValid(
+        modules.contains(value.owner) && value.path.startsWith(value.owner + ".") &&
+          value.sourceOrdinal >= 0 && value.caseIds.distinct.size == canonical.cases.size &&
+          value.caseIds.toSet == canonical.cases.map(
+            _.id
+          ).toSet && value.arms.size == value.caseIds.size &&
+          value.parentRegion.forall(path => regions.get(path).exists(_.owner == value.owner)) &&
+          (if value.parentRegion.isEmpty then value.root == value.path
+           else value.parentRegion.flatMap(sequentialRoot).contains(value.root)) &&
+          !expressions.contains(value.path) && !declarations.contains(
+            value.path
+          ) && !regions.contains(value.path) &&
+          !conditionals.contains(value.path),
+        "enum switch requires exhaustive unique cases, exact lexical ownership and one sequential root",
+        value.path
+      )
+      requireVisible(value.selector, value.owner, value.parentRegion, value.path)
+      requireValid(
+        expressionType(
+          value.selector
+        ) == s"Enum(${canonical.identity},${canonical.width},${canonical.hash})",
+        "enum switch selector must retain exact canonical enum ABI",
+        value.path
+      )
+      (value.arms :+ value.invalidArm).zipWithIndex.foreach: (arm, index) =>
+        requireValid(
+          arm.path == s"${value.path}.arm$index" && arm.yieldValue.isEmpty,
+          "enum switch arm requires source-correlated identity without yield",
+          arm.path
+        )
+        validateSequentialArm(
+          value.owner,
+          value.parentRegion,
+          arm.path,
+          arm.captures,
+          arm.arguments,
+          Vector.empty
+        )
+      requireValid(
+        (value.arms :+ value.invalidArm).map(_.captures.size.toLong).sum <= 8192,
+        "enum switch captures exceed aggregate budget",
+        value.path
       )
 
     requireValid(
@@ -542,7 +1088,9 @@ private[nodal] object DigitalValueMlir:
           assignment.sourceOrdinal >= 0 && assignment.region.forall(region =>
             regions.get(region).exists(value =>
               value.owner == assignment.owner &&
-                (loops.contains(region) || arms.contains(region) || generated.contains(region))
+                (loops.contains(region) || arms.contains(region) || generated.contains(
+                  region
+                ) || actions.contains(region) || switchArms.contains(region))
             )
           ),
         "digital assignment has no exact digital effect scope or source order",
@@ -557,15 +1105,45 @@ private[nodal] object DigitalValueMlir:
         fail("digital assignment target requires an owned declaration", assignment.path)
       )
       val valid = assignment.kind match
-        case "continuous" => Set("wire", "output").contains(target.kind)
-        case "register_next" => assignment.region.isEmpty && target.kind == "register" &&
-          assignment.target == target.path
+        case "continuous" => Set("wire", "output").contains(target.kind) &&
+          !assignment.region.exists(hasBehavioralAncestor)
+        case "register_next" => target.kind == "register" &&
+          (assignment.region.isEmpty && assignment.target == target.path ||
+            assignment.region.flatMap(sequentialRoot).nonEmpty &&
+            wholeRegisterTarget(assignment.target))
         case _ => false
       requireValid(
-        valid && target.generatedScope.isEmpty,
+        valid && target.generatedScope.isEmpty && !privateMachineStorage(target.path),
         "digital assignment kind differs from its exact sink kind or uses an unsupported projected register update",
         assignment.path
       )
+    requireValid(
+      snapshot.memoryWrites.size <= 65536 &&
+        snapshot.memoryWrites.map(_.path).distinct.size == snapshot.memoryWrites.size,
+      "duplicate or excessive memory write identities",
+      snapshot.root
+    )
+    snapshot.memoryWrites.foreach: write =>
+      requireValid(
+        modules.contains(write.owner) && write.path.startsWith(write.owner + ".") &&
+          !expressions.contains(write.path) && !declarations.contains(write.path) &&
+          !staticExpressions.contains(write.path) && !arguments.contains(write.path) &&
+          !assignmentPaths.contains(write.path) &&
+          !conditionals.contains(write.path) && !machines.contains(write.path) &&
+          !switches.contains(write.path) && !regions.contains(write.path) &&
+          !predicates.contains(write.path) && !iterationIndices.contains(write.path) &&
+          write.path == write.path.trim && write.sourceOrdinal >= 0 &&
+          write.region.forall(region =>
+            regions.get(region).exists(_.owner == write.owner) && sequentialRoot(region).nonEmpty
+          ),
+        "memory write requires an exact module or sequential effect scope and source order",
+        write.path
+      )
+      val _ = memoryPort(write.owner, write.memory, write.domain, write.path)
+      Vector(write.address, write.value, write.mask).foreach(input =>
+        requireVisible(input, write.owner, write.region, write.path)
+      )
+
     assignmentsByRegion.foreach:
       case ((owner, region), assignments) =>
         if region.isEmpty && (loopsByOwner.contains(owner) || assignments.exists(
@@ -649,6 +1227,21 @@ private[nodal] object DigitalValueMlir:
         "digital expression has invalid module ownership, identity or operand count",
         expression.path
       )
+      requireValid(
+        (expression.operation == "memory_read") == expression.memory.nonEmpty,
+        "only memory reads carry one exact memory port identity",
+        expression.path
+      )
+      expression.memory.foreach: port =>
+        requireValid(
+          expression.region.isEmpty && expression.operands.size == 1 &&
+            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+            expression.caseIds.isEmpty && expression.structure.isEmpty &&
+            expression.materializationIntent.isEmpty,
+          "memory read requires one module-level address without unrelated expression facts",
+          expression.path
+        )
+        val _ = memoryPort(expression.owner, port.memory, port.domain, expression.path)
       expression.region.foreach: region =>
         requireValid(
           regions.get(region).exists(_.owner == expression.owner),
@@ -1309,7 +1902,11 @@ private[nodal] object DigitalValueMlir:
             Vector[(String, String)]
         ) => Projection,
         additionalRoots: Vector[String],
-        staticValue: (String, Option[String], mutable.ArrayBuffer[String]) => (String, String),
+        domainReference: String => String,
+        staticValue: (String, Option[String], mutable.ArrayBuffer[String], StaticPurpose) => (
+            String,
+            String
+        ),
         prepareType: (String, String, Option[String], mutable.ArrayBuffer[String]) => Unit,
         bindStaticArgument: (String, (String, String)) => Unit,
         withCollectionContexts: (KernelDigitalCollectionSnapshot, () => Unit) => Unit,
@@ -1322,7 +1919,7 @@ private[nodal] object DigitalValueMlir:
         collectionResultMatches: (KernelDigitalCollectionSnapshot, String) => Boolean,
         withLoopContext: (KernelDigitalLoopSnapshot, () => Unit) => Unit,
         withArmContext: (
-            KernelStructuralIfSnapshot,
+            Option[String],
             KernelStructuralArmSnapshot,
             () => Unit
         ) => Unit,
@@ -1334,7 +1931,14 @@ private[nodal] object DigitalValueMlir:
             (String, String),
             (String, String)
         ) => String,
-        effectMetadata: (String, Int) => String
+        effectMetadata: (String, Int) => String,
+        renderMemoryRead: (
+            KernelDigitalExpressionSnapshot,
+            String,
+            String,
+            (String, String)
+        ) => String,
+        renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
     ): Rendered =
       val lines = mutable.ArrayBuffer.empty[String]
       val values = mutable.HashMap.empty[String, (String, String)]
@@ -1355,6 +1959,31 @@ private[nodal] object DigitalValueMlir:
           proofs.remove(identity)
           emittedEffects.remove(identity)
 
+      def emitMemoryWrite(
+          write: KernelMemoryWriteSnapshot,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        val paths = Vector(write.address, write.value, write.mask)
+        val operands = paths.map(emit(_, depth + 1, write.region, output))
+        val declaration = memoryPort(module.path, write.memory, write.domain, write.path)._1
+        requireValid(
+          scalarType(expressionType(write.address), write.path).exists(_.kind == "UInt") &&
+            scalarType(expressionType(write.mask), write.path).exists(value =>
+              Set("Bits", "UInt").contains(value.kind)
+            ) && exactValueType(
+              expressionType(write.value),
+              declaration.dataType.get,
+              write.path
+            ) &&
+            paths.zip(operands).forall((path, operand) =>
+              operand._2 == nativeType(expressionType(path), path)
+            ),
+          "memory write requires UInt address, Bits mask and exact element value types",
+          write.path
+        )
+        output += renderMemoryWrite(write, operands)
+
       def emitScope(region: String, depth: Int, output: mutable.ArrayBuffer[String]): Unit =
         val scoped = Some(region)
         val effects = assignmentsByRegion.getOrElse(module.path -> scoped, Vector.empty)
@@ -1368,14 +1997,18 @@ private[nodal] object DigitalValueMlir:
                 output += renderAssignment(value, target, source)
               }
             )
-          ) ++ conditionalsByRegion.getOrElse(module.path -> scoped, Vector.empty)
+          ) ++ memoryWritesByRegion.getOrElse(module.path -> scoped, Vector.empty).map(value =>
+          (value.sourceOrdinal, value.path, () => emitMemoryWrite(value, depth + 1, output))
+        ) ++ conditionalsByRegion.getOrElse(module.path -> scoped, Vector.empty)
           .map(value =>
             (
               value.sourceOrdinal,
               value.path,
               () => { emitConditional(value, depth + 1, output); () }
             )
-          ) ++
+          ) ++ switchesByRegion.getOrElse(module.path -> scoped, Vector.empty).map(value =>
+          (value.sourceOrdinal, value.path, () => emitSwitch(value, depth + 1, output))
+        ) ++
           generatedByRegion.getOrElse(module.path -> scoped, Vector.empty).map(value =>
             (
               value.digitalBody.get.sourceOrdinal,
@@ -1390,7 +2023,15 @@ private[nodal] object DigitalValueMlir:
         )
         effects.sortBy(value => (value._1, value._2)).foreach(value => value._3())
         staticByRegion.getOrElse(scoped, Vector.empty).sortBy(_.path).foreach(value =>
-          emit(value.path, depth + 1, scoped, output)
+          if !values.contains(value.path) then
+            emit(
+              value.path,
+              depth + 1,
+              scoped,
+              output,
+              topology = sequentialRoot(region).isEmpty,
+              typeArithmetic = true
+            )
         )
         predicatesByRegion.getOrElse(scoped, Vector.empty).sortBy(_.path).foreach(value =>
           emit(value.path, depth + 1, scoped, output)
@@ -1402,8 +2043,203 @@ private[nodal] object DigitalValueMlir:
           emit(value.path, depth + 1, scoped, output)
         )
 
+      // Every sequential body enters the existing typed value and regional effect scheduler.
+      // Context-prefix arguments retain their source identities; captures are never reordered or
+      // repaired with textual substitution.
+      def renderSequentialRegion(
+          parent: Option[String],
+          path: String,
+          captures: Vector[String],
+          regionArguments: Vector[KernelDigitalRegionArgument],
+          prefix: Vector[(String, String)],
+          depth: Int
+      ): String =
+        val local = mutable.ArrayBuffer.empty[String]
+        var blockArguments = Vector.empty[String]
+        val lexical =
+          KernelStructuralArmSnapshot(path, captures, regionArguments.drop(prefix.size), None)
+        withArmContext(
+          parent,
+          lexical,
+          () => {
+            clearRegion(path)
+            blockArguments = regionArguments.zipWithIndex.map: (argument, index) =>
+              val captured = captures.lift(index - prefix.size)
+              captured.foreach: input =>
+                requireValid(
+                  regionalTypeMatches(argument.dataType, expressionType(input), argument.path),
+                  "sequential capture must preserve its exact complete type",
+                  argument.path
+                )
+              val name = s"%sequential_region_${ordinal}_arg$index"
+              val dataType = computedType(argument.dataType, argument.path)
+              requireValid(
+                prefix.lift(index).forall(_._2 == dataType),
+                "sequential context prefix has a forged native type",
+                argument.path
+              )
+              values.update(argument.path, name -> dataType)
+              heights.update(argument.path, captured.map(heights(_) + 1).getOrElse(0))
+              proofs.update(argument.path, captured.map(proofs).getOrElse(Unknown))
+              if argument.role == "static_capture" then
+                bindStaticArgument(argument.path, name -> dataType)
+              s"$name: $dataType"
+            ordinal += 1
+            emitScope(path, depth + 1, local)
+          }
+        )
+        val block =
+          (if blockArguments.isEmpty then "^bb0:\n"
+           else s"^bb0(${blockArguments.mkString(", ")}):\n") + local.mkString("\n")
+        "{\n" + block.linesIterator.map("  " + _).mkString("\n") + "\n}"
+
+      def emitSwitch(
+          value: KernelEnumSwitchSnapshot,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        if !emittedEffects.contains(value.path) then
+          requireValid(
+            depth <= 128 && active.add(value.path),
+            "enum switch dependency graph contains a cycle or exceeds depth limit",
+            value.path
+          )
+          val selector = emit(value.selector, depth + 1, value.parentRegion, output)
+          val arms = value.arms :+ value.invalidArm
+          val operands = Vector(selector) ++ arms.flatMap(_.captures).map(
+            emit(_, depth + 1, value.parentRegion, output, topology = false)
+          )
+          val rendered = arms.map(arm =>
+            renderSequentialRegion(
+              value.parentRegion,
+              arm.path,
+              arm.captures,
+              arm.arguments,
+              Vector.empty,
+              depth + 1
+            )
+          )
+          val attributes =
+            s"{contract_version = \"enum-switch-v1\", region_id = ${quoted(value.path)}, " +
+              s"enum_ref = ${enums.reference(value.enumIdentity, value.path)}, " +
+              s"case_ids = ${value.caseIds.map(quoted).mkString("[", ", ", "]")}, " +
+              s"capture_counts = array<i32: ${arms.map(_.captures.size).mkString(", ")}>, " +
+              s"arm_ids = ${arms.map(arm => quoted(arm.path)).mkString("[", ", ", "]")}, " +
+              s"metadata = ${effectMetadata(value.path, value.sourceOrdinal)}}"
+          output += s"${quoted("nodal.enum_switch")}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
+            rendered.mkString(
+              "(",
+              ", ",
+              ")"
+            ) + s" : (${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(value.path)}"
+          emittedEffects += value.path
+          active.remove(value.path)
+
+      def emitMachine(
+          machine: KernelFlatFsmSnapshot,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        if !emittedEffects.contains(machine.path) then
+          requireValid(
+            depth <= 128 && active.add(machine.path),
+            "flat FSM actual dependency graph contains a cycle or exceeds depth limit",
+            machine.path
+          )
+          // Physical reset is an actual next/taken dependency even though it is owned by
+          // the local domain binding rather than the flat_fsm operand segment.
+          module.domains.find(_.path == machine.domain).toVector.flatMap(_.attributes)
+            .collect { case (key, path) if Set("clock_source", "reset_source")(key) => path }
+            .foreach(path => { emit(path, depth + 1, None, output); () })
+          val inputs = Vector(machine.storage) ++ machine.transitions.map(_.guard)
+          val operands = (inputs ++ machine.actions.flatMap(_.captures)).map(
+            emit(_, depth + 1, None, output, topology = false)
+          )
+          val result = s"%flat_fsm_$ordinal"
+          ordinal += 1
+          val bits = s"!nodal.bits<${machine.localWidth}>"
+          val rendered = machine.actions.map(action =>
+            renderSequentialRegion(
+              None,
+              action.path,
+              action.captures,
+              action.arguments,
+              Vector(
+                "current_local" -> bits,
+                "next_local" -> bits,
+                "transition_taken" -> "!nodal.bits<1>"
+              ),
+              depth + 1
+            )
+          )
+          def dictionary(fields: Vector[(String, String)]): String =
+            fields.map((key, value) => s"$key = $value").mkString("{", ", ", "}")
+          val states = machine.states.map(state =>
+            dictionary(Vector(
+              "case_id" -> quoted(state.caseId),
+              "terminal" -> state.terminal.toString,
+              "ordinal" -> s"${state.sourceOrdinal} : i64"
+            ))
+          )
+          val transitions = machine.transitions.map(edge =>
+            dictionary(Vector(
+              "source_case" -> quoted(edge.sourceCase),
+              "destination_case" -> quoted(edge.destinationCase),
+              "mode" -> quoted(edge.mode),
+              "ordinal" -> s"${edge.sourceOrdinal} : i64"
+            ))
+          )
+          val actions = machine.actions.map(action =>
+            dictionary(Vector(
+              "region_id" -> quoted(action.path),
+              "phase" -> quoted(action.phase),
+              "ordinal" -> s"${action.sourceOrdinal} : i64"
+            ) ++
+              action.ownerCase.map(value => "owner_case" -> quoted(value)) ++
+              action.transitionOrdinal.map(value => "transition_ordinal" -> s"$value : i64"))
+          )
+          val counts = if machine.actions.isEmpty then "array<i32>"
+          else s"array<i32: ${machine.actions.map(_.captures.size).mkString(", ")}>"
+          val attributes = dictionary(Vector(
+            "contract_version" -> quoted("flat-fsm-v1"),
+            "machine_id" -> quoted(machine.path),
+            "enum_ref" -> enums.reference(machine.enumIdentity, machine.path),
+            "domain" -> domainReference(machine.domain),
+            "initial_case" -> quoted(machine.initialCase),
+            "requested_encoding" -> quoted(machine.requestedEncoding),
+            "resolved_encoding" -> quoted(machine.resolvedEncoding),
+            "local_width" -> s"${machine.localWidth} : i64",
+            "illegal_policy" -> quoted(machine.illegalState),
+            "case_ids" -> machine.localCodes.map(value => quoted(value.caseId)).mkString(
+              "[",
+              ", ",
+              "]"
+            ),
+            "local_codes" -> machine.localCodes.map(value =>
+              s"${value.code} : ui${machine.localWidth}"
+            ).mkString("[", ", ", "]"),
+            "states" -> states.mkString("[", ", ", "]"),
+            "transitions" -> transitions.mkString("[", ", ", "]"),
+            "actions" -> actions.mkString("[", ", ", "]"),
+            "action_capture_counts" -> counts,
+            "metadata" -> effectMetadata(machine.path, machine.sourceOrdinal)
+          ))
+          output += s"$result:2 = ${quoted("nodal.flat_fsm")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
+            (if rendered.isEmpty then "" else rendered.mkString(" (", ", ", ")")) +
+            s" : (${operands.map(_._2).mkString(", ")}) -> ($bits, !nodal.bits<1>)${sourceLocation(machine.path)}"
+          val height = inputs.map(heights).maxOption.getOrElse(0) + 1
+          Vector(
+            (machine.nextLocal, result + "#0", bits),
+            (machine.transitionTaken, result + "#1", "!nodal.bits<1>")
+          ).foreach: (path, name, dataType) =>
+            values.update(path, name -> dataType)
+            heights.update(path, height)
+            proofs.update(path, Unknown)
+          emittedEffects += machine.path
+          active.remove(machine.path)
+
       def emitConditional(
-          conditional: KernelStructuralIfSnapshot,
+          conditional: Conditional,
           depth: Int,
           output: mutable.ArrayBuffer[String]
       ): Option[(String, String)] =
@@ -1417,8 +2253,9 @@ private[nodal] object DigitalValueMlir:
           )
           val predicate = emit(conditional.predicate, depth + 1, conditional.parentRegion, output)
           requireValid(
-            predicate._2 == "!nodal.static_predicate",
-            "structural if requires a static predicate",
+            predicate._2 == (if conditional.behavioralRoot.nonEmpty then "!nodal.bits<1>"
+                             else "!nodal.static_predicate"),
+            "conditional predicate has the wrong static or behavioral type",
             path
           )
           val result = conditional.dataType.map: sourceType =>
@@ -1427,14 +2264,21 @@ private[nodal] object DigitalValueMlir:
             ordinal += 1
             name -> computedType(sourceType, path)
           val allCaptures = Vector(conditional.trueArm, conditional.falseArm).map(arm =>
-            arm.captures.map(emit(_, depth + 1, conditional.parentRegion, output))
+            arm.captures.map(emit(
+              _,
+              depth + 1,
+              conditional.parentRegion,
+              output,
+              topology = conditional.behavioralRoot.isEmpty,
+              typeArithmetic = true
+            ))
           )
           val rendered = Vector(conditional.trueArm, conditional.falseArm).zip(allCaptures).map:
             (arm, captures) =>
               val local = mutable.ArrayBuffer.empty[String]
               var blockArguments = Vector.empty[String]
               withArmContext(
-                conditional,
+                conditional.parentRegion,
                 arm,
                 () => {
                   clearRegion(arm.path)
@@ -1453,7 +2297,7 @@ private[nodal] object DigitalValueMlir:
                     values.update(argument.path, name -> dataType)
                     heights.update(argument.path, heights(arm.captures(index)) + 1)
                     proofs.update(argument.path, proofs(arm.captures(index)))
-                    if argument.dataType == "Integer" && argument.role != "index_capture" then
+                    if argument.role == "static_capture" then
                       bindStaticArgument(argument.path, name -> dataType)
                     s"$name: $dataType"
                   ordinal += 1
@@ -1466,8 +2310,9 @@ private[nodal] object DigitalValueMlir:
                       "structural yield must match the enclosing exact finite read-only ABI",
                       path
                     )
-                  local += s"${quoted("nodal.structural_yield")}(${yielded.map(_._1).mkString}) " +
-                    s"<{metadata = ${metadata(arm.path + ".yield", false)}}> : (${yielded.map(_._2).mkString}) -> ()${sourceLocation(path)}"
+                  if conditional.behavioralRoot.isEmpty then
+                    local += s"${quoted("nodal.structural_yield")}(${yielded.map(_._1).mkString}) " +
+                      s"<{metadata = ${metadata(arm.path + ".yield", false)}}> : (${yielded.map(_._2).mkString}) -> ()${sourceLocation(path)}"
                 }
               )
               // Capture identity is retained through actual first SSA/type use, not declaration order.
@@ -1547,11 +2392,19 @@ private[nodal] object DigitalValueMlir:
                 )
               (order.map(captures), block.linesIterator.map("  " + _).mkString("\n"))
           val operands = Vector(predicate) ++ rendered.flatMap(_._1)
+          val contract =
+            if conditional.behavioralRoot.nonEmpty then "behavioral-if-v1" else "structural-if-v1"
           val attributes =
-            s"{contract_version = \"structural-if-v1\", region_id = ${quoted(path)}, " +
-              s"operandSegmentSizes = array<i32: 1, ${rendered(0)._1.size}, ${rendered(1)._1.size}>, metadata = ${metadata(path, result.nonEmpty)}}"
+            s"{contract_version = ${quoted(contract)}, region_id = ${quoted(path)}, " +
+              s"operandSegmentSizes = array<i32: 1, ${rendered(0)._1.size}, ${rendered(1)._1.size}>, metadata = ${
+                  if conditional.behavioralRoot.nonEmpty
+                  then effectMetadata(path, conditional.sourceOrdinal)
+                  else metadata(path, result.nonEmpty)
+                }}"
           val assignment = result.map(value => value._1 + " = ").getOrElse("")
-          output += s"$assignment${quoted("nodal.structural_if")}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
+          val name = if conditional.behavioralRoot.nonEmpty then "nodal.behavioral_if"
+          else "nodal.structural_if"
+          output += s"$assignment${quoted(name)}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
             rendered.map(value => "{\n" + value._2 + "\n}").mkString("(", ", ", ")") +
             s" : (${operands.map(_._2).mkString(", ")}) -> ${result.map(_._2).getOrElse("()")}${sourceLocation(path)}"
           result.foreach(value => values.update(path, value))
@@ -1579,14 +2432,16 @@ private[nodal] object DigitalValueMlir:
         )
         val body = region.digitalBody.get
         val header = Vector(region.lower, region.upperExclusive, region.step).map: path =>
-          if path.toLongOption.nonEmpty then staticValue(path, region.parent, output)
+          if path.toLongOption.nonEmpty then
+            staticValue(path, region.parent, output, StaticPurpose.Structural)
           else emit(path, depth + 1, region.parent, output)
         requireValid(
           header.forall(_._2 == "i64"),
           "Generate bounds require three actual i64 operands",
           region.path
         )
-        val captures = body.captures.map(emit(_, depth + 1, region.parent, output))
+        val captures =
+          body.captures.map(emit(_, depth + 1, region.parent, output, typeArithmetic = true))
         val induction = s"%generated_index_$ordinal"
         ordinal += 1
         val local = mutable.ArrayBuffer.empty[String]
@@ -1644,7 +2499,9 @@ private[nodal] object DigitalValueMlir:
           path: String,
           depth: Int,
           region: Option[String],
-          output: mutable.ArrayBuffer[String]
+          output: mutable.ArrayBuffer[String],
+          topology: Boolean = true,
+          typeArithmetic: Boolean = false
       ): (String, String) =
         requireValid(depth <= 128, "digital expression graph exceeds depth limit", path)
         requireVisible(path, module.path, region, path)
@@ -1655,7 +2512,13 @@ private[nodal] object DigitalValueMlir:
               val predicate = predicates(path)
               val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(predicate.operation)
               if comparison then predicate.operands.foreach(validatePredicateInput)
-              val operands = predicate.operands.map(emit(_, depth + 1, region, output))
+              val operands = predicate.operands.map(emit(
+                _,
+                depth + 1,
+                region,
+                output,
+                requiresTopology(path)
+              ))
               requireValid(
                 operands.forall(_._2 == (if comparison then "i64" else "!nodal.static_predicate")),
                 "static predicate requires exact typed operands",
@@ -1677,6 +2540,9 @@ private[nodal] object DigitalValueMlir:
               result -> "!nodal.static_predicate"
             }
           )
+        else if machineResults.contains(path) then
+          emitMachine(machineResults(path), depth + 1, output)
+          values.getOrElse(path, fail("flat FSM result has no actual producer", path))
         else if conditionals.contains(path) then
           emitConditional(conditionals(path), depth, output).getOrElse(
             fail("statement structural if cannot be used as a value", path)
@@ -1709,7 +2575,11 @@ private[nodal] object DigitalValueMlir:
             value._2.kind == "parameter" && value._2.dataType.contains("Integer")
           )
         then
-          val value = staticValue(path, region, output)
+          val purpose =
+            if !topology then StaticPurpose.RuntimeValue
+            else if typeArithmetic then StaticPurpose.TypeArithmetic
+            else StaticPurpose.Structural
+          val value = staticValue(path, region, output, purpose)
           values.update(path, value)
           heights.update(path, 0)
           proofs.update(path, Unknown)
@@ -1730,7 +2600,9 @@ private[nodal] object DigitalValueMlir:
               ordinal += 1
               val sourceType = expressionType(path)
               requireValid(
-                region.isEmpty || (sourceType != "Integer" && sourceType != "Real"),
+                region.isEmpty || region.exists(
+                  hasBehavioralAncestor
+                ) || (sourceType != "Integer" && sourceType != "Real"),
                 "collection expressions require finite digital values",
                 path
               )
@@ -1748,18 +2620,66 @@ private[nodal] object DigitalValueMlir:
               val unsigned = scalarType(sourceType, path).exists(_.kind != "SInt")
               val (text, height, proof) = expressions.get(path) match
                 case Some(expression) =>
-                  val operands = expression.operands.map(emit(_, depth + 1, region, output))
+                  val typeCaptures =
+                    collections.get(path).map(_.captures.toSet).getOrElse(Set.empty)
+                  val operands = expression.operands.map(input =>
+                    emit(
+                      input,
+                      depth + 1,
+                      region,
+                      output,
+                      typeArithmetic = typeCaptures.contains(input)
+                    )
+                  )
                   val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
                   val specialized =
                     DigitalInterfaceContract.ValueOperations.contains(expression.operation)
-                  if !specialized then
+                  if !specialized && expression.operation != "behavioral_predicate" then
                     expression.operands.zip(operands).foreach: (input, actual) =>
                       requireValid(
                         actual._2 == nativeType(expressionType(input), input),
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == DigitalCollectionContract.Operation then
+                  if expression.operation == "memory_read" then
+                    val port = expression.memory.get
+                    val declaration = memoryPort(module.path, port.memory, port.domain, path)._1
+                    requireValid(
+                      scalarType(
+                        expressionType(expression.operands.head),
+                        path
+                      ).exists(_.kind == "UInt") &&
+                        exactValueType(expression.dataType, declaration.dataType.get, path),
+                      "memory read requires UInt address and exact declared element result type",
+                      path
+                    )
+                    (
+                      Vector(renderMemoryRead(expression, result, dataType, operands.head)),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == "behavioral_predicate" then
+                    requireValid(
+                      expression.dataType == "Bool" && operands.map(_._2) == Vector(
+                        "!nodal.static_predicate"
+                      ) &&
+                        expression.literal.isEmpty && expression.enumIdentity.isEmpty && expression.caseIds.isEmpty,
+                      "behavioral predicate requires one actual checked static predicate and a Bool result",
+                      path
+                    )
+                    (
+                      Vector(operation(
+                        "nodal.behavioral_predicate",
+                        result,
+                        dataType,
+                        operands,
+                        s"{metadata = ${metadata(path, false)}}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == DigitalCollectionContract.Operation then
                     val collection = collections(path)
                     val vectors =
                       collection.inputs.map(input => vectorType(expressionType(input), path))
@@ -1837,7 +2757,7 @@ private[nodal] object DigitalValueMlir:
                         // Retained unused static operations are part of the closed pure body too.
                         staticByRegion.getOrElse(Some(path), Vector.empty).sortBy(_.path).foreach(
                           value =>
-                            staticValue(value.path, Some(path), local)
+                            staticValue(value.path, Some(path), local, StaticPurpose.TypeArithmetic)
                         )
                         bodyExpressions.filterNot(value =>
                           DigitalCombinationalContract.ReachableBooleanOperations.contains(
@@ -2145,100 +3065,113 @@ private[nodal] object DigitalValueMlir:
       val moduleChoices = conditionalsByRegion.getOrElse(module.path -> None, Vector.empty)
       // A value choice may contain writes. Materialize its dependencies on demand at the
       // authored effect position; retain the predecessor pure-root schedule otherwise.
-      if moduleChoices.isEmpty then emitModuleRoots()
-      val effects: Vector[(
-          Int,
-          String,
-          Either[
-            Either[KernelDigitalAssignmentSnapshot, KernelDigitalLoopSnapshot],
-            Either[KernelStructuralIfSnapshot, KernelGeneratedRegionSnapshot]
-          ]
-      )] = assignmentsByRegion.getOrElse(module.path -> None, Vector.empty)
-        .map(value => (value.sourceOrdinal, value.path, Left(Left(value)))) ++
+      if moduleChoices.isEmpty && !snapshot.flatFsms.exists(_.owner == module.path) &&
+        !switchesByRegion.contains(module.path -> None)
+      then emitModuleRoots()
+      def emitModuleAssignment(assignment: KernelDigitalAssignmentSnapshot): Unit =
+        val target = emit(assignment.target, 0, None, lines)
+        val value = emit(assignment.value, 0, None, lines)
+        lines += renderAssignment(assignment, target, value)
+      def emitLoop(loop: KernelDigitalLoopSnapshot): Unit =
+        val header = Vector(loop.lower, loop.upperExclusive, loop.step).map: path =>
+          if path.toLongOption.nonEmpty then
+            staticValue(path, None, lines, StaticPurpose.Structural)
+          else emit(path, 0, None, lines)
+        requireValid(
+          header.forall(_._2 == "i64"),
+          "loop header requires static i64 operands",
+          loop.path
+        )
+        val captures = loop.captures.map(emit(_, 0, None, lines, typeArithmetic = true))
+        val local = mutable.ArrayBuffer.empty[String]
+        val blockArguments = loop.arguments.zipWithIndex.map: (argument, index) =>
+          val name = s"%loop_${ordinal}_arg$index"
+          val dataType = if index == 0 then "i64" else captures(index - 1)._2
+          values.update(argument.path, name -> dataType)
+          heights.update(
+            argument.path,
+            if index == 0 then 0 else heights(loop.captures(index - 1)) + 1
+          )
+          proofs.update(
+            argument.path,
+            if index == 0 then Unknown else proofs(loop.captures(index - 1))
+          )
+          if argument.dataType == "Integer" then
+            bindStaticArgument(argument.path, name -> dataType)
+          s"$name: $dataType"
+        ordinal += 1
+        withLoopContext(
+          loop,
+          () => {
+            // All regional effects use the same scoped SSA schedule, including both
+            // alternatives of parameter-controlled structural choices in a procedural loop.
+            emitScope(loop.path, 0, local)
+          }
+        )
+        local += s"${quoted("nodal.hardware_loop_end")}() : () -> ()"
+        // Transport follows the actual first SSA use, while source capture identities remain
+        // associated with their original operand. Do not introduce a fake use for dead captures.
+        val argumentNames = blockArguments.map(_.takeWhile(_ != ':'))
+        val argumentOrdinals = argumentNames.zipWithIndex.toMap
+        val capturePattern = "%loop_[0-9]+_arg[0-9]+(?![A-Za-z0-9_])".r
+        val operandPattern = "\"nodal\\.[a-z0-9_]+\"\\(([^)]*)\\)".r
+        val used = local.iterator.flatMap(line => operandPattern.findAllMatchIn(line))
+          .flatMap(value => capturePattern.findAllIn(value.group(1)))
+          .flatMap(argumentOrdinals.get).filter(_ != 0).toVector.distinct
+        requireValid(
+          used.size == captures.size,
+          "loop capture has no actual body SSA use",
+          loop.path
+        )
+        val captureOrder = used.map(_ - 1)
+        val orderedArguments = blockArguments.head +: used.map(blockArguments)
+        val operands = header ++ captureOrder.map(captures)
+        val maximum = loop.maximum.map(value => s", maximum = $value : i64").getOrElse("")
+        val attributes =
+          s"{contract_version = \"bounded-digital-v1\", effect_policy = \"ordered\", " +
+            s"region_id = ${quoted(loop.path)}, induction_path = ${quoted(loop.arguments.head.path)}, " +
+            s"induction = \"i\"$maximum, " +
+            s"metadata = ${effectMetadata(loop.path, loop.sourceOrdinal)}}"
+        val block = s"^bb0(${orderedArguments.mkString(", ")}):\n" + local.mkString("\n")
+        val nested = block.linesIterator.map("  " + _).mkString("\n")
+        lines += s"${quoted("nodal.hardware_loop")}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
+          s"({\n$nested\n}) : (${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(loop.path)}"
+      val effects = assignmentsByRegion.getOrElse(module.path -> None, Vector.empty)
+        .map(value => (value.sourceOrdinal, value.path, () => emitModuleAssignment(value))) ++
+        memoryWritesByRegion.getOrElse(module.path -> None, Vector.empty)
+          .map(value =>
+            (value.sourceOrdinal, value.path, () => emitMemoryWrite(value, 0, lines))
+          ) ++
         loopsByOwner.getOrElse(module.path, Vector.empty)
-          .map(value => (value.sourceOrdinal, value.path, Left(Right(value)))) ++
-        moduleChoices
-          .map(value => (value.sourceOrdinal, value.path, Right(Left(value)))) ++
+          .map(value => (value.sourceOrdinal, value.path, () => emitLoop(value))) ++
+        moduleChoices.map(value =>
+          (
+            value.sourceOrdinal,
+            value.path,
+            () => { emitConditional(value, 0, lines); () }
+          )
+        ) ++
         generatedByRegion.getOrElse(module.path -> None, Vector.empty)
-          .map(value => (value.digitalBody.get.sourceOrdinal, value.path, Right(Right(value))))
+          .map(value =>
+            (value.digitalBody.get.sourceOrdinal, value.path, () => emitGenerated(value, 0, lines))
+          ) ++
+        snapshot.flatFsms.filter(_.owner == module.path)
+          .map(value => (value.sourceOrdinal, value.path, () => emitMachine(value, 0, lines))) ++
+        switchesByRegion.getOrElse(module.path -> None, Vector.empty)
+          .map(value => (value.sourceOrdinal, value.path, () => emitSwitch(value, 0, lines)))
       requireValid(
         effects.forall(_._1 == 0) && !loopsByOwner.contains(module.path) &&
+          !memoryWritesByRegion.contains(module.path -> None) &&
           conditionalsByRegion.getOrElse(module.path -> None, Vector.empty).isEmpty &&
           generatedByRegion.getOrElse(module.path -> None, Vector.empty).isEmpty ||
           effects.map(_._1).distinct.size == effects.size,
         "module digital effects require distinct source ordinals",
         module.path
       )
-      effects.sortBy(value => (value._1, value._2)).foreach:
-        case (_, _, Right(Left(conditional))) => emitConditional(conditional, 0, lines)
-        case (_, _, Right(Right(region))) => emitGenerated(region, 0, lines)
-        case (_, _, Left(Left(assignment))) =>
-          val target = emit(assignment.target, 0, None, lines)
-          val value = emit(assignment.value, 0, None, lines)
-          lines += renderAssignment(assignment, target, value)
-        case (_, _, Left(Right(loop))) =>
-          val header = Vector(loop.lower, loop.upperExclusive, loop.step).map: path =>
-            if path.toLongOption.nonEmpty then staticValue(path, None, lines)
-            else emit(path, 0, None, lines)
-          requireValid(
-            header.forall(_._2 == "i64"),
-            "loop header requires static i64 operands",
-            loop.path
-          )
-          val captures = loop.captures.map(emit(_, 0, None, lines))
-          val local = mutable.ArrayBuffer.empty[String]
-          val blockArguments = loop.arguments.zipWithIndex.map: (argument, index) =>
-            val name = s"%loop_${ordinal}_arg$index"
-            val dataType = if index == 0 then "i64" else captures(index - 1)._2
-            values.update(argument.path, name -> dataType)
-            heights.update(
-              argument.path,
-              if index == 0 then 0 else heights(loop.captures(index - 1)) + 1
-            )
-            proofs.update(
-              argument.path,
-              if index == 0 then Unknown else proofs(loop.captures(index - 1))
-            )
-            if argument.dataType == "Integer" then
-              bindStaticArgument(argument.path, name -> dataType)
-            s"$name: $dataType"
-          ordinal += 1
-          withLoopContext(
-            loop,
-            () => {
-              // All regional effects use the same scoped SSA schedule, including both
-              // alternatives of parameter-controlled structural choices in a procedural loop.
-              emitScope(loop.path, 0, local)
-            }
-          )
-          local += s"${quoted("nodal.hardware_loop_end")}() : () -> ()"
-          // Transport follows the actual first SSA use, while source capture identities remain
-          // associated with their original operand. Do not introduce a fake use for dead captures.
-          val argumentNames = blockArguments.map(_.takeWhile(_ != ':'))
-          val argumentOrdinals = argumentNames.zipWithIndex.toMap
-          val capturePattern = "%loop_[0-9]+_arg[0-9]+(?![A-Za-z0-9_])".r
-          val operandPattern = "\"nodal\\.[a-z0-9_]+\"\\(([^)]*)\\)".r
-          val used = local.iterator.flatMap(line => operandPattern.findAllMatchIn(line))
-            .flatMap(value => capturePattern.findAllIn(value.group(1)))
-            .flatMap(argumentOrdinals.get).filter(_ != 0).toVector.distinct
-          requireValid(
-            used.size == captures.size,
-            "loop capture has no actual body SSA use",
-            loop.path
-          )
-          val captureOrder = used.map(_ - 1)
-          val orderedArguments = blockArguments.head +: used.map(blockArguments)
-          val operands = header ++ captureOrder.map(captures)
-          val maximum = loop.maximum.map(value => s", maximum = $value : i64").getOrElse("")
-          val attributes = s"{contract_version = \"bounded-digital-v1\", effect_policy = \"ordered\", " +
-            s"region_id = ${quoted(loop.path)}, induction_path = ${quoted(loop.arguments.head.path)}, " +
-            s"induction = \"i\"$maximum, " +
-            s"metadata = ${effectMetadata(loop.path, loop.sourceOrdinal)}}"
-          val block = s"^bb0(${orderedArguments.mkString(", ")}):\n" + local.mkString("\n")
-          val nested = block.linesIterator.map("  " + _).mkString("\n")
-          lines += s"${quoted("nodal.hardware_loop")}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
-            s"({\n$nested\n}) : (${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(loop.path)}"
-      if moduleChoices.nonEmpty then emitModuleRoots()
+      effects.sortBy(value => (value._1, value._2)).foreach(value => value._3())
+      if moduleChoices.nonEmpty || snapshot.flatFsms.exists(_.owner == module.path) ||
+        switchesByRegion.contains(module.path -> None)
+      then emitModuleRoots()
       predicatesByRegion.getOrElse(None, Vector.empty).filter(_.owner == module.path)
         .sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
       moduleExpressions.filter(value =>

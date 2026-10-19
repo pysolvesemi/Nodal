@@ -103,6 +103,9 @@ namespace detail {
 class CollectionIntegerEnvironmentAdmission;
 class LoopIntegerEnvironmentAdmission;
 class StructuralIfIntegerEnvironmentAdmission;
+class BehavioralIntegerEnvironmentAdmission;
+class FlatFSMIntegerEnvironmentAdmission;
+class EnumSwitchIntegerEnvironmentAdmission;
 class DigitalGenerateIntegerEnvironmentAdmission;
 } // namespace detail
 
@@ -168,6 +171,9 @@ private:
   friend class detail::CollectionIntegerEnvironmentAdmission;
   friend class detail::LoopIntegerEnvironmentAdmission;
   friend class detail::StructuralIfIntegerEnvironmentAdmission;
+  friend class detail::BehavioralIntegerEnvironmentAdmission;
+  friend class detail::FlatFSMIntegerEnvironmentAdmission;
+  friend class detail::EnumSwitchIntegerEnvironmentAdmission;
   friend class detail::DigitalGenerateIntegerEnvironmentAdmission;
 };
 
@@ -252,6 +258,13 @@ struct StructuralIntegerFacts {
 };
 mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir::Value value,
                                                                            mlir::Operation *use);
+mlir::FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(mlir::Value value,
+                                                                           mlir::Operation *use);
+/// Non-diagnostic capture classification. A runtime Integer is not a static
+/// binding. Actual static uses still call the resolving API above and retain its
+/// normal diagnostics; no runtime value is represented as unreachable or zero.
+mlir::FailureOr<StructuralIntegerFacts> probeBehavioralIntegerCapture(mlir::Value value,
+                                                                      mlir::Operation *use);
 mlir::LogicalResult verifyStructuralIntegerOperation(mlir::Operation *operation);
 
 /// Resolve only a direct instance in the use's immediate Module/Generate scope.

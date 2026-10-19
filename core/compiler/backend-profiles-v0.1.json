@@ -782,6 +782,18 @@
         "admission": "guarded"
       },
       {
+        "operation": "nodal.behavioral_if",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.behavioral_predicate",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.branch",
         "feature": "conservative-connectivity",
         "domain": "analog",
@@ -944,6 +956,18 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.enum_switch",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.flat_fsm",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.flow_conservation",
         "feature": "partial-topology-records",
         "domain": "analog",
@@ -1070,6 +1094,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.local_domain_binding",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.member_access",
         "feature": "unlowered-shared-forms",
         "domain": "neutral",
@@ -1077,6 +1107,24 @@
       },
       {
         "operation": "nodal.memory",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.memory_read",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.memory_write",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.memory_write_effect",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"
@@ -1244,6 +1292,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.reset_asserted",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.reset_relation",
         "feature": "digital-behavior",
         "domain": "digital",
@@ -1251,6 +1305,24 @@
       },
       {
         "operation": "nodal.resolved_net",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.sequential_assert",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.sequential_select",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.sequential_update",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"

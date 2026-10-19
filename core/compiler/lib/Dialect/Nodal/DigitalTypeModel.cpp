@@ -4,7 +4,11 @@
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
@@ -219,6 +223,12 @@ public:
 
   LogicalResult verify(Operation *use) {
     currentUse = use;
+    // Diagnose malformed isolated ingress before descending into block types;
+    // otherwise a failed scoped environment can hide the actual header error.
+    if (llvm::isa<FlatFSMOp>(use) && failed(inspectFlatFSMHeader(use)))
+      return verifyFlatFSMOperation(use);
+    if (llvm::isa<EnumSwitchOp>(use) && failed(inspectEnumSwitchHeader(use)))
+      return verifyEnumSwitchOperation(use);
     bool capability = false;
     auto verifyType = [&](Type type) {
       auto result = check(type);
@@ -271,6 +281,16 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<LocalDomainBindingOp>(use))
+      return verifyLocalDomainBinding(use);
+    if (llvm::isa<MemoryWriteEffectOp>(use))
+      return verifyMemoryPort(use);
+    if (llvm::isa<SequentialUpdateOp>(use))
+      return verifySequentialUpdate(use);
+    if (llvm::isa<ResetAssertedOp>(use))
+      return verifyResetAsserted(use);
+    if (llvm::isa<SequentialAssertOp>(use))
+      return verifySequentialAssertion(use);
     if (llvm::isa<PortValueOp, ShapeIndexOp, ShapeSliceOp, ShapeFlattenOp, ShapeViewOp,
                   DigitalAssignOp>(use))
       return success();
@@ -386,7 +406,9 @@ private:
     // Token admissibility depends on the actual consumer, so it must be
     // checked before the structural-type memo (which is shared across uses).
     if (llvm::isa<StaticPredicateType>(type) &&
-        (storageContext || !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp>(currentUse)))
+        (storageContext ||
+         !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp, BehavioralPredicateOp,
+                    BehavioralIfOp, SequentialSelectOp>(currentUse)))
       return reject(
           "static predicate tokens cannot be stored or manufactured by runtime operations");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));

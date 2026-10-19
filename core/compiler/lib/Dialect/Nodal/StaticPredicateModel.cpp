@@ -1,14 +1,76 @@
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+
+#include <algorithm>
 using namespace mlir;
 namespace nodal {
 namespace {
 using Activity = StaticPredicateActivity;
+constexpr unsigned maximumGuardWork = 65536;
+constexpr unsigned maximumGuardDepth = 128;
+bool consume(unsigned &remainingWork, size_t amount = 1) {
+  if (amount > remainingWork)
+    return false;
+  remainingWork -= amount;
+  return true;
+}
+
+// Charge the actual SSA graph before delegating to an existing semantic owner.
+// This is only a work preflight, never an alternative interpretation of values.
+LogicalResult chargeValueGraph(Value value, unsigned &remainingWork, llvm::DenseSet<Value> &visited,
+                               unsigned depth = 0) {
+  if (!consume(remainingWork) || depth >= maximumGuardDepth || !value)
+    return failure();
+  if (!visited.insert(value).second)
+    return success();
+  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+    auto source = digitalRegionCaptureSource(argument);
+    if (failed(source))
+      return failure();
+    return *source ? chargeValueGraph(*source, remainingWork, visited, depth + 1) : success();
+  }
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return failure();
+  // A stored value is a runtime leaf, not its initializer or its writers.
+  if (llvm::isa<DigitalStorageOp>(op))
+    return success();
+  for (Value operand : op->getOperands())
+    if (failed(chargeValueGraph(operand, remainingWork, visited, depth + 1)))
+      return failure();
+  return success();
+}
+
+// The parameter owner remains authoritative for equality. Preflight the aligned
+// DAG pairs it may visit, bounding traversal/storage before its equality query.
+LogicalResult chargeIntegerPairs(
+    const InstantiatedIntegerNode *left, const InstantiatedIntegerNode *right,
+    unsigned &remainingWork,
+    llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>>
+        &visited,
+    unsigned depth = 0) {
+  if (!consume(remainingWork) || depth >= maximumGuardDepth)
+    return failure();
+  if (left == right || !left || !right || !visited.insert({left, right}).second ||
+      left->operands.size() != right->operands.size())
+    return success();
+  for (size_t index = 0; index < left->operands.size(); ++index)
+    if (failed(chargeIntegerPairs(left->operands[index].get(), right->operands[index].get(),
+                                  remainingWork, visited, depth + 1)))
+      return failure();
+  return success();
+}
+
+struct ComparisonFacts {
+  InstantiatedIntegerExpression left, right;
+};
 StringRef text(Operation *op, StringRef key) {
   auto value = op->getAttrOfType<StringAttr>(key);
   return value ? value.getValue() : StringRef();
@@ -24,9 +86,10 @@ bool closed(Operation *op, ArrayRef<StringRef> keys) {
 }
 class Query {
 public:
+  explicit Query(bool behavioral = false, unsigned *remainingWork = nullptr)
+      : behavioral(behavioral), remainingWork(remainingWork) {}
   FailureOr<Activity> value(Value input, Operation *use, unsigned depth = 0) {
-    if (++work > 65536 || depth >= 128 || !input ||
-        !llvm::isa<StaticPredicateType>(input.getType()) ||
+    if (!step() || depth >= 128 || !input || !llvm::isa<StaticPredicateType>(input.getType()) ||
         failed(verifyDigitalValueScope(input, use)))
       return failure();
     if (auto known = memo.find(input); known != memo.end())
@@ -46,7 +109,7 @@ public:
     return result;
   }
   FailureOr<Activity> operation(Operation *op, unsigned depth = 0) {
-    if (++work > 65536 || depth >= 128 || !op || op->getNumResults() != 1 ||
+    if (!step() || depth >= 128 || !op || op->getNumResults() != 1 ||
         !llvm::isa<StaticPredicateType>(op->getResult(0).getType()) || op->getNumRegions() ||
         op->getNumSuccessors())
       return failure();
@@ -59,14 +122,29 @@ public:
       StringRef cmp = text(op, "comparison");
       if (cmp != "eq" && cmp != "ne" && cmp != "lt" && cmp != "le" && cmp != "gt" && cmp != "ge")
         return failure();
-      auto left = resolveStructuralIntegerExpression(op->getOperand(0), op);
-      auto right = resolveStructuralIntegerExpression(op->getOperand(1), op);
+      if (remainingWork)
+        for (Value input : op->getOperands()) {
+          llvm::DenseSet<Value> visited;
+          if (failed(chargeValueGraph(input, *remainingWork, visited)))
+            return failure();
+        }
+      auto left = behavioral ? resolveBehavioralIntegerExpression(op->getOperand(0), op)
+                             : resolveStructuralIntegerExpression(op->getOperand(0), op);
+      auto right = behavioral ? resolveBehavioralIntegerExpression(op->getOperand(1), op)
+                              : resolveStructuralIntegerExpression(op->getOperand(1), op);
       if (failed(left) || failed(right))
         return failure();
       if (!left->expression || !right->expression)
         return Activity::Unreachable;
       auto &a = *left->expression;
       auto &b = *right->expression;
+      if (remainingWork) {
+        llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>>
+            visited;
+        if (failed(chargeIntegerPairs(a.root.get(), b.root.get(), *remainingWork, visited)))
+          return failure();
+        comparisons.try_emplace(op->getResult(0), ComparisonFacts{a, b});
+      }
       bool equal = equivalentInstantiatedIntegerExpressions(a, b);
       bool less = proveIntegerExpressionLess(a, b), greater = proveIntegerExpressionLess(b, a);
       if (cmp == "eq")
@@ -120,10 +198,262 @@ public:
                : Activity::Either;
   }
 
+  const ComparisonFacts *comparison(Value value) const {
+    auto found = comparisons.find(value);
+    return found == comparisons.end() ? nullptr : &found->second;
+  }
+
 private:
+  bool step() { return ++work <= maximumGuardWork && (!remainingWork || consume(*remainingWork)); }
+  bool behavioral;
+  unsigned *remainingWork;
   unsigned work = 0;
   llvm::DenseMap<Value, Activity> memo;
   llvm::DenseSet<Value> active;
+  llvm::DenseMap<Value, ComparisonFacts> comparisons;
+};
+
+struct GuardLiteral {
+  Value value;
+  bool negated;
+};
+using GuardCube = SmallVector<GuardLiteral, 4>;
+using GuardDnf = SmallVector<GuardCube, 4>;
+
+// A finite Boolean expansion, not a solver: conjunction cubes contradict only
+// through an actual atom/complement or equivalent checked static comparisons.
+// Each visit, cube pair, literal pair and copied element consumes shared work.
+class GuardQuery {
+public:
+  explicit GuardQuery(unsigned &remainingWork)
+      : remainingWork(remainingWork), predicates(true, &remainingWork) {}
+
+  FailureOr<bool> disjoint(Value left, Value right, Operation *use) {
+    if (!boolean(left) || !boolean(right) || !consume(remainingWork))
+      return failure();
+    auto a = formula(left, use, false, 0);
+    auto b = formula(right, use, false, 0);
+    if (failed(a) || failed(b))
+      return failure();
+    for (const GuardCube &x : *a)
+      for (const GuardCube &y : *b) {
+        auto contradiction = contradict(x, y);
+        if (failed(contradiction))
+          return failure();
+        if (!*contradiction)
+          return false;
+      }
+    return true;
+  }
+
+private:
+  bool boolean(Value value) {
+    auto type = value ? llvm::dyn_cast<BitsType>(value.getType()) : BitsType();
+    return type && type.getWidth() == 1;
+  }
+
+  FailureOr<GuardDnf> constant(bool value) {
+    GuardDnf result;
+    if (value) {
+      if (!consume(remainingWork))
+        return failure();
+      result.emplace_back();
+    }
+    return result;
+  }
+
+  FailureOr<GuardDnf> atom(Value value, bool negated) {
+    if (!consume(remainingWork, 2))
+      return failure();
+    GuardDnf result;
+    result.push_back(GuardCube{{value, negated}});
+    return result;
+  }
+
+  LogicalResult runtimeOperation(Operation *op) {
+    if (!consume(remainingWork))
+      return failure();
+    if (validated.contains(op))
+      return success();
+    llvm::DenseSet<Value> visited;
+    if (failed(chargeValueGraph(op->getResult(0), remainingWork, visited)))
+      return failure();
+    LogicalResult valid = failure();
+    if (llvm::isa<DigitalExprOp>(op))
+      valid = verifyDigitalValueOperation(op);
+    else if (llvm::isa<ConstantOp, ConstLiteralOp>(op))
+      valid = verifyDigitalLiteralOperation(op);
+    else if (llvm::isa<PortValueOp, DigitalStorageOp, EnumExprOp, ShapeIndexOp, ShapeFlattenOp,
+                       ShapeViewOp, ShapeSliceOp>(op))
+      // Invoke the existing registered owner, including its generated invariant
+      // checks, rather than reimplementing port, storage, enum or shape policy.
+      valid = op->getName().verifyInvariants(op);
+    if (succeeded(valid))
+      validated.insert(op);
+    return valid;
+  }
+
+  FailureOr<GuardDnf> formula(Value value, Operation *use, bool negated, unsigned depth) {
+    if (!consume(remainingWork) || depth >= maximumGuardDepth || !value ||
+        (!boolean(value) && !llvm::isa<StaticPredicateType>(value.getType())) ||
+        failed(verifyDigitalValueScope(value, use)))
+      return failure();
+    if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+      auto source = digitalRegionCaptureSource(argument);
+      if (failed(source) || !*source || source->getType() != value.getType())
+        return failure();
+      return formula(*source, argument.getOwner()->getParentOp(), negated, depth + 1);
+    }
+    Operation *op = value.getDefiningOp();
+    if (!op || op->getNumResults() != 1 || op->getNumRegions() || op->getNumSuccessors())
+      return failure();
+    if (llvm::isa<StaticPredicateType>(value.getType())) {
+      auto activity = predicates.value(value, use);
+      if (failed(activity))
+        return failure();
+      if (*activity == Activity::Unreachable)
+        return constant(false);
+      if (*activity != Activity::Either)
+        return constant((*activity == Activity::AlwaysTrue) != negated);
+      if (llvm::isa<StaticCompareOp>(op))
+        return atom(value, negated);
+      return logic(op, text(op, "operator_name"), negated, depth);
+    }
+    if (llvm::isa<BehavioralPredicateOp>(op)) {
+      // A narrow Bool/static bridge; deliberately no SequentialModel dependency.
+      if (op->getNumOperands() != 1 || !closed(op, {"metadata"}) ||
+          !llvm::isa<StaticPredicateType>(op->getOperand(0).getType()))
+        return failure();
+      return formula(op->getOperand(0), op, negated, depth + 1);
+    }
+    if (failed(runtimeOperation(op)))
+      return failure();
+    if (llvm::isa<ConstantOp, ConstLiteralOp>(op)) {
+      auto value = op->getAttrOfType<IntegerAttr>("value");
+      return constant((!value.getValue().isZero()) != negated);
+    }
+    if (llvm::isa<DigitalExprOp>(op)) {
+      StringRef opcode = text(op, "operator_name");
+      if (opcode.consume_front("bool_"))
+        return logic(op, opcode, negated, depth);
+    }
+    return atom(value, negated);
+  }
+
+  FailureOr<GuardDnf> logic(Operation *op, StringRef opcode, bool negated, unsigned depth) {
+    if (opcode == "not" && op->getNumOperands() == 1)
+      return formula(op->getOperand(0), op, !negated, depth + 1);
+    if ((opcode != "and" && opcode != "or") || op->getNumOperands() != 2)
+      return failure();
+    // Visit both children eagerly, even if one already determines the truth.
+    auto left = formula(op->getOperand(0), op, negated, depth + 1);
+    auto right = formula(op->getOperand(1), op, negated, depth + 1);
+    if (failed(left) || failed(right))
+      return failure();
+    const bool conjunction = (opcode == "and") != negated;
+    if (!conjunction) {
+      for (GuardCube &cube : *right) {
+        if (!consume(remainingWork, 1 + cube.size()))
+          return failure();
+        left->push_back(std::move(cube));
+      }
+      return std::move(*left);
+    }
+    GuardDnf result;
+    for (const GuardCube &a : *left)
+      for (const GuardCube &b : *right) {
+        auto contradiction = contradict(a, b);
+        if (failed(contradiction))
+          return failure();
+        if (*contradiction)
+          continue;
+        if (!consume(remainingWork, 1 + a.size() + b.size()))
+          return failure();
+        GuardCube cube;
+        cube.append(a.begin(), a.end());
+        cube.append(b.begin(), b.end());
+        result.push_back(std::move(cube));
+      }
+    return result;
+  }
+
+  FailureOr<bool> equal(const InstantiatedIntegerExpression &a,
+                        const InstantiatedIntegerExpression &b) {
+    if (!consume(remainingWork))
+      return failure();
+    auto key = std::make_pair(a.root.get(), b.root.get());
+    if (auto found = equalities.find(key); found != equalities.end())
+      return found->second;
+    llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>>
+        visited;
+    if (failed(chargeIntegerPairs(key.first, key.second, remainingWork, visited)))
+      return failure();
+    bool result = equivalentInstantiatedIntegerExpressions(a, b);
+    equalities.try_emplace(key, result);
+    return result;
+  }
+
+  // Bits denote the three exact Integer outcomes: less, equal, greater.
+  unsigned outcomes(GuardLiteral literal) {
+    StringRef cmp = text(literal.value.getDefiningOp(), "comparison");
+    unsigned mask = cmp == "lt"   ? 1
+                    : cmp == "eq" ? 2
+                    : cmp == "le" ? 3
+                    : cmp == "gt" ? 4
+                    : cmp == "ne" ? 5
+                                  : 6;
+    return literal.negated ? mask ^ 7 : mask;
+  }
+
+  FailureOr<bool> conflict(GuardLiteral a, GuardLiteral b) {
+    if (!consume(remainingWork))
+      return failure();
+    if (a.value == b.value)
+      return a.negated != b.negated;
+    const ComparisonFacts *x = predicates.comparison(a.value);
+    const ComparisonFacts *y = predicates.comparison(b.value);
+    if (!x || !y)
+      return false;
+    unsigned leftMask = outcomes(a), rightMask = outcomes(b);
+    auto ll = equal(x->left, y->left);
+    if (failed(ll))
+      return failure();
+    if (*ll) {
+      auto rr = equal(x->right, y->right);
+      if (failed(rr))
+        return failure();
+      if (*rr)
+        return (leftMask & rightMask) == 0;
+    }
+    auto lr = equal(x->left, y->right);
+    if (failed(lr))
+      return failure();
+    if (!*lr)
+      return false;
+    auto rl = equal(x->right, y->left);
+    if (failed(rl))
+      return failure();
+    unsigned reversed = ((rightMask & 1) << 2) | (rightMask & 2) | ((rightMask & 4) >> 2);
+    return *rl && (leftMask & reversed) == 0;
+  }
+
+  FailureOr<bool> contradict(const GuardCube &a, const GuardCube &b) {
+    if (!consume(remainingWork))
+      return failure();
+    for (GuardLiteral left : a)
+      for (GuardLiteral right : b) {
+        auto result = conflict(left, right);
+        if (failed(result) || *result)
+          return result;
+      }
+    return false;
+  }
+
+  unsigned &remainingWork;
+  Query predicates;
+  llvm::DenseSet<Operation *> validated;
+  llvm::DenseMap<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>, bool>
+      equalities;
 };
 } // namespace
 FailureOr<StaticPredicateFacts> analyzeStaticPredicate(Value predicate, Operation *use,
@@ -132,8 +462,21 @@ FailureOr<StaticPredicateFacts> analyzeStaticPredicate(Value predicate, Operatio
   return failed(result) ? FailureOr<StaticPredicateFacts>(failure())
                         : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
 }
+FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(Value predicate, Operation *use) {
+  auto result = Query(true).value(predicate, use);
+  return failed(result) ? FailureOr<StaticPredicateFacts>(failure())
+                        : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+}
+FailureOr<bool> proveBehavioralGuardsDisjoint(Value left, Value right, Operation *use,
+                                              unsigned &remainingWork) {
+  unsigned available = std::min(remainingWork, maximumGuardWork);
+  unsigned budget = available;
+  auto result = GuardQuery(budget).disjoint(left, right, use);
+  remainingWork -= available - budget;
+  return result;
+}
 LogicalResult verifyStaticPredicateOperation(Operation *operation) {
-  if (failed(Query().operation(operation)))
+  if (failed(Query(true).operation(operation)))
     return operation->emitOpError("NODAL-DIGITAL-055-013: static predicate requires a closed owned "
                                   "parameter/Generate Integer DAG valid over every legal value");
   return success();

@@ -61,8 +61,476 @@ private final class ConstructionSession(val options: EmitOptions):
   private val staticPredicates = mutable.LinkedHashMap.empty[ExpressionRef, StaticPredicate]
   private val structuralIfs = mutable.LinkedHashMap.empty[ExpressionRef, StructuralIfRecord]
   private val structuralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val behavioralIfs = mutable.LinkedHashMap.empty[ExpressionRef, BehavioralIfRecord]
+  private val behavioralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val flatFsms = mutable.LinkedHashMap.empty[ExpressionRef, FlatFsmRecord[?]]
+  private val fsmActionRegions =
+    mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val fsmResults = mutable.HashMap.empty[ExpressionRef, (FlatFsmRecord[?], String)]
+  private val fsmObservations = new IdentityHashMap[AnyRef, FlatFsmObservation]()
+  private val openFsms = mutable.ArrayBuffer.empty[FlatFsmRecord[?]]
+  private val privateFsmStorage = mutable.HashSet.empty[DeclarationRef]
+  private val enumSwitches = mutable.LinkedHashMap.empty[ExpressionRef, EnumSwitchRecord[?]]
+  private val enumSwitchArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val behavioralChains =
+    mutable.HashMap.empty[(Long, Option[ExpressionRef]), BehavioralChainCursor]
   private def allValueRegions =
-    collectionRegions.valuesIterator ++ loopRegions.valuesIterator ++ structuralArms.valuesIterator
+    collectionRegions.valuesIterator ++ loopRegions.valuesIterator ++ structuralArms.valuesIterator ++
+      behavioralArms.valuesIterator ++ fsmActionRegions.valuesIterator ++ enumSwitchArms.valuesIterator
+
+  private def activeBehavioral: Option[DigitalValueRegionRecord] =
+    collectionStack.reverseIterator.find(sequentialRegion)
+
+  private def sequentialRegion(region: DigitalValueRegionRecord): Boolean =
+    region.behavioralArm.nonEmpty || region.fsmAction.nonEmpty || region.switchArm.nonEmpty
+
+  private def sequentialRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
+    region.flatMap: current =>
+      current.behavioralArm.map(header => behavioralIfs(header.conditional).root)
+        .orElse(current.fsmAction.map(_.machine))
+        .orElse(current.switchArm.map(header => enumSwitches(header.switch).root))
+        .orElse(sequentialRoot(current.parent))
+
+  private def fsmActionRegion(record: FlatFsmRecord[?]): Option[DigitalValueRegionRecord] =
+    collectionStack.reverseIterator.find(_.fsmAction.exists(_.machine == record.reference))
+
+  private def validateFsmObservations(values: Vector[Any]): Option[FlatFsmObservation] =
+    val pending = mutable.ArrayDeque.from(values)
+    var result: Option[FlatFsmObservation] = None
+    while pending.nonEmpty do
+      pending.removeLast() match
+        case reference: Expr[?] =>
+          Option(fsmObservations.get(reference)).foreach: observation =>
+            if !observation.record.open || observation.record.reference.module != currentModule.handle
+            then
+              FlatFsmRuntime.fail("machine observation escaped its open builder scope")
+            result.foreach: previous =>
+              if previous.record ne observation.record then
+                FlatFsmRuntime.fail("observations belong to different open machine scopes")
+            result = Some(FlatFsmObservation(
+              observation.record,
+              observation.future || result.exists(_.future)
+            ))
+        case values: Seq[?] => pending ++= values
+        case Some(value) => pending.append(value)
+        case _ => ()
+    result
+
+  private def markFsmObservation[A <: Data](
+      record: FlatFsmRecord[?],
+      value: Expr[A],
+      future: Boolean
+  )
+      : Expr[A] =
+    fsmObservations.put(value, FlatFsmObservation(record, future))
+    value
+
+  private def requireFsm[S](builder: FsmBuilder[S]): FlatFsmRecord[S] =
+    val record = builder.record
+    if !record.open || record.reference.module != currentModule.handle ||
+      !flatFsms.get(record.reference).contains(record) || !openFsms.lastOption.contains(record)
+    then
+      FlatFsmRuntime.fail("machine builder is closed or belongs to another construction")
+    record
+
+  private def requireFsmState[S](builder: StateBuilder[S]): FlatFsmRecord[S] =
+    val record = requireFsm(builder.machine)
+    if !builder.record.open || !record.states.contains(builder.record) || activeValueRegion.nonEmpty
+    then
+      FlatFsmRuntime.fail("state builder is closed or used outside its graph construction scope")
+    record
+
+  private def fsmTransaction[A](body: => A): A =
+    try body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "flat FSM/action switch")
+        scala.util.Failure[Nothing](failure).get
+
+  def captureFlatFsm[S](
+      definition: FsmDefinition[S],
+      initial: S,
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      body: FsmBuilder[S] => Unit,
+      evidence: HwEnum[S]
+  ): Unit = fsmTransaction:
+    if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
+      analogSemanticContext.nonEmpty || openFsms.nonEmpty || flatFsms.size >= 4096
+    then
+      FlatFsmRuntime.fail("flat machine requires direct bounded digital Module construction")
+    if Option(definition).isEmpty || Option(encoding).isEmpty || Option(illegalState).isEmpty ||
+      custom.exists(value => Option(value).isEmpty)
+    then
+      FlatFsmRuntime.fail("machine configuration cannot be null")
+    val module = currentModule
+    val domain =
+      currentDomain.getOrElse(FlatFsmRuntime.fail("machine requires an actual local clock domain"))
+    if domain.clock.isEmpty || !domain.resetPolicy.exists(Set(
+        ResetPolicy.None,
+        ResetPolicy.Sync,
+        ResetPolicy.Async
+      ).contains)
+    then
+      FlatFsmRuntime.fail("machine requires an actual supported local Clock/Reset binding")
+    val canonical = DigitalEnumContract.abi(definition.canonicalType)
+    val initialId = DigitalEnumContract.selectedCase(initial, evidence, canonical)
+    val (resolvedEncoding, local) = FlatFsmRuntime.localCodes(encoding, custom, evidence)
+    if local.identity != canonical.identity || local.cases.map(_.id).toSet != canonical.caseIds then
+      FlatFsmRuntime.fail("local encoding belongs to another canonical enum")
+    val localType = CandidateRuntime.dataType[Bits]("Bits", local.width)
+    val initialCode = local.cases.find(_.id == initialId).get.code
+    val storage = if domain.resetPolicy.contains(ResetPolicy.None) then Reg.uninitialized(localType)
+    else Reg(FlatFsmRuntime.bits(initialCode, local.width))
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    def projection[A <: Data](operation: String, dataType: KernelTypeDescriptor): KernelExpr[A] =
+      val value =
+        new KernelExpr[A](Vector(storage), resultType = Some(dataType), operation = Some(operation))
+      val _ = captureExpression(value)
+      value
+    val next = projection[Bits](
+      FlatFsmRuntime.NextOperation,
+      KernelTypeDescriptor("Bits", Vector(local.width))
+    )
+    val taken = projection[Bool](FlatFsmRuntime.TakenOperation, KernelTypeDescriptor("Bool"))
+    val record = new FlatFsmRecord(
+      reference,
+      definition,
+      evidence,
+      canonical,
+      local,
+      initialId,
+      encoding,
+      resolvedEncoding,
+      illegalState,
+      domain,
+      storage,
+      next,
+      taken,
+      nextEffectOrdinal()
+    )
+    flatFsms.update(reference, record)
+    fsmResults.update(expressionIds.get(next), record -> "next")
+    fsmResults.update(expressionIds.get(taken), record -> "taken")
+    privateFsmStorage += declarationIds.get(storage)
+    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(storage))
+    openFsms += record
+    val builder = new FsmBuilder(definition, initial, encoding, illegalState, record)
+    try
+      body(builder)
+      FlatFsmGraphContract.validate(record, pathOf)
+    finally
+      record.open = false
+      record.states.foreach(_.open = false)
+      val removed = openFsms.remove(openFsms.size - 1)
+      if removed ne record then FlatFsmRuntime.fail("machine builder stack is corrupt")
+
+  def captureFlatFsmState[S](
+      builder: FsmBuilder[S],
+      value: S,
+      body: StateBuilder[S] => Unit
+  ): Unit =
+    fsmTransaction:
+      val record = requireFsm(builder)
+      if activeValueRegion.nonEmpty || record.states.exists(_.open) then
+        FlatFsmRuntime.fail("state declarations cannot nest or occur inside actions")
+      val id = DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+      if record.states.exists(_.caseId == id) then FlatFsmRuntime.fail("machine repeats a state")
+      val state = new FlatFsmStateRecord(id, record.nextOrdinal())
+      record.states += state
+      try body(new StateBuilder(builder, state))
+      finally state.open = false
+
+  def captureFlatFsmTerminal[S](builder: StateBuilder[S]): Unit =
+    val _ = requireFsmState(builder)
+    if builder.record.terminal then FlatFsmRuntime.fail("state repeats terminal declaration")
+    builder.record.terminal = true
+
+  private def captureFsmAction[S](
+      record: FlatFsmRecord[S],
+      phase: String,
+      ownerCase: Option[String],
+      transitionOrdinal: Option[Int],
+      body: () => Unit
+  ): Unit =
+    if record.actions.size.toLong + record.transitions.size >= FlatFsmRuntime.MaximumRecords then
+      FlatFsmRuntime.fail("machine transitions/actions exceed 65536 records")
+    val header = FlatFsmActionHeader(
+      record.reference,
+      phase,
+      ownerCase,
+      transitionOrdinal,
+      record.nextOrdinal()
+    )
+    val region = new DigitalValueRegionRecord(
+      newScaffoldReference(currentModule),
+      None,
+      "fsm_action",
+      Vector.empty,
+      None,
+      fsmAction = Some(header)
+    )
+    fsmActionRegions.update(region.reference, region)
+    record.actions += region
+    val _ = newCollectionArgument(
+      region,
+      CandidateRuntime.dataType[Bits]("Bits", record.local.width),
+      "current_local"
+    )
+    val _ = newCollectionArgument(
+      region,
+      CandidateRuntime.dataType[Bits]("Bits", record.local.width),
+      "next_local"
+    )
+    val _ = newCollectionArgument(region, Bool, "transition_taken")
+    withBehavioralArm(region)(body())
+
+  def captureFlatFsmAction[S](builder: StateBuilder[S], phase: String, body: () => Unit): Unit =
+    fsmTransaction:
+      val record = requireFsmState(builder)
+      if !Set("entry", "active", "exit")(phase) then
+        FlatFsmRuntime.fail("unknown state action phase")
+      captureFsmAction(record, phase, Some(builder.record.caseId), None, body)
+
+  def captureFlatFsmTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S,
+      body: Option[() => Unit]
+  ): Unit = fsmTransaction:
+    val record = requireFsmState(builder)
+    if Option(mode).isEmpty || CandidateRuntime.expressionDataType(
+        condition
+      ).map(CandidateRuntime.typeDescriptor) !=
+        Some(KernelTypeDescriptor("Bool"))
+    then FlatFsmRuntime.fail("transition requires exact Bool and a known mode")
+    val _ = validateFsmObservations(Vector(condition))
+    if Option(fsmObservations.get(condition)).exists(_.future) then
+      FlatFsmRuntime.fail("next-state/event feedback into transition selection is cyclic")
+    if record.actions.size.toLong + record.transitions.size >= FlatFsmRuntime.MaximumRecords then
+      FlatFsmRuntime.fail("machine transitions/actions exceed 65536 records")
+    val bound = bindCollectionValue(condition, None, currentModule.handle).asInstanceOf[Expr[Bool]]
+    val destination = DigitalEnumContract.selectedCase(to, record.evidence, record.canonical)
+    val transition =
+      FlatFsmTransitionRecord(builder.record.caseId, destination, mode, bound, record.nextOrdinal())
+    record.transitions += transition
+    body.foreach(callback =>
+      captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
+    )
+
+  private def flatFsmLocal[S](builder: FsmBuilder[S], next: Boolean): Expr[Bits] =
+    val record = requireFsm(builder)
+    fsmActionRegion(record).map(_.arguments(if next then 1 else 0)._1.asInstanceOf[Expr[Bits]])
+      .getOrElse(if next then record.nextLocal else record.storage)
+
+  def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
+    val record = requireFsm(builder)
+    record.views.getOrElseUpdate(
+      activeValueRegion.map(_.reference) -> next, {
+        val local = flatFsmLocal(builder, next)
+        val initial =
+          enumLiteral(record.definition.canonicalType, builder.initial)(using record.evidence)
+        val hostCases =
+          record.evidence.declaration.get.cases.map(value => value.id -> value.value).toMap
+        val leaves = record.local.cases.map: value =>
+          val matches = DigitalCombinationalContract.compare(
+            "digital_eq",
+            local,
+            FlatFsmRuntime.bits(value.code, record.local.width)
+          )
+          val canonicalCase = hostCases(value.id)
+          val literal =
+            enumLiteral(record.definition.canonicalType, canonicalCase)(using record.evidence)
+          (matches, literal)
+        def combine(start: Int, end: Int): (Expr[Bool], Expr[EnumValue[S]]) =
+          if end - start == 1 then leaves(start)
+          else
+            val middle = start + (end - start) / 2
+            val left = combine(start, middle)
+            val right = combine(middle, end)
+            (
+              SequentialRuntime.or(left._1, right._1),
+              DigitalCombinationalContract.select(left._1, left._2, right._2)
+            )
+        val (valid, candidate) = combine(0, leaves.size)
+        val decoded = DigitalCombinationalContract.select(valid, candidate, initial)
+        DecodedEnum(
+          markFsmObservation(record, decoded, next),
+          markFsmObservation(record, valid, next)
+        )
+      }
+    )
+
+  def flatFsmTaken[S](builder: FsmBuilder[S]): Expr[Bool] =
+    val record = requireFsm(builder)
+    val value = fsmActionRegion(
+      record
+    ).map(_.arguments(2)._1.asInstanceOf[Expr[Bool]]).getOrElse(record.taken)
+    markFsmObservation(record, value, future = true)
+
+  def flatFsmEvent[S](builder: FsmBuilder[S], state: S, entering: Boolean): Expr[Bool] =
+    val record = requireFsm(builder)
+    val view = flatFsmStateView(builder, entering)
+    val matches = DigitalEnumContract.isOneOf(view.value, Vector(state), record.evidence)
+    markFsmObservation(record, SequentialRuntime.and(flatFsmTaken(builder), matches), future = true)
+
+  def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
+    val record = requireFsm(builder)
+    val current = flatFsmStateView(builder, next = false)
+    val membership = new KernelExpr[Bool](
+      Vector(current.value, FlatFsmCompletionMetadata(record)),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(FlatFsmRuntime.CompletedOperation)
+    )
+    val _ = captureExpression(membership)
+    markFsmObservation(record, SequentialRuntime.and(current.valid, membership), future = false)
+
+  def captureEnumSwitch[S](
+      selector: Expr[EnumValue[S]],
+      invalid: () => Unit,
+      body: EnumSwitchBuilder[S] => Unit,
+      evidence: HwEnum[S]
+  ): Unit = fsmTransaction:
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty || activeGeneratedRegion.nonEmpty ||
+      activeValueRegion.exists(
+        !sequentialRegion(_)
+      ) || collectionStack.size >= 128 || enumSwitches.size >= 65536
+    then
+      FlatFsmRuntime.fail("action switch requires a bounded digital sequential context")
+    closeBehavioralChain()
+    val module = currentModule
+    val parent = activeValueRegion
+    val canonical = DigitalEnumContract.abi(selector)
+    val bound =
+      bindCollectionValue(selector, parent, module.handle).asInstanceOf[Expr[EnumValue[S]]]
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    val ordinal = parent.map: region =>
+      val result = region.assignmentCount
+      region.assignmentCount += 1
+      result
+    .getOrElse(nextEffectOrdinal())
+    val record = new EnumSwitchRecord(
+      reference,
+      parent,
+      bound,
+      canonical,
+      evidence,
+      ordinal,
+      sequentialRoot(parent).getOrElse(reference)
+    )
+    enumSwitches.update(reference, record)
+    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(selector))
+    try body(new EnumSwitchBuilder(record))
+    finally record.open = false
+    DigitalEnumContract.completeSelection(record.cases.map(_._1).toVector, canonical)
+    (record.cases.map(_._2).toVector :+ invalid).zipWithIndex.foreach: (callback, index) =>
+      val region = new DigitalValueRegionRecord(
+        newScaffoldReference(module),
+        parent,
+        "enum_switch_arm",
+        Vector.empty,
+        None,
+        switchArm = Some(EnumSwitchArmHeader(reference, index))
+      )
+      enumSwitchArms.update(region.reference, region)
+      record.arms += region
+      withBehavioralArm(region)(callback())
+
+  def captureEnumSwitchCase[S](builder: EnumSwitchBuilder[S], value: S, body: () => Unit): Unit =
+    val record = builder.record
+    if !record.open || record.reference.module != currentModule.handle ||
+      !enumSwitches.get(record.reference).contains(record) || activeValueRegion != record.parent
+    then
+      FlatFsmRuntime.fail("enum switch builder is closed or belongs to another lexical scope")
+    val id = DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+    if record.cases.exists(_._1 == id) then FlatFsmRuntime.fail("enum switch repeats a case")
+    record.cases += id -> body
+
+  private def sharedArmSnapshot(region: DigitalValueRegionRecord): KernelStructuralArmSnapshot =
+    KernelStructuralArmSnapshot(
+      expressionPath(region.reference),
+      region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+      regionArguments(region),
+      None
+    )
+
+  private def flatFsmSnapshots(): Vector[KernelFlatFsmSnapshot] = flatFsms.valuesIterator.map:
+    record =>
+      KernelFlatFsmSnapshot(
+        expressionPath(record.reference),
+        modulePath(record.reference.module),
+        None,
+        pathOf(record.domain).get,
+        pathOf(record.storage).get,
+        record.canonical.identity,
+        FlatFsmRuntime.encodingName(record.encoding),
+        record.resolvedEncoding,
+        record.local.width,
+        record.initialCase,
+        record.local.cases.map(value => KernelFlatFsmCode(value.id, value.code.toString)),
+        if record.illegalState == IllegalStatePolicy.Error then "error" else "recover_to_initial",
+        record.states.toVector.map(value =>
+          KernelFlatFsmState(value.caseId, value.terminal, value.ordinal)
+        ),
+        record.transitions.toVector.map(value =>
+          KernelFlatFsmTransition(
+            value.sourceCase,
+            value.destinationCase,
+            if value.mode == TransitionMode.Exclusive then "exclusive" else "priority",
+            pathOf(value.guard).get,
+            value.ordinal
+          )
+        ),
+        record.actions.toVector.map: region =>
+          val header = region.fsmAction.get
+          val arm = sharedArmSnapshot(region)
+          KernelFlatFsmAction(
+            arm.path,
+            header.phase,
+            header.ownerCase,
+            header.transitionOrdinal,
+            header.ordinal,
+            arm.captures,
+            arm.arguments
+          )
+        ,
+        pathOf(record.nextLocal).get,
+        pathOf(record.taken).get,
+        record.sourceOrdinal
+      )
+  .toVector
+
+  private def enumSwitchSnapshots(): Vector[KernelEnumSwitchSnapshot] =
+    enumSwitches.valuesIterator.map: record =>
+      KernelEnumSwitchSnapshot(
+        expressionPath(record.reference),
+        modulePath(record.reference.module),
+        record.parent.map(value => expressionPath(value.reference)),
+        pathOf(record.selector).get,
+        record.canonical.identity,
+        record.cases.map(_._1).toVector,
+        record.arms.dropRight(1).map(sharedArmSnapshot).toVector,
+        sharedArmSnapshot(record.arms.last),
+        record.sourceOrdinal,
+        expressionPath(record.root)
+      )
+    .toVector
+
+  private def behavioralFailure(message: String, code: String = "NODAL-SEQUENTIAL-056-001")
+      : Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(code, message))
+    poisonConstructor(failure, "behavioral guard")
+    scala.util.Failure[Nothing](failure).get
+
+  private def behavioralKey = currentModule.handle -> activeValueRegion.map(_.reference)
+
+  private def closeBehavioralChain(): Unit =
+    if moduleStack.nonEmpty then behavioralChains.remove(behavioralKey)
+
   private val iterationIndices = mutable.LinkedHashSet.empty[ExpressionRef]
   private val nextDigitalEffectOrdinal = mutable.HashMap.empty[Long, Int]
 
@@ -204,7 +672,9 @@ private final class ConstructionSession(val options: EmitOptions):
       depth += 1
       if depth > 128 then collectionFailure("lexical static scope exceeds its depth budget")
       val value = current.get
-      admitted = value.structuralArm.nonEmpty || value.loop.exists(_.generated.nonEmpty)
+      admitted = value.structuralArm.nonEmpty || sequentialRegion(value) || value.loop.exists(
+        _.generated.nonEmpty
+      )
       current = value.parent
     admitted
 
@@ -222,7 +692,7 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def requireNoCollectionEffect(role: String, assignment: Boolean = false): Unit =
     collectionStack.reverseIterator.find(region =>
-      !region.isLoop && !(assignment && region.structuralArm.nonEmpty)
+      !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
       rejectCollection(
         "NODAL-COLLECTION-055-006",
@@ -249,6 +719,44 @@ private final class ConstructionSession(val options: EmitOptions):
       case expression: ExpressionRef => expressionRegions.get(expression)
       case _ => None
 
+  /** Physical Integer values are storage data, never proof-time parameter atoms. Follow the
+    * existing value/capture edges without interpreting a host default as a static value.
+    */
+  private def runtimeSequentialInteger(value: Expr[?]): Boolean =
+    val memo = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    var work = 0
+    def visit(current: Expr[?], depth: Int): Boolean =
+      Option(memo.get(current)).map(_.booleanValue).getOrElse:
+        work += 1
+        if work > 65536 || depth > 128 then
+          collectionFailure("Integer capture origin exceeds its bounded graph")
+        memo.put(current, java.lang.Boolean.FALSE)
+        val result = valueReference(current) match
+          case reference: DeclarationRef =>
+            records(
+              reference.module
+            ).declarations(reference.index).kind != KernelSignalKind.Parameter
+          case reference: ExpressionRef =>
+            collectionArguments.get(reference) match
+              case Some((region, ordinal)) => region.arguments(ordinal)._2 == "capture"
+              case None => current match
+                  case expression: KernelExpr[?] if expression.literal.nonEmpty => false
+                  case expression: KernelExpr[?]
+                      if expression.operation.contains("generate_index") => false
+                  case expression: KernelExpr[?]
+                      if expression.operation.flatMap(IterationDomain.staticArithmetic).nonEmpty =>
+                    expression.operands.collect { case child: Expr[?] => child }.exists(visit(
+                      _,
+                      depth + 1
+                    ))
+                  case _ => true
+        memo.put(current, java.lang.Boolean.valueOf(result))
+        result
+    visit(value, 0)
+
+  private def validateSequentialValueType(dataType: DataType[?], owner: Long): Unit =
+    validateShapeType(dataType, owner, cardinality = true, storageContext = true)
+
   /** Private range partition scaffolding must not consume authored expression identities. Negative
     * indices are disjoint from the ordinary allocation stream and use the same reference
     * registries.
@@ -267,7 +775,9 @@ private final class ConstructionSession(val options: EmitOptions):
   ): KernelExpr[?] =
     if region.arguments.size >= DigitalReductionContract.MaximumArguments then
       collectionFailure("collection signature exceeds the 4098 argument budget")
-    if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
+    if sequentialRegion(region) then
+      validateSequentialValueType(dataType, region.reference.module)
+    else if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
       DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(dataType))
     val argument = new KernelExpr[Data](
       Vector.empty,
@@ -297,7 +807,15 @@ private final class ConstructionSession(val options: EmitOptions):
       create: Boolean = true,
       predicateUse: Boolean = false
   ): Expr[?] =
+    if create then
+      val _ = validateFsmObservations(Vector(value))
     val reference = valueReference(value)
+    if create && valueRegion(reference).isEmpty && destination.nonEmpty then
+      Option(fsmObservations.get(value)).filter(_.future).foreach: observation =>
+        if fsmActionRegion(observation.record).nonEmpty then
+          FlatFsmRuntime.fail(
+            "next/event observations used in actions must be obtained from their action context"
+          )
     val sourceOwner = reference match
       case declaration: DeclarationRef => declaration.module
       case expression: ExpressionRef => expression.module
@@ -320,8 +838,14 @@ private final class ConstructionSession(val options: EmitOptions):
               val dataType = CandidateRuntime.expressionDataType(parentValue).getOrElse(
                 collectionFailure("collection capture requires an exact type")
               )
-              val isStatic =
+              val integer =
                 CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+              val runtimeInteger = integer && runtimeSequentialInteger(parentValue)
+              if runtimeInteger && (predicateUse || !sequentialRegion(region)) then
+                collectionFailure(
+                  "runtime Integer capture cannot supply static parameter or collection facts"
+                )
+              val isStatic = integer && !runtimeInteger
               val proceduralIndex = isStatic && loopAffine(parentValue)
                 .exists(_._1.loop.get.generated.isEmpty)
               if !isStatic then
@@ -334,6 +858,16 @@ private final class ConstructionSession(val options: EmitOptions):
                   val _ = analysis.predicateBound(parentValue.asInstanceOf[Expr[Integer]])
                 else
                   val _ = analysis(parentValue.asInstanceOf[Expr[Integer]])
+              region.fsmAction.foreach: header =>
+                val machine = flatFsms(header.machine)
+                if machine.captureCount >= 8192 then
+                  FlatFsmRuntime.fail("machine action captures exceed 8192")
+                machine.captureCount += 1
+              region.switchArm.foreach: header =>
+                val switch = enumSwitches(header.switch)
+                if switch.captureCount >= 8192 then
+                  FlatFsmRuntime.fail("switch captures exceed 8192")
+                switch.captureCount += 1
               val argument = newCollectionArgument(
                 region,
                 dataType,
@@ -450,6 +984,7 @@ private final class ConstructionSession(val options: EmitOptions):
     * do not otherwise enter the digital expression closure.
     */
   private def validateCollectionDependencies(values: Vector[Any]): Unit =
+    val _ = validateFsmObservations(values)
     val pending = mutable.ArrayDeque.from(values)
     while pending.nonEmpty do
       pending.removeLast() match
@@ -538,6 +1073,7 @@ private final class ConstructionSession(val options: EmitOptions):
         operation == DigitalCollectionContract.Operation
       val knownConditional = retained.exists(structuralIfs.contains) &&
         operation == StructuralIfRuntime.Operation
+      val behavioralPredicate = operation == SequentialRuntime.PredicateOperation
       val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
         DigitalScalarContract.Operations.contains(operation) ||
         operation == DigitalMaterializationContract.Operation ||
@@ -545,7 +1081,9 @@ private final class ConstructionSession(val options: EmitOptions):
         DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
-        knownArgument || knownCollection || knownConditional
+        knownArgument || knownCollection || knownConditional || behavioralPredicate || FlatFsmRuntime.Operations(
+          operation
+        )
       val rangeAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           !pure && !staticInteger && !knownArgument
@@ -561,7 +1099,13 @@ private final class ConstructionSession(val options: EmitOptions):
           val dataType = expression.resultType.getOrElse(
             collectionFailure("region body expression requires an exact type")
           )
-          try DigitalCombinationalContract.validateValueType(dataType)
+          try
+            if current.exists(sequentialRegion) then
+              validateSequentialValueType(
+                CandidateRuntime.dataTypeFromDescriptor(dataType),
+                currentModule.handle
+              )
+            else DigitalCombinationalContract.validateValueType(dataType)
           catch
             case failure: ConstructionException =>
               rejectCollection(
@@ -764,7 +1308,11 @@ private final class ConstructionSession(val options: EmitOptions):
         role
       )
 
-  def captureStaticPredicate(operation: String, operands: Vector[Any]): StaticPredicate =
+  def captureStaticPredicate(
+      operation: String,
+      operands: Vector[Any],
+      structural: Boolean = true
+  ): StaticPredicate =
     try
       if staticPredicates.size >= 65536 then
         structuralFailure("static predicate DAG exceeds 65536 nodes")
@@ -786,7 +1334,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
               ) =>
             val facts = analysis.predicateBound(value.asInstanceOf[Expr[Integer]])
-            facts.toVector.flatMap(_.parameters).foreach(markStructuralParameter)
+            if structural then facts.toVector.flatMap(_.parameters).foreach(markStructuralParameter)
             bindCollectionValue(value, activeValueRegion, module.handle, predicateUse = true)
           case _ =>
             structuralFailure("comparison operands must be owned static Integer expressions")
@@ -816,6 +1364,8 @@ private final class ConstructionSession(val options: EmitOptions):
       whenTrue: () => Option[Expr[?]],
       whenFalse: () => Option[Expr[?]]
   ): Option[Expr[?]] =
+    if activeBehavioral.nonEmpty && !hasResult then
+      behavioralFailure("effectful structural if is not permitted inside a behavioral update")
     val module = currentModule
     val parent = activeValueRegion
     try
@@ -903,6 +1453,357 @@ private final class ConstructionSession(val options: EmitOptions):
       case failure: Throwable =>
         poisonConstructor(failure, "structural if")
         scala.util.Failure[Nothing](failure).get
+
+  def captureBehavioralComparison(
+      left: Expr[Integer],
+      right: Expr[Integer],
+      operation: String
+  ): Expr[Bool] =
+    val predicate = captureStaticPredicate(operation, Vector(left, right), structural = false)
+    val expression = new KernelExpr[Bool](
+      Vector(predicate),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(SequentialRuntime.PredicateOperation)
+    )
+    val _ = captureExpression(expression)
+    expression
+
+  private def withBehavioralArm(region: DigitalValueRegionRecord)(body: => Unit): Unit =
+    collectionStack += region
+    try body
+    finally
+      behavioralChains.remove(region.reference.module -> Some(region.reference))
+      val removed = collectionStack.remove(collectionStack.size - 1)
+      if removed ne region then behavioralFailure("behavioral lexical stack is corrupt")
+
+  private def newBehavioralIf(
+      condition: Expr[Bool],
+      root: Option[ExpressionRef]
+  ): BehavioralIfRecord =
+    val module = currentModule
+    val parent = activeValueRegion
+    var ancestor = parent
+    var depth = 0
+    while ancestor.nonEmpty do
+      depth += 1
+      if depth >= 128 then behavioralFailure("behavioral lexical depth exceeds 128")
+      ancestor = ancestor.get.parent
+    if CandidateRuntime.expressionDataType(condition).map(CandidateRuntime.typeDescriptor) !=
+        Some(KernelTypeDescriptor("Bool"))
+    then behavioralFailure("behavioral guard requires an exact owned Bool value")
+    val bound = bindCollectionValue(condition, parent, module.handle).asInstanceOf[Expr[Bool]]
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    val ordinal = parent match
+      case Some(region) =>
+        val result = region.assignmentCount
+        region.assignmentCount += 1
+        result
+      case None => nextEffectOrdinal()
+    def arm(selected: Boolean): DigitalValueRegionRecord =
+      val region = new DigitalValueRegionRecord(
+        newScaffoldReference(module),
+        parent,
+        "behavioral_arm",
+        Vector.empty,
+        None,
+        behavioralArm = Some(BehavioralArmHeader(reference, selected))
+      )
+      behavioralArms.update(region.reference, region)
+      region
+    val record = new BehavioralIfRecord(
+      reference,
+      parent,
+      bound,
+      arm(true),
+      arm(false),
+      ordinal,
+      root.getOrElse(reference)
+    )
+    behavioralIfs.update(reference, record)
+    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(condition))
+    record
+
+  def captureBehavioralBranch(
+      kind: String,
+      condition: Option[Expr[Bool]],
+      body: () => Unit
+  ): Unit =
+    try
+      if analogStack.nonEmpty || analogSemanticContext.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        activeValueRegion.exists(!sequentialRegion(_)) || collectionStack.size >= 128 ||
+        behavioralIfs.size >= 65536
+      then behavioralFailure("behavioral update requires a bounded, owned sequential context")
+      val key = behavioralKey
+      kind match
+        case "when" =>
+          val outerRoot = sequentialRoot(activeValueRegion)
+          val record = newBehavioralIf(
+            condition.getOrElse(
+              behavioralFailure("when requires a predicate")
+            ),
+            outerRoot
+          )
+          withBehavioralArm(record.trueArm)(body())
+          behavioralChains.update(key, new BehavioralChainCursor(record.root, record))
+        case "elsewhen" | "otherwise" =>
+          val cursor = behavioralChains.remove(key).getOrElse(
+            behavioralFailure("elsewhen/otherwise has no immediately preceding open when chain")
+          )
+          withBehavioralArm(cursor.tail.falseArm):
+            if kind == "otherwise" then
+              if condition.nonEmpty then behavioralFailure("otherwise cannot have a predicate")
+              body()
+            else
+              val record = newBehavioralIf(
+                condition.getOrElse(
+                  behavioralFailure("elsewhen requires a predicate")
+                ),
+                Some(cursor.root)
+              )
+              withBehavioralArm(record.trueArm)(body())
+              cursor.tail = record
+          if kind == "elsewhen" then behavioralChains.update(key, cursor)
+        case _ => behavioralFailure("unknown behavioral chain arm")
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "behavioral guard")
+        scala.util.Failure[Nothing](failure).get
+
+  private def behavioralIfSnapshots(): Vector[KernelBehavioralIfSnapshot] =
+    behavioralIfs.valuesIterator.map: record =>
+      def arm(region: DigitalValueRegionRecord): KernelStructuralArmSnapshot =
+        KernelStructuralArmSnapshot(
+          expressionPath(region.reference),
+          region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+          regionArguments(region),
+          None
+        )
+      KernelBehavioralIfSnapshot(
+        expressionPath(record.reference),
+        modulePath(record.reference.module),
+        record.parent.map(region => expressionPath(region.reference)),
+        pathOf(record.predicate).get,
+        arm(record.trueArm),
+        arm(record.falseArm),
+        record.sourceOrdinal,
+        expressionPath(record.root)
+      )
+    .toVector
+
+  /** Validate actual pre-edge dependencies and update-root ownership, without evaluating guards. */
+  private def verifySequentialAssignments(resolved: Map[DomainRef, String]): Unit =
+    val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
+    val guardPairs: Vector[(ExpressionRef, Expr[?])] =
+      behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
+        flatFsms.valuesIterator.flatMap(record =>
+          record.transitions.map(value => record.reference -> value.guard)
+        ).toVector ++
+        enumSwitches.valuesIterator.map(record => record.root -> record.selector).toVector
+    val guardsByRoot = guardPairs.groupMap(_._1)(_._2)
+    flatFsms.valuesIterator.foreach(record =>
+      roots.update(declarationIds.get(record.storage), Left(record.reference))
+    )
+    val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
+    val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
+    operations.iterator.filter(operation =>
+      Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
+    ).foreach: operation =>
+      val target =
+        digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+      if records(target.module).declarations(target.index).kind != KernelSignalKind.Register then
+        continuousDrivers.update(
+          target,
+          continuousDrivers.getOrElse(target, Vector.empty) :+ operation.values(1)
+        )
+    val domainsByPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+      domainPath(domain.reference) -> domain
+    ).toMap
+    def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
+      sequentialRoot(region)
+    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
+      val pending = mutable.ArrayDeque[Any](value)
+      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      var count = 0
+      while pending.nonEmpty do
+        val current = pending.removeLast()
+        current match
+          case reference: AnyRef
+              if Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
+            count += 1
+            if count > 65536 then
+              behavioralFailure("sequential dependency graph exceeds its budget")
+            Option(declarationIds.get(reference)).foreach: declarationRef =>
+              if declarationRef.module != owner then
+                behavioralFailure("sequential dependency belongs to another module")
+              val declaration = records(owner).declarations(declarationRef.index)
+              if declaration.kind != KernelSignalKind.Register then
+                pending ++= continuousDrivers.getOrElse(declarationRef, Vector.empty)
+              val sourceDomain = declarationDomain(declaration, resolved)
+              if sourceDomain.exists(_ != targetDomain) ||
+                (declaration.kind == KernelSignalKind.Register && sourceDomain.isEmpty)
+              then behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
+            Option(expressionIds.get(reference)).foreach: expressionRef =>
+              if expressionRef.module != owner then
+                behavioralFailure("sequential expression belongs to another module")
+              collectionArguments.get(expressionRef).foreach: (region, _) =>
+                region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
+                  pending.append(value._1)
+                )
+            reference match
+              case expression: KernelExpr[?] => pending ++= expression.operands
+              case memory: MemoryPortCapture =>
+                val declaration = memoryDeclaration(memory.memory, owner)
+                if declarationDomain(declaration, resolved).exists(_ != targetDomain) then
+                  behavioralFailure("memory value crosses an unrelated domain", "NODAL-CDC-001")
+              case predicate: StaticPredicate => pending ++= predicate.operands
+              case _ => ()
+          case _ => ()
+    operations.zipWithIndex.foreach: (operation, index) =>
+      if operation.kind == "assignment" && operation.values.size == 2 then
+        val target =
+          digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+        val declaration = records(target.module).declarations(target.index)
+        if privateFsmStorage(target) then
+          FlatFsmRuntime.fail("private machine state cannot have external updates")
+        if declaration.kind == KernelSignalKind.Register then
+          val root = behavioralRoot(operation.digitalRegion).map(Left(_)).getOrElse(Right(index))
+          roots.get(target).foreach: previous =>
+            if previous != root then
+              behavioralFailure("one register has unrelated update roots", "NODAL-STATE-001")
+          roots.update(target, root)
+          val source = operation.values(1).asInstanceOf[Expr[?]]
+          val exact =
+            for
+              targetType <- declaration.dataType
+              sourceType <- CandidateRuntime.expressionDataType(source)
+            yield DigitalEnumContract.sameType(
+              CandidateRuntime.typeDescriptor(targetType),
+              CandidateRuntime.typeDescriptor(sourceType)
+            )
+          if !exact.contains(true) then
+            behavioralFailure("register update requires exactly matching types")
+          val domain = declarationDomain(declaration, resolved).getOrElse(
+            behavioralFailure("register update has no resolved domain", "NODAL-DOMAIN-001")
+          )
+          root.left.toOption.flatMap(flatFsms.get).foreach: machine =>
+            val machineDomain = resolved.get(domainRef(machine.domain)).getOrElse(
+              behavioralFailure("FSM root has no resolved domain", "NODAL-DOMAIN-001")
+            )
+            if domain != machineDomain then
+              behavioralFailure(
+                "FSM action target belongs to a different clock domain",
+                "NODAL-CDC-001"
+              )
+          dependencies(source, operation.owner, domain)
+          root.left.toOption.foreach: identity =>
+            if checkedGuards.add((identity, operation.owner, domain)) then
+              guardsByRoot.getOrElse(identity, Vector.empty).foreach(record =>
+                dependencies(record, operation.owner, domain)
+              )
+    def memoryPort(
+        capture: MemoryPortCapture,
+        owner: Long,
+        operands: Vector[Any],
+        region: Option[DigitalValueRegionRecord]
+    ): Unit =
+      val declaration = memoryDeclaration(capture.memory, owner)
+      val domain = declarationDomain(declaration, resolved).getOrElse(
+        memoryFailure("memory port has no resolved domain")
+      )
+      capture.lexicalDomain.foreach: lexical =>
+        if !resolved.get(domainRef(lexical)).contains(domain) then
+          behavioralFailure("memory port is inside a foreign active domain", "NODAL-CDC-001")
+      val root = sequentialRoot(region)
+      root.flatMap(flatFsms.get).foreach: machine =>
+        if !resolved.get(domainRef(machine.domain)).contains(domain) then
+          behavioralFailure("FSM memory write belongs to a different clock domain", "NODAL-CDC-001")
+      operands.foreach(dependencies(_, owner, domain))
+      root.foreach: identity =>
+        if checkedGuards.add((identity, owner, domain)) then
+          guardsByRoot.getOrElse(identity, Vector.empty).foreach(dependencies(_, owner, domain))
+    operations.iterator.filter(_.kind == "memory-write").foreach: operation =>
+      memoryPort(
+        operation.values.last.asInstanceOf[MemoryPortCapture],
+        operation.owner,
+        operation.values.slice(1, 4),
+        operation.digitalRegion
+      )
+    expressionValues.foreach: (reference, expression) =>
+      if expression.operation.contains("memory_read") then
+        val _ = memoryReadSnapshot(expression)
+        memoryPort(
+          expression.operands.last.asInstanceOf[MemoryPortCapture],
+          reference.module,
+          expression.operands.take(1),
+          None
+        )
+    flatFsms.valuesIterator.foreach: record =>
+      val targetDomain = pathOf(record.domain).get
+      guardsByRoot.getOrElse(
+        record.reference,
+        Vector.empty
+      ).foreach(dependencies(_, record.reference.module, targetDomain))
+    val usedMemories = operations.iterator.filter(_.kind == "memory-write").map(
+      _.values.head.asInstanceOf[AnyRef]
+    ).toSet ++ expressionValues.valuesIterator.filter(_.operation.contains("memory_read")).map(
+      _.operands.last.asInstanceOf[MemoryPortCapture].memory
+    ).toSet
+    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+      declaration.kind == KernelSignalKind.Register ||
+        (declaration.kind == KernelSignalKind.Memory && usedMemories(declaration.value))
+    ).foreach: declaration =>
+      val target = declaration.reference
+      val domain = declarationDomain(declaration, resolved).flatMap(domainsByPath.get).getOrElse(
+        behavioralFailure("register update domain is not owned by this construction")
+      )
+      val behavioral = roots.get(target).exists(_.isLeft)
+      if domain.domain.clock.isEmpty && (behavioral || declaration.kind == KernelSignalKind.Memory)
+      then
+        behavioralFailure("behavioral update requires an actual local Clock binding")
+      declaration.attributes.collectFirst { case ("initial", Some(value: Expr[?])) => value }
+        .foreach(dependencies(_, target.module, domainPath(domain.reference)))
+      if domain.domain.clock.nonEmpty then
+        def capability(value: Expr[?], expected: String): Unit =
+          if CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor) !=
+              Some(KernelTypeDescriptor(expected))
+          then behavioralFailure(s"local $expected binding requires its exact capability type")
+          var reference = assignmentReference(value)
+          val seen = mutable.HashSet.empty[ExpressionRef]
+          while reference.isInstanceOf[ExpressionRef] do
+            val expression = reference.asInstanceOf[ExpressionRef]
+            if !seen.add(expression) || seen.size > 128 then
+              behavioralFailure("clock/reset boundary projection is cyclic or exceeds its budget")
+            reference = shapeIndices.get(expression).map(_.input)
+              .orElse(shapeViews.get(expression).map(_.input)).getOrElse(
+                behavioralFailure(
+                  "executable clock/reset requires an actual input boundary or static projection"
+                )
+              )
+          val root = reference.asInstanceOf[DeclarationRef]
+          if root.module != domain.reference.module ||
+            records(root.module).declarations(root.index).kind != KernelSignalKind.Input
+          then
+            behavioralFailure(
+              "executable clock/reset input belongs to another module or is not an input"
+            )
+        capability(domain.domain.clock.get, "Clock")
+        if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
+          capability(domain.domain.reset, "Reset")
+        if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
+          behavioralFailure(
+            "generated and inherited clock execution requires its later domain profile"
+          )
+        domain.domain.resetPolicy match
+          case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
+            behavioralFailure("async-assert/sync-release requires actual release synchronization")
+          case Some(ResetPolicy.None) =>
+            if declaration.attributes.exists:
+                case ("initial", Some(_: Expr[?])) => true
+                case _ => false
+            then behavioralFailure("resetless register cannot have a reset initializer")
+          case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
+          case _ => behavioralFailure("executable register requires an explicit reset policy")
 
   private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
     staticPredicates.toVector.map: (reference, predicate) =>
@@ -1436,6 +2337,8 @@ private final class ConstructionSession(val options: EmitOptions):
       )
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    requireNoCollectionEffect("domain declaration")
+    closeBehavioralChain()
     requireNoGeneratedEffect(s"generated ${kind.label} domain declaration")
     val module = currentModule
     if domainIds.containsKey(domain) then
@@ -1445,6 +2348,25 @@ private final class ConstructionSession(val options: EmitOptions):
     val reference = DomainRef(module.handle, module.domains.size)
     module.domains += DomainRecord(reference, domain, domain.name, kind)
     domainIds.put(domain, reference)
+    if kind == KernelDomainKind.External then
+      def boundary(value: Expr[?], expected: String): Unit =
+        val source = Option(declarationIds.get(value)).getOrElse(
+          behavioralFailure(s"local $expected binding requires an actual typed input boundary")
+        )
+        if source.module != module.handle then
+          behavioralFailure(s"local $expected binding belongs to another module")
+        val declaration = module.declarations(source.index)
+        if declaration.kind != KernelSignalKind.Input ||
+          !declaration.dataType.exists(value =>
+            CandidateRuntime.typeDescriptor(value) == KernelTypeDescriptor(expected)
+          )
+        then behavioralFailure(s"local $expected binding requires an exact typed input boundary")
+        declaration.domainCandidate.foreach: previous =>
+          if previous ne domain then
+            behavioralFailure(s"one $expected input cannot belong to two local domains")
+        module.declarations.update(source.index, declaration.copy(domainCandidate = Some(domain)))
+      domain.clock.foreach(boundary(_, "Clock"))
+      if !domain.resetPolicy.contains(ResetPolicy.None) then boundary(domain.reset, "Reset")
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
   private def requireGeneratedDeclarationScope(reference: DeclarationRef): Unit =
@@ -1499,6 +2421,7 @@ private final class ConstructionSession(val options: EmitOptions):
       attributes: Vector[(String, Any)],
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
+    closeBehavioralChain()
     requireNoCollectionEffect(s"${kind.label} declaration")
     requireLoopEffect(s"${kind.label} declaration")
     validateCollectionDependencies(attributes.map(_._2))
@@ -2770,6 +3693,9 @@ private final class ConstructionSession(val options: EmitOptions):
       scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      val observation = value match
+        case expression: KernelExpr[?] => validateFsmObservations(expression.operands)
+        case _ => validateFsmObservations(structuralOperands)
       if reductionProofBuilding then
         value match
           case expression: KernelExpr[?] if expression.resultType.exists(_.kind == "Integer") => ()
@@ -2796,6 +3722,7 @@ private final class ConstructionSession(val options: EmitOptions):
             collectionFailure("collection body exceeds the 4098 expression budget")
           region.expressionCount += 1
       expressionIds.put(value, reference)
+      observation.foreach(fact => fsmObservations.put(value, fact))
       value match
         case expression: KernelExpr[?]
             if scope.nonEmpty &&
@@ -2818,6 +3745,8 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
+      memoryFailure("memory reads require the owned Mem.read entrypoint")
     case expression: KernelExpr[?]
         if expression.operation.exists(operation =>
           operation.startsWith(
@@ -3611,9 +4540,9 @@ private final class ConstructionSession(val options: EmitOptions):
     private val predicateActive = mutable.HashSet.empty[ExpressionRef]
     def predicateBound(value: Expr[Integer]): Option[StructuralBound] = value match
       case parameter: Param[?] =>
-        val fact = parameterFact(parameter, allowUnbounded = true)
-        fact.parameters.foreach(markStructuralParameter)
-        Some(fact)
+        // Analysis returns facts only. The consuming structural construct owns classification;
+        // behavioral guards must retain ordinary parameter identity without changing topology.
+        Some(parameterFact(parameter, allowUnbounded = true))
       case expression: KernelExpr[?] =>
         val reference = Option(expressionIds.get(expression)).getOrElse(
           invalid("structural predicate Integer has no captured identity")
@@ -4727,27 +5656,204 @@ private final class ConstructionSession(val options: EmitOptions):
     append(value)
     rendered.toString
 
+  private def memoryFailure(message: String): Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(
+      "NODAL-MEMORY-056-001",
+      message,
+      moduleStack.lastOption.map(value => provisionalModulePath(value.handle))
+    ))
+    poisonConstructor(failure, "memory port")
+    scala.util.Failure[Nothing](failure).get
+
+  private def memoryTransaction[A](body: => A): A =
+    try body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "memory port")
+        scala.util.Failure[Nothing](failure).get
+
+  private def memoryDeclaration(memory: Mem[?], owner: Long): DeclarationRecord =
+    val reference = Option(declarationIds.get(memory)).getOrElse(
+      memoryFailure("memory port requires an actual captured declaration")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != owner || declaration.kind != KernelSignalKind.Memory ||
+      (declaration.value ne memory) || domainRef(memory.domain).module != owner
+    then memoryFailure("memory port and its declared domain must belong to the active Module")
+    declaration
+
+  private def memoryOperand(value: Expr[?], owner: Long): KernelTypeDescriptor =
+    val reference = valueReference(value)
+    val module = reference match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    if module != owner then memoryFailure("memory operand belongs to another Module")
+    CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor).getOrElse(
+      memoryFailure("memory operand requires an exact captured type")
+    )
+
+  def memoryRead[A <: Data](memory: Mem[A], address: Expr[UInt]): Expr[A] = memoryTransaction:
+    closeBehavioralChain()
+    if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
+      analogSemanticContext.nonEmpty
+    then
+      memoryFailure(
+        "memory read creation requires Module scope; capture an existing read into actions"
+      )
+    val owner = currentModule.handle
+    val _ = memoryDeclaration(memory, owner)
+    if memoryOperand(address, owner).kind != "UInt" then
+      memoryFailure("memory address requires an exact UInt value")
+    validateCollectionDependencies(Vector(address))
+    validateGeneratedDependencies(Vector(address))
+    val result = new KernelExpr[A](
+      Vector(address, MemoryPortCapture(memory, currentDomain)),
+      resultType = Some(CandidateRuntime.typeDescriptor(memory.element)),
+      operation = Some("memory_read")
+    )
+    val _ = captureExpression(result)
+    result
+
+  def memoryWrite[A <: Data](
+      memory: Mem[A],
+      address: Expr[UInt],
+      value: Expr[A],
+      mask: Expr[Bits]
+  ): Unit = memoryTransaction:
+    val owner = currentModule.handle
+    val _ = memoryDeclaration(memory, owner)
+    if memoryOperand(address, owner).kind != "UInt" then
+      memoryFailure("memory address requires an exact UInt value")
+    if !DigitalEnumContract.sameType(
+        memoryOperand(value, owner),
+        CandidateRuntime.typeDescriptor(memory.element)
+      )
+    then memoryFailure("memory write value requires the exact declared recursive element type")
+    if !Set("Bits", "UInt")(memoryOperand(mask, owner).kind) then
+      memoryFailure("memory mask requires Bits or UInt")
+    if collectionStack.exists(region => !sequentialRegion(region)) ||
+      activeGeneratedRegion.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then memoryFailure("memory write requires Module scope or a checked sequential action")
+    captureOperation(
+      "memory-write",
+      Vector(memory, address, value, mask, MemoryPortCapture(memory, currentDomain)),
+      permitMemory = true
+    )
+
+  private def memoryPortSnapshot(capture: MemoryPortCapture, owner: Long)
+      : KernelMemoryPortSnapshot =
+    val declaration = memoryDeclaration(capture.memory, owner)
+    KernelMemoryPortSnapshot(
+      declarationPath(declaration.reference),
+      domainPath(domainRef(capture.memory.domain))
+    )
+
+  private def memoryReadSnapshot(expression: KernelExpr[?]): Option[KernelMemoryPortSnapshot] =
+    val metadata = expression.operands.collect { case value: MemoryPortCapture => value }
+    if expression.operation.contains("memory_read") then
+      val reference = expressionIds.get(expression)
+      if metadata.size != 1 || expression.operands.size != 2 ||
+        expression.operands.lastOption != metadata.headOption || expressionRegions.contains(
+          reference
+        )
+      then memoryFailure("memory read has malformed operands or lexical ownership")
+      Some(memoryPortSnapshot(metadata.head, reference.module))
+    else
+      if metadata.nonEmpty then
+        memoryFailure("memory port metadata is attached to another operation")
+      None
+
+  private def memoryWriteRecords: Vector[(KernelMemoryWriteSnapshot, Operation)] =
+    val writes = operations.iterator.filter(_.kind == "memory-write").toVector
+    val bases = writes.groupMapReduce(_.owner)(_ => 1)(_ + _).map: (owner, count) =>
+      owner -> Vector.tabulate(count)(ordinal => s"memory_write_$ordinal")
+    val paths = semanticOrigin.auxiliaryPaths(semanticResult.get, bases)
+    val ordinals = mutable.HashMap.empty[Long, Int]
+    writes.iterator.map: operation =>
+      val ordinal = ordinals.getOrElse(operation.owner, 0)
+      ordinals.update(operation.owner, ordinal + 1)
+      val owner = modulePath(operation.owner)
+      val metadata = operation.values.last.asInstanceOf[MemoryPortCapture]
+      val port = memoryPortSnapshot(metadata, operation.owner)
+      def operand(index: Int): String = collectionOperandPath(
+        operation.values(index),
+        operation.digitalRegion,
+        operation.owner
+      ).getOrElse(memoryFailure("memory write operand has no captured identity"))
+      KernelMemoryWriteSnapshot(
+        paths(operation.owner)(ordinal),
+        owner,
+        port.memory,
+        port.domain,
+        operand(1),
+        operand(2),
+        operand(3),
+        operation.digitalRegion.map(region => expressionPath(region.reference)),
+        operation.sourceOrdinal
+      ) -> operation
+    .toVector
+
   def operation(kind: String, values: Any*): Unit =
-    validateCollectionDependencies(values.toVector)
+    captureOperation(kind, values.toVector, permitMemory = false)
+
+  private def captureOperation(kind: String, values: Vector[Any], permitMemory: Boolean): Unit =
+    validateCollectionDependencies(values)
     val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
       analogStack.isEmpty && analogSemanticContext.isEmpty &&
       !AnalogProceduralConstruction.generatedProcedureActive &&
       values.headOption.collect { case expression: Expr[?] => expression }
         .flatMap(CandidateRuntime.expressionDataType)
-        .map(CandidateRuntime.typeDescriptor).exists(DigitalCombinationalContract.isValueTypeKind)
-    requireNoCollectionEffect(s"hardware '$kind' effect", assignment = digitalAssignment)
+        .map(CandidateRuntime.typeDescriptor).exists(dataType =>
+          DigitalCombinationalContract.isValueTypeKind(dataType) ||
+            (activeBehavioral.nonEmpty && Set("Integer", "Real")(dataType.kind))
+        )
+    val memoryWrite = permitMemory && kind == "memory-write" && values.size == 5 &&
+      values.headOption.exists(
+        _.isInstanceOf[Mem[?]]
+      ) && values.last.isInstanceOf[MemoryPortCapture]
+    if kind == "memory-write" && !memoryWrite then memoryFailure("malformed memory write effect")
+    closeBehavioralChain()
+    if activeBehavioral.nonEmpty && !digitalAssignment && !memoryWrite then
+      behavioralFailure(s"hardware '$kind' effect is not permitted in a behavioral update")
+    requireNoCollectionEffect(
+      s"hardware '$kind' effect",
+      assignment = digitalAssignment || memoryWrite
+    )
     val loop = Option.when(digitalAssignment)(activeLoop).flatten
     val effectRegion =
-      Option.when(digitalAssignment)(activeValueRegion.filter(_.permitsAssignment)).flatten
+      Option.when(digitalAssignment || memoryWrite)(
+        activeValueRegion.filter(_.permitsAssignment)
+      ).flatten
     if !digitalAssignment then requireLoopEffect(s"hardware '$kind' effect")
     loop.foreach: region =>
       if !effectRegion.nonEmpty || region.loop.get.generated != activeGeneratedRegion
       then
         collectionFailure("digital assignments require their exact loop lexical scope")
       validateDigitalLoopDomain(region)
-    effectRegion.foreach: region =>
+    if memoryWrite then
+      if collectionStack.exists(region => !sequentialRegion(region)) then
+        memoryFailure("memory write cannot escape the sequential effect profile")
+      effectRegion.foreach: region =>
+        values.slice(1, 4).foreach:
+          case value: Expr[?] =>
+            val _ = bindCollectionValue(value, Some(region), currentModule.handle)
+          case _ => memoryFailure("memory write requires exact typed operands")
+    effectRegion.filter(_ => digitalAssignment).foreach: region =>
       if values.size != 2 then collectionFailure("digital assignment requires two operands")
-      val _ = digitalAssignmentRoot(values.head, currentModule.handle, allowRootRegister = false)
+      val target = digitalAssignmentRoot(
+        values.head,
+        currentModule.handle,
+        allowRootRegister = activeBehavioral.nonEmpty
+      )
+      if activeBehavioral.nonEmpty &&
+        (!sequentialRegion(region) ||
+          records(target.module).declarations(target.index).kind != KernelSignalKind.Register)
+      then
+        behavioralFailure(
+          "behavioral updates may assign only owned whole registers in behavioral arms"
+        )
+      if privateFsmStorage(target) then
+        FlatFsmRuntime.fail("private machine state cannot be assigned by source actions")
       val exactType =
         for
           target <- values.headOption.collect { case value: Expr[?] => value }
@@ -4805,13 +5911,15 @@ private final class ConstructionSession(val options: EmitOptions):
           val ordinal = region.assignmentCount
           region.assignmentCount += 1
           ordinal
-        case None => if digitalAssignment then nextEffectOrdinal() else 0
+        case None =>
+          if Set("assignment", "value-connect", "memory-write")(kind) then nextEffectOrdinal()
+          else 0
       val captured = Operation(
         owner,
         kind,
         values.toVector,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
-        if structuralTopology && activeGeneratedRegion.nonEmpty then
+        if memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty) then
           semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
@@ -4874,13 +5982,25 @@ private final class ConstructionSession(val options: EmitOptions):
       .getOrElse(s"${modulePath(reference.module)}.${declarationName(reference)}")
 
   private def expressionPath(reference: ExpressionRef): String =
-    collectionArguments.get(reference).map: (region, ordinal) =>
+    fsmResults.get(reference).map((record, role) =>
+      s"${expressionPath(record.reference)}.$role"
+    ).orElse(
+      fsmActionRegions.get(reference).flatMap(_.fsmAction).map(header =>
+        s"${expressionPath(header.machine)}.action${header.ordinal}"
+      )
+    ).orElse(enumSwitchArms.get(reference).flatMap(_.switchArm).map(header =>
+      s"${expressionPath(header.switch)}.arm${header.index}"
+    )).orElse(collectionArguments.get(reference).map: (region, ordinal) =>
       if ordinal == 0 && region.structuralGenerate then
         expressionPath(region.loop.get.generated.get.induction)
-      else s"${expressionPath(region.reference)}.arg$ordinal"
-    .orElse(structuralArms.get(reference).flatMap(_.structuralArm).map(arm =>
+      else s"${expressionPath(region.reference)}.arg$ordinal").orElse(structuralArms.get(
+      reference
+    ).flatMap(_.structuralArm).map(arm =>
       s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
     ))
+      .orElse(behavioralArms.get(reference).flatMap(_.behavioralArm).map(arm =>
+        s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
+      ))
       .orElse(loopRegions.get(reference).flatMap(region =>
         region.loop.flatMap(_.generated).map(record =>
           if region.structuralGenerate then generatedRegionPath(record)
@@ -5149,6 +6269,13 @@ private final class ConstructionSession(val options: EmitOptions):
             "state in a multi-domain Module requires a lexical ClockDomain",
             Some(declarationPath(declaration.reference))
           )
+    case None if declaration.dataType.exists(isBoundaryCapability) =>
+      val actual = records(declaration.reference.module).domains.filter(domain =>
+        (domain.domain.clock.toVector :+ domain.domain.reset).exists(value =>
+          capabilitySourceRoot(value).contains(declaration.reference)
+        )
+      )
+      if actual.size == 1 then resolved.get(actual.head.reference) else None
     case None => None
 
   private def attribute(
@@ -5983,6 +7110,18 @@ private final class ConstructionSession(val options: EmitOptions):
     if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
     Set("Clock", "Reset").contains(descriptor.kind)
 
+  private def capabilitySourceRoot(value: AnyRef): Option[DeclarationRef] =
+    var current =
+      Option(declarationIds.get(value)).map(identity[DeclarationRef | ExpressionRef])
+        .orElse(Option(expressionIds.get(value)))
+    var depth = 0
+    while current.exists(_.isInstanceOf[ExpressionRef]) && depth < 128 do
+      val reference = current.get.asInstanceOf[ExpressionRef]
+      current = shapeIndices.get(reference).map(_.input)
+        .orElse(shapeViews.get(reference).map(_.input))
+      depth += 1
+    current.collect { case reference: DeclarationRef => reference }
+
   private def capabilityDomain(
       declaration: DeclarationRecord,
       resolved: Map[DomainRef, String]
@@ -5997,9 +7136,14 @@ private final class ConstructionSession(val options: EmitOptions):
           fail("NODAL-DIGITAL-054-018", "capability boundary has no local domain")
         )
       case None =>
-        if domains.size != 1 then
-          fail("NODAL-DIGITAL-054-018", "capability boundary requires an exact local domain")
-        domains.head.name
+        val actual = domains.filter(domain =>
+          (domain.domain.clock.toVector :+ domain.domain.reset).exists(value =>
+            capabilitySourceRoot(value).contains(declaration.reference)
+          )
+        )
+        if actual.size == 1 then actual.head.name
+        else if domains.size == 1 then domains.head.name
+        else fail("NODAL-DIGITAL-054-018", "capability boundary requires an exact local domain")
 
   private def validateBoundarySource(
       value: Expr[?],
@@ -6222,10 +7366,21 @@ private final class ConstructionSession(val options: EmitOptions):
     DigitalValueConstruction.snapshot(
       records.valuesIterator.flatMap(
         _.declarations.iterator.flatMap(_.dataType)
-      ).toVector ++ interfaces.dataTypes,
-      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots ++
+      ).toVector ++ interfaces.dataTypes ++ flatFsms.valuesIterator.map(
+        _.definition.canonicalType
+      ).toVector ++
+        enumSwitches.valuesIterator.map(record =>
+          new KernelDataType[Data](KernelTypeDescriptor("Enum", Vector(record.canonical)))
+        ).toVector,
+      storageRoots.toVector ++ assignmentRoots.toVector ++
+        operations.iterator.filter(_.kind == "memory-write").flatMap(_.values.collect {
+          case value: Expr[?] => value
+        }).toVector ++ interfaces.valueRoots ++
         collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
-        structuralArms.valuesIterator.flatMap(_.yielded).toVector,
+        structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
+        behavioralIfs.valuesIterator.map(_.predicate).toVector ++
+        flatFsms.valuesIterator.flatMap(_.transitions.map(_.guard)).toVector ++
+        enumSwitches.valuesIterator.map(_.selector).toVector,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,
@@ -6246,7 +7401,8 @@ private final class ConstructionSession(val options: EmitOptions):
         val reference = expressionIds.get(expression)
         collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
       ,
-      collectionArguments.keysIterator.map(expressionPath).toSet
+      collectionArguments.keysIterator.map(expressionPath).toSet,
+      memoryReadSnapshot
     )
 
   private def parameterExpressionSnapshots(
@@ -6313,8 +7469,9 @@ private final class ConstructionSession(val options: EmitOptions):
       retainedLoopRegions ++ loopRegions.valuesIterator.filter(_.structuralGenerate)
     val predicateRoots = (staticPredicates.valuesIterator.flatMap(_.operands) ++
       allValueRegions.flatMap(_.captures.valuesIterator.map(_._1))).collect {
-      case value: KernelExpr[?] if value.resultType.contains(KernelTypeDescriptor("Integer")) =>
-        value
+      case value: KernelExpr[?]
+          if value.resultType.contains(KernelTypeDescriptor("Integer")) &&
+            !runtimeSequentialInteger(value) => value
     }.toVector
     val loopStaticRoots = (loopRegions.valuesIterator.filter(retainedLoops).flatMap(region =>
       Iterator(region.loop.get.lower, region.loop.get.upperExclusive, region.loop.get.step) ++
@@ -6477,6 +7634,18 @@ private final class ConstructionSession(val options: EmitOptions):
       semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
         .map(source => SourceMapEntry(expressionPath(reference), source))
     .toVector
+    val sequentialRegionSources = (
+      fsmResults.keysIterator.map(reference => reference -> expressionPath(reference)) ++
+        fsmActionRegions.valuesIterator.map(region =>
+          region.fsmAction.get.machine -> expressionPath(region.reference)
+        ) ++
+        enumSwitchArms.valuesIterator.map(region =>
+          region.switchArm.get.switch -> expressionPath(region.reference)
+        )
+    ).flatMap: (reference, path) =>
+      semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
+        .map(source => SourceMapEntry(path, source))
+    .toVector
     val rootSources = operations.iterator.flatMap(_.values.collect {
       case root: InstanceArrayRootRecord => root
     })
@@ -6564,11 +7733,13 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
           .toVector.sortBy(_.path)
         )
+    verifySequentialAssignments(resolved)
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(
       emitQuality = options.quality,
       digitalAssignments = digitalAssignmentSnapshots(resolved),
+      memoryWrites = memoryWriteRecords.map(_._1),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
       enumDefinitions = digitalCapture._1,
@@ -6578,6 +7749,9 @@ private final class ConstructionSession(val options: EmitOptions):
       iterationIndices = iterationIndexSnapshots(),
       staticPredicates = staticPredicateSnapshots(),
       structuralIfs = structuralIfSnapshots(),
+      behavioralIfs = behavioralIfSnapshots(),
+      flatFsms = flatFsmSnapshots(),
+      enumSwitches = enumSwitchSnapshots(),
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
         case (parameter, value) =>
@@ -6603,7 +7777,9 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ collectionArgumentSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
+        (semantic.sourceMap ++ memoryWriteRecords.flatMap((write, record) =>
+          record.source.map(SourceMapEntry(write.path, _))
+        ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
           (edge, record) =>
             edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
         ) ++ arrayBindings.flatMap((binding, record) =>

@@ -151,7 +151,31 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp"]>]> {
+// F56 owned memory ports. Reads are continuously enabled intrinsic state ports;
+// write ingress receives its actual guard/clock/order from SequentialModel.
+def Nodal_MemoryReadOp : Nodal_Op<"memory_read", [HasParent<"ModuleOp">]> {
+  let summary = "Owned memory read with intrinsic exact latency and collision semantics";
+  let arguments = (ins AnyType:$address, FlatSymbolRefAttr:$memory,
+    FlatSymbolRefAttr:$domain, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_MemoryWriteOp : Nodal_Op<"memory_write",
+    [ParentOneOf<["ModuleOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
+  let summary = "Typed owned memory write before checked path/order normalization";
+  let arguments = (ins AnyType:$address, AnyType:$value, AnyType:$mask,
+    FlatSymbolRefAttr:$memory, FlatSymbolRefAttr:$domain, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_MemoryWriteEffectOp : Nodal_Op<"memory_write_effect", [HasParent<"ModuleOp">]> {
+  let summary = "Canonical pre-edge guarded write in authored per-memory port order";
+  let arguments = (ins AnyType:$address, AnyType:$value, AnyType:$mask,
+    AnyType:$guard, AnyType:$clock, FlatSymbolRefAttr:$memory, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, I64Attr:$order, StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -1825,3 +1849,77 @@ def Nodal_FsmCompletionOp : Nodal_Op<"fsm_completion",
 }
 
 #endif // NODAL_DIALECT_NODAL_NODALOPS_TD
+
+// F56: local executable sequential boundary; F19 descriptors remain distinct.
+def Nodal_LocalDomainBindingOp : Nodal_Op<"local_domain_binding", [HasParent<"ModuleOp">]> {
+  let summary = "Physical typed clock and optional reset for a local domain";
+  let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
+    FlatSymbolRefAttr:$domain, StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_BehavioralPredicateOp : Nodal_Op<"behavioral_predicate"> {
+  let summary = "Checked static predicate as a behavioral Bool value";
+  let arguments = (ins Nodal_StaticPredicateType:$predicate, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_BehavioralIfOp : Nodal_Op<"behavioral_if",
+    [IsolatedFromAbove, SingleBlock, NoTerminator, AttrSizedOperandSegments]> {
+  let summary = "Owned behavioral priority choice with explicit captures";
+  let arguments = (ins AnyType:$predicate,
+    Variadic<AnyType>:$true_captures, Variadic<AnyType>:$false_captures,
+    StrAttr:$contract_version, StrAttr:$region_id, DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select", [HasParent<"ModuleOp">]> {
+  let summary = "Exact typed priority selection with explicit hold alternatives";
+  let arguments = (ins AnyType:$predicate, AnyType:$true_value, AnyType:$false_value,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleOp">]> {
+  let summary = "Normalized clocked next state; reset dominates next-state enable";
+  let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
+    Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$reset_policy, StrAttr:$reset_polarity,
+    StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F56 v0.2: executable closed action ingress; F19 descriptors remain unchanged.
+def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
+    IsolatedFromAbove, NoTerminator]> {
+  let summary = "Checked flat state graph with actual guard and action edges";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$contract_version,
+    StrAttr:$machine_id, FlatSymbolRefAttr:$enum_ref, FlatSymbolRefAttr:$domain,
+    StrAttr:$initial_case, StrAttr:$requested_encoding, StrAttr:$resolved_encoding,
+    I64Attr:$local_width, ArrayAttr:$case_ids, ArrayAttr:$local_codes,
+    StrAttr:$illegal_policy, ArrayAttr:$states, ArrayAttr:$transitions,
+    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$next, AnyType:$taken);
+  let regions = (region VariadicRegion<AnyRegion>:$action_bodies);
+  let hasVerifier = 1;
+}
+def Nodal_EnumSwitchOp : Nodal_Op<"enum_switch", [IsolatedFromAbove, NoTerminator]> {
+  let summary = "Exact exhaustive enum action choice with explicit invalid arm";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$contract_version,
+    StrAttr:$region_id, FlatSymbolRefAttr:$enum_ref, ArrayAttr:$case_ids,
+    DenseI32ArrayAttr:$capture_counts, ArrayAttr:$arm_ids, DictionaryAttr:$metadata);
+  let regions = (region VariadicRegion<AnyRegion>:$arms);
+  let hasVerifier = 1;
+}
+def Nodal_ResetAssertedOp : Nodal_Op<"reset_asserted", [HasParent<"ModuleOp">]> {
+  let summary = "Actual bound reset capability and polarity as a Boolean";
+  let arguments = (ins AnyType:$reset, FlatSymbolRefAttr:$domain,
+    StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleOp">]> {
+  let summary = "Actual clock sampled property with exact owning domain";
+  let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}

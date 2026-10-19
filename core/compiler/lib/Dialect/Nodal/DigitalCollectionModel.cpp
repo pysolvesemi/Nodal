@@ -1411,8 +1411,7 @@ LogicalResult verifyDigitalCollectionYield(Operation *operation) {
 }
 LogicalResult verifyDigitalCollectionOperation(Operation *operation,
                                                const ParameterIntegerEnvironment *enclosing) {
-  if (!enclosing && (named(operation->getParentOp(), "nodal.collection") ||
-                     isBoundedDigitalLoop(operation->getParentOp()))) {
+  if (!enclosing && isDigitalRegionOwner(operation->getParentOp())) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return reject(operation, "nested collection cannot derive checked enclosing contexts");

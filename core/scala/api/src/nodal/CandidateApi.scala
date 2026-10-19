@@ -130,9 +130,10 @@ private[nodal] final case class ConstructorCapturedParameter(
 /** Candidate digital signal or port. */
 final class Signal[A <: Data] private[nodal] (
     val dataType: DataType[A],
-    kind: KernelSignalKind
+    kind: KernelSignalKind,
+    explicitName: Option[String] = None
 ) extends Expr[A]:
-  CandidateRuntime.declare(this, kind, dataType = Some(dataType))
+  CandidateRuntime.declare(this, kind, dataType = Some(dataType), explicitName = explicitName)
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
@@ -411,14 +412,19 @@ object ClockDomain:
       frequency: Frequency
   ): ClockDomain =
     CandidateRuntime.metadata(edge, reset, resetPolarity, frequency)
+    val clock = new Signal(Clock, KernelSignalKind.Input, Some(s"${name}_clock"))
+    val resetValue: Expr[Reset] = reset match
+      case ResetPolicy.None => CandidateRuntime.resetExpr("external_reset", name)
+      case _ => new Signal(Reset, KernelSignalKind.Input, Some(s"${name}_reset"))
     new ClockDomain(
       name,
-      CandidateRuntime.resetExpr("external_reset", name),
+      resetValue,
       KernelDomainKind.External,
       edge = Some(edge),
       resetPolicy = Some(reset),
       resetPolarity = Some(resetPolarity),
-      frequency = Some(frequency)
+      frequency = Some(frequency),
+      clock = Some(clock)
     )
 
   def from(
@@ -623,12 +629,30 @@ object RegNext:
     register
 
 def when(condition: Expr[Bool])(body: => Unit): Unit =
-  CandidateRuntime.block(CandidateRuntime.event(condition), body)
+  if AnalogProceduralConstruction.procedureActive then
+    CandidateRuntime.block(CandidateRuntime.event(condition), body)
+  else SequentialRuntime.missing()
 
 def elsewhen(condition: Expr[Bool])(body: => Unit): Unit =
-  CandidateRuntime.block(CandidateRuntime.event(condition), body)
+  if AnalogProceduralConstruction.procedureActive then
+    CandidateRuntime.block(CandidateRuntime.event(condition), body)
+  else SequentialRuntime.missing()
 
-def otherwise(body: => Unit): Unit = CandidateRuntime.block(body)
+def otherwise(body: => Unit): Unit =
+  if AnalogProceduralConstruction.procedureActive then CandidateRuntime.block(body)
+  else SequentialRuntime.missing()
+
+@compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+def when(condition: Boolean)(body: => Unit): Unit =
+  val _ = condition
+  val _ = () => body
+  SequentialRuntime.missing()
+
+@compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+def elsewhen(condition: Boolean)(body: => Unit): Unit =
+  val _ = condition
+  val _ = () => body
+  SequentialRuntime.missing()
 
 /** Value carrying an explicit Gray-code proof for CDC. */
 final class Gray[A <: Data] private[nodal] (val value: Expr[A])
@@ -1003,6 +1027,36 @@ extension (left: Expr[UInt])
   @targetName("uintAddition")
   def +(right: Expr[UInt]): Expr[UInt] =
     DigitalCombinationalContract.arithmetic("digital_add", left, right)
+
+extension (left: Boolean)
+  @compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+  @targetName("behavioralAndRuntime")
+  def &&(right: Expr[Bool]): Boolean =
+    val _ = left
+    val _ = right
+    SequentialRuntime.missing()
+
+  @compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+  @targetName("behavioralOrRuntime")
+  def ||(right: Expr[Bool]): Boolean =
+    val _ = left
+    val _ = right
+    SequentialRuntime.missing()
+
+extension (left: Expr[Bool])
+  @compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+  @targetName("runtimeAndBehavioral")
+  def &&(right: Boolean): Expr[Bool] =
+    val _ = left
+    val _ = right
+    SequentialRuntime.missing()
+
+  @compileTimeOnly("NODAL-SEQUENTIAL-056-MISSING: behavioral guard requires compiler capture")
+  @targetName("runtimeOrBehavioral")
+  def ||(right: Boolean): Expr[Bool] =
+    val _ = left
+    val _ = right
+    SequentialRuntime.missing()
 
 extension (left: Expr[Bool])
   def &&(right: Expr[Bool]): Expr[Bool] =

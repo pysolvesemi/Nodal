@@ -1325,18 +1325,21 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 - [ ] **Increment 56 — Implicit-domain registers, enum state, and flat FSM semantics**
   - Original scope retained: Implement `Reg`, `RegNext`, reset/uninitialized state, enum registers, exhaustive switches, `when` priority, enables, manual FSMs, concise high-level flat FSMs, entry/active/exit/transition actions, exclusive/priority transitions, terminal/completion states, local compact/one-hot/Gray/custom/Auto encoding, illegal-state policies, graph diagnostics, memory-port ownership, and CIRCT/Nodal sequential lowering without exposing normal `always` syntax or hidden boot state.
-  - [ ] **F-056.A — Architecture review, modularity, scalability and extensibility.** Reuse explicit domain/state ownership and canonical enum ABI; separate local FSM encoding from external values.
-  - [ ] **F-056.B — Implementation and integration**
-    - [ ] **F-056.B.1** Implement public/frontend state, enum/FSM and priority construction with explicit reset/domain ownership.
-    - [ ] **F-056.B.2** Integrate native state/transition/action, encoding and memory-port verification, preserving canonical external enum ABI.
-    - [ ] **F-056.B.3** Lower the approved sequential profile through Nodal/CIRCT with retained action/reset/illegal-state behavior and source identities.
-  - [ ] **F-056.C — Focused positive, negative and predecessor regression.** Test reset/enable priority, uninitialized state, illegal encodings, overlapping transitions, incomplete actions and multiple drivers.
-  - [ ] **F-056.D — Focused local validation and applicability**
-    - [ ] **F-056.D.1** Compiler and target witnesses: Retain actual construction/IR and any generated HDL promised here, with source maps and structural checks at the implemented boundary. A future backend is not an executed tool result.
-    - [ ] **F-056.D.2** Focused tool handoff: Name representative affected 65/66 parse-and-simulation, 67 synthesis/equivalence/core-proof and 72 AMS-output cases. Limit early claims to executed local checks; no full proof campaign or later consumer parent is a prerequisite.
-  - [ ] **F-056.E — Optimization review and output quality.** Review redundant state/materialization without hidden boot states or changes to reset/action ordering. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-056.F — Representative scale, determinism and compatibility.** Exercise many states/transitions and several encoding/reset policies; preserve stable state identity and reports.
+  - [x] **F-056.A — Architecture review, modularity, scalability and extensibility.** Reuse explicit domain/state ownership and canonical enum ABI; separate local FSM encoding from external values.
+  - [x] **F-056.B — Implementation and integration**
+    - [x] **F-056.B.1** Implement public/frontend state, enum/FSM and priority construction with explicit reset/domain ownership.
+    - [x] **F-056.B.2** Integrate native state/transition/action, encoding and memory-port verification, preserving canonical external enum ABI.
+    - [x] **F-056.B.3** Lower the approved sequential profile through Nodal/CIRCT with retained action/reset/illegal-state behavior and source identities.
+  - Focused checkpoint acceptance: [flat-FSM source/native and actual CIRCT target replay](../implementation/increment56-readiness.md#flat-fsm-and-fixed-scalar-target-integration). Memory ports were open at that earlier checkpoint; the final scoped acceptance below completes B.2.
+  - [x] **F-056.C — Focused positive, negative and predecessor regression.** Test reset/enable priority, uninitialized state, illegal encodings, overlapping transitions, incomplete actions and multiple drivers.
+  - [x] **F-056.D — Focused local validation and applicability**
+    - [x] **F-056.D.1** Compiler and target witnesses: Retain actual construction/IR and any generated HDL promised here, with source maps and structural checks at the implemented boundary. A future backend is not an executed tool result.
+    - [x] **F-056.D.2** Focused tool handoff: Name representative affected 65/66 parse-and-simulation, 67 synthesis/equivalence/core-proof and 72 AMS-output cases. Limit early claims to executed local checks; no full proof campaign or later consumer parent is a prerequisite.
+  - [x] **F-056.E — Optimization review and output quality.** Review redundant state/materialization without hidden boot states or changes to reset/action ordering. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-056.F — Representative scale, determinism and compatibility.** Exercise many states/transitions and several encoding/reset policies; preserve stable state identity and reports.
   - [ ] **F-056.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 56; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+
+  - Scoped implementation acceptance: [F56 final shared memory integration and actual Scala/IR/SystemVerilog demonstrations](../implementation/increment56-readiness.md#final-scoped-acceptance-and-integration-handoff). Final memory replay: 969 native cases, 100 maintained Scala groups, 17 identity predecessors, eight frontend negatives with positive/separate-JAR controls, plus 40 repaired F55 bridge groups and 45 affected bridge groups rerun. A–F and mandatory B.1.1 complete; G/parent await verified squash integration. RAM target and later-owner execution remain explicitly unsupported/unexecuted.
 
 - [ ] **Increment 57 — Clock/reset domains, CDC/RDC primitives, and low-level event escape**
   - Original scope retained: Implement domain construction/application, external/default/generated binding, relationship graphs, reset policies, async-assert/sync-release, timing provenance, all semantic CDC/RDC operations, gates/muxes, waivers, and restricted low-level processes.

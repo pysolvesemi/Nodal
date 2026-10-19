@@ -159,6 +159,7 @@ private:
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
   SmallVector<Net> nets;
+  llvm::DenseMap<unsigned, FlatSymbolRefAttr> componentDomains;
   SmallVector<unsigned> parents, ranks;
   llvm::StringMap<Operation *> driverIdentities;
   llvm::DenseSet<Value> usedDrivers;
@@ -1026,7 +1027,6 @@ LogicalResult Model::verify() {
   }
   // Domain ownership is a property of the entire resolved component. A
   // standalone net must not erase a constraint between two Interface leaves.
-  llvm::DenseMap<unsigned, FlatSymbolRefAttr> componentDomains;
   for (auto &item : accesses) {
     auto index = netIndices.find(item.first);
     if (index == netIndices.end())
@@ -1061,7 +1061,7 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
   auto add = [&](Value value) -> DigitalInterfaceValueDependencies & {
     auto [entry, inserted] = positions.try_emplace(value, collected.size());
     if (inserted)
-      collected.push_back({value, {}});
+      collected.push_back({value, {}, {}});
     return collected[entry->second];
   };
   // Choose representatives in authored source order, never hash iteration order.
@@ -1073,6 +1073,7 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
       if (net != netIndices.end()) {
         auto [known, inserted] = components.try_emplace(representative(net->second), value);
         auto &entry = add(value);
+        entry.domain = componentDomains.lookup(representative(net->second));
         if (!inserted)
           entry.sources.emplace_back(known->second, &operation);
         continue;
@@ -1083,6 +1084,7 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
       auto key = std::make_pair(access->second.instance->operation, access->second.path.str());
       auto [known, inserted] = members.try_emplace(key, value);
       auto &entry = add(value);
+      entry.domain = access->second.instance->domain;
       if (!inserted)
         entry.sources.emplace_back(known->second, &operation);
     }
@@ -1112,8 +1114,12 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
   for (Operation &operation : module->getRegion(0).front()) {
     if (!marked(&operation))
       continue;
-    if (llvm::isa<NetReadOp>(operation))
-      add(operation.getResult(0)).sources.emplace_back(operation.getOperand(0), &operation);
+    if (llvm::isa<NetReadOp>(operation)) {
+      auto &entry = add(operation.getResult(0));
+      entry.domain =
+          componentDomains.lookup(representative(netIndices.lookup(operation.getOperand(0))));
+      entry.sources.emplace_back(operation.getOperand(0), &operation);
+    }
   }
   llvm::DenseMap<unsigned, Operation *> componentDriver;
   for (auto [index, operation] : conditionalDrivers)
@@ -1125,10 +1131,12 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
     if (!driver)
       return reject(operation, "split dependency has no verified conditional driver");
     auto &data = add(operation->getResult(0));
+    data.domain = componentDomains.lookup(representative(index));
     if (llvm::isa<NetDriveOp>(driver))
       data.sources.emplace_back(driver->getOperand(2), driver);
-    add(operation->getResult(1))
-        .sources.emplace_back(driver->getOperand(llvm::isa<NetDriveOp>(driver) ? 3 : 2), driver);
+    auto &enable = add(operation->getResult(1));
+    enable.domain = componentDomains.lookup(representative(index));
+    enable.sources.emplace_back(driver->getOperand(llvm::isa<NetDriveOp>(driver) ? 3 : 2), driver);
   }
   uint64_t edges = 0;
   for (const auto &entry : collected)

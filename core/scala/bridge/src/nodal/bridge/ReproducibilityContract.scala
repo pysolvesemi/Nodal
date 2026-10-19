@@ -368,6 +368,8 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      ) ++ value.memory.toVector.map(port =>
+        "memory" -> obj("memory" -> string(port.memory), "domain" -> string(port.domain))
       ) ++ value.structure.toVector.map(evidence =>
         "structure" -> obj(
           "schema_type" -> string(evidence.schemaType),
@@ -471,6 +473,98 @@ private[nodal] object ReproducibilityContract:
         "data_type" -> optionalString(value.dataType),
         "source_ordinal" -> number(value.sourceOrdinal)
       )
+    ))).toVector ++ Option.when(snapshot.behavioralIfs.nonEmpty)("behavioral_ifs" ->
+    array(snapshot.behavioralIfs.sortBy(_.path).map(value =>
+      def arm(value: KernelStructuralArmSnapshot): JsonValue = obj(
+        "path" -> string(value.path),
+        "captures" -> array(value.captures.map(string)),
+        "arguments" -> array(value.arguments.map(argument =>
+          obj(
+            "path" -> string(argument.path),
+            "data_type" -> string(argument.dataType),
+            "role" -> string(argument.role)
+          )
+        )),
+        "yield" -> optionalString(value.yieldValue)
+      )
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "predicate" -> string(value.predicate),
+        "true_arm" -> arm(value.trueArm),
+        "false_arm" -> arm(value.falseArm),
+        "source_ordinal" -> number(value.sourceOrdinal),
+        "root" -> string(value.root)
+      )
+    ))).toVector ++ Option.when(snapshot.flatFsms.nonEmpty)("flat_fsms" ->
+    array(snapshot.flatFsms.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "domain" -> string(value.domain),
+        "storage" -> string(value.storage),
+        "enum_identity" -> string(value.enumIdentity),
+        "requested_encoding" -> string(value.requestedEncoding),
+        "resolved_encoding" -> string(value.resolvedEncoding),
+        "local_width" -> number(value.localWidth),
+        "initial_case" -> string(value.initialCase),
+        "illegal_state" -> string(value.illegalState),
+        "source_ordinal" -> number(value.sourceOrdinal),
+        "next_local" -> string(value.nextLocal),
+        "transition_taken" -> string(value.transitionTaken),
+        "local_codes" -> array(value.localCodes.map(code =>
+          obj(
+            "case_id" -> string(code.caseId),
+            "code" -> string(code.code)
+          )
+        )),
+        "states" -> array(value.states.map(state =>
+          obj(
+            "case_id" -> string(state.caseId),
+            "terminal" -> bool(state.terminal),
+            "source_ordinal" -> number(state.sourceOrdinal)
+          )
+        )),
+        "transitions" -> array(value.transitions.map(edge =>
+          obj(
+            "source_case" -> string(edge.sourceCase),
+            "destination_case" -> string(edge.destinationCase),
+            "mode" -> string(edge.mode),
+            "guard" -> string(edge.guard),
+            "source_ordinal" -> number(edge.sourceOrdinal)
+          )
+        )),
+        "actions" -> array(value.actions.map(action =>
+          obj(
+            "region" -> sequentialArm(KernelStructuralArmSnapshot(
+              action.path,
+              action.captures,
+              action.arguments,
+              None
+            )),
+            "phase" -> string(action.phase),
+            "owner_case" -> optionalString(action.ownerCase),
+            "transition_ordinal" -> action.transitionOrdinal.map(number).getOrElse(JNull),
+            "source_ordinal" -> number(action.sourceOrdinal)
+          )
+        ))
+      )
+    ))).toVector ++ Option.when(snapshot.enumSwitches.nonEmpty)("enum_switches" ->
+    array(snapshot.enumSwitches.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "selector" -> string(value.selector),
+        "enum_identity" -> string(value.enumIdentity),
+        "case_ids" -> array(value.caseIds.map(string)),
+        "arms" -> array(value.arms.map(sequentialArm)),
+        "invalid_arm" -> sequentialArm(value.invalidArm),
+        "source_ordinal" -> number(value.sourceOrdinal),
+        "root" -> string(value.root)
+      )
     ))).toVector ++ Option.when(snapshot.generatedRegions.exists(_.digitalBody.nonEmpty))(
     "digital_generates" -> array(snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .sortBy(_.path).map(value =>
@@ -496,7 +590,34 @@ private[nodal] object ReproducibilityContract:
           ))
         )
       ))
+  ).toVector ++ Option.when(snapshot.memoryWrites.nonEmpty)(
+    "memory_writes" -> array(snapshot.memoryWrites.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "memory" -> string(value.memory),
+        "domain" -> string(value.domain),
+        "address" -> string(value.address),
+        "value" -> string(value.value),
+        "mask" -> string(value.mask),
+        "region" -> optionalString(value.region),
+        "source_ordinal" -> number(value.sourceOrdinal)
+      )
+    ))
   ).toVector)
+
+  private def sequentialArm(value: KernelStructuralArmSnapshot): JsonValue = obj(
+    "path" -> string(value.path),
+    "captures" -> array(value.captures.map(string)),
+    "arguments" -> array(value.arguments.map(argument =>
+      obj(
+        "path" -> string(argument.path),
+        "data_type" -> string(argument.dataType),
+        "role" -> string(argument.role)
+      )
+    )),
+    "yield" -> optionalString(value.yieldValue)
+  )
 
   private def semanticNames(snapshot: ConstructionSnapshot): JsonValue =
     val declared = snapshot.names

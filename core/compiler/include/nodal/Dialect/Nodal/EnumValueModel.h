@@ -1,12 +1,24 @@
 #ifndef NODAL_DIALECT_NODAL_ENUMVALUEMODEL_H
 #define NODAL_DIALECT_NODAL_ENUMVALUEMODEL_H
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 namespace nodal {
 
 class ParameterIntegerEnvironment;
+/// Read-only facts admitted by the canonical ABI owner, in declaration order.
+struct CanonicalEnumDefinition {
+  mlir::Operation *operation;
+  mlir::Type type;
+  llvm::SmallVector<mlir::StringAttr, 4> caseIds;
+  llvm::SmallVector<mlir::IntegerAttr, 4> codes;
+};
+mlir::FailureOr<CanonicalEnumDefinition>
+inspectCanonicalEnumDefinition(mlir::Operation *use, mlir::FlatSymbolRefAttr reference);
 
 /// Validate the versioned semantic ABI, if present. Historical F19 definitions
 /// with empty metadata retain their declaration-only contract. New typed enum

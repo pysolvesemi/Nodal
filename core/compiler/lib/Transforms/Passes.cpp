@@ -51,6 +51,8 @@ std::unique_ptr<Pass> createPlanDigitalMaterializationPass();
 std::unique_ptr<Pass> createPlanDigitalLoopsPass();
 void registerDigitalLoopPlanningPass();
 void registerDigitalMaterializationPass();
+void registerSequentialNormalizationPass();
+void registerSequentialToCIRCTPass();
 
 namespace {
 
@@ -1443,6 +1445,8 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 void registerNodalPasses() {
   registerDigitalLoopPlanningPass();
   registerDigitalMaterializationPass();
+  registerSequentialNormalizationPass();
+  registerSequentialToCIRCTPass();
   registerAnalogCanonicalizationPass();
   registerAnalogSemanticLintPass();
   static PassRegistration<MaterializeConservativeConnectivityPass> connectivity;

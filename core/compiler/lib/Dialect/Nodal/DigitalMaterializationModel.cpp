@@ -114,9 +114,11 @@ FailureOr<std::string> identity(Value value, Operation *module) {
   if (Operation *definition = value.getDefiningOp()) {
     if (owner(definition) != module || !canonicalText(path(definition), maximumIdentityBytes))
       return failure();
-    if (definition->getNumResults() != 1)
+    auto semantic = digitalValueSemanticPath(value);
+    if ((definition->getNumResults() != 1 && !llvm::isa<FlatFSMOp>(definition)) ||
+        !canonicalText(semantic, maximumIdentityBytes))
       return failure();
-    return path(definition).str();
+    return semantic;
   }
   auto argument = llvm::dyn_cast<BlockArgument>(value);
   Operation *region = argument ? argument.getOwner()->getParentOp() : nullptr;

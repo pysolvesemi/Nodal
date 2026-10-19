@@ -61,8 +61,28 @@ private final class ConstructionSession(val options: EmitOptions):
   private val staticPredicates = mutable.LinkedHashMap.empty[ExpressionRef, StaticPredicate]
   private val structuralIfs = mutable.LinkedHashMap.empty[ExpressionRef, StructuralIfRecord]
   private val structuralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val behavioralIfs = mutable.LinkedHashMap.empty[ExpressionRef, BehavioralIfRecord]
+  private val behavioralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val behavioralChains =
+    mutable.HashMap.empty[(Long, Option[ExpressionRef]), BehavioralChainCursor]
   private def allValueRegions =
-    collectionRegions.valuesIterator ++ loopRegions.valuesIterator ++ structuralArms.valuesIterator
+    collectionRegions.valuesIterator ++ loopRegions.valuesIterator ++ structuralArms.valuesIterator ++
+      behavioralArms.valuesIterator
+
+  private def activeBehavioral: Option[DigitalValueRegionRecord] =
+    collectionStack.reverseIterator.find(_.behavioralArm.nonEmpty)
+
+  private def behavioralFailure(message: String, code: String = "NODAL-SEQUENTIAL-056-001")
+      : Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(code, message))
+    poisonConstructor(failure, "behavioral guard")
+    scala.util.Failure[Nothing](failure).get
+
+  private def behavioralKey = currentModule.handle -> activeValueRegion.map(_.reference)
+
+  private def closeBehavioralChain(): Unit =
+    if moduleStack.nonEmpty then behavioralChains.remove(behavioralKey)
+
   private val iterationIndices = mutable.LinkedHashSet.empty[ExpressionRef]
   private val nextDigitalEffectOrdinal = mutable.HashMap.empty[Long, Int]
 
@@ -204,7 +224,9 @@ private final class ConstructionSession(val options: EmitOptions):
       depth += 1
       if depth > 128 then collectionFailure("lexical static scope exceeds its depth budget")
       val value = current.get
-      admitted = value.structuralArm.nonEmpty || value.loop.exists(_.generated.nonEmpty)
+      admitted = value.structuralArm.nonEmpty || value.behavioralArm.nonEmpty || value.loop.exists(
+        _.generated.nonEmpty
+      )
       current = value.parent
     admitted
 
@@ -222,7 +244,7 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def requireNoCollectionEffect(role: String, assignment: Boolean = false): Unit =
     collectionStack.reverseIterator.find(region =>
-      !region.isLoop && !(assignment && region.structuralArm.nonEmpty)
+      !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
       rejectCollection(
         "NODAL-COLLECTION-055-006",
@@ -538,6 +560,7 @@ private final class ConstructionSession(val options: EmitOptions):
         operation == DigitalCollectionContract.Operation
       val knownConditional = retained.exists(structuralIfs.contains) &&
         operation == StructuralIfRuntime.Operation
+      val behavioralPredicate = operation == SequentialRuntime.PredicateOperation
       val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
         DigitalScalarContract.Operations.contains(operation) ||
         operation == DigitalMaterializationContract.Operation ||
@@ -545,7 +568,7 @@ private final class ConstructionSession(val options: EmitOptions):
         DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
-        knownArgument || knownCollection || knownConditional
+        knownArgument || knownCollection || knownConditional || behavioralPredicate
       val rangeAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           !pure && !staticInteger && !knownArgument
@@ -764,7 +787,11 @@ private final class ConstructionSession(val options: EmitOptions):
         role
       )
 
-  def captureStaticPredicate(operation: String, operands: Vector[Any]): StaticPredicate =
+  def captureStaticPredicate(
+      operation: String,
+      operands: Vector[Any],
+      structural: Boolean = true
+  ): StaticPredicate =
     try
       if staticPredicates.size >= 65536 then
         structuralFailure("static predicate DAG exceeds 65536 nodes")
@@ -786,7 +813,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
               ) =>
             val facts = analysis.predicateBound(value.asInstanceOf[Expr[Integer]])
-            facts.toVector.flatMap(_.parameters).foreach(markStructuralParameter)
+            if structural then facts.toVector.flatMap(_.parameters).foreach(markStructuralParameter)
             bindCollectionValue(value, activeValueRegion, module.handle, predicateUse = true)
           case _ =>
             structuralFailure("comparison operands must be owned static Integer expressions")
@@ -816,6 +843,8 @@ private final class ConstructionSession(val options: EmitOptions):
       whenTrue: () => Option[Expr[?]],
       whenFalse: () => Option[Expr[?]]
   ): Option[Expr[?]] =
+    if activeBehavioral.nonEmpty && !hasResult then
+      behavioralFailure("effectful structural if is not permitted inside a behavioral update")
     val module = currentModule
     val parent = activeValueRegion
     try
@@ -903,6 +932,284 @@ private final class ConstructionSession(val options: EmitOptions):
       case failure: Throwable =>
         poisonConstructor(failure, "structural if")
         scala.util.Failure[Nothing](failure).get
+
+  def captureBehavioralComparison(
+      left: Expr[Integer],
+      right: Expr[Integer],
+      operation: String
+  ): Expr[Bool] =
+    val predicate = captureStaticPredicate(operation, Vector(left, right), structural = false)
+    val expression = new KernelExpr[Bool](
+      Vector(predicate),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(SequentialRuntime.PredicateOperation)
+    )
+    val _ = captureExpression(expression)
+    expression
+
+  private def withBehavioralArm(region: DigitalValueRegionRecord)(body: => Unit): Unit =
+    collectionStack += region
+    try body
+    finally
+      behavioralChains.remove(region.reference.module -> Some(region.reference))
+      val removed = collectionStack.remove(collectionStack.size - 1)
+      if removed ne region then behavioralFailure("behavioral lexical stack is corrupt")
+
+  private def newBehavioralIf(
+      condition: Expr[Bool],
+      root: Option[ExpressionRef]
+  ): BehavioralIfRecord =
+    val module = currentModule
+    val parent = activeValueRegion
+    var ancestor = parent
+    var depth = 0
+    while ancestor.nonEmpty do
+      depth += 1
+      if depth >= 128 then behavioralFailure("behavioral lexical depth exceeds 128")
+      ancestor = ancestor.get.parent
+    if CandidateRuntime.expressionDataType(condition).map(CandidateRuntime.typeDescriptor) !=
+        Some(KernelTypeDescriptor("Bool"))
+    then behavioralFailure("behavioral guard requires an exact owned Bool value")
+    val bound = bindCollectionValue(condition, parent, module.handle).asInstanceOf[Expr[Bool]]
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    val ordinal = parent match
+      case Some(region) =>
+        val result = region.assignmentCount
+        region.assignmentCount += 1
+        result
+      case None => nextEffectOrdinal()
+    def arm(selected: Boolean): DigitalValueRegionRecord =
+      val region = new DigitalValueRegionRecord(
+        newScaffoldReference(module),
+        parent,
+        "behavioral_arm",
+        Vector.empty,
+        None,
+        behavioralArm = Some(BehavioralArmHeader(reference, selected))
+      )
+      behavioralArms.update(region.reference, region)
+      region
+    val record = new BehavioralIfRecord(
+      reference,
+      parent,
+      bound,
+      arm(true),
+      arm(false),
+      ordinal,
+      root.getOrElse(reference)
+    )
+    behavioralIfs.update(reference, record)
+    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(condition))
+    record
+
+  def captureBehavioralBranch(
+      kind: String,
+      condition: Option[Expr[Bool]],
+      body: () => Unit
+  ): Unit =
+    try
+      if analogStack.nonEmpty || analogSemanticContext.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        activeValueRegion.exists(_.behavioralArm.isEmpty) || collectionStack.size >= 128 ||
+        behavioralIfs.size >= 65536
+      then behavioralFailure("behavioral update requires a bounded, owned sequential context")
+      val key = behavioralKey
+      kind match
+        case "when" =>
+          val outerRoot = activeBehavioral.map(region =>
+            behavioralIfs(region.behavioralArm.get.conditional).root
+          )
+          val record = newBehavioralIf(
+            condition.getOrElse(
+              behavioralFailure("when requires a predicate")
+            ),
+            outerRoot
+          )
+          withBehavioralArm(record.trueArm)(body())
+          behavioralChains.update(key, new BehavioralChainCursor(record.root, record))
+        case "elsewhen" | "otherwise" =>
+          val cursor = behavioralChains.remove(key).getOrElse(
+            behavioralFailure("elsewhen/otherwise has no immediately preceding open when chain")
+          )
+          withBehavioralArm(cursor.tail.falseArm):
+            if kind == "otherwise" then
+              if condition.nonEmpty then behavioralFailure("otherwise cannot have a predicate")
+              body()
+            else
+              val record = newBehavioralIf(
+                condition.getOrElse(
+                  behavioralFailure("elsewhen requires a predicate")
+                ),
+                Some(cursor.root)
+              )
+              withBehavioralArm(record.trueArm)(body())
+              cursor.tail = record
+          if kind == "elsewhen" then behavioralChains.update(key, cursor)
+        case _ => behavioralFailure("unknown behavioral chain arm")
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "behavioral guard")
+        scala.util.Failure[Nothing](failure).get
+
+  private def behavioralIfSnapshots(): Vector[KernelBehavioralIfSnapshot] =
+    behavioralIfs.valuesIterator.map: record =>
+      def arm(region: DigitalValueRegionRecord): KernelStructuralArmSnapshot =
+        KernelStructuralArmSnapshot(
+          expressionPath(region.reference),
+          region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+          regionArguments(region),
+          None
+        )
+      KernelBehavioralIfSnapshot(
+        expressionPath(record.reference),
+        modulePath(record.reference.module),
+        record.parent.map(region => expressionPath(region.reference)),
+        pathOf(record.predicate).get,
+        arm(record.trueArm),
+        arm(record.falseArm),
+        record.sourceOrdinal,
+        expressionPath(record.root)
+      )
+    .toVector
+
+  /** Validate actual pre-edge dependencies and update-root ownership, without evaluating guards. */
+  private def verifySequentialAssignments(resolved: Map[DomainRef, String]): Unit =
+    val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
+    val guardsByRoot = behavioralIfs.valuesIterator.toVector.groupBy(_.root)
+    val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
+    val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
+    operations.iterator.filter(operation =>
+      Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
+    ).foreach: operation =>
+      val target =
+        digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+      if records(target.module).declarations(target.index).kind != KernelSignalKind.Register then
+        continuousDrivers.update(
+          target,
+          continuousDrivers.getOrElse(target, Vector.empty) :+ operation.values(1)
+        )
+    val domainsByPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+      domainPath(domain.reference) -> domain
+    ).toMap
+    def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
+      region.flatMap(_.behavioralArm).map(header => behavioralIfs(header.conditional).root)
+    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
+      val pending = mutable.ArrayDeque[Any](value)
+      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      var count = 0
+      while pending.nonEmpty do
+        val current = pending.removeLast()
+        current match
+          case reference: AnyRef
+              if Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
+            count += 1
+            if count > 65536 then
+              behavioralFailure("sequential dependency graph exceeds its budget")
+            Option(declarationIds.get(reference)).foreach: declarationRef =>
+              if declarationRef.module != owner then
+                behavioralFailure("sequential dependency belongs to another module")
+              val declaration = records(owner).declarations(declarationRef.index)
+              if declaration.kind != KernelSignalKind.Register then
+                pending ++= continuousDrivers.getOrElse(declarationRef, Vector.empty)
+              val sourceDomain = declarationDomain(declaration, resolved)
+              if sourceDomain.exists(_ != targetDomain) ||
+                (declaration.kind == KernelSignalKind.Register && sourceDomain.isEmpty)
+              then behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
+            Option(expressionIds.get(reference)).foreach: expressionRef =>
+              if expressionRef.module != owner then
+                behavioralFailure("sequential expression belongs to another module")
+              collectionArguments.get(expressionRef).foreach: (region, _) =>
+                region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
+                  pending.append(value._1)
+                )
+            reference match
+              case expression: KernelExpr[?] => pending ++= expression.operands
+              case predicate: StaticPredicate => pending ++= predicate.operands
+              case _ => ()
+          case _ => ()
+    operations.zipWithIndex.foreach: (operation, index) =>
+      if operation.kind == "assignment" && operation.values.size == 2 then
+        val target =
+          digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
+        val declaration = records(target.module).declarations(target.index)
+        if declaration.kind == KernelSignalKind.Register then
+          val root = behavioralRoot(operation.digitalRegion).map(Left(_)).getOrElse(Right(index))
+          roots.get(target).foreach: previous =>
+            if previous != root then
+              behavioralFailure("one register has unrelated update roots", "NODAL-STATE-001")
+          roots.update(target, root)
+          val source = operation.values(1).asInstanceOf[Expr[?]]
+          val exact =
+            for
+              targetType <- declaration.dataType
+              sourceType <- CandidateRuntime.expressionDataType(source)
+            yield DigitalEnumContract.sameType(
+              CandidateRuntime.typeDescriptor(targetType),
+              CandidateRuntime.typeDescriptor(sourceType)
+            )
+          if !exact.contains(true) then
+            behavioralFailure("register update requires exactly matching types")
+          val domain = declarationDomain(declaration, resolved).getOrElse(
+            behavioralFailure("register update has no resolved domain", "NODAL-DOMAIN-001")
+          )
+          dependencies(source, operation.owner, domain)
+          root.left.toOption.foreach: identity =>
+            if checkedGuards.add((identity, operation.owner, domain)) then
+              guardsByRoot(identity).foreach(record =>
+                dependencies(record.predicate, operation.owner, domain)
+              )
+    records.valuesIterator.flatMap(_.declarations).filter(_.kind == KernelSignalKind.Register)
+      .foreach: declaration =>
+        val target = declaration.reference
+        val domain = declarationDomain(declaration, resolved).flatMap(domainsByPath.get).getOrElse(
+          behavioralFailure("register update domain is not owned by this construction")
+        )
+        val behavioral = roots.get(target).exists(_.isLeft)
+        if domain.domain.clock.isEmpty && behavioral then
+          behavioralFailure("behavioral update requires an actual local Clock binding")
+        declaration.attributes.collectFirst { case ("initial", Some(value: Expr[?])) => value }
+          .foreach(dependencies(_, target.module, domainPath(domain.reference)))
+        if domain.domain.clock.nonEmpty then
+          def capability(value: Expr[?], expected: String): Unit =
+            if CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor) !=
+                Some(KernelTypeDescriptor(expected))
+            then behavioralFailure(s"local $expected binding requires its exact capability type")
+            var reference = assignmentReference(value)
+            val seen = mutable.HashSet.empty[ExpressionRef]
+            while reference.isInstanceOf[ExpressionRef] do
+              val expression = reference.asInstanceOf[ExpressionRef]
+              if !seen.add(expression) || seen.size > 128 then
+                behavioralFailure("clock/reset boundary projection is cyclic or exceeds its budget")
+              reference = shapeIndices.get(expression).map(_.input)
+                .orElse(shapeViews.get(expression).map(_.input)).getOrElse(
+                  behavioralFailure(
+                    "executable clock/reset requires an actual input boundary or static projection"
+                  )
+                )
+            val root = reference.asInstanceOf[DeclarationRef]
+            if root.module != domain.reference.module ||
+              records(root.module).declarations(root.index).kind != KernelSignalKind.Input
+            then
+              behavioralFailure(
+                "executable clock/reset input belongs to another module or is not an input"
+              )
+          capability(domain.domain.clock.get, "Clock")
+          if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
+            capability(domain.domain.reset, "Reset")
+          if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
+            behavioralFailure(
+              "generated and inherited clock execution requires its later domain profile"
+            )
+          domain.domain.resetPolicy match
+            case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
+              behavioralFailure("async-assert/sync-release requires actual release synchronization")
+            case Some(ResetPolicy.None) =>
+              if declaration.attributes.exists:
+                  case ("initial", Some(_: Expr[?])) => true
+                  case _ => false
+              then behavioralFailure("resetless register cannot have a reset initializer")
+            case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
+            case _ => behavioralFailure("executable register requires an explicit reset policy")
 
   private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
     staticPredicates.toVector.map: (reference, predicate) =>
@@ -1436,6 +1743,8 @@ private final class ConstructionSession(val options: EmitOptions):
       )
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    requireNoCollectionEffect("domain declaration")
+    closeBehavioralChain()
     requireNoGeneratedEffect(s"generated ${kind.label} domain declaration")
     val module = currentModule
     if domainIds.containsKey(domain) then
@@ -1445,6 +1754,25 @@ private final class ConstructionSession(val options: EmitOptions):
     val reference = DomainRef(module.handle, module.domains.size)
     module.domains += DomainRecord(reference, domain, domain.name, kind)
     domainIds.put(domain, reference)
+    if kind == KernelDomainKind.External then
+      def boundary(value: Expr[?], expected: String): Unit =
+        val source = Option(declarationIds.get(value)).getOrElse(
+          behavioralFailure(s"local $expected binding requires an actual typed input boundary")
+        )
+        if source.module != module.handle then
+          behavioralFailure(s"local $expected binding belongs to another module")
+        val declaration = module.declarations(source.index)
+        if declaration.kind != KernelSignalKind.Input ||
+          !declaration.dataType.exists(value =>
+            CandidateRuntime.typeDescriptor(value) == KernelTypeDescriptor(expected)
+          )
+        then behavioralFailure(s"local $expected binding requires an exact typed input boundary")
+        declaration.domainCandidate.foreach: previous =>
+          if previous ne domain then
+            behavioralFailure(s"one $expected input cannot belong to two local domains")
+        module.declarations.update(source.index, declaration.copy(domainCandidate = Some(domain)))
+      domain.clock.foreach(boundary(_, "Clock"))
+      if !domain.resetPolicy.contains(ResetPolicy.None) then boundary(domain.reset, "Reset")
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
   private def requireGeneratedDeclarationScope(reference: DeclarationRef): Unit =
@@ -1499,6 +1827,7 @@ private final class ConstructionSession(val options: EmitOptions):
       attributes: Vector[(String, Any)],
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
+    closeBehavioralChain()
     requireNoCollectionEffect(s"${kind.label} declaration")
     requireLoopEffect(s"${kind.label} declaration")
     validateCollectionDependencies(attributes.map(_._2))
@@ -3611,9 +3940,9 @@ private final class ConstructionSession(val options: EmitOptions):
     private val predicateActive = mutable.HashSet.empty[ExpressionRef]
     def predicateBound(value: Expr[Integer]): Option[StructuralBound] = value match
       case parameter: Param[?] =>
-        val fact = parameterFact(parameter, allowUnbounded = true)
-        fact.parameters.foreach(markStructuralParameter)
-        Some(fact)
+        // Analysis returns facts only. The consuming structural construct owns classification;
+        // behavioral guards must retain ordinary parameter identity without changing topology.
+        Some(parameterFact(parameter, allowUnbounded = true))
       case expression: KernelExpr[?] =>
         val reference = Option(expressionIds.get(expression)).getOrElse(
           invalid("structural predicate Integer has no captured identity")
@@ -4735,6 +5064,9 @@ private final class ConstructionSession(val options: EmitOptions):
       values.headOption.collect { case expression: Expr[?] => expression }
         .flatMap(CandidateRuntime.expressionDataType)
         .map(CandidateRuntime.typeDescriptor).exists(DigitalCombinationalContract.isValueTypeKind)
+    closeBehavioralChain()
+    if activeBehavioral.nonEmpty && !digitalAssignment then
+      behavioralFailure(s"hardware '$kind' effect is not permitted in a behavioral update")
     requireNoCollectionEffect(s"hardware '$kind' effect", assignment = digitalAssignment)
     val loop = Option.when(digitalAssignment)(activeLoop).flatten
     val effectRegion =
@@ -4747,7 +5079,18 @@ private final class ConstructionSession(val options: EmitOptions):
       validateDigitalLoopDomain(region)
     effectRegion.foreach: region =>
       if values.size != 2 then collectionFailure("digital assignment requires two operands")
-      val _ = digitalAssignmentRoot(values.head, currentModule.handle, allowRootRegister = false)
+      val target = digitalAssignmentRoot(
+        values.head,
+        currentModule.handle,
+        allowRootRegister = activeBehavioral.nonEmpty
+      )
+      if activeBehavioral.nonEmpty &&
+        (region.behavioralArm.isEmpty ||
+          records(target.module).declarations(target.index).kind != KernelSignalKind.Register)
+      then
+        behavioralFailure(
+          "behavioral updates may assign only owned whole registers in behavioral arms"
+        )
       val exactType =
         for
           target <- values.headOption.collect { case value: Expr[?] => value }
@@ -4881,6 +5224,9 @@ private final class ConstructionSession(val options: EmitOptions):
     .orElse(structuralArms.get(reference).flatMap(_.structuralArm).map(arm =>
       s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
     ))
+      .orElse(behavioralArms.get(reference).flatMap(_.behavioralArm).map(arm =>
+        s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
+      ))
       .orElse(loopRegions.get(reference).flatMap(region =>
         region.loop.flatMap(_.generated).map(record =>
           if region.structuralGenerate then generatedRegionPath(record)
@@ -5149,6 +5495,13 @@ private final class ConstructionSession(val options: EmitOptions):
             "state in a multi-domain Module requires a lexical ClockDomain",
             Some(declarationPath(declaration.reference))
           )
+    case None if declaration.dataType.exists(isBoundaryCapability) =>
+      val actual = records(declaration.reference.module).domains.filter(domain =>
+        (domain.domain.clock.toVector :+ domain.domain.reset).exists(value =>
+          capabilitySourceRoot(value).contains(declaration.reference)
+        )
+      )
+      if actual.size == 1 then resolved.get(actual.head.reference) else None
     case None => None
 
   private def attribute(
@@ -5983,6 +6336,18 @@ private final class ConstructionSession(val options: EmitOptions):
     if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
     Set("Clock", "Reset").contains(descriptor.kind)
 
+  private def capabilitySourceRoot(value: AnyRef): Option[DeclarationRef] =
+    var current =
+      Option(declarationIds.get(value)).map(identity[DeclarationRef | ExpressionRef])
+        .orElse(Option(expressionIds.get(value)))
+    var depth = 0
+    while current.exists(_.isInstanceOf[ExpressionRef]) && depth < 128 do
+      val reference = current.get.asInstanceOf[ExpressionRef]
+      current = shapeIndices.get(reference).map(_.input)
+        .orElse(shapeViews.get(reference).map(_.input))
+      depth += 1
+    current.collect { case reference: DeclarationRef => reference }
+
   private def capabilityDomain(
       declaration: DeclarationRecord,
       resolved: Map[DomainRef, String]
@@ -5997,9 +6362,14 @@ private final class ConstructionSession(val options: EmitOptions):
           fail("NODAL-DIGITAL-054-018", "capability boundary has no local domain")
         )
       case None =>
-        if domains.size != 1 then
-          fail("NODAL-DIGITAL-054-018", "capability boundary requires an exact local domain")
-        domains.head.name
+        val actual = domains.filter(domain =>
+          (domain.domain.clock.toVector :+ domain.domain.reset).exists(value =>
+            capabilitySourceRoot(value).contains(declaration.reference)
+          )
+        )
+        if actual.size == 1 then actual.head.name
+        else if domains.size == 1 then domains.head.name
+        else fail("NODAL-DIGITAL-054-018", "capability boundary requires an exact local domain")
 
   private def validateBoundarySource(
       value: Expr[?],
@@ -6225,7 +6595,8 @@ private final class ConstructionSession(val options: EmitOptions):
       ).toVector ++ interfaces.dataTypes,
       storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots ++
         collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
-        structuralArms.valuesIterator.flatMap(_.yielded).toVector,
+        structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
+        behavioralIfs.valuesIterator.map(_.predicate).toVector,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,
@@ -6564,6 +6935,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
           .toVector.sortBy(_.path)
         )
+    verifySequentialAssignments(resolved)
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(
@@ -6578,6 +6950,7 @@ private final class ConstructionSession(val options: EmitOptions):
       iterationIndices = iterationIndexSnapshots(),
       staticPredicates = staticPredicateSnapshots(),
       structuralIfs = structuralIfSnapshots(),
+      behavioralIfs = behavioralIfSnapshots(),
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
         case (parameter, value) =>

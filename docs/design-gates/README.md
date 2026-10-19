@@ -118,3 +118,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalStructuralIf-DG v0.1](NodalStructuralIf-DG-v0.1.md): approved bounded
   F55 structural predicates, read-only branch results and guard-qualified writes;
   supplies only the required symbolic-if portion of the F58 gate.
+- [NodalSequentialState-DG v0.1](NodalSequentialState-DG-v0.1.md): approved
+  first F56 register/behavioral-guard contract with actual local bindings and
+  sequential normalization; remaining flat-FSM and memory work stays open.

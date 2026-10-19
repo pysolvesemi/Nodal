@@ -653,3 +653,10 @@ target_link_libraries(nodal-structural-if-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.structural-if-model-unit COMMAND nodal-structural-if-model-unit-tests)
 set_tests_properties(nodal.native.structural-if-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-sequential-model-unit-tests SequentialModelTest.cpp)
+llvm_update_compile_flags(nodal-sequential-model-unit-tests)
+target_link_libraries(nodal-sequential-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.sequential-model-unit COMMAND nodal-sequential-model-unit-tests)
+set_tests_properties(nodal.native.sequential-model-unit PROPERTIES TIMEOUT 60)

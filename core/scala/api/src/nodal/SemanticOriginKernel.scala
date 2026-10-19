@@ -149,6 +149,7 @@ private[nodal] final class SemanticOriginBuilder:
     "DigitalAggregateContract.scala",
     "AnalogUserFunctionRuntime.scala",
     "StructuralIfRuntime.scala",
+    "SequentialRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
@@ -327,11 +328,7 @@ private[nodal] final class SemanticOriginBuilder:
       observedLine: Int
   ): (SourceSpan, Option[String]) =
     val line = math.max(1, observedLine)
-    val cacheKey = fileName -> ownerClass
-    val source = sourceCache.getOrElseUpdate(
-      cacheKey,
-      locateSource(fileName, ownerClass)
-    )
+    val source = locateSource(fileName, ownerClass)
     source match
       case Some(path) =>
         try
@@ -443,7 +440,12 @@ private[nodal] final class SemanticOriginBuilder:
           Files.isDirectory(candidate.resolve("docs"))
       .getOrElse(workingDirectory)
 
+  // Constructor selection and span lookup share one transaction-owned cache, including misses.
+  // Synthesized region captures must not re-walk the source tree at every dependency edge.
   private def locateSource(fileName: String, ownerClass: String): Option[Path] =
+    sourceCache.getOrElseUpdate(fileName -> ownerClass, findSource(fileName, ownerClass))
+
+  private def findSource(fileName: String, ownerClass: String): Option[Path] =
     val root = repositoryRoot
     if !Files.isDirectory(root) then None
     else

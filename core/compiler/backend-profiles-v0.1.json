@@ -782,6 +782,18 @@
         "admission": "guarded"
       },
       {
+        "operation": "nodal.behavioral_if",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.behavioral_predicate",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.branch",
         "feature": "conservative-connectivity",
         "domain": "analog",
@@ -1070,6 +1082,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.local_domain_binding",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.member_access",
         "feature": "unlowered-shared-forms",
         "domain": "neutral",
@@ -1251,6 +1269,18 @@
       },
       {
         "operation": "nodal.resolved_net",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.sequential_select",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.sequential_update",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"

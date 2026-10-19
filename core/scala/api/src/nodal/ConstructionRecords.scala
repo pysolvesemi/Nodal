@@ -204,6 +204,18 @@ private[nodal] final case class KernelStructuralIfSnapshot(
     sourceOrdinal: Int
 )
 
+/** Behavioral priority nodes share the canonical lexical argument/capture representation. */
+private[nodal] final case class KernelBehavioralIfSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    predicate: String,
+    trueArm: KernelStructuralArmSnapshot,
+    falseArm: KernelStructuralArmSnapshot,
+    sourceOrdinal: Int,
+    root: String
+)
+
 private[nodal] final case class KernelDigitalGeneratedBody(
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument],
@@ -410,6 +422,7 @@ private[nodal] final case class ConstructionSnapshot(
     iterationIndices: Vector[KernelIterationIndexSnapshot] = Vector.empty,
     staticPredicates: Vector[KernelStaticPredicateSnapshot] = Vector.empty,
     structuralIfs: Vector[KernelStructuralIfSnapshot] = Vector.empty,
+    behavioralIfs: Vector[KernelBehavioralIfSnapshot] = Vector.empty,
     emitQuality: EmitQuality = EmitQuality()
 )
 
@@ -583,7 +596,7 @@ private final case class Operation(
 
 /** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
 private enum DigitalRegionKind:
-  case Collection, BoundedLoop, Generate, StructuralArm
+  case Collection, BoundedLoop, Generate, StructuralArm, BehavioralArm
 
 private final case class StructuralArmHeader(conditional: ExpressionRef, whenTrue: Boolean)
 
@@ -597,6 +610,20 @@ private final class StructuralIfRecord(
 ):
   var result: Option[KernelExpr[?]] = None
 
+private final case class BehavioralArmHeader(conditional: ExpressionRef, whenTrue: Boolean)
+
+private final class BehavioralIfRecord(
+    val reference: ExpressionRef,
+    val parent: Option[DigitalValueRegionRecord],
+    val predicate: Expr[Bool],
+    val trueArm: DigitalValueRegionRecord,
+    val falseArm: DigitalValueRegionRecord,
+    val sourceOrdinal: Int,
+    val root: ExpressionRef
+)
+
+private final class BehavioralChainCursor(val root: ExpressionRef, var tail: BehavioralIfRecord)
+
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
 private final class DigitalValueRegionRecord(
     val reference: ExpressionRef,
@@ -605,18 +632,20 @@ private final class DigitalValueRegionRecord(
     val inputs: Vector[Expr[?]],
     val seed: Option[Expr[?]],
     val loop: Option[DigitalLoopHeader] = None,
-    val structuralArm: Option[StructuralArmHeader] = None
+    val structuralArm: Option[StructuralArmHeader] = None,
+    val behavioralArm: Option[BehavioralArmHeader] = None
 ):
   var structuralGenerate: Boolean = false
   def regionKind: DigitalRegionKind =
-    if structuralArm.nonEmpty then DigitalRegionKind.StructuralArm
+    if behavioralArm.nonEmpty then DigitalRegionKind.BehavioralArm
+    else if structuralArm.nonEmpty then DigitalRegionKind.StructuralArm
     else if structuralGenerate then DigitalRegionKind.Generate
     else if loop.nonEmpty then DigitalRegionKind.BoundedLoop
     else DigitalRegionKind.Collection
   def isLoop: Boolean = regionKind == DigitalRegionKind.BoundedLoop ||
     regionKind == DigitalRegionKind.Generate
   def permitsAssignment: Boolean = regionKind match
-    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm =>
+    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm | DigitalRegionKind.BehavioralArm =>
       true
     case DigitalRegionKind.Collection => false
   val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty

@@ -471,6 +471,30 @@ private[nodal] object ReproducibilityContract:
         "data_type" -> optionalString(value.dataType),
         "source_ordinal" -> number(value.sourceOrdinal)
       )
+    ))).toVector ++ Option.when(snapshot.behavioralIfs.nonEmpty)("behavioral_ifs" ->
+    array(snapshot.behavioralIfs.sortBy(_.path).map(value =>
+      def arm(value: KernelStructuralArmSnapshot): JsonValue = obj(
+        "path" -> string(value.path),
+        "captures" -> array(value.captures.map(string)),
+        "arguments" -> array(value.arguments.map(argument =>
+          obj(
+            "path" -> string(argument.path),
+            "data_type" -> string(argument.dataType),
+            "role" -> string(argument.role)
+          )
+        )),
+        "yield" -> optionalString(value.yieldValue)
+      )
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "parent_region" -> optionalString(value.parentRegion),
+        "predicate" -> string(value.predicate),
+        "true_arm" -> arm(value.trueArm),
+        "false_arm" -> arm(value.falseArm),
+        "source_ordinal" -> number(value.sourceOrdinal),
+        "root" -> string(value.root)
+      )
     ))).toVector ++ Option.when(snapshot.generatedRegions.exists(_.digitalBody.nonEmpty))(
     "digital_generates" -> array(snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .sortBy(_.path).map(value =>

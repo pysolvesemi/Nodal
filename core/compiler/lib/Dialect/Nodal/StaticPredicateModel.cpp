@@ -24,6 +24,7 @@ bool closed(Operation *op, ArrayRef<StringRef> keys) {
 }
 class Query {
 public:
+  explicit Query(bool behavioral = false) : behavioral(behavioral) {}
   FailureOr<Activity> value(Value input, Operation *use, unsigned depth = 0) {
     if (++work > 65536 || depth >= 128 || !input ||
         !llvm::isa<StaticPredicateType>(input.getType()) ||
@@ -59,8 +60,10 @@ public:
       StringRef cmp = text(op, "comparison");
       if (cmp != "eq" && cmp != "ne" && cmp != "lt" && cmp != "le" && cmp != "gt" && cmp != "ge")
         return failure();
-      auto left = resolveStructuralIntegerExpression(op->getOperand(0), op);
-      auto right = resolveStructuralIntegerExpression(op->getOperand(1), op);
+      auto left = behavioral ? resolveBehavioralIntegerExpression(op->getOperand(0), op)
+                             : resolveStructuralIntegerExpression(op->getOperand(0), op);
+      auto right = behavioral ? resolveBehavioralIntegerExpression(op->getOperand(1), op)
+                              : resolveStructuralIntegerExpression(op->getOperand(1), op);
       if (failed(left) || failed(right))
         return failure();
       if (!left->expression || !right->expression)
@@ -121,6 +124,7 @@ public:
   }
 
 private:
+  bool behavioral;
   unsigned work = 0;
   llvm::DenseMap<Value, Activity> memo;
   llvm::DenseSet<Value> active;
@@ -132,8 +136,13 @@ FailureOr<StaticPredicateFacts> analyzeStaticPredicate(Value predicate, Operatio
   return failed(result) ? FailureOr<StaticPredicateFacts>(failure())
                         : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
 }
+FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(Value predicate, Operation *use) {
+  auto result = Query(true).value(predicate, use);
+  return failed(result) ? FailureOr<StaticPredicateFacts>(failure())
+                        : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+}
 LogicalResult verifyStaticPredicateOperation(Operation *operation) {
-  if (failed(Query().operation(operation)))
+  if (failed(Query(true).operation(operation)))
     return operation->emitOpError("NODAL-DIGITAL-055-013: static predicate requires a closed owned "
                                   "parameter/Generate Integer DAG valid over every legal value");
   return success();

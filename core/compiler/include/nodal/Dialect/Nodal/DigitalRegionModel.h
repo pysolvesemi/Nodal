@@ -5,7 +5,7 @@
 #include "llvm/ADT/SmallVector.h"
 namespace nodal {
 /// Neutral lexical owner. Inspection is raw-header-only; it never verifies a body.
-enum class DigitalRegionKind { Collection, BoundedLoop, StructuralArm, Generate };
+enum class DigitalRegionKind { Collection, BoundedLoop, StructuralArm, BehavioralArm, Generate };
 struct DigitalRegionHeader {
   mlir::Operation *operation = nullptr;
   mlir::Operation *module = nullptr;

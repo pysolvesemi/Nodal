@@ -177,6 +177,10 @@ private[nodal] object ScalaToMlirBridge:
       Vector(value.trueArm, value.falseArm).map(arm =>
         StaticRegion(arm.path, value.owner, arm.arguments, arm.captures)
       )
+    ) ++ snapshot.behavioralIfs.flatMap(value =>
+      Vector(value.trueArm, value.falseArm).map(arm =>
+        StaticRegion(arm.path, value.owner, arm.arguments, arm.captures)
+      )
     ) ++
       snapshot.generatedRegions.flatMap(value =>
         value.digitalBody.map(body =>
@@ -210,20 +214,22 @@ private[nodal] object ScalaToMlirBridge:
           )
         }
       )
-    private val structuralArmsByPath = snapshot.structuralIfs.flatMap(value =>
-      Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
-    ).toMap
+    private val conditionalArmsByPath = snapshot.structuralIfs.flatMap(value =>
+      Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value.parentRegion, arm))
+    ).toMap ++ snapshot.behavioralIfs.flatMap(value =>
+      Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value.parentRegion, arm))
+    )
     private val digitalGeneratedByPath = snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .map(value => value.path -> value).toMap
     private def armQuery(
-        conditional: KernelStructuralIfSnapshot,
+        parentRegion: Option[String],
         arm: KernelStructuralArmSnapshot,
         parent: StructuralParameterBinding.Query
     ): StructuralParameterBinding.Query =
-      if parent.scope != conditional.parentRegion then
+      if parent.scope != parentRegion then
         fail(
           "NODAL-BRIDGE-055",
-          "structural arm context has another lexical parent",
+          "conditional arm context has another lexical parent",
           Some(arm.path)
         )
       new StructuralParameterBinding.Query(
@@ -272,7 +278,7 @@ private[nodal] object ScalaToMlirBridge:
       activeIntegerQuery.filter(_.scope.contains(region)).getOrElse {
         val parent =
           digitalValues.parentRegion(region).map(regionalQuery).getOrElse(moduleIntegerQuery)
-        structuralArmsByPath.get(region) match
+        conditionalArmsByPath.get(region) match
           case Some((conditional, arm)) => armQuery(conditional, arm, parent)
           case None if digitalGeneratedByPath.contains(region) =>
             generatedQuery(digitalGeneratedByPath(region), parent)
@@ -589,7 +595,9 @@ private[nodal] object ScalaToMlirBridge:
         ),
         "nodal.backend.naming" -> quoted("semantic")
       ) ++
-        Option.when(snapshot.digitalExpressions.nonEmpty || snapshot.structuralIfs.nonEmpty)(
+        Option.when(
+          snapshot.digitalExpressions.nonEmpty || snapshot.structuralIfs.nonEmpty || snapshot.behavioralIfs.nonEmpty
+        )(
           "nodal.digital.quality" -> digitalMaterialization.quality
         ) ++
         Option.when(sourceProvenance)("nodal.backend.source_provenance" -> "true") ++
@@ -2384,7 +2392,8 @@ ${indent(body, 2)}
       def renderDigitalStatic(
           path: String,
           region: Option[String],
-          output: mutable.ArrayBuffer[String]
+          output: mutable.ArrayBuffer[String],
+          requireTopology: Boolean
       ): (String, String) =
         if region.isEmpty && path.toLongOption.nonEmpty then
           val literal = path.toLong
@@ -2411,6 +2420,11 @@ ${indent(body, 2)}
           )
         else
           digitalValues.requireVisible(path, module.path, region, path)
+          if requireTopology then
+            try digitalValues.requireStructuralStaticInput(path, module.path)
+            catch
+              case error: BridgeException =>
+                fail("NODAL-BRIDGE-043", error.diagnostic.message, Some(path))
           if region.nonEmpty then
             try
               val query = integerQuery
@@ -2426,7 +2440,7 @@ ${indent(body, 2)}
             output,
             staticValuesFor(region),
             () => allocateShapeStaticValue(),
-            requireStructural = true,
+            requireStructural = requireTopology,
             region = region
           )
       def prepareDigitalType(
@@ -2438,7 +2452,7 @@ ${indent(body, 2)}
         compoundShapeDimensionPaths(text, path).distinct.foreach: dependency =>
           val actualRegion = digitalValues.valueRegion(dependency)
           if actualRegion == region then
-            val _ = renderDigitalStatic(dependency, region, output)
+            val _ = renderDigitalStatic(dependency, region, output, true)
           else if actualRegion.nonEmpty then
             fail(
               "NODAL-BRIDGE-055",
@@ -2550,6 +2564,8 @@ ${indent(body, 2)}
           activeIntegerQuery = previous
           enclosingIntegerQuery = previousParent
 
+      val sequential =
+        new SequentialMlir.Plan(module, declaration => localDomainName(module, declaration))
       val digital = digitalValues.renderModule(
         module,
         parseType,
@@ -2581,7 +2597,7 @@ ${indent(body, 2)}
             bridgeMetadata(expression.path, Vector.empty),
             location(expression.path)
           ),
-        interfaceValues.roots(module),
+        interfaceValues.roots(module) ++ sequential.roots,
         renderDigitalStatic,
         prepareDigitalType,
         (path, value) => staticValuesFor(digitalValues.valueRegion(path)).update(path, value),
@@ -2640,6 +2656,12 @@ ${indent(body, 2)}
       )
       body ++= digital.lines
       values ++= digital.values
+      body ++= sequential.render(
+        values.toMap,
+        stableLocalSymbol,
+        path => bridgeMetadata(path, Vector.empty),
+        location
+      )
 
       renderShapes(body, values, None)
 
@@ -6073,13 +6095,20 @@ ${indent(body, 2)}
           Some(path)
         )
 
+    private lazy val conditionalSourceOwners = (snapshot.structuralIfs.flatMap(value =>
+      Vector(
+        value.path,
+        value.trueArm.path,
+        value.falseArm.path,
+        value.trueArm.path + ".yield",
+        value.falseArm.path + ".yield"
+      ).map(_ -> value.path)
+    ) ++ snapshot.behavioralIfs.flatMap(value =>
+      Vector(value.path, value.trueArm.path, value.falseArm.path).map(_ -> value.path)
+    )).toMap
     private def sourceForPath(path: String): Option[SourceSpan] =
       sourceByPath.get(path).orElse(
-        snapshot.structuralIfs.find(value =>
-          path == value.path || path == value.trueArm.path ||
-            path == value.falseArm.path || path == value.trueArm.path + ".yield" ||
-            path == value.falseArm.path + ".yield"
-        ).flatMap(value => sourceByPath.get(value.path))
+        conditionalSourceOwners.get(path).flatMap(sourceByPath.get)
       ).orElse(
         digitalLoopsByPath.get(path).flatMap(_.generatedRegion).flatMap(generatedByPath.get)
           .flatMap(region =>

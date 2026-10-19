@@ -191,6 +191,25 @@ private[nodal] object ConstructionKernel:
         "structural predicate requires an active Module"
       )).get
 
+  def behavioralComparison(
+      left: Expr[Integer],
+      right: Expr[Integer],
+      operation: String
+  ): Expr[Bool] = active match
+    case Some(session) => session.captureBehavioralComparison(left, right, operation)
+    case None => SequentialRuntime.missing()
+
+  def behavioralBranch(kind: String, condition: Option[Expr[Bool]], body: () => Unit): Unit =
+    try
+      DigitalCollectionCallback.requireSequentialChecked(body)
+      active match
+        case Some(session) => session.captureBehavioralBranch(kind, condition, body)
+        case None => SequentialRuntime.missing()
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "behavioral guard")
+        scala.util.Failure[Nothing](failure).get
+
   def structuralIf(predicate: StaticPredicate, hasResult: Boolean)(
       whenTrue: () => Option[Expr[?]],
       whenFalse: () => Option[Expr[?]]

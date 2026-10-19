@@ -8,6 +8,9 @@ final class CheckedEmptyLoop extends Module:
   loop(LoopBound.Static(0)): _ =>
     ()
 
+final class CheckedAttestedHelper extends Module:
+  loop(LoopBound.Static(1))(SeparateHelper.effect)
+
 final class CheckedEmptyRange extends Module:
   hdlRange(0, 0): _ =>
     ()
@@ -31,6 +34,7 @@ object RuntimeProbe:
     assert(ConstructionKernel.inspect(new CheckedLibraryAllocation).modules.size == 2)
     assert(ConstructionKernel.inspect(new CheckedLibraryRangeAllocation).modules.size == 2)
     assert(ConstructionKernel.inspect(new CheckedEmptyLoop).digitalLoops.size == 1)
+    assert(ConstructionKernel.inspect(new CheckedAttestedHelper).digitalLoops.size == 1)
     ConstructionKernel.inspect(new CheckedEmptyRange)
     val loopFailure = scala.util.Try(ConstructionKernel.inspect(new UncheckedLoop)).failed.get
     assert(loopFailure.asInstanceOf[ConstructionException].diagnostic.code ==

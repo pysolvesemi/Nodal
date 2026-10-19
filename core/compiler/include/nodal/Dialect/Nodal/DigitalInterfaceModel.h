@@ -1,6 +1,7 @@
 #ifndef NODAL_DIALECT_NODAL_DIGITALINTERFACEMODEL_H
 #define NODAL_DIALECT_NODAL_DIGITALINTERFACEMODEL_H
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -28,6 +29,9 @@ mlir::LogicalResult verifyDigitalInterfaceModel(mlir::Operation *module);
 /// not permission to fabricate a value or execute an unimplemented backend.
 struct DigitalInterfaceValueDependencies {
   mlir::Value value;
+  /// Actual verified Interface instance/component domain. Null only for a
+  /// standalone boundary with no declared Interface domain constraint.
+  mlir::FlatSymbolRefAttr domain;
   llvm::SmallVector<std::pair<mlir::Value, mlir::Operation *>, 2> sources;
 };
 mlir::LogicalResult collectDigitalInterfaceDependencies(

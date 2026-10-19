@@ -26,7 +26,9 @@ private[nodal] final class DigitalReductionMlir(
   private val loopPaths = snapshot.digitalLoops.iterator.map(_.path).toSet
   private val regionalParents = snapshot.structuralIfs.flatMap(value =>
     Vector(value.trueArm.path -> value.parentRegion, value.falseArm.path -> value.parentRegion)
-  ).toMap ++ snapshot.generatedRegions.filter(_.digitalBody.nonEmpty).map(value =>
+  ).toMap ++ snapshot.behavioralIfs.flatMap(value =>
+    Vector(value.trueArm.path -> value.parentRegion, value.falseArm.path -> value.parentRegion)
+  ) ++ snapshot.generatedRegions.filter(_.digitalBody.nonEmpty).map(value =>
     value.path -> value.parent
   )
   private val parameters = snapshot.parameterExpressions.map(value => value.path -> value).toMap

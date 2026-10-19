@@ -18,7 +18,8 @@ private[nodal] object DigitalValueConstruction:
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
         (operation == DigitalCollectionContract.Operation ||
-          operation == StructuralIfRuntime.Operation)
+          operation == StructuralIfRuntime.Operation ||
+          operation == SequentialRuntime.PredicateOperation)
     )
 
   def snapshot(
@@ -90,7 +91,8 @@ private[nodal] object DigitalValueConstruction:
             DigitalAggregateContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
             (operation == DigitalCollectionContract.Operation ||
-              operation == StructuralIfRuntime.Operation)
+              operation == StructuralIfRuntime.Operation ||
+              operation == SequentialRuntime.PredicateOperation)
         )
       then
         pending.append((expression, 0))

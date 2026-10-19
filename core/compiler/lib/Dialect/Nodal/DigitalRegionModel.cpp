@@ -3,6 +3,7 @@
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 using namespace mlir;
 namespace nodal {
@@ -23,7 +24,7 @@ Operation *owner(Operation *op) {
 } // namespace
 bool isDigitalRegionOwner(Operation *op) {
   return named(op, "nodal.collection") || isBoundedDigitalLoop(op) ||
-         named(op, "nodal.structural_if") ||
+         named(op, "nodal.structural_if") || named(op, "nodal.behavioral_if") ||
          (named(op, "nodal.generate") && op->getNumRegions() == 1 &&
           op->getRegion(0).hasOneBlock() && op->getNumOperands() == 3 &&
           op->getRegion(0).front().getNumArguments() == 1);
@@ -41,6 +42,13 @@ FailureOr<DigitalRegionHeader> inspectDigitalRegion(Block *body) {
     auto h = inspectDigitalLoopHeader(op);
     if (succeeded(h) && h->body == body)
       return DigitalRegionHeader{op, module, body, DigitalRegionKind::BoundedLoop, 0, true};
+  }
+  if (named(op, "nodal.behavioral_if")) {
+    auto h = inspectBehavioralIfHeader(op);
+    if (succeeded(h))
+      for (unsigned arm = 0; arm < 2; ++arm)
+        if (h->bodies[arm] == body)
+          return DigitalRegionHeader{op, module, body, DigitalRegionKind::BehavioralArm, arm, true};
   }
   if (named(op, "nodal.structural_if")) {
     auto h = inspectStructuralIfHeader(op);
@@ -114,6 +122,8 @@ FailureOr<Value> digitalRegionCaptureSource(BlockArgument arg,
     return digitalLoopCaptureSource(arg);
   case DigitalRegionKind::StructuralArm:
     return structuralIfCaptureSource(arg);
+  case DigitalRegionKind::BehavioralArm:
+    return behavioralCaptureSource(arg);
   case DigitalRegionKind::Generate:
     return Value();
   }
@@ -137,7 +147,7 @@ std::string digitalRegionSemanticPath(Block *body) {
   if (failed(h))
     return {};
   std::string result = text(h->operation, "region_id").str();
-  if (h->kind == DigitalRegionKind::StructuralArm)
+  if (h->kind == DigitalRegionKind::StructuralArm || h->kind == DigitalRegionKind::BehavioralArm)
     result += h->ordinal ? ".else" : ".then";
   return result;
 }
@@ -177,6 +187,8 @@ FailureOr<SmallVector<ParameterIntegerEnvironment, 4>> digitalIntegerContextsAtU
     return collectionOwnIntegerContextsAtUse(use);
   if (h->kind == DigitalRegionKind::StructuralArm)
     return structuralIfIntegerContextsAtUse(use);
+  if (h->kind == DigitalRegionKind::BehavioralArm)
+    return behavioralIntegerContextsAtUse(use);
   auto context = h->kind == DigitalRegionKind::Generate ? digitalGenerateIntegerContextAtUse(use)
                                                         : digitalLoopIntegerContextAtUse(use);
   if (failed(context))

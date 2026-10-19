@@ -126,6 +126,16 @@ struct Harness {
 };
 
 bool testRegistry(Harness &test) {
+  for (llvm::StringRef operation :
+       {"nodal.behavioral_if", "nodal.behavioral_predicate", "nodal.local_domain_binding",
+        "nodal.sequential_select", "nodal.sequential_update"}) {
+    const auto *entry = nodal::lookupBackendOperation(operation);
+    ++test.cases;
+    if (!test.require(entry && entry->domain == nodal::BackendOperationDomain::Digital &&
+                          entry->admission == nodal::BackendOperationAdmission::Unsupported,
+                      "sequential operation lost digital/unsupported analog classification"))
+      return false;
+  }
   const auto *direct = nodal::lookupBackendOperation("nodal.real_literal");
   const auto *guarded = nodal::lookupBackendOperation("nodal.analog_procedure");
   const auto *digital = nodal::lookupBackendOperation("nodal.hardware_loop");

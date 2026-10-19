@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
@@ -271,6 +272,10 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<LocalDomainBindingOp>(use))
+      return verifyLocalDomainBinding(use);
+    if (llvm::isa<SequentialUpdateOp>(use))
+      return verifySequentialUpdate(use);
     if (llvm::isa<PortValueOp, ShapeIndexOp, ShapeSliceOp, ShapeFlattenOp, ShapeViewOp,
                   DigitalAssignOp>(use))
       return success();
@@ -386,7 +391,9 @@ private:
     // Token admissibility depends on the actual consumer, so it must be
     // checked before the structural-type memo (which is shared across uses).
     if (llvm::isa<StaticPredicateType>(type) &&
-        (storageContext || !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp>(currentUse)))
+        (storageContext ||
+         !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp, BehavioralPredicateOp,
+                    BehavioralIfOp, SequentialSelectOp>(currentUse)))
       return reject(
           "static predicate tokens cannot be stored or manufactured by runtime operations");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));

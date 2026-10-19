@@ -48,7 +48,7 @@ private[nodal] object StructuralParameterBinding:
   ):
     if snapshot.parameterExpressions.size > 65536 ||
       snapshot.digitalCollections.size + snapshot.digitalLoops.size +
-        snapshot.structuralIfs.size * 2 +
+        (snapshot.structuralIfs.size + snapshot.behavioralIfs.size) * 2 +
         snapshot.generatedRegions.count(_.digitalBody.nonEmpty) > 65536
     then
       invalid("static snapshot exceeds the bounded definition budget")
@@ -62,6 +62,14 @@ private[nodal] object StructuralParameterBinding:
       enclosing.map(_.expressions).getOrElse(
         unique(snapshot.parameterExpressions.map(value => value.path -> value), "expression")
       )
+    private val conditionalArms: Vector[(String, KernelStructuralArmSnapshot)] =
+      enclosing.map(_.conditionalArms).getOrElse(
+        snapshot.structuralIfs.flatMap(value =>
+          Vector(value.trueArm, value.falseArm).map(value.owner -> _)
+        ) ++ snapshot.behavioralIfs.flatMap(value =>
+          Vector(value.trueArm, value.falseArm).map(value.owner -> _)
+        )
+      )
     private val arguments
         : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
       enclosing.map(_.arguments).getOrElse(
@@ -74,11 +82,9 @@ private[nodal] object StructuralParameterBinding:
             value.arguments.map(argument =>
               argument.path -> (RegionOwner(value.path, value.owner), argument)
             )
-          ) ++ snapshot.structuralIfs.flatMap(value =>
-            Vector(value.trueArm, value.falseArm).flatMap(arm =>
-              arm.arguments.map(argument =>
-                argument.path -> (RegionOwner(arm.path, value.owner), argument)
-              )
+          ) ++ conditionalArms.flatMap((owner, arm) =>
+            arm.arguments.map(argument =>
+              argument.path -> (RegionOwner(arm.path, owner), argument)
             )
           ) ++ snapshot.generatedRegions.flatMap(value =>
             value.digitalBody.toVector.flatMap(body =>
@@ -114,10 +120,8 @@ private[nodal] object StructuralParameterBinding:
     private val rawCaptures =
       (snapshot.digitalCollections.flatMap(value =>
         value.arguments.takeRight(value.captures.size).map(_.path).zip(value.captures)
-      ) ++ snapshot.structuralIfs.flatMap(value =>
-        Vector(value.trueArm, value.falseArm).flatMap(arm =>
-          arm.arguments.map(_.path).zip(arm.captures)
-        )
+      ) ++ conditionalArms.flatMap((_, arm) =>
+        arm.arguments.map(_.path).zip(arm.captures)
       ) ++ snapshot.generatedRegions.flatMap(value =>
         value.digitalBody.toVector.flatMap(body =>
           body.arguments.drop(1).map(_.path).zip(body.captures)

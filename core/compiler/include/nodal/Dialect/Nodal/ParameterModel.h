@@ -103,6 +103,7 @@ namespace detail {
 class CollectionIntegerEnvironmentAdmission;
 class LoopIntegerEnvironmentAdmission;
 class StructuralIfIntegerEnvironmentAdmission;
+class BehavioralIntegerEnvironmentAdmission;
 class DigitalGenerateIntegerEnvironmentAdmission;
 } // namespace detail
 
@@ -168,6 +169,7 @@ private:
   friend class detail::CollectionIntegerEnvironmentAdmission;
   friend class detail::LoopIntegerEnvironmentAdmission;
   friend class detail::StructuralIfIntegerEnvironmentAdmission;
+  friend class detail::BehavioralIntegerEnvironmentAdmission;
   friend class detail::DigitalGenerateIntegerEnvironmentAdmission;
 };
 
@@ -251,6 +253,8 @@ struct StructuralIntegerFacts {
   std::optional<InstantiatedIntegerExpression> expression;
 };
 mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir::Value value,
+                                                                           mlir::Operation *use);
+mlir::FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(mlir::Value value,
                                                                            mlir::Operation *use);
 mlir::LogicalResult verifyStructuralIntegerOperation(mlir::Operation *operation);
 

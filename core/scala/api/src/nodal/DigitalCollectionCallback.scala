@@ -21,6 +21,19 @@ private[nodal] object DigitalCollectionCallback:
         "NODAL-STRUCTURAL-055-MISSING",
         "structural branch requires typed effect validation by the Nodal compiler plugin"
       ))).get
+  private final class CheckedSequential(function: () => Unit) extends (() => Unit):
+    def apply(): Unit = function()
+
+  def checkedSequential(function: () => Unit): () => Unit = new CheckedSequential(function)
+
+  def requireSequentialChecked(function: AnyRef): Unit = function match
+    case _: CheckedSequential => ()
+    case _ =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-SEQUENTIAL-056-MISSING",
+        "behavioral branch requires typed effect validation by the Nodal compiler plugin"
+      ))).get
+
   private final class Checked1[A, B](function: A => B) extends (A => B):
     def apply(value: A): B = function(value)
 

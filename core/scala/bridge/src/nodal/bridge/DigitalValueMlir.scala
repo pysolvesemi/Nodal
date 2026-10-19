@@ -61,10 +61,46 @@ private[nodal] object DigitalValueMlir:
     private val loopsByOwner = snapshot.digitalLoops.groupBy(_.owner)
     private val predicates = snapshot.staticPredicates.map(value => value.path -> value).toMap
     private val predicatesByRegion = snapshot.staticPredicates.groupBy(_.region)
-    private val conditionals = snapshot.structuralIfs.map(value => value.path -> value).toMap
+    private final case class Conditional(
+        path: String,
+        owner: String,
+        parentRegion: Option[String],
+        predicate: String,
+        trueArm: KernelStructuralArmSnapshot,
+        falseArm: KernelStructuralArmSnapshot,
+        dataType: Option[String],
+        sourceOrdinal: Int,
+        behavioralRoot: Option[String]
+    )
+    private val conditionalRecords = snapshot.structuralIfs.map(value =>
+      Conditional(
+        value.path,
+        value.owner,
+        value.parentRegion,
+        value.predicate,
+        value.trueArm,
+        value.falseArm,
+        value.dataType,
+        value.sourceOrdinal,
+        None
+      )
+    ) ++ snapshot.behavioralIfs.map(value =>
+      Conditional(
+        value.path,
+        value.owner,
+        value.parentRegion,
+        value.predicate,
+        value.trueArm,
+        value.falseArm,
+        None,
+        value.sourceOrdinal,
+        Some(value.root)
+      )
+    )
+    private val conditionals = conditionalRecords.map(value => value.path -> value).toMap
     private val conditionalsByRegion =
-      snapshot.structuralIfs.groupBy(value => value.owner -> value.parentRegion)
-    private val arms = snapshot.structuralIfs.flatMap(value =>
+      conditionalRecords.groupBy(value => value.owner -> value.parentRegion)
+    private val arms = conditionalRecords.flatMap(value =>
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
     ).toMap
     private val generated = snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
@@ -93,6 +129,21 @@ private[nodal] object DigitalValueMlir:
         value.digitalBody.get.captures
       )
     )).map(value => value.path -> value).toMap
+    private def hasBehavioralAncestor(region: String): Boolean =
+      var current = Option(region)
+      val seen = mutable.HashSet.empty[String]
+      while current.nonEmpty do
+        val path = current.get
+        requireValid(
+          seen.add(path) && seen.size <= 128,
+          "conditional lexical scope contains a cycle or exceeds depth limit",
+          region
+        )
+        if arms.get(path).exists(_._1.behavioralRoot.nonEmpty) then return true
+        current =
+          regions.getOrElse(path, fail("conditional lexical scope is absent", region)).parentRegion
+      false
+
     private val arguments = regions.valuesIterator.flatMap(region =>
       region.arguments.map(argument => argument.path -> (region, argument))
     ).toMap
@@ -309,12 +360,35 @@ private[nodal] object DigitalValueMlir:
 
     requireValid(
       predicates.size == snapshot.staticPredicates.size && predicates.size <= 65536 &&
-        conditionals.size == snapshot.structuralIfs.size && conditionals.size <= 65536 &&
+        conditionals.size == conditionalRecords.size && conditionals.size <= 65536 &&
         arms.size == 2 * conditionals.size,
       "duplicate or excessive structural predicate, conditional or arm identities",
       snapshot.root
     )
-    private def requireStaticPredicateInput(path: String, owner: String): Unit =
+    private def predicateDependencies(roots: Vector[String]): Set[String] =
+      val pending = mutable.ArrayDeque.from(roots)
+      val seen = mutable.HashSet.empty[String]
+      while pending.nonEmpty do
+        val path = pending.removeHead()
+        if seen.add(path) then
+          requireValid(seen.size <= 65536, "predicate consumer graph exceeds its budget", path)
+          predicates.get(path).foreach(value =>
+            pending ++= value.operands.filter(predicates.contains)
+          )
+      seen.toSet
+    private val structuralPredicates =
+      predicateDependencies(snapshot.structuralIfs.map(_.predicate))
+    private val behavioralPredicates = predicateDependencies(snapshot.digitalExpressions
+      .filter(_.operation == "behavioral_predicate").flatMap(_.operands))
+    private def requiresTopology(path: String): Boolean =
+      structuralPredicates.contains(path) || !behavioralPredicates.contains(path)
+
+    private def requireStaticPredicateInput(
+        path: String,
+        owner: String,
+        topology: Boolean,
+        structural: Boolean = false
+    ): Unit =
       val pending = mutable.ArrayDeque(path)
       val seen = mutable.HashSet.empty[String]
       while pending.nonEmpty do
@@ -357,13 +431,21 @@ private[nodal] object DigitalValueMlir:
                   val attributes = declaration.attributes.toMap
                   requireValid(
                     declaration.kind == "parameter" && declaration.dataType.contains("Integer") &&
-                      attributes.get("classification").contains("structural") &&
-                      attributes.get(
-                        "structural_effects"
-                      ).exists(_.split(",").contains("topology")),
+                      (!(topology || structural) || attributes.get(
+                        "classification"
+                      ).contains("structural") &&
+                        (!topology || attributes.get(
+                          "structural_effects"
+                        ).exists(_.split(",").contains("topology")))),
                     "static predicate parameter requires actual structural topology classification",
                     path
                   )
+
+    private val admittedStructuralInputs = mutable.HashSet.empty[(String, String)]
+    def requireStructuralStaticInput(path: String, owner: String): Unit =
+      if !admittedStructuralInputs.contains(owner -> path) then
+        requireStaticPredicateInput(path, owner, topology = false, structural = true)
+        admittedStructuralInputs.add(owner -> path)
 
     snapshot.staticPredicates.foreach: predicate =>
       val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(predicate.operation)
@@ -385,7 +467,8 @@ private[nodal] object DigitalValueMlir:
           "static predicate operand has the wrong stage or type",
           predicate.path
         )
-        if comparison then requireStaticPredicateInput(input, predicate.owner)
+        if comparison then
+          requireStaticPredicateInput(input, predicate.owner, requiresTopology(predicate.path))
     snapshot.structuralIfs.foreach: conditional =>
       requireValid(
         modules.contains(
@@ -393,7 +476,8 @@ private[nodal] object DigitalValueMlir:
         ) && conditional.path.startsWith(conditional.owner + ".") &&
           conditional.sourceOrdinal >= 0 &&
           conditional.parentRegion.forall(path =>
-            regions.get(path).exists(_.owner == conditional.owner)
+            regions.get(path).exists(_.owner == conditional.owner) &&
+              (!hasBehavioralAncestor(path) || conditional.dataType.nonEmpty)
           ) &&
           predicates.get(conditional.predicate).exists(value =>
             value.owner == conditional.owner &&
@@ -464,6 +548,74 @@ private[nodal] object DigitalValueMlir:
               parent.get,
               fail("structural parent scope is absent", arm.path)
             ).parentRegion
+    snapshot.behavioralIfs.foreach: conditional =>
+      val parent = conditional.parentRegion.flatMap(arms.get).map(_._1)
+      requireValid(
+        modules.contains(
+          conditional.owner
+        ) && conditional.path.startsWith(conditional.owner + ".") &&
+          conditional.sourceOrdinal >= 0 && !expressions.contains(conditional.path) &&
+          !predicates.contains(conditional.path) && !declarations.contains(conditional.path) &&
+          !staticExpressions.contains(conditional.path) && !arguments.contains(conditional.path) &&
+          (conditional.parentRegion.isEmpty || parent.exists(value =>
+            value.owner == conditional.owner && value.behavioralRoot.contains(conditional.root)
+          )) &&
+          (if conditional.parentRegion.isEmpty then conditional.root == conditional.path
+           else parent.exists(_.behavioralRoot.contains(conditional.root))),
+        "behavioral if requires one owned outer update root and a behavioral lexical parent",
+        conditional.path
+      )
+      requireVisible(
+        conditional.predicate,
+        conditional.owner,
+        conditional.parentRegion,
+        conditional.path
+      )
+      requireValid(
+        expressionType(conditional.predicate) == "Bool",
+        "behavioral if requires an actual canonical Bool predicate",
+        conditional.path
+      )
+      Vector(conditional.trueArm -> "then", conditional.falseArm -> "else").foreach:
+        (arm, suffix) =>
+          requireValid(
+            arm.path == s"${conditional.path}.$suffix" && arm.arguments.size == arm.captures.size &&
+              arm.captures.distinct.size == arm.captures.size && arm.arguments.size <= 4098 &&
+              arm.yieldValue.isEmpty,
+            "behavioral arm requires canonical identity, unique captures and no yield",
+            arm.path
+          )
+          arm.captures.foreach(requireVisible(
+            _,
+            conditional.owner,
+            conditional.parentRegion,
+            arm.path
+          ))
+          arm.arguments.zipWithIndex.foreach: (argument, index) =>
+            val expected = expressionType(arm.captures(index))
+            requireValid(
+              argument.path == s"${arm.path}.arg$index" &&
+                argument.role == (if expected == "Integer" then "static_capture" else "capture") &&
+                (expected == "Integer" || finiteType(expected)) &&
+                !expressions.contains(argument.path) && !staticExpressions.contains(
+                  argument.path
+                ) &&
+                !declarations.contains(argument.path) && !predicates.contains(argument.path),
+              "behavioral arm argument requires its actual finite capture and canonical identity",
+              argument.path
+            )
+          var ancestor = conditional.parentRegion
+          val visited = mutable.HashSet(arm.path)
+          while ancestor.nonEmpty do
+            requireValid(
+              visited.add(ancestor.get) && visited.size <= 128,
+              "behavioral lexical scope contains a cycle or exceeds depth limit",
+              arm.path
+            )
+            ancestor = regions.getOrElse(
+              ancestor.get,
+              fail("behavioral parent scope is absent", arm.path)
+            ).parentRegion
     expressions.valuesIterator.filter(_.operation == "structural_if").foreach(value =>
       requireValid(
         conditionals.contains(value.path),
@@ -472,6 +624,11 @@ private[nodal] object DigitalValueMlir:
       )
     )
     generated.valuesIterator.foreach: value =>
+      requireValid(
+        !value.parent.exists(hasBehavioralAncestor),
+        "behavioral body cannot create generated structure",
+        value.path
+      )
       val body = value.digitalBody.get
       requireValid(
         body.arguments.size == body.captures.size + 1 && body.arguments.size <= 4098 &&
@@ -525,6 +682,15 @@ private[nodal] object DigitalValueMlir:
               assignmentRoot(scope.captures(capture), owner, scope.parentRegion, depth + 1)
             case None => path
 
+    private def wholeRegisterTarget(path: String, depth: Int = 0): Boolean =
+      requireValid(depth <= 128, "register capture chain exceeds depth limit", path)
+      !shapeByPath.contains(path) && (arguments.get(path) match
+        case Some((scope, argument)) =>
+          val index = scope.arguments.indexWhere(_.path == argument.path) -
+            (scope.arguments.size - scope.captures.size)
+          scope.captures.lift(index).exists(wholeRegisterTarget(_, depth + 1))
+        case None => declarations.get(path).exists(_._2.kind == "register"))
+
     def boundaryRoot(path: String, owner: String): KernelDeclarationSnapshot =
       val root = assignmentRoot(path, owner)
       declarations.get(root).filter(_._1 == owner).map(_._2).getOrElse(
@@ -557,9 +723,12 @@ private[nodal] object DigitalValueMlir:
         fail("digital assignment target requires an owned declaration", assignment.path)
       )
       val valid = assignment.kind match
-        case "continuous" => Set("wire", "output").contains(target.kind)
-        case "register_next" => assignment.region.isEmpty && target.kind == "register" &&
-          assignment.target == target.path
+        case "continuous" => Set("wire", "output").contains(target.kind) &&
+          !assignment.region.exists(hasBehavioralAncestor)
+        case "register_next" => target.kind == "register" &&
+          (assignment.region.isEmpty && assignment.target == target.path ||
+            assignment.region.flatMap(arms.get).exists(_._1.behavioralRoot.nonEmpty) &&
+            wholeRegisterTarget(assignment.target))
         case _ => false
       requireValid(
         valid && target.generatedScope.isEmpty,
@@ -1309,7 +1478,10 @@ private[nodal] object DigitalValueMlir:
             Vector[(String, String)]
         ) => Projection,
         additionalRoots: Vector[String],
-        staticValue: (String, Option[String], mutable.ArrayBuffer[String]) => (String, String),
+        staticValue: (String, Option[String], mutable.ArrayBuffer[String], Boolean) => (
+            String,
+            String
+        ),
         prepareType: (String, String, Option[String], mutable.ArrayBuffer[String]) => Unit,
         bindStaticArgument: (String, (String, String)) => Unit,
         withCollectionContexts: (KernelDigitalCollectionSnapshot, () => Unit) => Unit,
@@ -1322,7 +1494,7 @@ private[nodal] object DigitalValueMlir:
         collectionResultMatches: (KernelDigitalCollectionSnapshot, String) => Boolean,
         withLoopContext: (KernelDigitalLoopSnapshot, () => Unit) => Unit,
         withArmContext: (
-            KernelStructuralIfSnapshot,
+            Option[String],
             KernelStructuralArmSnapshot,
             () => Unit
         ) => Unit,
@@ -1390,7 +1562,14 @@ private[nodal] object DigitalValueMlir:
         )
         effects.sortBy(value => (value._1, value._2)).foreach(value => value._3())
         staticByRegion.getOrElse(scoped, Vector.empty).sortBy(_.path).foreach(value =>
-          emit(value.path, depth + 1, scoped, output)
+          if !values.contains(value.path) then
+            emit(
+              value.path,
+              depth + 1,
+              scoped,
+              output,
+              topology = !arms.get(region).exists(_._1.behavioralRoot.nonEmpty)
+            )
         )
         predicatesByRegion.getOrElse(scoped, Vector.empty).sortBy(_.path).foreach(value =>
           emit(value.path, depth + 1, scoped, output)
@@ -1403,7 +1582,7 @@ private[nodal] object DigitalValueMlir:
         )
 
       def emitConditional(
-          conditional: KernelStructuralIfSnapshot,
+          conditional: Conditional,
           depth: Int,
           output: mutable.ArrayBuffer[String]
       ): Option[(String, String)] =
@@ -1417,8 +1596,9 @@ private[nodal] object DigitalValueMlir:
           )
           val predicate = emit(conditional.predicate, depth + 1, conditional.parentRegion, output)
           requireValid(
-            predicate._2 == "!nodal.static_predicate",
-            "structural if requires a static predicate",
+            predicate._2 == (if conditional.behavioralRoot.nonEmpty then "!nodal.bits<1>"
+                             else "!nodal.static_predicate"),
+            "conditional predicate has the wrong static or behavioral type",
             path
           )
           val result = conditional.dataType.map: sourceType =>
@@ -1427,14 +1607,20 @@ private[nodal] object DigitalValueMlir:
             ordinal += 1
             name -> computedType(sourceType, path)
           val allCaptures = Vector(conditional.trueArm, conditional.falseArm).map(arm =>
-            arm.captures.map(emit(_, depth + 1, conditional.parentRegion, output))
+            arm.captures.map(emit(
+              _,
+              depth + 1,
+              conditional.parentRegion,
+              output,
+              topology = conditional.behavioralRoot.isEmpty
+            ))
           )
           val rendered = Vector(conditional.trueArm, conditional.falseArm).zip(allCaptures).map:
             (arm, captures) =>
               val local = mutable.ArrayBuffer.empty[String]
               var blockArguments = Vector.empty[String]
               withArmContext(
-                conditional,
+                conditional.parentRegion,
                 arm,
                 () => {
                   clearRegion(arm.path)
@@ -1466,8 +1652,9 @@ private[nodal] object DigitalValueMlir:
                       "structural yield must match the enclosing exact finite read-only ABI",
                       path
                     )
-                  local += s"${quoted("nodal.structural_yield")}(${yielded.map(_._1).mkString}) " +
-                    s"<{metadata = ${metadata(arm.path + ".yield", false)}}> : (${yielded.map(_._2).mkString}) -> ()${sourceLocation(path)}"
+                  if conditional.behavioralRoot.isEmpty then
+                    local += s"${quoted("nodal.structural_yield")}(${yielded.map(_._1).mkString}) " +
+                      s"<{metadata = ${metadata(arm.path + ".yield", false)}}> : (${yielded.map(_._2).mkString}) -> ()${sourceLocation(path)}"
                 }
               )
               // Capture identity is retained through actual first SSA/type use, not declaration order.
@@ -1547,11 +1734,19 @@ private[nodal] object DigitalValueMlir:
                 )
               (order.map(captures), block.linesIterator.map("  " + _).mkString("\n"))
           val operands = Vector(predicate) ++ rendered.flatMap(_._1)
+          val contract =
+            if conditional.behavioralRoot.nonEmpty then "behavioral-if-v1" else "structural-if-v1"
           val attributes =
-            s"{contract_version = \"structural-if-v1\", region_id = ${quoted(path)}, " +
-              s"operandSegmentSizes = array<i32: 1, ${rendered(0)._1.size}, ${rendered(1)._1.size}>, metadata = ${metadata(path, result.nonEmpty)}}"
+            s"{contract_version = ${quoted(contract)}, region_id = ${quoted(path)}, " +
+              s"operandSegmentSizes = array<i32: 1, ${rendered(0)._1.size}, ${rendered(1)._1.size}>, metadata = ${
+                  if conditional.behavioralRoot.nonEmpty
+                  then effectMetadata(path, conditional.sourceOrdinal)
+                  else metadata(path, result.nonEmpty)
+                }}"
           val assignment = result.map(value => value._1 + " = ").getOrElse("")
-          output += s"$assignment${quoted("nodal.structural_if")}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
+          val name = if conditional.behavioralRoot.nonEmpty then "nodal.behavioral_if"
+          else "nodal.structural_if"
+          output += s"$assignment${quoted(name)}(${operands.map(_._1).mkString(", ")}) <$attributes> " +
             rendered.map(value => "{\n" + value._2 + "\n}").mkString("(", ", ", ")") +
             s" : (${operands.map(_._2).mkString(", ")}) -> ${result.map(_._2).getOrElse("()")}${sourceLocation(path)}"
           result.foreach(value => values.update(path, value))
@@ -1579,7 +1774,7 @@ private[nodal] object DigitalValueMlir:
         )
         val body = region.digitalBody.get
         val header = Vector(region.lower, region.upperExclusive, region.step).map: path =>
-          if path.toLongOption.nonEmpty then staticValue(path, region.parent, output)
+          if path.toLongOption.nonEmpty then staticValue(path, region.parent, output, true)
           else emit(path, depth + 1, region.parent, output)
         requireValid(
           header.forall(_._2 == "i64"),
@@ -1644,7 +1839,8 @@ private[nodal] object DigitalValueMlir:
           path: String,
           depth: Int,
           region: Option[String],
-          output: mutable.ArrayBuffer[String]
+          output: mutable.ArrayBuffer[String],
+          topology: Boolean = true
       ): (String, String) =
         requireValid(depth <= 128, "digital expression graph exceeds depth limit", path)
         requireVisible(path, module.path, region, path)
@@ -1655,7 +1851,13 @@ private[nodal] object DigitalValueMlir:
               val predicate = predicates(path)
               val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(predicate.operation)
               if comparison then predicate.operands.foreach(validatePredicateInput)
-              val operands = predicate.operands.map(emit(_, depth + 1, region, output))
+              val operands = predicate.operands.map(emit(
+                _,
+                depth + 1,
+                region,
+                output,
+                requiresTopology(path)
+              ))
               requireValid(
                 operands.forall(_._2 == (if comparison then "i64" else "!nodal.static_predicate")),
                 "static predicate requires exact typed operands",
@@ -1709,7 +1911,7 @@ private[nodal] object DigitalValueMlir:
             value._2.kind == "parameter" && value._2.dataType.contains("Integer")
           )
         then
-          val value = staticValue(path, region, output)
+          val value = staticValue(path, region, output, topology)
           values.update(path, value)
           heights.update(path, 0)
           proofs.update(path, Unknown)
@@ -1752,14 +1954,35 @@ private[nodal] object DigitalValueMlir:
                   val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
                   val specialized =
                     DigitalInterfaceContract.ValueOperations.contains(expression.operation)
-                  if !specialized then
+                  if !specialized && expression.operation != "behavioral_predicate" then
                     expression.operands.zip(operands).foreach: (input, actual) =>
                       requireValid(
                         actual._2 == nativeType(expressionType(input), input),
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == DigitalCollectionContract.Operation then
+                  if expression.operation == "behavioral_predicate" then
+                    requireValid(
+                      expression.dataType == "Bool" && operands.map(_._2) == Vector(
+                        "!nodal.static_predicate"
+                      ) &&
+                        expression.literal.isEmpty && expression.enumIdentity.isEmpty && expression.caseIds.isEmpty,
+                      "behavioral predicate requires one actual checked static predicate and a Bool result",
+                      path
+                    )
+                    (
+                      Vector(operation(
+                        "nodal.behavioral_predicate",
+                        result,
+                        dataType,
+                        operands,
+                        s"{metadata = ${metadata(path, false)}}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == DigitalCollectionContract.Operation then
                     val collection = collections(path)
                     val vectors =
                       collection.inputs.map(input => vectorType(expressionType(input), path))
@@ -1837,7 +2060,7 @@ private[nodal] object DigitalValueMlir:
                         // Retained unused static operations are part of the closed pure body too.
                         staticByRegion.getOrElse(Some(path), Vector.empty).sortBy(_.path).foreach(
                           value =>
-                            staticValue(value.path, Some(path), local)
+                            staticValue(value.path, Some(path), local, true)
                         )
                         bodyExpressions.filterNot(value =>
                           DigitalCombinationalContract.ReachableBooleanOperations.contains(
@@ -2151,7 +2374,7 @@ private[nodal] object DigitalValueMlir:
           String,
           Either[
             Either[KernelDigitalAssignmentSnapshot, KernelDigitalLoopSnapshot],
-            Either[KernelStructuralIfSnapshot, KernelGeneratedRegionSnapshot]
+            Either[Conditional, KernelGeneratedRegionSnapshot]
           ]
       )] = assignmentsByRegion.getOrElse(module.path -> None, Vector.empty)
         .map(value => (value.sourceOrdinal, value.path, Left(Left(value)))) ++
@@ -2178,7 +2401,7 @@ private[nodal] object DigitalValueMlir:
           lines += renderAssignment(assignment, target, value)
         case (_, _, Left(Right(loop))) =>
           val header = Vector(loop.lower, loop.upperExclusive, loop.step).map: path =>
-            if path.toLongOption.nonEmpty then staticValue(path, None, lines)
+            if path.toLongOption.nonEmpty then staticValue(path, None, lines, true)
             else emit(path, 0, None, lines)
           requireValid(
             header.forall(_._2 == "i64"),

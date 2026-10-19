@@ -151,7 +151,7 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp"]>]> {
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -1825,3 +1825,41 @@ def Nodal_FsmCompletionOp : Nodal_Op<"fsm_completion",
 }
 
 #endif // NODAL_DIALECT_NODAL_NODALOPS_TD
+
+// F56: local executable sequential boundary; F19 descriptors remain distinct.
+def Nodal_LocalDomainBindingOp : Nodal_Op<"local_domain_binding", [HasParent<"ModuleOp">]> {
+  let summary = "Physical typed clock and optional reset for a local domain";
+  let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
+    FlatSymbolRefAttr:$domain, StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_BehavioralPredicateOp : Nodal_Op<"behavioral_predicate"> {
+  let summary = "Checked static predicate as a behavioral Bool value";
+  let arguments = (ins Nodal_StaticPredicateType:$predicate, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_BehavioralIfOp : Nodal_Op<"behavioral_if",
+    [IsolatedFromAbove, SingleBlock, NoTerminator, AttrSizedOperandSegments]> {
+  let summary = "Owned behavioral priority choice with explicit captures";
+  let arguments = (ins AnyType:$predicate,
+    Variadic<AnyType>:$true_captures, Variadic<AnyType>:$false_captures,
+    StrAttr:$contract_version, StrAttr:$region_id, DictionaryAttr:$metadata);
+  let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select", [HasParent<"ModuleOp">]> {
+  let summary = "Exact typed priority selection with explicit hold alternatives";
+  let arguments = (ins AnyType:$predicate, AnyType:$true_value, AnyType:$false_value,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleOp">]> {
+  let summary = "Normalized clocked next state; reset dominates next-state enable";
+  let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
+    Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$reset_policy, StrAttr:$reset_polarity,
+    StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}

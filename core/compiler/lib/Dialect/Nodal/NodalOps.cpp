@@ -27,6 +27,7 @@
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -2222,6 +2223,7 @@ LogicalResult nodal::ModuleOp::verify() {
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
       failed(verifyStructuralIfModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
+      failed(verifySequentialModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation(), false)) ||
       failed(verifyDigitalValueModel(getOperation(), false)) ||
       failed(verifyDigitalCollectionModel(getOperation())) ||
@@ -4360,3 +4362,15 @@ LogicalResult nodal::StructuralIfOp::verify() {
 LogicalResult nodal::StructuralYieldOp::verify() {
   return verifyStructuralYieldOperation(getOperation());
 }
+
+LogicalResult nodal::LocalDomainBindingOp::verify() {
+  return verifyLocalDomainBinding(getOperation());
+}
+LogicalResult nodal::BehavioralPredicateOp::verify() {
+  return verifyBehavioralPredicate(getOperation());
+}
+LogicalResult nodal::BehavioralIfOp::verify() {
+  return verifyBehavioralIfOperation(getOperation());
+}
+LogicalResult nodal::SequentialSelectOp::verify() { return verifySequentialSelect(getOperation()); }
+LogicalResult nodal::SequentialUpdateOp::verify() { return verifySequentialUpdate(getOperation()); }

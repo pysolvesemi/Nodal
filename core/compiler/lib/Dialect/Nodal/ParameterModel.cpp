@@ -2681,9 +2681,10 @@ FailureOr<nodal::ParameterIntegerEnvironment> nodal::ParameterIntegerEnvironment
         return failure();
     }
   }
-  if (region->kind == nodal::DigitalRegionKind::StructuralArm) {
+  if (region->kind == nodal::DigitalRegionKind::StructuralArm ||
+      region->kind == nodal::DigitalRegionKind::BehavioralArm) {
     for (const auto &binding : bindings) {
-      auto source = nodal::structuralIfCaptureSource(binding.argument);
+      auto source = nodal::digitalRegionCaptureSource(binding.argument);
       if (failed(source) || !*source || binding.captureSource != *source)
         return failure();
     }
@@ -3857,6 +3858,7 @@ namespace {
 /// Neither contextual width formals nor procedural loop induction are static.
 class StructuralIntegerQuery {
 public:
+  explicit StructuralIntegerQuery(bool behavioral = false) : behavioral(behavioral) {}
   FailureOr<StructuralIntegerFacts> operation(Operation *op) {
     if (!op || op->getNumResults() != 1 || !op->getResult(0).getType().isSignlessInteger(64))
       return failure();
@@ -3904,7 +3906,8 @@ private:
       return failure();
     if (op->getParentOp() == module) {
       llvm::DenseSet<Value> activeDependencies, visited;
-      if (failed(verifyGeneratedBoundDependencies(value, module, use, activeDependencies, visited)))
+      if (failed(verifyGeneratedBoundDependencies(value, module, use, activeDependencies, visited,
+                                                  !behavioral)))
         return failure();
       auto expression =
           resolveOwnedIntegerExpression(module, value, ParameterIntegerMode::MathematicalSigned64);
@@ -3922,7 +3925,8 @@ private:
       if (op->getNumOperands() || !parameter || parameter->hasAttr("unit") ||
           !parameter->getAttrOfType<TypeAttr>("type") ||
           parameter->getAttrOfType<TypeAttr>("type").getValue() != value.getType() ||
-          (textAttr(parameter, "variability") != "fixed" && !isStructuralParameter(parameter)))
+          (!behavioral && textAttr(parameter, "variability") != "fixed" &&
+           !isStructuralParameter(parameter)))
         return failure();
       if (auto definition = findParameterValue(module, symbolName(parameter))) {
         if (textAttr(parameter, "variability") == "fixed") {
@@ -3930,7 +3934,7 @@ private:
             return failure();
           llvm::DenseSet<Value> activeDependencies, visited;
           if (failed(verifyGeneratedBoundDependencies(definition->getOperand(0), module, use,
-                                                      activeDependencies, visited)))
+                                                      activeDependencies, visited, !behavioral)))
             return failure();
         }
       }
@@ -3972,6 +3976,7 @@ private:
                ? FailureOr<StructuralIntegerFacts>(failure())
                : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
   }
+  bool behavioral;
   unsigned work = 0;
   llvm::DenseMap<Value, StructuralIntegerFacts> memo;
   llvm::DenseSet<Value> active;
@@ -3982,5 +3987,8 @@ LogicalResult verifyStructuralIntegerOperation(Operation *op) {
 }
 FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(Value value, Operation *use) {
   return StructuralIntegerQuery().resolve(value, use);
+}
+FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(Value value, Operation *use) {
+  return StructuralIntegerQuery(true).resolve(value, use);
 }
 } // namespace nodal

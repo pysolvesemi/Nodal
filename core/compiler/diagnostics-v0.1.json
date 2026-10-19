@@ -9,6 +9,11 @@
     "source-range"
   ],
   "families": {
+    "sequential-state": [
+      "NODAL-SEQUENTIAL-056-001",
+      "NODAL-STATE-001",
+      "NODAL-CDC-001"
+    ],
     "structural-conditionals": [
       "NODAL-DIGITAL-055-013",
       "NODAL-DIGITAL-055-014"
@@ -286,6 +291,7 @@
   },
   "preserved_prefixes": [
     "NODAL-DIGITAL-",
+    "NODAL-SEQUENTIAL-",
     "NODAL-SHAPE-",
     "NODAL-ITERATION-",
     "NODAL-BRIDGE-",

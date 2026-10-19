@@ -170,7 +170,9 @@ object SelectedCaptureTests extends TestSuite:
       val bound = domains("bound").attributes.toMap
       val related = domains("related").attributes.toMap
       assert(root("frequency_hz") == "1.25E7")
-      assert(!root.contains("clock_source"), !root.contains("clock_parent"))
+      assert(root("clock_source") == "SelectedClockCapture.root_clock")
+      assert(root("reset_source") == "SelectedClockCapture.root_reset")
+      assert(!root.contains("clock_parent"))
       assert(bound("frequency_hz") == "8000000.0")
       assert(bound("clock_source") == "SelectedClockCapture.inputClock")
       assert(bound("reset_source") == "SelectedClockCapture.inputReset")
@@ -190,7 +192,11 @@ object SelectedCaptureTests extends TestSuite:
       val external = capture.references(5)
       val release = capture.references(6)
       val transferred = capture.references(7)
-      assert(external.operation.contains("external_reset"), external.dataType.contains("Reset"))
+      assert(external.kind == "input", external.operation.isEmpty)
+      assert(
+        external.path == "SelectedClockCapture.root_reset",
+        external.dataType.contains("Reset")
+      )
       assert(release.operation.contains("rdc_sync"), release.dataType.contains("Reset"))
       assert(release.operands == Vector(
         KernelSelectedOperand.Reference(external.path),

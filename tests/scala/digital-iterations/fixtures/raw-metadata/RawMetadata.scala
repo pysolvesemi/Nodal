@@ -59,3 +59,8 @@ final class WrongProfileSummaryChild extends Module
     "constructor\tclass:nodal.iteration.fixture.CyclicSummaryChild\t\tnodal.iteration.fixture.CyclicSummaryChild():nodal.iteration.fixture.CyclicSummaryChild\t1"
 )
 final class CyclicSummaryChild extends Module
+
+// Compiled without the plugin: same harmless body, deliberately no effect summary.
+object UninstrumentedHelper:
+  def effect(index: LoopIndex): Unit =
+    val _ = index

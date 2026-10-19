@@ -10,6 +10,8 @@ struct StaticPredicateFacts {
 mlir::FailureOr<StaticPredicateFacts>
 analyzeStaticPredicate(mlir::Value predicate, mlir::Operation *use,
                        const ParameterIntegerEnvironment *environment = nullptr);
+mlir::FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(mlir::Value predicate,
+                                                                       mlir::Operation *use);
 mlir::LogicalResult verifyStaticPredicateOperation(mlir::Operation *operation);
 } // namespace nodal
 #endif

@@ -12,6 +12,8 @@
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -170,7 +172,9 @@ bool integerFits(IntegerAttr value, Type type) {
   return !value.getValue().isNegative() && value.getValue().isIntN(*width);
 }
 
-bool bindingFits(Attribute value, Type type) {
+bool bindingFits(Attribute value, Type type, Operation *module) {
+  if (nodal::isDigitalScalarType(type))
+    return nodal::digitalIntegerAttributeFits(llvm::dyn_cast<IntegerAttr>(value), type, module);
   if (auto typed = llvm::dyn_cast<TypedAttr>(value)) {
     if (typed.getType() == type)
       return true;
@@ -645,7 +649,8 @@ LogicalResult verifyParameters(mlir::ModuleOp module) {
       Operation *parameter =
           findDirectSymbol(rootModule, "nodal.parameter", binding.getName().getValue());
       auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-      if (!type || !bindingFits(binding.getValue(), type.getValue()))
+      if (!type ||
+          !bindingFits(binding.getValue(), type.getValue(), enclosingNodalModule(parameter)))
         return emitFailure(rootModule, "NODAL-VERIFY-PARAMETER-008",
                            llvm::Twine("incompatible root parameter binding '") +
                                binding.getName().getValue() + "'");
@@ -678,7 +683,8 @@ LogicalResult verifyParameters(mlir::ModuleOp module) {
               continue;
             }
             auto type = parameter->getAttrOfType<TypeAttr>("type");
-            if (!type || !bindingFits(binding.getValue(), type.getValue()))
+            if (!type ||
+                !bindingFits(binding.getValue(), type.getValue(), enclosingNodalModule(parameter)))
               result = emitFailure(operation, "NODAL-VERIFY-PARAMETER-004",
                                    llvm::Twine("incompatible parameter binding '") +
                                        binding.getName().getValue() + "'");
@@ -903,13 +909,18 @@ LogicalResult verifyProtocols(mlir::ModuleOp module) {
     if (!isNamed(owner, "nodal.module") || owner->getNumRegions() != 1 ||
         owner->getRegion(0).empty())
       return;
+    if (failed(verifyDigitalInterfaceModel(owner))) {
+      result = failure();
+      return;
+    }
     struct InstanceInfo {
       std::string definition;
       std::string role;
     };
     llvm::StringMap<InstanceInfo> instances;
     for (Operation &operation : owner->getRegion(0).front()) {
-      if (!isNamed(&operation, "nodal.interface_instance"))
+      if (!isNamed(&operation, "nodal.interface_instance") ||
+          hasDigitalInterfaceContract(&operation))
         continue;
       FlatSymbolRefAttr definition = flatReference(&operation, "definition");
       auto role = operation.getAttrOfType<StringAttr>("role");
@@ -928,7 +939,7 @@ LogicalResult verifyProtocols(mlir::ModuleOp module) {
     }
 
     for (Operation &operation : owner->getRegion(0).front()) {
-      if (!isNamed(&operation, "nodal.member_access"))
+      if (!isNamed(&operation, "nodal.member_access") || hasDigitalInterfaceContract(&operation))
         continue;
       FlatSymbolRefAttr instance = flatReference(&operation, "instance");
       auto path = operation.getAttrOfType<StringAttr>("path");

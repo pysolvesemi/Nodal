@@ -133,6 +133,30 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
   let hasVerifier = 1;
 }
 
+// Exact F54 declaration/connection carriers. Clocked update execution, memory
+// access operations and target layout remain with their later semantic owners.
+def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage", [HasParent<"ModuleOp">]> {
+  let summary = "Owned typed structural wire or domain-owned register";
+  let arguments = (ins Variadic<AnyType>:$initial, StrAttr:$name,
+    StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
+  let summary = "Explicit typed addressable memory declaration and access policy";
+  let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$element_type, StrAttr:$depth,
+    I64Attr:$read_latency, StrAttr:$read_under_write, StrAttr:$ordering,
+    FlatSymbolRefAttr:$domain, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [HasParent<"ModuleOp">]> {
+  let summary = "Exact typed continuous connection or register-next intent";
+  let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_InstanceOp : Nodal_Op<"instance",
     [ParentOneOf<["ModuleOp", "GenerateOp"]>, Symbol]> {
   let summary = "Typed module instance with explicit bindings";
@@ -251,6 +275,23 @@ def Nodal_InterfaceAbiOp : Nodal_Op<"interface_abi",
     StrAttr:$layout_policy,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+// Fully typed connectivity uses existing Interface/Role/Member identities.
+def Nodal_InterfaceConnectOp : Nodal_Op<"interface_connect", [HasParent<"ModuleOp">]> {
+  let summary = "Connect two exact role-qualified Interface leaves";
+  let arguments = (ins AnyType:$left, AnyType:$right, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_InterfaceDriveOp : Nodal_Op<"interface_drive", [HasParent<"ModuleOp">]> {
+  let summary = "Drive an explicitly writable Interface leaf";
+  let arguments = (ins AnyType:$member, AnyType:$value, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_InterfaceObserveOp : Nodal_Op<"interface_observe", [HasParent<"ModuleOp">]> {
+  let summary = "Observe a role-qualified digital Interface leaf";
+  let arguments = (ins AnyType:$member, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 
@@ -559,13 +600,38 @@ def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
     Nodal_ResolvedType:$net,
     Nodal_DriverType:$driver,
     AnyType:$value,
-    I1:$enable,
+    AnyType:$enable,
     StrAttr:$mode,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
 }
 
+
+def Nodal_NetReleaseOp : Nodal_Op<"net_release", [HasParent<"ModuleOp">]> {
+  let summary = "Explicit inactive high-impedance driver";
+  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+                       DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_NetDriveLevelOp : Nodal_Op<"net_drive_level", [HasParent<"ModuleOp">]> {
+  let summary = "Conditional low or high drive with no fabricated bit-vector constant";
+  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+                       AnyType:$enable, StrAttr:$level, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_NetPassThroughOp : Nodal_Op<"net_pass_through", [HasParent<"ModuleOp">]> {
+  let summary = "Exact resolved-net identity connection";
+  let arguments = (ins Nodal_ResolvedType:$left, Nodal_ResolvedType:$right,
+                       DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_NetSplitOp : Nodal_Op<"net_split", [HasParent<"ModuleOp">]> {
+  let summary = "Typed write and enable views of one unique authored conditional driver";
+  let arguments = (ins Nodal_ResolvedType:$net, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$value, AnyType:$enable);
+  let hasVerifier = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // Analog natures, disciplines, and normalized imports
@@ -1550,6 +1616,47 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
     APIntAttr:$value,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
+  let summary = "Closed typed hardware digital scalar conversion";
+  let description = [{
+    Exactly one Bits/UInt/SInt operand and one exact typed result. Closed
+    digital_extend/truncate/wrap/saturate/resize_checked operations retain kind;
+    truncation keeps low bits, wrapping is modulo 2^width, and saturation clamps
+    to the result range. Checked resize requires all-value or exact-constant
+    proof, with no implicit runtime assertion. digital_to_signed adds one bit
+    numerically; digital_to_unsigned preserves width and proves nonnegativity.
+    digital_reinterpret_signed/unsigned preserve exact bit width and encoding.
+    digital_to_real accepts UInt and produces f64 using nearest-ties-even
+    binary64 rounding, with an independent finite-result proof. Symbolic widths
+    retain exact owned structural identity rather than an overridable default.
+  }];
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$operator_name,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_EnumExprOp : Nodal_Op<"enum_expr"> {
+  let summary = "Closed typed hardware enum value operation";
+  let description = [{
+    The operator_name is enum_literal, enum_decode, enum_is_valid,
+    enum_as_bits, enum_eq, enum_is_one_of or enum_select. enum_ref resolves an
+    actual root enum symbol; metadata repeats its checked versioned ABI.
+    enum_decode takes original Bits and one belonging default case ID. A legal
+    code passes through unchanged; an illegal code produces that default. The
+    separate enum_is_valid on those original Bits remains false for illegal
+    input. enum_as_bits preserves the exact encoding. enum_eq compares codes
+    of the identical semantic enum. enum_is_one_of with no case IDs is false.
+    enum_select takes selector, explicit invalid result and one result per legal
+    case in declaration order, with case_ids in that same order. Its invalid
+    result handles illegal codes; missing legal cases are never a default.
+  }];
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$operator_name,
+    FlatSymbolRefAttr:$enum_ref, ArrayAttr:$case_ids, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 

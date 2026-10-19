@@ -139,8 +139,17 @@ private[nodal] object ScalaToMlirBridge:
       sourceProvenance: Boolean
   ):
     private val sourceEquations = new AnalogEquationMlir.Plan(snapshot)
+    private val enumValues = new EnumMlir.Plan(snapshot.enumDefinitions, snapshot.root)
+    private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues)
+    private val interfaceValues = new InterfaceMlir.Plan(snapshot)
+    private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
+    private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
+      value.members ++ value.roles.flatMap(_.members)
+    ).map(member => member.path -> member).toMap
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
+    private val storageDeclarationPaths = modules.flatMap(_.declarations)
+      .filter(value => Set("wire", "register", "memory").contains(value.kind)).map(_.path).toSet
     private val parameterExpressionsByOwner = snapshot.parameterExpressions
       .groupBy(_.owner)
       .view
@@ -182,11 +191,12 @@ private[nodal] object ScalaToMlirBridge:
     private def visibleInduction(scope: Option[KernelGeneratedScope], induction: String): Boolean =
       var current = scope.map(_.owner)
       val seen = mutable.HashSet.empty[String]
-      while current.nonEmpty && seen.add(current.get) do
+      var found = false
+      while !found && current.nonEmpty && seen.add(current.get) do
         val region = generatedByPath.get(current.get)
-        if region.exists(_.induction == induction) then return true
+        found = region.exists(_.induction == induction)
         current = region.flatMap(_.parent)
-      false
+      found
 
     private def sameStaticInteger(
         module: KernelModuleSnapshot,
@@ -318,6 +328,8 @@ private[nodal] object ScalaToMlirBridge:
       ordered.result()
 
     private lazy val structuralShapesByOwner = structuralShapeOperations.groupBy(_.owner)
+    private lazy val structuralShapesByPath =
+      structuralShapeOperations.map(value => value.path -> value).toMap
     private val instanceArrayRootsByPath =
       snapshot.instanceArrayRoots.map(root => root.path -> root).toMap
     private val instanceArrayRootsByOwner = snapshot.instanceArrayRoots.groupBy(_.owner)
@@ -350,11 +362,6 @@ private[nodal] object ScalaToMlirBridge:
       .groupBy(entry => resolveOwningModule(entry.logicalPath))
       .view
       .mapValues(_.sortBy(_.logicalPath))
-      .toMap
-    private val resolvedEntriesByModule = snapshot.resolvedNets
-      .groupBy(entry => resolveOwningModule(entry.path))
-      .view
-      .mapValues(_.sortBy(_.path))
       .toMap
     private val domainBindingOwners = modules.iterator
       .flatMap(_.domains.iterator.flatMap(_.binding))
@@ -401,7 +408,7 @@ private[nodal] object ScalaToMlirBridge:
       validate()
       canonicalizeModuleDefinitions()
       val body =
-        (standardConservativeDeclarations ++ AnalogEquationMlir.unitDeclarations(
+        (enumValues.renderDefinitions ++ standardConservativeDeclarations ++ AnalogEquationMlir.unitDeclarations(
           sourceEquations
         ) ++ emittedModules.map(module =>
           renderModule(module)
@@ -576,7 +583,10 @@ ${indent(body, 2)}
       val needsElectrical = modules.exists(module =>
         terminalDeclarations(module).nonEmpty ||
           module.declarations.exists(isConservativeArray)
-      )
+      ) || snapshot.interfaceContracts.exists(_.members.exists(member =>
+        member.protocol == "conservative" &&
+          member.analogAttributes.toMap.get("discipline").contains("electrical")
+      ))
       if !needsElectrical then Vector.empty
       else
         val standardMetadata = (semanticPath: String) =>
@@ -659,8 +669,12 @@ ${indent(body, 2)}
           snapshot.analogSemantics.equations.nonEmpty ||
           snapshot.analogSemantics.contributions.nonEmpty ||
           snapshot.analogProcedural.nonEmpty ||
-          declarationKinds.exists(analogKinds.contains)
-      val digital = declarationKinds.exists(digitalKinds.contains) ||
+          declarationKinds.exists(analogKinds.contains) ||
+          snapshot.interfaceContracts.exists(_.members.exists(member =>
+            Set("conservative", "signal-flow").contains(member.protocol)
+          ))
+      val digital = snapshot.enumDefinitions.nonEmpty || snapshot.digitalExpressions.nonEmpty ||
+        declarationKinds.exists(digitalKinds.contains) ||
         snapshot.interfaceAbi.nonEmpty ||
         snapshot.resolvedNets.nonEmpty
       (digital, analog) match
@@ -1275,9 +1289,18 @@ ${indent(body, 2)}
                 Vector.empty[StructuralShapeCoordinates.Projection]
               )
             case Some(declaration) =>
-              if shape.isNodeSelection || (declaration.kind != "input" && declaration.kind != "output")
+              if shape.isNodeSelection || !Set(
+                  "input",
+                  "output",
+                  "wire",
+                  "register"
+                ).contains(declaration.kind)
               then
-                fail(shape.code, "structural shape input must be a module port", Some(shape.path))
+                fail(
+                  shape.code,
+                  "structural shape input must be an owned port or storage value",
+                  Some(shape.path)
+                )
               val dataType = declaration.dataType.getOrElse(fail(
                 shape.code,
                 "structural shape input type is absent",
@@ -1694,6 +1717,97 @@ ${indent(body, 2)}
                 Some(dimensionPath)
               )
 
+      val digitalTypeRoots = snapshot.digitalExpressions.filter(_.owner == module.path)
+        .map(value => value.path -> value.dataType) ++
+        snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
+          .map(value => value.path -> value.dataType)
+      val digitalStaticRoots = digitalTypeRoots.flatMap: (path, dataType) =>
+        compoundShapeDimensionPaths(dataType, path).map(path -> _)
+      val interfaceStaticRoots = snapshot.interfaceContracts.filter(_.owner == module.path)
+        .flatMap(value => value.dimensions.filter(expressionsByPath.contains).map(value.path -> _))
+      (digitalStaticRoots ++ interfaceStaticRoots).distinct.sortBy(identity).foreach:
+        (path, dimensionPath) =>
+          val (_, dataType) = emitStaticValue(
+            dimensionPath,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            body,
+            shapeStaticValues,
+            () => allocateShapeStaticValue(),
+            requireStructural = true
+          )
+          if dataType != "i64" then
+            fail(
+              "NODAL-BRIDGE-054",
+              "digital result width must have Integer type",
+              Some(path)
+            )
+
+      module.declarations.filter(_.kind == "memory").sortBy(_.path).foreach: declaration =>
+        val depth = DigitalStorageMlir.depth(declaration)
+        depth.toLongOption.foreach: literal =>
+          if depth != literal.toString then
+            fail(
+              "NODAL-BRIDGE-054",
+              "memory depth literal must be canonical",
+              Some(declaration.path)
+            )
+        val reference =
+          depth.toLongOption.map(_.toString).orElse(shapeDimensionStaticPath(module, depth))
+            .getOrElse(fail(
+              "NODAL-BRIDGE-054",
+              "memory depth has no owned static identity",
+              Some(declaration.path)
+            ))
+        val bounds = shapeStaticBounds(
+          module,
+          reference,
+          declaration.path,
+          "NODAL-BRIDGE-054",
+          "memory depth",
+          requiredEffect = "shape"
+        )
+        if bounds.lower <= 0L then
+          fail(
+            "NODAL-BRIDGE-054",
+            "memory depth must be positive for every legal parameter value",
+            Some(declaration.path)
+          )
+        if expressionsByPath.contains(reference) then
+          val _ = emitStaticValue(
+            reference,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            body,
+            shapeStaticValues,
+            () => allocateShapeStaticValue(),
+            requireStructural = true
+          )
+        val canonical =
+          module.declarations.find(_.path == reference).map(_.name).getOrElse(reference)
+        val dataType = declaration.dataType.map(parseType(_, declaration.path)).getOrElse(
+          fail("NODAL-BRIDGE-054", "memory element type is absent", Some(declaration.path))
+        )
+        body += DigitalStorageMlir.renderMemory(
+          module,
+          declaration,
+          dataType,
+          canonical,
+          stableLocalSymbol,
+          bridgeMetadata(declaration.path, Vector.empty),
+          location(declaration.path)
+        )
+
+      body ++= interfaceValues.renderDefinitions(
+        module,
+        interfaceNativeType,
+        stableLocalSymbol,
+        path => bridgeMetadata(path, Vector.empty),
+        location
+      )
+
       module.declarations.filter(isConservativeArray)
         .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path))
         .sortBy(_.path).zipWithIndex.foreach: (declaration, index) =>
@@ -1702,15 +1816,17 @@ ${indent(body, 2)}
           body += renderConservativeArray(declaration, result, None)
           values.update(declaration.path, result -> nodeArrayType(declaration))
 
+      val renderedShapePaths = mutable.HashSet.empty[String]
       def renderShapes(
           shapeBody: mutable.ArrayBuffer[String],
           shapeValues: mutable.LinkedHashMap[String, (String, String)],
-          scope: Option[KernelGeneratedScope]
+          scope: Option[KernelGeneratedScope],
+          onlyPath: Option[String] = None
       ): Unit =
         instanceArrayRootsByOwner.getOrElse(
           module.path,
           Vector.empty
-        ).filter(_.generatedScope == scope)
+        ).filter(root => root.generatedScope == scope && onlyPath.forall(_ == root.path))
           .zipWithIndex.foreach: (root, index) =>
             root.dimensions.distinct.filter(expressionsByPath.contains).foreach: path =>
               emitStaticValue(
@@ -1758,10 +1874,12 @@ ${indent(body, 2)}
             )
             shapeValues.update(root.path, result -> resultType)
             emittedShapes.update(root.path, (result, resultType, elementType))
-        structuralShapesByOwner.getOrElse(
-          module.path,
-          Vector.empty
-        ).filter(_.scope == scope).foreach: shape =>
+        val selectedShapes = onlyPath match
+          case Some(path) => structuralShapesByPath.get(path).toVector
+          case None => structuralShapesByOwner.getOrElse(module.path, Vector.empty)
+        selectedShapes.filter(shape =>
+          shape.scope == scope && !renderedShapePaths.contains(shape.path)
+        ).foreach: shape =>
           shape.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
             val (_, dataType) = emitStaticValue(
               dimensionPath,
@@ -1788,18 +1906,21 @@ ${indent(body, 2)}
                 fail(shape.code, "structural shape input type is absent", Some(shape.path))
               )
               val (element, _) = vecTypeParts(dataType, shape.path)
-              val portValue = s"${shape.result}_input"
               val shapedType = parseType(dataType, shape.path)
-              shapeBody += operation(
-                "nodal.port_value",
-                results = Vector(portValue),
-                resultTypes = Vector(shapedType),
-                attributes = Vector(
-                  "port" -> symbolReference(stableLocalSymbol("port", declaration.name)),
-                  "metadata" -> bridgeMetadata(shape.input, Vector("use" -> quoted(shape.name)))
-                ),
-                semanticPath = shape.input
-              )
+              val portValue = shapeValues.get(declaration.path) match
+                case Some((value, actualType)) =>
+                  if actualType != shapedType then
+                    fail(
+                      shape.code,
+                      "shape root type differs from its actual typed value",
+                      Some(shape.path)
+                    )
+                  value
+                case None =>
+                  val result = s"${shape.result}_input"
+                  shapeBody ++= renderDigitalDeclarationValue(declaration, result, shapedType, None)
+                  shapeValues.update(declaration.path, result -> shapedType)
+                  result
               (portValue, shapedType, parseType(element, shape.path))
             case None =>
               emittedShapes.getOrElse(
@@ -1967,11 +2088,113 @@ ${indent(body, 2)}
                 ) ++ scopeAttributes(index.generatedScope),
                 semanticPath = index.path
               )
-          if shape.isNodeSelection then shapeValues.update(shape.path, shape.result -> resultType)
-          else if shape.dimensions.nonEmpty then
+          shapeValues.update(shape.path, shape.result -> resultType)
+          renderedShapePaths.add(shape.path)
+          if !shape.isNodeSelection && shape.dimensions.nonEmpty then
             emittedShapes.update(shape.path, (shape.result, resultType, elementText))
 
+      def renderDigitalProjection(path: String, resolve: String => (String, String))
+          : DigitalValueMlir.Projection =
+        val shape = structuralShapesByPath.getOrElse(
+          path,
+          fail(
+            "NODAL-BRIDGE-054",
+            "digital projection has no authoritative shape record",
+            Some(path)
+          )
+        )
+        if shape.owner != module.path || shape.scope.nonEmpty || shape.isNodeSelection then
+          fail("NODAL-BRIDGE-054", "digital projection has invalid scope or capability", Some(path))
+        val input = resolve(shape.input)
+        values.update(shape.input, input)
+        val projected = mutable.ArrayBuffer.empty[String]
+        renderShapes(projected, values, None, Some(path))
+        DigitalValueMlir.Projection(
+          projected.toVector,
+          values.getOrElse(
+            path,
+            fail("NODAL-BRIDGE-054", "digital projection has no actual SSA result", Some(path))
+          )
+        )
+
+      val digital = digitalValues.renderModule(
+        module,
+        parseType,
+        (text, path) => parseTypeChecked(text, path, 0, Array(65536), storageContext = true),
+        digitalScalarType,
+        digitalWidthRelation,
+        renderDigitalDeclarationValue,
+        DigitalStorageMlir.initializer,
+        path => bridgeMetadata(path, Vector.empty),
+        location,
+        renderDigitalProjection,
+        interfaceValues.declarationType,
+        (expression, result, dataType, operands) =>
+          interfaceValues.renderValue(
+            expression,
+            result,
+            dataType,
+            operands,
+            interfaceNativeType,
+            bridgeMetadata(expression.path, Vector.empty),
+            location(expression.path)
+          ),
+        interfaceValues.roots(module)
+      )
+      body ++= digital.lines
+      values ++= digital.values
+
       renderShapes(body, values, None)
+
+      snapshot.digitalAssignments.filter(_.owner == module.path).sortBy(_.path).foreach:
+        assignment =>
+          def value(path: String): (String, String) = values.getOrElse(
+            path,
+            fail(
+              "NODAL-BRIDGE-054",
+              "digital assignment value has no actual typed SSA carrier",
+              Some(assignment.path)
+            )
+          )
+          val target = value(assignment.target)
+          val source = value(assignment.value)
+          if containsBoundaryCapability(target._2) || containsBoundaryCapability(source._2) then
+            val targetRoot = digitalValues.boundaryRoot(assignment.target, module.path)
+            val sourceRoot = digitalValues.boundaryRoot(assignment.value, module.path)
+            if assignment.kind != "continuous" || targetRoot.kind != "output" || sourceRoot.kind != "input" ||
+              localDomainName(module, targetRoot) != localDomainName(module, sourceRoot)
+            then
+              fail(
+                "NODAL-BRIDGE-054",
+                "clock/reset wiring requires same-domain input/output boundary roots",
+                Some(assignment.path)
+              )
+          body += DigitalStorageMlir.renderAssignment(
+            assignment.path,
+            assignment.kind,
+            value(assignment.target),
+            value(assignment.value),
+            bridgeMetadata(assignment.path, Vector.empty),
+            location(assignment.path)
+          )
+
+      body ++= interfaceValues.renderEffects(
+        module,
+        path =>
+          values.getOrElse(
+            path,
+            fail(
+              "NODAL-BRIDGE-054",
+              "digital connectivity requires an actual owned typed SSA value",
+              Some(path)
+            )
+          ),
+        interfaceNativeType,
+        stableLocalSymbol,
+        path => bridgeMetadata(path, Vector.empty),
+        location,
+        validateInterfaceCapabilitySource
+      )
 
       // Keep one canonical static DAG per module: defaults, dimensions and
       // instance overrides can share the same authored expression identity.
@@ -2019,51 +2242,27 @@ ${indent(body, 2)}
           () => allocateShapeStaticValue()
         )
 
-      interfaceEntries(module).foreach: entry =>
-        body += operation(
-          "nodal.interface_abi",
-          attributes = Vector(
-            "logical_path" -> quoted(entry.logicalPath),
-            "members" -> array(Vector(quoted(lastSegment(entry.logicalPath)))),
-            "layout_policy" -> quoted("logical_only"),
-            "metadata" -> bridgeMetadata(
-              entry.logicalPath,
-              Vector(
-                "emitted_path" -> quoted(entry.emittedPath),
-                "role" -> quoted(entry.role),
-                "access" -> quoted(entry.access),
-                "data_type" -> quoted(entry.dataType),
-                "domain" -> quoted(entry.domain)
+      interfaceEntries(module).filter(_ => !interfaceContractOwners.contains(module.path)).foreach:
+        entry =>
+          body += operation(
+            "nodal.interface_abi",
+            attributes = Vector(
+              "logical_path" -> quoted(entry.logicalPath),
+              "members" -> array(Vector(quoted(lastSegment(entry.logicalPath)))),
+              "layout_policy" -> quoted("logical_only"),
+              "metadata" -> bridgeMetadata(
+                entry.logicalPath,
+                Vector(
+                  "emitted_path" -> quoted(entry.emittedPath),
+                  "role" -> quoted(entry.role),
+                  "access" -> quoted(entry.access),
+                  "data_type" -> quoted(entry.dataType),
+                  "domain" -> quoted(entry.domain)
+                )
               )
-            )
-          ),
-          semanticPath = entry.logicalPath
-        )
-
-      resolvedEntries(module).zipWithIndex.foreach: (net, index) =>
-        val elementType = parseType(net.dataType, net.path)
-        val mode = resolvedMode(net.mode, net.path)
-        val resultType =
-          s"""!nodal.resolved<${quoted(mode)}, $elementType>"""
-        val result = s"%net_$index"
-        body += operation(
-          "nodal.resolved_net",
-          results = Vector(result),
-          resultTypes = Vector(resultType),
-          attributes = Vector(
-            "name" -> quoted(lastSegment(net.path)),
-            "metadata" -> bridgeMetadata(
-              net.path,
-              Vector(
-                "placement" -> quoted(net.placement),
-                "profile" -> quoted(net.profile),
-                "operations" -> array(net.operations.sorted.map(quoted))
-              )
-            )
-          ),
-          semanticPath = net.path
-        )
-        values.update(net.path, result -> resultType)
+            ),
+            semanticPath = entry.logicalPath
+          )
 
       val externallyBoundTerminals =
         externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
@@ -3061,6 +3260,12 @@ ${indent(body, 2)}
             Some(declaration.path)
           )
         )
+      if dataType.startsWith("!nodal.capability<") then
+        fail(
+          "NODAL-BRIDGE-054",
+          "clock/reset capabilities cannot be parameter literals",
+          Some(declaration.path)
+        )
       val attributes = declaration.attributes.toMap
       val defaultValue = attributes.get("default").getOrElse(
         fail(
@@ -3089,7 +3294,13 @@ ${indent(body, 2)}
           attributes = Vector(
             "sym_name" -> quoted(parameterSymbol),
             "type" -> dataType,
-            "default_value" -> typedLiteral(transportDefault, dataType, declaration.path),
+            "default_value" -> (if isDigitalParameterType(dataType) then
+                                  digitalValues.parameterDefault(
+                                    declaration,
+                                    defaultValue,
+                                    digitalScalarType
+                                  )
+                                else typedLiteral(transportDefault, dataType, declaration.path)),
             "variability" -> quoted("symbolic"),
             "classification" -> quoted(classification),
             "metadata" -> bridgeMetadata(
@@ -3183,7 +3394,8 @@ ${indent(body, 2)}
           .filter(_.nonEmpty)
           .distinct
           .sorted
-        val allowedEffects = Set("topology", "component_count", "equation_count", "shape", "rank")
+        val allowedEffects =
+          Set("topology", "component_count", "equation_count", "shape", "rank", "width")
         if effects.isEmpty || effects.exists(effect => !allowedEffects.contains(effect)) then
           fail(
             "NODAL-BRIDGE-043",
@@ -3401,13 +3613,14 @@ ${indent(body, 2)}
         def value(input: Value, depth: Int = 0): Int =
           if depth >= 512 then
             invalidValue("procedural value dependency exceeds supported depth", program.owner)
-          val previous = valueStates.get(input)
-          if previous != null then
-            if previous.intValue == -1 then
+          val previous = Option(valueStates.get(input))
+          if previous.nonEmpty then
+            val state = previous.get.intValue
+            if state == -1 then
               invalidValue("cyclic retained procedural value source", input.rendered)
             if depth + valueHeights.get(input).intValue >= 512 then
               invalidValue("procedural value dependency exceeds supported depth", program.owner)
-            previous.intValue
+            state
           else
             valueStates.put(input, -1)
             dimensions(input.valueType.dimensions, input.rendered)
@@ -3874,9 +4087,25 @@ ${indent(body, 2)}
           fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(target.path))
         )
         val rendered =
-          if parameterSymbols.contains(value) || expressionsByPath.contains(value) then
+          if targetType.startsWith("!nodal.enum<") then
+            Some(digitalValues.literalAttribute(
+              value,
+              target.dataType.get,
+              resolveOwningModule(instance.path),
+              instance.path,
+              (text, _) => digitalScalarType(text, target.path)
+            ))
+          else if parameterSymbols.contains(value) || expressionsByPath.contains(value) then
             symbolicBindings += ((name, value, targetType))
             None
+          else if isDigitalParameterType(targetType) then
+            Some(digitalValues.literalAttribute(
+              value,
+              target.dataType.get,
+              resolveOwningModule(instance.path),
+              instance.path,
+              (text, _) => digitalScalarType(text, target.path)
+            ))
           else Some(typedLiteral(value, targetType, instance.path))
         rendered.map(stableLocalSymbol("parameter", name) -> _)
       val parameterBindings = dictionary(literalBindings)
@@ -3948,11 +4177,6 @@ ${indent(body, 2)}
         module: KernelModuleSnapshot
     ): Vector[InterfaceAbiEntry] =
       interfaceEntriesByModule.getOrElse(module.path, Vector.empty)
-
-    private def resolvedEntries(
-        module: KernelModuleSnapshot
-    ): Vector[KernelResolvedNetSnapshot] =
-      resolvedEntriesByModule.getOrElse(module.path, Vector.empty)
 
     private def terminalDeclarations(
         module: KernelModuleSnapshot
@@ -4382,27 +4606,226 @@ ${indent(body, 2)}
         .orElse(snapshot.instanceArrayRoots.find(_.path == path).map(_.owner))
         .getOrElse(resolve(path))
 
-    private def parseType(text: String, path: String): String =
+    private def renderDigitalDeclarationValue(
+        declaration: KernelDeclarationSnapshot,
+        result: String,
+        dataType: String,
+        initial: Option[(String, String)]
+    ): Vector[String] =
+      declaration.kind match
+        case "digital-inout" => interfaceValues.renderDeclaration(
+            declaration,
+            result,
+            dataType,
+            bridgeMetadata(declaration.path, Vector.empty),
+            location(declaration.path)
+          )
+        case "wire" | "register" =>
+          val module = modulesByPath(resolveOwningModule(declaration.path))
+          Vector(DigitalStorageMlir.renderValue(
+            module,
+            declaration,
+            result,
+            dataType,
+            initial,
+            stableLocalSymbol,
+            bridgeMetadata(declaration.path, Vector.empty),
+            location(declaration.path)
+          ))
+        case kind =>
+          val (name, key, category) = kind match
+            case "input" | "output" => ("nodal.port_value", "port", "port")
+            case "parameter" => ("nodal.const_parameter_ref", "parameter", "parameter")
+            case _ => fail(
+                "NODAL-BRIDGE-054",
+                "digital operand storage is outside the implemented SSA profile",
+                Some(declaration.path)
+              )
+          Vector(operation(
+            name,
+            results = Vector(result),
+            resultTypes = Vector(dataType),
+            attributes = Vector(
+              key -> symbolReference(stableLocalSymbol(category, declaration.name)),
+              "metadata" -> bridgeMetadata(declaration.path, Vector.empty)
+            ),
+            semanticPath = declaration.path
+          ))
+
+    private def digitalScalarType(text: String, path: String): Option[DigitalValueMlir.ScalarType] =
       text match
-        case "Bool" => "!nodal.bits<1>"
-        case "Clock" | "Reset" => "i1"
-        case "Integer" => "i64"
-        case "Real" => "f64"
-        case WidthType(kind, widthText) =>
-          val width = widthText.toIntOption.filter(_ > 0).getOrElse(
+        case WidthType(kind, width) =>
+          val bounds = width.toLongOption match
+            case Some(value) if width == value.toString => IterationDomain.Bounds(value, value)
+            case _ =>
+              val module = modulesByPath(resolveOwningModule(path))
+              val reference = shapeDimensionStaticPath(module, width).getOrElse(
+                fail("NODAL-BRIDGE-054", "digital width has no exact owned identity", Some(path))
+              )
+              shapeStaticBounds(
+                module,
+                reference,
+                path,
+                "NODAL-BRIDGE-054",
+                "digital width",
+                requiredEffect = "width"
+              )
+          if bounds.lower <= 0L || bounds.upper < bounds.lower then
             fail(
-              "NODAL-BRIDGE-016",
-              s"non-concrete or invalid width '$widthText'",
+              "NODAL-BRIDGE-054",
+              "digital width is not positive for every legal parameter value",
               Some(path)
             )
+          Some(DigitalValueMlir.ScalarType(kind, width, bounds.lower, bounds.upper))
+        case _ => None
+
+    private def digitalWidthRelation(
+        source: DigitalValueMlir.ScalarType,
+        result: DigitalValueMlir.ScalarType,
+        offset: Int,
+        path: String
+    ): Boolean =
+      if source.lower == source.upper && result.lower == result.upper then
+        BigInt(source.lower) + offset == BigInt(result.lower)
+      else
+        val owner = resolveOwningModule(path)
+        def same(left: String, right: String): Boolean =
+          try StructuralParameterBinding.sameInteger(snapshot, owner, left, right)
+          catch
+            case error: IllegalArgumentException =>
+              fail("NODAL-BRIDGE-054", error.getMessage, Some(path))
+        if offset == 0 then same(source.width, result.width)
+        else
+          parameterExpressionsByOwner.getOrElse(owner, Map.empty).get(result.width).exists:
+            expression =>
+              expression.operation == "analog_add" && expression.operands.size == 2 &&
+                ((same(
+                  expression.operands(0),
+                  source.width
+                ) && same(expression.operands(1), offset.toString)) ||
+                  (same(expression.operands(1), source.width) && same(
+                    expression.operands(0),
+                    offset.toString
+                  )))
+
+    // Inputs are already canonical native types produced by the shared type renderer.
+    private def containsBoundaryCapability(nativeType: String): Boolean =
+      nativeType.contains("!nodal.capability<")
+
+    private def validateInterfaceCapabilitySource(
+        path: String,
+        owner: String,
+        targetDomain: String,
+        nativeType: String
+    ): Unit =
+      if containsBoundaryCapability(nativeType) then
+        val module = modulesByPath(owner)
+        val source = digitalValues.boundaryRoot(path, owner)
+        val domain = module.domains.find(value =>
+          value.path == targetDomain || value.binding.contains(targetDomain)
+        ).map(_.name)
+        if source.kind != "input" || !domain.contains(localDomainName(module, source)) then
+          fail(
+            "NODAL-BRIDGE-054-INTERFACE",
+            "clock/reset member drive requires a same-domain actual input boundary root",
+            Some(path)
           )
-          kind match
-            case "Bits" => s"!nodal.bits<$width>"
-            case "UInt" => s"!nodal.uint<$width>"
-            case "SInt" => s"!nodal.sint<$width>"
+
+    private def interfaceNativeType(text: String, path: String): String = text match
+      case value if value.startsWith("Terminal(") =>
+        val member = interfaceMembersByPath.getOrElse(
+          path,
+          fail(
+            "NODAL-BRIDGE-054-INTERFACE",
+            "Interface terminal requires its exact captured conservative contract",
+            Some(path)
+          )
+        )
+        val discipline = conservativeDiscipline(member.analogAttributes.toMap, path)
+        if value != "Terminal(electrical)" || discipline != "electrical" then
+          fail(
+            "NODAL-BRIDGE-054-INTERFACE",
+            "named Interface discipline requires an existing native analog definition/import owner",
+            Some(path)
+          )
+        s"!nodal.terminal<${quoted(discipline)}>"
+      case value if value.startsWith("AnalogSignal(") && value.endsWith(")") =>
+        try
+          val _ = AnalogUserFunctionRuntime.dimension(value.drop(13).dropRight(1))
+        catch
+          case error: ConstructionException =>
+            fail("NODAL-BRIDGE-054-INTERFACE", error.getMessage, Some(path))
+        "f64"
+      case _
+          if interfaceMembersByPath.get(path).exists(member =>
+            Set("valid", "stream").contains(member.protocol)
+          ) => parseTypeChecked(text, path, 0, Array(65536), storageContext = true)
+      case _ => parseType(text, path)
+
+    private def parseType(text: String, path: String): String =
+      parseTypeChecked(text, path, 0, Array(65536), storageDeclarationPaths.contains(path))
+
+    private def parseTypeChecked(
+        text: String,
+        path: String,
+        depth: Int,
+        remaining: Array[Int],
+        storageContext: Boolean
+    ): String =
+      remaining(0) -= 1
+      if depth > 128 || remaining(0) < 0 || text.length > 1048576 then
+        fail("NODAL-BRIDGE-054", "digital type exceeds the supported structural budget", Some(path))
+      text match
+        case "Bool" => "!nodal.bits<1>"
+        case "Clock" | "Reset" =>
+          if storageContext then
+            fail(
+              "NODAL-BRIDGE-054",
+              "clock/reset capabilities are not digital storage fields",
+              Some(path)
+            )
+          s"!nodal.capability<${quoted(text.toLowerCase(java.util.Locale.ROOT))}>"
+        case "Integer" => "i64"
+        case "Real" => "f64"
+        case value if value.startsWith("Enum(") => enumValues.parseType(value, path)
+        case WidthType(kind, widthText) =>
+          val label = kind.toLowerCase(java.util.Locale.ROOT)
+          widthText.toLongOption match
+            case Some(width) if width > 0L && widthText == width.toString =>
+              s"!nodal.$label<$width>"
+            case None
+                if widthText.length <= 4096 && validShapeDimension(widthText, path, "width") =>
+              s"!nodal.digital<${quoted(label)}, ${quoted(widthText)}>"
+            case _ => fail(
+                "NODAL-BRIDGE-016",
+                s"invalid or unproved digital width '$widthText'",
+                Some(path)
+              )
+        case value if value.startsWith("Struct(") && value.endsWith(")") =>
+          val inside = value.drop(7).dropRight(1)
+          val open = inside.indexOf('{')
+          if open <= 0 || !inside.endsWith("}") then
+            fail("NODAL-BRIDGE-054", "invalid Struct type representation", Some(path))
+          val name = inside.take(open)
+          def validName(value: String): Boolean =
+            value.length <= 1024 && value.matches("[A-Za-z_][A-Za-z0-9_]*")
+          if !validName(name) then fail("NODAL-BRIDGE-054", "invalid Struct identity", Some(path))
+          val fields = splitStructFields(inside.drop(open + 1).dropRight(1), path)
+          val names = mutable.HashSet.empty[String]
+          val rendered = fields.map: field =>
+            val colon = field.indexOf(':')
+            if colon <= 0 then
+              fail("NODAL-BRIDGE-054", "Struct field has no typed identity", Some(path))
+            val fieldName = field.take(colon)
+            if !validName(fieldName) || !names.add(fieldName) then
+              fail("NODAL-BRIDGE-054", "Struct fields require unique portable names", Some(path))
+            val fieldType =
+              parseTypeChecked(field.drop(colon + 1), path, depth + 1, remaining, true)
+            s"{name = ${quoted(fieldName)}, type = $fieldType}"
+          s"!nodal.struct<${quoted(name)}, [${rendered.mkString(", ")}]>"
         case value if value.startsWith("Vec(") && value.endsWith(")") =>
           val (elementText, dimensions) = vecTypeParts(value, path)
-          val element = parseType(elementText, path)
+          val element = parseTypeChecked(elementText, path, depth + 1, remaining, storageContext)
           if dimensions.isEmpty || dimensions.exists(dimension =>
               !validShapeDimension(dimension, path)
             )
@@ -4419,6 +4842,28 @@ ${indent(body, 2)}
             s"unsupported exact MLIR type representation '$text'",
             Some(path)
           )
+
+    private def splitStructFields(text: String, path: String): Vector[String] =
+      val fields = mutable.ArrayBuffer.empty[String]
+      val delimiters = mutable.ArrayBuffer.empty[Char]
+      var start = 0
+      text.indices.foreach: index =>
+        text(index) match
+          case '(' | '{' => delimiters += text(index)
+          case ')' | '}' =>
+            val expected = if text(index) == ')' then '(' else '{'
+            if delimiters.lastOption != Some(expected) then
+              fail("NODAL-BRIDGE-054", "unbalanced Struct type", Some(path))
+            delimiters.remove(delimiters.size - 1)
+          case ',' if delimiters.isEmpty =>
+            fields += text.substring(start, index)
+            start = index + 1
+          case _ => ()
+      if delimiters.nonEmpty then fail("NODAL-BRIDGE-054", "unbalanced Struct type", Some(path))
+      fields += text.drop(start)
+      if fields.size > 65536 || fields.exists(_.isEmpty) then
+        fail("NODAL-BRIDGE-054", "Struct requires nonempty bounded fields", Some(path))
+      fields.toVector
 
     private def vecTypeParts(text: String, path: String): (String, Vector[String]) =
       if !text.startsWith("Vec(") || !text.endsWith(")") then
@@ -4609,12 +5054,23 @@ ${indent(body, 2)}
         bounds.lower
 
     private def compoundShapeDimensionPaths(text: String, path: String): Vector[String] =
-      if !text.startsWith("Vec(") || !text.endsWith(")") then Vector.empty
-      else
-        val (element, dimensions) = vecTypeParts(text, path)
-        val expressions =
-          parameterExpressionsByOwner.getOrElse(resolveOwningModule(path), Map.empty)
-        dimensions.filter(expressions.contains) ++ compoundShapeDimensionPaths(element, path)
+      val expressions = parameterExpressionsByOwner.getOrElse(resolveOwningModule(path), Map.empty)
+      text match
+        case WidthType(_, width) => Vector(width).filter(expressions.contains)
+        case value if value.startsWith("Struct(") && value.endsWith(")") =>
+          val inside = value.drop(7).dropRight(1)
+          val open = inside.indexOf('{')
+          if open <= 0 || !inside.endsWith("}") then
+            fail("NODAL-BRIDGE-054", "invalid Struct type representation", Some(path))
+          splitStructFields(inside.drop(open + 1).dropRight(1), path).flatMap: field =>
+            val colon = field.indexOf(':')
+            if colon <= 0 then
+              fail("NODAL-BRIDGE-054", "Struct field has no typed identity", Some(path))
+            compoundShapeDimensionPaths(field.drop(colon + 1), path)
+        case value if value.startsWith("Vec(") && value.endsWith(")") =>
+          val (element, dimensions) = vecTypeParts(value, path)
+          dimensions.filter(expressions.contains) ++ compoundShapeDimensionPaths(element, path)
+        case _ => Vector.empty
 
     private def shapeDimensionStaticPath(
         module: KernelModuleSnapshot,
@@ -4889,7 +5345,11 @@ ${indent(body, 2)}
     ): IterationDomain.Bounds =
       shapeStaticBounds(module, value, indexPath, "NODAL-BRIDGE-044", "shape index")
 
-    private def validShapeDimension(dimension: String, path: String): Boolean =
+    private def validShapeDimension(
+        dimension: String,
+        path: String,
+        requiredEffect: String = "shape"
+    ): Boolean =
       if dimension != dimension.trim then false
       else if dimension.matches("[1-9][0-9]*") then true
       else
@@ -4900,7 +5360,8 @@ ${indent(body, 2)}
               staticPath,
               path,
               "NODAL-BRIDGE-018",
-              "symbolic shape dimension"
+              s"symbolic $requiredEffect dimension",
+              requiredEffect = requiredEffect
             )
             bounds.lower > 0L
         .getOrElse(false)
@@ -4910,6 +5371,10 @@ ${indent(body, 2)}
       def unapply(value: String): Option[(String, String)] = value match
         case Pattern(kind, width) => Some(kind -> width)
         case _ => None
+
+    private def isDigitalParameterType(dataType: String): Boolean =
+      Vector("!nodal.bits<", "!nodal.uint<", "!nodal.sint<", "!nodal.digital<", "!nodal.enum<")
+        .exists(dataType.startsWith)
 
     private def typedLiteral(
         value: String,
@@ -4961,16 +5426,27 @@ ${indent(body, 2)}
         val dataType = declaration.dataType.map(parseType(_, declaration.path)).getOrElse(
           fail("NODAL-BRIDGE-005", "parameter type is unavailable", Some(declaration.path))
         )
-        stableLocalSymbol("parameter", name) -> typedLiteral(value, dataType, declaration.path))
+        stableLocalSymbol("parameter", name) -> (if isDigitalParameterType(dataType) then
+                                                   digitalValues.literalAttribute(
+                                                     value,
+                                                     declaration.dataType.get,
+                                                     root.path,
+                                                     declaration.path,
+                                                     digitalScalarType
+                                                   )
+                                                 else
+                                                   typedLiteral(value, dataType, declaration.path)))
 
     private def conservativeDiscipline(declaration: KernelDeclarationSnapshot): String =
-      val attributes = declaration.attributes.toMap
+      conservativeDiscipline(declaration.attributes.toMap, declaration.path)
+
+    private def conservativeDiscipline(attributes: Map[String, String], path: String): String =
       val declared = attributes.getOrElse(
         "discipline",
         fail(
           "NODAL-BRIDGE-014",
           "conservative declaration lacks discipline identity",
-          Some(declaration.path)
+          Some(path)
         )
       )
       val potential = attributes.get("potential_nature").map(_.trim.toLowerCase)
@@ -4984,21 +5460,9 @@ ${indent(body, 2)}
           fail(
             "NODAL-BRIDGE-033",
             s"unsupported conservative nature pair '$left/$right' for '$declared'",
-            Some(declaration.path)
-          )
-        case _ => normalizeDiscipline(declared)
-
-    private def resolvedMode(mode: String, path: String): String =
-      mode match
-        case "push-pull" | "push_pull" => "push_pull"
-        case "open-drain" | "open_drain" => "open_drain"
-        case "open-source" | "open_source" => "open_source"
-        case other =>
-          fail(
-            "NODAL-BRIDGE-022",
-            s"resolved-net mode '$other' has no Increment 19 representation",
             Some(path)
           )
+        case _ => normalizeDiscipline(declared)
 
     private def normalizeDiscipline(value: String): String =
       value

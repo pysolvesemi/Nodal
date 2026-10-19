@@ -34,6 +34,15 @@ DIRECT_OPERATIONS = {
     """.split()
 }
 
+# F54 is an additive typed-IR boundary, not digital target admission.
+F54_DIGITAL_OPERATIONS = {
+    "nodal." + name for name in """
+    enum_expr digital_expr digital_storage memory digital_assign
+    interface_connect interface_drive interface_observe
+    net_release net_drive_level net_pass_through net_split
+    """.split()
+}
+
 # Legacy 0.1 fields remain byte-for-value compatible; the feature inventory is additive.
 LEGACY_CONTEXT = {
     "registry": "analog-functions-v1.json#contexts",
@@ -103,9 +112,21 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
 
     def test_preserves_the_complete_historical_feature_inventory(self) -> None:
         # Frozen F47 value identity, including every historical observation field.
-        serialized = json.dumps(self.inventory, sort_keys=True, separators=(",", ":")).encode()
+        historical = copy.deepcopy(self.inventory)
+        historical["operations"] = [entry for entry in historical["operations"]
+                                    if entry["operation"] not in F54_DIGITAL_OPERATIONS]
+        serialized = json.dumps(historical, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(serialized).hexdigest(),
                          "aeb2b8c8246dbe6e06432de8ff543d2024e565cbe97824eec4a05260250048ca")
+
+    def test_f54_typed_operations_do_not_claim_analog_target_support(self) -> None:
+        for operation in F54_DIGITAL_OPERATIONS:
+            self.assertEqual(self.operations[operation], {
+                "operation": operation,
+                "feature": "digital-behavior",
+                "domain": "digital",
+                "admission": "unsupported",
+            })
 
     def generated(self, serialized: bytes | None = None) -> dict[Path, str]:
         with tempfile.TemporaryDirectory(dir=ROOT / ".work") as directory:

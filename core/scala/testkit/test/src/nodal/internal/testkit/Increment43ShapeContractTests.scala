@@ -410,14 +410,24 @@ object Increment43ShapeContractTests extends TestSuite:
     test("public static indexing retains input identity literal order and semantic result"):
       val fixed = ConstructionKernel.inspect(new Increment43FixedShapeIndex)
       val symbolic = ConstructionKernel.inspect(new Increment43SymbolicShapeIndex)
-      val legacyWire = ConstructionKernel.inspect(new Increment43WireShapeIndex)
+      val ownedWire = ConstructionKernel.inspect(new Increment43WireShapeIndex)
       assert(fixed.shapeIndices.size == 1)
       assert(fixed.shapeIndices.head.input.endsWith(".samples"))
       assert(fixed.shapeIndices.head.indices == Vector("1", "2"))
       assert(fixed.shapeIndices.head.path != fixed.shapeIndices.head.input)
       assert(fixed.sourceMap.exists(_.semanticPath == fixed.shapeIndices.head.path))
       assert(symbolic.shapeIndices.head.indices == Vector("0", "1"))
-      assert(legacyWire.shapeIndices.isEmpty)
+      assert(ownedWire.shapeIndices.size == 1)
+      val wireIndex = ownedWire.shapeIndices.head
+      assert(wireIndex.input.endsWith(".samples"))
+      assert(wireIndex.indices == Vector("1"))
+      assert(wireIndex.resultDimensions.isEmpty)
+      assert(ownedWire.modules.flatMap(_.declarations).find(_.path == wireIndex.input)
+        .flatMap(_.dataType).contains("Vec(Real;2)"))
+      val wireDocument = ScalaToMlirBridge.fromSnapshot(ownedWire)
+      assert(wireDocument.text.contains("\"nodal.digital_storage\""))
+      assert(wireDocument.text.contains("\"nodal.shape_index\""))
+      assert(wireDocument.text.contains("!nodal.shaped<\"2\", f64>"))
 
     test("bridge transports public static indexing through typed port SSA"):
       val fixed = ScalaToMlirBridge.lower(new Increment43FixedShapeIndex)

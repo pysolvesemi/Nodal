@@ -106,6 +106,25 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     unit: Option[String]
 )
 
+private[nodal] final case class KernelDigitalExpressionSnapshot(
+    path: String,
+    owner: String,
+    operation: String,
+    operands: Vector[String],
+    dataType: String,
+    literal: Option[String],
+    enumIdentity: Option[String],
+    caseIds: Vector[String]
+)
+
+private[nodal] final case class KernelDigitalAssignmentSnapshot(
+    path: String,
+    owner: String,
+    target: String,
+    value: String,
+    kind: String
+)
+
 private[nodal] final case class KernelGeneratedRegionSnapshot(
     path: String,
     owner: String,
@@ -292,7 +311,12 @@ private[nodal] final case class ConstructionSnapshot(
     shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
     shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty,
     conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty,
-    instanceArrayRoots: Vector[KernelInstanceArrayRootSnapshot] = Vector.empty
+    instanceArrayRoots: Vector[KernelInstanceArrayRootSnapshot] = Vector.empty,
+    enumDefinitions: Vector[ResolvedEnumAbi] = Vector.empty,
+    digitalExpressions: Vector[KernelDigitalExpressionSnapshot] = Vector.empty,
+    interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
+    digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
+    digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty
 )
 
 /** Immutable selected facts. Operand tags prevent authored strings from posing as references. */

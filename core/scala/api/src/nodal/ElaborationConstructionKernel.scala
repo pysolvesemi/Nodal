@@ -396,6 +396,13 @@ private[nodal] object ConstructionKernel:
   def shortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
     active.foreach(_.recordShortAnalogContribution(target, value))
 
+  def digitalWidthBounds(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
+    active.map(_.digitalWidthBounds(descriptor))
+
+  def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
+    descriptor.arguments == Vector(expected) ||
+      active.exists(_.digitalWidthEquals(descriptor, expected))
+
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
 
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

@@ -79,3 +79,5 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalCrossToolPortability-DG-v0.1](NodalCrossToolPortability-DG-v0.1.md):
   approved additive F53 optional second-consumer, shared finite bench and explicit
   cross-tool comparison contract.
+
+- [NodalDigitalTypeEnum-DG v0.1](NodalDigitalTypeEnum-DG-v0.1.md): approved additive F54 hardware enum carrier, exact digital type contracts and explicit legacy decode migration under standing Foundation authority.

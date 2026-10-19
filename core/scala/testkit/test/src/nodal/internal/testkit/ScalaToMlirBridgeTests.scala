@@ -123,6 +123,14 @@ final class BridgeProceduralInitializerDependency extends Module:
     val sink: Variable[Real] = variable(Real, source)
     source := sink
 
+final class BridgeProceduralScopedInitializerDependency extends Module:
+  analogProcedure:
+    when(true.B):
+      val source: Variable[Real] = variable(Real)
+      source := 1.0.real
+      val sink: Variable[Real] = variable(Real, source)
+      source := sink
+
 final class BridgeStructuredProceduralTop extends Module:
   val select: Variable[Bool] = variable(Bool, false.B)
   val mode: Variable[Integer] = variable(Integer, 0.integer)
@@ -451,7 +459,7 @@ object ScalaToMlirBridgeTests extends TestSuite:
           assert(success.normalizedMlir.contains("authored_order"))
           assert(success.normalizedMlir.contains("declaration_order"))
         finally delete(directory)
-    test("initializing assignments precede dependent declarations independent of provenance"):
+    test("persistent scalar initializer dependencies retain chronology and fail static contract"):
       val snapshot = ConstructionKernel.inspect(new BridgeProceduralInitializerDependency)
       val program = snapshot.analogProcedural.head
       assert(program.variables.map(_.operationOrder) == Vector(0, 2))
@@ -490,7 +498,7 @@ object ScalaToMlirBridgeTests extends TestSuite:
       sys.env.get("NODAL_NODALC").foreach: executable =>
         val directory = workDirectory()
         try
-          val success = NativeCompilerClient
+          val result = NativeCompilerClient
             .run(
               document,
               NativeCompilerRequest(
@@ -500,8 +508,63 @@ object ScalaToMlirBridgeTests extends TestSuite:
                 timeout = Duration.ofSeconds(30)
               )
             )
-            .asInstanceOf[NativeCompilerSuccess]
+          assert(result.isInstanceOf[NativeCompilerFailure])
+          val failure = result.asInstanceOf[NativeCompilerFailure]
+          assert(failure.diagnostic.code == "NODAL-ANALOG-037-009")
+          assert(failure.diagnostic.message.contains("persistent scalar initialization"))
+        finally delete(directory)
+
+    test("initializing assignments precede dependent declarations independent of provenance"):
+      val snapshot = ConstructionKernel.inspect(new BridgeProceduralScopedInitializerDependency)
+      val program = snapshot.analogProcedural.head
+      assert(program.variables.forall(_.variable.declarationScope.size > 1))
+      assert(program.variables.map(_.operationOrder) == Vector(0, 2))
+      assert(program.assignments.map(_.operationOrder) == Vector(1, 3))
+      assert(program.variables.map(_.declarationOrder) == Vector(0, 1))
+      assert(program.assignments.map(_.authoredOrder) == Vector(0, 1))
+      val sourceIdentity = program.variables.head.variable.identity
+      assert(program.variables(1).initializer.get.reads.map(_.identity) == Vector(sourceIdentity))
+      val inverted = program.copy(
+        variables = program.variables.zipWithIndex.map: (record, index) =>
+          val source =
+            if index == 0 then AnalogProceduralRuntime.Source("z-helper.scala", 400, 1)
+            else AnalogProceduralRuntime.Source("a-helper.scala", 1, 1)
+          record.copy(source = Some(source))
+        ,
+        assignments = program.assignments.zipWithIndex.map: (record, index) =>
+          val source =
+            if index == 0 then AnalogProceduralRuntime.Source("z-helper.scala", 300, 1)
+            else AnalogProceduralRuntime.Source("a-helper.scala", 2, 1)
+          record.copy(source = Some(source))
+      )
+      val modified =
+        snapshot.copy(analogProcedural = snapshot.analogProcedural.updated(0, inverted))
+      val rendered = AnalogProceduralMlir.renderModule(modified, program.owner).head
+      val declaration0 = rendered.indexOf("declaration_order = 0 : i64")
+      val assignment0 = rendered.indexOf("authored_order = 0 : i64")
+      val declaration1 = rendered.indexOf("declaration_order = 1 : i64")
+      val assignment1 = rendered.indexOf("authored_order = 1 : i64")
+      assert(declaration0 >= 0)
+      assert(assignment0 > declaration0)
+      assert(declaration1 > assignment0)
+      assert(assignment1 > declaration1)
+      val document = ScalaToMlirBridge.fromSnapshot(modified)
+      sys.env.get("NODAL_NODALC").foreach: executable =>
+        val directory = workDirectory()
+        try
+          val result = NativeCompilerClient.run(
+            document,
+            NativeCompilerRequest(
+              executable = Path.of(executable).toAbsolutePath,
+              arguments = Vector("--mlir-print-op-generic"),
+              workingDirectory = directory,
+              timeout = Duration.ofSeconds(30)
+            )
+          )
+          assert(result.isInstanceOf[NativeCompilerSuccess])
+          val success = result.asInstanceOf[NativeCompilerSuccess]
           assert(success.normalizedMlir.contains("operation_order"))
+          assert(success.normalizedMlir.contains("initializer_reads"))
         finally delete(directory)
 
     test("structured analog control flow serializes without flattening"):

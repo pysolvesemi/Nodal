@@ -10,6 +10,7 @@ sealed trait Integer extends Data
 sealed trait Bool extends Data
 sealed trait Bits extends Data
 sealed trait UInt extends Bits
+sealed trait EnumValue[A] extends Data
 sealed trait Clock extends Data
 sealed trait Reset extends Data
 
@@ -215,10 +216,10 @@ final class NodeArray[D <: Discipline] private[nodal] (
   private def prefix(index: Dimension, rank: Int): NodeArray[D] =
     val input = qualified
     if input.shapeIntent.rank != rank then
-      throw new ConstructionException(KernelDiagnostic(
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
         "NODAL-SHAPE-043-002",
         "node-array prefix selection has the wrong rank"
-      ))
+      ))).get
     new NodeArray(
       discipline,
       NodeArrayShapeIntent.Transform(
@@ -233,10 +234,10 @@ final class NodeArray[D <: Discipline] private[nodal] (
   def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0): NodeArray[D] =
     val input = qualified
     if axis < 0 || axis >= input.shapeIntent.rank then
-      throw new ConstructionException(KernelDiagnostic(
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
         "NODAL-SHAPE-043-004",
         "slice axis is outside the array rank"
-      ))
+      ))).get
     val result = input.shapeIntent.knownDimensions.map(
       CandidateRuntime.sliceShapeDimensions(_, lower, upperExclusive, axis)
     )
@@ -532,8 +533,11 @@ abstract class Module:
 /** Domain-owned state captured at its lexical construction point. */
 final class Register[A <: Data] private[nodal] (
     val initialValue: Option[Expr[A]],
-    val dataType: Option[DataType[A]]
+    declaredType: Option[DataType[A]]
 ) extends Expr[A]:
+  val dataType: Option[DataType[A]] = declaredType.orElse(
+    initialValue.flatMap(CandidateRuntime.expressionDataType).map(_.asInstanceOf[DataType[A]])
+  )
   CandidateRuntime.declare(
     this,
     KernelSignalKind.Register,
@@ -557,7 +561,8 @@ object RegNext:
     register
 
   def uninitialized[A <: Data](next: Expr[A]): Register[A] =
-    val register = new Register[A](None, None)
+    val dataType = CandidateRuntime.expressionDataType(next).map(_.asInstanceOf[DataType[A]])
+    val register = new Register[A](None, dataType)
     register := next
     register
 
@@ -856,7 +861,7 @@ def toUInt(value: Expr[Real], width: Int): Expr[UInt] =
 def toUInt(value: Expr[Real], width: Expr[Integer]): Expr[UInt] =
   CandidateRuntime.expr(value, width)
 
-def toReal(value: Expr[UInt]): Expr[Real] = CandidateRuntime.expr(value)
+def toReal(value: Expr[UInt]): Expr[Real] = DigitalScalarContract.toReal(value)
 
 object lowlevel:
   def process(event: Event)(body: => Unit): Unit = CandidateRuntime.digitalEventBlock(event, body)
@@ -928,7 +933,7 @@ extension (value: Int)
   def real: Expr[Real] = realLiteral(value.toDouble, "")
   def integer: Expr[Integer] = CandidateRuntime.literalInteger(value)
   def U(width: Int): Expr[UInt] = CandidateRuntime.literalUInt(value, width)
-  def U(width: Expr[Integer]): Expr[UInt] = CandidateRuntime.expr(value, width)
+  def U(width: Expr[Integer]): Expr[UInt] = DigitalScalarContract.literal("UInt", value, width)
   def V: Expr[Real] = realLiteral(value.toDouble, "V")
   def A: Expr[Real] = realLiteral(value.toDouble, "A")
   def Ohm: Expr[Real] = realLiteral(value.toDouble, "Ohm")
@@ -1236,8 +1241,8 @@ private[nodal] object CandidateRuntime:
       expression.resultType.map(dataTypeFromDescriptor)
     case parameter: Param[?] => expressionDataType(parameter.default)
     case variable: Variable[?] => Some(variable.dataType)
+    case register: Register[?] => register.dataType
     case signal: Signal[?] => Some(signal.dataType)
-    case _ => None
 
   def declareAnalogVariable[A <: Data](
       value: Variable[A],
@@ -1280,8 +1285,18 @@ private[nodal] object CandidateRuntime:
     )
 
   def literalUInt(value: Int, width: Int): Expr[UInt] =
+    DigitalValueContract.validateLiteral("UInt", BigInt(value), width.toLong)
     literal(
       KernelTypeDescriptor("UInt", Vector(width)),
+      "integer",
+      value.toString,
+      Vector(value, width)
+    )
+
+  def literalSInt(value: Int, width: Int): Expr[SInt] =
+    DigitalValueContract.validateLiteral("SInt", BigInt(value), width.toLong)
+    literal(
+      KernelTypeDescriptor("SInt", Vector(width)),
       "integer",
       value.toString,
       Vector(value, width)
@@ -1437,7 +1452,10 @@ private[nodal] object CandidateRuntime:
       axis: Int
   ): Vector[Dimension] =
     def invalid(message: String): Nothing =
-      throw new ConstructionException(KernelDiagnostic("NODAL-SHAPE-043-004", message))
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-SHAPE-043-004",
+        message
+      ))).get
     if axis < 0 || axis >= sourceDimensions.size then
       invalid("shape slice axis is outside the input rank")
     def literalValue(dimension: Dimension): Option[Long] = dimension match

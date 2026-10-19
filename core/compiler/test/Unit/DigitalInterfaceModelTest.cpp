@@ -1,0 +1,594 @@
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/TargetCapabilities.h"
+
+#include "llvm/Support/raw_ostream.h"
+
+#include <string>
+
+using namespace mlir;
+namespace {
+const std::string tag = "interface_abi_version = 1 : i64";
+const std::string bits = "!nodal.bits<8>", boolean = "!nodal.bits<1>";
+std::string model(StringRef body, StringRef header = "") {
+  return "module { " + header.str() +
+         "\n \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" + body.str() +
+         "}) : () -> () }\n";
+}
+std::string domain(StringRef name = "clock") {
+  return "\"nodal.domain\"() <{sym_name = \"" + name.str() +
+         "\", edge = \"rising\", reset_policy = \"sync\", metadata = {}}> : () -> ()\n";
+}
+std::string entry(StringRef path, StringRef access, StringRef role) {
+  return "{path = \"" + path.str() + "\", access = \"" + access.str() + "\", leaf_role = \"" +
+         role.str() + "\", nested_roles = [], nested_interfaces = []}";
+}
+std::string definition(StringRef type = bits, StringRef member = "data",
+                       StringRef protocol = "plain") {
+  std::string body;
+  for (auto pair :
+       {std::pair{"source", "out"}, std::pair{"sink", "in"}, std::pair{"monitor", "observe"}})
+    body += "\"nodal.interface_role\"() <{sym_name = \"" + std::string(pair.first) +
+            "\", kind = \"explicit\", metadata = {" + tag + ", access = [" +
+            entry(member, pair.second, pair.first) + "]}}> : () -> ()\n";
+  body += "\"nodal.interface_member\"() <{sym_name = \"" + member.str() +
+          "\", type = " + type.str() + ", protocol = \"" + protocol.str() +
+          "\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag +
+          "}}> : () -> ()\n";
+  return "\"nodal.interface\"() <{sym_name = \"Bus\", metadata = {" + tag +
+         ", semantic_identity = \"pkg.Bus\"}}> ({\n" + body + "}) : () -> ()\n";
+}
+std::string instance(StringRef name, StringRef role, StringRef access, StringRef type = bits,
+                     StringRef dimensions = "", StringRef clock = "clock",
+                     StringRef member = "data") {
+  return "\"nodal.interface_instance\"() <{sym_name = \"" + name.str() +
+         "\", definition = @Bus, role = \"" + role.str() + "\", metadata = {" + tag +
+         ", domain = @" + clock.str() + ", dimensions = [" + dimensions.str() +
+         "], semantic_path = \"Fixture." + name.str() + "\"}}> : () -> ()\n" +
+         "\"nodal.interface_abi\"() <{logical_path = \"Fixture." + name.str() +
+         "\", layout_policy = \"structural\", members = [{path = \"" + member.str() +
+         "\", type = " + type.str() + ", role = \"" + role.str() + "\", access = \"" +
+         access.str() + "\", nested_roles = [], nested_interfaces = []}], metadata = {" + tag +
+         ", instance = @" + name.str() + "}}> : () -> ()\n";
+}
+std::string member(StringRef name, StringRef endpoint, StringRef type = bits, StringRef role = "",
+                   StringRef path = "data") {
+  return "%" + name.str() + " = \"nodal.member_access\"() <{instance = @" + endpoint.str() +
+         ", path = \"" + path.str() + "\", metadata = {" + tag +
+         (role.empty() ? "" : ", role = \"" + role.str() + "\"") + "}}> : () -> " + type.str() +
+         "\n";
+}
+std::string literal(StringRef name, StringRef type = bits, StringRef value = "1") {
+  return "%" + name.str() + " = \"nodal.const_literal\"() <{kind = \"integer\", spelling = \"" +
+         value.str() + "\", value = " + value.str() + " : i64, metadata = {}}> : () -> " +
+         type.str() + "\n";
+}
+std::string port(StringRef name, StringRef type, StringRef direction = "input",
+                 StringRef clock = "clock") {
+  return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + type.str() +
+         ", direction = \"" + direction.str() + "\", domain = @" + clock.str() +
+         ", metadata = {}}> : () -> ()\n%" + name.str() + " = \"nodal.port_value\"() <{port = @" +
+         name.str() + ", metadata = {}}> : () -> " + type.str() + "\n";
+}
+std::string assign(StringRef type, StringRef kind = "continuous", StringRef sourceType = "") {
+  return "\"nodal.digital_assign\"(%output, %input) <{kind = \"" + kind.str() +
+         "\", metadata = {}}> : (" + type.str() + ", " +
+         (sourceType.empty() ? type.str() : sourceType.str()) + ") -> ()\n";
+}
+std::string storage(StringRef type) {
+  return "%wire = \"nodal.digital_storage\"() <{name = \"wire\", kind = \"wire\", metadata = {}}> "
+         ": () -> " +
+         type.str() + "\n";
+}
+std::string connect(StringRef first = "a", StringRef second = "b", StringRef type = bits) {
+  return "\"nodal.interface_connect\"(%" + first.str() + ", %" + second.str() + ") <{metadata = {" +
+         tag + "}}> : (" + type.str() + ", " + type.str() + ") -> ()\n";
+}
+std::string drive(StringRef target = "a", StringRef value = "value", StringRef type = bits) {
+  return "\"nodal.interface_drive\"(%" + target.str() + ", %" + value.str() + ") <{metadata = {" +
+         tag + "}}> : (" + type.str() + ", " + type.str() + ") -> ()\n";
+}
+std::string observe(StringRef target = "a", StringRef type = bits) {
+  return "\"nodal.interface_observe\"(%" + target.str() + ") <{metadata = {" + tag + "}}> : (" +
+         type.str() + ") -> ()\n";
+}
+std::string resolved(StringRef mode = "push_pull", StringRef type = bits) {
+  return "!nodal.resolved<\"" + mode.str() + "\", " + type.str() + ">";
+}
+std::string net(StringRef name = "net", StringRef mode = "push_pull",
+                StringRef placement = "top_level_pin",
+                StringRef profile = "portable_boundary_only") {
+  return "%" + name.str() + " = \"nodal.resolved_net\"() <{name = \"" + name.str() +
+         "\", metadata = {" + tag + ", placement = \"" + placement.str() + "\", profile = \"" +
+         profile.str() + "\"}}> : () -> " + resolved(mode) + "\n";
+}
+std::string driver(StringRef name = "driver", StringRef target = "net",
+                   StringRef mode = "push_pull") {
+  return "%" + name.str() + " = \"nodal.net_driver\"(%" + target.str() + ") <{driver_id = \"" +
+         name.str() + "\", metadata = {" + tag + "}}> : (" + resolved(mode) +
+         ") -> !nodal.driver<" + bits + ">\n";
+}
+std::string netDrive(StringRef identity = "driver", StringRef target = "net",
+                     StringRef mode = "push_pull") {
+  return "\"nodal.net_drive\"(%" + target.str() + ", %" + identity.str() +
+         ", %value, %enable) <{mode = \"" + mode.str() + "\", metadata = {" + tag + "}}> : (" +
+         resolved(mode) + ", !nodal.driver<" + bits + ">, " + bits + ", " + boolean + ") -> ()\n";
+}
+std::string level(StringRef active = "low", StringRef mode = "open_drain") {
+  return "\"nodal.net_drive_level\"(%net, %driver, %enable) <{level = \"" + active.str() +
+         "\", metadata = {" + tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">, " +
+         boolean + ") -> ()\n";
+}
+std::string release(StringRef identity = "release", StringRef target = "net",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_release\"(%" + target.str() + ", %" + identity.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">) -> ()\n";
+}
+std::string split(StringRef target = "net", StringRef mode = "push_pull") {
+  return "%write, %enabled = \"nodal.net_split\"(%" + target.str() + ") <{metadata = {" + tag +
+         "}}> : (" + resolved(mode) + ") -> (" + bits + ", " + boolean + ")\n";
+}
+std::string through(StringRef first = "net", StringRef second = "other",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_pass_through\"(%" + first.str() + ", %" + second.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", " + resolved(mode) + ") -> ()\n";
+}
+std::string replace(std::string text, StringRef from, StringRef to) {
+  auto index = text.find(from.str());
+  if (index == std::string::npos)
+    return text;
+  text.replace(index, from.size(), to.str());
+  return text;
+}
+std::string resolvedDefinition() {
+  std::string result = definition(resolved(), "data", "resolved");
+  result = replace(result, "access = \"out\"", "access = \"drive\"");
+  return replace(result, "access = \"in\"", "access = \"connect\"");
+}
+std::string analogDefinition(bool conservative) {
+  std::string result = definition(conservative ? "!nodal.terminal<\"electrical\">" : "f64", "data",
+                                  conservative ? "conservative" : "signal_flow");
+  if (conservative) {
+    result = replace(result, "access = \"out\"", "access = \"contribute\"");
+    result = replace(result, "access = \"in\"", "access = \"connect\"");
+    result = replace(result, "access = \"observe\"", "access = \"sense\"");
+  }
+  std::string analog = conservative ? "{discipline = \"electrical\", potential_nature = "
+                                      "\"voltage\", flow_nature = \"current\"}"
+                                    : "{dimension = \"voltage\"}";
+  std::string refs =
+      conservative
+          ? ", analog_refs = {discipline = @electrical, potential = @Voltage, flow = @Current}"
+          : "";
+  return replace(result, "roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag,
+                 "roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag +
+                     ", analog = " + analog + refs);
+}
+std::string analogInstance(bool conservative) {
+  std::string result = instance("left", "sink", conservative ? "connect" : "in",
+                                conservative ? "!nodal.terminal<\"electrical\">" : "f64");
+  std::string analog = conservative ? "{discipline = \"electrical\", potential_nature = "
+                                      "\"voltage\", flow_nature = \"current\"}"
+                                    : "{dimension = \"voltage\"}";
+  return replace(result, "nested_interfaces = []}",
+                 "nested_interfaces = [], analog = " + analog + "}");
+}
+std::string analogOwners() {
+  return "\"nodal.nature\"() <{sym_name = \"Voltage\", units = \"V\", access = \"V\", "
+         "abstol = 1.0e-6 : f64, dimension = \"voltage\", metadata = {}}> : () -> ()\n"
+         "\"nodal.nature\"() <{sym_name = \"Current\", units = \"A\", access = \"I\", "
+         "abstol = 1.0e-12 : f64, dimension = \"current\", metadata = {}}> : () -> ()\n"
+         "\"nodal.discipline\"() <{sym_name = \"electrical\", domain = \"continuous\", "
+         "potential = @Voltage, flow = @Current, metadata = {}}> : () -> ()\n";
+}
+std::string read(StringRef target = "net", StringRef mode = "push_pull", StringRef type = bits) {
+  return "%read = \"nodal.net_read\"(%" + target.str() + ") <{metadata = {" + tag + "}}> : (" +
+         resolved(mode) + ") -> " + type.str() + "\n";
+}
+std::string streamDefinition() {
+  std::string body;
+  for (StringRef role : {StringRef("source"), StringRef("sink")}) {
+    bool source = role == "source";
+    body += "\"nodal.interface_role\"() <{sym_name = \"" + role.str() +
+            "\", kind = \"explicit\", metadata = {" + tag + ", access = [" +
+            entry("channel.payload", source ? "out" : "in", role) + ", " +
+            entry("channel.valid", source ? "out" : "in", role) + ", " +
+            entry("channel.ready", source ? "in" : "out", role) + "]}}> : () -> ()\n";
+  }
+  for (StringRef suffix : {StringRef("payload"), StringRef("valid"), StringRef("ready")})
+    body += "\"nodal.interface_member\"() <{sym_name = \"channel." + suffix.str() +
+            "\", type = " + (suffix == "payload" ? bits : boolean) +
+            ", protocol = \"stream\", roles = [\"source\", \"sink\"], metadata = {" + tag +
+            "}}> : () -> ()\n";
+  return "\"nodal.interface\"() <{sym_name = \"Stream\", metadata = {" + tag +
+         ", semantic_identity = \"pkg.Stream\"}}> ({" + body + "}) : () -> ()\n";
+}
+std::string nestedFixture() {
+  std::string child = replace(definition(), "sym_name = \"Bus\"", "sym_name = \"Child\"");
+  child = replace(child, "semantic_identity = \"pkg.Bus\"", "semantic_identity = \"pkg.Child\"");
+  std::string parent = definition(bits, "nested.data");
+  for (StringRef role : {StringRef("source"), StringRef("sink"), StringRef("monitor")}) {
+    std::string from =
+        "leaf_role = \"" + role.str() + "\", nested_roles = [], nested_interfaces = []";
+    std::string to = "leaf_role = \"" + role.str() +
+                     "\", nested_roles = [{path = \"nested\", role = \"" + role.str() +
+                     "\"}], nested_interfaces = [{path = \"nested\", definition = \"pkg.Child\"}]";
+    parent = replace(parent, from, to);
+  }
+  std::string endpoint = instance("left", "source", "out", bits, "", "clock", "nested.data");
+  endpoint = replace(endpoint, "nested_roles = [], nested_interfaces = []",
+                     "nested_roles = [{path = \"nested\", role = \"source\"}], "
+                     "nested_interfaces = [{path = \"nested\", definition = \"pkg.Child\"}]");
+  return domain() + child + parent + endpoint + member("a", "left", bits, "", "nested.data");
+}
+std::string parameter(bool bounded = true) {
+  std::string result =
+      "\"nodal.parameter\"() <{sym_name = \"N\", type = i64, default_value = 2 : i64, "
+      "parameter_kind = \"integer\", classification = \"structural\", "
+      "variability = \"symbolic\", metadata = {}}> : () -> ()\n";
+  if (bounded)
+    result += literal("low", "i64", "1") + literal("high", "i64", "4") +
+              "\"nodal.parameter_constraint\"(%low, %high) <{parameter = @N, "
+              "constraint_kind = \"range\", lower_inclusive = true, upper_inclusive = true, "
+              "metadata = {}}> : (i64, i64) -> ()\n";
+  return result + "\"nodal.parameter_envelope\"() <{parameter = @N, policy = \"static_generate\", "
+                  "effects = [\"shape\", \"width\"], metadata = {}}> : () -> ()\n";
+}
+std::string print(Operation *operation) {
+  std::string result;
+  llvm::raw_string_ostream stream(result);
+  operation->print(stream);
+  return result;
+}
+} // namespace
+
+int main() {
+  DialectRegistry registry;
+  registry.insert<nodal::NodalDialect>();
+  MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+  unsigned cases = 0, failures = 0;
+  std::string diagnosticText;
+  ScopedDiagnosticHandler diagnostics(&context, [&](Diagnostic &diagnostic) {
+    llvm::raw_string_ostream stream(diagnosticText);
+    diagnostic.print(stream);
+    stream << '\n';
+    return success();
+  });
+  auto check = [&](StringRef name, const std::string &body, bool expected, StringRef header = "") {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(model(body, header), ParserConfig(&context, false));
+    bool valid = false, unchanged = true, roundtrip = true;
+    if (parsed) {
+      std::string before = print(parsed->getOperation());
+      valid = succeeded(verify(parsed->getOperation()));
+      unchanged = before == print(parsed->getOperation());
+      if (valid) {
+        auto again = parseSourceString<mlir::ModuleOp>(before, ParserConfig(&context, false));
+        roundtrip = again && succeeded(verify(again->getOperation())) &&
+                    before == print(again->getOperation());
+      }
+    }
+    bool passed = valid == expected && unchanged && roundtrip;
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  const std::string endpoints =
+      domain() + definition() + instance("left", "source", "out") + instance("right", "sink", "in");
+  const std::string pair = endpoints + member("a", "left") + member("b", "right");
+  check("exact-role-connect", pair + connect(), true);
+  check("drive-and-observe", pair + literal("value") + drive() + observe(), true);
+  check("direct-member-drive-same-domain", pair + drive("a", "b"), true);
+  check("direct-member-drive-domain-mismatch",
+        domain("otherClock") + replace(pair, "domain = @clock", "domain = @otherClock") +
+            drive("a", "b"),
+        false);
+  check("monitor-view", endpoints + member("a", "left", bits, "monitor") + observe(), true);
+  check("inverted-view", endpoints + member("a", "left", bits, "sink") + observe(), true);
+  check("missing-definition", replace(pair, "definition = @Bus", "definition = @Missing"), false);
+  check("unknown-role", replace(pair, "role = \"source\"", "role = \"unknown\""), false);
+  check("unknown-member",
+        replace(pair, "path = \"data\", metadata", "path = \"unknown\", metadata"), false);
+  check("missing-actual-role-map",
+        replace(pair, "access = [{path = \"data\"", "access = [{path = \"unknown\""), false);
+  check("forged-access-result", endpoints + member("a", "left", "!nodal.uint<8>"), false);
+  check("forged-abi-type",
+        replace(pair, "members = [{path = \"data\", type = !nodal.bits<8>",
+                "members = [{path = \"data\", type = !nodal.uint<8>"),
+        false);
+  check("missing-owned-domain", replace(pair, "domain = @clock", "domain = @missing"), false);
+  check("connect-domain-mismatch",
+        domain("otherClock") + replace(pair, "domain = @clock", "domain = @otherClock") + connect(),
+        false);
+  check("noncomplementary-connect",
+        endpoints + member("a", "left") + member("b", "right", bits, "source") + connect(), false);
+  check("duplicate-ordinary-driver", pair + connect() + connect(), false);
+  check("monitor-cannot-drive",
+        endpoints + member("a", "left", bits, "monitor") + literal("value") + drive(), false);
+  check("input-cannot-drive", pair + literal("value") + drive("b"), false);
+  check("typed-connect-rejects-plain-values", literal("a") + literal("b") + connect(), false);
+  check("missing-typed-effect-marker", pair + replace(connect(), tag, ""), false);
+  check("missing-typed-member-marker", endpoints + replace(member("a", "left"), tag, ""), false);
+  check("missing-typed-instance-marker",
+        domain() + definition() + replace(instance("left", "source", "out"), tag, "") +
+            member("a", "left"),
+        false);
+  check("unsupported-version",
+        replace(pair, "interface_abi_version = 1", "interface_abi_version = 2"), false);
+  check("malformed-access-zero-results",
+        endpoints + replace(replace(member("a", "left"), "%a = ", ""), ": () -> !nodal.bits<8>",
+                            ": () -> ()"),
+        false);
+  const std::string shape = "!nodal.shaped<\"2,3\", " + bits + ">";
+  check("structural-interface-array",
+        domain() + definition() + instance("left", "source", "out", bits, "\"2\", \"3\"") +
+            member("a", "left", shape),
+        true);
+  check("array-shape-order",
+        domain() + definition() + instance("left", "source", "out", bits, "\"2\", \"3\"") +
+            member("a", "left", "!nodal.shaped<\"3,2\", " + bits + ">"),
+        false);
+  check("array-invalid-dimension",
+        domain() + definition() + instance("left", "source", "out", bits, "\"0\""), false);
+  check("array-symbolic-missing-owner",
+        domain() + definition() + instance("left", "source", "out", bits, "\"N\""), false);
+  check("array-footprint-overflow",
+        domain() + definition() +
+            instance("left", "source", "out", bits, "\"9223372036854775807\""),
+        false);
+  check("complete-stream-role-map", streamDefinition(), true);
+  check("stream-ready-complement",
+        replace(streamDefinition(), "path = \"channel.ready\", access = \"in\"",
+                "path = \"channel.ready\", access = \"out\""),
+        false);
+  check("stream-control-bool",
+        replace(streamDefinition(), "sym_name = \"channel.valid\", type = !nodal.bits<1>",
+                "sym_name = \"channel.valid\", type = !nodal.uint<1>"),
+        false);
+  check("actual-nested-role-definition", nestedFixture() + observe(), true);
+  check("missing-nested-definition",
+        replace(nestedFixture(), "definition = \"pkg.Child\"", "definition = \"pkg.Missing\""),
+        false);
+  check("missing-nested-role",
+        replace(nestedFixture(), "path = \"nested\", role = \"source\"",
+                "path = \"nested\", role = \"unknown\""),
+        false);
+  check("nested-permission-forgery",
+        replace(nestedFixture(), "path = \"nested.data\", access = \"out\"",
+                "path = \"nested.data\", access = \"in\""),
+        false);
+  const std::string symbolic = "!nodal.digital<\"uint\", \"N\">";
+  check("owned-symbolic-interface-array",
+        domain() + parameter() + definition(symbolic) +
+            instance("left", "source", "out", symbolic, "\"N\", \"2\"") +
+            member("a", "left", "!nodal.shaped<\"N,2\", " + symbolic + ">"),
+        true);
+  check("malformed-symbolic-bound-missing-value",
+        domain() + replace(parameter(), "value = 1 : i64, ", "") + definition(symbolic) +
+            instance("left", "source", "out", symbolic),
+        false);
+  check("malformed-ordinary-literal-missing-value",
+        replace(literal("malformed", "i64"), "value = 1 : i64, ", ""), false);
+  check("symbolic-width-no-default-substitution",
+        domain() + parameter(false) + definition(symbolic) +
+            instance("left", "source", "out", symbolic),
+        false);
+  check("billion-lane-structural-array",
+        domain() + definition() + instance("left", "source", "out", bits, "\"1000000000\"") +
+            member("a", "left", "!nodal.shaped<\"1000000000\", " + bits + ">"),
+        true);
+  const std::string resolvedEndpoints =
+      domain() + domain("otherClock") + resolvedDefinition() +
+      instance("left", "sink", "connect", resolved()) +
+      instance("right", "sink", "connect", resolved(), "", "otherClock") +
+      member("a", "left", resolved()) + member("b", "right", resolved());
+  check("resolved-transitive-domain-mismatch",
+        resolvedEndpoints + net() + through("a", "net") + through("net", "b"), false);
+  check("resolved-transitive-same-domain",
+        replace(resolvedEndpoints, "domain = @otherClock", "domain = @clock") + net() +
+            through("a", "net") + through("net", "b"),
+        true);
+  check("resolved-array-structural-view",
+        domain() + resolvedDefinition() + instance("left", "sink", "connect", resolved(), "\"2\"") +
+            member("a", "left", "!nodal.shaped<\"2\", " + resolved() + ">") +
+            observe("a", "!nodal.shaped<\"2\", " + resolved() + ">"),
+        true);
+  const std::string conservative = domain() + analogDefinition(true) + analogInstance(true);
+  check("conservative-declaration-existing-analog-owner", conservative, true, analogOwners());
+  check("conservative-missing-actual-owner", conservative, false);
+  check("conservative-forged-nature-reference",
+        replace(conservative, "potential = @Voltage", "potential = @Current"), false,
+        analogOwners());
+  const std::string signal =
+      domain() + analogDefinition(false) + analogInstance(false) + member("a", "left", "f64");
+  check("signal-flow-exact-dimension-abi", signal, true);
+  check("signal-flow-not-digital-observation", signal + observe("a", "f64"), false);
+  check("analog-abi-mismatch",
+        replace(signal, "analog = {dimension = \"voltage\"}", "analog = {dimension = \"current\"}"),
+        false);
+  check("analog-invalid-dimension",
+        replace(signal, "dimension = \"voltage\"", "dimension = \"?invalid!\""), false);
+  std::string empty =
+      "\"nodal.interface\"() <{sym_name = \"Empty\", metadata = {" + tag +
+      ", semantic_identity = \"pkg.Empty\"}}> ({\"nodal.interface_role\"() <{sym_name = \"empty\", "
+      "kind = \"explicit\", metadata = {" +
+      tag + ", access = []}}> : () -> ()}) : () -> ()\n";
+  check("empty-interface-actual-empty-role", empty, true);
+  check("typed-read-exact-value", net() + read(), true);
+  check("typed-readonly-read", net("net", "read_only") + read("net", "read_only"), true);
+  check("typed-read-exact-type-required", net() + read("net", "push_pull", "!nodal.uint<8>"),
+        false);
+  check("typed-read-marker-required", net() + replace(read(), tag, ""), false);
+  const std::string values = literal("value") + literal("enable", boolean);
+  const std::string driven = net() + values + driver() + netDrive();
+  check("conditional-driver-split", driven + split(), true);
+  check("release-does-not-compete", driven + driver("release") + release() + split(), true);
+  check("split-after-pass-through", driven + net("other") + through() + split("other"), true);
+  check("multiple-alias-edges",
+        driven + net("other") + through() + through("other", "net") + split(), true);
+  check("no-value-driver", net() + split(), false);
+  check("release-only-no-write-projection", net() + driver("release") + release() + split(), false);
+  check("multiple-value-drivers", driven + driver("second") + netDrive("second") + split(), false);
+  check("multiple-value-drivers-through-alias",
+        driven + net("other") + driver("second", "other") + netDrive("second", "other") +
+            through() + split(),
+        false);
+  check("driver-used-twice", driven + netDrive(), false);
+  check("driver-unconsumed", net() + driver(), false);
+  check("driver-wrong-net", net() + net("other") + values + driver() + netDrive("driver", "other"),
+        false);
+  check("duplicate-driver-id",
+        driven + replace(driver("second"), "driver_id = \"second\"", "driver_id = \"driver\"") +
+            netDrive("second"),
+        false);
+  check("missing-driver-marker", net() + values + replace(driver(), tag, "") + netDrive(), false);
+  check("missing-net-marker", replace(net(), tag + ", ", "") + values + driver() + netDrive(),
+        false);
+  check("missing-drive-marker", net() + values + driver() + replace(netDrive(), tag, ""), false);
+  check("missing-split-marker", driven + replace(split(), tag, ""), false);
+  check("readonly-driver", net("net", "read_only") + driver("driver", "net", "read_only"), false);
+  check("portable-internal-rejected", net("net", "push_pull", "internal_resolved_net"), false);
+  check("simulation-internal-retained",
+        net("net", "push_pull", "internal_resolved_net", "full_resolved_simulation"), true);
+  check("technology-internal-retained",
+        net("net", "push_pull", "internal_resolved_net", "technology_mapped"), true);
+  check("low-driver-split",
+        net("net", "open_drain") + values + driver("driver", "net", "open_drain") + level() +
+            split("net", "open_drain"),
+        true);
+  check("high-driver-split",
+        net("net", "open_source") + values + driver("driver", "net", "open_source") +
+            level("high", "open_source") + split("net", "open_source"),
+        true);
+  check("wrong-level-mode",
+        net("net", "open_drain") + values + driver("driver", "net", "open_drain") + level("high"),
+        false);
+  check("open-drain-arbitrary-value",
+        net("net", "open_drain") + values + driver("driver", "net", "open_drain") +
+            netDrive("driver", "net", "open_drain"),
+        false);
+  check("pass-through-profile-mismatch",
+        net() + net("other", "push_pull", "top_level_pin", "technology_mapped") + through(), false);
+  check("split-exact-value-type",
+        driven + replace(split(), "-> (!nodal.bits<8>", "-> (!nodal.uint<8>"), false);
+  check("split-exact-bool-type", driven + replace(split(), ", !nodal.bits<1>)", ", i1)"), false);
+  check("driver-exact-bool-enable",
+        net() + literal("value") + literal("enable", "i1") + driver() +
+            replace(netDrive(), ", !nodal.bits<1>)", ", i1)"),
+        false);
+  const std::string clock = "!nodal.capability<\"clock\">", reset = "!nodal.capability<\"reset\">";
+  const std::string clockVec = "!nodal.shaped<\"2\", " + clock + ">";
+  auto capabilities = [&](StringRef type, StringRef dimensions = "", StringRef view = "") {
+    std::string result = domain() + definition(type) +
+                         instance("left", "source", "out", type, dimensions) +
+                         instance("right", "sink", "in", type, dimensions);
+    StringRef resultType = view.empty() ? type : view;
+    return result + member("a", "left", resultType) + member("b", "right", resultType);
+  };
+  check("clock-interface-connect-observe",
+        capabilities(clock) + connect("a", "b", clock) + observe("b", clock), true);
+  check("reset-interface-connect-observe",
+        capabilities(reset) + connect("a", "b", reset) + observe("b", reset), true);
+  check("clock-shaped-plain-members", capabilities(clockVec) + connect("a", "b", clockVec), true);
+  check("clock-interface-array",
+        capabilities(clock, "\"2\"", clockVec) + connect("a", "b", clockVec), true);
+  check("clock-reset-member-substitution",
+        domain() + definition(clock) + instance("left", "source", "out", clock) +
+            member("a", "left", reset),
+        false);
+  check("clock-bool-member-substitution",
+        domain() + definition(clock) + instance("left", "source", "out", clock) +
+            member("a", "left", boolean),
+        false);
+  check("clock-input-member-drive", capabilities(clock) + drive("a", "b", clock), true);
+  check("clock-input-port-member-drive",
+        capabilities(clock) + port("value", clock) + drive("a", "value", clock), true);
+  check("clock-input-port-member-domain",
+        capabilities(clock) + domain("other") + port("value", clock, "input", "other") +
+            drive("a", "value", clock),
+        false);
+  check("clock-output-port-not-input-provenance",
+        capabilities(clock) + port("value", clock, "output") + drive("a", "value", clock), false);
+  check("clock-computed-member-source",
+        capabilities(clock) + literal("value", clock) + drive("a", "value", clock), false);
+  auto ports = [&](StringRef type) {
+    return domain() + port("input", type) + port("output", type, "output");
+  };
+  check("clock-continuous-boundary", ports(clock) + assign(clock), true);
+  check("reset-continuous-boundary", ports(reset) + assign(reset), true);
+  check("clock-shaped-continuous-boundary", ports(clockVec) + assign(clockVec), true);
+  check("clock-reset-assignment-substitution",
+        domain() + port("input", reset) + port("output", clock, "output") +
+            assign(clock, "continuous", reset),
+        false);
+  check("clock-bool-assignment-substitution",
+        domain() + port("input", boolean) + port("output", clock, "output") +
+            assign(clock, "continuous", boolean),
+        false);
+  const std::string indexed =
+      literal("zero", "i64", "0") +
+      "%input = \"nodal.shape_index\"(%vector, %zero) <{metadata = {}}> : (" + clockVec +
+      ", i64) -> " + clock + "\n";
+  check("clock-structural-input-index",
+        domain() + port("vector", clockVec) + port("output", clock, "output") + indexed +
+            assign(clock),
+        true);
+  check("clock-projected-port-member-drive",
+        capabilities(clock) + port("vector", clockVec) + indexed + drive("a", "input", clock),
+        true);
+  check("clock-scalar-conversion-rejected",
+        domain() + port("input", clock) +
+            "%value = \"nodal.digital_expr\"(%input) <{operator_name = "
+            "\"digital_reinterpret_unsigned\", metadata = {}}> : (" +
+            clock + ") -> !nodal.uint<1>\n",
+        false);
+  check("clock-computed-producer-rejected",
+        domain() + port("output", clock, "output") + literal("input", clock) + assign(clock),
+        false);
+  check("clock-register-next-rejected", ports(clock) + assign(clock, "register_next"), false);
+  check("clock-port-domain-mismatch",
+        domain() + domain("other") + port("input", clock, "input", "other") +
+            port("output", clock, "output") + assign(clock),
+        false);
+  check("clock-port-missing-actual-domain",
+        replace(ports(clock), "domain = @clock", "domain = @missing") + assign(clock), false);
+  check("clock-port-direction-mismatch",
+        domain() + port("input", clock, "output") + port("output", clock, "output") + assign(clock),
+        false);
+  check("clock-wire-storage-rejected", storage(clock), false);
+  check("clock-shaped-storage-rejected", storage(clockVec), false);
+  check("clock-literal-rejected", literal("value", clock), false);
+  check("clock-protocol-payload-rejected",
+        replace(streamDefinition(), "type = !nodal.bits<8>", "type = " + clock), false);
+  check("clock-shaped-protocol-payload-rejected",
+        replace(streamDefinition(), "type = !nodal.bits<8>", "type = " + clockVec), false);
+  check("clock-unsupported-kind", port("input", "!nodal.capability<\"enable\">"), false);
+  {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(model(ports(clock)), ParserConfig(&context, false));
+    bool digital = false;
+    if (parsed)
+      parsed->walk([&](Operation *op) { digital |= nodal::hasDigitalTargetCapability(op); });
+    bool passed = parsed && succeeded(verify(parsed->getOperation())) && digital &&
+                  failed(nodal::verifyTargetLanguageCapabilities(*parsed, "verilog-a"));
+    failures += !passed;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ")
+        << "clock-digital-target-capability\n";
+  }
+  llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
+  return failures ? 1 : 0;
+}

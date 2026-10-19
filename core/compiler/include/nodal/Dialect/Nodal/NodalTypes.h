@@ -1,6 +1,7 @@
 #ifndef NODAL_DIALECT_NODAL_NODALTYPES_H
 #define NODAL_DIALECT_NODAL_NODALTYPES_H
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 #include "llvm/ADT/StringRef.h"

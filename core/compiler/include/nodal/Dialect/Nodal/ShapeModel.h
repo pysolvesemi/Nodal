@@ -28,7 +28,8 @@ mlir::LogicalResult verifyInstanceShapeDimension(mlir::Operation *instance,
 /// Resolve a canonical dimension without substituting parameter defaults.
 /// Requires positive finite i64 bounds and direct-module structural ownership.
 mlir::FailureOr<StaticShapeDimension> resolveStaticShapeDimension(mlir::Operation *module,
-                                                                  llvm::StringRef dimension);
+                                                                  llvm::StringRef dimension,
+                                                                  llvm::StringRef requiredEffect = "shape");
 
 /// Prove a nonempty shape's worst-case cardinality fits positive signed i64.
 mlir::FailureOr<int64_t> inferStaticShapeMaximumCardinality(mlir::Operation *module,

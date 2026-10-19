@@ -146,9 +146,10 @@ final class Increment43ForeignNodeArray(form: Int) extends Module:
   val tap = node(Electrical, 2)
   val selected = if form == 0 then child.tap.at(0) else tap.at(child.lane)
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43GeneratedNodeArray(declare: Boolean) extends Module:
   val tap = node(Electrical, 2)
-  hdlRange(0, 2): index =>
+  ConstructionKernel.generatedRegion(0, 2, 1, None): index =>
     if declare then
       val generated = node(Electrical, 2)
       val _ = generated
@@ -454,12 +455,16 @@ object Increment43NodeArrayTests extends TestSuite:
       )
 
     test(
-      "foreign ownership and generated array declarations reject while scoped selection is retained"
+      "foreign ownership rejects while generated declarations and selection retain exact scope"
     ):
-      (0 to 1).foreach(form =>
-        failure(new Increment43ForeignNodeArray(form), "NODAL-SHAPE-043-006")
-      )
-      failure(new Increment43GeneratedNodeArray(true), "NODAL-ITERATION-043-004")
+      failure(new Increment43ForeignNodeArray(0), "NODAL-SHAPE-043-007")
+      failure(new Increment43ForeignNodeArray(1), "NODAL-SHAPE-043-006")
+      val declared = ConstructionKernel.inspect(new Increment43GeneratedNodeArray(true))
+      val region = declared.generatedRegions.head
+      val local = declared.modules.flatMap(_.declarations).find(_.generatedScope.nonEmpty).get
+      assert(local.kind == "analog-node-array")
+      assert(local.generatedScope.contains(KernelGeneratedScope(region.path, region.induction)))
+      assert(region.declarations.contains(local.path))
       val selected = ConstructionKernel.inspect(new Increment43GeneratedNodeArray(false))
       assert(selected.shapeIndices.size == 1, selected.shapeIndices.head.generatedScope.nonEmpty)
       assert(selected.shapeIndices.head.indices == Vector(selected.generatedRegions.head.induction))

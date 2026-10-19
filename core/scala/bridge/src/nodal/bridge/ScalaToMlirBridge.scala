@@ -163,11 +163,44 @@ private[nodal] object ScalaToMlirBridge:
     private val moduleIntegerQuery = new StructuralParameterBinding.Query(snapshot)
     private var activeIntegerQuery: Option[StructuralParameterBinding.Query] = None
     private var enclosingIntegerQuery: Option[StructuralParameterBinding.Query] = None
-    private val staticArguments = snapshot.digitalCollections.flatMap(collection =>
-      collection.arguments.filter(_.dataType == "Integer").map(argument =>
-        argument.path -> collection
-      )
+    private final case class StaticRegion(
+        path: String,
+        owner: String,
+        arguments: Vector[KernelDigitalRegionArgument],
+        captures: Vector[String]
+    )
+    private val staticRegions = snapshot.digitalCollections.map(value =>
+      StaticRegion(value.path, value.owner, value.arguments, value.captures)
+    ) ++ snapshot.digitalLoops.map(value =>
+      StaticRegion(value.path, value.owner, value.arguments, value.captures)
+    )
+    private val staticArguments = staticRegions.flatMap(region =>
+      region.arguments.filter(argument =>
+        argument.dataType == "Integer" &&
+          argument.role != "induction"
+      ).map(argument => argument.path -> region)
     ).toMap
+    private val digitalLoopsByPath = snapshot.digitalLoops.map(value => value.path -> value).toMap
+    private val loopQueries = mutable.HashMap.empty[String, StructuralParameterBinding.Query]
+    private def loopQuery(loop: KernelDigitalLoopSnapshot): StructuralParameterBinding.Query =
+      loopQueries.getOrElseUpdate(
+        loop.path, {
+          val bindings = loop.arguments.drop(1).zip(loop.captures).collect:
+            case (argument, capture) if argument.role == "static_capture" =>
+              argument.path -> moduleIntegerQuery.exportValues(Vector(
+                moduleIntegerQuery.resolve(loop.owner, capture)
+              ))
+          new StructuralParameterBinding.Query(
+            snapshot,
+            scope = Some(loop.path),
+            exact = bindings.toMap,
+            enclosing = Some(moduleIntegerQuery)
+          )
+        }
+      )
+    private def queryForPath(path: String): StructuralParameterBinding.Query =
+      digitalValues.valueRegion(path).flatMap(digitalLoopsByPath.get)
+        .map(loopQuery).getOrElse(integerQuery)
     private def integerQuery: StructuralParameterBinding.Query =
       activeIntegerQuery.getOrElse(moduleIntegerQuery)
 
@@ -1409,28 +1442,38 @@ ${indent(body, 2)}
             index.indices.zip(dimensions).zipWithIndex.foreach:
               case ((position, dimension), axis) =>
                 val minimum = shapeDimensionMinimum(module, dimension, shape.path)
-                val bounds = generatedIndexBounds(module, position, shape.path)
-                val valid = generatedByInduction.get(position) match
-                  case Some(region) =>
-                    val dimensionIdentity =
-                      shapeDimensionStaticPath(module, dimension).getOrElse(dimension)
-                    val upperIdentity = shapeDimensionStaticPath(
-                      module,
-                      region.upperExclusive
-                    ).getOrElse(region.upperExclusive)
-                    visibleInduction(index.generatedScope, position) &&
-                    (region.maximumTripCount == 0 || sameStaticInteger(
-                      module,
-                      upperIdentity,
-                      dimensionIdentity,
-                      shape.path
-                    ) ||
-                      generatedRangeBounds(
+                val loopIndex = digitalValues.isIterationIndex(position)
+                if loopIndex then
+                  digitalValues.requireVisible(position, module.path, shape.region, shape.path)
+                  if !shape.region.exists(digitalLoopsByPath.contains) then
+                    fail(shape.code, "iteration selector escaped its actual loop", Some(shape.path))
+                val bounds = if loopIndex then None
+                else Some(generatedIndexBounds(module, position, shape.path))
+                // The actual affine DAG is retained; native ShapeModel owns attained/all-legal
+                // bounds, correlation with extents, empty activity and strided physical images.
+                val valid = if loopIndex then true
+                else
+                  generatedByInduction.get(position) match
+                    case Some(region) =>
+                      val dimensionIdentity =
+                        shapeDimensionStaticPath(module, dimension).getOrElse(dimension)
+                      val upperIdentity = shapeDimensionStaticPath(
                         module,
-                        region.upperExclusive,
+                        region.upperExclusive
+                      ).getOrElse(region.upperExclusive)
+                      visibleInduction(index.generatedScope, position) &&
+                      (region.maximumTripCount == 0 || sameStaticInteger(
+                        module,
+                        upperIdentity,
+                        dimensionIdentity,
                         shape.path
-                      ).upper <= minimum)
-                  case None => bounds.lower >= 0L && bounds.upper < minimum
+                      ) ||
+                        generatedRangeBounds(
+                          module,
+                          region.upperExclusive,
+                          shape.path
+                        ).upper <= minimum)
+                    case None => bounds.get.lower >= 0L && bounds.get.upper < minimum
                 if !valid then
                   fail(
                     shape.code,
@@ -1768,6 +1811,8 @@ ${indent(body, 2)}
         ) ++
         snapshot.digitalCollections.filter(_.owner == module.path).flatMap(_.arguments)
           .map(value => value.path -> value.dataType) ++
+        snapshot.digitalLoops.filter(_.owner == module.path).flatMap(_.arguments)
+          .map(value => value.path -> value.dataType) ++
         snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
           .map(value => value.path -> value.dataType)
       val digitalStaticRoots = digitalTypeRoots.filter((path, _) =>
@@ -1938,7 +1983,10 @@ ${indent(body, 2)}
           shape.scope == scope && (shape.region.isEmpty || onlyPath.contains(shape.path)) &&
             !renderedShapePaths.contains(shape.path)
         ).foreach: shape =>
-          shape.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
+          shape.dimensions.distinct.filter(path =>
+            expressionsByPath.contains(path) &&
+              digitalValues.valueRegion(path).isEmpty
+          ).foreach: dimensionPath =>
             val (_, dataType) = emitStaticValue(
               dimensionPath,
               parameterSymbols,
@@ -2031,25 +2079,27 @@ ${indent(body, 2)}
                       }
                     )
                   case None =>
-                    if collectionBody then
-                      fail(
-                        shape.code,
-                        "collection slice bounds currently require static literals",
-                        Some(view.path)
-                      )
                     val path = shapeDimensionStaticPath(module, token).getOrElse(
                       fail(shape.code, "shape slice value has no static identity", Some(view.path))
                     )
-                    val value = emitStaticValue(
-                      path,
-                      parameterSymbols,
-                      declarationsByPath,
-                      expressionsByPath,
-                      body,
-                      shapeStaticValues,
-                      () => allocateShapeStaticValue(),
-                      requireStructural = true
-                    )
+                    val value = shapeValues.get(path).filter(_._2 == "i64").getOrElse {
+                      if collectionBody then
+                        fail(
+                          shape.code,
+                          "regional slice bound needs an actual local SSA value",
+                          Some(view.path)
+                        )
+                      emitStaticValue(
+                        path,
+                        parameterSymbols,
+                        declarationsByPath,
+                        expressionsByPath,
+                        body,
+                        shapeStaticValues,
+                        () => allocateShapeStaticValue(),
+                        requireStructural = true
+                      )
+                    }
                     if value._2 != "i64" then
                       fail(
                         shape.code,
@@ -2123,23 +2173,25 @@ ${indent(body, 2)}
                     )
                     result -> "index"
                   case None =>
-                    if collectionBody then
-                      fail(
-                        shape.code,
-                        "collection index currently requires a static literal",
-                        Some(index.path)
-                      )
                     val value =
-                      shapeValues.get(position).filter(_._2 == "i64").getOrElse(emitStaticValue(
-                        position,
-                        parameterSymbols,
-                        declarationsByPath,
-                        expressionsByPath,
-                        body,
-                        shapeStaticValues,
-                        () => allocateShapeStaticValue(),
-                        requireStructural = true
-                      ))
+                      shapeValues.get(position).filter(_._2 == "i64").getOrElse {
+                        if collectionBody then
+                          fail(
+                            shape.code,
+                            "regional index needs an actual local SSA value",
+                            Some(index.path)
+                          )
+                        emitStaticValue(
+                          position,
+                          parameterSymbols,
+                          declarationsByPath,
+                          expressionsByPath,
+                          body,
+                          shapeStaticValues,
+                          () => allocateShapeStaticValue(),
+                          requireStructural = true
+                        )
+                      }
                     if value._2 != "i64" then
                       fail(
                         shape.code,
@@ -2190,6 +2242,21 @@ ${indent(body, 2)}
           fail("NODAL-BRIDGE-054", "digital projection has invalid scope or capability", Some(path))
         val input = resolve(shape.input)
         val projectionValues = mutable.LinkedHashMap(shape.input -> input)
+        val selectors = shape.record match
+          case index: KernelShapeIndexSnapshot => index.indices
+          case view: KernelShapeViewSnapshot => view.slice.toVector.flatMap(value =>
+              Vector(value.lower, value.upperExclusive)
+            )
+        selectors.filter(_.toLongOption.isEmpty).foreach: selector =>
+          if shape.region.nonEmpty && !shape.region.exists(digitalLoopsByPath.contains) &&
+            digitalValues.valueRegion(selector) != shape.region
+          then
+            fail(
+              shape.code,
+              "collection index currently requires a static literal",
+              Some(shape.path)
+            )
+          projectionValues.update(selector, resolve(selector))
         val projected = mutable.ArrayBuffer.empty[String]
         renderShapes(projected, projectionValues, None, Some(path))
         DigitalValueMlir.Projection(
@@ -2210,21 +2277,47 @@ ${indent(body, 2)}
           region: Option[String],
           output: mutable.ArrayBuffer[String]
       ): (String, String) =
-        digitalValues.requireVisible(path, module.path, region, path)
-        if region.nonEmpty then
-          val query = integerQuery
-          val _ = query.resolve(module.path, path)
-        emitStaticValue(
-          path,
-          parameterSymbols,
-          declarationsByPath,
-          expressionsByPath,
-          output,
-          staticValuesFor(region),
-          () => allocateShapeStaticValue(),
-          requireStructural = true,
-          region = region
-        )
+        if region.isEmpty && path.toLongOption.nonEmpty then
+          val literal = path.toLong
+          if literal.toString != path then
+            fail("NODAL-BRIDGE-055", "loop bound literal is noncanonical", Some(path))
+          staticValuesFor(None).getOrElseUpdate(
+            s"literal:$path", {
+              val result = allocateShapeStaticValue()
+              output += operation(
+                "nodal.const_literal",
+                results = Vector(result),
+                resultTypes = Vector("i64"),
+                attributes = Vector(
+                  "value" -> s"$literal : i64",
+                  "spelling" -> quoted(path),
+                  "metadata" -> "{use = \"loop_bound\"}"
+                ),
+                semanticPath = module.path
+              )
+              result -> "i64"
+            }
+          )
+        else
+          digitalValues.requireVisible(path, module.path, region, path)
+          if region.nonEmpty then
+            try
+              val query = integerQuery
+              val _ = query.resolve(module.path, path)
+            catch
+              case error: IllegalArgumentException =>
+                fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
+          emitStaticValue(
+            path,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            output,
+            staticValuesFor(region),
+            () => allocateShapeStaticValue(),
+            requireStructural = true,
+            region = region
+          )
       def prepareDigitalType(
           text: String,
           path: String,
@@ -2267,6 +2360,62 @@ ${indent(body, 2)}
             activeIntegerQuery = Some(query)
             enclosingIntegerQuery = Some(parent)
             body()
+        finally
+          activeIntegerQuery = previous
+          enclosingIntegerQuery = previousParent
+
+      def renderDigitalAssignment(
+          assignment: KernelDigitalAssignmentSnapshot,
+          target: (String, String),
+          source: (String, String)
+      ): String =
+        val capability =
+          containsBoundaryCapability(target._2) || containsBoundaryCapability(source._2)
+        if capability then
+          if assignment.region.nonEmpty then
+            fail(
+              "NODAL-BRIDGE-055",
+              "loop cannot write clock/reset capabilities",
+              Some(assignment.path)
+            )
+          val targetRoot = digitalValues.boundaryRoot(assignment.target, module.path)
+          val sourceRoot = digitalValues.boundaryRoot(assignment.value, module.path)
+          if assignment.kind != "continuous" || targetRoot.kind != "output" || sourceRoot.kind != "input" ||
+            localDomainName(module, targetRoot) != localDomainName(module, sourceRoot)
+          then
+            fail(
+              "NODAL-BRIDGE-054",
+              "clock/reset wiring requires same-domain input/output boundary roots",
+              Some(assignment.path)
+            )
+        DigitalStorageMlir.renderAssignment(
+          assignment.path,
+          assignment.kind,
+          target,
+          source,
+          bridgeMetadata(
+            assignment.path,
+            Vector("source_ordinal" -> integer(assignment.sourceOrdinal))
+          ),
+          location(assignment.path),
+          if capability then target._2 == source._2
+          else
+            exactDigitalValueType(
+              digitalValues.expressionType(assignment.target),
+              digitalValues.expressionType(assignment.value),
+              assignment.path
+            )
+        )
+      def withDigitalLoopContext(loop: KernelDigitalLoopSnapshot, action: () => Unit): Unit =
+        val previous = activeIntegerQuery
+        val previousParent = enclosingIntegerQuery
+        try
+          activeIntegerQuery = Some(loopQuery(loop))
+          enclosingIntegerQuery = Some(moduleIntegerQuery)
+          action()
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-BRIDGE-055", error.getMessage, Some(loop.path))
         finally
           activeIntegerQuery = previous
           enclosingIntegerQuery = previousParent
@@ -2322,52 +2471,22 @@ ${indent(body, 2)}
             yielded,
             activeIntegerQuery.get,
             enclosingIntegerQuery.get
+          ),
+        withDigitalLoopContext,
+        renderDigitalAssignment,
+        (path, ordinal) =>
+          bridgeMetadata(
+            path,
+            Vector("source_ordinal" -> integer(ordinal)) ++ digitalLoopsByPath.get(path)
+              .flatMap(_.generatedRegion).toVector.map(region =>
+                "generated_region" -> quoted(region)
+              )
           )
       )
       body ++= digital.lines
       values ++= digital.values
 
       renderShapes(body, values, None)
-
-      snapshot.digitalAssignments.filter(_.owner == module.path).sortBy(_.path).foreach:
-        assignment =>
-          def value(path: String): (String, String) = values.getOrElse(
-            path,
-            fail(
-              "NODAL-BRIDGE-054",
-              "digital assignment value has no actual typed SSA carrier",
-              Some(assignment.path)
-            )
-          )
-          val target = value(assignment.target)
-          val source = value(assignment.value)
-          if containsBoundaryCapability(target._2) || containsBoundaryCapability(source._2) then
-            val targetRoot = digitalValues.boundaryRoot(assignment.target, module.path)
-            val sourceRoot = digitalValues.boundaryRoot(assignment.value, module.path)
-            if assignment.kind != "continuous" || targetRoot.kind != "output" || sourceRoot.kind != "input" ||
-              localDomainName(module, targetRoot) != localDomainName(module, sourceRoot)
-            then
-              fail(
-                "NODAL-BRIDGE-054",
-                "clock/reset wiring requires same-domain input/output boundary roots",
-                Some(assignment.path)
-              )
-          body += DigitalStorageMlir.renderAssignment(
-            assignment.path,
-            assignment.kind,
-            value(assignment.target),
-            value(assignment.value),
-            bridgeMetadata(assignment.path, Vector.empty),
-            location(assignment.path),
-            if containsBoundaryCapability(target._2) || containsBoundaryCapability(source._2) then
-              target._2 == source._2
-            else
-              exactDigitalValueType(
-                digitalValues.expressionType(assignment.target),
-                digitalValues.expressionType(assignment.value),
-                assignment.path
-              )
-          )
 
       body ++= interfaceValues.renderEffects(
         module,
@@ -5630,7 +5749,7 @@ ${indent(body, 2)}
           finally { val _ = active.remove(token) }
       check(value)
       try
-        val query = integerQuery
+        val query = queryForPath(value)
         query.bounds(query.resolve(module.path, value))
       catch
         case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)
@@ -5783,11 +5902,19 @@ ${indent(body, 2)}
           Some(path)
         )
 
+    private def sourceForPath(path: String): Option[SourceSpan] =
+      sourceByPath.get(path).orElse(
+        digitalLoopsByPath.get(path).flatMap(_.generatedRegion).flatMap(generatedByPath.get)
+          .flatMap(region =>
+            sourceByPath.get(region.path).orElse(sourceByPath.get(region.induction))
+          )
+      )
+
     private def bridgeMetadata(
         semanticPath: String,
         additional: Vector[(String, String)]
     ): String =
-      val endPosition = sourceByPath.get(semanticPath).toVector.flatMap: source =>
+      val endPosition = sourceForPath(semanticPath).toVector.flatMap: source =>
         Vector(
           "source_end_line" -> integer(source.endLine),
           "source_end_column" -> integer(source.endColumn)
@@ -5908,10 +6035,18 @@ ${indent(body, 2)}
             Vector("semantic_path" -> quoted(region.path)) ++
               sourceFields(sourceByPath(region.induction))
           )
-      array(ordinary ++ generatedRegions ++ AnalogProceduralMlir.sourceMapEntries(snapshot))
+      val digitalLoops = snapshot.digitalLoops.filterNot(loop => sourceByPath.contains(loop.path))
+        .sortBy(_.path).flatMap: loop =>
+          sourceForPath(loop.path).map: source =>
+            dictionary(
+              Vector("semantic_path" -> quoted(loop.path)) ++ sourceFields(source)
+            )
+      array(ordinary ++ generatedRegions ++ digitalLoops ++ AnalogProceduralMlir.sourceMapEntries(
+        snapshot
+      ))
 
     private def sourceFields(path: String): Vector[(String, String)] =
-      sourceByPath.get(path).toVector.flatMap(source => sourceFields(source))
+      sourceForPath(path).toVector.flatMap(source => sourceFields(source))
 
     private def sourceFields(
         source: SourceSpan
@@ -5966,7 +6101,7 @@ ${indent(region, 2)}
         location(semanticPath)
 
     private def location(semanticPath: String): String =
-      sourceByPath.get(semanticPath) match
+      sourceForPath(semanticPath) match
         case Some(source) =>
           s""" loc(${quoted(source.path)}:${source.line}:${source.column})"""
         case None => " loc(unknown)"

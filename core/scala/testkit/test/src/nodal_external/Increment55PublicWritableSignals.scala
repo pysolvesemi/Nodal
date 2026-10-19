@@ -143,3 +143,20 @@ final class WritableSignalAggregate(mismatch: Boolean) extends Module, WritableS
   val output = out(Vec(packet, 2))
   output.writable.at(0) := input.at(0)
   output.writable.at(1) := input.at(1)
+
+/** Symbolic partial storage is legal when every actually observed region is driven. */
+final class WritableSignalSymbolicCovered(row: Boolean) extends Module, WritableSignalClock:
+  val count = param(4.integer, range = 2 to 20)
+  val width = param(8.integer, range = 4 to 12)
+  val index = param(0.integer, range = 0 to 1)
+  val input = in(UInt(width))
+  val rows = in(Vec(UInt(width), count, 2))
+  val scratch = wire(Vec(UInt(width), count, 2))
+  val output = out(UInt(width))
+  val rowOutput = out(Vec(UInt(width), 2))
+  if row then
+    scratch.writable.row(0) := rows.row(0)
+    rowOutput := scratch.row(0)
+  else
+    scratch.writable.at(index, 1) := input
+    output := scratch.at(index, 1)

@@ -2,6 +2,8 @@
 
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
@@ -228,6 +230,14 @@ public:
             if (failed(verifyType(argument.getType())))
               return failure();
     for (NamedAttribute attribute : use->getAttrs()) {
+      if (use == module && attribute.getName() == "nodal.digital.materialization") {
+        // This inventory retains exact types from their actual lexical uses.
+        // Its owner recomputes every record (including type and region) under
+        // those scoped contexts; module-scope reinterpretation loses that proof.
+        if (failed(verifyDigitalMaterializationReport(module)))
+          return failure();
+        continue;
+      }
       auto result = checkAttribute(attribute.getValue());
       if (failed(result))
         return failure();
@@ -591,7 +601,8 @@ LogicalResult verifyDigitalTypeOperation(Operation *operation,
                           : operation->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
-  if (!environment && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && (operation->getParentOfType<CollectionOp>() ||
+                       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -616,7 +627,9 @@ LogicalResult verifyDigitalTypeModel(Operation *module, bool includeCollections)
   auto result = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
-    if (failed(verifier.verify(operation)))
+    if (failed(isBoundedDigitalLoop(operation->getParentOp())
+                   ? verifyDigitalTypeOperation(operation)
+                   : verifier.verify(operation)))
       return WalkResult::interrupt();
     if (llvm::isa<CollectionOp>(operation)) {
       if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))

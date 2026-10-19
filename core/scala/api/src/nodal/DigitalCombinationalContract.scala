@@ -180,8 +180,11 @@ private[nodal] object DigitalCombinationalContract:
   /** Shared root capability profile for computed combinational values. Aggregate storage validation
     * remains with the existing complete-type owner.
     */
+  def isValueTypeKind(result: KernelTypeDescriptor): Boolean =
+    Set("Bits", "UInt", "SInt", "Bool", "Enum", "Vec", "Struct").contains(result.kind)
+
   def validateValueType(result: KernelTypeDescriptor): Unit =
-    if !Set("Bits", "UInt", "SInt", "Bool", "Enum", "Vec", "Struct").contains(result.kind) then
+    if !isValueTypeKind(result) then
       fail(1, "digital selection requires finite digital values or storable digital aggregates")
     DigitalEnumContract.validateSelectionResult(result)
 

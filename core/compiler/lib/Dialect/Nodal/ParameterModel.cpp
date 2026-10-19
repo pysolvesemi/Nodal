@@ -5,6 +5,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -1563,7 +1564,9 @@ bool scopedIntegerUse(const nodal::ParameterIntegerEnvironment &environment) {
   Block *scope = environment.scope();
   Operation *use = environment.use();
   Operation *collection = scope ? scope->getParentOp() : nullptr;
-  return scope && use && use->getBlock() == scope && isNamed(collection, "nodal.collection") &&
+  return scope && use && use->getBlock() == scope &&
+         (isNamed(collection, "nodal.collection") ||
+          succeeded(nodal::inspectDigitalLoopHeader(collection))) &&
          collection->getNumRegions() == 1 && llvm::hasSingleElement(collection->getRegion(0)) &&
          &collection->getRegion(0).front() == scope &&
          enclosingNodalModule(collection) == environment.module() &&
@@ -1967,7 +1970,8 @@ LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds l
 
 LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Operation *diagnostic,
                                                llvm::DenseSet<Value> &active,
-                                               llvm::DenseSet<Value> &visited) {
+                                               llvm::DenseSet<Value> &visited,
+                                               bool requireStructural = true) {
   if (!value)
     return diagnostic->emitOpError("NODAL-ITERATION-043-001: generated SSA bound has no value");
   if (visited.contains(value))
@@ -2001,8 +2005,8 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
     Operation *parameter =
         reference ? findDirectSymbol(owner, reference.getValue(), "nodal.parameter") : nullptr;
-    if (!parameter ||
-        (textAttr(parameter, "variability") != "fixed" && !nodal::isStructuralParameter(parameter)))
+    if (!parameter || (requireStructural && textAttr(parameter, "variability") != "fixed" &&
+                       !nodal::isStructuralParameter(parameter)))
       return finish(diagnostic->emitOpError("NODAL-PARAMETER-STRUCTURAL-001: generated SSA bounds "
                                             "require structural parameter dependencies"));
     auto declaredType = parameter->getAttrOfType<TypeAttr>("type");
@@ -2019,7 +2023,7 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
           return finish(diagnostic->emitOpError(
               "NODAL-ITERATION-043-001: fixed generated parameter has an invalid expression"));
         if (failed(verifyGeneratedBoundDependencies(definition->getOperand(0), owner, diagnostic,
-                                                    active, visited)))
+                                                    active, visited, requireStructural)))
           return finish(failure());
       }
     }
@@ -2040,7 +2044,8 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
     if (operand.getType() != value.getType())
       return finish(diagnostic->emitOpError(
           "NODAL-ITERATION-043-001: generated SSA bound arithmetic type mismatch"));
-    if (failed(verifyGeneratedBoundDependencies(operand, owner, diagnostic, active, visited)))
+    if (failed(verifyGeneratedBoundDependencies(operand, owner, diagnostic, active, visited,
+                                                requireStructural)))
       return finish(failure());
   }
   return finish(success());
@@ -2477,6 +2482,8 @@ public:
       } else if (input.captureSource.getDefiningOp() &&
                  input.captureSource.getDefiningOp()->getParentOp() == module) {
         source = instanceExpression(analysis.value(input.captureSource));
+      } else if (!instance && nodal::isBoundedDigitalLoop(collection->getParentOp())) {
+        source = nodal::resolveDigitalLoopStaticInteger(input.captureSource, collection);
       }
       if (failed(source) || !nodal::equivalentInstantiatedIntegerExpressions(*source, *result) ||
           !sameBounds(source->bounds, result->bounds))
@@ -2614,13 +2621,17 @@ FailureOr<nodal::ParameterIntegerEnvironment> nodal::ParameterIntegerEnvironment
       domains.size() > 65536 - bindings.size() || scope->getNumArguments() > 65536)
     return failure();
   Operation *collection = scope->getParentOp();
-  if (!isNamed(collection, "nodal.collection") || collection->getNumRegions() != 1 ||
-      !llvm::hasSingleElement(collection->getRegion(0)) ||
+  const bool loop = nodal::isBoundedDigitalLoop(collection);
+  if ((!isNamed(collection, "nodal.collection") && !loop) ||
+      (loop && (failed(nodal::inspectDigitalLoopHeader(collection)) || instance || enclosing ||
+                !domains.empty())) ||
+      collection->getNumRegions() != 1 || !llvm::hasSingleElement(collection->getRegion(0)) ||
       &collection->getRegion(0).front() != scope || enclosingNodalModule(collection) != module)
     return failure();
   unsigned depth = 0;
   for (Operation *owner = collection; owner != module; owner = owner->getParentOp())
-    if (!isNamed(owner, "nodal.collection") || ++depth > 128)
+    if ((!isNamed(owner, "nodal.collection") && failed(nodal::inspectDigitalLoopHeader(owner))) ||
+        ++depth > 128)
       return failure();
   Operation *parent = instance ? enclosingNodalModule(instance) : module;
   InstanceIntegerAnalysis storageAnalysis(parent, instance);
@@ -2652,6 +2663,19 @@ FailureOr<nodal::ParameterIntegerEnvironment> nodal::ParameterIntegerEnvironment
     auto anchor = makeOpaqueIntegerExpression(domain.argument, domain.bounds);
     result->domains.try_emplace(domain.argument, anchor);
     result->bindings.try_emplace(domain.argument, anchor);
+  }
+  if (loop) {
+    unsigned expected = 0;
+    for (BlockArgument argument : scope->getArguments().drop_front())
+      expected += argument.getType().isSignlessInteger(64);
+    if (bindings.size() != expected)
+      return failure();
+    for (const auto &binding : bindings) {
+      auto source = nodal::digitalLoopCaptureSource(binding.argument);
+      if (!binding.argument.getArgNumber() || failed(source) || !*source ||
+          binding.captureSource != *source)
+        return failure();
+    }
   }
   ScopedIntegerBindingCheck checker(module, scope, instance, bindings, domains, enclosing);
   for (const auto &binding : bindings) {
@@ -2933,6 +2957,82 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
   if (*count)
     domain.attainedInductionBounds =
         ParameterIntegerBounds{bounds.lower.lower, bounds.upper.upper - 1};
+  return domain;
+}
+
+FailureOr<nodal::GeneratedDomain> nodal::resolveBoundedIterationDomain(Operation *operation) {
+  auto reject = [&](llvm::StringRef message) -> FailureOr<GeneratedDomain> {
+    if (operation)
+      operation->emitOpError("NODAL-DIGITAL-055-011: ") << message;
+    return failure();
+  };
+  Operation *module = enclosingNodalModule(operation);
+  if (!operation || !isNamed(operation, "nodal.hardware_loop") ||
+      textAttr(operation, "contract_version") != "bounded-digital-v1" || !module ||
+      operation->getParentOp() != module || operation->getNumOperands() < 3 ||
+      operation->getNumRegions() != 1 || !operation->getRegion(0).hasOneBlock() ||
+      operation->getRegion(0).front().getNumArguments() != operation->getNumOperands() - 2 ||
+      operation->hasAttr("lower") || operation->hasAttr("upper") || operation->hasAttr("step"))
+    return reject("bounded domain requires the actual exclusive SSA loop header");
+  Block &body = operation->getRegion(0).front();
+  if (!body.getArgument(0).getType().isSignlessInteger(64))
+    return reject("bounded induction must be signless i64 with mathematical signed semantics");
+  llvm::DenseSet<Value> active, visited;
+  for (Value bound : operation->getOperands().take_front(3))
+    if (failed(verifyGeneratedBoundDependencies(bound, module, operation, active, visited, false)))
+      return failure();
+  InstanceIntegerAnalysis expressions(module, nullptr, false, true);
+  auto lower = instanceExpression(expressions.value(operation->getOperand(0)));
+  auto upper = instanceExpression(expressions.value(operation->getOperand(1)));
+  auto step = instanceExpression(expressions.value(operation->getOperand(2)));
+  if (failed(lower) || failed(upper) || failed(step))
+    return reject(
+        "bounds need finite lawful owned Integer envelopes; a maximum is not a constraint");
+  // Literal/fully fixed DAGs are invariant. An overridable singleton parameter
+  // remains an atom and cannot manufacture an unrolled/default specialization.
+  SmallVector<std::shared_ptr<const InstantiatedIntegerNode>, 8> pending{step->root};
+  unsigned work = 0;
+  while (!pending.empty()) {
+    auto node = pending.pop_back_val();
+    if (!node || ++work > 65536 || node->kind == InstantiatedIntegerNode::Kind::ParentParameter ||
+        node->kind == InstantiatedIntegerNode::Kind::OpaqueValue)
+      return reject("step must be a positive invariant Integer DAG");
+    llvm::append_range(pending, node->operands);
+  }
+  if (step->bounds.lower <= 0 || step->bounds.lower != step->bounds.upper)
+    return reject("step must be a positive invariant Integer DAG");
+  bool identical = equivalentInstantiatedIntegerExpressions(*lower, *upper);
+  bool literals = lower->root->kind == InstantiatedIntegerNode::Kind::Literal &&
+                  upper->root->kind == InstantiatedIntegerNode::Kind::Literal;
+  if (!identical && !literals && lower->bounds.upper > upper->bounds.lower)
+    return reject("symbolic direction must hold for every legal parameter setting");
+  auto count = positiveGenerateMaximumCount(lower->bounds.lower, upper->bounds.upper,
+                                            step->bounds.lower, identical);
+  if (!count || *count > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))
+    return reject("finite trip envelope exceeds the checked 32-bit iteration contract");
+  if (auto maximum = operation->getAttrOfType<IntegerAttr>("maximum")) {
+    if (!maximum.getType().isSignlessInteger(64) || maximum.getInt() < 0 ||
+        *count > static_cast<uint64_t>(maximum.getInt()))
+      return reject("declared maximum does not contain the independently proved trip envelope");
+  } else if (operation->hasAttr("maximum"))
+    return reject("declared maximum must be a nonnegative i64");
+  GeneratedDomain domain;
+  domain.module = module;
+  domain.induction = body.getArgument(0);
+  domain.lower = *lower;
+  domain.upperExclusive = *upper;
+  domain.step = *step;
+  domain.maximumTripCount = *count;
+  if (*count) {
+    int64_t attainedUpper = upper->bounds.upper - 1;
+    if (lower->bounds.lower == lower->bounds.upper && upper->bounds.lower == upper->bounds.upper) {
+      uint64_t distance =
+          static_cast<uint64_t>(upper->bounds.upper) - static_cast<uint64_t>(lower->bounds.lower);
+      attainedUpper -=
+          static_cast<int64_t>((distance - 1) % static_cast<uint64_t>(step->bounds.lower));
+    }
+    domain.attainedInductionBounds = ParameterIntegerBounds{lower->bounds.lower, attainedUpper};
+  }
   return domain;
 }
 

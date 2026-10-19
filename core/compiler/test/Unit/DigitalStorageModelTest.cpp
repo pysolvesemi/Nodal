@@ -562,8 +562,16 @@ int main() {
   const std::string laneWrite = port(uint) + assign(uint, uint, "lane");
   writableTarget("writable-selection-wire-positive",
                  storage(targetShape, "cells") + targetLane() + laneWrite);
-  writableTarget("writable-selection-output-positive",
-                 port(targetShape, "cells", "output") + targetLane() + laneWrite);
+  writableTarget(
+      "writable-selection-output-positive",
+      port(targetShape, "cells", "output") + targetLane() + laneWrite +
+          literal("i64", "1", "otherPosition") +
+          "%otherLane = \"nodal.shape_index\"(%cells, %otherPosition) <{metadata = {}}> : (" +
+          targetShape + ", i64) -> !nodal.uint<8>\n" + assign(uint, uint, "otherLane"));
+  writableTarget("writable-selection-output-missing-lane",
+                 port(targetShape, "cells", "output") + targetLane() + laneWrite,
+                 "NODAL-DIGITAL-055-010: ordinary assignment read lacks proved complete physical "
+                 "driver coverage");
   writableTarget(
       "writable-selection-input-forged-labels",
       port(targetShape, "cells") + targetLane() + laneWrite,

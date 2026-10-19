@@ -3,6 +3,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -117,7 +118,7 @@ FailureOr<std::string> identity(Value value, Operation *module) {
   auto argument = llvm::dyn_cast<BlockArgument>(value);
   Operation *region = argument ? argument.getOwner()->getParentOp() : nullptr;
   if (!region || owner(region) != module ||
-      region->getName().getStringRef() != "nodal.collection" ||
+      (region->getName().getStringRef() != "nodal.collection" && !isBoundedDigitalLoop(region)) ||
       !canonicalText(path(region), maximumIdentityBytes))
     return failure();
   return (path(region) + ".arg" + llvm::Twine(argument.getArgNumber())).str();
@@ -247,7 +248,7 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     if (known != validTypes.end())
       return known->second;
     bool valid = false;
-    if (!use->getParentOfType<CollectionOp>()) {
+    if (!use->getParentOfType<CollectionOp>() && !isBoundedDigitalLoop(use->getParentOp())) {
       auto ordinary = moduleValidTypes.find(type);
       if (ordinary == moduleValidTypes.end())
         ordinary =
@@ -289,7 +290,8 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     const bool staticIndex =
         operation->getNumResults() == 1 &&
         llvm::isa<IntegerType>(operation->getResult(0).getType()) &&
-        (operationName == "nodal.constant" || operationName == "nodal.const_literal");
+        (operationName == "nodal.constant" || operationName == "nodal.const_literal" ||
+         operationName == "nodal.iteration_index");
     const bool valueProducer =
         operation->getNumResults() == 1 &&
         (staticIndex || finiteDigitalType(operation->getResult(0).getType(), operation));
@@ -344,7 +346,9 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     std::string region;
     Operation *parent = operation->getParentOp();
     if (parent != module) {
-      if (!parent || parent->getName().getStringRef() != "nodal.collection" ||
+      if (!parent ||
+          (parent->getName().getStringRef() != "nodal.collection" &&
+           !isBoundedDigitalLoop(parent)) ||
           !canonicalText(path(parent), maximumIdentityBytes)) {
         (void)reject(operation, "candidate has an unsupported lexical scope");
         return WalkResult::interrupt();
@@ -424,6 +428,8 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
     entry.set("operation", builder.getStringAttr(operation->getName().getStringRef()));
     entry.set("operator", builder.getStringAttr(text(operation, "operator_name")));
     entry.set("region", builder.getStringAttr(region));
+    if (isBoundedDigitalLoop(parent))
+      entry.set("iteration_boundary", builder.getStringAttr("ordered-read-point"));
     entry.set("inputs", builder.getArrayAttr(inputs));
     entry.set("type", TypeAttr::get(operation->getResult(0).getType()));
     entry.set("use_count", builder.getI64IntegerAttr(uses));

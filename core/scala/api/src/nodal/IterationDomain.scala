@@ -197,6 +197,34 @@ private[nodal] object IterationDomain:
         positiveTripCount(if identicalBounds then BigInt(0) else distance, step.lower, maximum)
           .map(count => Structural(lower, upperExclusive, step, maximum, count))
 
+  /** Conservative attained values for a validated positive domain. Empty domains have no value.
+    * Exact fixed endpoints retain the last strided value instead of filling the excluded tail.
+    */
+  def attainedBounds(domain: Structural): Option[Bounds] =
+    Option.when(domain.maximumTripCount > 0):
+      val last =
+        (BigInt(domain.lower.upper) +
+          (BigInt(domain.maximumTripCount) - 1) * domain.step.upper)
+          .min(BigInt(domain.upperExclusive.upper) - 1)
+      Bounds(domain.lower.lower, last.toLong)
+
+  /** Finite same-cycle digital domains retain literal reversed emptiness and require one fixed
+    * positive step. The structural owner remains authoritative for symbolic direction and counts.
+    */
+  def boundedDigital(
+      lower: Bounds,
+      upperExclusive: Bounds,
+      step: Bounds,
+      maximum: Option[Int],
+      identicalBounds: Boolean = false
+  ): Either[Problem, Structural] =
+    if step.lower != step.upper then
+      Left(Problem(ProblemKind.InvalidStep, "digital iteration step must be invariant"))
+    else
+      val literalEmpty = lower.lower == lower.upper &&
+        upperExclusive.lower == upperExclusive.upper && lower.lower >= upperExclusive.upper
+      structural(lower, upperExclusive, step, maximum, identicalBounds || literalEmpty)
+
   /** Repetition has an explicit count: a negative count is invalid, not an empty range. */
   def repeat(iterations: Int): Either[Problem, Static] =
     if iterations < 0 then

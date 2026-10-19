@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
@@ -875,7 +876,9 @@ bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module
 
 LogicalResult verifyDigitalLiteralOperation(Operation *operation,
                                             const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -892,7 +895,9 @@ LogicalResult verifyDigitalLiteralOperation(Operation *operation,
 
 LogicalResult verifyDigitalValueOperation(Operation *operation,
                                           const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -918,7 +923,10 @@ LogicalResult verifyDigitalValueModel(Operation *module, bool includeCollections
       return WalkResult::skip();
     }
     StringRef name = operation->getName().getStringRef();
-    if (name == "nodal.digital_expr" && failed(verifier.expression(operation)))
+    if (name == "nodal.digital_expr" &&
+        failed(isBoundedDigitalLoop(operation->getParentOp())
+                   ? verifyDigitalValueOperation(operation)
+                   : success(succeeded(verifier.expression(operation)))))
       return WalkResult::interrupt();
     if ((name == "nodal.constant" || name == "nodal.const_literal") &&
         operation->getNumResults() == 1 && isDigitalScalarType(operation->getResult(0).getType()) &&

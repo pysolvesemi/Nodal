@@ -115,6 +115,7 @@ final class Increment43RelationUnrelatedDefault extends Module:
   val child = instance(new Increment43RelationChild)
   taps <> child(_.p)
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43RelationOwnershipFailure(form: Int) extends Module:
   val taps = node(Electrical, 4)
   if form <= 2 then
@@ -127,13 +128,13 @@ final class Increment43RelationOwnershipFailure(form: Int) extends Module:
       taps <> detached.p
   else if form == 3 then
     var escaped: Option[NodeArray[Electrical.type]] = None
-    hdlRange(0, 1): _ =>
+    ConstructionKernel.generatedRegion(0, 1, 1, None): _ =>
       val child = instance(new Increment43RelationInternalChild)
       escaped = Some(child(_.p.slice(0, 2)))
-    hdlRange(0, 1): _ =>
+    ConstructionKernel.generatedRegion(0, 1, 1, None): _ =>
       taps.slice(0, 2) <> escaped.get
   else if form == 4 then
-    hdlRange(3, 3): _ =>
+    ConstructionKernel.generatedRegion(3, 3, 1, None): _ =>
       val child = instance(new Increment43RelationInternalChild)
       taps.slice(0, 2) <> child(_.p.slice(-1, 1))
   else

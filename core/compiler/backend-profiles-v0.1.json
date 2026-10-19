@@ -992,6 +992,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.hardware_loop_end",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.instance",
         "feature": "structural-hierarchy",
         "domain": "neutral",
@@ -1055,6 +1061,12 @@
         "operation": "nodal.interface_role",
         "feature": "unlowered-shared-forms",
         "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.iteration_index",
+        "feature": "digital-behavior",
+        "domain": "digital",
         "admission": "unsupported"
       },
       {

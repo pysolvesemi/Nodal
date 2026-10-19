@@ -53,7 +53,7 @@ inferStaticShapeIndexBounds(mlir::Operation *module, mlir::Value value,
 struct StaticShapeIndexIdentity {
   // StaticArgument uses the actual collection root and argument ordinal in
   // literal, preserving identity without treating equal bounds as equality.
-  enum Kind { Literal, Parameter, Expression, Induction, StaticArgument } kind;
+  enum Kind { Literal, Parameter, Expression, Induction, StaticArgument, IterationAffine } kind;
   int64_t literal = 0;
   mlir::Operation *root = nullptr;
   bool operator==(const StaticShapeIndexIdentity &other) const {
@@ -104,14 +104,30 @@ mlir::FailureOr<StaticShapeProjection> resolveStaticShapeProjection(mlir::Value 
 struct StaticShapeRegionAxis {
   InstantiatedIntegerExpression lower, upperExclusive;
 };
+/// One actual injective induction family, retained with its canonical image.
+/// axes[varyingAxis] is the progression boundary in root coordinates; a missing
+/// axis means root row-major ordinals. The region must never be treated as a
+/// filled box/interval while stride is greater than one.
+struct StaticShapeIterationImage {
+  mlir::Operation *loop = nullptr;
+  GeneratedDomain domain;
+  InstantiatedIntegerExpression offset;
+  InstantiatedIntegerExpression tripCount;
+  /// Width of one occurrence in the varying coordinate (or flat ordinal).
+  InstantiatedIntegerExpression occurrenceWidth;
+  std::optional<unsigned> varyingAxis;
+  int64_t stride = 1;
+  bool empty = false;
+};
 struct StaticShapeRegion {
-  enum class Kind { Whole, Box, Interval } kind = Kind::Whole;
+  enum class Kind { Whole, Box, Interval, Empty } kind = Kind::Whole;
   mlir::Value root;
   llvm::SmallVector<StaticShapeRegionAxis, 4> axes;
   StaticShapeRegionAxis interval;
   /// Retained actual map for scalar identity; coverage cuts alone do not
   /// identify independently authored compound selector atoms.
   std::optional<StaticShapeProjection> projection;
+  std::optional<StaticShapeIterationImage> iteration;
 };
 enum class ShapeRegionProofStatus { Proved, Unsupported, Invalid, ResourceLimit };
 struct ShapeRegionProofLimits {
@@ -132,6 +148,30 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(mlir::Value root,
 /// Exact all-legal pairwise relation. Unknown (including unsupported mapping)
 /// cannot establish independent writers. Actual SSA chains are rechecked, and
 /// physical selector identities are preserved; no supplied flags are trusted.
+/// Resolve the aggregate image of one actual loop-selected projection. Success
+/// establishes per-iteration injectivity, including empty domains; ordinary or
+/// invariant projections return Unsupported. The returned iteration facts retain
+/// actual loop/domain/offset identity for ordered-dependence proofs.
+ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProjection &projection,
+                                                        mlir::Operation *use,
+                                                        StaticShapeRegion &result,
+                                                        ShapeRegionProofLimits limits = {});
+
+/// Exact occurrence displacement: read(q) equals write(q + result). Only the
+/// same actual loop and identical canonical physical per-occurrence map qualify.
+/// A result of -1 is the immediately preceding occurrence; failure is unknown.
+mlir::FailureOr<int64_t> compareStaticShapeIterationPositions(const StaticShapeProjection &read,
+                                                              const StaticShapeProjection &write,
+                                                              mlir::Operation *use,
+                                                              ShapeRegionProofLimits limits = {});
+
+/// Check the exact ordinary q=0 base image of the supported unit-step chain.
+/// Writer uniqueness, source order and external seed dependencies remain the
+/// assignment graph's responsibility.
+ShapeRegionProofStatus verifyStaticShapeIterationPredecessorSeed(
+    const StaticShapeProjection &read, const StaticShapeProjection &write,
+    const StaticShapeProjection &seed, mlir::Operation *use, ShapeRegionProofLimits limits = {});
+
 enum class ShapeRegionOverlap { Disjoint, Overlapping, Unknown };
 struct StaticShapeOverlap {
   ShapeRegionProofStatus status = ShapeRegionProofStatus::Unsupported;

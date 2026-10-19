@@ -3,6 +3,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -412,7 +413,9 @@ LogicalResult verifyEnumDefinitionAbi(Operation *definition) {
 
 LogicalResult verifyEnumValueOperation(Operation *operation,
                                        const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -433,7 +436,9 @@ LogicalResult verifyEnumValueOperation(Operation *operation,
 
 LogicalResult verifyEnumLiteralOperation(Operation *operation,
                                          const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -466,7 +471,8 @@ LogicalResult verifyEnumTypeOperation(Operation *operation,
                                       const ParameterIntegerEnvironment *environment) {
   if (!operation)
     return failure();
-  if (!environment && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && (operation->getParentOfType<CollectionOp>() ||
+                       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();

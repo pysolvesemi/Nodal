@@ -151,7 +151,31 @@ private[nodal] final case class KernelDigitalAssignmentSnapshot(
     owner: String,
     target: String,
     value: String,
-    kind: String
+    kind: String,
+    region: Option[String] = None,
+    sourceOrdinal: Int = 0
+)
+
+private[nodal] final case class KernelDigitalLoopSnapshot(
+    path: String,
+    owner: String,
+    lower: String,
+    upperExclusive: String,
+    step: String,
+    maximum: Option[Int],
+    maximumTripCount: Int,
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    sourceOrdinal: Int,
+    generatedRegion: Option[String] = None
+)
+
+private[nodal] final case class KernelIterationIndexSnapshot(
+    path: String,
+    owner: String,
+    region: String,
+    operation: String,
+    operands: Vector[String]
 )
 
 private[nodal] final case class KernelGeneratedRegionSnapshot(
@@ -349,6 +373,8 @@ private[nodal] final case class ConstructionSnapshot(
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
     digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
     digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
+    digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
+    iterationIndices: Vector[KernelIterationIndexSnapshot] = Vector.empty,
     emitQuality: EmitQuality = EmitQuality()
 )
 
@@ -507,6 +533,7 @@ private final class ModuleRecord(
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
   val generatedRegions: mutable.ArrayBuffer[GeneratedRegionRecord] = mutable.ArrayBuffer.empty
   var expressionCount: Int = 0
+  var scaffoldExpressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 
 private final case class Operation(
@@ -514,21 +541,26 @@ private final case class Operation(
     kind: String,
     values: Vector[Any],
     generatedScope: Option[GeneratedRegionRecord] = None,
-    source: Option[SourceSpan] = None
+    source: Option[SourceSpan] = None,
+    digitalRegion: Option[DigitalValueRegionRecord] = None,
+    sourceOrdinal: Int = 0
 )
 
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
-private final class DigitalCollectionRecord(
+private final class DigitalValueRegionRecord(
     val reference: ExpressionRef,
-    val parent: Option[DigitalCollectionRecord],
+    val parent: Option[DigitalValueRegionRecord],
     val kind: String,
     val inputs: Vector[Expr[?]],
-    val seed: Option[Expr[?]]
+    val seed: Option[Expr[?]],
+    val loop: Option[DigitalLoopHeader] = None
 ):
+  def isLoop: Boolean = loop.nonEmpty
   val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
   val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
     mutable.LinkedHashMap.empty
   var expressionCount: Int = 0
+  var assignmentCount: Int = 0
   var yielded: Option[Expr[?]] = None
   var result: Option[KernelExpr[?]] = None
 
@@ -553,4 +585,15 @@ private final case class ContinuousOperatorRecord(
     context: String,
     inputDimension: AnalogDimension,
     resultDimension: AnalogDimension
+)
+
+/** A domain and effect position attached to the shared lexical value owner. */
+private final case class DigitalLoopHeader(
+    lower: Dimension,
+    upperExclusive: Dimension,
+    step: Dimension,
+    maximum: Option[Int],
+    domain: IterationDomain.Structural,
+    sourceOrdinal: Int,
+    generated: Option[GeneratedRegionRecord] = None
 )

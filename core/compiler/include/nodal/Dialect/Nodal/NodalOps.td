@@ -151,7 +151,7 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [HasParent<"ModuleOp">]> {
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -554,16 +554,35 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
 }
 
 def Nodal_HardwareLoopOp : Nodal_Op<"hardware_loop", [NoTerminator]> {
-  let summary = "Bounded hardware-iteration region with declared effects";
+  let summary = "Legacy carrier or versioned finite ordered digital iteration";
   let arguments = (ins
+    Variadic<AnyType>:$inputs,
     StrAttr:$induction,
-    AnyAttr:$lower,
-    AnyAttr:$upper,
-    AnyAttr:$step,
+    OptionalAttr<AnyAttr>:$lower,
+    OptionalAttr<AnyAttr>:$upper,
+    OptionalAttr<AnyAttr>:$step,
     StrAttr:$effect_policy,
+    OptionalAttr<StrAttr>:$contract_version,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
+    OptionalAttr<I64Attr>:$maximum,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_HardwareLoopEndOp : Nodal_Op<"hardware_loop_end",
+    [Terminator, HasParent<"HardwareLoopOp">]> {
+  let summary = "Explicit end of a bounded digital loop template";
+  let hasVerifier = 1;
+}
+
+def Nodal_IterationIndexOp : Nodal_Op<"iteration_index"> {
+  let summary = "Actual affine i64 induction plus or minus a static offset";
+  let arguments = (ins I64:$lhs, I64:$rhs, StrAttr:$operator_name,
+    DictionaryAttr:$metadata);
+  let results = (outs I64:$result);
   let hasVerifier = 1;
 }
 

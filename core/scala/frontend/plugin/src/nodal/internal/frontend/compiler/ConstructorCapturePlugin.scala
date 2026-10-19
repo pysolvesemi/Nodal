@@ -47,6 +47,7 @@ private final class ConstructorCapturePhase extends PluginPhase:
   private def paramClass(using Context) = requiredClass("nodal.Param")
   private def realClass(using Context) = requiredClass("nodal.Real")
   private def markerClass(using Context) = requiredClass("nodal.ConstructorSchema")
+  private def effectMarkerClass(using Context) = requiredClass("nodal.ConstructorEffectSummary")
   private def string(value: String)(using Context): Tree = Literal(Constant(value))
   private def number(value: Double)(using Context): Tree = Literal(Constant(value))
 
@@ -63,6 +64,14 @@ private final class ConstructorCapturePhase extends PluginPhase:
         given Context = scanBase.fresh.setCompilationUnit(unit)
         val collect = new TreeTraverser:
           override def traverse(tree: Tree)(using Context): Unit =
+            if (tree.isInstanceOf[TypeDef] || tree.isInstanceOf[DefDef]) &&
+              tree.symbol.hasAnnotation(effectMarkerClass)
+            then
+              fail(
+                "METADATA",
+                "source must not supply compiler-owned constructor effect summaries",
+                tree
+              )
             tree match
               case definition: DefDef => definitions(definition.symbol) = definition
               case definition: TypeDef if definition.symbol.isClass =>

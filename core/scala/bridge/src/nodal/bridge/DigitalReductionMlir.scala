@@ -23,6 +23,7 @@ private[nodal] final class DigitalReductionMlir(
 
   private val scalar = raw"(Bits|UInt|SInt)\(([^)]+)\)".r
   private val collections = snapshot.digitalCollections.map(value => value.path -> value).toMap
+  private val loopPaths = snapshot.digitalLoops.iterator.map(_.path).toSet
   private val parameters = snapshot.parameterExpressions.map(value => value.path -> value).toMap
   private val parameterRegions = snapshot.parameterExpressions.groupBy(_.region)
   private val expressionRegions = snapshot.digitalExpressions.groupBy(_.region)
@@ -254,10 +255,13 @@ private[nodal] final class DigitalReductionMlir(
     else
       var ancestor = collection.parentRegion
       while ancestor.nonEmpty do
-        val outer = collections(ancestor.get)
-        if Kinds.contains(outer.kind) then
-          fail("a reduction nested inside a reduction is outside the initial profile", path)
-        ancestor = outer.parentRegion
+        collections.get(ancestor.get) match
+          case Some(outer) =>
+            if Kinds.contains(outer.kind) then
+              fail("a reduction nested inside a reduction is outside the initial profile", path)
+            ancestor = outer.parentRegion
+          case None if loopPaths.contains(ancestor.get) => ancestor = None
+          case None => fail("reduction lexical parent is absent", path)
       val (elementText, dimensions) = vectorType(valueType(collection.inputs.head), path)
       val initialShape = parse(elementText, path)
       val initialTokens = widths(initialShape)

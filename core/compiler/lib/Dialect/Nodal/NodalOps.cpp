@@ -16,6 +16,8 @@
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopPlanningModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
@@ -2001,6 +2003,31 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (!module)
     return failure();
+  if (isBoundedDigitalLoop(use->getParentOp())) {
+    auto affine = resolveDigitalIterationIndex(value, use);
+    if (succeeded(affine)) {
+      auto definition = value.getDefiningOp();
+      return ShapeIndexProof{{definition ? StaticShapeIndexIdentity::IterationAffine
+                                         : StaticShapeIndexIdentity::Induction,
+                              0, definition ? definition : affine->loop},
+                             affine->attainedBounds};
+    }
+    auto integer = resolveDigitalLoopStaticInteger(value, use);
+    if (succeeded(integer)) {
+      if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+        auto source = digitalLoopCaptureSource(argument);
+        if (succeeded(source) && *source)
+          return resolveShapeIndexProof(*source, use->getParentOp());
+      }
+      if (llvm::isa_and_nonnull<ConstExprOp>(value.getDefiningOp()))
+        return ShapeIndexProof{{StaticShapeIndexIdentity::Expression, 0, value.getDefiningOp()},
+                               integer->bounds};
+      if (integer->root->kind == InstantiatedIntegerNode::Kind::Literal)
+        return ShapeIndexProof{{StaticShapeIndexIdentity::Literal, integer->root->literal, nullptr},
+                               integer->bounds};
+    }
+    return failure();
+  }
   if (environment) {
     auto context = environment->atUse(use);
     if (failed(context))
@@ -2049,6 +2076,32 @@ LogicalResult nodal::verifyShapeIndexInExtent(Value value, const StaticShapeDime
     return use->emitOpError(
         "NODAL-SHAPE-043-002: index is not in bounds for every legal shape and active occurrence");
   };
+  if (isBoundedDigitalLoop(use->getParentOp())) {
+    auto affine = resolveDigitalIterationIndex(value, use);
+    if (succeeded(affine)) {
+      if (extent.bounds.lower <= 0)
+        return reject();
+      auto lower = composeIntegerExpression("add", {affine->domain.lower, affine->offset});
+      auto upper = composeIntegerExpression("add", {affine->domain.upperExclusive, affine->offset});
+      if (failed(lower) || failed(upper))
+        return reject();
+      if (!affine->attainedBounds)
+        return success();
+      if (lower->bounds.lower < 0)
+        return reject();
+      if (affine->attainedBounds->upper < extent.bounds.lower)
+        return success();
+      FailureOr<InstantiatedIntegerExpression> dimension =
+          extent.parameter ? resolveOwnedIntegerParameter(affine->domain.module, extent.parameter)
+          : extent.expression
+              ? resolveOwnedIntegerExpression(affine->domain.module, extent.expression)
+              : FailureOr<InstantiatedIntegerExpression>(
+                    makeLiteralIntegerExpression(extent.literal));
+      return succeeded(dimension) && proveIntegerExpressionLess(*upper, *dimension, true)
+                 ? success()
+                 : reject();
+    }
+  }
   auto proof = resolveShapeIndexProof(value, use, environment);
   if (failed(proof) || extent.bounds.lower <= 0)
     return reject();
@@ -2148,7 +2201,8 @@ LogicalResult nodal::ModuleOp::verify() {
       failed(verifyEnumValueModel(getOperation(), false)) ||
       failed(verifyDigitalValueModel(getOperation(), false)) ||
       failed(verifyDigitalCollectionModel(getOperation())) ||
-      failed(verifyDigitalMaterializationReport(getOperation())))
+      failed(verifyDigitalMaterializationReport(getOperation())) ||
+      failed(verifyDigitalLoopPlanningReport(getOperation())))
     return failure();
   // Captured region and induction identities are module-local semantic keys.
   // Check each once; independent nested module definitions own their own keys.
@@ -2157,7 +2211,7 @@ LogicalResult nodal::ModuleOp::verify() {
   auto ownership = getOperation()->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != getOperation() && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
-    if (!llvm::isa<nodal::GenerateOp>(operation))
+    if (!llvm::isa<nodal::GenerateOp>(operation) && !isBoundedDigitalLoop(operation))
       return WalkResult::advance();
     for (auto [attribute, identities] : {std::pair{"region_id", &generatedRegions},
                                          std::pair{"induction_path", &generatedInductions}}) {
@@ -2375,7 +2429,9 @@ LogicalResult nodal::ConstantOp::verify() {
 
 LogicalResult nodal::verifyShapeIndexMapping(Operation *operation,
                                              const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -2465,7 +2521,7 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation,
         return failure();
       continue;
     }
-    if (environment) {
+    if (environment || isBoundedDigitalLoop(operation->getParentOp())) {
       auto extent = resolveStaticShapeDimension(owner, dimension, "shape", environment);
       if (failed(extent) ||
           failed(verifyShapeIndexInExtent(indexValue, *extent, operation, environment)))
@@ -2539,7 +2595,9 @@ LogicalResult nodal::ShapeFlattenOp::verify() {
 
 LogicalResult nodal::verifyShapeViewMapping(Operation *operation,
                                             const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -2781,7 +2839,9 @@ LogicalResult nodal::ShapeViewOp::verify() {
 
 LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
                                              const ParameterIntegerEnvironment *environment) {
-  if (!environment && operation && operation->getParentOfType<CollectionOp>()) {
+  if (!environment && operation &&
+      (operation->getParentOfType<CollectionOp>() ||
+       isBoundedDigitalLoop(operation->getParentOp()))) {
     auto contexts = collectionIntegerContextsAtUse(operation);
     if (failed(contexts))
       return failure();
@@ -3089,12 +3149,30 @@ LogicalResult nodal::GenerateOp::verify() {
 }
 
 LogicalResult nodal::HardwareLoopOp::verify() {
+  if (getOperation()->hasAttr("contract_version"))
+    return verifyDigitalLoopOperation(getOperation());
+  if (getOperation()->getNumOperands() || getOperation()->hasAttr("region_id") ||
+      getOperation()->hasAttr("induction_path") || getOperation()->hasAttr("maximum") ||
+      !getOperation()->hasAttr("lower") || !getOperation()->hasAttr("upper") ||
+      !getOperation()->hasAttr("step") || getOperation()->getRegion(0).front().getNumArguments())
+    return emitOpError("legacy hardware loop must retain only its separate attribute-bound form");
   if (failed(verifyLoop(getOperation())))
     return failure();
   const llvm::StringRef policy = textAttr(getOperation(), "effect_policy");
   if (!oneOf(policy, {"pure", "ordered", "state_update"}))
     return emitOpError() << "unsupported effect policy '" << policy << "'";
   return success();
+}
+
+LogicalResult nodal::HardwareLoopEndOp::verify() {
+  auto header = inspectDigitalLoopHeader(getOperation()->getParentOp());
+  if (failed(header) || header->body->empty() || &header->body->back() != getOperation() ||
+      getOperation()->getNumOperands() || getOperation()->getNumResults())
+    return emitOpError("bounded loop end requires its actual unique final position");
+  return success();
+}
+LogicalResult nodal::IterationIndexOp::verify() {
+  return verifyDigitalIterationIndexOperation(getOperation());
 }
 
 LogicalResult nodal::ResolvedNetOp::verify() {

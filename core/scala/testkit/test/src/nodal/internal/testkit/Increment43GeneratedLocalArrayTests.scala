@@ -84,25 +84,27 @@ final class Increment43LocalArrayReusable extends Module:
     connect(taps.at(lane), second(_.p))
     connect(common, second(_.n))
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43LocalArrayEscape(form: Int) extends Module:
   val common = inout(Electrical)
   var escaped: Option[NodeArray[Electrical.type]] = None
   var selected: Option[Node[Electrical.type]] = None
-  hdlRange(0, 2): _ =>
+  ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
     val taps = node(Electrical, 2, 3)
     escaped = Some(if form == 2 then taps.row(0) else taps)
     selected = Some(taps.at(0, 0))
   if form == 0 then
     val _ = escaped.get.at(0, 0)
   else if form == 1 || form == 2 then
-    hdlRange(0, 1): _ =>
+    ConstructionKernel.generatedRegion(0, 1, 1, None): _ =>
       val _ = escaped.get.flatten.at(0)
   else
     analog:
       I(common) <+ V(selected.get, common) / 1.kOhm
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43LocalArrayInvalid(form: Int) extends Module:
-  hdlRange(0, if form == 2 || form == 3 then 0 else 2): lane =>
+  ConstructionKernel.generatedRegion(0, if form == 2 || form == 3 then 0 else 2, 1, None): lane =>
     if form == 0 then
       val _ = inout(Electrical, 2)
     else if form == 1 then

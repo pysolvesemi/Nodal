@@ -111,3 +111,7 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalDigitalReductions-DG v0.1](NodalDigitalReductions-DG-v0.1.md): approved
   F55/BT ordered left/balanced whole-value reductions with checked finite width
   transfer, universal intermediate validation and exact contextual type queries.
+- [NodalBoundedDigitalLoops-DG v0.1](NodalBoundedDigitalLoops-DG-v0.1.md):
+  approved F55 ordered finite loop templates, shared physical coverage and verified
+  unrolled/procedural plans; checked callback and separate-library effect proofs
+  preserve the unified range contract.

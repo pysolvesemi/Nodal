@@ -180,6 +180,11 @@ private[nodal] object ConstructionKernel:
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
 
+  def digitalLoop(bound: LoopBound)(body: Expr[Integer] => Unit): Unit = active match
+    case Some(session) => session.captureDigitalLoop(bound)(body)
+    case None =>
+      scala.util.Failure[Nothing](new IllegalStateException("loop requires an active Module")).get
+
   def collection(
       kind: String,
       inputs: Vector[Expr[?]],

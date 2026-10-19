@@ -1221,6 +1221,7 @@ private[nodal] object CandidateRuntime:
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
+    DigitalIterationCallback.requireRange(body)
     AnalogProceduralConstruction.requireContinuousContext("structural hdlRange")
     ConstructionKernel.generatedRegion(lower, upperExclusive, step, maximum)(body)
 

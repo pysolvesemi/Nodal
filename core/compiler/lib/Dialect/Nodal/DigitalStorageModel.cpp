@@ -1,6 +1,8 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -129,20 +131,33 @@ LogicalResult verifyDigitalMemoryOperation(Operation *operation) {
 }
 
 LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
-  Operation *module = operation->getParentOp();
+  Operation *parent = operation->getParentOp();
+  const bool loop = isBoundedDigitalLoop(parent);
+  Operation *module = loop ? parent->getParentOp() : parent;
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || operation->getNumResults() ||
-      operation->getNumOperands() != 2 || operation->getNumRegions())
-    return reject(operation, "digital assignment requires two values owned by one direct module");
+      operation->getNumOperands() != 2 || operation->getNumRegions() ||
+      (loop && failed(inspectDigitalLoopHeader(parent))))
+    return reject(operation,
+                  "digital assignment requires two values in its owned module or bounded loop");
   Value target = operation->getOperand(0), value = operation->getOperand(1);
   const bool control = isDigitalControlBoundaryType(target.getType());
+  std::optional<ParameterIntegerEnvironment> context;
+  if (loop) {
+    auto scoped = digitalLoopIntegerContextAtUse(operation);
+    if (failed(scoped))
+      return failure();
+    context.emplace(*scoped);
+  }
   if (control ? target.getType() != value.getType()
-              : !equivalentDigitalStorageTypes(target.getType(), value.getType(), module))
+              : !equivalentDigitalStorageTypes(target.getType(), value.getType(), module,
+                                               context ? &*context : nullptr))
     return reject(operation,
                   "digital assignment requires exactly matching recursive storage types");
   for (Value operand : operation->getOperands()) {
-    Operation *definition = operand.getDefiningOp();
-    if (!definition || definition->getParentOp() != module)
-      return reject(operation, "digital assignment operands must belong to the same module");
+    if (failed(verifyCollectionValueScope(operand, operation)))
+      return reject(operation,
+                    loop ? "digital assignment operands must retain exact lexical/module ownership"
+                         : "digital assignment operands must belong to the same module");
   }
   auto projection = resolveStaticShapeProjection(target, operation);
   if (failed(projection))
@@ -150,6 +165,8 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *root = projection->root.getDefiningOp();
   if (!root || root->getParentOp() != module)
     return reject(operation, "digital assignment target root belongs to another module");
+  if (loop && (control || text(operation, "kind") != "continuous"))
+    return reject(operation, "bounded loop writes require continuous ordinary digital storage");
   if (control) {
     auto source = resolveStaticShapeProjection(value, operation);
     if (failed(source) || text(operation, "kind") != "continuous")

@@ -19,7 +19,16 @@ types and whole aggregate callbacks. They do not redefine left reduce/fold order
 F58 shares structural integration; F65/66/67 own later target emission/execution/
 proof consumers. No full later parent is a reverse prerequisite.
 
-## Shared architecture and first implementation
+The approved [Area/symbolic-conditional amendment](../roadmap/areas-symbolic-conditionals-v0.1-plan.md#existing-owners-and-new-descendants)
+also assigns **F-055.B.1.1** here: structural parameter/index predicates, Boolean
+composition and statement/value-producing `if/else` with exact branch results and
+lexical lifetime. This child remains open after the arithmetic, collection,
+reduction and bounded-loop checkpoints. Its minimum additive syntax/gate dependency
+is F-058.A.1; complete Area/hierarchy and mixed sequential integration remain with
+F58/F159. Ordinary Scala equality, default-value branch selection, a runtime mux or
+analog procedural control is not evidence of this structural conditional feature.
+
+## Initial architecture and first implementation (historical checkpoint)
 
 Reuse F54 DigitalValueConstruction, DigitalValueModel, storage/assignment and the
 single bridge value schedule. Existing shape and ParameterModel owners retain
@@ -34,7 +43,7 @@ its implementation needs an explicit compatible migration plus a genuine typed
 combiner/pair representation. LoopIndex requires actual scoped induction access.
 No placeholder, forged zero induction or discarded pair field satisfies F55.
 
-## Pending decisions and focused validation
+## Initial pending decisions and focused validation (historical checkpoint)
 
 ADR 0016 requires division/remainder and minimum/maximum. The approved additive
 [arithmetic gate](../design-gates/NodalDigitalArithmetic-DG-v0.2.md) defines exact
@@ -542,12 +551,110 @@ prefix/tree/body queries invalidate with mutation. Resource bounds and downstrea
 F58/F65 lowering ownership remain explicit in the gate. Bounded hardware iteration
 and the F55/BT acceptance decisions remain open.
 
-Remaining shared output-observability work: current coverage roots are explicit
-consumers, so a partially written shaped output with no internal reader can pass
-its target-eligibility check. Before F55 closure, ordinary and loop-driven output
-roots participating in executable writes must gain whole-output final-read
-coverage obligations through DigitalAssignmentModel. Preserve untouched
-output-declaration fixtures. The existing native one-lane output eligibility
-case must gain a genuinely fully driven positive and an exact missing-lane
-negative; zero-iteration loop output gaps must also reject. This is required
-shared coverage work, not completed by the writable capability checkpoint.
+The loop checkpoint below completes the previously recorded shared output-
+observability repair. DigitalAssignmentModel now adds final whole-output coverage
+for roots participating in executable ordinary or loop writes, including empty
+loops, while preserving untouched declaration-only fixtures. Fully driven output
+positives and exact missing-lane negatives pass; internal SSA readers are no
+longer required to establish this observable obligation.
+
+
+## Bounded hardware iteration checkpoint
+
+The approved [bounded-loop gate](../design-gates/NodalBoundedDigitalLoops-DG-v0.1.md)
+retains one captured body and actual ordered effects. Unified `hdlRange` shares
+its checked structural domain with a digital partition; explicit `loop` retains
+procedural iteration. The canonical native loop verifier, physical region-image
+proof and assignment graph jointly check bounds, lexical captures, write overlap,
+read coverage and causal recurrence. Independent type/value checks still validate
+empty bodies. Target-neutral plans choose checked unrolling only within eight
+exact invariant iterations and bounded expansion resources; otherwise they retain
+a procedural plan. These are planning records, not executed digital HDL.
+
+The maintained public `PublicSymbolicLoop` witness uses:
+
+```scala
+val count = param(2.integer, range = 1 to 1000000)
+val input = in(Vec(SInt(8), count))
+val output = out(Vec(SInt(8), count))
+loop(LoopBound.Symbolic(count, 1000000)): i =>
+  output.writable.at(i.value) := input.at(i.value)
+```
+
+Its verified IR retains one `nodal.hardware_loop`, actual bound/capture operands,
+a real induction argument and one typed assignment. The maximum is a checked
+whole-domain promise, not a clamp or a request to expand a million lanes.
+
+A required nested-reduction repair carries static loop-local width expressions
+through the existing checked ParameterModel environment. The induction argument
+never becomes a positive width formal. Actual mapped operands and independently
+recomputed materialization reports retain their lexical type obligations. Fixed
+left/tree and symbolic-width nested reductions pass, while forged width DAGs
+reject. No source formula rewrite or parameter-default specialization is used.
+
+The coherent live native replay passes 1,424 counted cases across 16 binaries,
+plus ParameterModel. The maintained bridge suite passes all 11 groups with both
+native tools configured, including 18 public witnesses, repeated byte-identical
+planning, three causal loop negatives and whole-model target rejection. Source
+loop/domain/arithmetic groups pass. The maintained callback harnesses pass 21
+collection and 31 iteration source negatives, typed/runtime/budget controls,
+separate-JAR constructor/factory reuse and missing/stale/dependency-summary
+rejections. The producer and consumer independently validate the private effect
+summary; allocation metadata alone grants no callback capability. The exact
+compiler ABI assumes coherent plugin-produced libraries, not arbitrary forged
+classfiles. Older allocation-only libraries must be rebuilt for attested ranges;
+their ordinary outside-range construction remains supported.
+
+The selected F43 waveform ownership replay exposed an inherited assertion that
+mistook canonical path-sorted metadata for authored body order. An exact published
+source/API/plugin/bridge control reproduces it. The repaired assertion checks
+canonical metadata order, exact authored binding correspondence, ordered analog
+body operations, region/induction ownership and forged-owner rejection separately.
+Historical execution is not relabeled passing. A separate real compatibility
+regression consumed two authored expression identities for an unused range-loop
+candidate. Private partition scaffolding now uses a checked disjoint identity
+allocation in the same construction registry and derives lexical paths from the
+actual generated owner. It creates no phantom authored origin. The exact same-
+source-root waveform MLIR again matches the published-API control byte for byte
+(22,431 bytes), including state IDs. The corresponding names/origins/generated
+names/source-map/region/waveform inventory projection also matches exactly
+(10,587 bytes). Digital/mixed/explicit sibling scope uniqueness and determinism
+remain checked. Raw controls, commands and focused results are
+retained under `.work/increment55/loop-live` and the related isolated checkpoint
+directories.
+
+The expanded affected predecessor selection initially passes 69/70 groups: the
+remaining forged generated-storage case rejects correctly with the new precise
+scope diagnostic, while its test still expected the former direct-module-only
+wording. The assertion is updated to that exact semantic rejection without
+changing the forged input; the final replay is recorded with the checkpoint.
+The explicitly configured writable-admission replay additionally exposed two old
+partial-output positives invalidated by the required output-observability repair.
+Their original source bodies remain as exact missing-coverage negatives. New
+symbolic selector/row positives use internal storage with complete coverage of
+every observed region and fully driven output values; neither defaults nor
+implicit zero-fill supply the formerly missing output lanes. The final repaired-tree
+replay passes all 25 loop/source/bridge/writable groups, all 70 selected F55
+predecessor groups, 25 domain/range predecessors, 26 migrated boundary groups and
+the focused native-backed waveform group. These selections overlap and are not
+summed as distinct cases. Both callback harnesses pass again on the final API.
+The frozen native compiler SHA-256 is
+`b0b4afac4f454527a3fb2a06d368ce0bbec17c44b2dd926805617a9f113f9c35`.
+
+Architecture review: the shared ParameterModel, ShapeModel and assignment graph
+own domain, physical-image and dependency semantics. Loop planners consume those
+verified representations; source callbacks are never replayed per lane. Captures,
+proof visits, recursion, body size and expansion have explicit checked budgets.
+Small and million-count source captures retain one loop, two arguments, six
+expressions, three selectors, one iteration index and three assignments. Forty
+captures measured 9.94 and 12.63 seconds respectively (247,308 KiB combined peak);
+these are representation observations, not a speedup or whole-pipeline complexity
+claim. Noncontiguous or multi-axis images beyond the finite proof profile reject.
+The existing unrelated CDC receipt limitation above remains unchanged. Focused
+syntactic lint over all changed Scala paths retains exactly 28 identical baseline
+findings and introduces none; full lint is not claimed passing. Formatting,
+Markdown, generated capability registry and whitespace checks pass.
+
+F55 remains open for the mandatory structural predicate/branch amendment,
+minimum F58 gate dependency and final original-checklist reconciliation. Full
+Area/hierarchy and downstream digital execution remain with their owning increments.

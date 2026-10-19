@@ -111,7 +111,7 @@ def generate(count: Dimension)(body: GenerateIndex => Unit): Unit =
   CandidateRuntime.statement(count, body)
 
 /** Bounded same-cycle hardware iteration candidate, distinct from generate and Scala for. */
-final class LoopIndex private[nodal] ()
+final class LoopIndex private[nodal] (val value: Expr[Integer])
 
 sealed trait LoopBound
 object LoopBound:
@@ -119,7 +119,8 @@ object LoopBound:
   final case class Symbolic(value: Expr[Integer], maximum: Int) extends LoopBound
 
 def loop(bound: LoopBound)(body: LoopIndex => Unit): Unit =
-  CandidateRuntime.statement(bound, body)
+  DigitalIterationCallback.requireLoop(body)
+  ConstructionKernel.digitalLoop(bound)(value => body(new LoopIndex(value)))
 
 /** Target-layout candidates for shaped values. */
 enum TargetLayout:

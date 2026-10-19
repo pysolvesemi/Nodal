@@ -42,15 +42,17 @@ final class SelectedClockCapture extends Module:
   val arbitrary: Expr[Reset] = CandidateRuntime.expr(inputReset, 4)
   val authoredPath: Expr[Reset] = CandidateRuntime.expr("SelectedClockCapture.inputReset", 4)
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class SelectedZeroPhaseFunction extends Module:
   val identity = AnalogFunction("zeroPhaseConstant", Real): function =>
     require(Phase.Zero.degrees == 0.0)
     function.input("value", Real)
-  hdlRange(0, 1): _ =>
+  ConstructionKernel.generatedRegion(0, 1, 1, None): _ =>
     require(Phase.Zero.degrees == 0.0)
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class SelectedGeneratedMetadata(effect: () => Unit) extends Module:
-  hdlRange(0, 1): _ =>
+  ConstructionKernel.generatedRegion(0, 1, 1, None): _ =>
     effect()
 
 final class SelectedDefaultPhaseCapture extends Module:

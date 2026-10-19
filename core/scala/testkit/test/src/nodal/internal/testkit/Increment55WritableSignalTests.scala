@@ -22,8 +22,18 @@ object WritableSignalWitnesses:
       Vector(
         Witness("planes", () => new WritableSignalPlanes),
         Witness("aggregate", () => new WritableSignalAggregate(false)),
-        Witness("symbolic-selector", () => new WritableSignalSymbolic("selector")),
-        Witness("symbolic-row", () => new WritableSignalSymbolic("row")),
+        Witness("symbolic-selector", () => new WritableSignalSymbolicCovered(false)),
+        Witness("symbolic-row", () => new WritableSignalSymbolicCovered(true)),
+        Witness(
+          "symbolic-selector-output-gap",
+          () => new WritableSignalSymbolic("selector"),
+          Some("lacks proved complete physical driver coverage")
+        ),
+        Witness(
+          "symbolic-row-output-gap",
+          () => new WritableSignalSymbolic("row"),
+          Some("lacks proved complete physical driver coverage")
+        ),
         Witness("root-predecessor", () => new WritableSignalRootPredecessor),
         Witness(
           "overlap",
@@ -205,7 +215,7 @@ object Increment55WritableSignalTests extends TestSuite:
             else value
           )
         ),
-        "direct-module scope"
+        "digital assignment projection cannot use generated storage"
       )
       val selectedExpression = captured.digitalExpressions.find(_.path == projection.path).get
       bridgeRejected(

@@ -618,3 +618,24 @@ target_link_libraries(nodal-digital-reduction-context-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.digital-reduction-context-unit COMMAND nodal-digital-reduction-context-unit-tests)
 set_tests_properties(nodal.native.digital-reduction-context-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-loop-model-unit-tests DigitalLoopModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-loop-model-unit-tests)
+target_link_libraries(nodal-digital-loop-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-loop-model-unit COMMAND nodal-digital-loop-model-unit-tests)
+set_tests_properties(nodal.native.digital-loop-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-loop-planning-unit-tests DigitalLoopPlanningModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-loop-planning-unit-tests)
+target_link_libraries(nodal-digital-loop-planning-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-loop-planning-unit COMMAND nodal-digital-loop-planning-unit-tests)
+set_tests_properties(nodal.native.digital-loop-planning-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-shape-iteration-image-unit-tests ShapeIterationImageTest.cpp)
+llvm_update_compile_flags(nodal-shape-iteration-image-unit-tests)
+target_link_libraries(nodal-shape-iteration-image-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.shape-iteration-image-unit COMMAND nodal-shape-iteration-image-unit-tests)
+set_tests_properties(nodal.native.shape-iteration-image-unit PROPERTIES TIMEOUT 60)

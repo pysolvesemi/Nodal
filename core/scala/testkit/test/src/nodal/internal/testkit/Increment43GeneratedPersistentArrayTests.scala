@@ -67,8 +67,9 @@ final class Increment43PersistentGeneratedSingleton extends Module:
 object Increment43PersistentEmptyCaptures:
   var count = 0
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43PersistentGeneratedEmpty extends Module:
-  hdlRange(-3, -3): _ =>
+  ConstructionKernel.generatedRegion(-3, -3, 1, None): _ =>
     Increment43PersistentEmptyCaptures.count += 1
     analogProcedure:
       val cells = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(10.5.real))
@@ -131,11 +132,12 @@ final class Increment43PersistentOrdinaryCapture extends Module:
       val generated = variable(Vec(Real, 2), Vec.fill(Vec(Real, 2))(2.0.real))
       generated.writable := ordinary
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43PersistentGeneratedFailure(form: Int) extends Module:
   val p = inout(Electrical)
   val n = inout(Electrical)
   var escaped: Option[Variable[Vec[Real]]] = None
-  hdlRange(0, if form == 2 then 0 else 2): _ =>
+  ConstructionKernel.generatedRegion(0, if form == 2 then 0 else 2, 1, None): _ =>
     analogProcedure:
       if form == 0 then
         val source = variable(Real, 1.0.real)

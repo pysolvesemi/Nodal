@@ -382,7 +382,40 @@ private[nodal] object ReproducibilityContract:
         "owner" -> string(value.owner),
         "target" -> string(value.target),
         "value" -> string(value.value),
-        "kind" -> string(value.kind)
+        "kind" -> string(value.kind),
+        "region" -> optionalString(value.region),
+        "source_ordinal" -> number(value.sourceOrdinal)
+      )
+    )),
+    "loops" ->
+      array(snapshot.digitalLoops.sortBy(value => (value.owner, value.sourceOrdinal)).map(value =>
+        obj(
+          "path" -> string(value.path),
+          "owner" -> string(value.owner),
+          "lower" -> string(value.lower),
+          "upper_exclusive" -> string(value.upperExclusive),
+          "step" -> string(value.step),
+          "maximum" -> value.maximum.map(number).getOrElse(JNull),
+          "maximum_trip_count" -> number(value.maximumTripCount),
+          "source_ordinal" -> number(value.sourceOrdinal),
+          "generated_region" -> optionalString(value.generatedRegion),
+          "captures" -> array(value.captures.map(string)),
+          "arguments" -> array(value.arguments.map(argument =>
+            obj(
+              "path" -> string(argument.path),
+              "data_type" -> string(argument.dataType),
+              "role" -> string(argument.role)
+            )
+          ))
+        )
+      )),
+    "iteration_indices" -> array(snapshot.iterationIndices.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "region" -> string(value.region),
+        "operation" -> string(value.operation),
+        "operands" -> array(value.operands.map(string))
       )
     )),
     "collections" -> array(snapshot.digitalCollections.sortBy(_.path).map(value =>

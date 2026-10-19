@@ -70,10 +70,11 @@ final class Increment43TopologyCompound extends Module:
 object Increment43TopologyCaptureCount:
   var value = 0
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43TopologyEmpty extends Module:
   val taps = inout(Electrical, 2)
   val common = inout(Electrical)
-  hdlRange(-3, -3): i =>
+  ConstructionKernel.generatedRegion(-3, -3, 1, None): i =>
     Increment43TopologyCaptureCount.value += 1
     val element = instance(new Increment43TopologyCell)
     connect(taps.at(i), element(_.p))
@@ -176,13 +177,14 @@ final class Increment43TopologyAnalog extends Module:
     analog:
       I(selected, common) <+ V(selected, common) / 2.kOhm
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43TopologyEscaped(form: Int) extends Module:
   val taps = inout(Electrical, 2)
   val common = inout(Electrical)
   var retained: Option[Instance[Increment43TopologyCell]] = None
   var induction: Option[Expr[Integer]] = None
   var endpoint: Option[Node[Electrical.type]] = None
-  hdlRange(0, 2): i =>
+  ConstructionKernel.generatedRegion(0, 2, 1, None): i =>
     val child = instance(new Increment43TopologyCell)
     connect(taps.at(i), child(_.p))
     connect(common, child(_.n))
@@ -192,7 +194,7 @@ final class Increment43TopologyEscaped(form: Int) extends Module:
   if form == 0 then connect(common, retained.get(_.p))
   else if form == 1 then retained.get.param(_.resistance, 2.kOhm)
   else if form == 2 then
-    hdlRange(0, 2): _ =>
+    ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
       connect(common, retained.get(_.p))
   else if form == 3 then
     val _ = taps.at(induction.get)
@@ -219,13 +221,15 @@ final class Increment43TopologyInductionDefault(value: Expr[Integer]) extends Mo
   val hidden: Param[Integer] = param(value, range = 0 to 5)
   val p = inout(Electrical)
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43TopologyForeignDefault extends Module:
-  hdlRange(0, 2): i =>
+  ConstructionKernel.generatedRegion(0, 2, 1, None): i =>
     val _ = instance(new Increment43TopologyInductionDefault(i))
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43TopologyCaughtFailure extends Module:
   try
-    hdlRange(0, 2): _ =>
+    ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
       val _ = instance(new Increment43TopologyCell)
       throw new IllegalStateException("authored callback failed")
   catch case _: IllegalStateException => ()

@@ -30,6 +30,7 @@ private[nodal] object StructuralParameterBinding:
     case Apply(operation: String, operands: Vector[Int])
 
   private final case class Fact(key: Key, bounds: IterationDomain.Bounds)
+  private final case class RegionOwner(path: String, owner: String)
 
   /** A query owns one immutable lexical substitution environment. Formal domains are internal proof
     * inputs; callers must derive them from a checked collection contract, never a snapshot bound
@@ -43,7 +44,9 @@ private[nodal] object StructuralParameterBinding:
       domains: Map[String, IterationDomain.Bounds] = Map.empty,
       enclosing: Option[Query] = None
   ):
-    if snapshot.parameterExpressions.size > 65536 || snapshot.digitalCollections.size > 65536 then
+    if snapshot.parameterExpressions.size > 65536 ||
+      snapshot.digitalCollections.size + snapshot.digitalLoops.size > 65536
+    then
       invalid("static snapshot exceeds the bounded definition budget")
     private val sourceSnapshot = snapshot
     if enclosing.exists(parent => !(parent.sourceSnapshot eq snapshot)) then
@@ -56,13 +59,19 @@ private[nodal] object StructuralParameterBinding:
         unique(snapshot.parameterExpressions.map(value => value.path -> value), "expression")
       )
     private val arguments
-        : Map[String, (KernelDigitalCollectionSnapshot, KernelDigitalRegionArgument)] =
+        : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
       enclosing.map(_.arguments).getOrElse(
         unique(
           snapshot.digitalCollections.flatMap(value =>
-            value.arguments.map(argument => argument.path -> (value, argument))
+            value.arguments.map(argument =>
+              argument.path -> (RegionOwner(value.path, value.owner), argument)
+            )
+          ) ++ snapshot.digitalLoops.flatMap(value =>
+            value.arguments.map(argument =>
+              argument.path -> (RegionOwner(value.path, value.owner), argument)
+            )
           ),
-          "collection argument"
+          "lexical region argument"
         )
       )
     if exact.keySet.intersect(domains.keySet).nonEmpty || exact.size + domains.size > 4098 then
@@ -70,7 +79,9 @@ private[nodal] object StructuralParameterBinding:
     (exact.keySet ++ domains.keySet).foreach: path =>
       val (collection, argument) =
         arguments.getOrElse(path, invalid("Integer binding is not an actual block argument"))
-      if !scope.contains(collection.path) || argument.dataType != "Integer" then
+      if !scope.contains(collection.path) || argument.dataType != "Integer" ||
+        argument.role == "induction"
+      then
         invalid("Integer binding belongs to another lexical scope or type")
       if domains.contains(path) && !argument.role.startsWith("left_width:") &&
         !argument.role.startsWith("right_width:")

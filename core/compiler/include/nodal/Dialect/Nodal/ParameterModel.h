@@ -101,7 +101,8 @@ struct InstantiatedIntegerExpression {
 
 namespace detail {
 class CollectionIntegerEnvironmentAdmission;
-}
+class LoopIntegerEnvironmentAdmission;
+} // namespace detail
 
 /// One checked substitution for an actual static collection block argument.
 /// A non-null captureSource denotes an actual collection operand; the factory
@@ -120,7 +121,7 @@ struct ParameterIntegerFormalDomain {
 };
 
 /// Immutable, query-local substitutions for one actual lexical use. Construction
-/// belongs exclusively to the collection raw-header/proof owner, after checking
+/// belongs to the collection or bounded-loop raw-header/proof owner, after checking
 /// the raw header, argument roles, capture provenance and substitution meaning.
 /// Full body-family validation is still required before publishing reduction
 /// facts; this object alone is not a verified reduction certificate. No serialized
@@ -163,9 +164,11 @@ private:
   std::shared_ptr<const Storage> storage;
   mlir::Operation *lexicalUse;
   friend class detail::CollectionIntegerEnvironmentAdmission;
+  friend class detail::LoopIntegerEnvironmentAdmission;
 };
 
-/// Environment-bearing queries are conditional on explicit collection admission.
+/// Environment-bearing queries require explicit collection or bounded-loop admission.
+/// Loop contexts bind actual static captures only, never induction or width domains.
 /// Existing overloads never consult a global environment or admit block arguments.
 mlir::FailureOr<ParameterIntegerBounds>
 inferParameterIntegerBounds(mlir::Value value, const ParameterIntegerEnvironment &environment,
@@ -254,6 +257,10 @@ struct GeneratedDomain {
   std::optional<ParameterIntegerBounds> attainedInductionBounds;
 };
 mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation);
+/// Shared positive half-open domain arithmetic for a checked SSA iteration
+/// header. Exactly the first three operands are bounds; remaining operands are
+/// captures. This query independently proves finite owned bounds and direction.
+mlir::FailureOr<GeneratedDomain> resolveBoundedIterationDomain(mlir::Operation *operation);
 
 /// Activity facts from the same checked bound/direction/count contract. Legacy
 /// no-induction negative-step loops are retained; no lanes are enumerated.

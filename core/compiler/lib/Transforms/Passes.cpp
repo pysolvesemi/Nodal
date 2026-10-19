@@ -48,6 +48,8 @@ using namespace mlir;
 
 namespace nodal {
 std::unique_ptr<Pass> createPlanDigitalMaterializationPass();
+std::unique_ptr<Pass> createPlanDigitalLoopsPass();
+void registerDigitalLoopPlanningPass();
 void registerDigitalMaterializationPass();
 
 namespace {
@@ -1253,6 +1255,7 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(createCrossLayerDiagnosticPass());
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
   manager.addPass(createAnalogSemanticLintPass());
+  manager.addPass(createPlanDigitalLoopsPass());
   manager.addPass(createPlanDigitalMaterializationPass());
 }
 
@@ -1438,6 +1441,7 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 }
 
 void registerNodalPasses() {
+  registerDigitalLoopPlanningPass();
   registerDigitalMaterializationPass();
   registerAnalogCanonicalizationPass();
   registerAnalogSemanticLintPass();

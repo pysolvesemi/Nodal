@@ -33,7 +33,7 @@ resolveCollectionIntegerToken(mlir::Operation *module, llvm::StringRef token,
                               llvm::StringRef requiredEffect,
                               const ParameterIntegerEnvironment &environment);
 
-/// Conditional raw-header/transfer contexts for an operation-local verifier.
+/// Conditional raw-header/transfer contexts for a collection or bounded-loop use.
 /// These are never a completed reduction certificate. No global state is retained.
 mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
 collectionIntegerContextsAtUse(mlir::Operation *use);

@@ -103,7 +103,14 @@ private[nodal] final case class KernelParameterExpressionSnapshot(
     operands: Vector[String],
     dataType: String,
     literal: Option[String],
-    unit: Option[String]
+    unit: Option[String],
+    region: Option[String] = None
+)
+
+private[nodal] final case class KernelStructOperationSnapshot(
+    schemaType: String,
+    ordinal: Option[Int],
+    name: Option[String]
 )
 
 private[nodal] final case class KernelDigitalExpressionSnapshot(
@@ -114,7 +121,29 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     dataType: String,
     literal: Option[String],
     enumIdentity: Option[String],
-    caseIds: Vector[String]
+    caseIds: Vector[String],
+    region: Option[String] = None,
+    materializationIntent: Option[KernelDigitalIntent] = None,
+    structure: Option[KernelStructOperationSnapshot] = None
+)
+
+private[nodal] final case class KernelDigitalRegionArgument(
+    path: String,
+    dataType: String,
+    role: String
+)
+
+private[nodal] final case class KernelDigitalCollectionSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    kind: String,
+    inputs: Vector[String],
+    seed: Option[String],
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    yieldValue: String,
+    dataType: String
 )
 
 private[nodal] final case class KernelDigitalAssignmentSnapshot(
@@ -122,7 +151,63 @@ private[nodal] final case class KernelDigitalAssignmentSnapshot(
     owner: String,
     target: String,
     value: String,
-    kind: String
+    kind: String,
+    region: Option[String] = None,
+    sourceOrdinal: Int = 0
+)
+
+private[nodal] final case class KernelDigitalLoopSnapshot(
+    path: String,
+    owner: String,
+    lower: String,
+    upperExclusive: String,
+    step: String,
+    maximum: Option[Int],
+    maximumTripCount: Int,
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    sourceOrdinal: Int,
+    generatedRegion: Option[String] = None
+)
+
+private[nodal] final case class KernelIterationIndexSnapshot(
+    path: String,
+    owner: String,
+    region: String,
+    operation: String,
+    operands: Vector[String]
+)
+
+private[nodal] final case class KernelStaticPredicateSnapshot(
+    path: String,
+    owner: String,
+    region: Option[String],
+    operation: String,
+    operands: Vector[String]
+)
+
+private[nodal] final case class KernelStructuralArmSnapshot(
+    path: String,
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    yieldValue: Option[String]
+)
+
+private[nodal] final case class KernelStructuralIfSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    predicate: String,
+    trueArm: KernelStructuralArmSnapshot,
+    falseArm: KernelStructuralArmSnapshot,
+    dataType: Option[String],
+    sourceOrdinal: Int
+)
+
+private[nodal] final case class KernelDigitalGeneratedBody(
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    sourceOrdinal: Int
 )
 
 private[nodal] final case class KernelGeneratedRegionSnapshot(
@@ -135,7 +220,8 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     step: String,
     maximum: Option[Int],
     maximumTripCount: Int,
-    declarations: Vector[String]
+    declarations: Vector[String],
+    digitalBody: Option[KernelDigitalGeneratedBody] = None
 )
 
 private[nodal] final case class KernelShapeIndexSnapshot(
@@ -145,7 +231,8 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     indices: Vector[String],
     resultDimensions: Vector[String] = Vector.empty,
     sourceUses: Vector[String] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    region: Option[String] = None
 )
 
 private[nodal] final case class KernelShapeSliceSnapshot(
@@ -160,7 +247,8 @@ private[nodal] final case class KernelShapeViewSnapshot(
     input: String,
     dimensions: Vector[String],
     slice: Option[KernelShapeSliceSnapshot] = None,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    region: Option[String] = None
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -316,7 +404,13 @@ private[nodal] final case class ConstructionSnapshot(
     digitalExpressions: Vector[KernelDigitalExpressionSnapshot] = Vector.empty,
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
-    digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty
+    digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
+    digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
+    digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
+    iterationIndices: Vector[KernelIterationIndexSnapshot] = Vector.empty,
+    staticPredicates: Vector[KernelStaticPredicateSnapshot] = Vector.empty,
+    structuralIfs: Vector[KernelStructuralIfSnapshot] = Vector.empty,
+    emitQuality: EmitQuality = EmitQuality()
 )
 
 /** Immutable selected facts. Operand tags prevent authored strings from posing as references. */
@@ -474,6 +568,7 @@ private final class ModuleRecord(
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
   val generatedRegions: mutable.ArrayBuffer[GeneratedRegionRecord] = mutable.ArrayBuffer.empty
   var expressionCount: Int = 0
+  var scaffoldExpressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
 
 private final case class Operation(
@@ -481,8 +576,56 @@ private final case class Operation(
     kind: String,
     values: Vector[Any],
     generatedScope: Option[GeneratedRegionRecord] = None,
-    source: Option[SourceSpan] = None
+    source: Option[SourceSpan] = None,
+    digitalRegion: Option[DigitalValueRegionRecord] = None,
+    sourceOrdinal: Int = 0
 )
+
+/** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
+private enum DigitalRegionKind:
+  case Collection, BoundedLoop, Generate, StructuralArm
+
+private final case class StructuralArmHeader(conditional: ExpressionRef, whenTrue: Boolean)
+
+private final class StructuralIfRecord(
+    val reference: ExpressionRef,
+    val parent: Option[DigitalValueRegionRecord],
+    val predicate: StaticPredicate,
+    val trueArm: DigitalValueRegionRecord,
+    val falseArm: DigitalValueRegionRecord,
+    val sourceOrdinal: Int
+):
+  var result: Option[KernelExpr[?]] = None
+
+/** Mutable lexical capture state owned exclusively by ConstructionSession. */
+private final class DigitalValueRegionRecord(
+    val reference: ExpressionRef,
+    val parent: Option[DigitalValueRegionRecord],
+    val kind: String,
+    val inputs: Vector[Expr[?]],
+    val seed: Option[Expr[?]],
+    val loop: Option[DigitalLoopHeader] = None,
+    val structuralArm: Option[StructuralArmHeader] = None
+):
+  var structuralGenerate: Boolean = false
+  def regionKind: DigitalRegionKind =
+    if structuralArm.nonEmpty then DigitalRegionKind.StructuralArm
+    else if structuralGenerate then DigitalRegionKind.Generate
+    else if loop.nonEmpty then DigitalRegionKind.BoundedLoop
+    else DigitalRegionKind.Collection
+  def isLoop: Boolean = regionKind == DigitalRegionKind.BoundedLoop ||
+    regionKind == DigitalRegionKind.Generate
+  def permitsAssignment: Boolean = regionKind match
+    case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm =>
+      true
+    case DigitalRegionKind.Collection => false
+  val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
+  val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
+    mutable.LinkedHashMap.empty
+  var expressionCount: Int = 0
+  var assignmentCount: Int = 0
+  var yielded: Option[Expr[?]] = None
+  var result: Option[KernelExpr[?]] = None
 
 private final class AnalogRegionRecord(
     val module: Long,
@@ -505,4 +648,15 @@ private final case class ContinuousOperatorRecord(
     context: String,
     inputDimension: AnalogDimension,
     resultDimension: AnalogDimension
+)
+
+/** A domain and effect position attached to the shared lexical value owner. */
+private final case class DigitalLoopHeader(
+    lower: Dimension,
+    upperExclusive: Dimension,
+    step: Dimension,
+    maximum: Option[Int],
+    domain: IterationDomain.Structural,
+    sourceOrdinal: Int,
+    generated: Option[GeneratedRegionRecord] = None
 )

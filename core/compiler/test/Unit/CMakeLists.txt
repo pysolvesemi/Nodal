@@ -570,6 +570,13 @@ target_link_libraries(nodal-enum-value-model-unit-tests PRIVATE
 add_test(NAME nodal.native.enum-value-model-unit COMMAND nodal-enum-value-model-unit-tests)
 set_tests_properties(nodal.native.enum-value-model-unit PROPERTIES TIMEOUT 30)
 
+add_executable(nodal-digital-materialization-model-unit-tests DigitalMaterializationModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-materialization-model-unit-tests)
+target_link_libraries(nodal-digital-materialization-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-materialization-model-unit COMMAND nodal-digital-materialization-model-unit-tests)
+set_tests_properties(nodal.native.digital-materialization-model-unit PROPERTIES TIMEOUT 30)
+
 add_executable(nodal-digital-value-model-unit-tests DigitalValueModelTest.cpp)
 llvm_update_compile_flags(nodal-digital-value-model-unit-tests)
 target_link_libraries(nodal-digital-value-model-unit-tests PRIVATE
@@ -590,3 +597,59 @@ target_link_libraries(nodal-digital-interface-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.digital-interface-model-unit COMMAND nodal-digital-interface-model-unit-tests)
 set_tests_properties(nodal.native.digital-interface-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-collection-model-unit-tests DigitalCollectionModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-collection-model-unit-tests)
+target_link_libraries(nodal-digital-collection-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-collection-model-unit COMMAND nodal-digital-collection-model-unit-tests)
+set_tests_properties(nodal.native.digital-collection-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-reduction-model-unit-tests DigitalReductionModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-reduction-model-unit-tests)
+target_link_libraries(nodal-digital-reduction-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-reduction-model-unit COMMAND nodal-digital-reduction-model-unit-tests)
+set_tests_properties(nodal.native.digital-reduction-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-reduction-context-unit-tests DigitalReductionContextTest.cpp)
+llvm_update_compile_flags(nodal-digital-reduction-context-unit-tests)
+target_link_libraries(nodal-digital-reduction-context-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-reduction-context-unit COMMAND nodal-digital-reduction-context-unit-tests)
+set_tests_properties(nodal.native.digital-reduction-context-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-loop-model-unit-tests DigitalLoopModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-loop-model-unit-tests)
+target_link_libraries(nodal-digital-loop-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-loop-model-unit COMMAND nodal-digital-loop-model-unit-tests)
+set_tests_properties(nodal.native.digital-loop-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-loop-planning-unit-tests DigitalLoopPlanningModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-loop-planning-unit-tests)
+target_link_libraries(nodal-digital-loop-planning-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-loop-planning-unit COMMAND nodal-digital-loop-planning-unit-tests)
+set_tests_properties(nodal.native.digital-loop-planning-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-shape-iteration-image-unit-tests ShapeIterationImageTest.cpp)
+llvm_update_compile_flags(nodal-shape-iteration-image-unit-tests)
+target_link_libraries(nodal-shape-iteration-image-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.shape-iteration-image-unit COMMAND nodal-shape-iteration-image-unit-tests)
+set_tests_properties(nodal.native.shape-iteration-image-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-digital-assignment-guard-unit-tests DigitalAssignmentGuardTest.cpp)
+llvm_update_compile_flags(nodal-digital-assignment-guard-unit-tests)
+target_link_libraries(nodal-digital-assignment-guard-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-assignment-guard-unit COMMAND nodal-digital-assignment-guard-unit-tests)
+set_tests_properties(nodal.native.digital-assignment-guard-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-structural-if-model-unit-tests StructuralIfModelTest.cpp)
+llvm_update_compile_flags(nodal-structural-if-model-unit-tests)
+target_link_libraries(nodal-structural-if-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.structural-if-model-unit COMMAND nodal-structural-if-model-unit-tests)
+set_tests_properties(nodal.native.structural-if-model-unit PROPERTIES TIMEOUT 60)

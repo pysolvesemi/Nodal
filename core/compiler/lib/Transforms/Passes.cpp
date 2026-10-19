@@ -47,6 +47,11 @@
 using namespace mlir;
 
 namespace nodal {
+std::unique_ptr<Pass> createPlanDigitalMaterializationPass();
+std::unique_ptr<Pass> createPlanDigitalLoopsPass();
+void registerDigitalLoopPlanningPass();
+void registerDigitalMaterializationPass();
+
 namespace {
 
 enum class VerificationStage {
@@ -1250,6 +1255,8 @@ void addVerifierPasses(OpPassManager &manager, GateProfile profile) {
   manager.addPass(createCrossLayerDiagnosticPass());
   manager.addPass(std::make_unique<VerifyCapabilitiesPass>());
   manager.addPass(createAnalogSemanticLintPass());
+  manager.addPass(createPlanDigitalLoopsPass());
+  manager.addPass(createPlanDigitalMaterializationPass());
 }
 
 class MaterializeConservativeConnectivityPass final
@@ -1331,6 +1338,8 @@ public:
     llvm::SmallVector<Attribute, 16> stages;
     for (llvm::StringRef name : stageNames(profile))
       stages.push_back(StringAttr::get(context, name));
+    if (module->hasAttr("nodal.digital.quality"))
+      stages.push_back(StringAttr::get(context, "digital-materialization"));
     module->setAttr("nodal.pipeline.version", IntegerAttr::get(IntegerType::get(context, 64), 1));
     module->setAttr("nodal.pipeline.profile",
                     StringAttr::get(context, stringifyGateProfile(profile)));
@@ -1432,6 +1441,8 @@ LogicalResult runNodalPipelineTransaction(mlir::ModuleOp module, GateProfile pro
 }
 
 void registerNodalPasses() {
+  registerDigitalLoopPlanningPass();
+  registerDigitalMaterializationPass();
   registerAnalogCanonicalizationPass();
   registerAnalogSemanticLintPass();
   static PassRegistration<MaterializeConservativeConnectivityPass> connectivity;

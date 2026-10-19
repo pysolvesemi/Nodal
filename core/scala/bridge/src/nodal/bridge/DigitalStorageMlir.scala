@@ -94,12 +94,13 @@ private[nodal] object DigitalStorageMlir:
       initial: Option[(String, String)],
       symbol: (String, String) => String,
       metadata: String,
-      sourceLocation: String
+      sourceLocation: String,
+      exactType: Boolean
   ): String =
     validateOwner(module, declaration)
     val authoredInitial = initializer(declaration)
     requireValid(
-      authoredInitial.nonEmpty == initial.nonEmpty && initial.forall(_._2 == nativeType),
+      authoredInitial.nonEmpty == initial.nonEmpty && exactType,
       "register initializer must retain the exact declared recursive type",
       declaration.path
     )
@@ -172,10 +173,11 @@ private[nodal] object DigitalStorageMlir:
       target: (String, String),
       value: (String, String),
       metadata: String,
-      sourceLocation: String
+      sourceLocation: String,
+      exactType: Boolean
   ): String =
     requireValid(
-      Set("continuous", "register_next").contains(kind) && target._2 == value._2,
+      Set("continuous", "register_next").contains(kind) && exactType,
       "digital assignment requires an explicit intent and exactly matching recursive types",
       path
     )

@@ -16,7 +16,8 @@ private[nodal] final case class KernelNameSnapshot(
     name: String,
     category: String,
     provenance: String,
-    source: Option[SourceSpan]
+    source: Option[SourceSpan],
+    aliases: Vector[String] = Vector.empty
 )
 
 private[nodal] final case class KernelOriginSnapshot(
@@ -145,11 +146,14 @@ private[nodal] final class SemanticOriginBuilder:
     "ConstructionSession.scala",
     "ConstructionExpressionFacts.scala",
     "ConstructionInterfaceLayout.scala",
+    "DigitalAggregateContract.scala",
     "AnalogUserFunctionRuntime.scala",
+    "StructuralIfRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
     "CandidateApi.scala",
+    "DigitalAggregateApi.scala",
     "AnalogUserFunctionApi.scala",
     "ContinuousTimeCandidateApi.scala",
     "CoreSemanticsCandidateApi.scala",
@@ -444,6 +448,12 @@ private[nodal] final class SemanticOriginBuilder:
     if !Files.isDirectory(root) then None
     else
       val candidates = mutable.ArrayBuffer.empty[Path]
+      // Ignore only this repository's generated scratch subtree. An explicitly selected
+      // external root may itself live under .work, and authored nested .work paths remain valid.
+      val generatedScratch = Option.when(
+        Files.isRegularFile(root.resolve("build.mill")) &&
+          Files.isDirectory(root.resolve("core/scala")) && Files.isDirectory(root.resolve("docs"))
+      )(root.resolve(".work"))
       try
         val _ = Files.walkFileTree(
           root,
@@ -454,7 +464,8 @@ private[nodal] final class SemanticOriginBuilder:
             ): FileVisitResult =
               if directory != root &&
                 attributes.isDirectory &&
-                ignoredSourceSegments.contains(directory.getFileName.toString)
+                (generatedScratch.contains(directory) ||
+                  ignoredSourceSegments.contains(directory.getFileName.toString))
               then FileVisitResult.SKIP_SUBTREE
               else FileVisitResult.CONTINUE
 
@@ -738,17 +749,23 @@ private[nodal] final class SemanticOriginBuilder:
   private def explicitExpressionName(
       capture: OriginExpressionCapture
   ): Option[String] =
-    if capture.operands.lastOption.contains("named") then
-      capture.operands.dropRight(1).lastOption.collect:
-        case name: String => cleanIdentifier(name, "expression")
-    else None
+    val typed = capture.value match
+      case expression: KernelExpr[?] => expression.materializationIntent.collect:
+          case KernelDigitalIntent.Named(name) => name
+      case _ => None
+    typed.orElse:
+      if capture.operands.lastOption.contains("named") then
+        capture.operands.dropRight(1).lastOption.collect:
+          case name: String => cleanIdentifier(name, "expression")
+      else None
 
   private def shapeName(
       capture: OriginExpressionCapture,
       localNames: IdentityHashMap[AnyRef, String]
   ): Option[String] =
     val operation = generatedStem(capture.site.apiOperation)
-    val shaped = Set("at", "row", "plane", "flatten", "reshape", "map", "zip", "reduce")
+    val shaped =
+      Set("at", "row", "plane", "flatten", "reshape", "map", "zip", "reduce", "reduceBalancedTree")
     if !shaped.contains(operation) then None
     else
       capture.operands.headOption.flatMap:
@@ -1035,7 +1052,18 @@ private[nodal] final class SemanticOriginBuilder:
         expressionNames(key),
         "expression",
         expressionProvenance(key),
-        capture.site.span
+        capture.site.span,
+        aliases = capture.value match
+          case expression: KernelExpr[?]
+              if expression.materializationIntent.exists(
+                _.isInstanceOf[KernelDigitalIntent.Named]
+              ) =>
+            (expressionBinding(capture.site).orElse(memberBinding(
+              members,
+              capture.value
+            )).toVector ++
+              explicitExpressionName(capture).toVector).distinct.sorted
+          case _ => Vector.empty
       )
 
     val origins = mutable.ArrayBuffer.empty[KernelOriginSnapshot]

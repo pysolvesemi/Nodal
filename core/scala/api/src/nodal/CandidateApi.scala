@@ -1,6 +1,6 @@
 package nodal
 
-import scala.annotation.targetName
+import scala.annotation.{compileTimeOnly, targetName}
 import scala.language.implicitConversions
 
 /** Public marker hierarchy frozen by Nodal API v0.2. Implementations remain inert. */
@@ -15,7 +15,24 @@ sealed trait Clock extends Data
 sealed trait Reset extends Data
 
 /** Backend-neutral expression node. Construction metadata remains private to Nodal. */
-sealed trait Expr[+A <: Data]
+sealed trait Expr[+A <: Data]:
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  final def ==(right: Int)(using A <:< Integer): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  final def !=(right: Int)(using A <:< Integer): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
 
 private[nodal] final case class KernelLiteral(
     kind: String,
@@ -27,7 +44,8 @@ private[nodal] final class KernelExpr[A <: Data](
     val operands: Vector[Any],
     val resultType: Option[KernelTypeDescriptor] = None,
     val literal: Option[KernelLiteral] = None,
-    val operation: Option[String] = None
+    val operation: Option[String] = None,
+    val materializationIntent: Option[KernelDigitalIntent] = None
 ) extends Expr[A]
 
 /** Candidate declaration-time type descriptor. */
@@ -44,11 +62,16 @@ case object Bool extends DataType[Bool]
 case object Clock extends DataType[Clock]
 case object Reset extends DataType[Reset]
 
-object Bits:
+object Bits extends DigitalBitsOperators[Bits]:
+  extension (left: Expr[Bits])
+    @targetName("bitsLogicalShiftRight")
+    def >>(amount: Int): Expr[Bits] =
+      DigitalCombinationalContract.shift("digital_shr", left, amount)
+
   def apply(width: Int): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
   def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
 
-object UInt:
+object UInt extends DigitalUIntOperators:
   def apply(width: Int): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
   def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
 
@@ -112,6 +135,39 @@ final class Signal[A <: Data] private[nodal] (
   CandidateRuntime.declare(this, kind, dataType = Some(dataType))
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
+
+  def writable: SignalSelection[A] = new SignalSelection(this)
+
+/** Explicit write capability retaining an actual signal or canonical structural projection. The
+  * expression remains a read-only value; assignment independently validates its owned root.
+  */
+final class SignalSelection[A <: Data] private[nodal] (
+    private[nodal] val expression: Expr[A]
+):
+  def value: Expr[A] = expression
+
+  infix def :=(value: Expr[A]): Unit = CandidateRuntime.assignSignalSelection(expression, value)
+
+object SignalSelection:
+  extension [A <: Data](selection: SignalSelection[Vec[A]])
+    def at(indices: Dimension*): SignalSelection[A] =
+      new SignalSelection(CandidateRuntime.shapeIndex(selection.value, indices.toVector))
+    def row(index: Dimension): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeRow(selection.value, index))
+    def plane(index: Dimension): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapePlane(selection.value, index))
+    def slice(lower: Dimension, upperExclusive: Dimension, axis: Int = 0)
+        : SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeSlice(
+        selection.value,
+        lower,
+        upperExclusive,
+        axis
+      ))
+    def flatten: SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeFlatten(selection.value))
+    def reshape(dimensions: Dimension*): SignalSelection[Vec[A]] =
+      new SignalSelection(CandidateRuntime.shapeView(selection.value, dimensions.toVector))
 
 /** Component-local variable visible to analog procedural blocks. */
 final class Variable[A <: Data] private[nodal] (
@@ -888,6 +944,46 @@ extension (left: Expr[Real])
     CandidateRuntime.analogContribution(left, value)
 
 extension (left: Expr[Integer])
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralLess")
+  def <(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralLessEqual")
+  def <=(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralGreater")
+  def >(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
+  @compileTimeOnly(
+    "NODAL-STRUCTURAL-055-MISSING: predicate requires compiler-captured structural if"
+  )
+  @targetName("integerStructuralGreaterEqual")
+  def >=(right: Int | Expr[Integer]): Boolean =
+    val _ = right
+    scala.util.Failure[Boolean](IllegalStateException(
+      "uncaptured structural Integer predicate"
+    )).get
+
   @targetName("integerAddition")
   def +(right: Expr[Integer]): Expr[Integer] =
     CandidateRuntime.integerExpr("analog_add", left, right)
@@ -905,7 +1001,8 @@ extension (left: Expr[Integer])
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
-  def +(right: Expr[UInt]): Expr[UInt] = CandidateRuntime.expr(left, right)
+  def +(right: Expr[UInt]): Expr[UInt] =
+    DigitalCombinationalContract.arithmetic("digital_add", left, right)
 
 extension (left: Expr[Bool])
   def &&(right: Expr[Bool]): Expr[Bool] =
@@ -1181,6 +1278,7 @@ private[nodal] object CandidateRuntime:
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
+    DigitalIterationCallback.requireRange(body)
     AnalogProceduralConstruction.requireContinuousContext("structural hdlRange")
     ConstructionKernel.generatedRegion(lower, upperExclusive, step, maximum)(body)
 
@@ -1228,7 +1326,7 @@ private[nodal] object CandidateRuntime:
       AnalogProceduralConstruction.requireContinuousContext("structural declaration")
     ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
 
-  private def dataTypeFromDescriptor(
+  private[nodal] def dataTypeFromDescriptor(
       descriptor: KernelTypeDescriptor
   ): DataType[? <: Data] = descriptor.kind match
     case "Real" => Real
@@ -1283,6 +1381,19 @@ private[nodal] object CandidateRuntime:
       value.toString,
       Vector(value)
     )
+
+  /** Compiler-derived metadata is signed i64; the public Integer literal remains Int-only. */
+  def derivedInteger(value: BigInt): Expr[Integer] =
+    if !value.isValidLong then
+      scala.util.Failure[Nothing](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-PARAMETER-BINDING-022",
+            "derived static Integer literal exceeds signed 64-bit bounds"
+          )
+        )
+      ).get
+    literal(KernelTypeDescriptor("Integer"), "integer", value.toString, Vector(value.toLong))
 
   def literalUInt(value: Int, width: Int): Expr[UInt] =
     DigitalValueContract.validateLiteral("UInt", BigInt(value), width.toLong)
@@ -1744,6 +1855,10 @@ private[nodal] object CandidateRuntime:
           // A caught recorder error must not publish an attributed but unrepresented effect.
           ConstructionKernel.poisonConstructor(error, ConstructionKernel.currentModulePath)
           scala.util.Failure[Unit](error).get
+
+  def assignSignalSelection[A <: Data](left: Expr[A], right: Expr[A]): Unit =
+    AnalogProceduralConstruction.requireContinuousContext("digital assignment")
+    ConstructionKernel.assignSignalSelection(left, right)
 
   def assign(left: AnyRef, right: Any): Unit =
     AnalogProceduralConstruction.requireContinuousContext("digital assignment")

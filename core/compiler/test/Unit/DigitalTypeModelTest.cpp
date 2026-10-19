@@ -9,6 +9,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+#include <limits>
 #include <string>
 
 using namespace mlir;
@@ -148,6 +149,82 @@ int main() {
         true);
   check("owned-typed-expression-width", parameter() + expression() + port(digital("Fixture.width")),
         true);
+  const std::string signedWidth = parameter("W", 2, 32) + literal("minus_one", -1) +
+                                  "%derived = \"nodal.const_expr\"(%W, %minus_one) <{metadata = "
+                                  "{semantic_path = \"Fixture.width\"}, "
+                                  "operator_name = \"add\"}> : (i64, i64) -> i64\n";
+  check("derived-width-admits-mathematical-negative-intermediate",
+        signedWidth + port(digital("Fixture.width")), true);
+  check("ordinary-shape-does-not-opt-in-to-negative-intermediate",
+        signedWidth + port(shape("Fixture.width", "!nodal.uint<1>")), false);
+  check("derived-width-final-zero-rejected",
+        literal("zero", 0) +
+            "%derived = \"nodal.const_expr\"(%zero) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"neg\"}> : (i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check(
+      "derived-width-final-negative-rejected",
+      literal("one", 1) +
+          "%derived = \"nodal.const_expr\"(%one) <{metadata = {semantic_path = \"Fixture.width\"}, "
+          "operator_name = \"neg\"}> : (i64) -> i64\n" +
+          port(digital("Fixture.width")),
+      false);
+  check("derived-width-positive-default-cannot-hide-zero-envelope",
+        parameter("W", 1, 32) + literal("minus_one", -1) +
+            "%derived = \"nodal.const_expr\"(%W, %minus_one) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"add\"}> : (i64, i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check("derived-width-overflow-rejected",
+        parameter("W", 2, 32) + literal("large", std::numeric_limits<int64_t>::max()) +
+            "%derived = \"nodal.const_expr\"(%W, %large) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"add\"}> : (i64, i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check("derived-width-signed64-footprint-overflow-rejected",
+        signedWidth + port(shape("9223372036854775807", digital("Fixture.width"))), false);
+  const std::string reductionWidth = parameter("W", 2, 32) + literal("four", 4) +
+                                     literal("five", 5) + literal("eight", 8) +
+                                     "%test = \"nodal.const_expr\"(%W, %four) <{metadata = {}, "
+                                     "operator_name = \"sub\"}> : (i64, i64) -> i64\n"
+                                     "%width = \"nodal.const_expr\"(%test, %five, %eight) "
+                                     "<{metadata = {semantic_path = \"Fixture.width\"}, "
+                                     "operator_name = \"choose_zero\"}> : (i64, i64, i64) -> i64\n";
+  check("choose-zero-width-mixed-sign-test", reductionWidth + port(digital("Fixture.width")), true);
+  const std::string logarithmicWidth =
+      parameter() + literal("one", 1) +
+      "%log = \"nodal.const_expr\"(%W) <{metadata = {}, operator_name = \"ceil_log2\"}> : (i64) -> "
+      "i64\n"
+      "%width = \"nodal.const_expr\"(%log, %one) <{metadata = {semantic_path = \"Fixture.width\"}, "
+      "operator_name = \"add\"}> : (i64, i64) -> i64\n";
+  check("ceil-log2-positive-derived-width", logarithmicWidth + port(digital("Fixture.width")),
+        true);
+  auto causalWidth = parseSourceString<mlir::ModuleOp>(
+      model(signedWidth + port(digital("Fixture.width"))), ParserConfig(&context, false));
+  bool repaired = false;
+  if (causalWidth) {
+    auto *owner = &causalWidth->getBody()->front();
+    mlir::Value expression;
+    owner->walk([&](nodal::ConstExprOp op) { expression = op->getResult(0); });
+    auto type = parseType(digital("Fixture.width"));
+    auto oldBounds = nodal::inferParameterIntegerBounds(expression);
+    auto mathematical = nodal::inferParameterIntegerBounds(
+        expression, nodal::ParameterIntegerMode::MathematicalSigned64);
+    auto oldExact = nodal::resolveOwnedIntegerExpression(owner, expression);
+    auto width = nodal::inferDigitalWidthExpression(type, owner);
+    repaired = failed(oldBounds) && failed(oldExact) && succeeded(mathematical) &&
+               mathematical->lower == 1 && mathematical->upper == 31 && succeeded(width) &&
+               width->bounds.lower == 1 && width->bounds.upper == 31 &&
+               succeeded(mlir::verify(*causalWidth));
+    expression.getDefiningOp()->setOperand(1, expression);
+    repaired &= failed(nodal::inferDigitalWidthExpression(type, owner));
+  }
+  report("width-mode-causal-old-reject-new-accept-cycle-reject", repaired);
+
   check("protocol-payload-recursion",
         parameter() + port("!nodal.stream<" + structure(field("payload", digital())) + ">"), true);
   check("standalone-analog-shape-policy-preserved",
@@ -289,6 +366,86 @@ int main() {
                                                    ParserConfig(&context, false));
   report("same-interned-type-cannot-reuse-foreign-owner-proof",
          failed(nodal::verifyDigitalTypeModel(&foreign->getBody()->front())));
+
+  const std::string identityBody =
+      parameter() + parameter("V") +
+      "%a = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path = "
+      "\"Fixture.a\"}}> : (i64, i64) -> i64\n"
+      "%b = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path = "
+      "\"Fixture.b\"}}> : (i64, i64) -> i64\n";
+  auto identityModel =
+      parseSourceString<mlir::ModuleOp>(model(identityBody), ParserConfig(&context, false));
+  Operation *identityOwner = &identityModel->getBody()->front();
+  const std::string identityBefore = print(identityModel->getOperation());
+  auto equivalent = [&](StringRef name, StringRef left, StringRef right, bool expected) {
+    Type a = parseType(left), b = parseType(right);
+    bool result = a && b && nodal::equivalentDigitalStorageTypes(a, b, identityOwner) == expected &&
+                  nodal::equivalentDigitalStorageTypes(b, a, identityOwner) == expected;
+    report(name, result && identityBefore == print(identityModel->getOperation()));
+  };
+  equivalent("equivalent-fresh-owned-width-DAG", digital("Fixture.a"), digital("Fixture.b"), true);
+  equivalent("equivalence-keeps-parameter-identity", digital("W"), digital("V"), false);
+  equivalent("equivalence-keeps-scalar-kind", digital("W", "uint"), digital("W", "sint"), false);
+  equivalent("equivalence-keeps-literal-kind", "!nodal.bits<1>", "i1", false);
+  equivalent("equivalence-keeps-enum-identity", "!nodal.enum<\"Mode\", 2>",
+             "!nodal.enum<\"Other\", 2>", false);
+  equivalent("equivalent-shape-and-element-DAGs", shape("2,Fixture.a", digital("Fixture.a")),
+             shape("2,Fixture.b", digital("Fixture.b")), true);
+  equivalent("equivalence-keeps-shape-rank", shape("2,3", digital()), shape("6", digital()), false);
+  equivalent("equivalence-keeps-shape-parameter", shape("W", digital()), shape("V", digital()),
+             false);
+  equivalent("equivalent-nested-struct-widths",
+             structure(field("lanes", shape("Fixture.a", digital("Fixture.a")))),
+             structure(field("lanes", shape("Fixture.b", digital("Fixture.b")))), true);
+  equivalent("equivalence-keeps-struct-name", structure(field("x", digital()), "A"),
+             structure(field("x", digital()), "B"), false);
+  equivalent("equivalence-keeps-field-name", structure(field("x", digital())),
+             structure(field("y", digital())), false);
+  equivalent("equivalence-keeps-field-order",
+             structure(field("x", digital()) + ", " + field("y", digital())),
+             structure(field("y", digital()) + ", " + field("x", digital())), false);
+  equivalent("equivalence-rejects-capabilities", "!nodal.capability<\"clock\">",
+             "!nodal.capability<\"clock\">", false);
+  report("equivalence-does-not-reuse-foreign-module-proof",
+         !nodal::equivalentDigitalStorageTypes(parseType(digital("Fixture.a")),
+                                               parseType(digital("Fixture.b")),
+                                               &foreign->getBody()->front()));
+  auto firstWidth =
+      nodal::inferDigitalWidthExpression(parseType(digital("Fixture.a")), identityOwner);
+  auto secondWidth =
+      nodal::inferDigitalWidthExpression(parseType(digital("Fixture.b")), identityOwner);
+  report("shared-exact-width-expression-owner",
+         succeeded(firstWidth) && succeeded(secondWidth) &&
+             nodal::equivalentInstantiatedIntegerExpressions(*firstWidth, *secondWidth));
+
+  auto family = [&](StringRef name, StringRef left, StringRef right, bool expected) {
+    Type a = parseType(left), b = parseType(right);
+    bool result = a && b && nodal::sameDigitalStorageWidthFamily(a, b, identityOwner) == expected &&
+                  nodal::sameDigitalStorageWidthFamily(b, a, identityOwner) == expected;
+    report(name, result && identityBefore == print(identityModel->getOperation()));
+  };
+  const auto narrow = structure(field("score", digital("W", "sint")) + ", " +
+                                field("payload", shape("W,2", digital("W"))));
+  const auto wide = structure(field("score", digital("V", "sint")) + ", " +
+                              field("payload", shape("W,2", digital("V"))));
+  family("width-family-keeps-independent-symbolic-widths", narrow, wide, true);
+  equivalent("width-specializations-remain-distinct-complete-ABI", narrow, wide, false);
+  family("width-family-reconstructed-semantic-schema", narrow, narrow, true);
+  family("width-family-rejects-kind-change", digital("W", "sint"), digital("V", "uint"), false);
+  family("width-family-keeps-inner-parameter-identity", shape("W", digital("W")),
+         shape("V", digital("W")), false);
+  family("width-family-keeps-inner-rank", shape("2,3", digital("W")), shape("6", digital("V")),
+         false);
+  family("width-family-keeps-field-order",
+         structure(field("x", digital()) + ", " + field("y", digital())),
+         structure(field("y", digital()) + ", " + field("x", digital())), false);
+  family("width-family-keeps-nominal-name", structure(field("x", digital()), "A"),
+         structure(field("x", digital()), "B"), false);
+  family("width-family-keeps-enum-identity", "!nodal.enum<\"Mode\", 2>", "!nodal.bits<2>", false);
+  family("width-family-keeps-invariant-real-integer-kind", "f64", "i64", false);
+  family("width-family-rejects-control-capability", "!nodal.capability<\"clock\">",
+         "!nodal.capability<\"clock\">", false);
+  family("width-family-rejects-invalid-width", digital("missing"), digital("W"), false);
 
   llvm::outs() << "DIGITAL_TYPE_MODEL_SUMMARY " << (cases - failures) << '/' << cases << '\n';
   return failures ? 1 : 0;

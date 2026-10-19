@@ -68,21 +68,52 @@ private[nodal] object IterationDomain:
     require(lower <= upper, "iteration bound interval must be ordered")
 
   enum Arithmetic:
-    case Add, Subtract, Multiply, Divide, Negate
+    case Add, Subtract, Multiply, Divide, Negate, Maximum, CeilLog2, ChooseZero
+
+    def arity: Int = this match
+      case Negate | CeilLog2 => 1
+      case ChooseZero => 3
+      case _ => 2
+
+  /** Captured source opcodes have one closed mapping to the shared interval arithmetic. */
+  def staticArithmetic(operation: String): Option[Arithmetic] = operation match
+    case "analog_add" => Some(Arithmetic.Add)
+    case "analog_sub" => Some(Arithmetic.Subtract)
+    case "analog_mul" => Some(Arithmetic.Multiply)
+    case "analog_div" => Some(Arithmetic.Divide)
+    case "analog_neg" => Some(Arithmetic.Negate)
+    case "static_integer_max" => Some(Arithmetic.Maximum)
+    case "static_integer_ceil_log2" => Some(Arithmetic.CeilLog2)
+    case "static_integer_choose_zero" => Some(Arithmetic.ChooseZero)
+    case _ => None
 
   /** Wide intermediates also serve trip-count proofs, where distance can exceed signed 64 bits. */
   private def wideArithmetic(
       operation: Arithmetic,
       operands: Vector[Bounds]
   ): Either[Problem, (BigInt, BigInt)] =
-    val arity = if operation == Arithmetic.Negate then 1 else 2
-    if operands.size != arity then
+    if operands.size != operation.arity then
       Left(Problem(ProblemKind.InvalidArithmetic, "integer interval operation has invalid arity"))
     else
       val left = operands.head
       val lower = BigInt(left.lower)
       val upper = BigInt(left.upper)
       if operation == Arithmetic.Negate then Right((-upper, -lower))
+      else if operation == Arithmetic.CeilLog2 then
+        if left.lower <= 0L then
+          Left(Problem(
+            ProblemKind.InvalidArithmetic,
+            "ceil_log2 requires a positive Integer envelope"
+          ))
+        else Right((BigInt((lower - 1).bitLength), BigInt((upper - 1).bitLength)))
+      else if operation == Arithmetic.ChooseZero then
+        val zero = operands(1)
+        val nonzero = operands(2)
+        val result =
+          if left.lower == 0L && left.upper == 0L then zero
+          else if left.lower > 0L || left.upper < 0L then nonzero
+          else Bounds(zero.lower.min(nonzero.lower), zero.upper.max(nonzero.upper))
+        Right((BigInt(result.lower), BigInt(result.upper)))
       else
         val right = operands(1)
         val rightLower = BigInt(right.lower)
@@ -90,6 +121,7 @@ private[nodal] object IterationDomain:
         operation match
           case Arithmetic.Add => Right((lower + rightLower, upper + rightUpper))
           case Arithmetic.Subtract => Right((lower - rightUpper, upper - rightLower))
+          case Arithmetic.Maximum => Right((lower.max(rightLower), upper.max(rightUpper)))
           case Arithmetic.Multiply =>
             val values = Vector(
               lower * rightLower,
@@ -109,7 +141,8 @@ private[nodal] object IterationDomain:
                 upper / rightUpper
               )
               Right((values.min, values.max))
-          case Arithmetic.Negate => Right((-upper, -lower))
+          case Arithmetic.Negate | Arithmetic.CeilLog2 | Arithmetic.ChooseZero =>
+            Left(Problem(ProblemKind.InvalidArithmetic, "invalid binary Integer operation"))
 
   /** Conservative signed-64-bit arithmetic, matching the Integer constant-expression envelope.
     *
@@ -163,6 +196,34 @@ private[nodal] object IterationDomain:
       wideArithmetic(Arithmetic.Subtract, Vector(upperExclusive, lower)).flatMap: (_, distance) =>
         positiveTripCount(if identicalBounds then BigInt(0) else distance, step.lower, maximum)
           .map(count => Structural(lower, upperExclusive, step, maximum, count))
+
+  /** Conservative attained values for a validated positive domain. Empty domains have no value.
+    * Exact fixed endpoints retain the last strided value instead of filling the excluded tail.
+    */
+  def attainedBounds(domain: Structural): Option[Bounds] =
+    Option.when(domain.maximumTripCount > 0):
+      val last =
+        (BigInt(domain.lower.upper) +
+          (BigInt(domain.maximumTripCount) - 1) * domain.step.upper)
+          .min(BigInt(domain.upperExclusive.upper) - 1)
+      Bounds(domain.lower.lower, last.toLong)
+
+  /** Finite same-cycle digital domains retain literal reversed emptiness and require one fixed
+    * positive step. The structural owner remains authoritative for symbolic direction and counts.
+    */
+  def boundedDigital(
+      lower: Bounds,
+      upperExclusive: Bounds,
+      step: Bounds,
+      maximum: Option[Int],
+      identicalBounds: Boolean = false
+  ): Either[Problem, Structural] =
+    if step.lower != step.upper then
+      Left(Problem(ProblemKind.InvalidStep, "digital iteration step must be invariant"))
+    else
+      val literalEmpty = lower.lower == lower.upper &&
+        upperExclusive.lower == upperExclusive.upper && lower.lower >= upperExclusive.upper
+      structural(lower, upperExclusive, step, maximum, identicalBounds || literalEmpty)
 
   /** Repetition has an explicit count: a negative count is invalid, not an empty range. */
   def repeat(iterations: Int): Either[Problem, Static] =

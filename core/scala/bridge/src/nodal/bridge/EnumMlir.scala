@@ -43,7 +43,11 @@ private[nodal] object EnumMlir:
     s"$result = ${quoted(name)}(${operands.map(_._1).mkString(", ")}) <$attributes> : " +
       s"(${operands.map(_._2).mkString(", ")}) -> $resultType$sourceLocation"
 
-  final class Plan(enumDefinitions: Vector[ResolvedEnumAbi], root: String):
+  final class Plan(
+      enumDefinitions: Vector[ResolvedEnumAbi],
+      root: String,
+      sourceMetadata: String => Vector[(String, String)] = _ => Vector.empty
+  ):
     private val definitions = enumDefinitions.sortBy(_.identity)
     private val byIdentity = definitions.map(value => value.identity -> value).toMap
     private val symbols = definitions.map: value =>
@@ -133,7 +137,8 @@ private[nodal] object EnumMlir:
         "abi_version" -> "1 : i64",
         "semantic_type" -> quoted(value.identity),
         "abi_hash" -> quoted(value.hash)
-      ) ++ path.toVector.map(value => "semantic_path" -> quoted(value)))*
+      ) ++ path.toVector.map(value => "semantic_path" -> quoted(value)) ++
+        path.toVector.flatMap(sourceMetadata))*
     )
 
     private def sourceLocation(source: Option[SourceSpan]): String = source match

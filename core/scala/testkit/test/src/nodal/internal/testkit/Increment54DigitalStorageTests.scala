@@ -29,7 +29,9 @@ final class DigitalStorageBridgeSource extends Module:
     StructField("level", Real)
   )
   val wireValue = wire(packet)
+  val signedInput = in(Vec(SInt(width), 2, 3))
   val signedCells = wire(Vec(SInt(width), 2, 3))
+  signedCells := signedInput
   val flat = signedCells.flatten
   val chosen = flat.at(1)
   val integers = wire(Vec(Integer, 2))

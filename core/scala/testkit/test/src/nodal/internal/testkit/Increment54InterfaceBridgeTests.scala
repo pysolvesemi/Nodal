@@ -29,6 +29,42 @@ final class InterfaceSymbolicBridgeSource extends Module:
   endpoint.driveMember("data", input)
   inverted.observeMember("data")
 
+final class InterfaceCombinationalWidthSource(invalid: Boolean = false) extends Module:
+  val core = ClockDomain.external(
+    "core",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val width = param(4.integer, range = 1 to 8)
+  val other = param(4.integer, range = 1 to 8)
+  val input = in(UInt(if invalid then other else width))
+  val enable = in(Bool)
+  val definition = Interface[InterfaceCaptureLink](
+    "CombinationalPayload",
+    InterfaceMember.value("data", UInt(width + 1.integer))
+  )
+  val endpoint = interfacePort(
+    definition,
+    Role[SourceRole]("source", RoleAccess.Out("data")),
+    "endpoint",
+    core
+  )
+  val pad = digitalInout(
+    UInt(width + 1.integer),
+    DriveMode.pushPull,
+    InoutPlacement.TopLevelPin,
+    ResolutionProfile.PortableBoundaryOnly,
+    "pad"
+  )
+  val sum = input + input
+  endpoint.driveMember("data", sum)
+  pad.drive(sum, enable)
+
+final class InterfaceCombinationalChildSource extends Module:
+  val child = instance(new InterfaceCombinationalWidthSource)
+
 final class InterfaceMixedDeclarationBridgeSource extends Module:
   val core = ClockDomain.external(
     "core",
@@ -175,6 +211,16 @@ final class InterfaceCapabilitiesBridgeSource extends Module:
   )
   val left = interfacePort(definition, source, "left", core)
   val right = interfacePort(definition, sink, "right", core)
+  core {
+    val clock = in(Clock)
+    val reset = in(Reset)
+    val clocks = in(Vec(Clock, 2))
+    val resets = in(Vec(Reset, 2))
+    left.driveMember("clock", clock)
+    left.driveMember("reset", reset)
+    left.driveMember("clocks", clocks)
+    left.driveMember("resets", resets)
+  }
   left.connectExact(right)
   right.observeMember("clock")
   right.observeMember("reset")
@@ -390,6 +436,27 @@ object Increment54InterfaceBridgeTests extends TestSuite:
       assert(!document.text.contains("lane_0"))
       assert(document == ScalaToMlirBridge.lower(new InterfaceSymbolicBridgeSource))
 
+    test("combinational symbolic payloads retain canonical type through interface and net drives"):
+      val captured = ConstructionKernel.inspect(new InterfaceCombinationalWidthSource)
+      val document = ScalaToMlirBridge.fromSnapshot(captured)
+      assert(document.text.contains("digital_add"))
+      assert(document.text.contains("nodal.interface_drive"))
+      assert(document.text.contains("nodal.net_drive"))
+      val directory = Path.of(".work", "increment55-interface-payload").toAbsolutePath
+      Files.createDirectories(directory)
+      assert(verified(document, directory).contains("nodal.interface_drive"))
+      val child = ScalaToMlirBridge.lower(new InterfaceCombinationalChildSource)
+      val childDirectory = directory.resolve("child")
+      Files.createDirectories(childDirectory)
+      assert(verified(child, childDirectory).contains("nodal.interface_drive"))
+
+      val rejected = scala.util.Try(
+        ConstructionKernel.inspect(new InterfaceCombinationalWidthSource(true))
+      ).failed.get
+      assert(rejected.isInstanceOf[ConstructionException])
+      assert(rejected.asInstanceOf[ConstructionException].diagnostic.code ==
+        "NODAL-INTERFACE-054-008")
+
     test("interface-only payload widths retain owned compound roots and reject invalid bounds"):
       val captured = ConstructionKernel.inspect(new InterfaceOnlyWidthSource(false))
       assert(captured.parameterExpressions.exists(_.operation == "analog_add"))
@@ -424,6 +491,7 @@ object Increment54InterfaceBridgeTests extends TestSuite:
       assert(document.text.contains("!nodal.capability<\"clock\">"))
       assert(document.text.contains("!nodal.capability<\"reset\">"))
       assert(document.text.contains("!nodal.shaped<\"2\", !nodal.capability<\"clock\">>"))
+      assert(captured.digitalConnectivity.count(_.kind == "interface-drive") == 4)
       Vector(false, true).foreach: stream =>
         val error = scala.util.Try(
           ConstructionKernel.inspect(new InterfaceInvalidCapabilityPayloadSource(stream))
@@ -479,6 +547,23 @@ object Increment54InterfaceBridgeTests extends TestSuite:
         )
       )
       assert(rejected(wrongDomain).startsWith("NODAL-BRIDGE"))
+      Vector(
+        "Reset" -> "NODAL-BRIDGE-054-INTERFACE",
+        "Struct(InvalidCapability{clock:Clock})" -> "NODAL-BRIDGE-054"
+      ).foreach: (dataType, diagnostic) =>
+        val changed = captured.copy(modules =
+          captured.modules.map(value =>
+            if value.path != module.path then value
+            else
+              value.copy(declarations =
+                value.declarations.map(declaration =>
+                  if declaration.path == input.path then declaration.copy(dataType = Some(dataType))
+                  else declaration
+                )
+              )
+          )
+        )
+        assert(rejected(changed) == diagnostic)
 
     test("mixed analog declarations preserve canonical identity and exact dimensions"):
       val snapshot = ConstructionKernel.inspect(new InterfaceMixedDeclarationBridgeSource)

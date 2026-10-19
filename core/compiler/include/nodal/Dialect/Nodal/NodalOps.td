@@ -151,7 +151,7 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [HasParent<"ModuleOp">]> {
+def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -554,16 +554,35 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
 }
 
 def Nodal_HardwareLoopOp : Nodal_Op<"hardware_loop", [NoTerminator]> {
-  let summary = "Bounded hardware-iteration region with declared effects";
+  let summary = "Legacy carrier or versioned finite ordered digital iteration";
   let arguments = (ins
+    Variadic<AnyType>:$inputs,
     StrAttr:$induction,
-    AnyAttr:$lower,
-    AnyAttr:$upper,
-    AnyAttr:$step,
+    OptionalAttr<AnyAttr>:$lower,
+    OptionalAttr<AnyAttr>:$upper,
+    OptionalAttr<AnyAttr>:$step,
     StrAttr:$effect_policy,
+    OptionalAttr<StrAttr>:$contract_version,
+    OptionalAttr<StrAttr>:$region_id,
+    OptionalAttr<StrAttr>:$induction_path,
+    OptionalAttr<I64Attr>:$maximum,
     DictionaryAttr:$metadata
   );
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_HardwareLoopEndOp : Nodal_Op<"hardware_loop_end",
+    [Terminator, HasParent<"HardwareLoopOp">]> {
+  let summary = "Explicit end of a bounded digital loop template";
+  let hasVerifier = 1;
+}
+
+def Nodal_IterationIndexOp : Nodal_Op<"iteration_index"> {
+  let summary = "Actual affine i64 induction plus or minus a static offset";
+  let arguments = (ins I64:$lhs, I64:$rhs, StrAttr:$operator_name,
+    DictionaryAttr:$metadata);
+  let results = (outs I64:$result);
   let hasVerifier = 1;
 }
 
@@ -1619,10 +1638,85 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
   let hasVerifier = 1;
 }
 
-def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
-  let summary = "Closed typed hardware digital scalar conversion";
+// F55: static choices retain both authored alternatives and all real SSA edges.
+def Nodal_StaticCompareOp : Nodal_Op<"static_compare"> {
+  let summary = "Closed comparison of owned static Integer expressions";
+  let arguments = (ins I64:$lhs, I64:$rhs, StrAttr:$comparison, DictionaryAttr:$metadata);
+  let results = (outs Nodal_StaticPredicateType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_StaticLogicOp : Nodal_Op<"static_logic"> {
+  let summary = "Closed bounded composition of actual static predicates";
+  let arguments = (ins Variadic<Nodal_StaticPredicateType>:$inputs,
+    StrAttr:$operator_name, DictionaryAttr:$metadata);
+  let results = (outs Nodal_StaticPredicateType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_StructuralIfOp : Nodal_Op<"structural_if",
+    [IsolatedFromAbove, SingleBlock, AttrSizedOperandSegments]> {
+  let summary = "Isolated static choice with separate captures and exact read-only yields";
+  let arguments = (ins Nodal_StaticPredicateType:$predicate,
+    Variadic<AnyType>:$true_captures, Variadic<AnyType>:$false_captures,
+    StrAttr:$contract_version, StrAttr:$region_id, DictionaryAttr:$metadata);
+  let results = (outs Optional<AnyType>:$result);
+  let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
+  let hasVerifier = 1;
+}
+def Nodal_StructuralYieldOp : Nodal_Op<"structural_yield",
+    [HasParent<"StructuralIfOp">, Terminator]> {
+  let summary = "Zero or one exact read-only branch result";
+  let arguments = (ins Optional<AnyType>:$value, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F55: typed pure collection templates; no lane expansion or target execution.
+def Nodal_CollectionOp : Nodal_Op<"collection",
+    [IsolatedFromAbove, SingleBlock, AttrSizedOperandSegments]> {
+  let summary = "Isolated typed digital collection callback region";
   let description = [{
-    Exactly one Bits/UInt/SInt operand and one exact typed result. Closed
+    kind is map, zip_with, fold_left or scan_left. Inputs are actual Vec values;
+    fold/scan have one seed; captures are explicit values with corresponding
+    block arguments. map args are element then captures; zip args are A, B,
+    then captures; fold/scan args are accumulator, element, then captures.
+    map/zip preserve every input dimension and yield one whole result element.
+    fold/scan yield exactly the seed type. scan excludes the seed and preserves
+    the input shape and cardinality, in canonical row-major traversal order.
+    One isolated block terminates with collection_yield. Region shape and
+    finite type proofs never substitute defaults or expand physical lanes.
+  }];
+  let arguments = (ins Variadic<AnyType>:$inputs, Optional<AnyType>:$seed,
+    Variadic<AnyType>:$captures, StrAttr:$kind, StrAttr:$region_id,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_CollectionYieldOp : Nodal_Op<"collection_yield",
+    [HasParent<"CollectionOp">, Terminator]> {
+  let summary = "One whole typed collection callback result";
+  let arguments = (ins AnyType:$value, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
+  let summary = "Closed typed hardware digital expression";
+  let description = [{
+    One exact typed result and opcode-specific owned operands. Numeric add/sub
+    use max operand width plus one; sub and neg produce SInt, neg grows one bit,
+    and multiplication adds widths. Numeric operands have the same UInt/SInt
+    kind. Comparisons produce Bits<1>; Bits equality and bitwise operations
+    require exact equal widths. concat places its left operand high and produces
+    Bits of summed width. select requires a Bits<1> predicate and identical
+    complete digital storage branch/result types. Shifts take a UInt literal
+    amount: shl grows width, shr preserves width with arithmetic SInt semantics,
+    and logical_shr zero-fills. extract takes UInt literal lower-inclusive and
+    upper-exclusive bounds and returns Bits of their difference. bool_and/or/not
+    require Bits<1>. Division, remainder and dynamic shifts are unsupported.
+    digital_alias retains one exact complete digital input type and one typed
+    named/keep intent record. Its metadata is a target-neutral semantic boundary,
+    not an emitted wire or a reassociation/duplication permission.
+    Closed unary
     digital_extend/truncate/wrap/saturate/resize_checked operations retain kind;
     truncation keeps low bits, wrapping is modulo 2^width, and saturation clamps
     to the result range. Checked resize requires all-value or exact-constant
@@ -1632,9 +1726,16 @@ def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
     digital_to_real accepts UInt and produces f64 using nearest-ties-even
     binary64 rounding, with an independent finite-result proof. Symbolic widths
     retain exact owned structural identity rather than an overridable default.
+    digital_struct_get retains one actual Struct operand and a checked nominal
+    schema, field ordinal and name. Its result is the receiver's exact field type.
+    digital_struct_make retains one operand per ordered result field. Schema and
+    result must have the same independently verified width family; every operand
+    has the exact corresponding result field type. Width families never relax
+    storage or assignment equality.
   }];
   let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$operator_name,
-    DictionaryAttr:$metadata);
+    DictionaryAttr:$metadata, OptionalAttr<TypeAttr>:$struct_schema,
+    OptionalAttr<I64Attr>:$field_ordinal, OptionalAttr<StrAttr>:$field_name);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

@@ -290,6 +290,44 @@ int main() {
   check("exact-role-connect", pair + connect(), true);
   check("drive-and-observe", pair + literal("value") + drive() + observe(), true);
   check("direct-member-drive-same-domain", pair + drive("a", "b"), true);
+  const std::string widthA = "!nodal.digital<\"uint\", \"Fixture.widthA\">";
+  const std::string widthB = "!nodal.digital<\"uint\", \"Fixture.widthB\">";
+  const std::string widthRoots =
+      parameter() +
+      "%n = \"nodal.const_parameter_ref\"() <{parameter = @N, metadata = {}}> : () -> i64\n" +
+      literal("one", "i64", "1") +
+      "%wa = \"nodal.const_expr\"(%n, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.widthA\"}}> : (i64, i64) -> i64\n"
+      "%wb = \"nodal.const_expr\"(%n, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.widthB\"}}> : (i64, i64) -> i64\n";
+  const std::string equivalentPayload = domain() + widthRoots + definition(widthA) +
+                                        instance("left", "source", "out", widthA) +
+                                        member("a", "left", widthA) + port("value", widthB);
+  const std::string equivalentDrive = "\"nodal.interface_drive\"(%a, %value) <{metadata = {" + tag +
+                                      "}}> : (" + widthA + ", " + widthB + ") -> ()\n";
+  check("drive-canonical-symbolic-payload", equivalentPayload + equivalentDrive, true);
+  const std::string typedNet = resolved("push_pull", widthA);
+  const std::string typedDriver = "!nodal.driver<" + widthA + ">";
+  const std::string netPayload =
+      domain() + widthRoots + port("value", widthB) + literal("enable", boolean) +
+      "%net = \"nodal.resolved_net\"() <{name = \"net\", metadata = {" + tag +
+      ", placement = \"top_level_pin\", profile = \"portable_boundary_only\"}}> : () -> " +
+      typedNet + "\n" +
+      "%driver = \"nodal.net_driver\"(%net) <{driver_id = \"driver\", metadata = {" + tag +
+      "}}> : (" + typedNet + ") -> " + typedDriver + "\n" +
+      "\"nodal.net_drive\"(%net, %driver, %value, %enable) <{mode = \"push_pull\", metadata = {" +
+      tag + "}}> : (" + typedNet + ", " + typedDriver + ", " + widthB + ", " + boolean +
+      ") -> ()\n";
+  check("net-drive-canonical-symbolic-payload", netPayload, true);
+
+  check(
+      "drive-distinct-symbolic-payload",
+      replace(equivalentPayload,
+              "%n, %one) <{operator_name = \"add\", metadata = {semantic_path = \"Fixture.widthB",
+              "%one, %n) <{operator_name = \"add\", metadata = {semantic_path = \"Fixture.widthB") +
+          equivalentDrive,
+      false);
+
   check("direct-member-drive-domain-mismatch",
         domain("otherClock") + replace(pair, "domain = @clock", "domain = @otherClock") +
             drive("a", "b"),
@@ -589,6 +627,146 @@ int main() {
         << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ")
         << "clock-digital-target-capability\n";
   }
+  auto ordinaryAssignment = [&](StringRef target, StringRef source, StringRef type = bits) {
+    return "\"nodal.digital_assign\"(%" + target.str() + ", %" + source.str() +
+           ") <{kind = \"continuous\", metadata = {}}> : (" + type.str() + ", " + type.str() +
+           ") -> ()\n";
+  };
+  auto dependency = [&](StringRef name, const std::string &body, bool expected) {
+    check(name, body, expected);
+    if (!expected && diagnosticText.find("NODAL-DIGITAL-055-010") == std::string::npos) {
+      ++failures;
+      llvm::errs() << "DIGITAL_INTERFACE_MODEL_FAIL " << name << "-causal-diagnostic\n";
+    }
+  };
+  dependency("assignment-external-member-read",
+             pair + port("output", bits, "output") + ordinaryAssignment("output", "b"), true);
+  dependency("assignment-connected-member-read",
+             pair + literal("value") + drive() + connect() + port("output", bits, "output") +
+                 ordinaryAssignment("output", "b"),
+             true);
+  dependency("assignment-member-wire-cycle",
+             pair + storage(bits) + drive("a", "wire") + ordinaryAssignment("wire", "a"), false);
+  dependency("assignment-member-connect-wire-cycle",
+             pair + storage(bits) + drive("a", "wire") + connect() +
+                 ordinaryAssignment("wire", "b"),
+             false);
+  dependency("assignment-member-alias-wire-cycle",
+             pair + member("alias", "left", bits, "monitor") + storage(bits) + drive("a", "wire") +
+                 ordinaryAssignment("wire", "alias"),
+             false);
+  const std::string resolvedValues = literal("value") + literal("enable", boolean);
+  dependency("assignment-resolved-net-boundary-read",
+             net() + read() + port("output", bits, "output") + ordinaryAssignment("output", "read"),
+             true);
+  dependency("assignment-resolved-net-multiple-drivers",
+             net() + driver("first") + driver("second") + resolvedValues + netDrive("first") +
+                 netDrive("second") + read() + port("output", bits, "output") +
+                 ordinaryAssignment("output", "read"),
+             true);
+  dependency("assignment-resolved-pass-through-read",
+             net() + net("other") + through() + driver() + resolvedValues + netDrive() +
+                 read("other") + port("output", bits, "output") +
+                 ordinaryAssignment("output", "read"),
+             true);
+  dependency("assignment-resolved-net-value-cycle",
+             net() + driver() + storage(bits) + literal("enable", boolean) +
+                 replace(netDrive(), "%value", "%wire") + read() +
+                 ordinaryAssignment("wire", "read"),
+             false);
+  dependency("assignment-resolved-pass-through-value-cycle",
+             net() + net("other") + through() + driver() + storage(bits) +
+                 literal("enable", boolean) + replace(netDrive(), "%value", "%wire") +
+                 read("other") + ordinaryAssignment("wire", "read"),
+             false);
+  dependency("assignment-resolved-split-driver-read",
+             net() + driver() + resolvedValues + netDrive() + split() +
+                 port("output", bits, "output") + ordinaryAssignment("output", "write"),
+             true);
+  dependency("assignment-resolved-split-value-cycle",
+             net() + driver() + storage(bits) + literal("enable", boolean) +
+                 replace(netDrive(), "%value", "%wire") + split() +
+                 ordinaryAssignment("wire", "write"),
+             false);
+  dependency("assignment-resolved-split-enable-cycle",
+             net() + driver() + storage(boolean) + literal("value") +
+                 replace(netDrive(), "%enable", "%wire") + split() +
+                 ordinaryAssignment("wire", "enabled", boolean),
+             false);
+  dependency("assignment-legacy-capability-not-runtime-read",
+             replace(net(), tag + ", ", "") + replace(read(), tag, "") +
+                 port("output", bits, "output") + ordinaryAssignment("output", "read"),
+             false);
+  auto standalone = [&](StringRef name, const std::string &body, bool expected) {
+    dependency(name, body, expected);
+    if (body.find("nodal.digital_assign") != std::string::npos ||
+        (!expected && diagnosticText.find("combinational value cycle") == std::string::npos)) {
+      ++failures;
+      llvm::errs() << "DIGITAL_INTERFACE_MODEL_FAIL " << name << "-standalone-causal-control\n";
+    }
+  };
+  standalone("standalone-interface-self-drive-feedback", pair + drive("a", "a"), false);
+  standalone("standalone-interface-connect-feedback", pair + drive("a", "b") + connect(), false);
+  const std::string outputPair = domain() + definition() + instance("left", "source", "out") +
+                                 instance("right", "source", "out") + member("a", "left") +
+                                 member("b", "right");
+  standalone("standalone-interface-two-drive-feedback",
+             outputPair + drive("a", "b") + drive("b", "a"), false);
+  standalone("standalone-interface-alias-feedback",
+             pair + member("alias", "left", bits, "monitor") + drive("a", "alias"), false);
+  standalone("standalone-interface-acyclic-connect", pair + literal("value") + drive() + connect(),
+             true);
+  standalone("standalone-interface-alias-not-a-value-cycle",
+             pair + member("alias", "left", bits, "monitor") + observe("alias"), true);
+  standalone("standalone-interface-undriven-boundary-policy-preserved", pair, true);
+  standalone("standalone-net-read-driver-feedback",
+             net() + driver() + literal("enable", boolean) + read() +
+                 replace(netDrive(), "%value", "%read"),
+             false);
+  standalone("standalone-net-pass-through-feedback",
+             net() + net("other") + through() + driver() + literal("enable", boolean) +
+                 read("other") + replace(netDrive(), "%value", "%read"),
+             false);
+  standalone("standalone-two-net-read-driver-feedback",
+             net() + net("other") + driver("first") + driver("second", "other") +
+                 literal("enable", boolean) + read() +
+                 replace(read("other"), "%read =", "%otherRead =") +
+                 replace(netDrive("first"), "%value", "%otherRead") +
+                 replace(netDrive("second", "other"), "%value", "%read"),
+             false);
+  standalone("standalone-net-conditional-enable-feedback",
+             net() + driver() + literal("value") + read() +
+                 "%enable = \"nodal.digital_expr\"(%read, %value) <{operator_name = "
+                 "\"digital_eq\", metadata = {}}> : (" +
+                 bits + ", " + bits + ") -> " + boolean + "\n" + netDrive(),
+             false);
+  standalone("standalone-net-multiple-drivers-preserved",
+             net() + driver("first") + driver("second") + resolvedValues + netDrive("first") +
+                 netDrive("second") + read(),
+             true);
+  standalone("standalone-net-feedback-among-multiple-drivers",
+             net() + driver("first") + driver("second") + resolvedValues + read() +
+                 netDrive("first") + replace(netDrive("second"), "%value", "%read"),
+             false);
+  standalone("standalone-net-pass-through-acyclic-driver",
+             net() + net("other") + through() + driver() + resolvedValues + netDrive() +
+                 read("other"),
+             true);
+  standalone("standalone-net-pass-through-union-is-not-a-value-cycle",
+             net() + net("other") + net("third") + through() + through("other", "third") +
+                 through("third", "net") + read("third"),
+             true);
+  standalone("standalone-net-external-boundary-read", net() + read(), true);
+  standalone("standalone-net-split-value-feedback",
+             net() + driver() + literal("enable", boolean) + split() +
+                 replace(netDrive(), "%value", "%write"),
+             false);
+  standalone("standalone-net-split-enable-feedback",
+             net() + driver() + literal("value") + split() +
+                 replace(netDrive(), "%enable", "%enabled"),
+             false);
+  standalone("standalone-net-split-acyclic",
+             net() + driver() + resolvedValues + netDrive() + split(), true);
   llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

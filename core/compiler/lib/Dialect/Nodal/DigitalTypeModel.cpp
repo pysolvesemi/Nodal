@@ -1,8 +1,12 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalLoopModel.h"
+#include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -29,6 +33,38 @@ bool identifier(StringRef value) {
 }
 
 bool validWidthKind(StringRef kind) { return kind == "bits" || kind == "uint" || kind == "sint"; }
+
+StringRef scalarKind(Type type) {
+  if (llvm::isa<BitsType>(type))
+    return "bits";
+  if (llvm::isa<UIntType>(type))
+    return "uint";
+  if (llvm::isa<SIntType>(type))
+    return "sint";
+  if (auto symbolic = llvm::dyn_cast<ParametricIntegerType>(type))
+    if (validWidthKind(symbolic.getKind()))
+      return symbolic.getKind();
+  return {};
+}
+
+FailureOr<InstantiatedIntegerExpression>
+dimensionExpression(Operation *module, StringRef token, StringRef effect,
+                    const ParameterIntegerEnvironment *environment) {
+  auto dimension = resolveStaticShapeDimension(module, token, effect, environment);
+  if (failed(dimension))
+    return failure();
+  if (dimension->parameter)
+    return environment ? resolveOwnedIntegerParameter(module, dimension->parameter, *environment)
+                       : resolveOwnedIntegerParameter(module, dimension->parameter);
+  if (dimension->expression) {
+    auto mode = effect == "width" ? ParameterIntegerMode::MathematicalSigned64
+                                  : ParameterIntegerMode::Storage;
+    return environment
+               ? resolveOwnedIntegerExpression(module, dimension->expression, *environment, mode)
+               : resolveOwnedIntegerExpression(module, dimension->expression, mode);
+  }
+  return makeLiteralIntegerExpression(dimension->literal);
+}
 
 bool shapeSpelling(StringRef dimensions) {
   if (dimensions.empty())
@@ -148,7 +184,9 @@ struct TypeFacts {
 
 class ModuleTypeVerifier {
 public:
-  explicit ModuleTypeVerifier(Operation *module) : module(module) {}
+  explicit ModuleTypeVerifier(Operation *module,
+                              const ParameterIntegerEnvironment *environment = nullptr)
+      : module(module), environment(environment), rightEnvironment(environment) {}
 
   FailureOr<int64_t> storageMaximumBits(Type type, Operation *use) {
     currentUse = use;
@@ -160,6 +198,23 @@ public:
     if (failed(result) || result->maximumBits <= 0)
       return failure();
     return result->maximumBits;
+  }
+
+  bool equivalentStorageTypes(Type left, Type right, bool widthFamily = false) {
+    if (failed(storageMaximumBits(left, environment ? environment->use() : module)) ||
+        failed(storageMaximumBits(right, environment ? environment->use() : module)))
+      return false;
+    return equivalentStoragePair(left, right, 1, widthFamily);
+  }
+
+  bool equivalentStorageTypesAcross(Type left, Type right,
+                                    const ParameterIntegerEnvironment *rightContext) {
+    ModuleTypeVerifier other(module, rightContext);
+    if (failed(storageMaximumBits(left, environment ? environment->use() : module)) ||
+        failed(other.storageMaximumBits(right, rightContext ? rightContext->use() : module)))
+      return false;
+    rightEnvironment = rightContext;
+    return equivalentStoragePair(left, right, 1, false);
   }
 
   LogicalResult verify(Operation *use) {
@@ -177,12 +232,23 @@ public:
     for (Type type : use->getResultTypes())
       if (failed(verifyType(type)))
         return failure();
-    for (Region &region : use->getRegions())
-      for (Block &block : region)
-        for (BlockArgument argument : block.getArguments())
-          if (failed(verifyType(argument.getType())))
-            return failure();
+    // A collection owns dependent block-argument types; its coordinator checks
+    // them under each admitted body context.
+    if (!llvm::isa<CollectionOp, StructuralIfOp>(use))
+      for (Region &region : use->getRegions())
+        for (Block &block : region)
+          for (BlockArgument argument : block.getArguments())
+            if (failed(verifyType(argument.getType())))
+              return failure();
     for (NamedAttribute attribute : use->getAttrs()) {
+      if (use == module && attribute.getName() == "nodal.digital.materialization") {
+        // This inventory retains exact types from their actual lexical uses.
+        // Its owner recomputes every record (including type and region) under
+        // those scoped contexts; module-scope reinterpretation loses that proof.
+        if (failed(verifyDigitalMaterializationReport(module)))
+          return failure();
+        continue;
+      }
       auto result = checkAttribute(attribute.getValue());
       if (failed(result))
         return failure();
@@ -216,6 +282,69 @@ public:
   }
 
 private:
+  bool equivalentStoragePair(Type left, Type right, unsigned depth, bool widthFamily) {
+    if (depth > digitalTypeMaximumDepth || ++comparisonWork > digitalTypeMaximumNodes)
+      return false;
+    const auto pair = std::make_pair(left, right);
+    if (equivalentPairs.contains(pair))
+      return true;
+    bool equal = left == right && environment == rightEnvironment;
+    StringRef kind = scalarKind(left);
+    if (!equal && !kind.empty() && kind == scalarKind(right)) {
+      auto lhs = widthExpression(left);
+      auto rhs = inferDigitalWidthExpression(right, module, rightEnvironment);
+      equal = succeeded(lhs) && succeeded(rhs) &&
+              (widthFamily || equivalentInstantiatedIntegerExpressions(*lhs, *rhs));
+    } else if (!equal) {
+      if (auto lhs = llvm::dyn_cast<nodal::ShapedType>(left)) {
+        auto rhs = llvm::dyn_cast<nodal::ShapedType>(right);
+        if (rhs) {
+          llvm::SmallVector<StringRef, 4> a, b;
+          lhs.getDimensions().split(a, ',');
+          rhs.getDimensions().split(b, ',');
+          equal = a.size() == b.size() &&
+                  equivalentStoragePair(lhs.getElementType(), rhs.getElementType(), depth + 1,
+                                        widthFamily);
+          for (unsigned index = 0; equal && index < a.size(); ++index) {
+            if (++comparisonWork > digitalTypeMaximumNodes)
+              return false;
+            auto x = dimensionExpression(module, a[index], "shape", environment);
+            auto y = dimensionExpression(module, b[index], "shape", rightEnvironment);
+            equal =
+                succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
+          }
+        }
+      } else if (auto lhs = llvm::dyn_cast<StructType>(left)) {
+        auto rhs = llvm::dyn_cast<StructType>(right);
+        equal = rhs && lhs.getName() == rhs.getName() &&
+                lhs.getFields().size() == rhs.getFields().size();
+        for (unsigned index = 0; equal && index < lhs.getFields().size(); ++index) {
+          auto a = llvm::cast<DictionaryAttr>(lhs.getFields()[index]);
+          auto b = llvm::cast<DictionaryAttr>(rhs.getFields()[index]);
+          equal =
+              a.getAs<StringAttr>("name") == b.getAs<StringAttr>("name") &&
+              equivalentStoragePair(a.getAs<TypeAttr>("type").getValue(),
+                                    b.getAs<TypeAttr>("type").getValue(), depth + 1, widthFamily);
+        }
+      } else {
+        equal = left == right;
+      }
+    }
+    if (equal)
+      equivalentPairs.insert(pair);
+    return equal;
+  }
+
+  FailureOr<InstantiatedIntegerExpression> widthExpression(Type type) {
+    auto known = widthExpressions.find(type);
+    if (known != widthExpressions.end())
+      return known->second;
+    auto expression = inferDigitalWidthExpression(type, module, environment);
+    if (succeeded(expression))
+      widthExpressions.try_emplace(type, *expression);
+    return expression;
+  }
+
   FailureOr<TypeFacts> reject(StringRef message) {
     currentUse->emitOpError("NODAL-DIGITAL-054-004: ") << message;
     return failure();
@@ -254,6 +383,12 @@ private:
       return reject("missing recursive digital type");
     if (depth > digitalTypeMaximumDepth)
       return reject("recursive type nesting exceeds the finite metadata limit");
+    // Token admissibility depends on the actual consumer, so it must be
+    // checked before the structural-type memo (which is shared across uses).
+    if (llvm::isa<StaticPredicateType>(type) &&
+        (storageContext || !llvm::isa<StaticCompareOp, StaticLogicOp, StructuralIfOp>(currentUse)))
+      return reject(
+          "static predicate tokens cannot be stored or manufactured by runtime operations");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));
     auto found = facts.find(key);
     if (found != facts.end()) {
@@ -264,7 +399,12 @@ private:
     if (++work > digitalTypeMaximumNodes || !active.insert(key).second)
       return reject("recursive type graph exceeds the finite metadata limit or contains a cycle");
     TypeFacts result;
-    auto width = inferDigitalWidthBounds(type, module);
+    if (llvm::isa<StaticPredicateType>(type)) {
+      active.erase(key);
+      facts.try_emplace(key, result);
+      return result;
+    }
+    auto width = inferDigitalWidthBounds(type, module, environment);
     if (succeeded(width)) {
       result.containsDigital =
           storageContext ||
@@ -301,9 +441,10 @@ private:
       result = *child;
       ++result.height;
       if (result.containsDigital) {
-        auto cardinality = shapeSpelling(shaped.getDimensions())
-                               ? inferStaticShapeMaximumCardinality(module, shaped.getDimensions())
-                               : FailureOr<int64_t>(failure());
+        auto cardinality =
+            shapeSpelling(shaped.getDimensions())
+                ? inferStaticShapeMaximumCardinality(module, shaped.getDimensions(), environment)
+                : FailureOr<int64_t>(failure());
         if (failed(cardinality))
           return reject("recursive digital shape requires canonical owned positive finite "
                         "dimensions and a signed-i64 cardinality proof");
@@ -349,12 +490,17 @@ private:
   }
 
   Operation *module;
+  const ParameterIntegerEnvironment *environment;
+  const ParameterIntegerEnvironment *rightEnvironment;
   Operation *currentUse = nullptr;
   unsigned work = 0;
+  unsigned comparisonWork = 0;
   StorageTypeChecker storage;
   llvm::DenseMap<std::pair<Type, unsigned>, TypeFacts> facts;
   llvm::DenseSet<std::pair<Type, unsigned>> active;
   llvm::DenseMap<Attribute, bool> attributes;
+  llvm::DenseSet<std::pair<Type, Type>> equivalentPairs;
+  llvm::DenseMap<Type, InstantiatedIntegerExpression> widthExpressions;
 };
 } // namespace
 
@@ -397,12 +543,15 @@ bool isDigitalControlBoundaryType(Type type) {
   return control && (control.getKind() == "clock" || control.getKind() == "reset");
 }
 
-FailureOr<int64_t> inferDigitalControlMaximumElements(Type type, Operation *module) {
+FailureOr<int64_t>
+inferDigitalControlMaximumElements(Type type, Operation *module,
+                                   const ParameterIntegerEnvironment *environment) {
   if (!isDigitalControlBoundaryType(type))
     return failure();
   int64_t count = 1;
   while (auto shaped = llvm::dyn_cast<nodal::ShapedType>(type)) {
-    auto cardinality = inferStaticShapeMaximumCardinality(module, shaped.getDimensions());
+    auto cardinality =
+        inferStaticShapeMaximumCardinality(module, shaped.getDimensions(), environment);
     if (failed(cardinality) || count > std::numeric_limits<int64_t>::max() / *cardinality)
       return failure();
     count *= *cardinality;
@@ -411,7 +560,9 @@ FailureOr<int64_t> inferDigitalControlMaximumElements(Type type, Operation *modu
   return count;
 }
 
-FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(Type type, Operation *module) {
+FailureOr<ParameterIntegerBounds>
+inferDigitalWidthBounds(Type type, Operation *module,
+                        const ParameterIntegerEnvironment *environment) {
   if (!type)
     return failure();
   int64_t width = 0;
@@ -430,7 +581,7 @@ FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(Type type, Operation *
   else if (auto scalar = llvm::dyn_cast<ParametricIntegerType>(type)) {
     if (!validWidthKind(scalar.getKind()) || !isCanonicalDigitalWidthToken(scalar.getWidth()))
       return failure();
-    auto dimension = resolveStaticShapeDimension(module, scalar.getWidth(), "width");
+    auto dimension = resolveStaticShapeDimension(module, scalar.getWidth(), "width", environment);
     if (failed(dimension))
       return failure();
     return dimension->bounds;
@@ -440,25 +591,146 @@ FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(Type type, Operation *
   return ParameterIntegerBounds{width, width};
 }
 
-LogicalResult verifyDigitalTypeModel(Operation *module) {
+FailureOr<InstantiatedIntegerExpression>
+inferDigitalWidthExpression(Type type, Operation *module,
+                            const ParameterIntegerEnvironment *environment) {
+  auto bounds = inferDigitalWidthBounds(type, module, environment);
+  if (failed(bounds) || bounds->lower <= 0 || bounds->upper < bounds->lower)
+    return failure();
+  if (auto symbolic = llvm::dyn_cast<ParametricIntegerType>(type))
+    return dimensionExpression(module, symbolic.getWidth(), "width", environment);
+  return makeLiteralIntegerExpression(bounds->lower);
+}
+
+bool equivalentDigitalStorageTypes(Type left, Type right, Operation *module,
+                                   const ParameterIntegerEnvironment *environment) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  ModuleTypeVerifier verifier(module, environment);
+  return verifier.equivalentStorageTypes(left, right);
+}
+
+bool sameDigitalStorageWidthFamily(Type base, Type instance, Operation *module,
+                                   const ParameterIntegerEnvironment *environment) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  ModuleTypeVerifier verifier(module, environment);
+  return verifier.equivalentStorageTypes(base, instance, true);
+}
+
+bool equivalentDigitalStorageTypesAcross(Type left, const ParameterIntegerEnvironment *leftContext,
+                                         Type right,
+                                         const ParameterIntegerEnvironment *rightContext,
+                                         Operation *module) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  return ModuleTypeVerifier(module, leftContext)
+      .equivalentStorageTypesAcross(left, right, rightContext);
+}
+
+LogicalResult verifyDigitalTypeOperation(Operation *operation,
+                                         const ParameterIntegerEnvironment *environment) {
+  if (!operation)
+    return failure();
+  Operation *module = llvm::isa<nodal::ModuleOp>(operation)
+                          ? operation
+                          : operation->getParentOfType<nodal::ModuleOp>();
+  if (!module)
+    return failure();
+  if (!environment && isDigitalRegionOwner(operation->getParentOp())) {
+    auto contexts = collectionIntegerContextsAtUse(operation);
+    if (failed(contexts))
+      return failure();
+    for (const auto &context : *contexts)
+      if (failed(verifyDigitalTypeOperation(operation, &context)))
+        return failure();
+    return success();
+  }
+  if (environment) {
+    auto context = environment->atUse(operation);
+    if (failed(context) || context->module() != module)
+      return failure();
+    return ModuleTypeVerifier(module, &*context).verify(operation);
+  }
+  return ModuleTypeVerifier(module).verify(operation);
+}
+
+LogicalResult verifyDigitalTypeModel(Operation *module, bool includeCollections) {
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
   ModuleTypeVerifier verifier(module);
   auto result = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
     if (operation != module && llvm::isa<nodal::ModuleOp>(operation))
       return WalkResult::skip();
-    return failed(verifier.verify(operation)) ? WalkResult::interrupt() : WalkResult::advance();
+    if (failed(isDigitalRegionOwner(operation->getParentOp())
+                   ? verifyDigitalTypeOperation(operation)
+                   : verifier.verify(operation)))
+      return WalkResult::interrupt();
+    if (llvm::isa<StructuralIfOp>(operation)) {
+      if (includeCollections && failed(verifyStructuralIfOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
+    if (llvm::isa<CollectionOp>(operation)) {
+      if (includeCollections && failed(verifyDigitalCollectionOperation(operation)))
+        return WalkResult::interrupt();
+      return WalkResult::skip();
+    }
+    return WalkResult::advance();
   });
   return failure(result.wasInterrupted());
 }
 
-FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use) {
+FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use,
+                                                  const ParameterIntegerEnvironment *environment) {
   if (!use)
     return failure();
-  Operation *module = llvm::isa<nodal::ModuleOp>(use) ? use : use->getParentOp();
+  Operation *module =
+      llvm::isa<nodal::ModuleOp>(use) ? use : use->getParentOfType<nodal::ModuleOp>();
+  std::optional<ParameterIntegerEnvironment> context;
+  if (environment) {
+    if (environment->module() != module)
+      return failure();
+    if (use != module) {
+      auto scoped = environment->atUse(use);
+      if (failed(scoped))
+        return failure();
+      context.emplace(*scoped);
+      environment = &*context;
+    }
+  }
+  if (!environment && use != module && use->getParentOp() != module)
+    return failure();
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
-  ModuleTypeVerifier verifier(module);
-  return verifier.storageMaximumBits(type, use);
+  return ModuleTypeVerifier(module, environment).storageMaximumBits(type, use);
+}
+} // namespace nodal
+
+// Preserve the ordinary entry-point ABI for existing non-contextual consumers.
+namespace nodal {
+FailureOr<int64_t> inferDigitalControlMaximumElements(Type type, Operation *module) {
+  return inferDigitalControlMaximumElements(type, module, nullptr);
+}
+FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(Type type, Operation *module) {
+  return inferDigitalWidthBounds(type, module, nullptr);
+}
+FailureOr<InstantiatedIntegerExpression> inferDigitalWidthExpression(Type type, Operation *module) {
+  return inferDigitalWidthExpression(type, module, nullptr);
+}
+bool equivalentDigitalStorageTypes(Type left, Type right, Operation *module) {
+  return equivalentDigitalStorageTypes(left, right, module, nullptr);
+}
+bool sameDigitalStorageWidthFamily(Type base, Type instance, Operation *module) {
+  return sameDigitalStorageWidthFamily(base, instance, module, nullptr);
+}
+FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use) {
+  return inferDigitalStorageMaximumBits(type, use, nullptr);
+}
+} // namespace nodal
+
+namespace nodal {
+LogicalResult verifyDigitalTypeModel(Operation *module) {
+  return verifyDigitalTypeModel(module, true);
 }
 } // namespace nodal

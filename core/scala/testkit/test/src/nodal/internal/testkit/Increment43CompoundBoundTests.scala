@@ -11,6 +11,7 @@ import nodal.internal.bridge.*
 
 import utest.*
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundCapture(onBody: () => Unit, initialLanes: Int) extends Module:
   val start: Param[Integer] = param(0.integer, range = 0 to 2)
   val lanes: Param[Integer] = param(initialLanes.integer, range = 2 to 5)
@@ -20,49 +21,53 @@ final class Increment43CompoundCapture(onBody: () => Unit, initialLanes: Int) ex
   val increment: Expr[Integer] = stride + 1.integer
   val unrelated: Expr[Integer] = lanes + 99.integer
 
-  hdlRange(start, limit, increment): _ =>
+  ConstructionKernel.generatedRegion(start, limit, increment, None): _ =>
     onBody()
     val tap = node(Electrical)
     val _ = tap
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43RepeatedCompound(onBody: () => Unit) extends Module:
   val lanes: Param[Integer] = param(2.integer, range = 1 to 4)
   val limit: Expr[Integer] = lanes + 1.integer
 
-  hdlRange(0, limit): _ =>
+  ConstructionKernel.generatedRegion(0, limit, 1, None): _ =>
     onBody()
     val first = node(Electrical)
     val _ = first
     ()
 
-  hdlRange(0, limit): _ =>
+  ConstructionKernel.generatedRegion(0, limit, 1, None): _ =>
     onBody()
-    hdlRange(0, limit): _ =>
+    ConstructionKernel.generatedRegion(0, limit, 1, None): _ =>
       onBody()
       val nested = node(Electrical)
       val _ = nested
       ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43SignedCompound(onBody: () => Unit) extends Module:
   val count: Param[Integer] = param(3.integer, range = 2 to 4)
   val lower: Expr[Integer] = -count
   val upper: Expr[Integer] = (count * 3.integer - 1.integer) / 2.integer
 
-  hdlRange(lower, upper): _ =>
+  ConstructionKernel.generatedRegion(lower, upper, 1, None): _ =>
     onBody()
     val tap = node(Electrical)
     val _ = tap
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundEmpty(onBody: () => Unit) extends Module:
   val count: Param[Integer] = param(2.integer, range = 1 to 4)
   val bound: Expr[Integer] = count + 1.integer
 
-  hdlRange(bound, bound): _ =>
+  ConstructionKernel.generatedRegion(bound, bound, 1, None): _ =>
     onBody()
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundInvalid(form: Int, onBody: () => Unit) extends Module:
   val count: Param[Integer] = param(3.integer, range = 2 to 4)
   val wide: Param[Integer] = param(1.integer, range = 1 to Int.MaxValue)
@@ -76,25 +81,28 @@ final class Increment43CompoundInvalid(form: Int, onBody: () => Unit) extends Mo
     case _ => count + 1.integer
   val step: Expr[Integer] = if form == 6 then count - 2.integer else 1.integer
 
-  hdlRange(0, upper, step, if form == 4 then 2 else Int.MaxValue): _ =>
-    onBody()
-    ()
+  ConstructionKernel.generatedRegion(0, upper, step, Some(if form == 4 then 2 else Int.MaxValue)):
+    _ =>
+      onBody()
+      ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundIdentity(same: Boolean, onBody: () => Unit) extends Module:
   val first: Param[Integer] = param(1.integer, range = 0 to 4)
   val second: Param[Integer] = param(1.integer, range = 0 to 4)
   val difference: Expr[Integer] = if same then first - first else first - second
 
-  hdlRange(0, difference): _ =>
+  ConstructionKernel.generatedRegion(0, difference, 1, None): _ =>
     onBody()
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundDepth(depth: Int, shared: Boolean, onBody: () => Unit)
     extends Module:
   val bound: Expr[Integer] = (0 until depth).foldLeft(0.integer): (previous, _) =>
     if shared then previous + previous else -previous
 
-  hdlRange(0, bound): _ =>
+  ConstructionKernel.generatedRegion(0, bound, 1, None): _ =>
     onBody()
     ()
 
@@ -102,18 +110,21 @@ final class Increment43CompoundForeignChild extends Module:
   val count: Param[Integer] = param(2.integer, range = 1 to 4)
   val bound: Expr[Integer] = count + 1.integer
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43CompoundForeign(onBody: () => Unit) extends Module:
   val child = new Increment43CompoundForeignChild
 
-  hdlRange(0, child.bound): _ =>
+  ConstructionKernel.generatedRegion(0, child.bound, 1, None): _ =>
     onBody()
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43PassedCompound(bound: Expr[Integer], onBody: () => Unit) extends Module:
-  hdlRange(0, bound): _ =>
+  ConstructionKernel.generatedRegion(0, bound, 1, None): _ =>
     onBody()
     ()
 
+// Private capture fixture: retain runtime invariants independently of public callback attestation.
 final class Increment43MalformedCompound(form: Int, onBody: () => Unit) extends Module:
   val count: Param[Integer] = param(2.integer, range = 1 to 4)
   val dynamic: Signal[Integer] = wire(Integer)
@@ -128,7 +139,7 @@ final class Increment43MalformedCompound(form: Int, onBody: () => Unit) extends 
       ConstructionKernel.expression(expression)
       expression
 
-  hdlRange(0, bound): _ =>
+  ConstructionKernel.generatedRegion(0, bound, 1, None): _ =>
     onBody()
     ()
 

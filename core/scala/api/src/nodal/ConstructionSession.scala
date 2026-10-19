@@ -51,6 +51,84 @@ private final class ConstructionSession(val options: EmitOptions):
   private val domainIds = new IdentityHashMap[AnyRef, DomainRef]()
   private val declarationIds = new IdentityHashMap[AnyRef, DeclarationRef]()
   private val expressionIds = new IdentityHashMap[AnyRef, ExpressionRef]()
+  private val expressionRegions = mutable.HashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val collectionRegions =
+    mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val collectionArguments =
+    mutable.HashMap.empty[ExpressionRef, (DigitalValueRegionRecord, Int)]
+  private val collectionStack = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+  private val loopRegions = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private val staticPredicates = mutable.LinkedHashMap.empty[ExpressionRef, StaticPredicate]
+  private val structuralIfs = mutable.LinkedHashMap.empty[ExpressionRef, StructuralIfRecord]
+  private val structuralArms = mutable.LinkedHashMap.empty[ExpressionRef, DigitalValueRegionRecord]
+  private def allValueRegions =
+    collectionRegions.valuesIterator ++ loopRegions.valuesIterator ++ structuralArms.valuesIterator
+  private val iterationIndices = mutable.LinkedHashSet.empty[ExpressionRef]
+  private val nextDigitalEffectOrdinal = mutable.HashMap.empty[Long, Int]
+
+  private def activeLoop: Option[DigitalValueRegionRecord] =
+    moduleStack.lastOption.flatMap(module =>
+      collectionStack.reverseIterator.find(region =>
+        region.isLoop && region.reference.module == module.handle
+      )
+    )
+
+  private def nextEffectOrdinal(): Int =
+    val owner = currentModule.handle
+    val result = nextDigitalEffectOrdinal.getOrElse(owner, 0)
+    nextDigitalEffectOrdinal.update(owner, result + 1)
+    result
+  // Query-local facts only. Raw KernelExpr identities and descriptors are never substituted.
+  private var reductionExact = Map.empty[KernelExpr[?], Dimension]
+  private var reductionDomains = Map.empty[KernelExpr[?], IterationDomain.Bounds]
+  private var reductionProofWork = 0
+  private var reductionChecking = false
+  private var reductionProofBuilding = false
+
+  private def chargeReduction(work: Int): Unit =
+    if reductionChecking || reductionExact.nonEmpty || reductionDomains.nonEmpty then
+      reductionProofWork += work
+      if reductionProofWork > DigitalReductionContract.MaximumWork then
+        collectionFailure("reduction body proof exceeds the 65536 analysis-work budget")
+
+  private def withReductionContext[A](
+      exact: Map[KernelExpr[?], Dimension],
+      domains: Map[KernelExpr[?], IterationDomain.Bounds]
+  )(body: => A): A =
+    val previousExact = reductionExact
+    val previousDomains = reductionDomains
+    val previousChecking = reductionChecking
+    reductionChecking = true
+    reductionExact = exact
+    reductionDomains = domains
+    try body
+    finally
+      reductionExact = previousExact
+      reductionDomains = previousDomains
+      reductionChecking = previousChecking
+
+  /** Endpoint formulas use the ordinary static builder/query, but are not source expressions. Their
+    * transient registrations must not become names, provenance, captures or snapshots.
+    */
+  private def withReductionProofExpressions[A](body: => A): A =
+    val module = currentModule
+    val checkpoint = module.expressionCount
+    val previous = reductionProofBuilding
+    val previousChecking = reductionChecking
+    reductionProofBuilding = true
+    reductionChecking = true
+    try body
+    finally
+      val temporary = expressionValues.iterator.filter((reference, _) =>
+        reference.module == module.handle && reference.index >= checkpoint
+      ).toVector
+      temporary.foreach: (reference, expression) =>
+        expressionIds.remove(expression)
+        expressionValues.remove(reference)
+        expressionRegions.remove(reference)
+      reductionProofBuilding = previous
+      reductionChecking = previousChecking
+
   private val instanceIds = new IdentityHashMap[AnyRef, InstanceRecord]()
   private val instanceObjects = new IdentityHashMap[AnyRef, Instance[? <: Module]]()
   private val records: mutable.LinkedHashMap[Long, ModuleRecord] = mutable.LinkedHashMap.empty
@@ -113,6 +191,1144 @@ private final class ConstructionSession(val options: EmitOptions):
     fail("NODAL-CONSTRUCT-016", "hardware construction has no active Module")
   )
 
+  private def activeValueRegion: Option[DigitalValueRegionRecord] =
+    moduleStack.lastOption.flatMap(module =>
+      collectionStack.reverseIterator.find(_.reference.module == module.handle)
+    )
+
+  private def admitsPredicateStatics(region: DigitalValueRegionRecord): Boolean =
+    var current = Option(region)
+    var admitted = false
+    var depth = 0
+    while current.nonEmpty && !admitted do
+      depth += 1
+      if depth > 128 then collectionFailure("lexical static scope exceeds its depth budget")
+      val value = current.get
+      admitted = value.structuralArm.nonEmpty || value.loop.exists(_.generated.nonEmpty)
+      current = value.parent
+    admitted
+
+  private def rejectCollection(code: String, message: String, path: Option[String]): Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(code, message, path))
+    poisonConstructor(failure, path.getOrElse("digital collection"))
+    scala.util.Failure[Nothing](failure).get
+
+  private def collectionFailure(message: String): Nothing =
+    rejectCollection(
+      "NODAL-COLLECTION-055-005",
+      message,
+      activeValueRegion.map(value => expressionPath(value.reference))
+    )
+
+  private def requireNoCollectionEffect(role: String, assignment: Boolean = false): Unit =
+    collectionStack.reverseIterator.find(region =>
+      !region.isLoop && !(assignment && region.structuralArm.nonEmpty)
+    ).foreach: region =>
+      rejectCollection(
+        "NODAL-COLLECTION-055-006",
+        s"$role is not permitted in this lexical value region",
+        Some(expressionPath(region.reference))
+      )
+
+  private def requireLoopEffect(role: String): Unit =
+    activeLoop.filter(_.loop.get.generated.isEmpty).foreach: region =>
+      rejectCollection(
+        "NODAL-LOOP-055-006",
+        s"$role is not permitted in a bounded digital loop",
+        Some(expressionPath(region.reference))
+      )
+
+  private def valueReference(value: Expr[?]): DeclarationRef | ExpressionRef =
+    Option(declarationIds.get(value)).map(value => value: DeclarationRef | ExpressionRef)
+      .orElse(Option(expressionIds.get(value)).map(value => value: DeclarationRef | ExpressionRef))
+      .getOrElse(collectionFailure("collection value has no captured construction identity"))
+
+  private def valueRegion(reference: DeclarationRef | ExpressionRef)
+      : Option[DigitalValueRegionRecord] =
+    reference match
+      case expression: ExpressionRef => expressionRegions.get(expression)
+      case _ => None
+
+  /** Private range partition scaffolding must not consume authored expression identities. Negative
+    * indices are disjoint from the ordinary allocation stream and use the same reference
+    * registries.
+    */
+  private def newScaffoldReference(module: ModuleRecord): ExpressionRef =
+    if module.scaffoldExpressionCount == Int.MaxValue then
+      collectionFailure("private iteration scaffold identity space is exhausted")
+    val reference = ExpressionRef(module.handle, -module.scaffoldExpressionCount - 1)
+    module.scaffoldExpressionCount += 1
+    reference
+
+  private def newCollectionArgument(
+      region: DigitalValueRegionRecord,
+      dataType: DataType[?],
+      role: String
+  ): KernelExpr[?] =
+    if region.arguments.size >= DigitalReductionContract.MaximumArguments then
+      collectionFailure("collection signature exceeds the 4098 argument budget")
+    if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
+      DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(dataType))
+    val argument = new KernelExpr[Data](
+      Vector.empty,
+      resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+      operation = Some(DigitalCollectionContract.Argument)
+    )
+    val module = records(region.reference.module)
+    val scaffold = role == "induction" && region.loop.exists(_.generated.nonEmpty)
+    val reference = if scaffold then newScaffoldReference(module)
+    else
+      val result = ExpressionRef(module.handle, module.expressionCount)
+      module.expressionCount += 1
+      result
+    collectionArguments.update(reference, region -> region.arguments.size)
+    region.arguments += argument -> role
+    val _ =
+      captureExpression(argument, retained = Some(reference), scopeOverride = Some(Some(region)))
+    argument
+
+  /** Resolve each free edge through every intervening region. This retains actual parent values as
+    * capture operands and introduces a genuine typed block argument at each isolation boundary.
+    */
+  private def bindCollectionValue(
+      value: Expr[?],
+      destination: Option[DigitalValueRegionRecord],
+      owner: Long,
+      create: Boolean = true,
+      predicateUse: Boolean = false
+  ): Expr[?] =
+    val reference = valueReference(value)
+    val sourceOwner = reference match
+      case declaration: DeclarationRef => declaration.module
+      case expression: ExpressionRef => expression.module
+    if sourceOwner != owner then collectionFailure("collection value belongs to another Module")
+    val sourceRegion = valueRegion(reference)
+    val generatedInduction = destination.filter(_.isLoop).flatMap(_.loop.get.generated)
+      .exists(region => reference == region.induction)
+    if generatedInduction then destination.get.arguments.head._1
+    else if sourceRegion == destination then value
+    else
+      destination match
+        case None =>
+          collectionFailure("collection argument or body value escaped its lexical region")
+        case Some(region) =>
+          val parentValue = bindCollectionValue(value, region.parent, owner, create, predicateUse)
+          val parentReference = valueReference(parentValue)
+          region.captures.get(parentReference) match
+            case Some((_, argument)) => argument
+            case None if create =>
+              val dataType = CandidateRuntime.expressionDataType(parentValue).getOrElse(
+                collectionFailure("collection capture requires an exact type")
+              )
+              val isStatic =
+                CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+              val proceduralIndex = isStatic && loopAffine(parentValue)
+                .exists(_._1.loop.get.generated.isEmpty)
+              if !isStatic then
+                validateShapeType(dataType, owner, cardinality = true, storageContext = true)
+              else if !proceduralIndex || predicateUse then
+                val analysis = new StructuralBoundAnalysis(owner, signed64Literals = true)
+                if predicateUse || (admitsPredicateStatics(region) && reductionExact.isEmpty &&
+                    reductionDomains.isEmpty && !reductionChecking)
+                then
+                  val _ = analysis.predicateBound(parentValue.asInstanceOf[Expr[Integer]])
+                else
+                  val _ = analysis(parentValue.asInstanceOf[Expr[Integer]])
+              val argument = newCollectionArgument(
+                region,
+                dataType,
+                if proceduralIndex then "index_capture"
+                else if isStatic then "static_capture" else "capture"
+              )
+              region.captures.update(parentReference, parentValue -> argument)
+              if !isStatic then
+                bindCollectionType(CandidateRuntime.typeDescriptor(dataType), Some(region), owner)
+              argument
+            case None => collectionFailure("collection free edge has no explicit capture argument")
+
+  private def mapCollectionType(
+      descriptor: KernelTypeDescriptor,
+      region: Option[DigitalValueRegionRecord],
+      owner: Long,
+      create: Boolean
+  ): KernelTypeDescriptor =
+    def map(value: Any): Any = value match
+      case expression: Expr[?]
+          if CandidateRuntime.expressionDataType(expression)
+            .exists(CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")) =>
+        // Module statics retain their normal parameter/reference semantics. Only crossing a
+        // collection isolation boundary introduces a genuine static capture argument.
+        if valueRegion(valueReference(expression)).nonEmpty then
+          bindCollectionValue(expression, region, owner, create)
+        else expression
+      case dataType: DataType[?] => CandidateRuntime.dataTypeFromDescriptor(
+          mapCollectionType(CandidateRuntime.typeDescriptor(dataType), region, owner, create)
+        )
+      case field: StructField[?] => StructField(
+          field.name,
+          CandidateRuntime.dataTypeFromDescriptor(mapCollectionType(
+            CandidateRuntime.typeDescriptor(field.dataType),
+            region,
+            owner,
+            create
+          ))
+        )
+      case values: Seq[?] => values.map(map)
+      case other => other
+    descriptor.copy(arguments = descriptor.arguments.map(map))
+
+  private def bindCollectionType(
+      descriptor: KernelTypeDescriptor,
+      region: Option[DigitalValueRegionRecord],
+      owner: Long
+  ): Unit =
+    val _ = mapCollectionType(descriptor, region, owner, create = true)
+
+  /** A homogeneous nested collection may export a type formula, never a local SSA identity. Rebuild
+    * only ordinary static arithmetic through explicit capture edges in its parent scope.
+    */
+  private def exportCollectionType(
+      descriptor: KernelTypeDescriptor,
+      region: DigitalValueRegionRecord
+  ): KernelTypeDescriptor =
+    val memo = mutable.HashMap.empty[KernelExpr[?], Expr[Integer]]
+    var work = 0
+    def exportWidth(value: Dimension, depth: Int): Dimension = value match
+      case expression: KernelExpr[?]
+          if Option(expressionIds.get(expression))
+            .flatMap(expressionRegions.get).contains(region) =>
+        if depth > 512 || work >= 65536 then
+          collectionFailure("collection type export exceeds static work budget")
+        memo.getOrElseUpdate(
+          expression, {
+            work += 1
+            val source = region.captures.valuesIterator.find(_._2 eq expression).map(_._1)
+            source match
+              case Some(value) => value.asInstanceOf[Expr[Integer]]
+              case None
+                  if expression.operation.exists(IterationDomain.staticArithmetic(_).nonEmpty) =>
+                CandidateRuntime.integerExpr(
+                  expression.operation.get,
+                  expression.operands.map(value =>
+                    exportWidth(value.asInstanceOf[Expr[Integer]], depth + 1)
+                      .asInstanceOf[Expr[Integer]]
+                  )*
+                )
+              case _ =>
+                collectionFailure("local collection width has no exportable static definition")
+          }
+        )
+      case other => other
+    DigitalReductionContract.mapWidths(descriptor)(exportWidth(_, 0))
+
+  private def renderCollectionType(
+      dataType: DataType[?],
+      owner: Long,
+      region: Option[DigitalValueRegionRecord]
+  ): String =
+    renderType(
+      CandidateRuntime.dataTypeFromDescriptor(mapCollectionType(
+        CandidateRuntime.typeDescriptor(dataType),
+        region,
+        owner,
+        create = false
+      )),
+      owner
+    )
+
+  private def collectionOperandPath(
+      value: Any,
+      region: Option[DigitalValueRegionRecord],
+      owner: Long
+  )
+      : Option[String] = value match
+    case expression: Expr[?] =>
+      pathOf(bindCollectionValue(expression, region, owner, create = false))
+    case _ => pathOf(value)
+
+  /** Escapes are checked on all construction consumers, including assignment/initializer paths that
+    * do not otherwise enter the digital expression closure.
+    */
+  private def validateCollectionDependencies(values: Vector[Any]): Unit =
+    val pending = mutable.ArrayDeque.from(values)
+    while pending.nonEmpty do
+      pending.removeLast() match
+        case value: Expr[?] =>
+          Option(expressionIds.get(value)).flatMap(expressionRegions.get).foreach: _ =>
+            val _ = bindCollectionValue(value, activeValueRegion, currentModule.handle)
+        case values: Seq[?] => pending ++= values
+        case Some(value) => pending.append(value)
+        case _ => ()
+
+  /** Follow only the actual induction and independently checked analysis-static offsets. Arithmetic
+    * and overflow stay in IterationDomain; no parameter default or width formal is an index proof.
+    */
+  private def loopAffine(
+      value: Any,
+      depth: Int = 0
+  ): Option[(DigitalValueRegionRecord, Vector[(String, Dimension)])] =
+    if depth > 128 then collectionFailure("iteration selector exceeds the depth budget")
+    value match
+      case expression: KernelExpr[?] =>
+        val reference = Option(expressionIds.get(expression))
+        val induction = reference.flatMap(collectionArguments.get).collect:
+          case (region, 0) if region.isLoop => region
+        val generated = activeLoop.filter(_.loop.get.generated.exists(region =>
+          reference.contains(region.induction)
+        ))
+        val captured = reference.flatMap(collectionArguments.get).flatMap: (region, _) =>
+          region.captures.valuesIterator.find(_._2 eq expression).map(_._1)
+        induction.orElse(generated) match
+          case Some(region) => Some(region -> Vector.empty)
+          case None if captured.nonEmpty => loopAffine(captured.get, depth + 1)
+          case None
+              if expression.operands.size == 2 &&
+                Set("analog_add", "analog_sub").contains(expression.operation.getOrElse("")) =>
+            val left = loopAffine(expression.operands(0), depth + 1)
+            val right = loopAffine(expression.operands(1), depth + 1)
+            def combine(
+                loop: (DigitalValueRegionRecord, Vector[(String, Dimension)]),
+                offset: Any,
+                subtract: Boolean
+            )
+                : Option[(DigitalValueRegionRecord, Vector[(String, Dimension)])] =
+              val dimension = offset.asInstanceOf[Dimension]
+              val _ = new StructuralBoundAnalysis(
+                loop._1.reference.module,
+                "NODAL-LOOP-055-002",
+                "iteration offset",
+                signed64Literals = true
+              )(dimension)
+              Some(loop._1 -> (loop._2 :+ ((if subtract then "analog_sub"
+                                            else "analog_add") -> dimension)))
+            (left, right) match
+              case (Some(loop), None) => combine(
+                  loop,
+                  expression.operands(1),
+                  expression.operation.contains("analog_sub")
+                )
+              case (None, Some(loop)) if expression.operation.contains("analog_add") =>
+                combine(loop, expression.operands(0), false)
+              case (None, None) => None
+              case _ =>
+                collectionFailure("iteration selector requires one induction in affine order")
+          case _ => None
+      case _ => None
+
+  private def collectionExpressionScope(
+      expression: KernelExpr[?],
+      retained: Option[ExpressionRef]
+  ): Option[DigitalValueRegionRecord] =
+    val current = activeValueRegion
+    if current.isEmpty then
+      validateCollectionDependencies(expression.operands)
+      None
+    else
+      val operation = expression.operation.getOrElse("")
+      val generatedAnalog =
+        current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
+          (analogStack.nonEmpty || AnalogProceduralConstruction.generatedProcedureActive ||
+            expression.resultType.exists(_.kind == "Real"))
+      val knownArgument = retained.exists(collectionArguments.contains) &&
+        operation == DigitalCollectionContract.Argument
+      val staticInteger = expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+        !knownArgument && (expression.literal.exists(_.kind == "integer") ||
+          IterationDomain.staticArithmetic(operation).nonEmpty)
+      val knownCollection = retained.exists(collectionRegions.contains) &&
+        operation == DigitalCollectionContract.Operation
+      val knownConditional = retained.exists(structuralIfs.contains) &&
+        operation == StructuralIfRuntime.Operation
+      val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
+        DigitalScalarContract.Operations.contains(operation) ||
+        operation == DigitalMaterializationContract.Operation ||
+        DigitalCombinationalContract.Operations.contains(operation) ||
+        DigitalAggregateContract.Operations.contains(operation) ||
+        DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
+        Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
+        knownArgument || knownCollection || knownConditional
+      val rangeAnalog =
+        current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
+          !pure && !staticInteger && !knownArgument
+      if generatedAnalog || rangeAnalog then
+        validateGeneratedDependencies(expression.operands)
+        None
+      else
+        if !pure && !staticInteger then
+          requireNoCollectionEffect(s"unsupported hardware expression '$operation'")
+          requireLoopEffect(s"unsupported hardware expression '$operation'")
+          collectionFailure(s"unsupported iteration expression '$operation'")
+        if !staticInteger && !knownArgument then
+          val dataType = expression.resultType.getOrElse(
+            collectionFailure("region body expression requires an exact type")
+          )
+          try DigitalCombinationalContract.validateValueType(dataType)
+          catch
+            case failure: ConstructionException =>
+              rejectCollection(
+                "NODAL-COLLECTION-055-006",
+                s"unsupported region body value: ${failure.diagnostic.message}",
+                current.map(value => expressionPath(value.reference))
+              )
+        val affine = if staticInteger then loopAffine(expression) else None
+        if staticInteger && affine.isEmpty && expression.operands.exists(loopAffine(_).nonEmpty) &&
+          !activeLoop.exists(_.loop.exists(_.generated.nonEmpty))
+        then
+          collectionFailure("iteration index supports only affine add/sub with a static offset")
+        val localStaticDependency = expression.operands.collect { case value: Expr[?] => value }
+          .exists(value => valueRegion(valueReference(value)).nonEmpty)
+        val moduleStatic = staticInteger && !localStaticDependency && affine.isEmpty &&
+          (!current.exists(_.isLoop) || current.exists(_.loop.exists(_.generated.nonEmpty)))
+        val destination = if moduleStatic then None else current
+        if !knownArgument then
+          expression.resultType.foreach(bindCollectionType(_, destination, currentModule.handle))
+        val runtimeOperands =
+          if Set("shape_index", "shape_view", "shape_slice").contains(operation) then
+            expression.operands.take(1)
+          else expression.operands
+        runtimeOperands.collect { case value: Expr[?] => value }.foreach: value =>
+          val _ = bindCollectionValue(value, destination, currentModule.handle)
+        destination
+
+  private def newLoopRegion(header: DigitalLoopHeader): DigitalValueRegionRecord =
+    if collectionStack.size >= 128 || collectionRegions.size + loopRegions.size >= 65536 then
+      collectionFailure("iteration region inventory exceeds its finite budget")
+    val module = currentModule
+    val reference = if header.generated.nonEmpty then newScaffoldReference(module)
+    else
+      val result = ExpressionRef(module.handle, module.expressionCount)
+      module.expressionCount += 1
+      result
+    val region = new DigitalValueRegionRecord(
+      reference,
+      None,
+      "bounded_loop",
+      Vector.empty,
+      None,
+      Some(header)
+    )
+    loopRegions.update(reference, region)
+    if header.generated.isEmpty then
+      semanticOrigin.captureExpression(module.handle, reference.index, region, Vector.empty)
+    collectionStack += region
+    val _ = newCollectionArgument(region, Integer, "induction")
+    region
+
+  def captureDigitalLoop(bound: LoopBound)(body: Expr[Integer] => Unit): Unit =
+    requireNoCollectionEffect("bounded loop")
+    if activeLoop.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
+      analogSemanticContext.nonEmpty
+    then
+      collectionFailure("nested or analog-context digital loops are outside the finite profile")
+    val (upper, maximum): (Dimension, Option[Int]) = bound match
+      case LoopBound.Static(value) =>
+        if value < 0 then collectionFailure("bounded loop requires a non-negative trip count")
+        value -> None
+      case LoopBound.Symbolic(value, maximum) => value -> Some(maximum)
+    val analysis = new StructuralBoundAnalysis(
+      currentModule.handle,
+      "NODAL-LOOP-055-001",
+      "bounded loop"
+    )
+    val count = analysis(upper)
+    if count.bounds.lower < 0 then collectionFailure("bounded loop count may be negative")
+    val domain = IterationDomain.boundedDigital(
+      IterationDomain.Bounds(0, 0),
+      count.bounds,
+      IterationDomain.Bounds(1, 1),
+      maximum
+    )
+      .fold(problem => collectionFailure(problem.message), identity)
+    count.parameters.foreach(markStructuralParameter)
+    val region = newLoopRegion(DigitalLoopHeader(
+      0,
+      upper,
+      1,
+      maximum,
+      domain,
+      nextEffectOrdinal()
+    ))
+    try body(region.arguments.head._1.asInstanceOf[Expr[Integer]])
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, expressionPath(region.reference))
+        scala.util.Failure[Nothing](failure).get
+    finally
+      val removed = collectionStack.remove(collectionStack.size - 1)
+      if removed ne region then collectionFailure("loop lexical scope stack is corrupt")
+
+  private def validateDigitalLoopDomain(region: DigitalValueRegionRecord): Unit =
+    val header = region.loop.get
+    val analysis = new StructuralBoundAnalysis(
+      region.reference.module,
+      "NODAL-LOOP-055-001",
+      "bounded loop"
+    )
+    if analysis(header.step).parameters.nonEmpty then
+      collectionFailure("digital iteration step must be a parameter-independent fixed DAG")
+    val _ = IterationDomain.boundedDigital(
+      header.domain.lower,
+      header.domain.upperExclusive,
+      header.domain.step,
+      header.maximum,
+      analysis.sameIdentity(header.lower, header.upperExclusive)
+    )
+      .fold(problem => collectionFailure(problem.message), identity)
+
+  private def retainedLoopRegions: Set[DigitalValueRegionRecord] =
+    val usedRegions = operations.iterator.flatMap(_.digitalRegion).toSet ++
+      expressionRegions.iterator.collect:
+        case (reference, region)
+            if region.isLoop && !collectionArguments.contains(reference) &&
+              expressionValues.get(reference).exists(value =>
+                !value.resultType.exists(dataType =>
+                  Set("Integer", "Real").contains(dataType.kind)
+                ) &&
+                  (DigitalValueConstruction.isDigitalValue(value) || shapeIndices.contains(
+                    reference
+                  ) ||
+                    shapeViews.contains(reference))
+              ) => region
+    loopRegions.valuesIterator.filter(region =>
+      !region.structuralGenerate && (region.loop.get.generated.isEmpty || usedRegions(region))
+    ).toSet
+
+  private def loopSnapshots(): Vector[KernelDigitalLoopSnapshot] =
+    val retained = retainedLoopRegions
+    loopRegions.valuesIterator.filter(retained).map: region =>
+      validateDigitalLoopDomain(region)
+      val header = region.loop.get
+      KernelDigitalLoopSnapshot(
+        expressionPath(region.reference),
+        modulePath(region.reference.module),
+        generatedBound(header.lower),
+        generatedBound(header.upperExclusive),
+        generatedBound(header.step),
+        header.maximum,
+        header.domain.maximumTripCount,
+        region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+        region.arguments.toVector.map((argument, role) =>
+          KernelDigitalRegionArgument(
+            pathOf(argument).get,
+            renderCollectionType(
+              CandidateRuntime.expressionDataType(argument).get,
+              region.reference.module,
+              Some(region)
+            ),
+            role
+          )
+        ),
+        header.sourceOrdinal,
+        header.generated.map(generatedRegionPath)
+      )
+    .toVector
+
+  private def iterationIndexSnapshots(): Vector[KernelIterationIndexSnapshot] =
+    val retained = retainedLoopRegions
+    iterationIndices.toVector.filter(reference =>
+      // Snapshot after construction: follow the retained lexical owner, not the transient
+      // active Generate stack used while admitting a newly authored selector.
+      Iterator.iterate(Option(expressionRegions(reference)))(_.flatMap(_.parent))
+        .take(129).collectFirst { case Some(region) if region.isLoop => region }.exists(retained)
+    ).map: reference =>
+      val expression = expressionValues(reference)
+      val region = expressionRegions(reference)
+      KernelIterationIndexSnapshot(
+        expressionPath(reference),
+        modulePath(reference.module),
+        expressionPath(region.reference),
+        if expression.operation.contains("analog_add") then "add" else "sub",
+        expression.operands.map(operand =>
+          collectionOperandPath(
+            operand,
+            Some(region),
+            reference.module
+          ).getOrElse(collectionFailure("iteration operand has no identity"))
+        )
+      )
+
+  private def structuralFailure(message: String): Nothing =
+    val failure = new ConstructionException(KernelDiagnostic("NODAL-STRUCTURAL-055-002", message))
+    poisonConstructor(failure, "structural if")
+    scala.util.Failure[Nothing](failure).get
+
+  private def regionArguments(region: DigitalValueRegionRecord)
+      : Vector[KernelDigitalRegionArgument] =
+    region.arguments.toVector.map: (argument, role) =>
+      KernelDigitalRegionArgument(
+        pathOf(argument).get,
+        renderCollectionType(
+          CandidateRuntime.expressionDataType(argument).get,
+          region.reference.module,
+          Some(region)
+        ),
+        role
+      )
+
+  def captureStaticPredicate(operation: String, operands: Vector[Any]): StaticPredicate =
+    try
+      if staticPredicates.size >= 65536 then
+        structuralFailure("static predicate DAG exceeds 65536 nodes")
+      val module = currentModule
+      val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(operation)
+      val logic = Set("and", "or", "not").contains(operation)
+      if ((!comparison && !logic) || operands.size != (if operation == "not" then 1 else 2)) then
+        structuralFailure("static predicate has an unknown operation or wrong arity")
+      val bound = if comparison then
+        val analysis = new StructuralBoundAnalysis(
+          module.handle,
+          "NODAL-STRUCTURAL-055-003",
+          "structural predicate",
+          signed64Literals = true
+        )
+        operands.map:
+          case value: Expr[?]
+              if CandidateRuntime.expressionDataType(value).exists(dataType =>
+                CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+              ) =>
+            val facts = analysis.predicateBound(value.asInstanceOf[Expr[Integer]])
+            facts.toVector.flatMap(_.parameters).foreach(markStructuralParameter)
+            bindCollectionValue(value, activeValueRegion, module.handle, predicateUse = true)
+          case _ =>
+            structuralFailure("comparison operands must be owned static Integer expressions")
+      else
+        operands.map:
+          case value: StaticPredicate =>
+            val reference = Option(expressionIds.get(value)).getOrElse(
+              structuralFailure("predicate operand is detached from construction")
+            )
+            if reference.module != module.handle || !staticPredicates.contains(reference) ||
+              expressionRegions.get(reference) != activeValueRegion
+            then
+              structuralFailure("predicate operand escaped its exact lexical region")
+            value
+          case _ => structuralFailure("static logic requires actual predicate operands")
+      val predicate = new StaticPredicate(operation, bound)
+      val reference =
+        captureExpression(predicate, bound, scopeOverride = Some(activeValueRegion)).get
+      staticPredicates.update(reference, predicate)
+      predicate
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "static predicate")
+        scala.util.Failure[Nothing](failure).get
+
+  def captureStructuralIf(predicate: StaticPredicate, hasResult: Boolean)(
+      whenTrue: () => Option[Expr[?]],
+      whenFalse: () => Option[Expr[?]]
+  ): Option[Expr[?]] =
+    val module = currentModule
+    val parent = activeValueRegion
+    try
+      if analogStack.nonEmpty || analogSemanticContext.nonEmpty ||
+        collectionStack.size >= 128 || structuralIfs.size * 2 + collectionRegions.size + loopRegions.size >= 65536
+      then
+        structuralFailure("structural if requires a bounded digital construction context")
+      activeLoop.filter(_.loop.get.generated.nonEmpty).foreach: region =>
+        region.structuralGenerate = true
+      val predicateRef = Option(expressionIds.get(predicate)).getOrElse(
+        structuralFailure("structural if predicate has no construction identity")
+      )
+      if predicateRef.module != module.handle || !staticPredicates.contains(predicateRef) ||
+        expressionRegions.get(predicateRef) != parent
+      then
+        structuralFailure("structural if predicate belongs to another lexical scope")
+      val reference = ExpressionRef(module.handle, module.expressionCount)
+      module.expressionCount += 1
+      val ordinal = parent match
+        case Some(region) =>
+          val result = region.assignmentCount
+          region.assignmentCount += 1
+          result
+        case None => nextEffectOrdinal()
+      def arm(whenTrue: Boolean): DigitalValueRegionRecord =
+        val value = new DigitalValueRegionRecord(
+          newScaffoldReference(module),
+          parent,
+          "structural_arm",
+          Vector.empty,
+          None,
+          structuralArm = Some(StructuralArmHeader(reference, whenTrue))
+        )
+        structuralArms.update(value.reference, value)
+        value
+      val record =
+        new StructuralIfRecord(reference, parent, predicate, arm(true), arm(false), ordinal)
+      structuralIfs.update(reference, record)
+      if !hasResult then
+        semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(predicate))
+      def capture(region: DigitalValueRegionRecord, callback: () => Option[Expr[?]])
+          : Option[KernelTypeDescriptor] =
+        collectionStack += region
+        val yielded = try
+          callback().map(value => bindCollectionValue(value, Some(region), module.handle))
+        finally
+          val removed = collectionStack.remove(collectionStack.size - 1)
+          if removed ne region then structuralFailure("structural arm lexical stack is corrupt")
+        if yielded.nonEmpty != hasResult then
+          structuralFailure("structural arm yield arity differs from its result")
+        region.yielded = yielded
+        yielded.map: value =>
+          val descriptor = DigitalCollectionContract.descriptor(value)
+          DigitalCombinationalContract.validateValueType(descriptor)
+          val exported = exportCollectionType(descriptor, region)
+          validateShapeType(
+            CandidateRuntime.dataTypeFromDescriptor(exported),
+            module.handle,
+            cardinality = true,
+            storageContext = true
+          )
+          exported
+      // Deterministic authored order, once per template, never per lane or parameter setting.
+      val trueType = capture(record.trueArm, whenTrue)
+      val falseType = capture(record.falseArm, whenFalse)
+      if trueType.size != falseType.size || trueType.zip(falseType).exists((left, right) =>
+          !DigitalEnumContract.sameType(left, right)
+        )
+      then
+        structuralFailure(
+          "structural if alternatives must yield exactly the same complete hardware ABI"
+        )
+      trueType.map: dataType =>
+        val captures = record.trueArm.captures.valuesIterator.map(_._1).toVector ++
+          record.falseArm.captures.valuesIterator.map(_._1).toVector
+        val result = new KernelExpr[Data](
+          predicate +: captures,
+          resultType = Some(dataType),
+          operation = Some(StructuralIfRuntime.Operation)
+        )
+        record.result = Some(result)
+        val _ = captureExpression(result, retained = Some(reference))
+        result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "structural if")
+        scala.util.Failure[Nothing](failure).get
+
+  private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
+    staticPredicates.toVector.map: (reference, predicate) =>
+      KernelStaticPredicateSnapshot(
+        expressionPath(reference),
+        modulePath(reference.module),
+        expressionRegions.get(reference).map(value => expressionPath(value.reference)),
+        predicate.operation,
+        predicate.operands.map(value =>
+          pathOf(value).getOrElse(
+            structuralFailure("predicate operand lost its captured identity")
+          )
+        )
+      )
+
+  private def structuralIfSnapshots(): Vector[KernelStructuralIfSnapshot] =
+    structuralIfs.valuesIterator.map: record =>
+      def arm(region: DigitalValueRegionRecord): KernelStructuralArmSnapshot =
+        KernelStructuralArmSnapshot(
+          expressionPath(region.reference),
+          region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+          regionArguments(region),
+          region.yielded.flatMap(pathOf)
+        )
+      KernelStructuralIfSnapshot(
+        expressionPath(record.reference),
+        modulePath(record.reference.module),
+        record.parent.map(value => expressionPath(value.reference)),
+        pathOf(record.predicate).get,
+        arm(record.trueArm),
+        arm(record.falseArm),
+        record.result.flatMap(CandidateRuntime.expressionDataType).map(renderType(
+          _,
+          record.reference.module
+        )),
+        record.sourceOrdinal
+      )
+    .toVector
+
+  def captureCollection(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] =
+    if activeGeneratedRegion.nonEmpty && activeLoop.isEmpty then
+      fail(
+        "NODAL-ITERATION-043-004",
+        "digital collection in structural generation requires its digital profile"
+      )
+    if collectionStack.size >= 128 || collectionRegions.size + loopRegions.size >= 65536 then
+      DigitalCollectionContract.fail(
+        5,
+        "collection nesting or region inventory exceeds its finite budget"
+      )
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      DigitalCollectionContract.fail(
+        6,
+        "digital collection requires a combinational digital context"
+      )
+    if DigitalReductionContract.Kinds.contains(kind) then captureReduction(kind, inputs, seed)(body)
+    else captureOrdinaryCollection(kind, inputs, seed)(body)
+
+  private def captureOrdinaryCollection(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] =
+    val module = currentModule
+    val argumentTypes = DigitalCollectionContract.arguments(kind, inputs, seed)
+    val parent = activeValueRegion
+    val boundInputs = inputs.map(bindCollectionValue(_, parent, module.handle))
+    val boundSeed = seed.map(bindCollectionValue(_, parent, module.handle))
+    (boundInputs ++ boundSeed).foreach: value =>
+      validateShapeType(
+        CandidateRuntime.expressionDataType(value).get,
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    val region = new DigitalValueRegionRecord(reference, parent, kind, boundInputs, boundSeed)
+    collectionRegions.update(reference, region)
+    collectionStack += region
+    try
+      val arguments =
+        argumentTypes.map((dataType, role) => newCollectionArgument(region, dataType, role))
+      arguments.foreach(argument =>
+        bindCollectionType(argument.resultType.get, Some(region), module.handle)
+      )
+      val yielded = bindCollectionValue(body(arguments), Some(region), module.handle)
+      DigitalCombinationalContract.validateValueType(DigitalCollectionContract.descriptor(yielded))
+      val rawResultType =
+        DigitalCollectionContract.result(kind, boundInputs.head, boundSeed, yielded)
+      region.yielded = Some(yielded)
+      collectionStack.remove(collectionStack.size - 1)
+      val resultType = exportCollectionType(rawResultType, region)
+      validateShapeType(
+        CandidateRuntime.dataTypeFromDescriptor(resultType),
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
+      val result = new KernelExpr[Data](
+        boundInputs ++ boundSeed ++ region.captures.valuesIterator.map(_._1).toVector,
+        resultType = Some(resultType),
+        operation = Some(DigitalCollectionContract.Operation)
+      )
+      region.result = Some(result)
+      val _ = captureExpression(result, retained = Some(reference))
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, expressionPath(reference))
+        scala.util.Failure[Nothing](failure).get
+    finally
+      if collectionStack.lastOption.contains(region) then
+        collectionStack.remove(collectionStack.size - 1)
+
+  /** Capture one dependent-width whole-value template, then discharge every reachable context. */
+  private def captureReduction(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] =
+    if inputs.size != 1 || seed.nonEmpty then
+      collectionFailure("reduction requires one input and no seed")
+    if collectionStack.exists(value => DigitalReductionContract.Kinds.contains(value.kind)) then
+      collectionFailure("reducer-in-reducer nesting is outside the finite reduction profile")
+    val module = currentModule
+    val parent = activeValueRegion
+    val input = bindCollectionValue(inputs.head, parent, module.handle)
+    val (element, dimensions) = DigitalCollectionContract.vector(input)
+    validateShapeType(
+      CandidateRuntime.expressionDataType(input).get,
+      module.handle,
+      cardinality = true,
+      storageContext = true
+    )
+    val initialType = CandidateRuntime.typeDescriptor(element)
+    val count = dimensions.reduce(StaticIntegerExpression.multiply64)
+    val countBounds =
+      new StructuralBoundAnalysis(module.handle, signed64Literals = true)(count).bounds
+    if countBounds.lower <= 0 then collectionFailure("reduction count must remain positive")
+    if countBounds.upper == 1 then
+      CandidateRuntime.shapeIndex(
+        input.asInstanceOf[Expr[Vec[Data]]],
+        dimensions.map(_ => 0)
+      )
+    else
+      // Inventory and cost preflight precede formal allocation and the user's callback.
+      val widths = DigitalReductionContract.widths(initialType)
+      val contexts = DigitalReductionContract.contexts(
+        countBounds.lower,
+        countBounds.upper,
+        kind == "reduce_balanced"
+      )
+      if BigInt(contexts.size) * BigInt(
+          DigitalReductionContract.schemaWork(initialType) * 2 + 2
+        ) > DigitalReductionContract.MaximumWork
+      then
+        collectionFailure("reduction context preflight exceeds the 65536 analysis-work budget")
+      val reference = ExpressionRef(module.handle, module.expressionCount)
+      module.expressionCount += 1
+      val region = new DigitalValueRegionRecord(reference, parent, kind, Vector(input), None)
+      collectionRegions.update(reference, region)
+      collectionStack += region
+      val previousExact = reductionExact
+      val previousDomains = reductionDomains
+      reductionProofWork = 0
+      try
+        def formals(side: String): Vector[KernelExpr[?]] = widths.indices.map(index =>
+          newCollectionArgument(region, Integer, s"${side}_width:$index")
+        ).toVector
+        val left = formals("left")
+        val right = formals("right")
+        val first = (left.zip(widths) ++ right.zip(widths)).toMap
+        reductionExact = first
+        reductionDomains = Map.empty
+        def template(formals: Vector[KernelExpr[?]]): DataType[?] =
+          var index = 0
+          CandidateRuntime.dataTypeFromDescriptor(DigitalReductionContract.mapWidths(initialType):
+            _ =>
+              val value = formals(index).asInstanceOf[Expr[Integer]]
+              index += 1
+              value)
+        val wholeLeft = newCollectionArgument(region, template(left), "left")
+        val wholeRight = newCollectionArgument(region, template(right), "right")
+        val yielded =
+          bindCollectionValue(body(Vector(wholeLeft, wholeRight)), Some(region), module.handle)
+        val yieldedType = DigitalCollectionContract.descriptor(yielded)
+        if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
+          collectionFailure(
+            "reduction callback changes kind, record schema, enum ABI or inner dimensions"
+          )
+        val yieldedWidths = DigitalReductionContract.widths(yieldedType)
+        val graph = new DigitalReductionContract.IntegerGraph[Dimension]:
+          override def charge(work: Int): Unit = chargeReduction(work)
+          def same(a: Dimension, b: Dimension): Boolean = (a, b) match
+            case (x: Int, y: Int) => x == y
+            case (x: Expr[?], y: Expr[?]) => x eq y
+            case _ => false
+          def operation(value: Dimension): Option[(String, Vector[Dimension])] = value match
+            case expression: KernelExpr[?] if expression.literal.isEmpty =>
+              expression.operation.filter(IterationDomain.staticArithmetic(_).nonEmpty).map(
+                operation =>
+                  operation -> expression.operands.map(_.asInstanceOf[Expr[Integer]])
+              )
+            case _ => None
+          def literal(value: Long): Dimension = StaticIntegerExpression.literal64(BigInt(value))
+          def bounds(value: Dimension): (Long, Long) =
+            val result =
+              new StructuralBoundAnalysis(module.handle, signed64Literals = true)(value).bounds
+            result.lower -> result.upper
+          def add(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.add64(a, b)
+          def subtract(a: Dimension, b: Dimension): Dimension =
+            StaticIntegerExpression.subtract64(a, b)
+          def multiply(a: Dimension, b: Dimension): Dimension =
+            StaticIntegerExpression.multiply64(a, b)
+          def maximum(a: Dimension, b: Dimension): Dimension = StaticIntegerExpression.maximum(a, b)
+          def ceilLog2(value: Dimension): Dimension = StaticIntegerExpression.ceilLog2(value)
+          def chooseZero(test: Dimension, zero: Dimension, nonzero: Dimension): Dimension =
+            StaticIntegerExpression.chooseZero(test, zero, nonzero)
+        val allFormals = (left ++ right).map(_.asInstanceOf[Dimension])
+        val profiles = yieldedWidths.indices.map(index =>
+          DigitalReductionContract.infer(
+            yieldedWidths(index),
+            left(index).asInstanceOf[Dimension],
+            right(index).asInstanceOf[Dimension],
+            allFormals,
+            graph
+          )
+        ).toVector
+        region.yielded = Some(yielded)
+        // Body inventory includes ordinary nested collections and all unused retained operations.
+        def descendant(candidate: DigitalValueRegionRecord): Boolean =
+          var current = Option(candidate)
+          var found = false
+          while current.nonEmpty && !found do
+            found = current.get eq region
+            current = current.get.parent
+          found
+        val actualBody = expressionValues.iterator.filter((ref, _) =>
+          expressionRegions.get(ref).exists(descendant)
+        ).toVector
+        if BigInt(actualBody.size + widths.size * 2) * BigInt(contexts.size) >
+            DigitalReductionContract.MaximumWork
+        then
+          collectionFailure("reduction body/context work exceeds the 65536 analysis-work budget")
+        // Endpoints are ordinary static expressions. The universal domain, never an endpoint sample,
+        // is used for every intermediate body width and operation obligation below.
+        collectionStack.remove(collectionStack.size - 1)
+        reductionExact = previousExact
+        reductionDomains = previousDomains
+        val balanced = kind == "reduce_balanced"
+        def at(index: Int, size: Long): Dimension = DigitalReductionContract.formula(
+          profiles(index),
+          widths(index),
+          graph.literal(size),
+          balanced,
+          graph
+        )
+        withReductionProofExpressions:
+          contexts.foreach: (leftSize, rightSize) =>
+            val exact = mutable.HashMap.empty[KernelExpr[?], Dimension]
+            val domains = mutable.HashMap.empty[KernelExpr[?], IterationDomain.Bounds]
+            def bind(
+                formals: Vector[KernelExpr[?]],
+                size: DigitalReductionContract.SizeRange
+            ): Unit =
+              profiles.indices.foreach: index =>
+                profiles(index) match
+                  case DigitalReductionContract.Transfer.Invariant =>
+                    exact.update(formals(index), widths(index))
+                  case DigitalReductionContract.Transfer.Fixed(value) =>
+                    exact.update(formals(index), if size.upper == 1 then widths(index) else value)
+                  case _ if size.lower == size.upper =>
+                    exact.update(formals(index), at(index, size.lower))
+                  case _ =>
+                    val lower = graph.bounds(at(index, size.lower))._1
+                    val upper = graph.bounds(at(index, size.upper))._2
+                    domains.update(formals(index), IterationDomain.Bounds(lower, upper))
+            bind(left, leftSize)
+            bind(right, rightSize)
+            withReductionContext(exact.toMap, domains.toMap):
+              if !DigitalEnumContract.sameWidthFamily(initialType, yieldedType) then
+                collectionFailure("reduction invariant inner shape changes in a reachable context")
+              actualBody.foreach: (reference, expression) =>
+                validateReductionStructure(reference, expression, module.handle)
+                val descriptor =
+                  expression.resultType.getOrElse(
+                    collectionFailure("reduction body type is absent")
+                  )
+                if descriptor.kind == "Integer" then
+                  // Raw static captures need only the i64 stage contract here. Each width,
+                  // shape and bounded consumer is checked independently in this same context.
+                  val _ = new StructuralBoundAnalysis(
+                    module.handle,
+                    signed64Literals = true,
+                    allowUnboundedParameters = true
+                  )(expression.asInstanceOf[Expr[Integer]])
+                else
+                  validateShapeType(
+                    CandidateRuntime.dataTypeFromDescriptor(descriptor),
+                    module.handle,
+                    cardinality = true,
+                    storageContext = true
+                  )
+                  DigitalReductionContract.validateBodyValue(expression)
+        var index = 0
+        val resultType = DigitalReductionContract.mapWidths(initialType): _ =>
+          val value =
+            DigitalReductionContract.formula(profiles(index), widths(index), count, balanced, graph)
+          index += 1
+          value
+        validateShapeType(
+          CandidateRuntime.dataTypeFromDescriptor(resultType),
+          module.handle,
+          cardinality = true,
+          storageContext = true
+        )
+        val result = new KernelExpr[Data](
+          Vector(input) ++ region.captures.valuesIterator.map(_._1).toVector,
+          resultType = Some(resultType),
+          operation = Some(DigitalCollectionContract.Operation)
+        )
+        region.result = Some(result)
+        val _ = captureExpression(result, retained = Some(reference))
+        result
+      catch
+        case failure: Throwable =>
+          poisonConstructor(failure, expressionPath(reference))
+          scala.util.Failure[Nothing](failure).get
+      finally
+        reductionExact = previousExact
+        reductionDomains = previousDomains
+        if collectionStack.lastOption.contains(region) then
+          collectionStack.remove(collectionStack.size - 1)
+
+  /** Reuse the ordinary shape/collection contracts under each admitted width context. */
+  private def validateReductionStructure(
+      reference: ExpressionRef,
+      expression: KernelExpr[?],
+      owner: Long
+  ): Unit =
+    def input: Expr[Vec[Data]] = expression.operands.head.asInstanceOf[Expr[Vec[Data]]]
+    shapeIndices.get(reference).foreach: index =>
+      val _ = validateShapeIndexBounds(
+        index.indices,
+        DigitalCollectionContract.vector(input)._2,
+        owner,
+        expressionPath(reference)
+      )
+    shapeViews.get(reference).foreach: view =>
+      val analysis = new StructuralBoundAnalysis(
+        owner,
+        if view.slice.nonEmpty then "NODAL-SHAPE-043-004" else "NODAL-SHAPE-043-003",
+        "shape view"
+      )
+      val _ = validateShapeViewDimensions(
+        DigitalCollectionContract.vector(input)._2,
+        view.dimensions,
+        view.slice,
+        owner,
+        expressionPath(reference),
+        analysis
+      )
+    collectionRegions.get(reference).foreach: nested =>
+      val expected = DigitalCollectionContract.arguments(nested.kind, nested.inputs, nested.seed)
+      if !nested.arguments.take(expected.size).zip(expected).forall:
+          case ((argument, _), (dataType, _)) =>
+            DigitalEnumContract.sameType(
+              argument.resultType.get,
+              CandidateRuntime.typeDescriptor(dataType)
+            )
+      then
+        collectionFailure(
+          "nested collection argument type changes in a reachable reduction context"
+        )
+      val result = DigitalCollectionContract.result(
+        nested.kind,
+        nested.inputs.head,
+        nested.seed,
+        nested.yielded.get
+      )
+      if !DigitalEnumContract.sameType(result, expression.resultType.get) then
+        collectionFailure("nested collection result type changes in a reachable reduction context")
+
+    structuralIfs.get(reference).foreach: conditional =>
+      Vector(conditional.trueArm, conditional.falseArm).foreach: arm =>
+        val yielded =
+          arm.yielded.getOrElse(collectionFailure("value conditional lost its reduction yield"))
+        if !DigitalEnumContract.sameType(
+            DigitalCollectionContract.descriptor(yielded),
+            expression.resultType.get
+          )
+        then
+          collectionFailure("structural alternative ABI changes in a reachable reduction context")
+
+  private def collectionSnapshots(): Vector[KernelDigitalCollectionSnapshot] =
+    collectionRegions.valuesIterator.map: region =>
+      val result = region.result.getOrElse(collectionFailure("collection capture did not complete"))
+      val owner = region.reference.module
+      KernelDigitalCollectionSnapshot(
+        expressionPath(region.reference),
+        modulePath(owner),
+        region.parent.map(value => expressionPath(value.reference)),
+        region.kind,
+        region.inputs.map(value => pathOf(value).get),
+        region.seed.flatMap(pathOf),
+        region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+        region.arguments.toVector.map: (argument, role) =>
+          KernelDigitalRegionArgument(
+            pathOf(argument).get,
+            renderCollectionType(
+              CandidateRuntime.expressionDataType(argument).get,
+              owner,
+              Some(region)
+            ),
+            role
+          ),
+        pathOf(region.yielded.get).get,
+        renderType(CandidateRuntime.expressionDataType(result).get, owner)
+      )
+    .toVector
+
   private def activeGeneratedRegion: Option[GeneratedRegionRecord] =
     moduleStack.lastOption.flatMap(module =>
       generationStack.reverseIterator.find(_.owner == module.handle)
@@ -125,6 +1341,8 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def requireNoGeneratedEffect(role: String): Unit =
+    requireNoCollectionEffect(role)
+    requireLoopEffect(role)
     activeGeneratedRegion.foreach: region =>
       fail(
         "NODAL-ITERATION-043-004",
@@ -155,6 +1373,8 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def beginModule(module: Module): Unit =
+    requireNoCollectionEffect("Module declaration")
+    requireLoopEffect("Module declaration")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
     val handle = nextModule
@@ -279,6 +1499,9 @@ private final class ConstructionSession(val options: EmitOptions):
       attributes: Vector[(String, Any)],
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
+    requireNoCollectionEffect(s"${kind.label} declaration")
+    requireLoopEffect(s"${kind.label} declaration")
+    validateCollectionDependencies(attributes.map(_._2))
     val activeGeneratedVariable =
       kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
     if kind != KernelSignalKind.AnalogNode && kind != KernelSignalKind.AnalogNodeArray &&
@@ -879,7 +2102,12 @@ private final class ConstructionSession(val options: EmitOptions):
   private def digitalWidthBound(descriptor: KernelTypeDescriptor, owner: Long): StructuralBound =
     if descriptor.arguments.size != 1 then
       fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
-    val analysis = new StructuralBoundAnalysis(owner, "NODAL-DIGITAL-054-001", "digital width")
+    val analysis = new StructuralBoundAnalysis(
+      owner,
+      "NODAL-DIGITAL-054-001",
+      "digital width",
+      signed64Literals = true
+    )
     val bound = descriptor.arguments.head match
       case width: Int => analysis(width)
       case width: Expr[?] => analysis(width.asInstanceOf[Expr[Integer]])
@@ -896,7 +2124,17 @@ private final class ConstructionSession(val options: EmitOptions):
     val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
     (bounds.lower, bounds.upper)
 
+  def sameStaticInteger(left: Dimension, right: Dimension): Boolean =
+    new StructuralBoundAnalysis(
+      currentModule.handle,
+      "NODAL-DIGITAL-054-001",
+      "digital type extent",
+      signed64Literals = true
+    ).sameIdentity(left, right)
+
   def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
+    // Equality to a literal is proven by a singleton domain, including each reduction context.
+    // This does not equate distinct symbolic widths whose broader domains happen to agree.
     val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
     bounds.lower == expected.toLong && bounds.upper == expected.toLong
 
@@ -919,6 +2157,7 @@ private final class ConstructionSession(val options: EmitOptions):
         )
       bits
     def visit(current: DataType[?], depth: Int, field: Boolean): Option[BigInt] =
+      chargeReduction(1)
       remaining -= 1
       if depth > 128 || remaining < 0 || active.containsKey(current) then
         fail(
@@ -1047,6 +2286,8 @@ private final class ConstructionSession(val options: EmitOptions):
       owner: Long,
       code: String
   ): (DeclarationRef | ExpressionRef, Option[DataType[? <: Data]], String) =
+    validateCollectionDependencies(Vector(input))
+    activeValueRegion.foreach(region => bindCollectionValue(input, Some(region), owner))
     val reference: DeclarationRef | ExpressionRef = input match
       case candidate: AnyRef =>
         Option(declarationIds.get(candidate))
@@ -1077,6 +2318,15 @@ private final class ConstructionSession(val options: EmitOptions):
         val dimensions = Option.when(lexical)(CandidateRuntime.expressionDataType(input).toVector
           .flatMap(dataType => CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector)
           .flatMap { case values: Seq[?] => values.toVector; case _ => Vector.empty })
+          .orElse(expressionValues.get(expression).filter(value =>
+            DigitalValueConstruction.isDigitalValue(value) || collectionArguments.contains(
+              expression
+            )
+          ).flatMap(CandidateRuntime.expressionDataType).map(dataType =>
+            CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector.flatMap:
+              case values: Seq[?] => values.toVector
+              case _ => Vector.empty
+          ))
           .orElse(shapeViews.get(expression).map(_.dimensions))
           .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
             .map(_.resultDimensions))
@@ -1171,35 +2421,69 @@ private final class ConstructionSession(val options: EmitOptions):
               "prefix index result must retain the exact remaining shaped dimensions",
               Some(inputPath)
             )
-        val analysis = new StructuralBoundAnalysis(
-          module.handle,
-          "NODAL-SHAPE-043-002",
-          "shape index"
-        )
-        val extentAnalysis = new StructuralBoundAnalysis(
-          module.handle,
-          "NODAL-SHAPE-043-002",
-          "shape extent"
-        )
-        val positions = indices.map(value => value -> analysis(value))
-        positions.zip(dimensions).zipWithIndex.foreach:
-          case (((_, position), dimension), axis) =>
-            val minimum = minimumShapeExtent(dimension, extentAnalysis)
-            if position.bounds.lower < 0L || position.bounds.upper >= minimum then
-              fail(
-                "NODAL-SHAPE-043-002",
-                s"index is not in bounds for every legal shape at axis $axis",
-                Some(inputPath)
-              )
-            position.parameters.foreach(markStructuralParameterEffect(_, "shape"))
+        validateShapeIndexBounds(indices, dimensions, module.handle, inputPath)
+          .foreach(markStructuralParameterEffect(_, "shape"))
+        activeValueRegion.foreach: region =>
+          indices.collect { case value: Expr[?] => value }.foreach(value =>
+            bindCollectionValue(value, Some(region), module.handle)
+          )
         val reference = captureExpression(expression).getOrElse(
           fail("NODAL-SHAPE-043-002", "shape index requires an active Module")
         )
         if !CandidateRuntime.proceduralShapeSource(input) then
           shapeIndices.update(
             reference,
-            ShapeIndexRecord(reference, inputReference, positions.map(_._1), resultDimensions)
+            ShapeIndexRecord(reference, inputReference, indices, resultDimensions)
           )
+
+  private def validateShapeIndexBounds(
+      indices: Vector[Dimension],
+      dimensions: Vector[Any],
+      owner: Long,
+      path: String
+  ): Vector[DeclarationRef] =
+    if indices.isEmpty || indices.size > dimensions.size then
+      fail("NODAL-SHAPE-043-002", "index rank is empty or exceeds shaped rank", Some(path))
+    val analysis = new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-002", "shape index")
+    val extentAnalysis = new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-002", "shape extent")
+    val parameters = mutable.ArrayBuffer.empty[DeclarationRef]
+    indices.zip(dimensions).zipWithIndex.foreach:
+      case ((index, dimension), axis) =>
+        val minimum = minimumShapeExtent(dimension, extentAnalysis)
+        loopAffine(index) match
+          case Some((region, offsets)) =>
+            if !activeLoop.contains(region) then
+              collectionFailure("iteration selector escaped its owner")
+            val header = region.loop.get
+            val shiftedLower = analysis.shiftedBounds(header.domain.lower, offsets)
+            val shiftedUpper = IterationDomain.attainedBounds(header.domain)
+              .map(analysis.shiftedBounds(_, offsets))
+            val related = analysis.shiftedAtMost(
+              header.upperExclusive,
+              offsets,
+              dimension.asInstanceOf[Dimension]
+            )
+            if header.domain.maximumTripCount != 0 &&
+              (shiftedLower.lower < 0 || (!related && shiftedUpper.exists(_.upper >= minimum)))
+            then
+              fail(
+                "NODAL-SHAPE-043-002",
+                s"iteration index is not in bounds for every legal shape at axis $axis",
+                Some(path)
+              )
+            parameters ++= offsets.flatMap(offset => analysis(offset._2).parameters)
+            parameters ++= analysis(header.lower).parameters
+            parameters ++= analysis(header.upperExclusive).parameters
+          case None =>
+            val position = analysis(index)
+            if position.bounds.lower < 0L || position.bounds.upper >= minimum then
+              fail(
+                "NODAL-SHAPE-043-002",
+                s"index is not in bounds for every legal shape at axis $axis",
+                Some(path)
+              )
+            parameters ++= position.parameters
+    parameters.toVector.distinct
 
   private final case class ShapeViewFactor(
       literal: Option[Long],
@@ -1481,22 +2765,56 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def captureExpression(
       value: AnyRef,
-      structuralOperands: Vector[Any] = Vector.empty
+      structuralOperands: Vector[Any] = Vector.empty,
+      retained: Option[ExpressionRef] = None,
+      scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      if reductionProofBuilding then
+        value match
+          case expression: KernelExpr[?] if expression.resultType.exists(_.kind == "Integer") => ()
+          case _ =>
+            collectionFailure("reduction proof may construct only temporary static expressions")
+      val scope = if reductionProofBuilding then None
+      else
+        scopeOverride.getOrElse(value match
+          case expression: KernelExpr[?] => collectionExpressionScope(expression, retained)
+          case _ =>
+            requireNoCollectionEffect("non-value hardware construction")
+            validateCollectionDependencies(structuralOperands)
+            None)
       validateGeneratedDependencies(value match
         case expression: KernelExpr[?] => expression.operands
         case _ => structuralOperands)
-      val reference = ExpressionRef(module.handle, module.expressionCount)
-      module.expressionCount += 1
+      val reference = retained.getOrElse:
+        val fresh = ExpressionRef(module.handle, module.expressionCount)
+        module.expressionCount += 1
+        fresh
+      if !reductionProofBuilding then
+        activeValueRegion.foreach: region =>
+          if region.expressionCount >= 4098 then
+            collectionFailure("collection body exceeds the 4098 expression budget")
+          region.expressionCount += 1
       expressionIds.put(value, reference)
+      value match
+        case expression: KernelExpr[?]
+            if scope.nonEmpty &&
+              expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+              !collectionArguments.contains(reference) && loopAffine(expression).exists(value =>
+                scope.exists(_.isLoop) || value._1.loop.get.generated.isEmpty
+              ) =>
+          iterationIndices += reference
+        case _ => ()
+      scope.foreach(region => expressionRegions.update(reference, region))
       val operands = value match
         case expression: KernelExpr[?] =>
           expressionValues.update(reference, expression)
           analogStack.lastOption.foreach(_.expressions += reference)
           expression.operands
         case _ => structuralOperands
-      semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
+      // Private partition scaffold arguments have lexical paths, but no authored source identity.
+      if !reductionProofBuilding && reference.index >= 0 then
+        semanticOrigin.captureExpression(module.handle, reference.index, value, operands)
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
@@ -1504,13 +2822,23 @@ private final class ConstructionSession(val options: EmitOptions):
         if expression.operation.exists(operation =>
           operation.startsWith(
             DigitalEnumContract.Prefix
-          ) || DigitalScalarContract.Operations.contains(operation)
+          ) || DigitalScalarContract.Operations.contains(operation) ||
+            operation == DigitalMaterializationContract.Operation ||
+            DigitalCombinationalContract.Operations.contains(operation) ||
+            DigitalAggregateContract.Operations.contains(operation)
         ) =>
-      if activeGeneratedRegion.nonEmpty then
+      if activeGeneratedRegion.nonEmpty && activeLoop.isEmpty then
         fail(
           "NODAL-ENUM-054-020",
           "digital expressions in generated scopes require the digital generation profile"
         )
+      expression.operands.collect { case metadata: StructOperationMetadata => metadata.schema }
+        .foreach(validateShapeType(
+          _,
+          currentModule.handle,
+          cardinality = true,
+          storageContext = true
+        ))
       val _ = captureExpression(value)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
@@ -2211,6 +3539,8 @@ private final class ConstructionSession(val options: EmitOptions):
         false
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
+    requireNoCollectionEffect("clock-domain context")
+    requireLoopEffect("clock-domain context")
     if !domainIds.containsKey(domain) then
       fail("NODAL-DOMAIN-018", "lexical ClockDomain is outside this transaction")
     domainRef(domain)
@@ -2242,7 +3572,8 @@ private final class ConstructionSession(val options: EmitOptions):
       owner: Long,
       diagnosticCode: String = "NODAL-ITERATION-043-001",
       subject: String = "hdlRange",
-      signed64Literals: Boolean = false
+      signed64Literals: Boolean = false,
+      allowUnboundedParameters: Boolean = false
   ):
     private val cache = mutable.HashMap.empty[ExpressionRef, StructuralBound]
     private val active = mutable.HashSet.empty[ExpressionRef]
@@ -2257,12 +3588,104 @@ private final class ConstructionSession(val options: EmitOptions):
       }
     )
 
-    private def parameterFact(parameter: Param[?]): StructuralBound =
-      val fact = parameterBound(parameter, owner, diagnosticCode, subject)
+    private def parameterFact(
+        parameter: Param[?],
+        allowUnbounded: Boolean = false
+    ): StructuralBound =
+      val fact = parameterBound(
+        parameter,
+        owner,
+        diagnosticCode,
+        subject,
+        allowUnbounded || allowUnboundedParameters
+      )
       val reference = fact.parameters.head
       fact.copy(identity =
         Some(intern((1, s"${reference.module}:${reference.index}", Vector.empty)))
       )
+
+    /** Predicate admission shares the same raw Integer DAG and checked arithmetic. An empty actual
+      * Generate has no attained value: retain None while still checking every raw operand and op.
+      */
+    private val predicateCache = mutable.HashMap.empty[ExpressionRef, Option[StructuralBound]]
+    private val predicateActive = mutable.HashSet.empty[ExpressionRef]
+    def predicateBound(value: Expr[Integer]): Option[StructuralBound] = value match
+      case parameter: Param[?] =>
+        val fact = parameterFact(parameter, allowUnbounded = true)
+        fact.parameters.foreach(markStructuralParameter)
+        Some(fact)
+      case expression: KernelExpr[?] =>
+        val reference = Option(expressionIds.get(expression)).getOrElse(
+          invalid("structural predicate Integer has no captured identity")
+        )
+        if reference.module != owner || expression.resultType != Some(
+            KernelTypeDescriptor("Integer")
+          )
+        then
+          invalid("structural predicate Integer belongs to another module or type")
+        predicateCache.get(reference) match
+          case Some(result) => result
+          case None =>
+            if predicateActive.size >= 128 || predicateCache.size >= 65536 || !predicateActive.add(
+                reference
+              )
+            then
+              invalid("static predicate Integer DAG is cyclic or exceeds its finite budget")
+            try
+              def generatedFact(generated: GeneratedRegionRecord): Option[StructuralBound] =
+                if !generationStack.contains(generated) then
+                  invalid("Generate induction escaped its actual active lexical scope")
+                val domain =
+                  loopRegions.valuesIterator.find(_.loop.exists(_.generated.contains(generated)))
+                    .map(_.loop.get.domain).getOrElse(invalid(
+                      "Generate induction lacks its actual domain"
+                    ))
+                IterationDomain.attainedBounds(domain).map(bounds =>
+                  StructuralBound(
+                    expression,
+                    bounds,
+                    Vector.empty,
+                    Some(intern((4, expressionPath(generated.induction), Vector.empty)))
+                  )
+                )
+              val result = collectionArguments.get(reference) match
+                case Some((region, _)) =>
+                  region.captures.valuesIterator.find(_._2 eq expression) match
+                    case Some((source, _)) => predicateBound(source.asInstanceOf[Expr[Integer]])
+                    case None
+                        if region.loop.exists(_.generated.nonEmpty) &&
+                          (region.arguments.head._1 eq expression) =>
+                      generatedFact(region.loop.get.generated.get)
+                    case _ => invalid(
+                        "procedural induction or unadmitted Integer formal in static predicate"
+                      )
+                case None if expression.operation.contains("generate_index") =>
+                  if expression.operands.nonEmpty then invalid("malformed Generate induction")
+                  val generated = records(owner).generatedRegions.find(_.induction == reference)
+                    .getOrElse(invalid("static index lacks an actual Generate owner"))
+                  generatedFact(generated)
+                case None if expression.literal.nonEmpty => Some(literalBound(expression))
+                case None =>
+                  val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
+                    .getOrElse(invalid("static predicate requires pure Integer arithmetic"))
+                  if expression.operands.size != operation.arity then
+                    invalid("static Integer operation has wrong arity")
+                  val facts = expression.operands.map:
+                    case operand: Expr[?] => predicateBound(operand.asInstanceOf[Expr[Integer]])
+                    case _ =>
+                      invalid("static Integer operation has an untyped or physical-unit operand")
+                  if facts.forall(_.nonEmpty) then
+                    Some(compose(
+                      expression.operation.get,
+                      facts.flatten,
+                      expression,
+                      Some(expressionPath(reference))
+                    ))
+                  else None
+              predicateCache.update(reference, result)
+              result
+            finally predicateActive.remove(reference)
+      case _ => invalid("structural predicate requires an owned Integer expression")
 
     def sameIdentity(left: Dimension, right: Dimension): Boolean =
       apply(left).identity == apply(right).identity
@@ -2287,18 +3710,30 @@ private final class ConstructionSession(val options: EmitOptions):
           if active.size >= 512 || !active.add(reference) then
             invalid("hdlRange expression is cyclic or exceeds the supported dependency depth")
           try
-            val result = expression.literal match
-              case Some(_) => literalBound(expression)
+            chargeReduction(1)
+            val result = reductionExact.get(expression) match
+              case Some(replacement) => apply(replacement)
+              case None if reductionDomains.contains(expression) =>
+                StructuralBound(
+                  expression,
+                  reductionDomains(expression),
+                  Vector.empty,
+                  Some(intern((3, expressionPath(reference), Vector.empty)))
+                )
+              case None if collectionArguments.contains(reference) =>
+                val (region, _) = collectionArguments(reference)
+                region.captures.valuesIterator.find(_._2 eq expression) match
+                  case Some((source, _))
+                      if expression.resultType.contains(KernelTypeDescriptor("Integer")) =>
+                    apply(source.asInstanceOf[Expr[Integer]])
+                  case _ => invalid("unadmitted collection Integer formal")
+              case None if expression.literal.nonEmpty => literalBound(expression)
               case None =>
-                val operation = expression.operation match
-                  case Some("analog_add") => IterationDomain.Arithmetic.Add
-                  case Some("analog_sub") => IterationDomain.Arithmetic.Subtract
-                  case Some("analog_mul") => IterationDomain.Arithmetic.Multiply
-                  case Some("analog_div") => IterationDomain.Arithmetic.Divide
-                  case Some("analog_neg") => IterationDomain.Arithmetic.Negate
-                  case _ =>
-                    invalid("hdlRange expression is not supported pure Integer arithmetic")
-                val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
+                val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
+                  .getOrElse(invalid(
+                    "hdlRange expression is not supported pure Integer arithmetic"
+                  ))
+                val arity = operation.arity
                 if expression.operands.size != arity then
                   invalid("hdlRange Integer expression has invalid arity")
                 val operands = expression.operands.map:
@@ -2306,32 +3741,93 @@ private final class ConstructionSession(val options: EmitOptions):
                     parameterFact(parameter)
                   case child: KernelExpr[?] => expressionBound(child)
                   case _ => invalid("hdlRange expression has a non-static or untyped operand")
-                // Correlation is valid only for the very same captured operand. Equal intervals
-                // on independent parameters are not an equality proof.
-                val bounds =
-                  if operation == IterationDomain.Arithmetic.Subtract &&
-                    sameStructuralBound(expression.operands(0), expression.operands(1))
-                  then IterationDomain.Bounds(0L, 0L)
-                  else
-                    IterationDomain.arithmetic(operation, operands.map(_.bounds))
-                      .fold(
-                        problem => invalid(problem.message, Some(expressionPath(reference))),
-                        identity
-                      )
-                val operandIds = operands.map(_.identity.get)
-                val key = if operandIds.forall(id => identityKeys(id)._1 == 0) then
-                  (0, bounds.lower.toString, Vector.empty[Int])
-                else (2, expression.operation.get, operandIds)
-                StructuralBound(
+                compose(
+                  expression.operation.get,
+                  operands,
                   expression,
-                  bounds,
-                  operands.flatMap(_.parameters).distinct,
-                  Some(intern(key))
+                  Some(expressionPath(reference))
                 )
             cache.update(reference, result)
             result
           finally
             val _ = active.remove(reference)
+
+    private def compose(
+        name: String,
+        operands: Vector[StructuralBound],
+        value: Any,
+        path: Option[String] = None
+    ): StructuralBound =
+      val operation = IterationDomain.staticArithmetic(name).getOrElse(
+        invalid("unsupported static Integer composition")
+      )
+      // Correlation is valid only for the very same captured operand. Equal intervals
+      // on independent parameters are not an equality proof.
+      val bounds =
+        if operation == IterationDomain.Arithmetic.Subtract &&
+          operands(0).identity == operands(1).identity
+        then IterationDomain.Bounds(0L, 0L)
+        else
+          IterationDomain.arithmetic(operation, operands.map(_.bounds))
+            .fold(
+              problem => invalid(problem.message, path),
+              identity
+            )
+      val operandIds = operands.map(_.identity.get)
+      val key =
+        if operation == IterationDomain.Arithmetic.Maximum &&
+          operandIds(0) == operandIds(1)
+        then identityKeys(operandIds.head)
+        else if operation == IterationDomain.Arithmetic.ChooseZero &&
+          identityKeys(operandIds.head)._1 == 0
+        then
+          identityKeys(operandIds(if identityKeys(operandIds.head)._2 == "0" then 1
+          else 2))
+        else if operation == IterationDomain.Arithmetic.ChooseZero &&
+          operandIds(1) == operandIds(2)
+        then identityKeys(operandIds(1))
+        else if operandIds.forall(id => identityKeys(id)._1 == 0) then
+          (0, bounds.lower.toString, Vector.empty[Int])
+        else (2, name, operandIds)
+      StructuralBound(
+        value,
+        bounds,
+        operands.flatMap(_.parameters).distinct,
+        Some(intern(key))
+      )
+
+    def shiftedBounds(base: IterationDomain.Bounds, offsets: Vector[(String, Dimension)])
+        : IterationDomain.Bounds =
+      offsets.foldLeft(base): (current, offset) =>
+        IterationDomain.arithmetic(
+          IterationDomain.staticArithmetic(offset._1).get,
+          Vector(current, apply(offset._2).bounds)
+        )
+          .fold(problem => invalid(problem.message), identity)
+
+    def shiftedAtMost(base: Dimension, offsets: Vector[(String, Dimension)], extent: Dimension)
+        : Boolean =
+      val shifted = offsets.foldLeft(apply(base)): (current, offset) =>
+        compose(offset._1, Vector(current, apply(offset._2)), base)
+      def containsWithNonnegativeSuffix(value: Dimension, depth: Int): Boolean =
+        if depth > 128 then invalid("static selector relation exceeds its depth budget")
+        if shifted.identity == apply(value).identity then true
+        else
+          value match
+            case expression: KernelExpr[?] if expression.operands.size == 2 =>
+              val left = expression.operands.head.asInstanceOf[Dimension]
+              val right = expression.operands(1).asInstanceOf[Dimension]
+              if expression.operation.contains("analog_add") then
+                (apply(right).bounds.lower >= 0 && containsWithNonnegativeSuffix(
+                  left,
+                  depth + 1
+                )) ||
+                (apply(left).bounds.lower >= 0 && containsWithNonnegativeSuffix(right, depth + 1))
+              else
+                expression.operation.contains("analog_sub") && apply(right).bounds.upper <= 0 &&
+                containsWithNonnegativeSuffix(left, depth + 1)
+            case _ => false
+      containsWithNonnegativeSuffix(extent, 0)
 
     private def literalBound(expression: KernelExpr[?]): StructuralBound =
       val literal = expression.literal
@@ -2344,6 +3840,12 @@ private final class ConstructionSession(val options: EmitOptions):
           else value.value.toIntOption.map(_.toLong)
         )
         .getOrElse(invalid("hdlRange literal must be a representable public Integer literal"))
+      if !literal.isValidInt then
+        val reference = Option(expressionIds.get(expression)).getOrElse(
+          invalid("derived i64 literal requires an owned construction identity")
+        )
+        if reference.module != owner then
+          invalid("derived i64 literal escapes its owning Module", Some(expressionPath(reference)))
       StructuralBound(
         expression,
         IterationDomain.Bounds(literal, literal),
@@ -2370,7 +3872,8 @@ private final class ConstructionSession(val options: EmitOptions):
       parameter: Param[?],
       owner: Long,
       diagnosticCode: String,
-      subject: String
+      subject: String,
+      allowUnbounded: Boolean
   ): StructuralBound =
     val reference = Option(declarationIds.get(parameter)).getOrElse(
       fail(
@@ -2392,20 +3895,22 @@ private final class ConstructionSession(val options: EmitOptions):
         s"symbolic $subject value must be an integer parameter",
         Some(declarationPath(reference))
       )
-    val lower = structuralRangeAttribute(declaration, "integer_range_lower").getOrElse(
-      fail(
-        diagnosticCode,
-        s"symbolic $subject parameter requires a finite declared integer range",
-        Some(declarationPath(reference))
+    val lower = structuralRangeAttribute(declaration, "integer_range_lower").map(_.toLong)
+      .orElse(Option.when(allowUnbounded)(Long.MinValue)).getOrElse(
+        fail(
+          diagnosticCode,
+          s"symbolic $subject parameter requires a finite declared integer range",
+          Some(declarationPath(reference))
+        )
       )
-    )
-    val upper = structuralRangeAttribute(declaration, "integer_range_upper").getOrElse(
-      fail(
-        diagnosticCode,
-        s"symbolic $subject parameter requires a finite declared integer range",
-        Some(declarationPath(reference))
+    val upper = structuralRangeAttribute(declaration, "integer_range_upper").map(_.toLong)
+      .orElse(Option.when(allowUnbounded)(Long.MaxValue)).getOrElse(
+        fail(
+          diagnosticCode,
+          s"symbolic $subject parameter requires a finite declared integer range",
+          Some(declarationPath(reference))
+        )
       )
-    )
     if lower > upper then
       fail(
         diagnosticCode,
@@ -2413,12 +3918,6 @@ private final class ConstructionSession(val options: EmitOptions):
         Some(declarationPath(reference))
       )
     StructuralBound(parameter, IterationDomain.Bounds(lower, upper), Vector(reference))
-
-  private def sameStructuralBound(left: Any, right: Any): Boolean =
-    (left, right) match
-      case (lhs: Int, rhs: Int) => lhs == rhs
-      case (lhs: AnyRef, rhs: AnyRef) => lhs eq rhs
-      case _ => false
 
   // Replicating analog nodes changes topology; generate is a construct, not an effect.
   private def markStructuralParameterEffect(reference: DeclarationRef, effect: String): Unit =
@@ -2452,6 +3951,9 @@ private final class ConstructionSession(val options: EmitOptions):
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
+    requireNoCollectionEffect("structural generation")
+    if activeLoop.exists(_.loop.get.generated.isEmpty) then
+      collectionFailure("nested effectful iteration is outside the bounded loop profile")
     val module = currentModule
     val analysis = new StructuralBoundAnalysis(module.handle)
     val lowerBound = analysis(lower)
@@ -2463,7 +3965,10 @@ private final class ConstructionSession(val options: EmitOptions):
         upperBound.bounds,
         stepBound.bounds,
         maximum,
-        identicalBounds = analysis.sameIdentity(lower, upperExclusive)
+        identicalBounds = analysis.sameIdentity(lower, upperExclusive) ||
+          (lowerBound.bounds.lower == lowerBound.bounds.upper &&
+            upperBound.bounds.lower == upperBound.bounds.upper &&
+            lowerBound.bounds.lower >= upperBound.bounds.upper)
       )
       .fold(
         problem =>
@@ -2509,6 +4014,17 @@ private final class ConstructionSession(val options: EmitOptions):
     generatedOwnershipRecords.update(
       generatedRegionPath(record) -> expressionPath(record.induction),
       record
+    )
+    val digitalRegion = Option.when(activeLoop.isEmpty && analogStack.isEmpty)(
+      newLoopRegion(DigitalLoopHeader(
+        lower,
+        upperExclusive,
+        step,
+        maximum,
+        envelope,
+        nextEffectOrdinal(),
+        Some(record)
+      ))
     )
     val domainCount = module.domains.size
     val analogRegionCount = analogRegions.size
@@ -2591,6 +4107,12 @@ private final class ConstructionSession(val options: EmitOptions):
                   )
       val changedAnalog = generatedAnalogRegions.nonEmpty || generatedOperators.nonEmpty ||
         generatedWaveforms.nonEmpty || generatedTransfers.nonEmpty || generatedNoise.nonEmpty
+      if digitalRegion.exists(_.structuralGenerate) &&
+        (changedAnalog || record.declarations.nonEmpty || module.domains.size != domainCount)
+      then
+        structuralFailure(
+          "structural hdlRange requires one pure/continuous digital body; mixed effects need a later profile"
+        )
       if changedAnalog && !supportedGeneratedAnalog then
         fail(
           "NODAL-ITERATION-043-004",
@@ -2608,8 +4130,11 @@ private final class ConstructionSession(val options: EmitOptions):
     catch
       case failure: Throwable =>
         poisonConstructor(failure, generatedRegionPath(record))
-        throw failure
+        scala.util.Failure[Nothing](failure).get
     finally
+      digitalRegion.foreach: region =>
+        val removed = collectionStack.remove(collectionStack.size - 1)
+        if removed ne region then collectionFailure("unified range lexical stack is corrupt")
       val removed = generationStack.remove(generationStack.size - 1)
       if removed ne record then
         fail("NODAL-ITERATION-043-004", "generated-region ownership stack is corrupt")
@@ -2628,6 +4153,8 @@ private final class ConstructionSession(val options: EmitOptions):
   def currentDomain: Option[ClockDomain] = domainStack.lastOption
 
   def withAnalogRegion[A](body: => A): A =
+    requireNoCollectionEffect("analog region")
+    requireLoopEffect("analog region")
     val module = currentModule
     val generatedOwnership = generationStack.lastOption
       .filter(_.owner == module.handle)
@@ -2775,6 +4302,8 @@ private final class ConstructionSession(val options: EmitOptions):
       right: Expr[Real],
       options: EquationOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
+    requireLoopEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (leftDimension, rightDimension) = requireCompatibleDimensions(
       left,
@@ -2808,6 +4337,8 @@ private final class ConstructionSession(val options: EmitOptions):
       right: Expr[Real],
       options: InitialEquationOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
+    requireLoopEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (leftDimension, rightDimension) = requireCompatibleDimensions(
       left,
@@ -2841,6 +4372,8 @@ private final class ConstructionSession(val options: EmitOptions):
       value: Expr[Real],
       options: ContributionOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
+    requireLoopEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (targetDimension, valueDimension) = requireCompatibleDimensions(
       target,
@@ -3195,6 +4728,42 @@ private final class ConstructionSession(val options: EmitOptions):
     rendered.toString
 
   def operation(kind: String, values: Any*): Unit =
+    validateCollectionDependencies(values.toVector)
+    val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
+      analogStack.isEmpty && analogSemanticContext.isEmpty &&
+      !AnalogProceduralConstruction.generatedProcedureActive &&
+      values.headOption.collect { case expression: Expr[?] => expression }
+        .flatMap(CandidateRuntime.expressionDataType)
+        .map(CandidateRuntime.typeDescriptor).exists(DigitalCombinationalContract.isValueTypeKind)
+    requireNoCollectionEffect(s"hardware '$kind' effect", assignment = digitalAssignment)
+    val loop = Option.when(digitalAssignment)(activeLoop).flatten
+    val effectRegion =
+      Option.when(digitalAssignment)(activeValueRegion.filter(_.permitsAssignment)).flatten
+    if !digitalAssignment then requireLoopEffect(s"hardware '$kind' effect")
+    loop.foreach: region =>
+      if !effectRegion.nonEmpty || region.loop.get.generated != activeGeneratedRegion
+      then
+        collectionFailure("digital assignments require their exact loop lexical scope")
+      validateDigitalLoopDomain(region)
+    effectRegion.foreach: region =>
+      if values.size != 2 then collectionFailure("digital assignment requires two operands")
+      val _ = digitalAssignmentRoot(values.head, currentModule.handle, allowRootRegister = false)
+      val exactType =
+        for
+          target <- values.headOption.collect { case value: Expr[?] => value }
+          source <- values.lift(1).collect { case value: Expr[?] => value }
+          targetType <- CandidateRuntime.expressionDataType(target)
+          sourceType <- CandidateRuntime.expressionDataType(source)
+        yield DigitalEnumContract.sameType(
+          CandidateRuntime.typeDescriptor(targetType),
+          CandidateRuntime.typeDescriptor(sourceType)
+        )
+      if !exactType.contains(true) then
+        collectionFailure("digital loop assignment requires exactly matching recursive types")
+      values.foreach:
+        case expression: Expr[?] =>
+          val _ = bindCollectionValue(expression, Some(region), currentModule.handle)
+        case _ => collectionFailure("digital loop assignment requires exact typed operands")
     if kind == "statement" then
       val effect = moduleStack.lastOption.flatMap(module =>
         values.headOption.map(renderAny(_, module.handle))
@@ -3208,7 +4777,7 @@ private final class ConstructionSession(val options: EmitOptions):
       "instance-node-array",
       "deferred-node-array"
     ).contains(kind)
-    if !generatedAnalogContribution && !structuralTopology then
+    if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty then
       requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" || kind == "analog-assignment" then
       analogSemanticContext.foreach: context =>
@@ -3229,14 +4798,24 @@ private final class ConstructionSession(val options: EmitOptions):
       val owner = moduleStack.lastOption.map(_.handle).getOrElse(
         fail("NODAL-LIFECYCLE-018", "operation requires an active Module")
       )
+      val sourceOrdinal = effectRegion match
+        case Some(region) =>
+          if region.assignmentCount >= 4098 then
+            collectionFailure("loop body exceeds the 4098 assignment budget")
+          val ordinal = region.assignmentCount
+          region.assignmentCount += 1
+          ordinal
+        case None => if digitalAssignment then nextEffectOrdinal() else 0
       val captured = Operation(
         owner,
         kind,
         values.toVector,
-        activeGeneratedRegion,
+        if effectRegion.nonEmpty then None else activeGeneratedRegion,
         if structuralTopology && activeGeneratedRegion.nonEmpty then
           semanticOrigin.captureSemanticSource()
-        else None
+        else None,
+        effectRegion,
+        sourceOrdinal
       )
       operations += captured
       moduleStack.lastOption.foreach(module =>
@@ -3295,8 +4874,20 @@ private final class ConstructionSession(val options: EmitOptions):
       .getOrElse(s"${modulePath(reference.module)}.${declarationName(reference)}")
 
   private def expressionPath(reference: ExpressionRef): String =
-    semanticResult
-      .flatMap(_.expressionPaths.get(reference.module -> reference.index))
+    collectionArguments.get(reference).map: (region, ordinal) =>
+      if ordinal == 0 && region.structuralGenerate then
+        expressionPath(region.loop.get.generated.get.induction)
+      else s"${expressionPath(region.reference)}.arg$ordinal"
+    .orElse(structuralArms.get(reference).flatMap(_.structuralArm).map(arm =>
+      s"${expressionPath(arm.conditional)}.${if arm.whenTrue then "then" else "else"}"
+    ))
+      .orElse(loopRegions.get(reference).flatMap(region =>
+        region.loop.flatMap(_.generated).map(record =>
+          if region.structuralGenerate then generatedRegionPath(record)
+          else s"${generatedRegionPath(record)}.digital_loop"
+        )
+      ))
+      .orElse(semanticResult.flatMap(_.expressionPaths.get(reference.module -> reference.index)))
       .getOrElse(s"${modulePath(reference.module)}.expr_${reference.index}")
 
   private def instancePath(parent: Long, ordinal: Int): String =
@@ -3343,6 +4934,10 @@ private final class ConstructionSession(val options: EmitOptions):
 
   /** Called only after finish has resolved final names and structural aliases. */
   def selectedReference(value: AnyRef): KernelSelectedReference =
+    if Option(expressionIds.get(value)).exists(expressionRegions.contains) then
+      collectionFailure(
+        "collection body value cannot escape through a selected construction result"
+      )
     val path = selectedPath(value).getOrElse(
       fail("NODAL-SELECTION-050-001", "selected handle is outside this construction transaction")
     )
@@ -4002,7 +5597,16 @@ private final class ConstructionSession(val options: EmitOptions):
             step = generatedBound(region.step),
             maximum = region.maximum,
             maximumTripCount = region.maximumTripCount,
-            declarations = region.declarations.toVector.map(declarationPath)
+            declarations = region.declarations.toVector.map(declarationPath),
+            digitalBody = loopRegions.valuesIterator.find(value =>
+              value.structuralGenerate && value.loop.exists(_.generated.contains(region))
+            ).map(value =>
+              KernelDigitalGeneratedBody(
+                value.captures.valuesIterator.map(capture => pathOf(capture._1).get).toVector,
+                regionArguments(value),
+                value.loop.get.sourceOrdinal
+              )
+            )
           )
 
   private def canonicalGeneratedOwnership(
@@ -4027,12 +5631,27 @@ private final class ConstructionSession(val options: EmitOptions):
         path = if index.conservative.nonEmpty then conservativeEndpointPath(index)
         else expressionPath(index.reference),
         owner = modulePath(index.reference.module),
-        input = inputPath,
-        indices = index.indices.map(generatedBound),
+        input = expressionValues.get(index.reference).flatMap(_.operands.headOption)
+          .flatMap(collectionOperandPath(
+            _,
+            expressionRegions.get(index.reference),
+            index.reference.module
+          ))
+          .getOrElse(inputPath),
+        indices = index.indices.map:
+          case value: Expr[?] if expressionRegions.contains(index.reference) =>
+            collectionOperandPath(
+              value,
+              expressionRegions.get(index.reference),
+              index.reference.module
+            ).get
+          case value => generatedBound(value),
         resultDimensions =
           index.resultDimensions.map(renderShapeDimension(_, index.reference.module)),
         sourceUses = index.sourceUses.map(use => expressionPath(use._1)).sorted,
-        generatedScope = generatedScopeSnapshot(index.generatedScope)
+        generatedScope = generatedScopeSnapshot(index.generatedScope),
+        region =
+          expressionRegions.get(index.reference).map(value => expressionPath(value.reference))
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
@@ -4043,7 +5662,13 @@ private final class ConstructionSession(val options: EmitOptions):
       KernelShapeViewSnapshot(
         path = expressionPath(view.reference),
         owner = modulePath(view.reference.module),
-        input = inputPath,
+        input = expressionValues.get(view.reference).flatMap(_.operands.headOption)
+          .flatMap(collectionOperandPath(
+            _,
+            expressionRegions.get(view.reference),
+            view.reference.module
+          ))
+          .getOrElse(inputPath),
         dimensions = view.dimensions.map(renderShapeDimension(_, view.reference.module)),
         slice = view.slice.map(selection =>
           KernelShapeSliceSnapshot(
@@ -4052,7 +5677,8 @@ private final class ConstructionSession(val options: EmitOptions):
             generatedBound(selection.upperExclusive)
           )
         ),
-        generatedScope = generatedScopeSnapshot(view.generatedScope)
+        generatedScope = generatedScopeSnapshot(view.generatedScope),
+        region = expressionRegions.get(view.reference).map(value => expressionPath(value.reference))
       )
 
   private def relationName(relation: ClockRelation): String =
@@ -4400,6 +6026,109 @@ private final class ConstructionSession(val options: EmitOptions):
     then
       fail("NODAL-DIGITAL-054-018", "capability source requires a same-owner/domain input boundary")
 
+  private def assignmentReference(value: Any): DeclarationRef | ExpressionRef = value match
+    case reference: AnyRef =>
+      Option(declarationIds.get(reference)).map(identity[DeclarationRef | ExpressionRef])
+        .orElse(Option(expressionIds.get(reference))).getOrElse(
+          fail("NODAL-DIGITAL-054-010", "digital assignment value has no captured identity")
+        )
+    case _ => fail("NODAL-DIGITAL-054-010", "digital assignment requires an actual typed value")
+
+  /** Resolve only actual canonical shape edges, never an operation spelling or materialized alias.
+    */
+  private def digitalAssignmentRoot(
+      value: Any,
+      owner: Long,
+      allowRootRegister: Boolean
+  ): DeclarationRef =
+    val selected = assignmentReference(value)
+    var current = selected
+    val visited = mutable.HashSet.empty[ExpressionRef]
+    while current.isInstanceOf[ExpressionRef] do
+      val reference = current.asInstanceOf[ExpressionRef]
+      if reference.module != owner || expressionRegions.get(
+          reference
+        ).exists(!_.permitsAssignment) ||
+        !visited.add(reference) || visited.size > 128
+      then
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment projection has foreign, cyclic or excessive scope"
+        )
+      val index = shapeIndices.get(reference)
+      val view = shapeViews.get(reference)
+      if index.flatMap(_.generatedScope).nonEmpty || view.flatMap(_.generatedScope).nonEmpty then
+        fail("NODAL-DIGITAL-054-010", "digital assignment projection requires direct-module scope")
+      val capture = collectionArguments.get(reference).filter(_._1.permitsAssignment).flatMap:
+        (region, _) =>
+          region.captures.valuesIterator.find(value =>
+            Option(expressionIds.get(value._2)).contains(reference)
+          ).map(value => valueReference(value._1))
+      val input = capture.orElse(index.map(_.input)).orElse(view.map(_.input)).getOrElse(
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment target is not an actual storage projection"
+        )
+      )
+      val expression = expressionValues.getOrElse(
+        reference,
+        fail("NODAL-DIGITAL-054-010", "digital assignment projection has no actual expression")
+      )
+      val operation = if index.nonEmpty then "shape_index"
+      else if view.exists(_.slice.nonEmpty) then "shape_slice" else "shape_view"
+      if capture.isEmpty && (!expression.operation.contains(operation) ||
+          !expression.operands.headOption.exists(value => assignmentReference(value) == input))
+      then
+        fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment projection differs from its actual input edge"
+        )
+      current = input
+    val root = current.asInstanceOf[DeclarationRef]
+    val declaration = records(root.module).declarations(root.index)
+    val direct = !records(root.module).generatedRegions.exists(_.declarations.contains(root))
+    val writable = Set(KernelSignalKind.Wire, KernelSignalKind.Output).contains(declaration.kind)
+    val rootRegister = allowRootRegister && selected == root &&
+      declaration.kind == KernelSignalKind.Register
+    if root.module != owner || !direct || (!writable && !rootRegister) then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment target requires an owned wire/output; projected register updates are unsupported"
+      )
+    root
+
+  def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
+    requireNoCollectionEffect("digital selection assignment", assignment = true)
+    if activeLoop.isEmpty then requireNoGeneratedEffect("digital selection assignment")
+    validateCollectionDependencies(Vector(left, right))
+    val owner = currentModule.handle
+    val _ = digitalAssignmentRoot(left, owner, allowRootRegister = false)
+    val source = assignmentReference(right)
+    val sourceOwner = source match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    // validateCollectionDependencies above resolves real ancestry through the shared capture
+    // registry. A parent value is legal through that explicit capture; sibling/escaped values fail.
+    if sourceOwner != owner then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment source must belong to the exact module scope"
+      )
+    val exact =
+      for
+        targetType <- CandidateRuntime.expressionDataType(left)
+        sourceType <- CandidateRuntime.expressionDataType(right)
+      yield DigitalEnumContract.sameType(
+        CandidateRuntime.typeDescriptor(targetType),
+        CandidateRuntime.typeDescriptor(sourceType)
+      )
+    if !exact.contains(true) then
+      fail(
+        "NODAL-DIGITAL-054-010",
+        "digital assignment requires exactly matching recursive storage types"
+      )
+    operation("assignment", left, right)
+
   private def digitalAssignmentSnapshots(
       resolved: Map[DomainRef, String]
   ): Vector[KernelDigitalAssignmentSnapshot] =
@@ -4409,11 +6138,11 @@ private final class ConstructionSession(val options: EmitOptions):
     ).map: operation =>
       if operation.generatedScope.nonEmpty || operation.values.size != 2 then
         fail("NODAL-DIGITAL-054-010", "digital assignment requires a direct-module sink and value")
-      val target = operation.values.head match
-        case reference: AnyRef => Option(declarationIds.get(reference)).getOrElse(
-            fail("NODAL-DIGITAL-054-010", "digital assignment sink has no owned declaration")
-          )
-        case _ => fail("NODAL-DIGITAL-054-010", "digital assignment sink is not a declaration")
+      val target = digitalAssignmentRoot(
+        operation.values.head,
+        operation.owner,
+        allowRootRegister = true
+      )
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)
       val owner = modulePath(operation.owner)
@@ -4427,12 +6156,25 @@ private final class ConstructionSession(val options: EmitOptions):
       KernelDigitalAssignmentSnapshot(
         s"$owner.digital_assignment_$ordinal",
         owner,
-        declarationPath(target),
-        pathOf(operation.values(1)).getOrElse(fail(
+        collectionOperandPath(
+          operation.values.head,
+          operation.digitalRegion,
+          operation.owner
+        ).getOrElse(fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment target has no captured identity"
+        )),
+        collectionOperandPath(
+          operation.values(1),
+          operation.digitalRegion,
+          operation.owner
+        ).getOrElse(fail(
           "NODAL-DIGITAL-054-010",
           "digital assignment value has no captured identity"
         )),
-        if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous"
+        if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous",
+        operation.digitalRegion.map(value => expressionPath(value.reference)),
+        operation.sourceOrdinal
       )
 
   private def digitalOwnerOf(value: Any): Option[String] = value match
@@ -4471,19 +6213,40 @@ private final class ConstructionSession(val options: EmitOptions):
               DigitalEnumContract.Prefix
             ) || DigitalScalarContract.Operations.contains(
               operation
-            ) || DigitalInterfaceContract.ValueOperations.contains(operation)
+            ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
+              operation == DigitalMaterializationContract.Operation ||
+              DigitalCombinationalContract.Operations.contains(operation) ||
+              DigitalAggregateContract.Operations.contains(operation) ||
+              DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
           ) => expression)
     DigitalValueConstruction.snapshot(
       records.valuesIterator.flatMap(
         _.declarations.iterator.flatMap(_.dataType)
       ).toVector ++ interfaces.dataTypes,
-      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots,
+      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots ++
+        collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
+        structuralArms.valuesIterator.flatMap(_.yielded).toVector,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,
       expressions,
-      pathOf,
-      renderType
+      (dataType, owner, region) =>
+        renderCollectionType(
+          dataType,
+          owner,
+          region.flatMap(path =>
+            allValueRegions
+              .find(value => expressionPath(value.reference) == path)
+          )
+        ),
+      expression =>
+        Option(expressionIds.get(expression)).flatMap(expressionRegions.get)
+          .map(value => expressionPath(value.reference)),
+      (expression, operand) =>
+        val reference = expressionIds.get(expression)
+        collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
+      ,
+      collectionArguments.keysIterator.map(expressionPath).toSet
     )
 
   private def parameterExpressionSnapshots(
@@ -4533,7 +6296,11 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     val interfaceTypeRoots = additionalTypes.iterator.flatMap(shapeDimensionRoots)
     val expressionTypeRoots = expressionValues.valuesIterator.flatMap(expression =>
-      CandidateRuntime.expressionDataType(expression).iterator.flatMap(shapeDimensionRoots)
+      (CandidateRuntime.expressionDataType(
+        expression
+      ).iterator ++ expression.operands.iterator.collect {
+        case metadata: StructOperationMetadata => metadata.schema
+      }).flatMap(shapeDimensionRoots)
     )
     val lexicalShapeRoots = expressionValues.valuesIterator
       .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
@@ -4542,17 +6309,49 @@ private final class ConstructionSession(val options: EmitOptions):
         dimensions.iterator ++
           (if expression.operation.contains("analog_array_fill") then Iterator.empty
            else expression.operands.drop(1).iterator)
+    val retainedLoops =
+      retainedLoopRegions ++ loopRegions.valuesIterator.filter(_.structuralGenerate)
+    val predicateRoots = (staticPredicates.valuesIterator.flatMap(_.operands) ++
+      allValueRegions.flatMap(_.captures.valuesIterator.map(_._1))).collect {
+      case value: KernelExpr[?] if value.resultType.contains(KernelTypeDescriptor("Integer")) =>
+        value
+    }.toVector
+    val loopStaticRoots = (loopRegions.valuesIterator.filter(retainedLoops).flatMap(region =>
+      Iterator(region.loop.get.lower, region.loop.get.upperExclusive, region.loop.get.step) ++
+        region.captures.valuesIterator.map(_._1).filter(value =>
+          CandidateRuntime.expressionDataType(value).exists(dataType =>
+            CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
+          )
+        )
+    ) ++ expressionValues.iterator.collect:
+      case (reference, value)
+          if expressionRegions.get(reference).exists(retainedLoops) &&
+            value.resultType.contains(KernelTypeDescriptor("Integer")) => value
+    ).toVector
+    val loopStaticReferences = (loopStaticRoots ++ predicateRoots).iterator.collect {
+      case expression: KernelExpr[?] if expressionIds.containsKey(expression) =>
+        expressionIds.get(expression)
+    }.toSet
     val reachable = capturedExpressionClosure(
-      (interfaceTypeRoots ++ expressionTypeRoots ++ lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
+      (predicateRoots.iterator ++ loopStaticRoots.iterator ++ interfaceTypeRoots ++ expressionTypeRoots ++ lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
         shapeDimensionExpressionRoots).collect:
         case expression: KernelExpr[?]
-            if expression.literal.isEmpty && !expression.operation.contains("generate_index") &&
+            if (expression.literal.isEmpty || loopStaticReferences.contains(
+              expressionIds.get(expression)
+            )) &&
+              !expression.operation.contains("generate_index") &&
               !expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix)) =>
           expression
     )
 
     expressionValues.toVector.collect:
-      case (reference, expression) if reachable.contains(reference) =>
+      case (reference, expression)
+          if reachable.contains(reference) &&
+            !collectionArguments.contains(reference) &&
+            (!iterationIndices.contains(
+              reference
+            ) || expressionRegions.get(reference).exists(_.structuralGenerate)) &&
+            !expression.operation.contains("generate_index") =>
         if expression.operation.exists(operation =>
             operation.startsWith(AnalogContextContract.Prefix) ||
               operation.startsWith(
@@ -4578,7 +6377,16 @@ private final class ConstructionSession(val options: EmitOptions):
           if expression.literal.nonEmpty then Vector.empty
           else
             expression.operands.map: operand =>
-              pathOf(operand).getOrElse(
+              val scoped = operand match
+                case value: Expr[?] if expressionRegions.contains(reference) =>
+                  bindCollectionValue(
+                    value,
+                    expressionRegions.get(reference),
+                    reference.module,
+                    create = false
+                  )
+                case other => other
+              pathOf(scoped).getOrElse(
                 fail(
                   "NODAL-PARAMETER-BINDING-023",
                   "static parameter expression operand has no semantic identity",
@@ -4598,7 +6406,8 @@ private final class ConstructionSession(val options: EmitOptions):
           operands,
           dataType,
           expression.literal.map(_.value),
-          expression.operands.lift(1).collect { case unit: String => unit }.filter(_.nonEmpty)
+          expression.operands.lift(1).collect { case unit: String => unit }.filter(_.nonEmpty),
+          expressionRegions.get(reference).map(value => expressionPath(value.reference))
         )
 
   private def classify(snapshot: ConstructionSnapshot): DesignKind =
@@ -4664,6 +6473,10 @@ private final class ConstructionSession(val options: EmitOptions):
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val collectionArgumentSources = collectionArguments.keysIterator.flatMap: reference =>
+      semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
+        .map(source => SourceMapEntry(expressionPath(reference), source))
+    .toVector
     val rootSources = operations.iterator.flatMap(_.values.collect {
       case root: InstanceArrayRootRecord => root
     })
@@ -4700,7 +6513,18 @@ private final class ConstructionSession(val options: EmitOptions):
               validateShapeType(dataType, module.handle, cardinality = true, storageContext = true),
             value =>
               if CandidateRuntime.expressionDataType(value).exists(isBoundaryCapability) then
-                validateBoundarySource(value, declaration, resolved)
+                validateBoundarySource(value, declaration, resolved),
+            (left, right) =>
+              val analysis = new StructuralBoundAnalysis(
+                module.handle,
+                "NODAL-DIGITAL-054-001",
+                "digital interface payload"
+              )
+              DigitalEnumContract.sameType(
+                CandidateRuntime.typeDescriptor(left),
+                CandidateRuntime.typeDescriptor(right),
+                Some(analysis.sameIdentity)
+              )
           )
         )
       ).toVector,
@@ -4743,11 +6567,17 @@ private final class ConstructionSession(val options: EmitOptions):
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(
+      emitQuality = options.quality,
       digitalAssignments = digitalAssignmentSnapshots(resolved),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
       enumDefinitions = digitalCapture._1,
       digitalExpressions = digitalCapture._2,
+      digitalCollections = collectionSnapshots(),
+      digitalLoops = loopSnapshots(),
+      iterationIndices = iterationIndexSnapshots(),
+      staticPredicates = staticPredicateSnapshots(),
+      structuralIfs = structuralIfSnapshots(),
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
         case (parameter, value) =>
@@ -4773,7 +6603,7 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
+        (semantic.sourceMap ++ collectionArgumentSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
           (edge, record) =>
             edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
         ) ++ arrayBindings.flatMap((binding, record) =>

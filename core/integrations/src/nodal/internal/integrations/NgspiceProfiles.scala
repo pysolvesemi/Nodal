@@ -10,6 +10,6 @@ private[nodal] object NgspiceProfiles:
         "******\n** ngspice-47 : Circuit level simulation program\n** Compiled with Sparse Direct Linear Solver\n** The U. C. Berkeley CAD Group\n** Copyright 1985-1994, Regents of the University of California.\n** Copyright 2001-2026, The ngspice team.\n** Please get your ngspice manual from https://ngspice.sourceforge.io/docs.html\n** Please file your bug-reports at http://ngspice.sourceforge.net/bugrep.html\n** Creation Date: Sun Oct 18 21:53:29 UTC 2026\n******",
       executableSha256 = "ba254f361c728f70cbb09293750d93f541f26c256d56286ddfb755d0d2793711",
       platform = "linux-x86_64",
-      catalogSha256 = "064f08db688c3cf05fd1ea9024c1dac008060e21ef35a799676d9d0c2de30a06"
+      catalogSha256 = "97f33b991e2c40cfbc4d038c973cf0bf52009a68cde4e705dc6bbc8d3376f8f1"
     )
   )

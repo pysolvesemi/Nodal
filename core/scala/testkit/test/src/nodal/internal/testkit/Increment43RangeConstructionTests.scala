@@ -225,7 +225,8 @@ final class Increment43UnsupportedGeneratedVariable extends Module:
     ()
 
 final class Increment43ForgedGeneratedVariableCarrier extends Module:
-  hdlRange(0, 2): _ =>
+  // Internal mutation fixture: preserve semantic verification beneath public callback attestation.
+  ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
     analogProcedure:
       val state = variable(Real, 0.0.V)
       val forged = new Object
@@ -237,7 +238,8 @@ final class Increment43ForgedGeneratedVariableCarrier extends Module:
       state := state + 1.0.V
 
 final class Increment43ForgedGeneratedAssignmentCarrier extends Module:
-  hdlRange(0, 2): _ =>
+  // Internal mutation fixture: preserve semantic verification beneath public callback attestation.
+  ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
     analogProcedure:
       val state = variable(Real, 0.0.V)
       ConstructionKernel.operation("assignment", state, state)
@@ -892,7 +894,8 @@ final class Increment43UnsupportedGeneratedContributionRegion extends Module:
       ()
 
 final class Increment43UnsupportedGeneratedBareProceduralRegion extends Module:
-  hdlRange(0, 2): _ =>
+  // Internal mutation fixture: preserve semantic verification beneath public callback attestation.
+  ConstructionKernel.generatedRegion(0, 2, 1, None): _ =>
     CandidateRuntime.analogSemanticBlock(AnalogEquationRuntime.RegionKind.Procedural, ())
 
 final class Increment43UnsupportedGeneratedProcedure extends Module:
@@ -1570,8 +1573,24 @@ object Increment43RangeConstructionTests extends TestSuite:
       val second = ConstructionKernel.inspect(new Increment43GeneratedWaveformOperator)
       assert(first == second)
       val generated = first.generatedRegions.head
-      assert(first.waveformOperators.map(_.operation) ==
+      // Metadata is canonical by semantic identity; the actual body retains authored order.
+      assert(first.waveformOperators.map(_.path) == first.waveformOperators.map(_.path).sorted)
+      val expectedBindings = Map(
+        "analog_transition" -> "smoothed",
+        "analog_slew" -> "limited",
+        "analog_absdelay" -> "delayed"
+      )
+      assert(first.waveformOperators.size == expectedBindings.size)
+      assert(first.waveformOperators.map(_.operation).toSet == expectedBindings.keySet)
+      first.waveformOperators.foreach: operator =>
+        assert(
+          operator.path.startsWith(s"${operator.owner}.${expectedBindings(operator.operation)}_")
+        )
+      val authoredOperators = first.analogRegions.flatMap(_.expressions)
+        .filter(expression => expectedBindings.contains(expression.operation))
+      assert(authoredOperators.map(_.operation) ==
         Vector("analog_transition", "analog_slew", "analog_absdelay"))
+      assert(authoredOperators.map(_.path).toSet == first.waveformOperators.map(_.path).toSet)
       assert(first.waveformOperators.forall(_.generatedOwner.contains(generated.path)))
       assert(first.waveformOperators.forall(
         _.generatedInduction.contains(generated.induction)

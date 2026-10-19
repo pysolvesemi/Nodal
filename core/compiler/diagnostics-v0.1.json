@@ -9,6 +9,10 @@
     "source-range"
   ],
   "families": {
+    "structural-conditionals": [
+      "NODAL-DIGITAL-055-013",
+      "NODAL-DIGITAL-055-014"
+    ],
     "iteration-bounds": [
       "NODAL-ITERATION-043-001",
       "NODAL-ITERATION-043-002",
@@ -281,6 +285,7 @@
     ]
   },
   "preserved_prefixes": [
+    "NODAL-DIGITAL-",
     "NODAL-SHAPE-",
     "NODAL-ITERATION-",
     "NODAL-BRIDGE-",

@@ -7,7 +7,9 @@ import scala.collection.mutable
   */
 private[nodal] object StructuralParameterBinding:
   private def invalid(message: String): Nothing =
-    throw new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
+    scala.util.Failure[Nothing](
+      new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
+    ).get
 
   final case class IntegerNode(
       literal: Option[Long],
@@ -28,14 +30,127 @@ private[nodal] object StructuralParameterBinding:
     case Apply(operation: String, operands: Vector[Int])
 
   private final case class Fact(key: Key, bounds: IterationDomain.Bounds)
+  private final case class RegionOwner(path: String, owner: String)
 
-  private final class Query(
+  /** A query owns one immutable lexical substitution environment. Formal domains are internal proof
+    * inputs; callers must derive them from a checked collection contract, never a snapshot bound
+    * attribute. Imported expressions are re-composed through this arithmetic owner.
+    */
+  final class Query(
       snapshot: ConstructionSnapshot,
-      instance: Option[(String, KernelInstanceSnapshot)]
+      instance: Option[(String, KernelInstanceSnapshot)] = None,
+      val scope: Option[String] = None,
+      exact: Map[String, ResolvedDimensions] = Map.empty,
+      domains: Map[String, IterationDomain.Bounds] = Map.empty,
+      enclosing: Option[Query] = None,
+      generatedDomains: Map[String, IterationDomain.Structural] = Map.empty,
+      captures: Map[String, String] = Map.empty
   ):
-    private val modules = unique(snapshot.modules.map(value => value.path -> value), "module")
-    private val expressions =
-      unique(snapshot.parameterExpressions.map(value => value.path -> value), "expression")
+    if snapshot.parameterExpressions.size > 65536 ||
+      snapshot.digitalCollections.size + snapshot.digitalLoops.size +
+        snapshot.structuralIfs.size * 2 +
+        snapshot.generatedRegions.count(_.digitalBody.nonEmpty) > 65536
+    then
+      invalid("static snapshot exceeds the bounded definition budget")
+    private val sourceSnapshot = snapshot
+    if enclosing.exists(parent => !(parent.sourceSnapshot eq snapshot)) then
+      invalid("enclosing Integer context belongs to another immutable snapshot")
+    private val modules: Map[String, KernelModuleSnapshot] = enclosing.map(_.modules).getOrElse(
+      unique(snapshot.modules.map(value => value.path -> value), "module")
+    )
+    private val expressions: Map[String, KernelParameterExpressionSnapshot] =
+      enclosing.map(_.expressions).getOrElse(
+        unique(snapshot.parameterExpressions.map(value => value.path -> value), "expression")
+      )
+    private val arguments
+        : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
+      enclosing.map(_.arguments).getOrElse(
+        unique(
+          snapshot.digitalCollections.flatMap(value =>
+            value.arguments.map(argument =>
+              argument.path -> (RegionOwner(value.path, value.owner), argument)
+            )
+          ) ++ snapshot.digitalLoops.flatMap(value =>
+            value.arguments.map(argument =>
+              argument.path -> (RegionOwner(value.path, value.owner), argument)
+            )
+          ) ++ snapshot.structuralIfs.flatMap(value =>
+            Vector(value.trueArm, value.falseArm).flatMap(arm =>
+              arm.arguments.map(argument =>
+                argument.path -> (RegionOwner(arm.path, value.owner), argument)
+              )
+            )
+          ) ++ snapshot.generatedRegions.flatMap(value =>
+            value.digitalBody.toVector.flatMap(body =>
+              body.arguments.map(argument =>
+                argument.path -> (RegionOwner(value.path, value.owner), argument)
+              )
+            )
+          ),
+          "lexical region argument"
+        )
+      )
+    private val bindingKeys =
+      Vector(exact.keySet, domains.keySet, generatedDomains.keySet, captures.keySet)
+    if bindingKeys.map(_.size).sum != bindingKeys.flatten.toSet.size ||
+      bindingKeys.map(_.size).sum > 4098
+    then
+      invalid("overlapping or excessive scoped Integer bindings")
+    (exact.keySet ++ domains.keySet ++ generatedDomains.keySet ++ captures.keySet).foreach: path =>
+      val (collection, argument) =
+        arguments.getOrElse(path, invalid("Integer binding is not an actual block argument"))
+      if !scope.contains(collection.path) || argument.dataType != "Integer" ||
+        argument.role == "index_capture" ||
+        (argument.role == "induction" && !generatedDomains.contains(path))
+      then
+        invalid("Integer binding belongs to another lexical scope or type")
+      if domains.contains(path) && !argument.role.startsWith("left_width:") &&
+        !argument.role.startsWith("right_width:")
+      then
+        invalid("only selected reduction width formals may receive a domain")
+    domains.values.foreach: value =>
+      if value.lower <= 0L || value.upper < value.lower then
+        invalid("formal width domain must be positive and ordered")
+    private val rawCaptures =
+      (snapshot.digitalCollections.flatMap(value =>
+        value.arguments.takeRight(value.captures.size).map(_.path).zip(value.captures)
+      ) ++ snapshot.structuralIfs.flatMap(value =>
+        Vector(value.trueArm, value.falseArm).flatMap(arm =>
+          arm.arguments.map(_.path).zip(arm.captures)
+        )
+      ) ++ snapshot.generatedRegions.flatMap(value =>
+        value.digitalBody.toVector.flatMap(body =>
+          body.arguments.drop(1).map(_.path).zip(body.captures)
+        )
+      )).toMap
+    captures.foreach: (argument, source) =>
+      if !rawCaptures.get(argument).contains(source) || enclosing.isEmpty then
+        invalid("Integer capture differs from its actual parent operand")
+    generatedDomains.foreach: (path, supplied) =>
+      val generated = snapshot.generatedRegions.find(value =>
+        value.induction == path &&
+          scope.contains(value.path) &&
+          value.digitalBody.exists(_.arguments.headOption.exists(_.path == path))
+      )
+        .getOrElse(invalid("Integer domain requires an actual Generate induction"))
+      val parent =
+        enclosing.getOrElse(invalid("Generate domain requires its enclosing static context"))
+      val lower = parent.bounds(parent.resolve(generated.owner, generated.lower))
+      val upper = parent.bounds(parent.resolve(generated.owner, generated.upperExclusive))
+      val step = parent.bounds(parent.resolve(generated.owner, generated.step))
+      val checked = IterationDomain.structural(
+        lower,
+        upper,
+        step,
+        generated.maximum,
+        identicalBounds = parent.resolve(generated.owner, generated.lower) ==
+          parent.resolve(generated.owner, generated.upperExclusive) ||
+          (lower.lower == lower.upper && upper.lower == upper.upper && lower.lower >= upper.upper)
+      )
+        .fold(problem => invalid(problem.message), identity)
+      if checked != supplied || checked.maximumTripCount != generated.maximumTripCount then
+        invalid("Generate domain differs from its actual retained bound operands")
+
     private val facts = mutable.ArrayBuffer.empty[Fact]
     private val ids = mutable.HashMap.empty[Key, Int]
     private val memo = mutable.HashMap.empty[(String, String, Boolean), Int]
@@ -49,9 +164,14 @@ private[nodal] object StructuralParameterBinding:
       values.toMap
 
     private def intern(key: Key, bounds: IterationDomain.Bounds): Int =
-      ids.getOrElseUpdate(key, { val id = facts.size; facts += Fact(key, bounds); id })
+      ids.getOrElseUpdate(
+        key, {
+          if facts.size >= 65536 then invalid("Integer query exceeds the bounded node budget")
+          val id = facts.size; facts += Fact(key, bounds); id
+        }
+      )
 
-    private def literal(value: Long): Int =
+    def literal(value: Long): Int =
       intern(Key.Literal(value), IterationDomain.Bounds(value, value))
 
     private def module(owner: String): KernelModuleSnapshot =
@@ -145,23 +265,124 @@ private[nodal] object StructuralParameterBinding:
         case Some(value) =>
           if expression.operation != "integer" || expression.operands.nonEmpty then
             invalid("forged Integer literal expression")
-          literal(value.toLongOption.getOrElse(invalid("Integer literal exceeds signed 64 bits")))
+          val number =
+            value.toLongOption.getOrElse(invalid("Integer literal exceeds signed 64 bits"))
+          if value != number.toString then invalid("Integer literal is not canonical decimal")
+          literal(number)
         case None =>
-          val operation = expression.operation match
-            case "analog_add" => IterationDomain.Arithmetic.Add
-            case "analog_sub" => IterationDomain.Arithmetic.Subtract
-            case "analog_mul" => IterationDomain.Arithmetic.Multiply
-            case "analog_div" => IterationDomain.Arithmetic.Divide
-            case "analog_neg" => IterationDomain.Arithmetic.Negate
-            case _ => invalid("structural expression is not supported pure Integer arithmetic")
-          val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
-          if expression.operands.size != arity then invalid("Integer expression has invalid arity")
-          val operands = expression.operands.map(resolve(expression.owner, _, defaults))
-          val bounds = IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
+          compose(
+            expression.operation,
+            expression.operands.map(resolve(expression.owner, _, defaults))
+          )
+
+    def compose(operationName: String, operands: Vector[Int]): Int =
+      val operation = IterationDomain.staticArithmetic(operationName).getOrElse(
+        invalid("structural expression is not supported pure Integer arithmetic")
+      )
+      val arity = operation.arity
+      if operands.size != arity then invalid("Integer expression has invalid arity")
+      val bounds =
+        if operation == IterationDomain.Arithmetic.Subtract && operands(0) == operands(1) then
+          IterationDomain.Bounds(0L, 0L)
+        else
+          IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
             .fold(problem => invalid(problem.message), identity)
-          if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) then
-            literal(bounds.lower)
-          else intern(Key.Apply(expression.operation, operands), bounds)
+      simplifiedOperand(operation, operands) match
+        case Some(index) => index
+        case None if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) =>
+          literal(bounds.lower)
+        case None => intern(Key.Apply(operationName, operands), bounds)
+
+    private def simplifiedOperand(operation: IterationDomain.Arithmetic, operands: Vector[Int])
+        : Option[Int] =
+      if operation == IterationDomain.Arithmetic.Maximum && operands(0) == operands(1) then
+        Some(operands(0))
+      else if operation == IterationDomain.Arithmetic.ChooseZero then
+        facts(operands(0)).key match
+          case Key.Literal(value) => Some(operands(if value == 0L then 1 else 2))
+          case _ if operands(1) == operands(2) => Some(operands(1))
+          case _ => None
+      else None
+
+    def bounds(index: Int): IterationDomain.Bounds = facts(index).bounds
+
+    def operation(index: Int): Option[(String, Vector[Int])] = facts(index).key match
+      case Key.Apply(name, operands) => Some(name -> operands)
+      case _ => None
+
+    def exportValues(indices: Vector[Int]): ResolvedDimensions =
+      // Export the reachable graph only. Copying the full query arena for every width binding
+      // would make a wide record's context plan quadratic in unrelated static definitions.
+      val mapped = mutable.HashMap.empty[Int, Int]
+      val nodes = mutable.ArrayBuffer.empty[IntegerNode]
+      def copy(index: Int, depth: Int): Int = mapped.getOrElseUpdate(
+        index, {
+          if depth > 512 then invalid("exported Integer proof exceeds the bounded depth")
+          val fact = facts(index)
+          val value = fact.key match
+            case Key.Literal(value) =>
+              IntegerNode(Some(value), None, None, Vector.empty, fact.bounds)
+            case Key.Parameter(path) =>
+              IntegerNode(None, Some(path), None, Vector.empty, fact.bounds)
+            case Key.Apply(operation, operands) =>
+              IntegerNode(
+                None,
+                None,
+                Some(operation),
+                operands.map(copy(_, depth + 1)),
+                fact.bounds
+              )
+          val result = nodes.size
+          nodes += value
+          result
+        }
+      )
+      val roots = indices.map(copy(_, 0))
+      ResolvedDimensions(roots, nodes.toVector, Map.empty)
+
+    def importValue(owner: String, value: ResolvedDimensions): Int =
+      if value.dimensions.size != 1 || value.nodes.size > 65536 then
+        invalid("exact Integer binding must contain one bounded expression")
+      val imported = mutable.HashMap.empty[Int, Int]
+      val visiting = mutable.HashSet.empty[Int]
+      def node(index: Int): Int = imported.getOrElseUpdate(
+        index, {
+          if index < 0 || index >= value.nodes.size || visiting.size >= 512 || !visiting.add(index)
+          then
+            invalid("exact Integer binding is cyclic, absent or excessively deep")
+          try
+            val source = value.nodes(index)
+            val result = (source.literal, source.parameter, source.operation) match
+              case (Some(number), None, None) if source.operands.isEmpty => literal(number)
+              case (None, Some(path), None) if source.operands.isEmpty =>
+                arguments.get(path) match
+                  case Some((collection, _)) =>
+                    val parent = enclosing.getOrElse(
+                      invalid("exact binding contains an unadmitted formal atom")
+                    )
+                    // A captured ancestor induction retains its original identity after passing
+                    // through an arm. It must already be an admitted atom in the parent query;
+                    // do not pretend that its original block argument belongs to this arm.
+                    val checked = parent.ids.get(Key.Parameter(path)).getOrElse(
+                      parent.resolve(collection.owner, path)
+                    )
+                    if parent.bounds(checked) != source.bounds then
+                      invalid("formal atom bounds differ from enclosing proof")
+                    // A parent's exact replacement must not be relabeled as an opaque atom.
+                    val proof = parent.exportValues(Vector(checked))
+                    if proof.nodes(proof.dimensions.head).parameter != Some(path) then
+                      invalid("exact binding forged an enclosing atom")
+                    intern(Key.Parameter(path), source.bounds)
+                  case None => resolve(owner, path)
+              case (None, None, Some(operation)) => compose(operation, source.operands.map(node))
+              case _ => invalid("exact Integer binding has malformed node facts")
+            if facts(result).bounds != source.bounds then
+              invalid("exact Integer binding bounds differ from checked arithmetic")
+            result
+          finally { val _ = visiting.remove(index) }
+        }
+      )
+      node(value.dimensions.head)
 
     def resolve(owner: String, token: String, defaults: Boolean = false): Int =
       token.toLongOption match
@@ -175,19 +396,76 @@ private[nodal] object StructuralParameterBinding:
               if active.size >= 512 || !active.add(cacheKey) then
                 invalid("cyclic or excessively deep Integer dependency")
               try
-                val result = declaration(owner, token) match
-                  case Some(value) => parameter(owner, value, defaults)
-                  case None =>
-                    val expression = expressions.getOrElse(
-                      token,
-                      invalid(s"Integer dependency '$token' has no retained identity")
-                    )
-                    if expression.owner != owner then
-                      invalid("Integer expression belongs to another module")
-                    arithmetic(expression, defaults)
+                val result = arguments.get(token) match
+                  case Some((collection, argument)) =>
+                    if defaults || collection.owner != owner || !scope.contains(collection.path) ||
+                      argument.dataType != "Integer"
+                    then invalid("Integer formal escaped its admitted lexical scope")
+                    captures.get(token).map(source =>
+                      val parent = enclosing.get
+                      importValue(owner, parent.exportValues(Vector(parent.resolve(owner, source))))
+                    ).orElse(exact.get(token).map(importValue(owner, _))).orElse(
+                      domains.get(token).map(bounds => intern(Key.Parameter(token), bounds))
+                    ).orElse(generatedDomains.get(token).flatMap(IterationDomain.attainedBounds)
+                      .map(bounds => intern(Key.Parameter(token), bounds))).getOrElse(invalid(
+                      "Integer formal has no admitted exact binding or domain"
+                    ))
+                  case None => declaration(owner, token) match
+                      case Some(value) => parameter(owner, value, defaults)
+                      case None =>
+                        val expression = expressions.getOrElse(
+                          token,
+                          invalid(s"Integer dependency '$token' has no retained identity")
+                        )
+                        if expression.owner != owner ||
+                          expression.region.nonEmpty && expression.region != scope
+                        then
+                          invalid("Integer expression belongs to another module or lexical scope")
+                        arithmetic(expression, defaults)
                 memo.update(cacheKey, result)
                 result
               finally { val _ = active.remove(cacheKey) }
+
+    /** Validate every raw dependency, without inventing an attained value for empty Generate.
+      * Numeric/type callers keep using resolve, which fails if an attained value is necessary.
+      */
+    def resolveIfAttained(owner: String, token: String): Option[Int] =
+      val visited = mutable.HashMap.empty[String, Option[Int]]
+      val visiting = mutable.HashSet.empty[String]
+      def visit(path: String): Option[Int] = visited.getOrElseUpdate(
+        path, {
+          if visiting.size >= 128 || visited.size >= 65536 || !visiting.add(path) then
+            invalid("static predicate dependency is cyclic or exceeds its finite budget")
+          try
+            captures.get(path) match
+              case Some(source) =>
+                val parent = enclosing.get
+                parent.resolveIfAttained(owner, source).map(value =>
+                  importValue(owner, parent.exportValues(Vector(value)))
+                )
+              case None if generatedDomains.contains(path) =>
+                generatedDomains.get(path).flatMap(IterationDomain.attainedBounds)
+                  .map(bounds => intern(Key.Parameter(path), bounds))
+              case None => expressions.get(path) match
+                  case Some(expression) if expression.literal.isEmpty =>
+                    if expression.owner != owner ||
+                      expression.region.nonEmpty && expression.region != scope ||
+                      expression.dataType != "Integer" || expression.unit.exists(_.nonEmpty)
+                    then
+                      invalid("predicate Integer expression has invalid scope, type or units")
+                    val operation = IterationDomain.staticArithmetic(expression.operation)
+                      .getOrElse(invalid("predicate Integer expression has unsupported arithmetic"))
+                    if expression.operands.size != operation.arity then
+                      invalid("predicate Integer expression has wrong arity")
+                    val operands = expression.operands.map(visit)
+                    if operands.forall(_.nonEmpty) then
+                      Some(compose(expression.operation, operands.flatten))
+                    else None
+                  case _ => Some(resolve(owner, path))
+          finally visiting.remove(path)
+        }
+      )
+      visit(token)
 
     def checkedLiteral(owner: String, reference: String): Long =
       facts(resolve(owner, reference, defaults = true)).key match
@@ -231,23 +509,17 @@ private[nodal] object StructuralParameterBinding:
                     else
                       val inputs = operands.flatten
                       ids.get(Key.Apply(expression.operation, inputs)).orElse:
-                        val operation = expression.operation match
-                          case "analog_add" => Some(IterationDomain.Arithmetic.Add)
-                          case "analog_sub" => Some(IterationDomain.Arithmetic.Subtract)
-                          case "analog_mul" => Some(IterationDomain.Arithmetic.Multiply)
-                          case "analog_div" => Some(IterationDomain.Arithmetic.Divide)
-                          case "analog_neg" => Some(IterationDomain.Arithmetic.Negate)
-                          case _ => None
-                        operation.filter(op =>
-                          inputs.size == (if op == IterationDomain.Arithmetic.Negate then 1 else 2)
-                        )
-                          .filter(_ =>
-                            inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
-                          )
-                          .flatMap(op =>
-                            IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
-                          )
-                          .flatMap(value => ids.get(Key.Literal(value.lower))))
+                        val operation = IterationDomain.staticArithmetic(expression.operation)
+                        operation.filter(op => inputs.size == op.arity)
+                          .flatMap(op => simplifiedOperand(op, inputs))
+                          .orElse(operation.filter(op => inputs.size == op.arity)
+                            .filter(_ =>
+                              inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
+                            )
+                            .flatMap(op =>
+                              IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
+                            )
+                            .flatMap(value => ids.get(Key.Literal(value.lower)))))
           finally { val _ = visiting.remove(token) }
       )
       (module(owner).declarations.filter(value =>
@@ -291,6 +563,24 @@ private[nodal] object StructuralParameterBinding:
   ): Boolean =
     val query = new Query(snapshot, None)
     query.resolve(owner, left) == query.resolve(owner, right)
+
+  /** Compare a retained result with checked composition in the same query-local identity space.
+    * Operation names are the captured static Integer opcodes, not renderer spellings.
+    */
+  def sameIntegerOperation(
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      resultToken: String,
+      operation: String,
+      operandTokens: Vector[String],
+      increment: Long = 0L
+  ): Boolean =
+    val query = new Query(snapshot, None)
+    val result = query.resolve(owner, resultToken)
+    val composed = query.compose(operation, operandTokens.map(query.resolve(owner, _)))
+    val expected = if increment == 0L then composed
+    else query.compose("analog_add", Vector(composed, query.resolve(owner, increment.toString)))
+    result == expected
 
   def defaultInteger(snapshot: ConstructionSnapshot, owner: String, reference: String): Long =
     new Query(snapshot, None).checkedLiteral(owner, reference)

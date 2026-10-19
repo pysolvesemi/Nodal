@@ -800,6 +800,18 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.collection",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.collection_yield",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.component_contract",
         "feature": "partial-topology-records",
         "domain": "analog",
@@ -980,6 +992,12 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.hardware_loop_end",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.instance",
         "feature": "structural-hierarchy",
         "domain": "neutral",
@@ -1043,6 +1061,12 @@
         "operation": "nodal.interface_role",
         "feature": "unlowered-shared-forms",
         "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.iteration_index",
+        "feature": "digital-behavior",
+        "domain": "digital",
         "admission": "unsupported"
       },
       {
@@ -1257,6 +1281,30 @@
       },
       {
         "operation": "nodal.state_owner",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.static_compare",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.static_logic",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.structural_if",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.structural_yield",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"

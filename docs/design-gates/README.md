@@ -81,3 +81,40 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
   cross-tool comparison contract.
 
 - [NodalDigitalTypeEnum-DG v0.1](NodalDigitalTypeEnum-DG-v0.1.md): approved additive F54 hardware enum carrier, exact digital type contracts and explicit legacy decode migration under standing Foundation authority.
+
+- [NodalDigitalExpressions-DG v0.1](NodalDigitalExpressions-DG-v0.1.md): approved
+  additive F55 lossless scalar arithmetic, exact symbolic width algebra and
+  independently verified combinational value semantics. Remaining collection and
+  iteration decisions stay open in the increment readiness record.
+
+- [NodalDigitalCollections-DG v0.1](NodalDigitalCollections-DG-v0.1.md): approved
+  F55 typed map/zipWith/fold/scan regions, explicit seed-excluded scan convention
+  and honest migration from the inert pair-losing zip candidate.
+- [NodalDigitalArithmetic-DG v0.2](NodalDigitalArithmetic-DG-v0.2.md): approved
+  additive F55 bounded division/remainder and exact numeric minimum/maximum;
+  dynamic numerators with proven nonzero constant divisors and explicit limits.
+- [NodalDigitalMaterialization-DG v0.1](NodalDigitalMaterialization-DG-v0.1.md):
+  approved F55 typed naming/keep intent and verified target-neutral decisions over
+  actual SSA uses; target emission legality remains with its backend owner.
+- [NodalStaticWidthArithmetic-DG v0.1](NodalStaticWidthArithmetic-DG-v0.1.md):
+  approved F55 shared static width primitives and explicit mathematical signed-64
+  proof mode; scoped reduction formals and target support remain separate.
+- [NodalDigitalStructValues-DG v0.1](NodalDigitalStructValues-DG-v0.1.md):
+  approved F55/BT typed record handles and actual get/make value DAGs; canonical
+  width families do not weaken complete ABI equality.
+- [NodalDigitalDrivers-DG v0.1](NodalDigitalDrivers-DG-v0.1.md): approved F55
+  canonical combinational dependency, ordinary driver and physical coverage
+  verification; bounded-loop order/domain proofs remain separate.
+- [NodalWritableSignals-DG v0.1](NodalWritableSignals-DG-v0.1.md): approved F55
+  private writable wire/output selections over actual canonical shape edges;
+  readonly expressions and register update boundaries remain unchanged.
+- [NodalDigitalReductions-DG v0.1](NodalDigitalReductions-DG-v0.1.md): approved
+  F55/BT ordered left/balanced whole-value reductions with checked finite width
+  transfer, universal intermediate validation and exact contextual type queries.
+- [NodalBoundedDigitalLoops-DG v0.1](NodalBoundedDigitalLoops-DG-v0.1.md):
+  approved F55 ordered finite loop templates, shared physical coverage and verified
+  unrolled/procedural plans; checked callback and separate-library effect proofs
+  preserve the unified range contract.
+- [NodalStructuralIf-DG v0.1](NodalStructuralIf-DG-v0.1.md): approved bounded
+  F55 structural predicates, read-only branch results and guard-qualified writes;
+  supplies only the required symbolic-if portion of the F58 gate.

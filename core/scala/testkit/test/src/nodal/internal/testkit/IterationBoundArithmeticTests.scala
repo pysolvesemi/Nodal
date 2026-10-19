@@ -19,8 +19,12 @@ object IterationBoundArithmeticTests extends TestSuite:
       case Arithmetic.Add => left + right
       case Arithmetic.Subtract => left - right
       case Arithmetic.Multiply => left * right
+      case Arithmetic.Maximum => left.max(right)
       case Arithmetic.Divide => left / right
       case Arithmetic.Negate => -left
+      case Arithmetic.CeilLog2 => BigInt((left - 1).bitLength)
+      case Arithmetic.ChooseZero =>
+        scala.util.Failure[Nothing](new IllegalArgumentException("ternary operation")).get
 
   private def evaluate(operation: Arithmetic, operands: Bounds*): Bounds =
     IterationDomain.arithmetic(operation, operands.toVector).toOption.get
@@ -86,6 +90,19 @@ object IterationBoundArithmeticTests extends TestSuite:
       rejected(Arithmetic.Multiply, ProblemKind.BoundOverflow, minimum, negativeOne)
       rejected(Arithmetic.Negate, ProblemKind.BoundOverflow, minimum)
 
+    test("static maximum keeps crossed envelopes and signed boundaries without overflow"):
+      assert(evaluate(Arithmetic.Maximum, Bounds(1L, 8L), Bounds(4L, 6L)) == Bounds(4L, 8L))
+      assert(evaluate(Arithmetic.Maximum, Bounds(-8L, -1L), Bounds(-6L, -4L)) == Bounds(-6L, -1L))
+      assert(evaluate(Arithmetic.Maximum, Bounds(Long.MinValue, 0L), Bounds(-1L, Long.MaxValue)) ==
+        Bounds(-1L, Long.MaxValue))
+      assert(StaticIntegerExpression.maximum(Int.MinValue, Int.MaxValue) == Int.MaxValue)
+      rejected(
+        Arithmetic.Add,
+        ProblemKind.BoundOverflow,
+        evaluate(Arithmetic.Maximum, Bounds(1L, Long.MaxValue), Bounds(2L, 3L)),
+        Bounds(1L, 1L)
+      )
+
     test("division truncates toward zero for either operand sign"):
       for (left, right, expected) <- Vector(
           (7L, 2L, 3L),
@@ -120,7 +137,7 @@ object IterationBoundArithmeticTests extends TestSuite:
       for
         operation <- Arithmetic.values.toVector
         count <- 0 to 3
-        expected = if operation == Arithmetic.Negate then 1 else 2
+        expected = operation.arity
         if count != expected
       do rejected(operation, ProblemKind.InvalidArithmetic, Vector.fill(count)(Bounds(1L, 2L))*)
 

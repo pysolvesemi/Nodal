@@ -5,7 +5,7 @@ import scala.annotation.targetName
 /** Public core semantic surface frozen by Increment 15. Implementation remains inert. */
 opaque type SInt <: Data = Bits
 
-object SInt:
+object SInt extends DigitalNumericOperators[SInt]:
   def apply(width: Int): DataType[SInt] =
     CandidateRuntime.dataType[SInt]("SInt", width)
 
@@ -14,13 +14,16 @@ object SInt:
 
   extension (left: Expr[SInt])
     @targetName("sintAddition")
-    def +(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+    def +(right: Expr[SInt]): Expr[SInt] =
+      DigitalCombinationalContract.arithmetic("digital_add", left, right)
 
     @targetName("sintSubtraction")
-    def -(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+    def -(right: Expr[SInt]): Expr[SInt] =
+      DigitalCombinationalContract.arithmetic("digital_sub", left, right)
 
     @targetName("sintArithmeticShiftRight")
-    def >>(amount: Int): Expr[SInt] = CandidateRuntime.expr(left, amount)
+    def >>(amount: Int): Expr[SInt] =
+      DigitalCombinationalContract.shift("digital_shr", left, amount)
 
 extension (value: Int)
   def S(width: Int): Expr[SInt] = CandidateRuntime.literalSInt(value, width)
@@ -28,7 +31,8 @@ extension (value: Int)
 
 extension (left: Expr[UInt])
   @targetName("uintLogicalShiftRight")
-  def >>(amount: Int): Expr[UInt] = CandidateRuntime.expr(left, amount)
+  def >>(amount: Int): Expr[UInt] =
+    DigitalCombinationalContract.shift("digital_shr", left, amount)
 
 extension [A <: Data](value: Expr[A])
   def extend(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "extend")
@@ -37,8 +41,8 @@ extension [A <: Data](value: Expr[A])
   def saturate(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "saturate")
   def resizeChecked(width: Int): Expr[A] =
     DigitalScalarContract.resize(value, width, "resize_checked")
-  def named(name: String): Expr[A] = CandidateRuntime.expr(value, name, "named")
-  def keep(reason: String): Expr[A] = CandidateRuntime.expr(value, reason, "keep")
+  def named(name: String): Expr[A] = DigitalMaterializationContract.named(value, name)
+  def keep(reason: String): Expr[A] = DigitalMaterializationContract.keep(value, reason)
 
 extension (value: Expr[UInt])
   def toSigned: Expr[SInt] = DigitalScalarContract.toSigned(value)
@@ -70,11 +74,29 @@ extension [A <: Data](value: Expr[Vec[A]])
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
     CandidateRuntime.shapeView(value, dimensions.toVector)
   def map[B <: Data](function: Expr[A] => Expr[B]): Expr[Vec[B]] =
-    CandidateRuntime.expr(value, function, "map")
+    DigitalCollectionContract.map(value, function)
+  def zipWith[B <: Data, C <: Data](other: Expr[Vec[B]])(
+      function: (Expr[A], Expr[B]) => Expr[C]
+  ): Expr[Vec[C]] = DigitalCollectionContract.zipWith(value, other, function)
+  def fold[B <: Data](initial: Expr[B])(
+      function: (Expr[B], Expr[A]) => Expr[B]
+  ): Expr[B] = DigitalCollectionContract.fold(value, initial, function, scan = false)
+    .asInstanceOf[Expr[B]]
+  def scan[B <: Data](initial: Expr[B])(
+      function: (Expr[B], Expr[A]) => Expr[B]
+  ): Expr[Vec[B]] = DigitalCollectionContract.fold(value, initial, function, scan = true)
+    .asInstanceOf[Expr[Vec[B]]]
   def zip[B <: Data](other: Expr[Vec[B]]): Expr[Vec[A]] =
-    CandidateRuntime.expr(value, other, "zip")
+    val _ = other
+    DigitalCollectionContract.fail(
+      4,
+      "inert zip cannot represent both operands; migrate to zipWith",
+      ConstructionKernel.referencePath(value)
+    )
   def reduce(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
-    CandidateRuntime.expr(value, function, "reduce")
+    DigitalCollectionContract.reduce(value, function, balanced = false)
+  def reduceBalancedTree(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
+    DigitalCollectionContract.reduce(value, function, balanced = true)
 
 /** General valid-only transport candidate. */
 final class Valid[A <: Data] private[nodal] (val payload: Expr[A])
@@ -89,7 +111,7 @@ def generate(count: Dimension)(body: GenerateIndex => Unit): Unit =
   CandidateRuntime.statement(count, body)
 
 /** Bounded same-cycle hardware iteration candidate, distinct from generate and Scala for. */
-final class LoopIndex private[nodal] ()
+final class LoopIndex private[nodal] (val value: Expr[Integer])
 
 sealed trait LoopBound
 object LoopBound:
@@ -97,7 +119,8 @@ object LoopBound:
   final case class Symbolic(value: Expr[Integer], maximum: Int) extends LoopBound
 
 def loop(bound: LoopBound)(body: LoopIndex => Unit): Unit =
-  CandidateRuntime.statement(bound, body)
+  DigitalIterationCallback.requireLoop(body)
+  ConstructionKernel.digitalLoop(bound)(value => body(new LoopIndex(value)))
 
 /** Target-layout candidates for shaped values. */
 enum TargetLayout:

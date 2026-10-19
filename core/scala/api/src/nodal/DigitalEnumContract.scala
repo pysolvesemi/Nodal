@@ -165,10 +165,46 @@ private[nodal] object DigitalEnumContract:
   def abi(value: Expr[?]): ResolvedEnumAbi = abi(descriptor(value))
 
   /** Exact structural identity, excluding enum policy/provenance when the actual ABI agrees. */
-  def sameType(left: KernelTypeDescriptor, right: KernelTypeDescriptor): Boolean =
+  def sameType(
+      left: KernelTypeDescriptor,
+      right: KernelTypeDescriptor,
+      integerIdentity: Option[(Dimension, Dimension) => Boolean] = None
+  ): Boolean = compareType(left, right, integerIdentity, widthFamily = false)
+
+  private def compareType(
+      left: KernelTypeDescriptor,
+      right: KernelTypeDescriptor,
+      integerIdentity: Option[(Dimension, Dimension) => Boolean],
+      widthFamily: Boolean
+  ): Boolean =
     val memo =
       new java.util.IdentityHashMap[AnyRef, java.util.IdentityHashMap[AnyRef, java.lang.Boolean]]()
     var examined = 0
+    def dimension(value: Any): Option[Dimension] = value match
+      case literal: Int => Some(literal)
+      case expression: Expr[?]
+          if CandidateRuntime.expressionDataType(expression)
+            .exists(value =>
+              CandidateRuntime.typeDescriptor(value) == KernelTypeDescriptor("Integer")
+            ) =>
+        Some(expression.asInstanceOf[Expr[Integer]])
+      case _ => None
+    def literal(value: Dimension): Option[Int] = value match
+      case integer: Int => Some(integer)
+      case expression: KernelExpr[?] if expression.operation.contains("integer") =>
+        expression.literal.filter(value =>
+          value.kind == "integer" && value.dataType == KernelTypeDescriptor("Integer")
+        ).flatMap(_.value.toIntOption).filter(value => expression.operands == Vector(value))
+      case _ => None
+    def sameDimension(left: Dimension, right: Dimension): Boolean =
+      // Reuse the construction owner's checked, interned static algebra. Parameter identity and
+      // ordered operation trees remain exact; neither defaults nor equal intervals are evidence.
+      integerIdentity.map(_(
+        left,
+        right
+      )).orElse(ConstructionKernel.sameStaticInteger(left, right)).getOrElse(
+        literal(left).exists(value => literal(right).contains(value))
+      )
     def same(a: Any, b: Any, depth: Int): Boolean =
       if depth >= 128 then fail(17, "enum selection result type exceeds the structural depth bound")
       val ar = a.asInstanceOf[AnyRef]
@@ -188,7 +224,11 @@ private[nodal] object DigitalEnumContract:
             row.put(br, java.lang.Boolean.FALSE)
             val result = (a, b) match
               case (x: KernelTypeDescriptor, y: KernelTypeDescriptor) =>
-                x.kind == y.kind && same(x.arguments, y.arguments, depth + 1)
+                x.kind == y.kind &&
+                (if widthFamily && Set("Bits", "UInt", "SInt").contains(x.kind) then
+                   x.arguments.size == 1 && y.arguments.size == 1 &&
+                   dimension(x.arguments.head).nonEmpty && dimension(y.arguments.head).nonEmpty
+                 else same(x.arguments, y.arguments, depth + 1))
               case (x: DataType[?], y: DataType[?]) =>
                 same(
                   CandidateRuntime.typeDescriptor(x),
@@ -202,10 +242,19 @@ private[nodal] object DigitalEnumContract:
               case (x: Seq[?], y: Seq[?]) =>
                 x.size == y.size &&
                 x.iterator.zip(y.iterator).forall((x, y) => same(x, y, depth))
-              case _ => a == b
+              case _ =>
+                (dimension(a), dimension(b)) match
+                  case (Some(x), Some(y)) => sameDimension(x, y)
+                  case _ => a == b
             row.put(br, java.lang.Boolean.valueOf(result))
             result
     same(left, right, 0)
+
+  /** Construction-only relation: erase scalar width leaves, preserve every other exact identity.
+    * This is never storage/assignment equality, and never evaluates a parameter default.
+    */
+  def sameWidthFamily(left: KernelTypeDescriptor, right: KernelTypeDescriptor): Boolean =
+    compareType(left, right, None, widthFamily = true)
 
   private def selectedCase[A](value: A, evidence: HwEnum[A], resolved: ResolvedEnumAbi): String =
     val owner = declaration(evidence)
@@ -314,7 +363,7 @@ private[nodal] object DigitalEnumContract:
       EnumOperationMetadata(resolved)
     )
 
-  private def validateSelectionResult(descriptor: KernelTypeDescriptor): Unit =
+  def validateSelectionResult(descriptor: KernelTypeDescriptor): Unit =
     val visited = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
     var remaining = 65536
     def visit(value: Any, depth: Int): Unit =

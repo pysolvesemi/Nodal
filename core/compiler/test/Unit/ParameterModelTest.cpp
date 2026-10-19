@@ -237,6 +237,583 @@ mlir::Operation *namedOperation(mlir::Operation *scope, llvm::StringRef name) {
   return found;
 }
 
+int checkParameterRenderBudget(mlir::MLIRContext &context) {
+  auto fixture = [&](unsigned levels, llvm::StringRef opcode) {
+    std::string source = R"mlir(module {
+      "nodal.module"() <{metadata = {}, sym_name = "Budget"}> ({
+        %v0 = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    )mlir";
+    for (unsigned index = 1; index <= levels; ++index) {
+      const auto current = std::to_string(index), previous = std::to_string(index - 1);
+      source += "%v" + current + " = \"nodal.const_expr\"(%v" + previous;
+      if (opcode != "neg")
+        source += ", %v" + previous;
+      source += ") <{metadata = {}, operator_name = \"" + opcode.str() + "\"}> : (i64";
+      if (opcode != "neg")
+        source += ", i64";
+      source += ") -> i64\n";
+    }
+    source += "}) : () -> () }";
+    return mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  };
+  auto output = [&](mlir::ModuleOp module) {
+    mlir::Value value;
+    module.walk([&](nodal::ConstExprOp op) { value = op->getResult(0); });
+    return nodal::renderParameterConstantExpression(value);
+  };
+  auto small = fixture(8, "max");
+  auto large = fixture(40, "max");
+  auto deep = fixture(513, "neg");
+  auto repeated = fixture(40, "add");
+  if (!small || !large || !deep || !repeated)
+    return fail("parameter rendering budget fixtures did not parse");
+  size_t expectedSize = 1;
+  for (unsigned index = 0; index < 8; ++index)
+    expectedSize = 4 * expectedSize + 11;
+  auto rendered = output(*small);
+  if (mlir::failed(rendered) || rendered->size() != expectedSize)
+    return fail("bounded shared maximum DAG did not preserve its ordinary expanded spelling");
+  if (mlir::succeeded(output(*large)) || mlir::succeeded(output(*deep)) ||
+      mlir::succeeded(output(*repeated)))
+    return fail("oversized or deep parameter rendering escaped bounded DAG preflight");
+  mlir::Operation *last = nullptr;
+  small->walk([&](nodal::ConstExprOp op) { last = op.getOperation(); });
+  last->setOperand(0, last->getResult(0));
+  if (mlir::succeeded(nodal::renderParameterConstantExpression(last->getResult(0))))
+    return fail("cyclic parameter rendering escaped bounded DAG preflight");
+  return 0;
+}
+
+int checkStaticIntegerMaximum(mlir::MLIRContext &context) {
+  constexpr llvm::StringLiteral source = R"mlir(
+module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "W", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "X", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "MAXIMUM", type = i64, variability = "fixed"}> : () -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %nine = "nodal.const_literal"() <{metadata = {}, spelling = "9", value = 9 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @W}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @X}> : (i64, i64) -> ()
+    %w = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @W}> : () -> i64
+    %x = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @X}> : () -> i64
+    %maximum = "nodal.const_expr"(%w, %x) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    "nodal.parameter_value"(%maximum) <{metadata = {}, parameter = @MAXIMUM}> : (i64) -> ()
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "A", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "B", type = i64, variability = "symbolic"}> : () -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %three = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    %six = "nodal.const_literal"() <{metadata = {}, spelling = "6", value = 6 : i64}> : () -> i64
+    %nine = "nodal.const_literal"() <{metadata = {}, spelling = "9", value = 9 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @A}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%three, %six) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @B}> : (i64, i64) -> ()
+    %a = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @A}> : () -> i64
+    %b = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @B}> : () -> i64
+    %maximum = "nodal.const_expr"(%a, %b) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    %same = "nodal.const_expr"(%a, %a) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+    "nodal.parameter_override"(%a) <{instance = @u, parameter = @W, metadata = {}}> : (i64) -> ()
+    "nodal.parameter_override"(%b) <{instance = @u, parameter = @X, metadata = {}}> : (i64) -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "d"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {W = 8 : i64, X = 6 : i64}, sym_name = "v"}> : () -> ()
+  }) : () -> ()
+}
+)mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module || mlir::failed(mlir::verify(*module)) ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("static Integer maximum model did not verify");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *formal = namedOperation(child, "MAXIMUM");
+  llvm::SmallVector<mlir::Value, 2> expressions;
+  parent->walk([&](nodal::ConstExprOp op) { expressions.push_back(op->getResult(0)); });
+  auto bounds = nodal::inferParameterIntegerBounds(expressions[0]);
+  auto owned = nodal::resolveOwnedIntegerExpression(parent, expressions[0]);
+  auto other = nodal::resolveOwnedIntegerExpression(parent, expressions[1]);
+  auto bound = nodal::resolveInstanceIntegerParameter(namedOperation(parent, "u"), formal);
+  auto a = nodal::resolveOwnedIntegerParameter(parent, namedOperation(parent, "A"));
+  auto b = nodal::resolveOwnedIntegerParameter(parent, namedOperation(parent, "B"));
+  if (mlir::failed(bounds) || bounds->lower != 3 || bounds->upper != 9 || mlir::failed(owned) ||
+      mlir::failed(other) || mlir::failed(bound) || mlir::failed(a) || mlir::failed(b) ||
+      owned->root->kind != nodal::InstantiatedIntegerNode::Kind::Apply ||
+      owned->root->opcode != "max" ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*owned, *bound) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*owned, *other) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*owned,
+                                                      nodal::makeLiteralIntegerExpression(4)))
+    return fail("static maximum lost all-legal bounds or symbolic declaration identity");
+  auto composed = nodal::composeIntegerExpression("max", {*a, *b});
+  auto idempotent = nodal::composeIntegerExpression("max", {*a, *a});
+  if (mlir::failed(composed) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*owned, *composed) ||
+      mlir::failed(idempotent) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*a, *idempotent) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*a, *other) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*a, *composed))
+    return fail("static maximum composition disagrees with exact owned operand identities");
+  auto childMaximum = nodal::resolveOwnedIntegerParameter(child, formal);
+  auto childWidth = nodal::resolveOwnedIntegerParameter(child, namedOperation(child, "W"));
+  if (mlir::failed(childMaximum) || mlir::failed(childWidth) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*childMaximum, *childWidth))
+    return fail("static maximum collapsed independent parameters with equal defaults and bounds");
+  for (auto entry : {std::make_pair("d", int64_t{4}), std::make_pair("v", int64_t{8})}) {
+    auto resolved =
+        nodal::resolveInstanceIntegerParameter(namedOperation(parent, entry.first), formal);
+    if (mlir::failed(resolved) || !nodal::equivalentInstantiatedIntegerExpressions(
+                                      *resolved, nodal::makeLiteralIntegerExpression(entry.second)))
+      return fail("static maximum did not substitute a finalized default or override exactly");
+  }
+  auto invariant = nodal::getInvariantParameterDefault(formal);
+  if (mlir::failed(invariant) || invariant->has_value())
+    return fail("fixed maximum with symbolic dependencies incorrectly became an invariant default");
+  auto rendered = nodal::renderParameterConstantExpression(expressions[0]);
+  if (mlir::failed(rendered) || *rendered != "(A > B ? A : B)")
+    return fail("static maximum rendering did not retain its symbolic operands");
+
+  const auto minimum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::min());
+  const auto maximum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::max());
+  auto endpoints = nodal::composeIntegerExpression("max", {minimum, maximum});
+  if (mlir::failed(endpoints) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*endpoints, maximum) ||
+      mlir::succeeded(nodal::composeIntegerExpression(
+          "add", {*endpoints, nodal::makeLiteralIntegerExpression(1)})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("max", {})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("max", {minimum})))
+    return fail("static maximum literal boundary, overflow, or arity checks failed");
+
+  auto *operation = expressions[0].getDefiningOp();
+  const auto originalOperands = llvm::SmallVector<mlir::Value, 2>(operation->getOperands());
+  operation->setOperands({originalOperands[0]});
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])) ||
+      mlir::succeeded(nodal::renderParameterConstantExpression(expressions[0])))
+    return fail("malformed maximum arity escaped independent native checks");
+  operation->setOperands(originalOperands);
+  auto childValue = formal;
+  mlir::Value foreign;
+  childValue->getParentOp()->walk([&](nodal::ConstExprOp op) { foreign = op->getResult(0); });
+  operation->setOperand(1, foreign);
+  if (mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("maximum accepted a foreign-module operand");
+  operation->setOperands(originalOperands);
+  expressions[0].setType(mlir::Float64Type::get(&context));
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::inferParameterIntegerBounds(expressions[0])))
+    return fail("maximum accepted a non-Integer result");
+  expressions[0].setType(mlir::IntegerType::get(&context, 64));
+  operation->setAttr("unit", mlir::FlatSymbolRefAttr::get(&context, "unavailable"));
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("maximum accepted dimensional metadata");
+  return 0;
+}
+
+// Deliberately independent parent/formal identities share both defaults and
+// intervals. Finalized instances must substitute all three choose_zero operands.
+int checkStaticReductionPrimitives(mlir::MLIRContext &context) {
+  auto literal = [](llvm::StringRef id, int64_t number) {
+    const auto value = std::to_string(number);
+    return "%" + id.str() + " = \"nodal.const_literal\"() <{metadata = {case = \"" + id.str() +
+           "\"}, spelling = \"" + value + "\", value = " + value + " : i64}> : () -> i64\n";
+  };
+  auto expression = [](llvm::StringRef id, llvm::StringRef opcode,
+                       llvm::ArrayRef<llvm::StringRef> operands) {
+    std::string arguments, types;
+    for (auto operand : operands) {
+      if (!arguments.empty()) {
+        arguments += ", ";
+        types += ", ";
+      }
+      arguments += "%" + operand.str();
+      types += "i64";
+    }
+    return "%" + id.str() + " = \"nodal.const_expr\"(" + arguments + ") <{metadata = {case = \"" +
+           id.str() + "\"}, operator_name = \"" + opcode.str() + "\"}> : (" + types + ") -> i64\n";
+  };
+  auto parameter = [](llvm::StringRef name, int64_t initial, bool fixed = false) {
+    return "\"nodal.parameter\"() <{classification = \"ordinary\", default_value = " +
+           std::to_string(initial) +
+           " : i64, metadata = {}, parameter_kind = \"integer\", "
+           "sym_name = \"" +
+           name.str() + "\", type = i64, variability = \"" + (fixed ? "fixed" : "symbolic") +
+           "\"}> : () -> ()\n";
+  };
+  auto parameterValue = [](llvm::StringRef name, llvm::StringRef value) {
+    return "\"nodal.parameter_value\"(%" + value.str() + ") <{metadata = {}, parameter = @" +
+           name.str() + "}> : (i64) -> ()\n";
+  };
+  auto body = [&]() {
+    std::string result = literal("zero", 0) + literal("one", 1) + literal("nine", 9);
+    for (auto name : {"T", "U", "A", "B"}) {
+      const bool test = llvm::StringRef(name) == "T" || llvm::StringRef(name) == "U";
+      result += parameter(name, test ? 0 : 5);
+      result += "\"nodal.parameter_constraint\"(%" + std::string(test ? "zero" : "one") +
+                ", %nine) <{constraint_kind = \"range\", lower_inclusive = true, upper_inclusive = "
+                "true, metadata = {}, parameter = @" +
+                name + "}> : (i64, i64) -> ()\n";
+      result += "%" + std::string(name) +
+                " = \"nodal.const_parameter_ref\"() <{metadata = {case = \"" + name +
+                "\"}, parameter = @" + name + "}> : () -> i64\n";
+    }
+    return result + expression("choice", "choose_zero", {"T", "A", "B"}) +
+           expression("other_test", "choose_zero", {"U", "A", "B"}) +
+           expression("other_branches", "choose_zero", {"T", "B", "A"}) +
+           expression("same", "choose_zero", {"T", "A", "A"}) +
+           expression("literal_test", "choose_zero", {"zero", "A", "B"}) +
+           expression("log", "ceil_log2", {"A"}) + expression("other_log", "ceil_log2", {"B"}) +
+           parameter("CHOICE", 5, true) + parameterValue("CHOICE", "choice") +
+           parameter("LOG", 3, true) + parameterValue("LOG", "log");
+  };
+  auto moduleText = [](llvm::StringRef name, llvm::StringRef body) {
+    return "\"nodal.module\"() <{metadata = {}, sym_name = \"" + name.str() + "\"}> ({\n" +
+           body.str() + "}) : () -> ()\n";
+  };
+  const std::string instances = R"mlir(
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+    "nodal.parameter_override"(%T) <{instance = @u, parameter = @T, metadata = {}}> : (i64) -> ()
+    "nodal.parameter_override"(%A) <{instance = @u, parameter = @A, metadata = {}}> : (i64) -> ()
+    "nodal.parameter_override"(%B) <{instance = @u, parameter = @B, metadata = {}}> : (i64) -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "d"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {T = 2 : i64, A = 4 : i64, B = 8 : i64}, sym_name = "v"}> : () -> ()
+  )mlir";
+  const std::string source =
+      "module {" + moduleText("Child", body()) + moduleText("Parent", body() + instances) + "}";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module || mlir::failed(mlir::verify(*module)) ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("static reduction primitive model did not verify");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto value = [](mlir::Operation *owner, llvm::StringRef name) {
+    mlir::Value result;
+    owner->walk([&](mlir::Operation *operation) {
+      auto metadata = operation->getAttrOfType<mlir::DictionaryAttr>("metadata");
+      auto label = metadata ? metadata.getAs<mlir::StringAttr>("case") : mlir::StringAttr();
+      if (label && label.getValue() == name && operation->getNumResults() == 1)
+        result = operation->getResult(0);
+    });
+    return result;
+  };
+  auto query = [&](llvm::StringRef name) {
+    return nodal::resolveOwnedIntegerExpression(parent, value(parent, name));
+  };
+  auto choice = query("choice"), otherTest = query("other_test"),
+       otherBranches = query("other_branches");
+  auto same = query("same"), literalTest = query("literal_test"), a = query("A"), b = query("B");
+  auto logarithm = query("log"), otherLog = query("other_log"), test = query("T");
+  if (mlir::failed(choice) || mlir::failed(otherTest) || mlir::failed(otherBranches) ||
+      mlir::failed(same) || mlir::failed(literalTest) || mlir::failed(a) || mlir::failed(b) ||
+      mlir::failed(logarithm) || mlir::failed(otherLog) || mlir::failed(test) ||
+      choice->bounds.lower != 1 || choice->bounds.upper != 9 ||
+      choice->root->opcode != "choose_zero" || choice->root->operands.size() != 3 ||
+      nodal::equivalentInstantiatedIntegerExpressions(*choice, *otherTest) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*choice, *otherBranches) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*logarithm, *otherLog) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*same, *a) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*literalTest, *a))
+    return fail("static primitive identities collapsed distinct equal-default parameters");
+  auto composed = nodal::composeIntegerExpression("choose_zero", {*test, *a, *b});
+  auto composedLog = nodal::composeIntegerExpression("ceil_log2", {*a});
+  if (mlir::failed(composed) || mlir::failed(composedLog) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*choice, *composed) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*logarithm, *composedLog))
+    return fail("static primitive composition disagrees with canonical owned queries");
+  auto zeroBoundTest = nodal::makeOpaqueIntegerExpression(value(parent, "T"), {0, 0});
+  auto zeroBoundChoice = nodal::composeIntegerExpression("choose_zero", {zeroBoundTest, *a, *b});
+  if (mlir::failed(zeroBoundChoice) || zeroBoundChoice->root->opcode != "choose_zero" ||
+      nodal::equivalentInstantiatedIntegerExpressions(*zeroBoundChoice, *a))
+    return fail("singleton envelope was substituted for exact choose_zero test identity");
+  for (auto name : {"choice", "log"}) {
+    auto bound =
+        nodal::resolveInstanceIntegerExpression(namedOperation(parent, "u"), value(child, name));
+    auto owned = query(name);
+    if (mlir::failed(bound) || mlir::failed(owned) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*bound, *owned))
+      return fail("static primitive actual SSA substitutions lost canonical identity");
+  }
+  for (auto entry : {std::make_pair("d", int64_t{5}), std::make_pair("v", int64_t{8})}) {
+    auto bound = nodal::resolveInstanceIntegerParameter(namedOperation(parent, entry.first),
+                                                        namedOperation(child, "CHOICE"));
+    auto boundLog = nodal::resolveInstanceIntegerParameter(namedOperation(parent, entry.first),
+                                                           namedOperation(child, "LOG"));
+    if (mlir::failed(bound) || mlir::failed(boundLog) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(
+            *bound, nodal::makeLiteralIntegerExpression(entry.second)) ||
+        boundLog->bounds.lower != (llvm::StringRef(entry.first) == "d" ? 3 : 2))
+      return fail("static primitive finalized defaults or literal bindings were not evaluated");
+  }
+  auto invariant = nodal::getInvariantParameterDefault(namedOperation(child, "CHOICE"));
+  if (mlir::failed(invariant) || invariant->has_value())
+    return fail("overridable default incorrectly specialized choose_zero");
+  auto selectedInvariant = mlir::parseSourceString<mlir::ModuleOp>(
+      "module {" +
+          moduleText("Invariant",
+                     body() + literal("seven", 7) +
+                         expression("selected", "choose_zero", {"zero", "seven", "B"}) +
+                         parameter("SELECTED", 7, true) + parameterValue("SELECTED", "selected")) +
+          "}",
+      &context);
+  if (!selectedInvariant)
+    return fail("selected-invariant choose_zero fixture did not parse");
+  auto *invariantOwner = namedOperation(selectedInvariant->getOperation(), "Invariant");
+  auto selected = nodal::getInvariantParameterDefault(namedOperation(invariantOwner, "SELECTED"));
+  if (mlir::failed(selected) || !selected->has_value() ||
+      llvm::cast<mlir::IntegerAttr>(**selected).getInt() != 7)
+    return fail("literal choose_zero test retained the dead branch's symbolic variability");
+  auto selectedValue = value(invariantOwner, "selected");
+  selectedValue.getDefiningOp()->setOperand(2, selectedValue);
+  if (mlir::succeeded(
+          nodal::getInvariantParameterDefault(namedOperation(invariantOwner, "SELECTED"))))
+    return fail("invariant choose_zero query skipped validation of its dead branch");
+
+  for (auto entry : {std::make_pair(int64_t{1}, int64_t{0}), std::make_pair(int64_t{2}, int64_t{1}),
+                     std::make_pair(int64_t{3}, int64_t{2}), std::make_pair(int64_t{4}, int64_t{2}),
+                     std::make_pair(std::numeric_limits<int64_t>::max(), int64_t{63})}) {
+    auto folded = nodal::composeIntegerExpression(
+        "ceil_log2", {nodal::makeLiteralIntegerExpression(entry.first)});
+    auto fixture = mlir::parseSourceString<mlir::ModuleOp>(
+        "module {" +
+            moduleText("Fixed", literal("n", entry.first) +
+                                    expression("result", "ceil_log2", {"n"}) +
+                                    parameter("RESULT", entry.second, true) +
+                                    parameterValue("RESULT", "result")) +
+            "}",
+        &context);
+    if (mlir::failed(folded) || folded->bounds.lower != entry.second || !fixture ||
+        mlir::failed(nodal::verifyParameterModel(*fixture)))
+      return fail("ceil_log2 signed64 literal boundary failed checked constant evaluation");
+  }
+  const auto minimum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::min());
+  const auto maximum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::max());
+  const auto zero = nodal::makeLiteralIntegerExpression(0);
+  auto picked = nodal::composeIntegerExpression("choose_zero", {minimum, minimum, maximum});
+  if (mlir::failed(picked) || !nodal::equivalentInstantiatedIntegerExpressions(*picked, maximum) ||
+      mlir::succeeded(nodal::composeIntegerExpression("ceil_log2", {minimum})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("ceil_log2", {zero})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("ceil_log2", {zero, maximum})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("choose_zero", {zero, minimum})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("choose_zero", {zero, minimum, {}})))
+    return fail("static primitive composition accepted invalid arity/domain/branch");
+
+  auto renderedChoice = nodal::renderParameterConstantExpression(value(parent, "choice"));
+  auto renderedLog = nodal::renderParameterConstantExpression(value(parent, "log"));
+  if (mlir::failed(renderedChoice) || *renderedChoice != "((T) == 0 ? (A) : (B))" ||
+      mlir::failed(renderedLog) ||
+      !llvm::StringRef(*renderedLog).starts_with("((A) <= 64'd1 ? 0 : ") ||
+      renderedLog->find("64'd4611686018427387904 ? 62 : 63") == std::string::npos ||
+      renderedLog->find("9223372036854775808") != std::string::npos)
+    return fail("portable static primitive rendering lost exact positive signed64 thresholds");
+  std::string expansion = literal("n", 2), previous = "n";
+  for (unsigned index = 0; index != 4; ++index) {
+    const auto next = "log" + std::to_string(index);
+    expansion += expression(next, "ceil_log2", {previous});
+    previous = next;
+  }
+  auto expanded = mlir::parseSourceString<mlir::ModuleOp>(
+      "module {" + moduleText("Budget", expansion) + "}", &context);
+  if (!expanded || mlir::succeeded(nodal::renderParameterConstantExpression(
+                       value(namedOperation(expanded->getOperation(), "Budget"), previous))))
+    return fail("ceil_log2 expansion escaped shared DAG rendering budget");
+
+  for (unsigned levels : {14u, 16u}) {
+    std::string shared = literal("zero", 0) + literal("seed", 8), previous = "seed";
+    size_t expected = 1;
+    for (unsigned index = 0; index != levels; ++index) {
+      const auto next = "choice" + std::to_string(index);
+      shared += expression(next, "choose_zero", {"zero", previous, previous});
+      expected = 2 * expected + 20;
+      previous = next;
+    }
+    auto fixture = mlir::parseSourceString<mlir::ModuleOp>(
+        "module {" + moduleText("ChooseBudget", shared) + "}", &context);
+    if (!fixture)
+      return fail("shared choose_zero rendering-budget fixture did not parse");
+    auto rendered = nodal::renderParameterConstantExpression(
+        value(namedOperation(fixture->getOperation(), "ChooseBudget"), previous));
+    if ((levels == 14 && (mlir::failed(rendered) || rendered->size() != expected)) ||
+        (levels == 16 && mlir::succeeded(rendered)))
+      return fail("shared choose_zero expansion did not obey aggregate preflight budget");
+  }
+
+  auto *operation = value(parent, "literal_test").getDefiningOp();
+  const auto operands = llvm::SmallVector<mlir::Value, 3>(operation->getOperands());
+  auto rejected = [&]() {
+    return mlir::failed(nodal::inferParameterIntegerBounds(operation->getResult(0))) &&
+           mlir::failed(nodal::resolveOwnedIntegerExpression(parent, operation->getResult(0)));
+  };
+  operation->setOperands({operands[0], operands[1]});
+  if (mlir::succeeded(mlir::verify(operation)) || !rejected() ||
+      mlir::succeeded(nodal::renderParameterConstantExpression(operation->getResult(0))))
+    return fail("choose_zero malformed arity escaped independent checks");
+  operation->setOperands(operands);
+  operation->setOperand(2, value(child, "A"));
+  if (!rejected())
+    return fail("choose_zero accepted unreachable foreign-module branch");
+  operation->setOperands(operands);
+  auto *malformedLiteral = value(parent, "one").getDefiningOp();
+  malformedLiteral->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  operation->setOperand(2, malformedLiteral->getResult(0));
+  if (!rejected())
+    return fail("choose_zero accepted an unreachable malformed literal branch");
+  malformedLiteral->setAttr("spelling", mlir::StringAttr::get(&context, "1"));
+  operation->setOperands(operands);
+  operation->setOperand(2, operation->getResult(0));
+  if (!rejected() ||
+      mlir::succeeded(nodal::renderParameterConstantExpression(operation->getResult(0))))
+    return fail("choose_zero accepted an unreachable cyclic branch");
+  operation->setOperands(operands);
+  auto *branch = operands[2].getDefiningOp();
+  branch->setAttr("unit", mlir::FlatSymbolRefAttr::get(&context, "unavailable"));
+  if (!rejected())
+    return fail("choose_zero accepted unreachable dimensional branch");
+  branch->removeAttr("unit");
+  operation->getResult(0).setType(mlir::IntegerType::get(&context, 64, mlir::IntegerType::Signed));
+  if (mlir::succeeded(mlir::verify(operation)) || !rejected())
+    return fail("choose_zero accepted a noncanonical Integer result");
+  operation->getResult(0).setType(mlir::IntegerType::get(&context, 64));
+
+  // These DAGs have valid operator syntax, but the fixed parameter's unused
+  // branch is invalid. Whole-model default evaluation must reject it too.
+  for (auto invalid : {"divide", "overflow", "log"}) {
+    const std::string invalidBody =
+        literal("zero", 0) + literal("one", 1) +
+        literal("huge", std::numeric_limits<int64_t>::max()) +
+        (llvm::StringRef(invalid) == "divide"     ? expression("bad", "div", {"one", "zero"})
+         : llvm::StringRef(invalid) == "overflow" ? expression("bad", "add", {"huge", "one"})
+                                                  : expression("bad", "ceil_log2", {"zero"}));
+    for (bool zeroTest : {true, false}) {
+      const std::string select = zeroTest
+                                     ? expression("result", "choose_zero", {"zero", "one", "bad"})
+                                     : expression("result", "choose_zero", {"one", "bad", "one"});
+      auto invalidModule = mlir::parseSourceString<mlir::ModuleOp>(
+          "module {" +
+              moduleText("Invalid", invalidBody + select + parameter("RESULT", 1, true) +
+                                        parameterValue("RESULT", "result")) +
+              "}",
+          &context);
+      if (!invalidModule || mlir::succeeded(nodal::verifyParameterModel(*invalidModule)))
+        return fail("whole-model evaluation hid an invalid unselected choose_zero branch");
+    }
+  }
+  auto cyclic = mlir::parseSourceString<mlir::ModuleOp>(
+      "module {" +
+          moduleText("Cycle", literal("zero", 0) + literal("one", 1) +
+                                  expression("result", "choose_zero", {"zero", "one", "one"}) +
+                                  parameter("RESULT", 1, true) +
+                                  parameterValue("RESULT", "result")) +
+          "}",
+      &context);
+  if (!cyclic)
+    return fail("eager cyclic-branch fixture did not parse");
+  auto cycleValue = value(namedOperation(cyclic->getOperation(), "Cycle"), "result");
+  cycleValue.getDefiningOp()->setOperand(2, cycleValue);
+  if (mlir::succeeded(nodal::verifyParameterModel(*cyclic)))
+    return fail("whole-model evaluation accepted an unselected cyclic choose_zero branch");
+
+  // An invalid formal in a provably unused branch still fails finalized binding.
+  auto *instance = namedOperation(parent, "v");
+  instance->setAttr(
+      "parameter_bindings",
+      mlir::DictionaryAttr::get(
+          &context,
+          {mlir::NamedAttribute(mlir::StringAttr::get(&context, "T"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0)),
+           mlir::NamedAttribute(mlir::StringAttr::get(&context, "A"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 4)),
+           mlir::NamedAttribute(
+               mlir::StringAttr::get(&context, "B"),
+               mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 10))}));
+  if (mlir::succeeded(nodal::resolveInstanceIntegerExpression(instance, value(child, "choice"))))
+    return fail("choose_zero discarded an invalid unreachable finalized formal");
+  return 0;
+}
+
+int checkMathematicalIntegerMode(mlir::MLIRContext &context) {
+  constexpr auto mode = nodal::ParameterIntegerMode::MathematicalSigned64;
+  constexpr llvm::StringLiteral source = R"mlir(
+module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = -1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "X", type = i64, variability = "symbolic"}> : () -> ()
+    %low = "nodal.const_literal"() <{metadata = {}, spelling = "-9223372036854775808", value = -9223372036854775808 : i64}> : () -> i64
+    %high = "nodal.const_literal"() <{metadata = {}, spelling = "9223372036854775807", value = 9223372036854775807 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%low, %high) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @X}> : (i64, i64) -> ()
+    %x = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @X}> : () -> i64
+    %result = "nodal.const_expr"(%x, %low, %high) <{metadata = {}, operator_name = "choose_zero"}> : (i64, i64, i64) -> i64
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = -1 : i64, metadata = {}, parameter_kind = "integer", sym_name = "N", type = i64, variability = "symbolic"}> : () -> ()
+    %low = "nodal.const_literal"() <{metadata = {}, spelling = "-4", value = -4 : i64}> : () -> i64
+    %high = "nodal.const_literal"() <{metadata = {}, spelling = "-1", value = -1 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%low, %high) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @N}> : (i64, i64) -> ()
+    %n = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @N}> : () -> i64
+    %runtime = "nodal.dynamic_value"(%n) <{metadata = {}, origin = "runtime"}> : (i64) -> i64
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+    "nodal.parameter_override"(%n) <{instance = @u, parameter = @X, metadata = {}}> : (i64) -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "d"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {X = -9223372036854775808 : i64}, sym_name = "v"}> : () -> ()
+  }) : () -> ()
+})mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return fail("mathematical signed64 mode fixture did not parse");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *formal = namedOperation(child, "X");
+  auto *parameter = namedOperation(parent, "N");
+  mlir::Value result, runtime, reference;
+  child->walk([&](nodal::ConstExprOp op) { result = op->getResult(0); });
+  parent->walk([&](nodal::DynamicValueOp op) { runtime = op->getResult(0); });
+  parent->walk([&](nodal::ConstParameterRefOp op) { reference = op->getResult(0); });
+  auto bounds = nodal::inferParameterIntegerBounds(parameter, mode);
+  auto expressionBounds = nodal::inferParameterIntegerBounds(result, mode);
+  auto owned = nodal::resolveOwnedIntegerParameter(parent, parameter, mode);
+  auto ownedValue = nodal::resolveOwnedIntegerExpression(parent, reference, mode);
+  if (mlir::failed(bounds) || bounds->lower != -4 || bounds->upper != -1 ||
+      mlir::failed(expressionBounds) ||
+      expressionBounds->lower != std::numeric_limits<int64_t>::min() ||
+      expressionBounds->upper != std::numeric_limits<int64_t>::max() || mlir::failed(owned) ||
+      mlir::failed(ownedValue) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*owned, *ownedValue) ||
+      mlir::succeeded(nodal::inferParameterIntegerBounds(parameter)) ||
+      mlir::succeeded(nodal::inferParameterIntegerBounds(result)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerParameter(parent, parameter)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, reference)))
+    return fail("mathematical mode changed ordinary storage semantics or lost signed64 endpoints");
+  for (auto name : {"u", "d", "v"}) {
+    auto *instance = namedOperation(parent, name);
+    auto actual = nodal::resolveInstanceIntegerParameter(instance, formal, mode);
+    auto actualResult = nodal::resolveInstanceIntegerExpression(instance, result, mode);
+    if (mlir::failed(actual) || mlir::failed(actualResult) ||
+        actualResult->bounds.lower != std::numeric_limits<int64_t>::max() ||
+        actualResult->bounds.upper != std::numeric_limits<int64_t>::max() ||
+        mlir::succeeded(nodal::resolveInstanceIntegerParameter(instance, formal)) ||
+        mlir::succeeded(nodal::resolveInstanceIntegerExpression(instance, result)))
+      return fail("signed64 instance substitution lost mode separation or effective constraints");
+    if (llvm::StringRef(name) == "u" &&
+        !nodal::equivalentInstantiatedIntegerExpressions(*actual, *owned))
+      return fail("signed64 symbolic override lost exact parent declaration identity");
+  }
+  if (mlir::succeeded(nodal::inferParameterIntegerBounds(runtime, mode)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, runtime, mode)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, result, mode)))
+    return fail("signed64 mode admitted runtime or foreign-module values");
+  auto argument = parent->getRegion(0).front().addArgument(mlir::IntegerType::get(&context, 64),
+                                                           mlir::UnknownLoc::get(&context));
+  if (mlir::succeeded(nodal::inferParameterIntegerBounds(argument, mode)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, argument, mode)))
+    return fail("signed64 mode made an arbitrary i64 block argument static");
+  auto *choice = result.getDefiningOp();
+  choice->setOperand(2, runtime);
+  if (mlir::succeeded(nodal::inferParameterIntegerBounds(result, mode)) ||
+      mlir::succeeded(
+          nodal::resolveInstanceIntegerExpression(namedOperation(parent, "u"), result, mode)))
+    return fail("signed64 choose_zero admitted an unreachable foreign runtime branch");
+  return 0;
+}
+
 int checkInstanceParameterQueries(mlir::MLIRContext &context) {
   auto module = mlir::parseSourceString<mlir::ModuleOp>(kInstanceShapeParameters, &context);
   if (!module || mlir::failed(mlir::verify(*module)) ||
@@ -608,7 +1185,9 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  if (checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
+  if (checkParameterRenderBudget(context) || checkStaticIntegerMaximum(context) ||
+      checkStaticReductionPrimitives(context) || checkMathematicalIntegerMode(context) ||
+      checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
       checkGeneratedParameterQueries(context) || checkGeneratedWaveformParameterLookup(context))
     return 1;
 

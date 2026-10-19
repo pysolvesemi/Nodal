@@ -185,6 +185,65 @@ bool testAnalogAndBuiltinControls(Harness &test) {
   return true;
 }
 
+bool testStaticReductionTargetBoundary(Harness &test) {
+  for (auto opcode : {"ceil_log2", "choose_zero"}) {
+    const bool log = llvm::StringRef(opcode) == "ceil_log2";
+    const std::string body =
+        "%zero = \"nodal.const_literal\"() <{metadata = {}, spelling = \"0\", value = 0 : i64}> : "
+        "() -> i64\n"
+        "%four = \"nodal.const_literal\"() <{metadata = {}, spelling = \"4\", value = 4 : i64}> : "
+        "() -> i64\n"
+        "%eight = \"nodal.const_literal\"() <{metadata = {}, spelling = \"8\", value = 8 : i64}> : "
+        "() -> i64\n"
+        "%value = \"nodal.const_expr\"(" +
+        std::string(log ? "%four" : "%zero, %four, %eight") +
+        ") <{metadata = {}, operator_name = \"" + opcode + "\"}> : (" +
+        (log ? "i64" : "i64, i64, i64") +
+        ") -> i64\n"
+        "\"nodal.parameter\"() <{classification = \"ordinary\", default_value = " +
+        (log ? "2" : "4") +
+        " : i64, metadata = {}, parameter_kind = \"integer\", sym_name = \"WIDTH\", "
+        "type = i64, variability = \"fixed\"}> : () -> ()\n"
+        "\"nodal.parameter_value\"(%value) <{metadata = {}, parameter = @WIDTH}> : (i64) -> ()\n";
+    auto module = test.parse(design(definition("StaticPrimitive", body)));
+    if (!module || mlir::failed(nodal::verifyParameterModel(*module)))
+      return test.require(false, "static primitive target witness must be semantically valid IR");
+    mlir::Value value;
+    module->walk([&](nodal::ConstExprOp op) { value = op->getResult(0); });
+    if (!test.require(mlir::succeeded(nodal::renderParameterConstantExpression(value)),
+                      "generic portable static rendering must remain available"))
+      return false;
+    for (auto kind : {nodal::BackendKind::VerilogA, nodal::BackendKind::VerilogAMS}) {
+      test.clear();
+      const auto &profile = nodal::getBackendProfile(kind);
+      const auto admitted = nodal::verifyBackendOperations(*module, profile);
+      ++test.cases;
+      if (!test.require(
+              mlir::failed(admitted) &&
+                  llvm::StringRef(test.diagnostic).contains("NODAL-BACKEND-CAPABILITY-001") &&
+                  llvm::StringRef(test.diagnostic).contains("ceil_log2/choose_zero"),
+              "static primitive escaped the analog backend capability boundary"))
+        return false;
+      test.clear();
+      const nodal::BackendConfiguration configuration{&profile, profile.defaultCheckProfile,
+                                                      profile.shapedValueLayout,
+                                                      profile.materialization, profile.naming};
+      std::string output = "unchanged-output";
+      llvm::raw_string_ostream stream(output);
+      const auto rendered =
+          nodal::renderBackendCandidate({&module->getBody()->front()}, configuration, stream);
+      stream.flush();
+      ++test.cases;
+      if (!test.require(
+              mlir::failed(rendered) && output == "unchanged-output" &&
+                  llvm::StringRef(test.diagnostic).contains("NODAL-BACKEND-CAPABILITY-001"),
+              "direct candidate rendering emitted an unsupported static primitive"))
+        return false;
+    }
+  }
+  return true;
+}
+
 bool testDigitalCarriersAndPorts(Harness &test) {
   for (auto type :
        {"!nodal.uint<8>", "!nodal.bits<1>", "!nodal.shaped<\"2\", !nodal.sint<8>>",
@@ -487,10 +546,10 @@ int main() {
   nodal::registerNodalPasses();
   Harness test;
   if (!testRegistry(test) || !testAnalogAndBuiltinControls(test) ||
-      !testDigitalCarriersAndPorts(test) || !testOperationsAndHierarchy(test) ||
-      !testSharedHierarchyAndDeepTypeScale(test) || !testBridgeAndAdversarialMetadata(test) ||
-      !testInterfaceMembers(test) || !testNamedCapabilityPass(test) ||
-      !testEarlyFailureAndEquationDiagnostic(test))
+      !testStaticReductionTargetBoundary(test) || !testDigitalCarriersAndPorts(test) ||
+      !testOperationsAndHierarchy(test) || !testSharedHierarchyAndDeepTypeScale(test) ||
+      !testBridgeAndAdversarialMetadata(test) || !testInterfaceMembers(test) ||
+      !testNamedCapabilityPass(test) || !testEarlyFailureAndEquationDiagnostic(test))
     return 1;
   llvm::outs() << "Foundation 47 target capabilities: " << test.cases << " focused cases passed\n";
   return 0;

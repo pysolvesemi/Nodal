@@ -30,7 +30,7 @@ private[nodal] object DigitalScalarContract:
       fail(5, s"digital conversion does not support '${descriptor.kind}'")
     descriptor
 
-  private def widthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
+  def widthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
     if descriptor.arguments.size != 1 then
       fail(1, "digital scalar type requires exactly one width")
     val bounds = descriptor.arguments.head match
@@ -40,10 +40,10 @@ private[nodal] object DigitalScalarContract:
             width.literal.exists(literal =>
               literal.kind == "integer" && literal.dataType == KernelTypeDescriptor("Integer")
             ) =>
-        val literal = width.literal.get.value.toIntOption.getOrElse(
-          fail(1, "digital width requires a representable public Integer literal")
-        )
-        (literal.toLong, literal.toLong)
+        width.literal.get.value.toIntOption.map(value => (value.toLong, value.toLong))
+          .getOrElse(ConstructionKernel.digitalWidthBounds(descriptor).getOrElse(
+            fail(1, "derived i64 digital width requires an active construction width proof")
+          ))
       case _: Expr[?] => ConstructionKernel.digitalWidthBounds(descriptor).getOrElse(
           fail(6, "symbolic digital conversion requires an active construction width proof")
         )
@@ -61,13 +61,16 @@ private[nodal] object DigitalScalarContract:
     * patterns are not allocated just to prove a conversion; an absent proof rejects checked
     * narrowing. The finite traversal bound matches the captured digital expression profile.
     */
-  private def knownValue(value: Expr[?]): Option[BigInt] =
+  def knownValue(value: Expr[?]): Option[BigInt] =
     val cache = new IdentityHashMap[Expr[?], Option[BigInt]]()
     val active = new IdentityHashMap[Expr[?], java.lang.Boolean]()
+    var remaining = 65536
     def visit(current: Expr[?], depth: Int): Option[BigInt] =
       if depth > 128 || active.containsKey(current) then None
       else if cache.containsKey(current) then cache.get(current)
+      else if remaining == 0 then None
       else
+        remaining -= 1
         active.put(current, true)
         val result = current match
           case expression: KernelExpr[?] =>
@@ -79,6 +82,26 @@ private[nodal] object DigitalScalarContract:
                 literal.value.toIntOption.map(BigInt(_)).filter(value =>
                   requiredWidth(literal.dataType.kind, value) <= widthBounds(literal.dataType)._1
                 )
+              case Some(literal)
+                  if literal.kind == "boolean" && expression.operation.contains("boolean") &&
+                    expression.resultType.contains(KernelTypeDescriptor("Bool")) &&
+                    literal.dataType == KernelTypeDescriptor("Bool") =>
+                literal.value match
+                  case "true" => Some(BigInt(1))
+                  case "false" => Some(BigInt(0))
+                  case _ => None
+              case None
+                  if expression.operation.contains(DigitalMaterializationContract.Operation) &&
+                    expression.operands.size == 1 =>
+                expression.operands.head match
+                  case operand: Expr[?] => visit(operand, depth + 1)
+                  case _ => None
+              case None
+                  if expression.operation.exists(operation =>
+                    DigitalCombinationalContract.Operations.contains(operation) ||
+                      DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
+                  ) =>
+                DigitalCombinationalContract.constantValue(expression, visit(_, depth + 1))
               case None
                   if expression.operation.exists(Operations.contains) &&
                     expression.operands.size == 1 =>
@@ -134,7 +157,10 @@ private[nodal] object DigitalScalarContract:
             case expression: KernelExpr[?] if expression.operands.size == 1 =>
               expression.operation match
                 case Some("digital_to_signed") => result = Some(true)
-                case Some("digital_extend" | "digital_resize_checked" | "digital_saturate") =>
+                case Some(
+                      "digital_extend" | "digital_resize_checked" | "digital_saturate" |
+                      "digital_alias"
+                    ) =>
                   expression.operands.head match
                     case operand: Expr[?] => current = operand
                     case _ => result = Some(false)
@@ -235,3 +261,26 @@ private[nodal] object DigitalScalarContract:
     if widthBounds(source)._2 > 1023L && !knownValue(value).exists(_.toDouble.isFinite) then
       fail(8, "numeric Real conversion requires a proof of finite binary64 representation")
     emit("digital_to_real", value, KernelTypeDescriptor("Real"))
+
+  /** Recheck ordinary conversion obligations under an admitted collection Integer context. */
+  def validateCaptured(expression: KernelExpr[?]): Unit =
+    val value = expression.operands.head.asInstanceOf[Expr[?]]
+    val source = scalarType(value)
+    val (minimum, maximum) = widthBounds(source)
+    val result = expression.resultType.getOrElse(fail(5, "conversion result type is absent"))
+    val operation = expression.operation.getOrElse("")
+    val resultBounds = if result.kind == "Real" then (0L, 0L) else widthBounds(result)
+    operation match
+      case "digital_extend" if resultBounds._1 < maximum =>
+        fail(7, "extend narrows in a reachable reduction context")
+      case "digital_truncate" if resultBounds._2 > minimum =>
+        fail(7, "truncate widens in a reachable reduction context")
+      case "digital_resize_checked"
+          if resultBounds._1 < maximum &&
+            !knownValue(value).exists(requiredWidth(source.kind, _) <= resultBounds._1) =>
+        fail(8, "checked resize is unproved in a reachable reduction context")
+      case "digital_to_unsigned" if !nonnegative(value) =>
+        fail(8, "unsigned conversion is unproved in a reachable reduction context")
+      case "digital_to_real" if maximum > 1023L && !knownValue(value).exists(_.toDouble.isFinite) =>
+        fail(8, "Real conversion is unproved in a reachable reduction context")
+      case _ => ()

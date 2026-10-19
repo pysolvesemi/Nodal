@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -16,8 +17,9 @@
 
 using namespace mlir;
 namespace {
-std::string model(StringRef body) {
-  return "module { \"nodal.module\"() <{metadata = {}, sym_name = \"Fixture\"}> ({\n" + body.str() +
+std::string model(StringRef body, StringRef definitions = {}) {
+  return "module { " + definitions.str() +
+         "\"nodal.module\"() <{metadata = {}, sym_name = \"Fixture\"}> ({\n" + body.str() +
          "}) : () -> () }\n";
 }
 std::string input(StringRef type, StringRef name = "input") {
@@ -36,8 +38,8 @@ std::string literal(StringRef type, StringRef value, StringRef carrier = "i64",
 std::string expression(StringRef opcode, StringRef source, StringRef result,
                        StringRef operand = "%input", StringRef name = "result") {
   return "%" + name.str() + " = \"nodal.digital_expr\"(" + operand.str() +
-         ") <{operator_name = \"digital_" + opcode.str() + "\", metadata = {}}> : (" +
-         source.str() + ") -> " + result.str() + "\n";
+         ") <{operator_name = \"" + (opcode.starts_with("bool_") ? "" : "digital_") + opcode.str() +
+         "\", metadata = {}}> : (" + source.str() + ") -> " + result.str() + "\n";
 }
 std::string parameter(StringRef name = "W", int64_t lower = 8, int64_t upper = 16,
                       bool constrained = true) {
@@ -153,7 +155,8 @@ int main() {
              true);
   conversion("reinterpret-cannot-resize", "reinterpret_signed", "!nodal.uint<8>", "!nodal.sint<9>",
              false);
-  conversion("unknown-closed-operation", "add", "!nodal.uint<8>", "!nodal.uint<8>", false);
+  conversion("binary-operation-rejects-unary-arity", "add", "!nodal.uint<8>", "!nodal.uint<8>",
+             false);
   conversion("real-rounding-permitted", "to_real", "!nodal.uint<54>", "f64", true);
   conversion("real-all-values-finite", "to_real", "!nodal.uint<1023>", "f64", true);
   conversion("real-potential-infinity-rejected", "to_real", "!nodal.uint<1024>", "f64", false);
@@ -343,6 +346,898 @@ int main() {
                            index ? "%step" + std::to_string(index - 1) : "%input",
                            "step" + std::to_string(index));
   check("expression-depth-boundary", model(boundary), true);
+
+  auto binary = [&](StringRef name, StringRef opcode, StringRef left, StringRef right,
+                    StringRef result, bool expected) {
+    check(name,
+          model(input(left) + input(right, "right") +
+                expression(opcode, left.str() + ", " + right.str(), result, "%input, %right")),
+          expected);
+  };
+  binary("unsigned-lossless-add", "add", "!nodal.uint<8>", "!nodal.uint<12>", "!nodal.uint<13>",
+         true);
+  binary("signed-lossless-add", "add", "!nodal.sint<8>", "!nodal.sint<12>", "!nodal.sint<13>",
+         true);
+  binary("unsigned-subtraction-is-signed", "sub", "!nodal.uint<8>", "!nodal.uint<12>",
+         "!nodal.sint<13>", true);
+  binary("signed-subtraction", "sub", "!nodal.sint<8>", "!nodal.sint<12>", "!nodal.sint<13>", true);
+  binary("unsigned-subtraction-kind-forgery", "sub", "!nodal.uint<8>", "!nodal.uint<12>",
+         "!nodal.uint<13>", false);
+  binary("add-cannot-narrow", "add", "!nodal.uint<8>", "!nodal.uint<12>", "!nodal.uint<12>", false);
+  binary("mixed-numeric-kinds-rejected", "add", "!nodal.uint<8>", "!nodal.sint<8>",
+         "!nodal.sint<9>", false);
+  binary("bits-not-numeric", "add", "!nodal.bits<8>", "!nodal.bits<8>", "!nodal.bits<9>", false);
+  binary("multiply-width-sum", "mul", "!nodal.uint<8>", "!nodal.uint<12>", "!nodal.uint<20>", true);
+  binary("multiply-signed", "mul", "!nodal.sint<8>", "!nodal.sint<12>", "!nodal.sint<20>", true);
+  conversion("unsigned-negation", "neg", "!nodal.uint<8>", "!nodal.sint<9>", true);
+  conversion("signed-negation", "neg", "!nodal.sint<8>", "!nodal.sint<9>", true);
+  conversion("negation-width-forgery", "neg", "!nodal.sint<8>", "!nodal.sint<8>", false);
+  for (StringRef opcode : {"eq", "ne", "lt", "le", "gt", "ge"}) {
+    binary("numeric-comparison-" + opcode.str(), opcode, "!nodal.sint<8>", "!nodal.sint<12>",
+           "!nodal.bits<1>", true);
+    binary("mixed-comparison-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.sint<12>",
+           "!nodal.bits<1>", false);
+  }
+  binary("bits-exact-equality", "eq", "!nodal.bits<8>", "!nodal.bits<8>", "!nodal.bits<1>", true);
+  binary("bits-width-equality-rejected", "eq", "!nodal.bits<8>", "!nodal.bits<9>", "!nodal.bits<1>",
+         false);
+  binary("bits-order-rejected", "lt", "!nodal.bits<8>", "!nodal.bits<8>", "!nodal.bits<1>", false);
+  binary("comparison-builtin-bool-rejected", "eq", "!nodal.uint<8>", "!nodal.uint<8>", "i1", false);
+  for (StringRef opcode : {"and", "or", "xor"}) {
+    binary("bitwise-signed-" + opcode.str(), opcode, "!nodal.sint<8>", "!nodal.sint<8>",
+           "!nodal.sint<8>", true);
+    binary("bitwise-width-forgery-" + opcode.str(), opcode, "!nodal.bits<8>", "!nodal.bits<9>",
+           "!nodal.bits<9>", false);
+  }
+  conversion("bitwise-complement", "not", "!nodal.bits<8>", "!nodal.bits<8>", true);
+  binary("bool-and", "bool_and", "!nodal.bits<1>", "!nodal.bits<1>", "!nodal.bits<1>", true);
+  binary("bool-or", "bool_or", "!nodal.bits<1>", "!nodal.bits<1>", "!nodal.bits<1>", true);
+  conversion("bool-not", "bool_not", "!nodal.bits<1>", "!nodal.bits<1>", true);
+  binary("bool-wide-rejected", "bool_and", "!nodal.bits<8>", "!nodal.bits<8>", "!nodal.bits<8>",
+         false);
+  binary("concat-mixed-scalar-kinds", "concat", "!nodal.sint<8>", "!nodal.uint<12>",
+         "!nodal.bits<20>", true);
+  binary("concat-result-kind-forgery", "concat", "!nodal.bits<8>", "!nodal.bits<12>",
+         "!nodal.uint<20>", false);
+  for (StringRef opcode : {"mod", "dynamic_shl"})
+    binary("unsupported-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<8>",
+           "!nodal.uint<8>", false);
+
+  auto constantDivisor = [&](StringRef name, StringRef opcode, StringRef left, StringRef right,
+                             StringRef divisor, StringRef result, bool expected) {
+    check(name,
+          model(input(left) + literal(right, divisor, "i64", "right") +
+                expression(opcode, left.str() + ", " + right.str(), result, "%input, %right")),
+          expected);
+  };
+  for (StringRef opcode : {"div", "rem"}) {
+    const std::string signedResult = opcode == "div" ? "!nodal.sint<9>" : "!nodal.sint<8>";
+    constantDivisor("dynamic-unsigned-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<16>",
+                    "255", "!nodal.uint<8>", true);
+    for (StringRef divisor : {"3", "-3"})
+      constantDivisor("dynamic-signed-" + opcode.str() + "-" + divisor.str(), opcode,
+                      "!nodal.sint<8>", "!nodal.sint<16>", divisor, signedResult, true);
+    constantDivisor("zero-divisor-rejected-" + opcode.str(), opcode, "!nodal.uint<8>",
+                    "!nodal.uint<1>", "0", "!nodal.uint<8>", false);
+    binary("runtime-divisor-rejected-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<8>",
+           "!nodal.uint<8>", false);
+    constantDivisor("mixed-divisor-kind-rejected-" + opcode.str(), opcode, "!nodal.uint<8>",
+                    "!nodal.sint<8>", "1", "!nodal.uint<8>", false);
+    constantDivisor("bits-divisor-rejected-" + opcode.str(), opcode, "!nodal.bits<8>",
+                    "!nodal.bits<8>", "1", "!nodal.bits<8>", false);
+    constantDivisor("unsigned-result-kind-forged-" + opcode.str(), opcode, "!nodal.uint<8>",
+                    "!nodal.uint<8>", "1", "!nodal.sint<8>", false);
+    constantDivisor("unsigned-result-width-forged-" + opcode.str(), opcode, "!nodal.uint<8>",
+                    "!nodal.uint<8>", "1", "!nodal.uint<9>", false);
+    constantDivisor("signed-result-width-forged-" + opcode.str(), opcode, "!nodal.sint<8>",
+                    "!nodal.sint<8>", "1", opcode == "div" ? "!nodal.sint<8>" : "!nodal.sint<9>",
+                    false);
+    check("computed-nonzero-divisor-" + opcode.str(),
+          model(input("!nodal.uint<8>") + literal("!nodal.uint<1>", "1", "i64", "oneDivisor") +
+                expression("add", "!nodal.uint<1>, !nodal.uint<1>", "!nodal.uint<2>",
+                           "%oneDivisor, %oneDivisor", "computedDivisor") +
+                expression(opcode, "!nodal.uint<8>, !nodal.uint<2>", "!nodal.uint<8>",
+                           "%input, %computedDivisor")),
+          true);
+    check("computed-zero-divisor-" + opcode.str(),
+          model(input("!nodal.sint<8>") + literal("!nodal.sint<2>", "1", "i64", "oneDivisor") +
+                expression("sub", "!nodal.sint<2>, !nodal.sint<2>", "!nodal.sint<3>",
+                           "%oneDivisor, %oneDivisor", "computedDivisor") +
+                expression(opcode, "!nodal.sint<8>, !nodal.sint<3>", signedResult,
+                           "%input, %computedDivisor")),
+          false);
+    check("forged-divisor-proof-ignored-" + opcode.str(),
+          model(input("!nodal.uint<8>") + input("!nodal.uint<8>", "right") +
+                replace(expression(opcode, "!nodal.uint<8>, !nodal.uint<8>", "!nodal.uint<8>",
+                                   "%input, %right"),
+                        "metadata = {}", "metadata = {divisor_value = 1 : i64}, value = 1 : i64")),
+          false);
+    conversion("binary-arity-required-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<8>",
+               false);
+    constantDivisor("huge-unsigned-width-no-allocation-" + opcode.str(), opcode,
+                    "!nodal.uint<9223372036854775807>", "!nodal.uint<1>", "1",
+                    "!nodal.uint<9223372036854775807>", true);
+  }
+  constantDivisor("signed-division-width-overflow", "div", "!nodal.sint<9223372036854775807>",
+                  "!nodal.sint<1>", "-1", "!nodal.sint<9223372036854775807>", false);
+  constantDivisor("huge-signed-division-no-allocation", "div", "!nodal.sint<9223372036854775806>",
+                  "!nodal.sint<1>", "-1", "!nodal.sint<9223372036854775807>", true);
+  constantDivisor("huge-signed-remainder-no-allocation", "rem", "!nodal.sint<9223372036854775807>",
+                  "!nodal.sint<1>", "-1", "!nodal.sint<9223372036854775807>", true);
+  for (StringRef opcode : {"min", "max"}) {
+    binary("unsigned-width-maximum-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<12>",
+           "!nodal.uint<12>", true);
+    binary("signed-width-maximum-" + opcode.str(), opcode, "!nodal.sint<12>", "!nodal.sint<8>",
+           "!nodal.sint<12>", true);
+    binary("mixed-kind-rejected-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.sint<12>",
+           "!nodal.sint<12>", false);
+    binary("bits-rejected-" + opcode.str(), opcode, "!nodal.bits<8>", "!nodal.bits<8>",
+           "!nodal.bits<8>", false);
+    binary("narrow-result-rejected-" + opcode.str(), opcode, "!nodal.sint<8>", "!nodal.sint<12>",
+           "!nodal.sint<8>", false);
+    binary("extra-result-width-rejected-" + opcode.str(), opcode, "!nodal.uint<8>",
+           "!nodal.uint<12>", "!nodal.uint<13>", false);
+    binary("result-kind-rejected-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<12>",
+           "!nodal.sint<12>", false);
+    binary("huge-width-no-allocation-" + opcode.str(), opcode, "!nodal.uint<9223372036854775807>",
+           "!nodal.uint<8>", "!nodal.uint<9223372036854775807>", true);
+    conversion("binary-arity-required-" + opcode.str(), opcode, "!nodal.uint<8>", "!nodal.uint<8>",
+               false);
+  }
+
+  auto shift = [&](StringRef name, StringRef opcode, StringRef type, StringRef result,
+                   StringRef amount, bool expected) {
+    check(name,
+          model(input(type) + literal("!nodal.uint<63>", amount, "i64", "amount") +
+                expression(opcode, type.str() + ", !nodal.uint<63>", result, "%input, %amount")),
+          expected);
+  };
+  shift("left-shift-grows-bits", "shl", "!nodal.bits<8>", "!nodal.bits<11>", "3", true);
+  shift("left-shift-zero", "shl", "!nodal.uint<8>", "!nodal.uint<8>", "0", true);
+  shift("left-shift-cannot-truncate", "shl", "!nodal.sint<8>", "!nodal.sint<8>", "3", false);
+  shift("signed-right-shift", "shr", "!nodal.sint<8>", "!nodal.sint<8>", "3", true);
+  shift("signed-logical-right-shift", "logical_shr", "!nodal.sint<8>", "!nodal.sint<8>", "3", true);
+  shift("huge-right-shift-no-allocation", "shr", "!nodal.sint<8>", "!nodal.sint<8>",
+        "9223372036854775807", true);
+  shift("shift-width-overflow", "shl", "!nodal.uint<8>", "!nodal.uint<8>", "9223372036854775807",
+        false);
+  binary("runtime-shift-amount-rejected", "shl", "!nodal.uint<8>", "!nodal.uint<8>",
+         "!nodal.uint<9>", false);
+  check("folded-hardware-shift-amount-is-not-static",
+        model(input("!nodal.uint<8>") + literal("!nodal.uint<1>", "1", "i64", "amount") +
+              expression("wrap", "!nodal.uint<1>", "!nodal.uint<1>", "%amount", "computed") +
+              expression("shl", "!nodal.uint<8>, !nodal.uint<1>", "!nodal.uint<9>",
+                         "%input, %computed")),
+        false);
+
+  auto extract = [&](StringRef name, StringRef lower, StringRef upper, StringRef result,
+                     bool expected) {
+    check(name,
+          model(input("!nodal.sint<8>") + literal("!nodal.uint<8>", lower, "i64", "lower") +
+                literal("!nodal.uint<8>", upper, "i64", "upper") +
+                expression("extract", "!nodal.sint<8>, !nodal.uint<8>, !nodal.uint<8>", result,
+                           "%input, %lower, %upper")),
+          expected);
+  };
+  extract("extract-half-open", "2", "6", "!nodal.bits<4>", true);
+  extract("extract-whole", "0", "8", "!nodal.bits<8>", true);
+  extract("extract-empty", "2", "2", "!nodal.bits<1>", false);
+  extract("extract-outside", "6", "9", "!nodal.bits<3>", false);
+  extract("extract-reversed", "6", "2", "!nodal.bits<4>", false);
+  extract("extract-width-forgery", "2", "6", "!nodal.bits<6>", false);
+
+  auto select = [&](StringRef name, StringRef predicate, StringRef left, StringRef right,
+                    StringRef result, bool expected) {
+    check(name,
+          model(input(predicate, "predicate") + input(left) + input(right, "right") +
+                expression("select", predicate.str() + ", " + left.str() + ", " + right.str(),
+                           result, "%predicate, %input, %right")),
+          expected);
+  };
+  select("scalar-select", "!nodal.bits<1>", "!nodal.sint<8>", "!nodal.sint<8>", "!nodal.sint<8>",
+         true);
+  select("select-branch-type-forgery", "!nodal.bits<1>", "!nodal.sint<8>", "!nodal.uint<8>",
+         "!nodal.sint<8>", false);
+  select("select-predicate-kind-forgery", "!nodal.uint<1>", "!nodal.uint<8>", "!nodal.uint<8>",
+         "!nodal.uint<8>", false);
+  const std::string vectorType = "!nodal.shaped<\"4\", !nodal.sint<8>>";
+  select("shaped-select", "!nodal.bits<1>", vectorType, vectorType, vectorType, true);
+  const std::string structType =
+      "!nodal.struct<\"Packet\", [{name = \"data\", type = !nodal.uint<8>}]>";
+  select("struct-select", "!nodal.bits<1>", structType, structType, structType, true);
+  select("scalar-real-select-excluded", "!nodal.bits<1>", "f64", "f64", "f64", false);
+  select("scalar-integer-select-excluded", "!nodal.bits<1>", "i64", "i64", "i64", false);
+  const std::string enumType = "!nodal.enum<\"Mode\", 2>";
+  const std::string enumDefinition =
+      "\"nodal.enum\"() <{sym_name = \"Mode\", underlying_type = !nodal.uint<2>, "
+      "encoding = \"custom\", metadata = {abi_version = 1 : i64, semantic_type = \"Mode\", "
+      "abi_hash = \"df5b4a51f3fade96f1ab8a106bbcb0114b5d4601e4e2c6aebcf38763dd61e66a\"}}> ({"
+      "\"nodal.enum_case\"() <{sym_name = \"Idle\", value = 0 : i64, "
+      "metadata = {case_id = \"Mode.Idle\"}}> : () -> () "
+      "\"nodal.enum_case\"() <{sym_name = \"Run\", value = 1 : i64, "
+      "metadata = {case_id = \"Mode.Run\"}}> : () -> () "
+      "}) : () -> ()\n";
+  check("enum-select",
+        model(input("!nodal.bits<1>", "predicate") + input(enumType) + input(enumType, "right") +
+                  expression("select", "!nodal.bits<1>, " + enumType + ", " + enumType, enumType,
+                             "%predicate, %input, %right"),
+              enumDefinition),
+        true);
+
+  const std::string sparseType = "!nodal.enum<\"Mode\", 3>";
+  std::string sparseDefinition = replace(enumDefinition, "!nodal.uint<2>", "!nodal.uint<3>");
+  sparseDefinition = replace(sparseDefinition, "value = 1 : i64", "value = 3 : i64");
+  sparseDefinition = replace(sparseDefinition, "}) : () -> ()",
+                             "\"nodal.enum_case\"() <{sym_name = \"Stop\", value = 7 : i64, "
+                             "metadata = {case_id = \"Mode.Stop\"}}> : () -> () }) : () -> ()");
+  sparseDefinition =
+      replace(sparseDefinition, "df5b4a51f3fade96f1ab8a106bbcb0114b5d4601e4e2c6aebcf38763dd61e66a",
+              "d06a339707813bfffb47e9e4bbdff53e7bca8a0c8a220786446a4427eaf0f9d6");
+  for (StringRef opcode : {"xor", "and", "or", "concat", "div", "rem", "min", "max"})
+    check(
+        "enum-" + opcode.str() + "-rejected",
+        model(input(sparseType) + input(sparseType, "right") +
+                  expression(opcode, sparseType + ", " + sparseType, sparseType, "%input, %right"),
+              sparseDefinition),
+        false);
+  for (StringRef opcode : {"not", "wrap", "saturate", "extend", "truncate", "resize_checked"})
+    check("enum-" + opcode.str() + "-rejected",
+          model(input(sparseType) + expression(opcode, sparseType, sparseType), sparseDefinition),
+          false);
+  for (StringRef opcode : {"shl", "shr", "logical_shr"})
+    check("enum-" + opcode.str() + "-rejected",
+          model(input(sparseType) + literal("!nodal.uint<1>", "0", "i64", "amount") +
+                    expression(opcode, sparseType + ", !nodal.uint<1>", sparseType,
+                               "%input, %amount"),
+                sparseDefinition),
+          false);
+  check(
+      "enum-expression-select",
+      model(input("!nodal.bits<1>", "predicate") + input(sparseType, "right") +
+                "%input = \"nodal.enum_expr\"() <{operator_name = \"enum_literal\", "
+                "enum_ref = @Mode, case_ids = [\"Mode.Run\"], metadata = {abi_version = 1 : i64, "
+                "semantic_type = \"Mode\", abi_hash = "
+                "\"d06a339707813bfffb47e9e4bbdff53e7bca8a0c8a220786446a4427eaf0f9d6\"}}> : () -> " +
+                sparseType + "\n" +
+                expression("select", "!nodal.bits<1>, " + sparseType + ", " + sparseType,
+                           sparseType, "%predicate, %input, %right"),
+            sparseDefinition),
+      true);
+  for (bool spelled : {false, true}) {
+    check(spelled ? "enum-literal-select" : "enum-constant-select",
+          model(input("!nodal.bits<1>", "predicate") +
+                    literal(sparseType, "0", "i64", "input", spelled) +
+                    literal(sparseType, "3", "i64", "right", spelled) +
+                    expression("select", "!nodal.bits<1>, " + sparseType + ", " + sparseType,
+                               sparseType, "%predicate, %input, %right"),
+                sparseDefinition),
+          true);
+    check(spelled ? "invalid-enum-literal-select" : "invalid-enum-constant-select",
+          model(input("!nodal.bits<1>", "predicate") +
+                    literal(sparseType, "2", "i64", "input", spelled) +
+                    literal(sparseType, "3", "i64", "right", spelled) +
+                    expression("select", "!nodal.bits<1>, " + sparseType + ", " + sparseType,
+                               sparseType, "%predicate, %input, %right"),
+                sparseDefinition),
+          false);
+  }
+
+  // Arithmetic inside an existing collection region uses the same value and
+  // visibility verifier. Captures inherit only their verified outer actual facts.
+  const std::string arithmeticVector = "!nodal.shaped<\"4\", !nodal.sint<8>>";
+  auto arithmeticMap = [&](StringRef opcode, StringRef body, StringRef operand = "%divisor",
+                           bool captured = false) {
+    const std::string result = opcode == "div" ? "!nodal.sint<9>" : "!nodal.sint<8>";
+    return "%mapped = \"nodal.collection\"(%input" + std::string(captured ? ", %divisor" : "") +
+           ") <{kind = \"map\", region_id = \"Fixture.arithmetic\", "
+           "operandSegmentSizes = array<i32: 1, 0, " +
+           std::string(captured ? "1" : "0") +
+           ">, metadata = {semantic_path = \"Fixture.arithmetic\"}}> ({\n^bb0(%lane: "
+           "!nodal.sint<8>" +
+           std::string(captured ? ", %capture: !nodal.sint<4>" : "") + "):\n" + body.str() +
+           expression(opcode, "!nodal.sint<8>, !nodal.sint<4>", result, "%lane, " + operand.str()) +
+           "\"nodal.collection_yield\"(%result) <{metadata = {}}> : (" + result +
+           ") -> ()\n}) : (" + arithmeticVector + std::string(captured ? ", !nodal.sint<4>" : "") +
+           ") -> !nodal.shaped<\"4\", " + result + ">\n";
+  };
+  for (StringRef opcode : {"div", "rem", "min", "max"}) {
+    check("collection-local-arithmetic-" + opcode.str(),
+          model(input(arithmeticVector) +
+                arithmeticMap(opcode, literal("!nodal.sint<4>", "-1", "i64", "divisor"))),
+          true);
+    check("collection-direct-outer-divisor-rejected-" + opcode.str(),
+          model(input(arithmeticVector) + literal("!nodal.sint<4>", "-1", "i64", "divisor") +
+                arithmeticMap(opcode, "")),
+          false);
+    check("collection-explicit-capture-proof-" + opcode.str(),
+          model(input(arithmeticVector) + literal("!nodal.sint<4>", "-1", "i64", "divisor") +
+                arithmeticMap(opcode, "", "%capture", true)),
+          true);
+    check("collection-runtime-capture-proof-" + opcode.str(),
+          model(input(arithmeticVector) + input("!nodal.sint<4>", "divisor") +
+                arithmeticMap(opcode, "", "%capture", true)),
+          opcode == "min" || opcode == "max");
+  }
+
+  // Exact value proofs are observed through an independently authored expected
+  // literal and a checked resize of a select: false equality selects 256, which
+  // cannot fit one bit. No test mutates or specializes the expression graph.
+  auto exact = [&](StringRef name, StringRef body, StringRef type, StringRef expectedValue,
+                   bool expected = true) {
+    check(name,
+          model(body.str() + literal(type, expectedValue, "i64", "expected") +
+                expression("eq", type.str() + ", " + type.str(), "!nodal.bits<1>",
+                           "%result, %expected", "equal") +
+                literal("!nodal.uint<9>", "1", "i64", "yes") +
+                literal("!nodal.uint<9>", "256", "i64", "no") +
+                expression("select", "!nodal.bits<1>, !nodal.uint<9>, !nodal.uint<9>",
+                           "!nodal.uint<9>", "%equal, %yes, %no", "selected") +
+                expression("resize_checked", "!nodal.uint<9>", "!nodal.uint<1>", "%selected",
+                           "checked")),
+          expected);
+  };
+  auto exactBinary = [&](StringRef name, StringRef opcode, StringRef leftValue,
+                         StringRef rightValue, StringRef type, StringRef result,
+                         StringRef expectedValue) {
+    exact(name,
+          literal(type, leftValue) + literal(type, rightValue, "i64", "right") +
+              expression(opcode, type.str() + ", " + type.str(), result, "%input, %right"),
+          result, expectedValue);
+  };
+  exactBinary("constant-unsigned-carry", "add", "255", "255", "!nodal.uint<8>", "!nodal.uint<9>",
+              "510");
+  exactBinary("constant-unsigned-negative-subtraction", "sub", "0", "255", "!nodal.uint<8>",
+              "!nodal.sint<9>", "-255");
+  exactBinary("constant-signed-extrema-add", "add", "-128", "-128", "!nodal.sint<8>",
+              "!nodal.sint<9>", "-256");
+  exactBinary("constant-signed-multiply", "mul", "-128", "-128", "!nodal.sint<8>",
+              "!nodal.sint<16>", "16384");
+  exactBinary("constant-unsigned-divide", "div", "255", "2", "!nodal.uint<8>", "!nodal.uint<8>",
+              "127");
+  exactBinary("constant-unsigned-remainder", "rem", "255", "2", "!nodal.uint<8>", "!nodal.uint<8>",
+              "1");
+  exactBinary("constant-signed-minimum-divide-minus-one", "div", "-128", "-1", "!nodal.sint<8>",
+              "!nodal.sint<9>", "128");
+  exactBinary("constant-signed-minimum-remainder-minus-one", "rem", "-128", "-1", "!nodal.sint<8>",
+              "!nodal.sint<8>", "0");
+  exactBinary("constant-one-bit-signed-minimum-divide", "div", "-1", "-1", "!nodal.sint<1>",
+              "!nodal.sint<2>", "1");
+  exactBinary("constant-one-bit-signed-minimum-remainder", "rem", "-1", "-1", "!nodal.sint<1>",
+              "!nodal.sint<1>", "0");
+  exactBinary("constant-zero-numerator", "div", "0", "-1", "!nodal.sint<8>", "!nodal.sint<9>", "0");
+  for (int64_t numerator : {-7, 7}) {
+    for (int64_t divisor : {-3, 3}) {
+      const std::string suffix = std::to_string(numerator) + "-" + std::to_string(divisor);
+      exactBinary("signed-truncation-toward-zero-" + suffix, "div", std::to_string(numerator),
+                  std::to_string(divisor), "!nodal.sint<8>", "!nodal.sint<9>",
+                  std::to_string(numerator / divisor));
+      exactBinary("signed-remainder-numerator-sign-" + suffix, "rem", std::to_string(numerator),
+                  std::to_string(divisor), "!nodal.sint<8>", "!nodal.sint<8>",
+                  std::to_string(numerator % divisor));
+      exact("signed-quotient-remainder-identity-" + suffix,
+            literal("!nodal.sint<8>", std::to_string(numerator)) +
+                literal("!nodal.sint<8>", std::to_string(divisor), "i64", "right") +
+                expression("div", "!nodal.sint<8>, !nodal.sint<8>", "!nodal.sint<9>",
+                           "%input, %right", "quotient") +
+                expression("rem", "!nodal.sint<8>, !nodal.sint<8>", "!nodal.sint<8>",
+                           "%input, %right", "remainder") +
+                expression("mul", "!nodal.sint<9>, !nodal.sint<8>", "!nodal.sint<17>",
+                           "%quotient, %right", "product") +
+                expression("add", "!nodal.sint<17>, !nodal.sint<8>", "!nodal.sint<18>",
+                           "%product, %remainder"),
+            "!nodal.sint<18>", std::to_string(numerator));
+    }
+  }
+  for (StringRef opcode : {"div", "rem"})
+    exact("wider-unsigned-divisor-" + opcode.str(),
+          literal("!nodal.uint<8>", "255") + literal("!nodal.uint<16>", "65535", "i64", "right") +
+              expression(opcode, "!nodal.uint<8>, !nodal.uint<16>", "!nodal.uint<8>",
+                         "%input, %right"),
+          "!nodal.uint<8>", opcode == "div" ? "0" : "255");
+  for (StringRef opcode : {"min", "max"}) {
+    exactBinary("unsigned-extrema-" + opcode.str(), opcode, "0", "255", "!nodal.uint<8>",
+                "!nodal.uint<8>", opcode == "min" ? "0" : "255");
+    exactBinary("signed-extrema-" + opcode.str(), opcode, "-128", "127", "!nodal.sint<8>",
+                "!nodal.sint<8>", opcode == "min" ? "-128" : "127");
+    exact("different-width-signed-" + opcode.str(),
+          literal("!nodal.sint<8>", "-128") + literal("!nodal.sint<12>", "-129", "i64", "right") +
+              expression(opcode, "!nodal.sint<8>, !nodal.sint<12>", "!nodal.sint<12>",
+                         "%input, %right"),
+          "!nodal.sint<12>", opcode == "min" ? "-129" : "-128");
+  }
+  for (StringRef opcode : {"div", "rem", "min", "max"})
+    exact("huge-declared-width-small-proof-" + opcode.str(),
+          literal("!nodal.uint<9223372036854775807>", "7") +
+              literal("!nodal.uint<2>", "3", "i64", "right") +
+              expression(opcode, "!nodal.uint<9223372036854775807>, !nodal.uint<2>",
+                         "!nodal.uint<9223372036854775807>", "%input, %right"),
+          "!nodal.uint<9223372036854775807>",
+          opcode == "div"   ? "2"
+          : opcode == "rem" ? "1"
+          : opcode == "min" ? "3"
+                            : "7");
+  exact("signed-division-wrong-rounded-result-rejected",
+        literal("!nodal.sint<8>", "-7") + literal("!nodal.sint<8>", "3", "i64", "right") +
+            expression("div", "!nodal.sint<8>, !nodal.sint<8>", "!nodal.sint<9>", "%input, %right"),
+        "!nodal.sint<9>", "-3", false);
+
+  exact("constant-negate-minimum",
+        literal("!nodal.sint<8>", "-128") + expression("neg", "!nodal.sint<8>", "!nodal.sint<9>"),
+        "!nodal.sint<9>", "128");
+  exactBinary("constant-signed-and", "and", "-1", "7", "!nodal.sint<8>", "!nodal.sint<8>", "7");
+  exactBinary("constant-signed-or", "or", "-128", "7", "!nodal.sint<8>", "!nodal.sint<8>", "-121");
+  exactBinary("constant-signed-xor", "xor", "-1", "7", "!nodal.sint<8>", "!nodal.sint<8>", "-8");
+  exactBinary("constant-bool-and", "bool_and", "1", "0", "!nodal.bits<1>", "!nodal.bits<1>", "0");
+  exactBinary("constant-bool-or", "bool_or", "0", "1", "!nodal.bits<1>", "!nodal.bits<1>", "1");
+  exact("constant-bool-not",
+        literal("!nodal.bits<1>", "1") + expression("bool_not", "!nodal.bits<1>", "!nodal.bits<1>"),
+        "!nodal.bits<1>", "0");
+  exact("constant-unsigned-not",
+        literal("!nodal.uint<8>", "1") + expression("not", "!nodal.uint<8>", "!nodal.uint<8>"),
+        "!nodal.uint<8>", "254");
+  exact("constant-signed-not",
+        literal("!nodal.sint<8>", "-128") + expression("not", "!nodal.sint<8>", "!nodal.sint<8>"),
+        "!nodal.sint<8>", "127");
+  for (StringRef opcode : {"eq", "ne", "lt", "le", "gt", "ge"})
+    exactBinary("constant-compare-" + opcode.str(), opcode, "-128", "127", "!nodal.sint<8>",
+                "!nodal.bits<1>", opcode == "ne" || opcode == "lt" || opcode == "le" ? "1" : "0");
+  exactBinary("constant-concat-encoded-signed", "concat", "-1", "1", "!nodal.sint<8>",
+              "!nodal.bits<16>", "65281");
+  for (StringRef opcode : {"shl", "shr", "logical_shr"}) {
+    StringRef type = opcode == "shl" ? "!nodal.sint<11>" : "!nodal.sint<8>";
+    exact("constant-shift-" + opcode.str(),
+          literal("!nodal.sint<8>", "-128") + literal("!nodal.uint<2>", "3", "i64", "amount") +
+              expression(opcode, "!nodal.sint<8>, !nodal.uint<2>", type, "%input, %amount"),
+          type,
+          opcode == "shl"   ? "-1024"
+          : opcode == "shr" ? "-16"
+                            : "16");
+  }
+  exact("constant-extract-negative",
+        literal("!nodal.sint<8>", "-8") + literal("!nodal.uint<4>", "2", "i64", "lower") +
+            literal("!nodal.uint<4>", "6", "i64", "upper") +
+            expression("extract", "!nodal.sint<8>, !nodal.uint<4>, !nodal.uint<4>",
+                       "!nodal.bits<4>", "%input, %lower, %upper"),
+        "!nodal.bits<4>", "14");
+  exact("constant-proof-negative-control",
+        literal("!nodal.uint<8>", "7") + expression("not", "!nodal.uint<8>", "!nodal.uint<8>"),
+        "!nodal.uint<8>", "7", false);
+
+  const std::string maximumWidth =
+      parameter() + parameter("V", 4, 24) +
+      "%maximum = \"nodal.const_expr\"(%W, %V) <{operator_name = \"max\", metadata = "
+      "{semantic_path = \"Fixture.maximum\"}}> : (i64, i64) -> i64\n" +
+      literal("i64", "1", "i64", "one") +
+      "%sumWidth = \"nodal.const_expr\"(%maximum, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.sumWidth\"}}> : (i64, i64) -> i64\n";
+  check("symbolic-max-plus-one-identity",
+        model(maximumWidth + input(symbolic()) + input(symbolic("uint", "V"), "right") +
+              expression("add", symbolic() + ", " + symbolic("uint", "V"),
+                         symbolic("uint", "Fixture.sumWidth"), "%input, %right")),
+        true);
+  for (StringRef opcode : {"min", "max"}) {
+    check("symbolic-maximum-identity-" + opcode.str(),
+          model(maximumWidth + input(symbolic()) + input(symbolic("uint", "V"), "right") +
+                expression(opcode, symbolic() + ", " + symbolic("uint", "V"),
+                           symbolic("uint", "Fixture.maximum"), "%input, %right")),
+          true);
+    check("symbolic-equal-envelope-not-maximum-" + opcode.str(),
+          model(maximumWidth + parameter("Fake", 8, 24) + input(symbolic()) +
+                input(symbolic("uint", "V"), "right") +
+                expression(opcode, symbolic() + ", " + symbolic("uint", "V"),
+                           symbolic("uint", "Fake"), "%input, %right")),
+          false);
+    check("same-symbolic-maximum-canonical-identity-" + opcode.str(),
+          model(parameter() + input(symbolic()) + input(symbolic(), "right") +
+                expression(opcode, symbolic() + ", " + symbolic(), symbolic(), "%input, %right")),
+          true);
+  }
+  check("symbolic-signed-division-exact-plus-one",
+        model(parameter() + incrementWidth() + input(symbolic("sint")) +
+              literal("!nodal.sint<2>", "-1", "i64", "divisor") +
+              expression("div", symbolic("sint") + ", !nodal.sint<2>",
+                         symbolic("sint", "Fixture.plus"), "%input, %divisor")),
+        true);
+  check("symbolic-signed-division-equal-envelope-not-identity",
+        model(parameter() + parameter("Fake", 9, 17) + input(symbolic("sint")) +
+              literal("!nodal.sint<2>", "-1", "i64", "divisor") +
+              expression("div", symbolic("sint") + ", !nodal.sint<2>", symbolic("sint", "Fake"),
+                         "%input, %divisor")),
+        false);
+  for (StringRef opcode : {"div", "rem"}) {
+    check(
+        "symbolic-unsigned-retains-numerator-" + opcode.str(),
+        model(parameter() + input(symbolic()) + literal("!nodal.uint<2>", "2", "i64", "divisor") +
+              expression(opcode, symbolic() + ", !nodal.uint<2>", symbolic(), "%input, %divisor")),
+        true);
+    check("symbolic-unsigned-equal-envelope-rejected-" + opcode.str(),
+          model(parameter() + parameter("Fake") + input(symbolic()) +
+                literal("!nodal.uint<2>", "2", "i64", "divisor") +
+                expression(opcode, symbolic() + ", !nodal.uint<2>", symbolic("uint", "Fake"),
+                           "%input, %divisor")),
+          false);
+  }
+  check("symbolic-signed-remainder-retains-numerator",
+        model(parameter() + input(symbolic("sint")) +
+              literal("!nodal.sint<2>", "-1", "i64", "divisor") +
+              expression("rem", symbolic("sint") + ", !nodal.sint<2>", symbolic("sint"),
+                         "%input, %divisor")),
+        true);
+
+  check("same-symbolic-width-add-uses-manual-plus-one",
+        model(parameter() + incrementWidth() + input(symbolic()) + input(symbolic(), "right") +
+              expression("add", symbolic() + ", " + symbolic(), symbolic("uint", "Fixture.plus"),
+                         "%input, %right")),
+        true);
+  check("symbolic-max-default-is-not-width",
+        model(maximumWidth + input(symbolic()) + input(symbolic("uint", "V"), "right") +
+              expression("add", symbolic() + ", " + symbolic("uint", "V"), "!nodal.uint<9>",
+                         "%input, %right")),
+        false);
+  check("symbolic-max-equal-envelope-is-not-identity",
+        model(maximumWidth + parameter("Fake", 9, 25) + input(symbolic()) +
+              input(symbolic("uint", "V"), "right") +
+              expression("add", symbolic() + ", " + symbolic("uint", "V"), symbolic("uint", "Fake"),
+                         "%input, %right")),
+        false);
+  const std::string freshMaximumWidth =
+      maximumWidth +
+      "%maximum2 = \"nodal.const_expr\"(%W, %V) <{operator_name = \"max\", metadata = "
+      "{semantic_path = \"Fixture.maximum2\"}}> : (i64, i64) -> i64\n"
+      "%sumWidth2 = \"nodal.const_expr\"(%maximum2, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.sumWidth2\"}}> : (i64, i64) -> i64\n";
+  check("select-fresh-equivalent-symbolic-arithmetic-types",
+        model(freshMaximumWidth + input("!nodal.bits<1>", "predicate") + input(symbolic()) +
+              input(symbolic("uint", "V"), "right") +
+              expression("add", symbolic() + ", " + symbolic("uint", "V"),
+                         symbolic("uint", "Fixture.sumWidth"), "%input, %right", "sum1") +
+              expression("add", symbolic() + ", " + symbolic("uint", "V"),
+                         symbolic("uint", "Fixture.sumWidth2"), "%input, %right", "sum2") +
+              expression("select",
+                         "!nodal.bits<1>, " + symbolic("uint", "Fixture.sumWidth") + ", " +
+                             symbolic("uint", "Fixture.sumWidth2"),
+                         symbolic("uint", "Fixture.sumWidth"), "%predicate, %sum1, %sum2")),
+        true);
+  const std::string nestedFirst =
+      "!nodal.shaped<\"2\", !nodal.struct<\"Packet\", [{name = \"data\", type = " +
+      symbolic("uint", "Fixture.sumWidth") + "}]>>";
+  const std::string nestedSecond =
+      "!nodal.shaped<\"2\", !nodal.struct<\"Packet\", [{name = \"data\", type = " +
+      symbolic("uint", "Fixture.sumWidth2") + "}]>>";
+  check("select-fresh-equivalent-aggregate-widths",
+        model(freshMaximumWidth + input("!nodal.bits<1>", "predicate") + input(nestedFirst) +
+              input(nestedSecond, "right") +
+              expression("select", "!nodal.bits<1>, " + nestedFirst + ", " + nestedSecond,
+                         nestedFirst, "%predicate, %input, %right")),
+        true);
+  check("symbolic-extract-must-fit-minimum",
+        model(parameter() + input(symbolic()) + literal("!nodal.uint<8>", "0", "i64", "lower") +
+              literal("!nodal.uint<8>", "9", "i64", "upper") +
+              expression("extract", symbolic() + ", !nodal.uint<8>, !nodal.uint<8>",
+                         "!nodal.bits<9>", "%input, %lower, %upper")),
+        false);
+  check("symbolic-left-shift-zero-retains-identity",
+        model(parameter() + input(symbolic()) + literal("!nodal.uint<1>", "0", "i64", "amount") +
+              expression("shl", symbolic() + ", !nodal.uint<1>", symbolic(), "%input, %amount")),
+        true);
+  binary("addition-width-overflow", "add", "!nodal.uint<9223372036854775807>", "!nodal.uint<1>",
+         "!nodal.uint<9223372036854775807>", false);
+  binary("concatenation-width-overflow", "concat", "!nodal.bits<9223372036854775807>",
+         "!nodal.bits<1>", "!nodal.bits<9223372036854775807>", false);
+  binary("huge-width-bitwise-no-allocation", "and", "!nodal.bits<9223372036854775807>",
+         "!nodal.bits<9223372036854775807>", "!nodal.bits<9223372036854775807>", true);
+
+  auto proofMagnitude = [&](StringRef amount, StringRef resultType, StringRef checkedType) {
+    return model(
+        literal("!nodal.uint<4096>", decimal(llvm::APInt::getAllOnes(4096)), "ui4096") +
+        literal("!nodal.uint<2>", amount, "i64", "right") +
+        expression("mul", "!nodal.uint<4096>, !nodal.uint<2>", resultType, "%input, %right") +
+        expression("resize_checked", resultType, checkedType, "%result", "checked"));
+  };
+  check("constant-magnitude-proof-boundary",
+        proofMagnitude("1", "!nodal.uint<4098>", "!nodal.uint<4096>"), true);
+  check("constant-magnitude-budget-fails-closed",
+        proofMagnitude("2", "!nodal.uint<4098>", "!nodal.uint<4097>"), false);
+  for (StringRef opcode : {"div", "rem"}) {
+    check("divisor-magnitude-proof-boundary-" + opcode.str(),
+          model(input("!nodal.uint<8>") +
+                literal("!nodal.uint<4096>", decimal(llvm::APInt::getAllOnes(4096)), "ui4096",
+                        "divisor") +
+                expression(opcode, "!nodal.uint<8>, !nodal.uint<4096>", "!nodal.uint<8>",
+                           "%input, %divisor")),
+          true);
+    check("divisor-magnitude-budget-rejected-" + opcode.str(),
+          model(input("!nodal.uint<8>") +
+                literal("!nodal.uint<4097>", decimal(llvm::APInt::getOneBitSet(4097, 4096)),
+                        "ui4097", "divisor") +
+                expression(opcode, "!nodal.uint<8>, !nodal.uint<4097>", "!nodal.uint<8>",
+                           "%input, %divisor")),
+          false);
+    check("computed-divisor-magnitude-budget-rejected-" + opcode.str(),
+          model(input("!nodal.uint<8>") +
+                literal("!nodal.uint<4096>", decimal(llvm::APInt::getAllOnes(4096)), "ui4096",
+                        "huge") +
+                literal("!nodal.uint<2>", "2", "i64", "two") +
+                expression("mul", "!nodal.uint<4096>, !nodal.uint<2>", "!nodal.uint<4098>",
+                           "%huge, %two", "divisor") +
+                expression(opcode, "!nodal.uint<8>, !nodal.uint<4098>", "!nodal.uint<8>",
+                           "%input, %divisor")),
+          false);
+    for (unsigned count : {127, 128}) {
+      std::string divisor = input("!nodal.uint<8>") + literal("!nodal.uint<8>", "1", "i64", "seed");
+      for (unsigned index = 0; index < count; ++index)
+        divisor += expression("wrap", "!nodal.uint<8>", "!nodal.uint<8>",
+                              index ? "%proof" + std::to_string(index - 1) : "%seed",
+                              "proof" + std::to_string(index));
+      check("divisor-depth-" + std::to_string(count) + "-" + opcode.str(),
+            model(divisor + expression(opcode, "!nodal.uint<8>, !nodal.uint<8>", "!nodal.uint<8>",
+                                       "%input, %proof" + std::to_string(count - 1))),
+            count == 127);
+    }
+  }
+  check("division-constant-magnitude-boundary",
+        model(literal("!nodal.uint<4096>", decimal(llvm::APInt::getAllOnes(4096)), "ui4096") +
+              literal("!nodal.uint<1>", "1", "i64", "divisor") +
+              expression("div", "!nodal.uint<4096>, !nodal.uint<1>", "!nodal.uint<4096>",
+                         "%input, %divisor", "quotient") +
+              expression("sub", "!nodal.uint<4096>, !nodal.uint<4096>", "!nodal.sint<4097>",
+                         "%quotient, %input", "difference") +
+              expression("resize_checked", "!nodal.sint<4097>", "!nodal.sint<1>", "%difference")),
+        true);
+  check("signed-division-constant-result-over-budget-is-unknown",
+        model(literal("!nodal.sint<4097>", "-" + decimal(llvm::APInt::getOneBitSet(4097, 4096)),
+                      "i4098") +
+              literal("!nodal.sint<1>", "-1", "i64", "divisor") +
+              expression("div", "!nodal.sint<4097>, !nodal.sint<1>", "!nodal.sint<4098>",
+                         "%input, %divisor", "quotient") +
+              expression("sub", "!nodal.sint<4098>, !nodal.sint<4098>", "!nodal.sint<4099>",
+                         "%quotient, %quotient", "difference") +
+              expression("resize_checked", "!nodal.sint<4099>", "!nodal.sint<1>", "%difference")),
+        false);
+
+  check("concat-bounded-temporary-small-magnitude",
+        model(literal("!nodal.uint<4096>", "0") +
+              literal("!nodal.uint<4096>", "0", "i64", "right") +
+              expression("concat", "!nodal.uint<4096>, !nodal.uint<4096>", "!nodal.bits<8192>",
+                         "%input, %right") +
+              expression("resize_checked", "!nodal.bits<8192>", "!nodal.bits<1>", "%result",
+                         "checked")),
+        true);
+  check("foreign-second-operand-rejected",
+        "module { " + literal("!nodal.uint<8>", "1", "i64", "foreign") +
+            "\"nodal.module\"() <{metadata = {}, sym_name = \"Fixture\"}> ({" +
+            input("!nodal.uint<8>") +
+            expression("add", "!nodal.uint<8>, !nodal.uint<8>", "!nodal.uint<9>",
+                       "%input, %foreign") +
+            "}) : () -> () }",
+        false);
+  check("symbolic-bitwise-equal-ranges-not-identity",
+        model(parameter() + parameter("V") + input(symbolic()) +
+              input(symbolic("uint", "V"), "right") +
+              expression("and", symbolic() + ", " + symbolic("uint", "V"), symbolic(),
+                         "%input, %right")),
+        false);
+  check("symbolic-select-exact-complete-type",
+        model(parameter() + parameter("V") + input("!nodal.bits<1>", "predicate") +
+              input(symbolic()) + input(symbolic("uint", "V"), "right") +
+              expression("select", "!nodal.bits<1>, " + symbolic() + ", " + symbolic("uint", "V"),
+                         symbolic(), "%predicate, %input, %right")),
+        false);
+
+  std::string shared = input("!nodal.bits<8>");
+  for (unsigned index = 0; index < 128; ++index) {
+    std::string previous = index ? "%join" + std::to_string(index - 1) : "%input";
+    shared += expression("and", "!nodal.bits<8>, !nodal.bits<8>", "!nodal.bits<8>",
+                         previous + ", " + previous, "join" + std::to_string(index));
+  }
+  check("shared-binary-DAG-depth-boundary", model(shared), true);
+  check("shared-binary-DAG-depth-overflow",
+        model(shared + expression("or", "!nodal.bits<8>, !nodal.bits<8>", "!nodal.bits<8>",
+                                  "%join127, %input", "tooDeep")),
+        false);
+
+  // A wide fanout must count standalone roots as well as recursively reached
+  // operands. Construct it in memory to avoid a large text fixture/roundtrip.
+  {
+    ScopedDiagnosticHandler capture(&context, [](Diagnostic &) { return success(); });
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(literal("!nodal.bits<1>", "1")),
+                                                    ParserConfig(&context, false));
+    Operation *module = &parsed->getBody()->front();
+    Block &body = module->getRegion(0).front();
+    Value input = body.front().getResult(0);
+    OpBuilder builder(&context);
+    builder.setInsertionPointToEnd(&body);
+    auto append = [&]() {
+      OperationState state(builder.getUnknownLoc(), "nodal.digital_expr");
+      state.addOperands({input, input});
+      state.addTypes(input.getType());
+      state.addAttribute("operator_name", builder.getStringAttr("digital_and"));
+      state.addAttribute("metadata", builder.getDictionaryAttr({}));
+      builder.create(state);
+    };
+    for (unsigned index = 0; index < 65535; ++index)
+      append();
+    bool boundary = succeeded(nodal::verifyDigitalValueModel(module));
+    append();
+    bool overflow = failed(nodal::verifyDigitalValueModel(module));
+    cases += 2;
+    failures += !boundary + !overflow;
+    (boundary ? llvm::outs() : llvm::errs())
+        << "DIGITAL_VALUE_MODEL_" << (boundary ? "PASS " : "FAIL ")
+        << "standalone-fanout-node-budget-boundary\n";
+    (overflow ? llvm::outs() : llvm::errs())
+        << "DIGITAL_VALUE_MODEL_" << (overflow ? "PASS " : "FAIL ")
+        << "standalone-fanout-node-budget-overflow\n";
+  }
+
+  // Whole records retain their actual scalar widths and nested element/shape identities.
+  auto record = [](StringRef score, StringRef tag, StringRef payload,
+                   StringRef nominal = "Candidate") {
+    return "!nodal.struct<\"" + nominal.str() + "\", [{name = \"score\", type = " + score.str() +
+           "}, {name = \"tag\", type = " + tag.str() +
+           "}, {name = \"payload\", type = " + payload.str() + "}]>";
+  };
+  auto getField = [](StringRef source, StringRef result, StringRef schema,
+                     StringRef field = "score", int64_t ordinal = 0) {
+    return "%field = \"nodal.digital_expr\"(%input) <{operator_name = \"digital_struct_get\", "
+           "metadata = {}, struct_schema = " +
+           schema.str() + ", field_ordinal = " + std::to_string(ordinal) +
+           " : i64, field_name = \"" + field.str() + "\"}> : (" + source.str() + ") -> " +
+           result.str() + "\n";
+  };
+  const std::string nested = "!nodal.shaped<\"2,3\", !nodal.uint<4>>";
+  const std::string base = record("!nodal.sint<4>", "!nodal.bits<3>", nested);
+  const std::string widened = record("!nodal.sint<5>", "!nodal.bits<3>", nested);
+  check("struct-get-equivalent-reconstructed-schema",
+        model(input(base) + getField(base, "!nodal.sint<4>", base)), true);
+  const std::string unsignedRecord = record("!nodal.uint<4>", "!nodal.bits<3>", nested);
+  check(
+      "struct-get-preserves-unsigned-proof-through-alias",
+      model(
+          input(unsignedRecord) + getField(unsignedRecord, "!nodal.uint<4>", unsignedRecord) +
+          expression("to_signed", "!nodal.uint<4>", "!nodal.sint<5>", "%field", "signedField") +
+          "%namedField = \"nodal.digital_expr\"(%signedField) <{operator_name = \"digital_alias\", "
+          "metadata = {digital_intent = {kind = \"named\", value = \"unsigned_field\"}}}> : "
+          "(!nodal.sint<5>) -> !nodal.sint<5>\n" +
+          expression("to_unsigned", "!nodal.sint<5>", "!nodal.uint<5>", "%namedField")),
+      true);
+  check("struct-get-derived-actual-field-width",
+        model(input(widened) + getField(widened, "!nodal.sint<5>", base)), true);
+  check("struct-get-reject-stale-schema-width",
+        model(input(widened) + getField(widened, "!nodal.sint<4>", base)), false);
+  check("struct-get-nested-vector", model(input(base) + getField(base, nested, base, "payload", 2)),
+        true);
+  check("struct-get-wrong-name", model(input(base) + getField(base, "!nodal.sint<4>", base, "tag")),
+        false);
+  check("struct-get-negative-ordinal",
+        model(input(base) + getField(base, "!nodal.sint<4>", base, "score", -1)), false);
+  check("struct-get-outside-ordinal",
+        model(input(base) + getField(base, "!nodal.sint<4>", base, "score", 3)), false);
+  check("struct-get-wrong-scalar-kind",
+        model(input(base) +
+              getField(base, "!nodal.sint<4>", record("!nodal.uint<4>", "!nodal.bits<3>", nested))),
+        false);
+  check("struct-get-wrong-nominal-schema",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     record("!nodal.sint<4>", "!nodal.bits<3>", nested, "Other"))),
+        false);
+  check("struct-get-wrong-inner-layout",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     record("!nodal.sint<4>", "!nodal.bits<3>",
+                                            "!nodal.shaped<\"3,2\", !nodal.uint<4>>"))),
+        false);
+  const auto make =
+      [&](StringRef result, StringRef operands = "%score, %tag, %payload",
+          StringRef types =
+              "!nodal.sint<5>, !nodal.bits<3>, !nodal.shaped<\"2,3\", !nodal.uint<4>>") {
+        return "%made = \"nodal.digital_expr\"(" + operands.str() +
+               ") <{operator_name = \"digital_struct_make\", metadata = {}, struct_schema = " +
+               base + "}> : (" + types.str() + ") -> " + result.str() + "\n";
+      };
+  const std::string inputs =
+      input("!nodal.sint<5>", "score") + input("!nodal.bits<3>", "tag") + input(nested, "payload");
+  check("struct-make-whole-typed-record", model(inputs + make(widened)), true);
+  check("struct-make-stale-result-width", model(inputs + make(base)), false);
+  check("struct-make-missing-field",
+        model(inputs + make(widened, "%score, %tag", "!nodal.sint<5>, !nodal.bits<3>")), false);
+  check("struct-make-wrong-order",
+        model(inputs +
+              make(widened, "%tag, %score, %payload",
+                   "!nodal.bits<3>, !nodal.sint<5>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+  check("struct-make-duplicate-field",
+        model(inputs +
+              make(widened, "%score, %score, %payload",
+                   "!nodal.sint<5>, !nodal.sint<5>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+  const std::string symbolicBase = record(symbolic("sint", "W"), "!nodal.bits<3>", nested);
+  const std::string symbolicActual = record(symbolic("sint", "X"), "!nodal.bits<3>", nested);
+  check("struct-independent-symbolic-width-instance",
+        model(parameter("W") + parameter("X") + input(symbolicActual) +
+              getField(symbolicActual, symbolic("sint", "X"), symbolicBase)),
+        true);
+  check("struct-equal-defaults-cannot-replace-actual-width",
+        model(parameter("W") + parameter("X") + input(symbolicActual) +
+              getField(symbolicActual, symbolic("sint", "W"), symbolicBase)),
+        false);
+  const std::string countBase =
+      record("!nodal.sint<4>", "!nodal.bits<3>", "!nodal.shaped<\"C\", !nodal.uint<4>>");
+  const std::string countActual =
+      record("!nodal.sint<4>", "!nodal.bits<3>", "!nodal.shaped<\"D\", !nodal.uint<4>>");
+  const std::string counts = replace(parameter("C", 2, 4), "[\"width\"]", "[\"shape\"]") +
+                             replace(parameter("D", 2, 4), "[\"width\"]", "[\"shape\"]");
+  check("struct-equal-defaults-cannot-replace-inner-dimension",
+        model(counts + input(countActual) + getField(countActual, "!nodal.sint<4>", countBase)),
+        false);
+
+  const std::string opaque = record("f64", "i64", nested);
+  check("struct-preserves-opaque-whole-record",
+        model(input(opaque) + input(opaque, "right") +
+              literal("!nodal.bits<1>", "1", "i64", "predicate") +
+              expression("select", "!nodal.bits<1>, " + opaque + ", " + opaque, opaque,
+                         "%predicate, %input, %right")),
+        true);
+  check("struct-get-real-leaf-is-outside-digital-profile",
+        model(input(opaque) + getField(opaque, "f64", opaque)), false);
+  check("struct-get-integer-leaf-is-outside-digital-profile",
+        model(input(opaque) + getField(opaque, "i64", opaque, "tag", 1)), false);
+  const auto get = input(base) + getField(base, "!nodal.sint<4>", base);
+  check("struct-get-missing-schema", model(replace(get, ", struct_schema = " + base, "")), false);
+  check("struct-get-non-Struct-schema",
+        model(replace(get, "struct_schema = " + base, "struct_schema = !nodal.uint<4>")), false);
+  const std::string enumRecord = record("!nodal.sint<4>", enumType, nested);
+  check("struct-preserves-enum-field-identity",
+        model(input(enumRecord) + getField(enumRecord, enumType, enumRecord, "tag", 1),
+              enumDefinition),
+        true);
+  check("struct-rejects-enum-as-bits-schema",
+        model(input(enumRecord) + getField(enumRecord, "!nodal.sint<4>",
+                                           record("!nodal.sint<4>", "!nodal.bits<2>", nested)),
+              enumDefinition),
+        false);
+
+  std::string otherEnumDefinition = enumDefinition;
+  for (std::size_t index = 0;
+       (index = otherEnumDefinition.find("Mode", index)) != std::string::npos;) {
+    otherEnumDefinition.replace(index, 4, "Other");
+    index += 5;
+  }
+  otherEnumDefinition = replace(otherEnumDefinition,
+                                "df5b4a51f3fade96f1ab8a106bbcb0114b5d4601e4e2c6aebcf38763dd61e66a",
+                                "7de2dab05dffe94f634c7f1131e3140b2307c3a8bbc79e7ff11e9d0affb682da");
+  const std::string otherEnumRecord = record("!nodal.sint<4>", "!nodal.enum<\"Other\", 2>", nested);
+  check("struct-other-enum-schema-is-independently-valid",
+        model(input(otherEnumRecord) + getField(otherEnumRecord, "!nodal.sint<4>", otherEnumRecord),
+              otherEnumDefinition),
+        true);
+  check("struct-rejects-distinct-enum-identity",
+        model(input(otherEnumRecord) + getField(otherEnumRecord, "!nodal.sint<4>", enumRecord),
+              enumDefinition + otherEnumDefinition),
+        false);
+  check("struct-rejects-schema-field-name",
+        model(input(base) + getField(base, "!nodal.sint<4>",
+                                     replace(base, "name = \"score\"", "name = \"other\""))),
+        false);
+
+  auto reordered = replace(base, "name = \"score\"", "name = \"tag\"");
+  reordered = replace(reordered, "name = \"tag\", type = !nodal.bits<3>",
+                      "name = \"score\", type = !nodal.bits<3>");
+  check("struct-rejects-schema-field-order",
+        model(input(base) + getField(base, "!nodal.sint<4>", reordered)), false);
+
+  check("struct-make-extra-field",
+        model(inputs + make(widened, "%score, %tag, %payload, %payload",
+                            "!nodal.sint<5>, !nodal.bits<3>, !nodal.shaped<\"2,3\", "
+                            "!nodal.uint<4>>, !nodal.shaped<\"2,3\", !nodal.uint<4>>")),
+        false);
+
+  check("struct-make-cannot-expose-opaque-scalar-operands",
+        model(input("f64", "real") + input("i64", "integer") + input(nested, "payload") +
+              "%made = \"nodal.digital_expr\"(%real, %integer, %payload) <{operator_name = "
+              "\"digital_struct_make\", "
+              "metadata = {}, struct_schema = " +
+              opaque + "}> : (f64, i64, " + nested + ") -> " + opaque + "\n"),
+        false);
 
   llvm::outs() << "DIGITAL_VALUE_MODEL_SUMMARY " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;

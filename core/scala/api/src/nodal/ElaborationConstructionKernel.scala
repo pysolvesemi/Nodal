@@ -151,7 +151,9 @@ private[nodal] object ConstructionKernel:
   def requireProceduralSources(expressions: Vector[KernelExpr[?]]): Unit =
     active.foreach(_.requireProceduralSources(expressions))
 
-  def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+  def referencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+
+  def analogReferencePath(value: Any): Option[String] = referencePath(value)
 
   def proceduralShapeDimension(value: Any): String =
     active.getOrElse(throw new IllegalStateException("shape requires active construction"))
@@ -177,6 +179,34 @@ private[nodal] object ConstructionKernel:
 
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
+
+  def digitalLoop(bound: LoopBound)(body: Expr[Integer] => Unit): Unit = active match
+    case Some(session) => session.captureDigitalLoop(bound)(body)
+    case None =>
+      scala.util.Failure[Nothing](new IllegalStateException("loop requires an active Module")).get
+
+  def staticPredicate(operation: String, operands: Vector[Any]): StaticPredicate = active match
+    case Some(session) => session.captureStaticPredicate(operation, operands)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "structural predicate requires an active Module"
+      )).get
+
+  def structuralIf(predicate: StaticPredicate, hasResult: Boolean)(
+      whenTrue: () => Option[Expr[?]],
+      whenFalse: () => Option[Expr[?]]
+  ): Option[Expr[?]] = active match
+    case Some(session) => session.captureStructuralIf(predicate, hasResult)(whenTrue, whenFalse)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "structural if requires an active Module"
+      )).get
+
+  def collection(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] = active match
+    case Some(session) => session.captureCollection(kind, inputs, seed)(body)
+    case None => DigitalCollectionContract.fail(1, "collection requires an active Module")
 
   def declareNodeArray(
       value: NodeArray[?],
@@ -399,10 +429,16 @@ private[nodal] object ConstructionKernel:
   def digitalWidthBounds(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
     active.map(_.digitalWidthBounds(descriptor))
 
+  def sameStaticInteger(left: Dimension, right: Dimension): Option[Boolean] =
+    active.map(_.sameStaticInteger(left, right))
+
   def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
     descriptor.arguments == Vector(expected) ||
       active.exists(_.digitalWidthEquals(descriptor, expected))
 
   def currentDomain: Option[ClockDomain] = active.flatMap(_.currentDomain)
+
+  def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
+    active.foreach(_.assignSignalSelection(left, right))
 
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

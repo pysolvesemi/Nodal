@@ -35,17 +35,28 @@ struct ParameterIntegerBounds {
   int64_t upper;
 };
 
+/// Opt-in mathematical interpretation for compiler-derived static i64 metadata.
+/// Storage preserves existing public literal/storage rules. MathematicalSigned64
+/// reuses the generated-bound signed-i64 policy, without admitting runtime values,
+/// arbitrary block arguments, foreign owners or units. Width/count callers must
+/// independently enforce their positive and finite domain requirements.
+enum class ParameterIntegerMode { Storage, MathematicalSigned64 };
+
 /// Analyze the canonical integer constant-expression DAG without substituting
 /// overridable defaults. Requires explicit finite ranges for symbolic parameters;
 /// fixed parameters retain the variability of their default expression. Unknown,
 /// cyclic, non-integer, overflowing or unsupported proofs fail closed. This
 /// bounded profile represents endpoints in signed 64-bit host metadata only.
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value value);
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Value value,
+                                                                    ParameterIntegerMode mode);
 
 /// Query the same conservative analysis for a canonical parameter declaration.
 /// Symbolic ranges, exclusive endpoints and intersecting constraints are retained;
 /// an overridable default alone is never a bound.
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter);
+mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter,
+                                                                    ParameterIntegerMode mode);
 
 /// Finite zero-admissibility facts for numeric denominator lint. ZeroPermitted
 /// means a checked constant is zero or every invariant explicit constraint on a
@@ -95,11 +106,23 @@ struct InstantiatedIntegerExpression {
 mlir::FailureOr<InstantiatedIntegerExpression>
 resolveInstanceIntegerParameter(mlir::Operation *instance, mlir::Operation *childParameter);
 mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerParameter(mlir::Operation *instance, mlir::Operation *childParameter,
+                                ParameterIntegerMode mode);
+mlir::FailureOr<InstantiatedIntegerExpression>
 resolveInstanceIntegerExpression(mlir::Operation *instance, mlir::Value childExpression);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveInstanceIntegerExpression(mlir::Operation *instance, mlir::Value childExpression,
+                                 ParameterIntegerMode mode);
 mlir::FailureOr<InstantiatedIntegerExpression>
 resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter);
 mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter,
+                             ParameterIntegerMode mode);
+mlir::FailureOr<InstantiatedIntegerExpression>
 resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression,
+                              ParameterIntegerMode mode);
 InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
 /// Query-only identity atom. The caller must independently prove the value's
 /// ownership and bounds; ordinary parameter interpretation never creates these.
@@ -107,9 +130,12 @@ InstantiatedIntegerExpression makeOpaqueIntegerExpression(mlir::Value identity,
                                                           ParameterIntegerBounds bounds);
 /// Checked composition of already proved immutable expressions. Reuses the
 /// parameter arithmetic policy and retains opaque identities through arithmetic.
-/// Supports add/sub/mul/div/mod/neg and static Integer max; max retains symbolic
-/// operand identity even for equal bounds or defaults, folds literal pairs, and
-/// normalizes max(W, W) only when both actual operand identities are equal.
+/// Supports add/sub/mul/div/mod/neg and static Integer max/ceil_log2/choose_zero.
+/// ceil_log2 requires a strictly positive envelope. choose_zero checks all three
+/// operands eagerly and selects bounds only when zero is proved or excluded;
+/// otherwise it unions the two branch bounds. Exact identities survive equal
+/// bounds/defaults. max(W, W) and choose_zero(N, W, W) normalize only for exact
+/// operand identity; choose_zero also folds a literal test after validation.
 mlir::FailureOr<InstantiatedIntegerExpression>
 composeIntegerExpression(llvm::StringRef opcode,
                          llvm::ArrayRef<InstantiatedIntegerExpression> operands);

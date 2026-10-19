@@ -96,3 +96,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalDigitalMaterialization-DG v0.1](NodalDigitalMaterialization-DG-v0.1.md):
   approved F55 typed naming/keep intent and verified target-neutral decisions over
   actual SSA uses; target emission legality remains with its backend owner.
+- [NodalStaticWidthArithmetic-DG v0.1](NodalStaticWidthArithmetic-DG-v0.1.md):
+  approved F55 shared static width primitives and explicit mathematical signed-64
+  proof mode; scoped reduction formals and target support remain separate.

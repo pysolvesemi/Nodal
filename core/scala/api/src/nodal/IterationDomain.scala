@@ -68,21 +68,52 @@ private[nodal] object IterationDomain:
     require(lower <= upper, "iteration bound interval must be ordered")
 
   enum Arithmetic:
-    case Add, Subtract, Multiply, Divide, Negate, Maximum
+    case Add, Subtract, Multiply, Divide, Negate, Maximum, CeilLog2, ChooseZero
+
+    def arity: Int = this match
+      case Negate | CeilLog2 => 1
+      case ChooseZero => 3
+      case _ => 2
+
+  /** Captured source opcodes have one closed mapping to the shared interval arithmetic. */
+  def staticArithmetic(operation: String): Option[Arithmetic] = operation match
+    case "analog_add" => Some(Arithmetic.Add)
+    case "analog_sub" => Some(Arithmetic.Subtract)
+    case "analog_mul" => Some(Arithmetic.Multiply)
+    case "analog_div" => Some(Arithmetic.Divide)
+    case "analog_neg" => Some(Arithmetic.Negate)
+    case "static_integer_max" => Some(Arithmetic.Maximum)
+    case "static_integer_ceil_log2" => Some(Arithmetic.CeilLog2)
+    case "static_integer_choose_zero" => Some(Arithmetic.ChooseZero)
+    case _ => None
 
   /** Wide intermediates also serve trip-count proofs, where distance can exceed signed 64 bits. */
   private def wideArithmetic(
       operation: Arithmetic,
       operands: Vector[Bounds]
   ): Either[Problem, (BigInt, BigInt)] =
-    val arity = if operation == Arithmetic.Negate then 1 else 2
-    if operands.size != arity then
+    if operands.size != operation.arity then
       Left(Problem(ProblemKind.InvalidArithmetic, "integer interval operation has invalid arity"))
     else
       val left = operands.head
       val lower = BigInt(left.lower)
       val upper = BigInt(left.upper)
       if operation == Arithmetic.Negate then Right((-upper, -lower))
+      else if operation == Arithmetic.CeilLog2 then
+        if left.lower <= 0L then
+          Left(Problem(
+            ProblemKind.InvalidArithmetic,
+            "ceil_log2 requires a positive Integer envelope"
+          ))
+        else Right((BigInt((lower - 1).bitLength), BigInt((upper - 1).bitLength)))
+      else if operation == Arithmetic.ChooseZero then
+        val zero = operands(1)
+        val nonzero = operands(2)
+        val result =
+          if left.lower == 0L && left.upper == 0L then zero
+          else if left.lower > 0L || left.upper < 0L then nonzero
+          else Bounds(zero.lower.min(nonzero.lower), zero.upper.max(nonzero.upper))
+        Right((BigInt(result.lower), BigInt(result.upper)))
       else
         val right = operands(1)
         val rightLower = BigInt(right.lower)
@@ -110,7 +141,8 @@ private[nodal] object IterationDomain:
                 upper / rightUpper
               )
               Right((values.min, values.max))
-          case Arithmetic.Negate => Right((-upper, -lower))
+          case Arithmetic.Negate | Arithmetic.CeilLog2 | Arithmetic.ChooseZero =>
+            Left(Problem(ProblemKind.InvalidArithmetic, "invalid binary Integer operation"))
 
   /** Conservative signed-64-bit arithmetic, matching the Integer constant-expression envelope.
     *

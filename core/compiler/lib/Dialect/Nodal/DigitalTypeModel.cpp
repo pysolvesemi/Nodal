@@ -51,7 +51,10 @@ FailureOr<InstantiatedIntegerExpression> dimensionExpression(Operation *module, 
   if (dimension->parameter)
     return resolveOwnedIntegerParameter(module, dimension->parameter);
   if (dimension->expression)
-    return resolveOwnedIntegerExpression(module, dimension->expression);
+    return resolveOwnedIntegerExpression(module, dimension->expression,
+                                         effect == "width"
+                                             ? ParameterIntegerMode::MathematicalSigned64
+                                             : ParameterIntegerMode::Storage);
   return makeLiteralIntegerExpression(dimension->literal);
 }
 

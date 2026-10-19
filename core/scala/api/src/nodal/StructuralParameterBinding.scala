@@ -155,23 +155,33 @@ private[nodal] object StructuralParameterBinding:
           )
 
     def compose(operationName: String, operands: Vector[Int]): Int =
-      val operation = operationName match
-        case "analog_add" => IterationDomain.Arithmetic.Add
-        case "analog_sub" => IterationDomain.Arithmetic.Subtract
-        case "analog_mul" => IterationDomain.Arithmetic.Multiply
-        case "analog_div" => IterationDomain.Arithmetic.Divide
-        case "analog_neg" => IterationDomain.Arithmetic.Negate
-        case "static_integer_max" => IterationDomain.Arithmetic.Maximum
-        case _ => invalid("structural expression is not supported pure Integer arithmetic")
-      val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
+      val operation = IterationDomain.staticArithmetic(operationName).getOrElse(
+        invalid("structural expression is not supported pure Integer arithmetic")
+      )
+      val arity = operation.arity
       if operands.size != arity then invalid("Integer expression has invalid arity")
-      val bounds = IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
-        .fold(problem => invalid(problem.message), identity)
+      val bounds =
+        if operation == IterationDomain.Arithmetic.Subtract && operands(0) == operands(1) then
+          IterationDomain.Bounds(0L, 0L)
+        else
+          IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
+            .fold(problem => invalid(problem.message), identity)
+      simplifiedOperand(operation, operands) match
+        case Some(index) => index
+        case None if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) =>
+          literal(bounds.lower)
+        case None => intern(Key.Apply(operationName, operands), bounds)
+
+    private def simplifiedOperand(operation: IterationDomain.Arithmetic, operands: Vector[Int])
+        : Option[Int] =
       if operation == IterationDomain.Arithmetic.Maximum && operands(0) == operands(1) then
-        operands(0)
-      else if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) then
-        literal(bounds.lower)
-      else intern(Key.Apply(operationName, operands), bounds)
+        Some(operands(0))
+      else if operation == IterationDomain.Arithmetic.ChooseZero then
+        facts(operands(0)).key match
+          case Key.Literal(value) => Some(operands(if value == 0L then 1 else 2))
+          case _ if operands(1) == operands(2) => Some(operands(1))
+          case _ => None
+      else None
 
     def resolve(owner: String, token: String, defaults: Boolean = false): Int =
       token.toLongOption match
@@ -241,24 +251,17 @@ private[nodal] object StructuralParameterBinding:
                     else
                       val inputs = operands.flatten
                       ids.get(Key.Apply(expression.operation, inputs)).orElse:
-                        val operation = expression.operation match
-                          case "analog_add" => Some(IterationDomain.Arithmetic.Add)
-                          case "analog_sub" => Some(IterationDomain.Arithmetic.Subtract)
-                          case "analog_mul" => Some(IterationDomain.Arithmetic.Multiply)
-                          case "analog_div" => Some(IterationDomain.Arithmetic.Divide)
-                          case "analog_neg" => Some(IterationDomain.Arithmetic.Negate)
-                          case "static_integer_max" => Some(IterationDomain.Arithmetic.Maximum)
-                          case _ => None
-                        operation.filter(op =>
-                          inputs.size == (if op == IterationDomain.Arithmetic.Negate then 1 else 2)
-                        )
-                          .filter(_ =>
-                            inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
-                          )
-                          .flatMap(op =>
-                            IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
-                          )
-                          .flatMap(value => ids.get(Key.Literal(value.lower))))
+                        val operation = IterationDomain.staticArithmetic(expression.operation)
+                        operation.filter(op => inputs.size == op.arity)
+                          .flatMap(op => simplifiedOperand(op, inputs))
+                          .orElse(operation.filter(op => inputs.size == op.arity)
+                            .filter(_ =>
+                              inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
+                            )
+                            .flatMap(op =>
+                              IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
+                            )
+                            .flatMap(value => ids.get(Key.Literal(value.lower)))))
           finally { val _ = visiting.remove(token) }
       )
       (module(owner).declarations.filter(value =>

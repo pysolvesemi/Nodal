@@ -40,10 +40,10 @@ private[nodal] object DigitalScalarContract:
             width.literal.exists(literal =>
               literal.kind == "integer" && literal.dataType == KernelTypeDescriptor("Integer")
             ) =>
-        val literal = width.literal.get.value.toIntOption.getOrElse(
-          fail(1, "digital width requires a representable public Integer literal")
-        )
-        (literal.toLong, literal.toLong)
+        width.literal.get.value.toIntOption.map(value => (value.toLong, value.toLong))
+          .getOrElse(ConstructionKernel.digitalWidthBounds(descriptor).getOrElse(
+            fail(1, "derived i64 digital width requires an active construction width proof")
+          ))
       case _: Expr[?] => ConstructionKernel.digitalWidthBounds(descriptor).getOrElse(
           fail(6, "symbolic digital conversion requires an active construction width proof")
         )

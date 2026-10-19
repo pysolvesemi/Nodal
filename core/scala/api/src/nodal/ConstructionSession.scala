@@ -243,14 +243,8 @@ private final class ConstructionSession(val options: EmitOptions):
       val operation = expression.operation.getOrElse("")
       val staticInteger = expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
         !retained.exists(collectionArguments.contains) &&
-        (expression.literal.exists(_.kind == "integer") || Set(
-          "analog_add",
-          "analog_sub",
-          "analog_mul",
-          "analog_div",
-          "analog_neg",
-          "static_integer_max"
-        ).contains(operation))
+        (expression.literal.exists(_.kind == "integer") ||
+          IterationDomain.staticArithmetic(operation).nonEmpty)
       val knownArgument = retained.exists(collectionArguments.contains) &&
         operation == DigitalCollectionContract.Argument
       val knownCollection = retained.exists(collectionRegions.contains) &&
@@ -1145,7 +1139,12 @@ private final class ConstructionSession(val options: EmitOptions):
   private def digitalWidthBound(descriptor: KernelTypeDescriptor, owner: Long): StructuralBound =
     if descriptor.arguments.size != 1 then
       fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
-    val analysis = new StructuralBoundAnalysis(owner, "NODAL-DIGITAL-054-001", "digital width")
+    val analysis = new StructuralBoundAnalysis(
+      owner,
+      "NODAL-DIGITAL-054-001",
+      "digital width",
+      signed64Literals = true
+    )
     val bound = descriptor.arguments.head match
       case width: Int => analysis(width)
       case width: Expr[?] => analysis(width.asInstanceOf[Expr[Integer]])
@@ -1166,7 +1165,8 @@ private final class ConstructionSession(val options: EmitOptions):
     new StructuralBoundAnalysis(
       currentModule.handle,
       "NODAL-DIGITAL-054-001",
-      "digital type extent"
+      "digital type extent",
+      signed64Literals = true
     ).sameIdentity(left, right)
 
   def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
@@ -2588,16 +2588,11 @@ private final class ConstructionSession(val options: EmitOptions):
             val result = expression.literal match
               case Some(_) => literalBound(expression)
               case None =>
-                val operation = expression.operation match
-                  case Some("analog_add") => IterationDomain.Arithmetic.Add
-                  case Some("static_integer_max") => IterationDomain.Arithmetic.Maximum
-                  case Some("analog_sub") => IterationDomain.Arithmetic.Subtract
-                  case Some("analog_mul") => IterationDomain.Arithmetic.Multiply
-                  case Some("analog_div") => IterationDomain.Arithmetic.Divide
-                  case Some("analog_neg") => IterationDomain.Arithmetic.Negate
-                  case _ =>
-                    invalid("hdlRange expression is not supported pure Integer arithmetic")
-                val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
+                val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
+                  .getOrElse(invalid(
+                    "hdlRange expression is not supported pure Integer arithmetic"
+                  ))
+                val arity = operation.arity
                 if expression.operands.size != arity then
                   invalid("hdlRange Integer expression has invalid arity")
                 val operands = expression.operands.map:
@@ -2622,6 +2617,14 @@ private final class ConstructionSession(val options: EmitOptions):
                   if operation == IterationDomain.Arithmetic.Maximum &&
                     operandIds(0) == operandIds(1)
                   then identityKeys(operandIds.head)
+                  else if operation == IterationDomain.Arithmetic.ChooseZero &&
+                    identityKeys(operandIds.head)._1 == 0
+                  then
+                    identityKeys(operandIds(if identityKeys(operandIds.head)._2 == "0" then 1
+                    else 2))
+                  else if operation == IterationDomain.Arithmetic.ChooseZero &&
+                    operandIds(1) == operandIds(2)
+                  then identityKeys(operandIds(1))
                   else if operandIds.forall(id => identityKeys(id)._1 == 0) then
                     (0, bounds.lower.toString, Vector.empty[Int])
                   else (2, expression.operation.get, operandIds)
@@ -2647,6 +2650,12 @@ private final class ConstructionSession(val options: EmitOptions):
           else value.value.toIntOption.map(_.toLong)
         )
         .getOrElse(invalid("hdlRange literal must be a representable public Integer literal"))
+      if !literal.isValidInt then
+        val reference = Option(expressionIds.get(expression)).getOrElse(
+          invalid("derived i64 literal requires an owned construction identity")
+        )
+        if reference.module != owner then
+          invalid("derived i64 literal escapes its owning Module", Some(expressionPath(reference)))
       StructuralBound(
         expression,
         IterationDomain.Bounds(literal, literal),

@@ -277,3 +277,45 @@ three unchanged baseline diagnostics: ConstructionSession's existing return/thro
 and ReproducibilityContract's existing throw. No new lint violation is introduced;
 the full lint invocation is not labeled passing. No F55 parent or child is closed
 by this checkpoint.
+
+## Shared static width prerequisite checkpoint
+
+The approved [static width arithmetic gate](../design-gates/NodalStaticWidthArithmetic-DG-v0.1.md)
+extends the existing static Integer owner with checked `ceil_log2`, `choose_zero`
+and private signed-64 derived arithmetic. Actual width consumers explicitly select
+mathematical signed-64 proof mode; ordinary parameter/storage interpretation keeps
+its existing default. Final positive width/resource checks, actual parameter
+identity and full operand-DAG validation remain mandatory. Generic rendering is
+bounded before expansion, and current analog targets explicitly reject the new
+primitives. This is a required widening-reduction prerequisite, not a reduction
+implementation or downstream compilation claim.
+
+Integrated focused checks pass 41 Scala cases, including the actual static-width
+source, arithmetic/materialization predecessors and four selected exact predecessor
+cases. Native ParameterModel passes; integer bounds 58/58, nonzero 44/44, shape
+45/45, digital types 91/91, target capabilities 74/74 and materialization 40/40 pass.
+Ten fresh source/native controls preserve symbolic identities and complete parameter
+verification. A compiler with the new shared engine but old width consumers rejects
+the signed intermediate witness; the integrated width consumers accept it. The
+same live archive independently tests default storage-mode rejection versus explicit
+width-mode acceptance. No default value is used as all-legal proof.
+
+The preceding normalized materialization artifact still verifies without running a
+repairing planner; its hash-only forgery rejects with
+`NODAL-MATERIALIZATION-055-001`. Generic expression rendering succeeds for the
+finite primitives while both capability and direct-render analog paths reject them.
+The rebuilt native compiler SHA-256 is
+`e2deb038e30a9082b6b473ee5dd164c69e98dd8a009bb9fbad0e446d32d158b4`.
+Exact commands, artifact hashes and logs are retained under
+`.work/increment55/reduction-static-stage/integrated-results`.
+
+Focused formatting passes; syntactic lint introduces no new diagnostic and retains
+ConstructionSession's two unchanged return/throw findings. Focused architecture
+review found no concrete defect. The implementation reuses the existing static
+DAG, checked interval arithmetic and immutable identity/substitution owners rather
+than adding a reduction-specific evaluator. Expansion accounting rejects oversized
+text before rendering; this is a resource bound, not a whole-pipeline speedup claim.
+
+F55 and its linked BT children remain open. Scoped formal-width environments, typed
+Struct value integration, driver validation and actual reduction/loop semantics
+remain required follow-on work.

@@ -3527,6 +3527,8 @@ ${indent(body, 2)}
       expression.operation match
         case "analog_add" => "add"
         case "static_integer_max" => "max"
+        case "static_integer_ceil_log2" => "ceil_log2"
+        case "static_integer_choose_zero" => "choose_zero"
         case "analog_sub" => "sub"
         case "analog_mul" => "mul"
         case "analog_div" => "div"
@@ -4090,8 +4092,11 @@ ${indent(body, 2)}
                     case "add" | "sub" | "mul" | "div" =>
                       operands.size == 2 && Set("f64", "i64").contains(dataType) &&
                       operands.forall(_._2 == dataType)
-                    case "max" =>
-                      operands.size == 2 && dataType == "i64" && operands.forall(_._2 == "i64")
+                    case "max" | "ceil_log2" | "choose_zero" =>
+                      val arity = if operatorName == "ceil_log2" then 1
+                      else if operatorName == "choose_zero" then 3 else 2
+                      operands.size == arity && dataType == "i64" &&
+                      operands.forall(_._2 == "i64") && expression.unit.forall(_.isEmpty)
                     case "neg" =>
                       operands.size == 1 && Set("f64", "i64").contains(dataType) &&
                       operands.head._2 == dataType
@@ -5458,19 +5463,17 @@ ${indent(body, 2)}
                       path,
                       invalid(s"$subject has no canonical static expression", path)
                     )
-                    if expression.owner != module.path || expression.dataType != "Integer" then
-                      invalid(s"$subject expression has invalid owner or type", path)
+                    if expression.owner != module.path || expression.dataType != "Integer" ||
+                      expression.unit.exists(_.nonEmpty)
+                    then invalid(s"$subject expression has invalid owner, type or unit", path)
                     expression.literal.flatMap(_.toLongOption) match
-                      case Some(literal) => IterationDomain.Bounds(literal, literal)
+                      case Some(literal) =>
+                        if expression.operation != "integer" || expression.operands.nonEmpty then
+                          invalid(s"$subject literal has forged operation or operands", path)
+                        IterationDomain.Bounds(literal, literal)
                       case None =>
-                        val operation = expression.operation match
-                          case "analog_add" => IterationDomain.Arithmetic.Add
-                          case "static_integer_max" => IterationDomain.Arithmetic.Maximum
-                          case "analog_sub" => IterationDomain.Arithmetic.Subtract
-                          case "analog_mul" => IterationDomain.Arithmetic.Multiply
-                          case "analog_div" => IterationDomain.Arithmetic.Divide
-                          case "analog_neg" => IterationDomain.Arithmetic.Negate
-                          case _ => invalid(s"$subject uses unsupported Integer arithmetic", path)
+                        val operation = IterationDomain.staticArithmetic(expression.operation)
+                          .getOrElse(invalid(s"$subject uses unsupported Integer arithmetic", path))
                         val bounds = expression.operands.map(analyze)
                         if operation == IterationDomain.Arithmetic.Subtract &&
                           expression.operands.size == 2 && expression.operands(

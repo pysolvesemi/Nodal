@@ -3642,9 +3642,29 @@ bool validGeneratedBoundExpression(llvm::StringRef text, const std::set<std::str
   return GeneratedBoundExpressionParser(text, parameters).parse();
 }
 
+// Shared static arithmetic/rendering does not establish an analog target
+// contract. Keep the new reduction formulas at verified IR until a backend
+// explicitly supports and checks their integer/conditional target semantics.
+LogicalResult verifyStaticIntegerTargetBoundary(Operation *root) {
+  Operation *unsupported = nullptr;
+  root->walk([&](ConstExprOp expression) {
+    const auto opcode = expression->getAttrOfType<StringAttr>("operator_name");
+    if (!unsupported && opcode &&
+        (opcode.getValue() == "ceil_log2" || opcode.getValue() == "choose_zero"))
+      unsupported = expression.getOperation();
+  });
+  if (!unsupported)
+    return success();
+  return emitMappedFailure(unsupported, "NODAL-BACKEND-CAPABILITY-001",
+                           "static ceil_log2/choose_zero require an explicit target lowering "
+                           "contract; current Verilog-A/AMS profiles do not support them");
+}
+
 } // namespace
 
 LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfile &profile) {
+  if (failed(verifyStaticIntegerTargetBoundary(module.getOperation())))
+    return failure();
   Operation *sourceEquations = nullptr;
   module.walk([&](Operation *operation) {
     if (!sourceEquations && (operation->hasAttr("source_equations") ||
@@ -3728,6 +3748,9 @@ LogicalResult verifyBackendOperations(mlir::ModuleOp module, const BackendProfil
 LogicalResult renderBackendCandidate(llvm::ArrayRef<Operation *> definitions,
                                      const BackendConfiguration &configuration,
                                      llvm::raw_ostream &output) {
+  for (Operation *definition : definitions)
+    if (failed(verifyStaticIntegerTargetBoundary(definition)))
+      return failure();
   if (failed(verifyRootExport(definitions)))
     return failure();
   llvm::SmallVector<std::string> hierarchyCorrespondence;

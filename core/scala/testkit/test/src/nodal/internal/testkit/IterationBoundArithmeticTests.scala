@@ -22,6 +22,9 @@ object IterationBoundArithmeticTests extends TestSuite:
       case Arithmetic.Maximum => left.max(right)
       case Arithmetic.Divide => left / right
       case Arithmetic.Negate => -left
+      case Arithmetic.CeilLog2 => BigInt((left - 1).bitLength)
+      case Arithmetic.ChooseZero =>
+        scala.util.Failure[Nothing](new IllegalArgumentException("ternary operation")).get
 
   private def evaluate(operation: Arithmetic, operands: Bounds*): Bounds =
     IterationDomain.arithmetic(operation, operands.toVector).toOption.get
@@ -134,7 +137,7 @@ object IterationBoundArithmeticTests extends TestSuite:
       for
         operation <- Arithmetic.values.toVector
         count <- 0 to 3
-        expected = if operation == Arithmetic.Negate then 1 else 2
+        expected = operation.arity
         if count != expected
       do rejected(operation, ProblemKind.InvalidArithmetic, Vector.fill(count)(Bounds(1L, 2L))*)
 

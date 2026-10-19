@@ -280,7 +280,12 @@ inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool dir
   llvm::SmallPtrSet<Operation *, 16> active;
   if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule, requiredEffect))
     return failure();
-  auto bounds = nodal::inferParameterIntegerBounds(value);
+  // Derived digital widths are mathematical i64 metadata: an intermediate
+  // may be negative even though the final width must be strictly positive.
+  // Ordinary shape/index/storage callers retain their existing interpretation.
+  auto mode = requiredEffect == "width" ? nodal::ParameterIntegerMode::MathematicalSigned64
+                                        : nodal::ParameterIntegerMode::Storage;
+  auto bounds = nodal::inferParameterIntegerBounds(value, mode);
   if (failed(bounds) || bounds->lower <= 0)
     return failure();
   return *bounds;

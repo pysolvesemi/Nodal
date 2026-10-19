@@ -62,6 +62,13 @@ std::string expression(llvm::StringRef id, llvm::StringRef op, llvm::StringRef l
          op.str() + "\"}> : (" + types + ") -> " + type.str() + "\n";
 }
 
+std::string choose(llvm::StringRef test, llvm::StringRef whenZero, llvm::StringRef whenNonzero) {
+  return "%result = \"nodal.const_expr\"(%" + test.str() + ", %" + whenZero.str() + ", %" +
+         whenNonzero.str() +
+         ") <{metadata = {probe = true}, operator_name = \"choose_zero\"}> : "
+         "(i64, i64, i64) -> i64\n";
+}
+
 std::string model(llvm::StringRef body) {
   return "module { \"nodal.module\"() <{metadata = {}, sym_name = \"Fixture\"}> ({\n" + body.str() +
          "}) : () -> () }\n";
@@ -82,7 +89,8 @@ std::string printed(mlir::ModuleOp module) {
 }
 
 bool check(mlir::MLIRContext &context, llvm::StringRef name, llvm::StringRef body, bool available,
-           int64_t lower = 0, int64_t upper = 0) {
+           int64_t lower = 0, int64_t upper = 0,
+           nodal::ParameterIntegerMode mode = nodal::ParameterIntegerMode::Storage) {
   auto parsed = mlir::parseSourceString<mlir::ModuleOp>(model(body), &context);
   if (!parsed) {
     llvm::errs() << "INTEGER_BOUNDS_TEST_PARSE_FAILED " << name << '\n';
@@ -103,7 +111,7 @@ bool check(mlir::MLIRContext &context, llvm::StringRef name, llvm::StringRef bod
     llvm::errs() << "INTEGER_BOUNDS_TEST_PROBE_FAILED " << name << '\n';
     return false;
   }
-  auto actual = nodal::inferParameterIntegerBounds(input);
+  auto actual = nodal::inferParameterIntegerBounds(input, mode);
   bool matched = available
                      ? mlir::succeeded(actual) && actual->lower == lower && actual->upper == upper
                      : mlir::failed(actual);
@@ -229,6 +237,67 @@ int main() {
   unavailable("dynamic-origin-is-not-constant",
               literal("zero", "0") + "%result = \"nodal.dynamic_value\"(%zero) <{metadata = {probe "
                                      "= true}, origin = \"runtime\"}> : (si64) -> si64\n");
+
+  // New canonical static primitives remain i64-only; the explicit metadata
+  // mode admits signed mathematical endpoints without changing storage callers.
+  constexpr auto mathematical = nodal::ParameterIntegerMode::MathematicalSigned64;
+  auto metadata = [&](llvm::StringRef name, llvm::StringRef body, bool valid, int64_t lower = 0,
+                      int64_t upper = 0) {
+    ++cases;
+    failures += !check(context, name, body, valid, lower, upper, mathematical);
+  };
+  for (auto entry : {std::make_pair("1", int64_t{0}), std::make_pair("2", int64_t{1}),
+                     std::make_pair("3", int64_t{2}), std::make_pair("4", int64_t{2}),
+                     std::make_pair("9223372036854775807", int64_t{63})})
+    expect("ceil-log2-" + std::string(entry.first),
+           literal("n", entry.first, "i64") + expression("result", "ceil_log2", "n", "", "i64"),
+           entry.second, entry.second);
+  expect("ceil-log2-symbolic-envelope",
+         bounded("1", "9223372036854775807", "1", "i64") +
+             expression("result", "ceil_log2", "n", "", "i64"),
+         0, 63);
+  unavailable("ceil-log2-zero",
+              literal("zero", "0", "i64") + expression("result", "ceil_log2", "zero", "", "i64"));
+  metadata("ceil-log2-negative",
+           literal("n", "-1", "i64") + expression("result", "ceil_log2", "n", "", "i64"), false);
+  unavailable("ceil-log2-possible-zero-default-positive",
+              bounded("0", "4", "1", "i64") + expression("result", "ceil_log2", "n", "", "i64"));
+  const std::string branches = literal("yes", "5", "i64") + literal("no", "8", "i64");
+  expect("choose-zero-literal-zero",
+         branches + literal("test", "0", "i64") + choose("test", "yes", "no"), 5, 5);
+  expect("choose-zero-literal-nonzero",
+         branches + literal("test", "3", "i64") + choose("test", "yes", "no"), 8, 8);
+  expect("choose-zero-proved-zero",
+         bounded("0", "0", "0", "i64") + branches + choose("n", "yes", "no"), 5, 5);
+  expect("choose-zero-proved-positive",
+         bounded("1", "3", "1", "i64") + branches + choose("n", "yes", "no"), 8, 8);
+  expect("choose-zero-inclusive-default-zero",
+         bounded("0", "3", "0", "i64") + branches + choose("n", "yes", "no"), 5, 8);
+  expect("choose-zero-inclusive-default-nonzero",
+         bounded("0", "3", "3", "i64") + branches + choose("n", "yes", "no"), 5, 8);
+  metadata("choose-zero-proved-negative",
+           bounded("-3", "-1", "-1", "i64") + branches + choose("n", "yes", "no"), true, 8, 8);
+  metadata("choose-zero-crosses-zero",
+           bounded("-3", "3", "0", "i64") + branches + choose("n", "yes", "no"), true, 5, 8);
+  const std::string signedBranches =
+      literal("yes", "-9223372036854775808", "i64") + literal("no", "9223372036854775807", "i64");
+  metadata("choose-zero-signed64-boundaries",
+           bounded("-1", "1", "0", "i64") + signedBranches + choose("n", "yes", "no"), true,
+           std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max());
+  unavailable("choose-zero-storage-still-rejects-negative-branch",
+              literal("test", "1", "i64") + signedBranches + choose("test", "yes", "no"));
+  unavailable("choose-zero-unreachable-division-by-zero",
+              branches + literal("test", "0", "i64") +
+                  expression("bad", "div", "yes", "test", "i64", false) +
+                  choose("test", "yes", "bad"));
+  unavailable("choose-zero-unreachable-nonpositive-log",
+              branches + literal("test", "0", "i64") +
+                  expression("bad", "ceil_log2", "test", "", "i64", false) +
+                  choose("test", "yes", "bad"));
+  unavailable(
+      "choose-zero-unreachable-overflow",
+      branches + literal("test", "1", "i64") + literal("huge", "9223372036854775807", "i64") +
+          expression("bad", "add", "huge", "test", "i64", false) + choose("test", "bad", "no"));
 
   std::string shared = literal("seed", "0");
   std::string previous = "seed";

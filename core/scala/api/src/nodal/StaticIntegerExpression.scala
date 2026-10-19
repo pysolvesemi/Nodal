@@ -29,3 +29,27 @@ private[nodal] object StaticIntegerExpression:
           ).get
     case _ =>
       CandidateRuntime.integerExpr("analog_add", expression(left), expression(right))
+
+  /** Checked metadata constructors deliberately avoid the Int-only literal shortcut in add. */
+  def literal64(value: BigInt): Expr[Integer] = CandidateRuntime.derivedInteger(value)
+
+  def add64(left: Dimension, right: Dimension): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_add", expression(left), expression(right))
+
+  def subtract64(left: Dimension, right: Dimension): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_sub", expression(left), expression(right))
+
+  def multiply64(left: Dimension, right: Dimension): Expr[Integer] =
+    CandidateRuntime.integerExpr("analog_mul", expression(left), expression(right))
+
+  def ceilLog2(value: Dimension): Expr[Integer] =
+    CandidateRuntime.integerExpr("static_integer_ceil_log2", expression(value))
+
+  /** Preserve every dependency until the ordinary static DAG validity check has run. */
+  def chooseZero(test: Dimension, whenZero: Dimension, whenNonzero: Dimension): Expr[Integer] =
+    CandidateRuntime.integerExpr(
+      "static_integer_choose_zero",
+      expression(test),
+      expression(whenZero),
+      expression(whenNonzero)
+    )

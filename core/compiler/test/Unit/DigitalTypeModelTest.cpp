@@ -9,6 +9,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 
+#include <limits>
 #include <string>
 
 using namespace mlir;
@@ -148,6 +149,82 @@ int main() {
         true);
   check("owned-typed-expression-width", parameter() + expression() + port(digital("Fixture.width")),
         true);
+  const std::string signedWidth = parameter("W", 2, 32) + literal("minus_one", -1) +
+                                  "%derived = \"nodal.const_expr\"(%W, %minus_one) <{metadata = "
+                                  "{semantic_path = \"Fixture.width\"}, "
+                                  "operator_name = \"add\"}> : (i64, i64) -> i64\n";
+  check("derived-width-admits-mathematical-negative-intermediate",
+        signedWidth + port(digital("Fixture.width")), true);
+  check("ordinary-shape-does-not-opt-in-to-negative-intermediate",
+        signedWidth + port(shape("Fixture.width", "!nodal.uint<1>")), false);
+  check("derived-width-final-zero-rejected",
+        literal("zero", 0) +
+            "%derived = \"nodal.const_expr\"(%zero) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"neg\"}> : (i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check(
+      "derived-width-final-negative-rejected",
+      literal("one", 1) +
+          "%derived = \"nodal.const_expr\"(%one) <{metadata = {semantic_path = \"Fixture.width\"}, "
+          "operator_name = \"neg\"}> : (i64) -> i64\n" +
+          port(digital("Fixture.width")),
+      false);
+  check("derived-width-positive-default-cannot-hide-zero-envelope",
+        parameter("W", 1, 32) + literal("minus_one", -1) +
+            "%derived = \"nodal.const_expr\"(%W, %minus_one) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"add\"}> : (i64, i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check("derived-width-overflow-rejected",
+        parameter("W", 2, 32) + literal("large", std::numeric_limits<int64_t>::max()) +
+            "%derived = \"nodal.const_expr\"(%W, %large) <{metadata = {semantic_path = "
+            "\"Fixture.width\"}, "
+            "operator_name = \"add\"}> : (i64, i64) -> i64\n" +
+            port(digital("Fixture.width")),
+        false);
+  check("derived-width-signed64-footprint-overflow-rejected",
+        signedWidth + port(shape("9223372036854775807", digital("Fixture.width"))), false);
+  const std::string reductionWidth = parameter("W", 2, 32) + literal("four", 4) +
+                                     literal("five", 5) + literal("eight", 8) +
+                                     "%test = \"nodal.const_expr\"(%W, %four) <{metadata = {}, "
+                                     "operator_name = \"sub\"}> : (i64, i64) -> i64\n"
+                                     "%width = \"nodal.const_expr\"(%test, %five, %eight) "
+                                     "<{metadata = {semantic_path = \"Fixture.width\"}, "
+                                     "operator_name = \"choose_zero\"}> : (i64, i64, i64) -> i64\n";
+  check("choose-zero-width-mixed-sign-test", reductionWidth + port(digital("Fixture.width")), true);
+  const std::string logarithmicWidth =
+      parameter() + literal("one", 1) +
+      "%log = \"nodal.const_expr\"(%W) <{metadata = {}, operator_name = \"ceil_log2\"}> : (i64) -> "
+      "i64\n"
+      "%width = \"nodal.const_expr\"(%log, %one) <{metadata = {semantic_path = \"Fixture.width\"}, "
+      "operator_name = \"add\"}> : (i64, i64) -> i64\n";
+  check("ceil-log2-positive-derived-width", logarithmicWidth + port(digital("Fixture.width")),
+        true);
+  auto causalWidth = parseSourceString<mlir::ModuleOp>(
+      model(signedWidth + port(digital("Fixture.width"))), ParserConfig(&context, false));
+  bool repaired = false;
+  if (causalWidth) {
+    auto *owner = &causalWidth->getBody()->front();
+    mlir::Value expression;
+    owner->walk([&](nodal::ConstExprOp op) { expression = op->getResult(0); });
+    auto type = parseType(digital("Fixture.width"));
+    auto oldBounds = nodal::inferParameterIntegerBounds(expression);
+    auto mathematical = nodal::inferParameterIntegerBounds(
+        expression, nodal::ParameterIntegerMode::MathematicalSigned64);
+    auto oldExact = nodal::resolveOwnedIntegerExpression(owner, expression);
+    auto width = nodal::inferDigitalWidthExpression(type, owner);
+    repaired = failed(oldBounds) && failed(oldExact) && succeeded(mathematical) &&
+               mathematical->lower == 1 && mathematical->upper == 31 && succeeded(width) &&
+               width->bounds.lower == 1 && width->bounds.upper == 31 &&
+               succeeded(mlir::verify(*causalWidth));
+    expression.getDefiningOp()->setOperand(1, expression);
+    repaired &= failed(nodal::inferDigitalWidthExpression(type, owner));
+  }
+  report("width-mode-causal-old-reject-new-accept-cycle-reject", repaired);
+
   check("protocol-payload-recursion",
         parameter() + port("!nodal.stream<" + structure(field("payload", digital())) + ">"), true);
   check("standalone-analog-shape-policy-preserved",

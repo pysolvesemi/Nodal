@@ -1291,6 +1291,19 @@ private[nodal] object CandidateRuntime:
       Vector(value)
     )
 
+  /** Compiler-derived metadata is signed i64; the public Integer literal remains Int-only. */
+  def derivedInteger(value: BigInt): Expr[Integer] =
+    if !value.isValidLong then
+      scala.util.Failure[Nothing](
+        new ConstructionException(
+          KernelDiagnostic(
+            "NODAL-PARAMETER-BINDING-022",
+            "derived static Integer literal exceeds signed 64-bit bounds"
+          )
+        )
+      ).get
+    literal(KernelTypeDescriptor("Integer"), "integer", value.toString, Vector(value.toLong))
+
   def literalUInt(value: Int, width: Int): Expr[UInt] =
     DigitalValueContract.validateLiteral("UInt", BigInt(value), width.toLong)
     literal(

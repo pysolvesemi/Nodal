@@ -5,6 +5,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -93,6 +94,22 @@ LogicalResult nodal::SIntType::verify(llvm::function_ref<InFlightDiagnostic()> e
   return verifyWidth(emitError, width, "sint");
 }
 
+LogicalResult
+nodal::ParametricIntegerType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                     llvm::StringRef kind, llvm::StringRef width) {
+  if (kind != "bits" && kind != "uint" && kind != "sint")
+    return emitError() << "NODAL-DIGITAL-054-001: digital kind must be bits, uint, or sint";
+  if (!isCanonicalDigitalWidthToken(width))
+    return emitError() << "NODAL-DIGITAL-054-001: symbolic digital width requires a canonical "
+                          "owned parameter or expression token";
+  return success();
+}
+
+LogicalResult nodal::StructType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                        llvm::StringRef name, ArrayAttr fields) {
+  return verifyDigitalStructFields(emitError, name, fields);
+}
+
 LogicalResult nodal::QuantityType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                                           llvm::StringRef kind, llvm::StringRef dimension) {
   if (kind != "integer" && kind != "real")
@@ -140,6 +157,14 @@ LogicalResult nodal::ShapedType::verify(llvm::function_ref<InFlightDiagnostic()>
   return success();
 }
 
+LogicalResult
+nodal::ControlCapabilityType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
+                                     llvm::StringRef kind) {
+  if (kind != "clock" && kind != "reset")
+    return emitError() << "NODAL-DIGITAL-054-011: control capability must be clock or reset";
+  return success();
+}
+
 LogicalResult nodal::InterfaceType::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                                            llvm::StringRef symbol) {
   return verifySymbol(emitError, symbol, "interface symbol");
@@ -159,7 +184,8 @@ LogicalResult nodal::ResolvedType::verify(llvm::function_ref<InFlightDiagnostic(
                                           llvm::StringRef driveMode, Type elementType) {
   if (failed(verifyPayload(emitError, elementType, "resolved element")))
     return failure();
-  if (driveMode != "push_pull" && driveMode != "open_drain" && driveMode != "open_source")
+  if (driveMode != "push_pull" && driveMode != "open_drain" && driveMode != "open_source" &&
+      driveMode != "read_only" && driveMode != "pass_through")
     return emitError() << "unsupported resolved drive mode '" << driveMode << "'";
   return success();
 }

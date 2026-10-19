@@ -548,3 +548,45 @@ target_link_libraries(nodal-scalar-hierarchy-materialization-unit-tests PRIVATE
 add_test(NAME nodal.native.scalar-hierarchy-materialization-unit
   COMMAND nodal-scalar-hierarchy-materialization-unit-tests)
 set_tests_properties(nodal.native.scalar-hierarchy-materialization-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-enum-encoding-unit-tests EnumEncodingTest.cpp)
+llvm_update_compile_flags(nodal-enum-encoding-unit-tests)
+target_link_libraries(nodal-enum-encoding-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.enum-encoding-unit COMMAND nodal-enum-encoding-unit-tests)
+set_tests_properties(nodal.native.enum-encoding-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-type-model-unit-tests DigitalTypeModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-type-model-unit-tests)
+target_link_libraries(nodal-digital-type-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-type-model-unit COMMAND nodal-digital-type-model-unit-tests)
+set_tests_properties(nodal.native.digital-type-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-enum-value-model-unit-tests EnumValueModelTest.cpp)
+llvm_update_compile_flags(nodal-enum-value-model-unit-tests)
+target_link_libraries(nodal-enum-value-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.enum-value-model-unit COMMAND nodal-enum-value-model-unit-tests)
+set_tests_properties(nodal.native.enum-value-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-value-model-unit-tests DigitalValueModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-value-model-unit-tests)
+target_link_libraries(nodal-digital-value-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-value-model-unit COMMAND nodal-digital-value-model-unit-tests)
+set_tests_properties(nodal.native.digital-value-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-storage-model-unit-tests DigitalStorageModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-storage-model-unit-tests)
+target_link_libraries(nodal-digital-storage-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-storage-model-unit COMMAND nodal-digital-storage-model-unit-tests)
+set_tests_properties(nodal.native.digital-storage-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-interface-model-unit-tests DigitalInterfaceModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-interface-model-unit-tests)
+target_link_libraries(nodal-digital-interface-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-interface-model-unit COMMAND nodal-digital-interface-model-unit-tests)
+set_tests_properties(nodal.native.digital-interface-model-unit PROPERTIES TIMEOUT 30)

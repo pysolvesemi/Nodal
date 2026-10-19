@@ -11,7 +11,6 @@ import scala.collection.mutable
   */
 private final class ConstructionSession(val options: EmitOptions):
   import ConstructionExpressionFacts.{disciplineDimension, waveformContinuity, waveformStatic}
-  import ConstructionInterfaceLayout.{accessMember, memberName, validAccess}
 
   def inferAnalogDimension(value: Any): AnalogDimension =
     ConstructionExpressionFacts.inferAnalogDimension(value)
@@ -288,7 +287,52 @@ private final class ConstructionSession(val options: EmitOptions):
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
     validateGeneratedDependencies(attributes.map(_._2))
-    dataType.foreach(validateShapeType(_, module.handle, kind == KernelSignalKind.Variable))
+    val initial = attributes.collectFirst { case ("initial", value) => value }.toVector.flatMap:
+      case expression: Expr[?] => Vector(expression)
+      case Some(expression: Expr[?]) => Vector(expression)
+      case _ => Vector.empty
+    val resolvedType = dataType.orElse(
+      Option.when(kind == KernelSignalKind.Register)(initial.headOption
+        .flatMap(CandidateRuntime.expressionDataType)).flatten
+    )
+    val digitalStorage =
+      Set(KernelSignalKind.Wire, KernelSignalKind.Register, KernelSignalKind.Memory).contains(kind)
+    resolvedType.foreach(validateShapeType(
+      _,
+      module.handle,
+      cardinality = kind == KernelSignalKind.Variable || digitalStorage,
+      storageContext = digitalStorage
+    ))
+    if digitalStorage then
+      val storageType = resolvedType.getOrElse(
+        fail("NODAL-DIGITAL-054-010", "digital storage requires an exact element type")
+      )
+      initial.foreach: expression =>
+        val initialType = CandidateRuntime.expressionDataType(expression).getOrElse(
+          fail("NODAL-DIGITAL-054-010", "digital initializer requires an exact type")
+        )
+        if !DigitalEnumContract.sameType(
+            CandidateRuntime.typeDescriptor(storageType),
+            CandidateRuntime.typeDescriptor(initialType)
+          )
+        then fail("NODAL-DIGITAL-054-010", "digital initializer type differs from its storage")
+      if kind == KernelSignalKind.Memory then
+        if !attributes.exists:
+            case ("readLatency", value: Int) => value >= 0
+            case _ => false
+        then fail("NODAL-DIGITAL-054-010", "memory read latency must be a nonnegative Integer")
+        val depth = attributes.collectFirst { case ("depth", value) => value }.getOrElse(
+          fail("NODAL-DIGITAL-054-010", "memory requires an owned positive depth")
+        )
+        val shaped =
+          new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(storageType, Vector(depth))))
+        validateShapeType(shaped, module.handle, cardinality = true, storageContext = true)
+    value match
+      case array: InterfaceArray[?, ?] =>
+        val shaped =
+          new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(Bool, Vector(array.count))))
+        validateShapeType(shaped, module.handle, cardinality = true)
+      case _ => ()
     if declarationIds.containsKey(value) then
       fail("NODAL-OWNERSHIP-016", s"${kind.label} was registered twice")
     val reference = DeclarationRef(module.handle, module.declarations.size)
@@ -296,9 +340,14 @@ private final class ConstructionSession(val options: EmitOptions):
       reference,
       value,
       kind,
-      dataType,
+      resolvedType,
       explicitName,
-      domain,
+      domain.orElse(
+        Option.when(
+          Set(KernelSignalKind.Input, KernelSignalKind.Output).contains(kind) &&
+            resolvedType.exists(isBoundaryCapability)
+        )(currentDomain).flatten
+      ),
       attributes,
       conservativeDimensions
     )
@@ -827,13 +876,112 @@ private final class ConstructionSession(val options: EmitOptions):
       index.generatedScope.map(region => s".in(${generatedRegionPath(region)})").getOrElse("")
     s"${pathOfReference(index.input)}.at(${indices.mkString(",")})$suffix"
 
+  private def digitalWidthBound(descriptor: KernelTypeDescriptor, owner: Long): StructuralBound =
+    if descriptor.arguments.size != 1 then
+      fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
+    val analysis = new StructuralBoundAnalysis(owner, "NODAL-DIGITAL-054-001", "digital width")
+    val bound = descriptor.arguments.head match
+      case width: Int => analysis(width)
+      case width: Expr[?] => analysis(width.asInstanceOf[Expr[Integer]])
+      case _ => fail("NODAL-DIGITAL-054-001", "digital width requires a static Integer expression")
+    if bound.bounds.lower <= 0L then
+      fail(
+        "NODAL-DIGITAL-054-001",
+        "digital width must be positive for every legal parameter value"
+      )
+    bound.parameters.distinct.foreach(markStructuralParameterEffect(_, "width"))
+    bound
+
+  def digitalWidthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
+    val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
+    (bounds.lower, bounds.upper)
+
+  def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
+    val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
+    bounds.lower == expected.toLong && bounds.upper == expected.toLong
+
   private def validateShapeType(
       dataType: DataType[?],
       owner: Long,
-      cardinality: Boolean
+      cardinality: Boolean,
+      storageContext: Boolean = false
   ): Unit =
-    val descriptor = CandidateRuntime.typeDescriptor(dataType)
-    if descriptor.kind == "Vec" then validateShapeDescriptor(descriptor, owner, cardinality)
+    val active = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
+    var remaining = 65536
+    def identifier(name: String): Unit =
+      if name.length > 1024 || !name.matches("[A-Za-z_][A-Za-z0-9_]*") then
+        fail("NODAL-DIGITAL-054-004", "Struct and field names require bounded portable identifiers")
+    def checkedFootprint(bits: BigInt): BigInt =
+      if bits <= 0 || bits > BigInt(Long.MaxValue) then
+        fail(
+          "NODAL-DIGITAL-054-004",
+          "digital type maximum bit footprint exceeds positive signed 64-bit bounds"
+        )
+      bits
+    def visit(current: DataType[?], depth: Int, field: Boolean): Option[BigInt] =
+      remaining -= 1
+      if depth > 128 || remaining < 0 || active.containsKey(current) then
+        fail(
+          "NODAL-DIGITAL-054-004",
+          "recursive type is cyclic or exceeds the supported structural budget"
+        )
+      active.put(current, java.lang.Boolean.TRUE)
+      try
+        val descriptor = CandidateRuntime.typeDescriptor(current)
+        descriptor.kind match
+          case "Bits" | "UInt" | "SInt" =>
+            Some(BigInt(digitalWidthBound(descriptor, owner).bounds.upper))
+          case "Bool" => Some(BigInt(1))
+          case "Integer" | "Real" => if field then Some(BigInt(64)) else None
+          case "Struct" =>
+            if descriptor.arguments.size != 2 then
+              fail(
+                "NODAL-DIGITAL-054-004",
+                "Struct requires one name and an ordered field inventory"
+              )
+            val name = descriptor.arguments.head match
+              case value: String => value
+              case _ => fail("NODAL-DIGITAL-054-004", "Struct name is missing")
+            identifier(name)
+            val fields = descriptor.arguments(1) match
+              case values: Seq[?] => values.toVector.map:
+                  case value: StructField[?] => value
+                  case _ => fail("NODAL-DIGITAL-054-004", "Struct inventory contains a non-field")
+              case _ => fail("NODAL-DIGITAL-054-004", "Struct field inventory is missing")
+            if fields.isEmpty || fields.size > 65536 || fields.map(
+                _.name
+              ).distinct.size != fields.size
+            then
+              fail("NODAL-DIGITAL-054-004", "Struct requires nonempty unique bounded fields")
+            val footprint = fields.foldLeft(BigInt(0)): (total, member) =>
+              identifier(member.name)
+              val bits = visit(member.dataType, depth + 1, field = true).getOrElse(
+                fail(
+                  "NODAL-DIGITAL-054-004",
+                  "Struct fields require storable digital scalar or aggregate types"
+                )
+              )
+              checkedFootprint(total + bits)
+            Some(footprint)
+          case "Vec" =>
+            validateShapeDescriptor(descriptor, owner, cardinality)
+            val element = descriptor.arguments.head.asInstanceOf[DataType[?]]
+            val dimensions = descriptor.arguments(1).asInstanceOf[Seq[Dimension]]
+            val analysis =
+              new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
+            visit(element, depth + 1, field).map: bits =>
+              checkedFootprint(dimensions.foldLeft(bits)((total, dimension) =>
+                total * BigInt(analysis(dimension).bounds.upper)
+              ))
+          case "Enum" =>
+            descriptor.arguments match
+              case Vector(abi: ResolvedEnumAbi) => Some(BigInt(abi.width))
+              case _ => fail("NODAL-DIGITAL-054-004", "enum type has no resolved ABI")
+          case _ => None
+      finally active.remove(current)
+    val footprint = visit(dataType, 0, field = storageContext)
+    if storageContext && footprint.isEmpty then
+      fail("NODAL-DIGITAL-054-010", "digital storage requires a directionless storable value type")
 
   private def validateShapeDescriptor(
       descriptor: KernelTypeDescriptor,
@@ -869,7 +1017,6 @@ private final class ConstructionSession(val options: EmitOptions):
       bounds.foldLeft(BigInt(1))((size, bound) => size * BigInt(bound.bounds.upper)) >
         BigInt(Long.MaxValue)
     then fail("NODAL-SHAPE-043-001", "Vec maximum element count exceeds signed 64-bit bounds")
-    validateShapeType(element.get, owner, cardinality)
     bounds.flatMap(_.parameters).distinct.foreach: reference =>
       markStructuralParameterEffect(reference, "shape")
       markStructuralParameterEffect(reference, "rank")
@@ -919,6 +1066,7 @@ private final class ConstructionSession(val options: EmitOptions):
       case declaration: DeclarationRef =>
         val record = records(declaration.module).declarations(declaration.index)
         if record.kind == KernelSignalKind.Input || record.kind == KernelSignalKind.Output ||
+          record.kind == KernelSignalKind.Wire || record.kind == KernelSignalKind.Register ||
           (record.kind == KernelSignalKind.Variable &&
             CandidateRuntime.proceduralShapeSource(input))
         then
@@ -1352,6 +1500,18 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(operation =>
+          operation.startsWith(
+            DigitalEnumContract.Prefix
+          ) || DigitalScalarContract.Operations.contains(operation)
+        ) =>
+      if activeGeneratedRegion.nonEmpty then
+        fail(
+          "NODAL-ENUM-054-020",
+          "digital expressions in generated scopes require the digital generation profile"
+        )
+      val _ = captureExpression(value)
     case expression: KernelExpr[?]
         if expression.operation.exists(_.startsWith(AnalogContextContract.Prefix)) =>
       val _ = AnalogContextContract.validate(expression)
@@ -3236,6 +3396,8 @@ private final class ConstructionSession(val options: EmitOptions):
     case mode: DriveMode.Value[?] => mode.name
     case placement: InoutPlacement => placement.toString
     case profile: ResolutionProfile => profile.toString
+    case policy: ReadUnderWrite => policy.toString
+    case ordering: MemoryOrdering => ordering.toString
     case dataType: DataType[?] => renderType(dataType, owner)
     case field: StructField[?] => s"${field.name}:${renderType(field.dataType, owner)}"
     case option: Option[?] => option.map(renderAny(_, owner)).getOrElse("none")
@@ -3253,6 +3415,10 @@ private final class ConstructionSession(val options: EmitOptions):
   private def renderType(dataType: DataType[?], owner: Long): String =
     val descriptor = CandidateRuntime.typeDescriptor(dataType)
     descriptor.kind match
+      case "Enum" =>
+        descriptor.arguments match
+          case Vector(abi: ResolvedEnumAbi) => s"Enum(${abi.identity},${abi.width},${abi.hash})"
+          case _ => fail("NODAL-ENUM-054-020", "enum type has no resolved ABI")
       case "Struct" =>
         val name = descriptor.arguments.headOption.collect { case value: String =>
           value
@@ -3270,6 +3436,10 @@ private final class ConstructionSession(val options: EmitOptions):
           case values: Seq[?] => values.map(renderShapeDimension(_, owner))
           case _ => Vector.empty
         s"Vec(${element.getOrElse("unknown")};${dimensions.mkString("x")})"
+      case kind @ ("Bits" | "UInt" | "SInt") =>
+        if descriptor.arguments.size != 1 then
+          fail("NODAL-DIGITAL-054-001", "digital scalar type requires exactly one width")
+        s"$kind(${renderShapeDimension(descriptor.arguments.head, owner)})"
       case kind if descriptor.arguments.nonEmpty =>
         s"$kind(${descriptor.arguments.map(renderAny(_, owner)).mkString(",")})"
       case kind => kind
@@ -3385,85 +3555,6 @@ private final class ConstructionSession(val options: EmitOptions):
             Some(declarationPath(declaration.reference))
           )
     case None => None
-
-  private def endpointAbi(
-      definition: InterfaceType[?],
-      role: Role[?],
-      name: String,
-      domain: ClockDomain,
-      count: Option[Any],
-      declaration: DeclarationRecord,
-      resolved: Map[DomainRef, String]
-  ): Vector[InterfaceAbiEntry] =
-    val names = definition.members.map(memberName)
-    if names.distinct.size != names.size then
-      fail(
-        "NODAL-INTERFACE-MEMBER-016",
-        s"Interface '${definition.name}' has duplicate member names",
-        Some(declarationPath(declaration.reference))
-      )
-    val grouped = role.access.groupBy(accessMember)
-    val missing = names.filterNot(grouped.contains)
-    val unknown = grouped.keySet.diff(names.toSet)
-    val duplicate =
-      grouped.collect { case (member, accesses) if accesses.size != 1 => member }.toVector
-    if missing.nonEmpty || unknown.nonEmpty || duplicate.nonEmpty then
-      fail(
-        "NODAL-ROLE-COMPLETE-016",
-        s"role '${role.name}' is incomplete",
-        Some(declarationPath(declaration.reference))
-      )
-    val endpointDomain = resolved.getOrElse(
-      domainRef(domain),
-      fail("NODAL-INTERFACE-DOMAIN-016", s"Interface endpoint '$name' has no domain")
-    )
-    val owner = declaration.reference.module
-    val suffix = count.map(value => s"[${renderAny(value, owner)}]").getOrElse("")
-    definition.members.toVector.flatMap: member =>
-      val memberNameValue = memberName(member)
-      val access = grouped(memberNameValue).head
-      if !validAccess(member, access) then
-        fail(
-          "NODAL-ROLE-ACCESS-016",
-          s"role '${role.name}' has an invalid access for '$memberNameValue'",
-          Some(declarationPath(declaration.reference))
-        )
-      ConstructionInterfaceLayout.expandMember(
-        member,
-        access,
-        s"${modulePath(owner)}.$name$suffix.$memberNameValue",
-        s"${name}_$memberNameValue",
-        role.name,
-        endpointDomain,
-        dataType => renderType(dataType, owner)
-      )
-
-  private def interfaceAbi(resolved: Map[DomainRef, String]): Vector[InterfaceAbiEntry] =
-    val entries = records.values.toVector.flatMap: module =>
-      module.declarations.toVector.flatMap: declaration =>
-        declaration.value match
-          case port: InterfacePort[?, ?] =>
-            endpointAbi(
-              port.definition,
-              port.role,
-              port.name,
-              port.domain,
-              None,
-              declaration,
-              resolved
-            )
-          case array: InterfaceArray[?, ?] =>
-            endpointAbi(
-              array.definition,
-              array.role,
-              array.name,
-              array.domain,
-              Some(array.count),
-              declaration,
-              resolved
-            )
-          case _ => Vector.empty
-    entries.sortBy(_.logicalPath)
 
   private def attribute(
       declaration: DeclarationRecord,
@@ -3786,13 +3877,37 @@ private final class ConstructionSession(val options: EmitOptions):
           metadata.sortBy(_._1)
         )
       val declarations = module.declarations.toVector.map: declaration =>
+        val retainedAttributes = declaration.attributes ++
+          Option.when(Set(
+            KernelSignalKind.Register,
+            KernelSignalKind.Memory
+          ).contains(declaration.kind))(
+            declaration.domainCandidate.toVector.map(domain =>
+              "declared_domain" -> domainPath(domainRef(domain))
+            )
+          ).toVector.flatten
         KernelDeclarationSnapshot(
           declarationPath(declaration.reference),
           declaration.kind.label,
           declarationName(declaration.reference),
           declaration.dataType.map(renderType(_, module.handle)),
           declarationDomain(declaration, resolved),
-          declaration.attributes.map(value => value._1 -> renderAny(value._2, module.handle)),
+          retainedAttributes.map: (name, value) =>
+            val rendered =
+              if name == "initial" && declaration.kind == KernelSignalKind.Register then
+                value match
+                  case Some(expression: Expr[?]) => pathOf(expression).getOrElse(
+                      fail("NODAL-DIGITAL-054-010", "register initializer has no captured identity")
+                    )
+                  case expression: Expr[?] => pathOf(expression).getOrElse(
+                      fail("NODAL-DIGITAL-054-010", "register initializer has no captured identity")
+                    )
+                  case None => "none"
+                  case _ =>
+                    fail("NODAL-DIGITAL-054-010", "register initializer is not a typed expression")
+              else renderAny(value, module.handle)
+            name -> rendered
+          ,
           declaration.conservativeDimensions.map(renderShapeDimension(_, module.handle)),
           if declaration.kind == KernelSignalKind.AnalogNodeArray then
             generatedScopeSnapshot(module.generatedRegions.find(
@@ -4230,7 +4345,150 @@ private final class ConstructionSession(val options: EmitOptions):
     roots.foreach(visit)
     reachable.toSet
 
-  private def parameterExpressionSnapshots(): Vector[KernelParameterExpressionSnapshot] =
+  private def isBoundaryCapability(dataType: DataType[?]): Boolean =
+    var current = dataType
+    var depth = 0
+    var descriptor = CandidateRuntime.typeDescriptor(current)
+    while descriptor.kind == "Vec" && depth <= 128 do
+      current = descriptor.arguments.headOption.collect { case value: DataType[?] => value }
+        .getOrElse(fail("NODAL-DIGITAL-054-018", "capability Vec has no element type"))
+      descriptor = CandidateRuntime.typeDescriptor(current)
+      depth += 1
+    if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
+    Set("Clock", "Reset").contains(descriptor.kind)
+
+  private def capabilityDomain(
+      declaration: DeclarationRecord,
+      resolved: Map[DomainRef, String]
+  ): String =
+    val domains = records(declaration.reference.module).domains
+    declarationDomain(declaration, resolved) match
+      case Some(identity) =>
+        domains.find(domain =>
+          resolved.get(domain.reference).contains(identity) ||
+            domainPath(domain.reference) == identity
+        ).map(_.name).getOrElse(
+          fail("NODAL-DIGITAL-054-018", "capability boundary has no local domain")
+        )
+      case None =>
+        if domains.size != 1 then
+          fail("NODAL-DIGITAL-054-018", "capability boundary requires an exact local domain")
+        domains.head.name
+
+  private def validateBoundarySource(
+      value: Expr[?],
+      target: DeclarationRecord,
+      resolved: Map[DomainRef, String]
+  ): Unit =
+    var reference: DeclarationRef | ExpressionRef =
+      Option(declarationIds.get(value)).map(identity[DeclarationRef | ExpressionRef])
+        .orElse(Option(expressionIds.get(value)))
+        .getOrElse(fail("NODAL-DIGITAL-054-018", "capability source has no captured identity"))
+    val visited = mutable.HashSet.empty[ExpressionRef]
+    while reference.isInstanceOf[ExpressionRef] do
+      val expression = reference.asInstanceOf[ExpressionRef]
+      if !visited.add(expression) || visited.size > 65536 then
+        fail("NODAL-DIGITAL-054-018", "capability source projection is cyclic or oversized")
+      reference = shapeIndices.get(expression).map(_.input)
+        .orElse(shapeViews.get(expression).map(_.input)).getOrElse(
+          fail("NODAL-DIGITAL-054-018", "capability source must be an input boundary projection")
+        )
+    val root = reference.asInstanceOf[DeclarationRef]
+    val source = records(root.module).declarations(root.index)
+    if root.module != target.reference.module || source.kind != KernelSignalKind.Input ||
+      capabilityDomain(source, resolved) != capabilityDomain(target, resolved)
+    then
+      fail("NODAL-DIGITAL-054-018", "capability source requires a same-owner/domain input boundary")
+
+  private def digitalAssignmentSnapshots(
+      resolved: Map[DomainRef, String]
+  ): Vector[KernelDigitalAssignmentSnapshot] =
+    val ordinals = mutable.HashMap.empty[Long, Int]
+    operations.toVector.filter(operation =>
+      Set("assignment", "value-connect").contains(operation.kind)
+    ).map: operation =>
+      if operation.generatedScope.nonEmpty || operation.values.size != 2 then
+        fail("NODAL-DIGITAL-054-010", "digital assignment requires a direct-module sink and value")
+      val target = operation.values.head match
+        case reference: AnyRef => Option(declarationIds.get(reference)).getOrElse(
+            fail("NODAL-DIGITAL-054-010", "digital assignment sink has no owned declaration")
+          )
+        case _ => fail("NODAL-DIGITAL-054-010", "digital assignment sink is not a declaration")
+      val ordinal = ordinals.getOrElse(operation.owner, 0)
+      ordinals.update(operation.owner, ordinal + 1)
+      val owner = modulePath(operation.owner)
+      val declaration = records(target.module).declarations(target.index)
+      if declaration.dataType.exists(isBoundaryCapability) then
+        if declaration.kind != KernelSignalKind.Output then
+          fail("NODAL-DIGITAL-054-018", "capability assignment requires an output boundary")
+        operation.values(1) match
+          case value: Expr[?] => validateBoundarySource(value, declaration, resolved)
+          case _ => fail("NODAL-DIGITAL-054-018", "capability assignment requires a typed source")
+      KernelDigitalAssignmentSnapshot(
+        s"$owner.digital_assignment_$ordinal",
+        owner,
+        declarationPath(target),
+        pathOf(operation.values(1)).getOrElse(fail(
+          "NODAL-DIGITAL-054-010",
+          "digital assignment value has no captured identity"
+        )),
+        if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous"
+      )
+
+  private def digitalOwnerOf(value: Any): Option[String] = value match
+    case reference: AnyRef =>
+      Option(declarationIds.get(reference)).map(_.module)
+        .orElse(Option(expressionIds.get(reference)).map(_.module)).map(modulePath)
+    case _ => None
+
+  private def digitalValueSnapshots(interfaces: DigitalInterfaceContract.Capture)
+      : (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
+    val expressions = expressionValues.toVector.map: (reference, expression) =>
+      (expression, expressionPath(reference), modulePath(reference.module), reference.module)
+    DigitalInterfaceContract.validateValues(
+      expressions.map((expression, _, owner, _) => expression -> owner),
+      interfaces,
+      pathOf,
+      digitalOwnerOf
+    )
+    val storageRoots = records.valuesIterator.flatMap(_.declarations.iterator)
+      .filter(declaration =>
+        Set(KernelSignalKind.Register, KernelSignalKind.Wire).contains(declaration.kind)
+      )
+      .flatMap(_.attributes.iterator.collect { case ("initial", value) => value }).flatMap:
+        case expression: Expr[?] => Vector(expression)
+        case Some(expression: Expr[?]) => Vector(expression)
+        case _ => Vector.empty
+    val assignmentRoots = operations.iterator.filter(operation =>
+      Set("assignment", "value-connect").contains(operation.kind)
+    ).flatMap(_.values.collect:
+      case expression: KernelExpr[?]
+          if expression.literal.nonEmpty || Option(expressionIds.get(expression)).exists(
+            reference =>
+              shapeIndices.contains(reference) || shapeViews.contains(reference)
+          ) || expression.operation.exists(operation =>
+            operation.startsWith(
+              DigitalEnumContract.Prefix
+            ) || DigitalScalarContract.Operations.contains(
+              operation
+            ) || DigitalInterfaceContract.ValueOperations.contains(operation)
+          ) => expression)
+    DigitalValueConstruction.snapshot(
+      records.valuesIterator.flatMap(
+        _.declarations.iterator.flatMap(_.dataType)
+      ).toVector ++ interfaces.dataTypes,
+      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots,
+      (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
+        expressionPath
+      )).toSet,
+      expressions,
+      pathOf,
+      renderType
+    )
+
+  private def parameterExpressionSnapshots(
+      additionalTypes: Vector[DataType[?]] = Vector.empty
+  ): Vector[KernelParameterExpressionSnapshot] =
     val roots = rootParameterBindings.iterator.map(_._2) ++ records.valuesIterator.flatMap(
       _.instances.iterator.flatMap(_.parameterOverrides.iterator.map(_._2))
     )
@@ -4244,7 +4502,14 @@ private final class ConstructionSession(val options: EmitOptions):
     )
     def shapeDimensionRoots(dataType: DataType[?]): Vector[Any] =
       val descriptor = CandidateRuntime.typeDescriptor(dataType)
-      if descriptor.kind != "Vec" then Vector.empty
+      if Set("Bits", "UInt", "SInt").contains(descriptor.kind) then descriptor.arguments
+      else if descriptor.kind == "Struct" then
+        descriptor.arguments.lift(1).toVector.flatMap:
+          case fields: Seq[?] => fields.toVector.flatMap:
+              case field: StructField[?] => shapeDimensionRoots(field.dataType)
+              case _ => Vector.empty
+          case _ => Vector.empty
+      else if descriptor.kind != "Vec" then Vector.empty
       else
         val nested = descriptor.arguments.headOption.collect:
           case element: DataType[?] => shapeDimensionRoots(element)
@@ -4255,9 +4520,20 @@ private final class ConstructionSession(val options: EmitOptions):
 
     val shapeDimensionExpressionRoots = records.valuesIterator.flatMap(
       _.declarations.iterator.flatMap(declaration =>
+        val cardinalityRoots = declaration.kind match
+          case KernelSignalKind.Memory => declaration.attributes.collect { case ("depth", value) =>
+              value
+            }
+          case KernelSignalKind.InterfaceArray =>
+            declaration.attributes.collect { case ("count", value) => value }
+          case _ => Vector.empty
         declaration.dataType.iterator.flatMap(shapeDimensionRoots) ++
-          declaration.conservativeDimensions.iterator
+          declaration.conservativeDimensions.iterator ++ cardinalityRoots.iterator
       )
+    )
+    val interfaceTypeRoots = additionalTypes.iterator.flatMap(shapeDimensionRoots)
+    val expressionTypeRoots = expressionValues.valuesIterator.flatMap(expression =>
+      CandidateRuntime.expressionDataType(expression).iterator.flatMap(shapeDimensionRoots)
     )
     val lexicalShapeRoots = expressionValues.valuesIterator
       .filter(CandidateRuntime.proceduralShapeSource(_)).flatMap: expression =>
@@ -4267,10 +4543,11 @@ private final class ConstructionSession(val options: EmitOptions):
           (if expression.operation.contains("analog_array_fill") then Iterator.empty
            else expression.operands.drop(1).iterator)
     val reachable = capturedExpressionClosure(
-      (lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
+      (interfaceTypeRoots ++ expressionTypeRoots ++ lexicalShapeRoots ++ roots ++ defaultRoots ++ generatedRoots ++ structuralShapeExpressionRoots ++
         shapeDimensionExpressionRoots).collect:
         case expression: KernelExpr[?]
-            if expression.literal.isEmpty && !expression.operation.contains("generate_index") =>
+            if expression.literal.isEmpty && !expression.operation.contains("generate_index") &&
+              !expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix)) =>
           expression
     )
 
@@ -4336,7 +4613,9 @@ private final class ConstructionSession(val options: EmitOptions):
       "analog-signal"
     )
     val analog =
-      kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
+      snapshot.interfaceContracts.exists(_.members.exists(member =>
+        Set("conservative", "signal-flow").contains(member.protocol)
+      )) || kinds.exists(analogKinds.contains) || snapshot.continuousOperators.nonEmpty ||
         snapshot.waveformOperators.nonEmpty || snapshot.noiseOperators.nonEmpty ||
         snapshot.transferOperators.nonEmpty || snapshot.analogFunctions.nonEmpty ||
         snapshot.analogRegions.nonEmpty ||
@@ -4384,7 +4663,6 @@ private final class ConstructionSession(val options: EmitOptions):
       materializeConservativeIntents(base)
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
-    val modules = snapshots(resolved)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
     val rootSources = operations.iterator.flatMap(_.values.collect {
       case root: InstanceArrayRootRecord => root
@@ -4399,7 +4677,49 @@ private final class ConstructionSession(val options: EmitOptions):
         sourceByPath.get(expressionPath(index.sourceUses.head._1)).map(source =>
           SourceMapEntry(conservativeEndpointPath(index), source)
         )
-    val abi = interfaceAbi(resolved)
+    val interfaceCapture = DigitalInterfaceContract.capture(
+      records.valuesIterator.flatMap(module =>
+        module.declarations.iterator.map(declaration =>
+          val validatedTypes = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
+          DigitalInterfaceContract.Declaration(
+            declaration.value,
+            declarationPath(declaration.reference),
+            modulePath(module.handle),
+            declarationDomain(declaration, resolved),
+            declaration.value match
+              case array: InterfaceArray[?, ?] =>
+                Vector(renderShapeDimension(array.count, module.handle))
+              case _ => Vector.empty,
+            dataType =>
+              if !validatedTypes.containsKey(dataType) then
+                validateShapeType(dataType, module.handle, cardinality = true)
+                validatedTypes.put(dataType, java.lang.Boolean.TRUE)
+              renderType(dataType, module.handle)
+            ,
+            dataType =>
+              validateShapeType(dataType, module.handle, cardinality = true, storageContext = true),
+            value =>
+              if CandidateRuntime.expressionDataType(value).exists(isBoundaryCapability) then
+                validateBoundarySource(value, declaration, resolved)
+          )
+        )
+      ).toVector,
+      operations.toVector.map(operation =>
+        DigitalInterfaceContract.Operation(
+          operation.kind,
+          operation.values,
+          modulePath(operation.owner)
+        )
+      ),
+      pathOf,
+      value =>
+        value match
+          case reference: AnyRef =>
+            Option(declarationIds.get(reference)).map(_.module)
+              .orElse(Option(expressionIds.get(reference)).map(_.module)).map(modulePath)
+          case _ => None
+    )
+    val abi = interfaceCapture.abi
     val arrayBindings = conservativeArrayBindingRecords
     val topologyEdges = topologyRecords()
     val recordedAnalogSemantics = analogSemanticSnapshot()
@@ -4420,7 +4740,14 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
           .toVector.sortBy(_.path)
         )
+    val digitalCapture = digitalValueSnapshots(interfaceCapture)
+    val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(
+      digitalAssignments = digitalAssignmentSnapshots(resolved),
+      interfaceContracts = interfaceCapture.interfaces,
+      digitalConnectivity = interfaceCapture.connectivity,
+      enumDefinitions = digitalCapture._1,
+      digitalExpressions = digitalCapture._2,
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
         case (parameter, value) =>
@@ -4437,7 +4764,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 "root constructor binding is not a declaration"
               )
           declarationName(reference) -> renderAny(value, rootHandle),
-      parameterExpressions = parameterExpressionSnapshots(),
+      parameterExpressions = parameterExpressionSnapshots(interfaceCapture.dataTypes),
       modules = modules,
       interfaceAbi = abi,
       resolvedNets = resolvedNets(),

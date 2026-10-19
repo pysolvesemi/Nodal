@@ -1,7 +1,8 @@
 package nodal
 
-/** Public Interface, inout, AMS, and pipeline surface frozen by Increment 15. Construction,
-  * scheduling, lowering, resolution, topology, and simulation remain inert.
+/** Public Interface, inout, AMS, and pipeline surface frozen by Increment 15. F54 captures typed
+  * digital connectivity; scheduling, target lowering and simulation have separate implementation
+  * owners.
   */
 
 /** Directionless, storable record candidate. */
@@ -62,8 +63,12 @@ object InterfaceMember:
 
 final class InterfaceType[I <: Interface] private[nodal] (
     val name: String,
-    val members: Seq[InterfaceMember]
-)
+    val members: Seq[InterfaceMember],
+    private[nodal] val roles: Vector[Role[?]] = Vector.empty
+):
+  /** Bind actual named role maps for nested Interface applications without global registration. */
+  def withRoles(bindings: Role[?]*): InterfaceType[I] =
+    new InterfaceType(name, members, roles ++ bindings)
 
 object Interface:
   def apply[I <: Interface](name: String, members: InterfaceMember*): InterfaceType[I] =
@@ -227,7 +232,8 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     val role: Role[R],
     val name: String,
     val domain: ClockDomain,
-    private[nodal] val exported: Boolean
+    private[nodal] val exported: Boolean,
+    private[nodal] val origin: Option[InterfacePort[I, ?]] = None
 ):
   if exported then
     CandidateRuntime.declare(
@@ -274,17 +280,21 @@ def interfaceArray[I <: Interface, R <: RoleKind](
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
   def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
+    DigitalInterfaceContract.requireInvertible(endpoint)
     val invertedRole = new Role[inverse.Out](
       inverse.inverse.name,
       endpoint.role.access.map(RoleAccess.inverted)
     )
-    new InterfacePort(
+    val view = new InterfacePort(
       endpoint.definition,
       invertedRole,
       s"${endpoint.name}.inverse",
       endpoint.domain,
-      exported = false
+      exported = false,
+      origin = Some(endpoint)
     )
+    ConstructionKernel.operation("interface-invert", endpoint, view)
+    view
 
   def monitorView: InterfacePort[I, MonitorRole] =
     new InterfacePort(
@@ -292,7 +302,8 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
       monitor,
       s"${endpoint.name}.monitor",
       endpoint.domain,
-      exported = false
+      exported = false,
+      origin = Some(endpoint)
     )
 
   def connectExact[OtherRole <: RoleKind](
@@ -301,9 +312,10 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
     ConstructionKernel.operation("interface-connect", endpoint, other)
 
   def driveMember[A <: Data](member: String, value: Expr[A])(using RoleCanDrive[R]): Unit =
-    CandidateRuntime.statement(endpoint, member, value)
+    ConstructionKernel.operation("interface-drive", endpoint, member, value)
 
-  def observeMember(member: String): Unit = CandidateRuntime.statement(endpoint, member)
+  def observeMember(member: String): Unit =
+    ConstructionKernel.operation("interface-observe", endpoint, member)
 
 enum InterfaceLayout:
   case PortableFlattened
@@ -364,7 +376,7 @@ final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     )
   )
 
-  def read: Expr[A] = CandidateRuntime.expr(this, "read")
+  def read: Expr[A] = DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
 
 trait ArbitraryDrive[M <: DriveMode]
 
@@ -410,8 +422,8 @@ extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
   def split: TriStateCarrier[A, M] =
     new TriStateCarrier(
       endpoint.read,
-      CandidateRuntime.expr(endpoint, "write"),
-      CandidateRuntime.expr(endpoint, "enable"),
+      DigitalInterfaceContract.netExpression("digital_net_write_view", endpoint, endpoint.dataType),
+      DigitalInterfaceContract.netExpression("digital_net_enable_view", endpoint, Bool),
       endpoint.mode
     )
 

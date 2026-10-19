@@ -23,29 +23,30 @@ object SInt:
     def >>(amount: Int): Expr[SInt] = CandidateRuntime.expr(left, amount)
 
 extension (value: Int)
-  def S(width: Int): Expr[SInt] = CandidateRuntime.expr(value, width)
-  def S(width: Expr[Integer]): Expr[SInt] = CandidateRuntime.expr(value, width)
+  def S(width: Int): Expr[SInt] = CandidateRuntime.literalSInt(value, width)
+  def S(width: Expr[Integer]): Expr[SInt] = DigitalScalarContract.literal("SInt", value, width)
 
 extension (left: Expr[UInt])
   @targetName("uintLogicalShiftRight")
   def >>(amount: Int): Expr[UInt] = CandidateRuntime.expr(left, amount)
 
 extension [A <: Data](value: Expr[A])
-  def extend(width: Int): Expr[A] = CandidateRuntime.expr(value, width, "extend")
-  def truncate(width: Int): Expr[A] = CandidateRuntime.expr(value, width, "truncate")
-  def wrap(width: Int): Expr[A] = CandidateRuntime.expr(value, width, "wrap")
-  def saturate(width: Int): Expr[A] = CandidateRuntime.expr(value, width, "saturate")
-  def resizeChecked(width: Int): Expr[A] = CandidateRuntime.expr(value, width, "checked")
+  def extend(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "extend")
+  def truncate(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "truncate")
+  def wrap(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "wrap")
+  def saturate(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "saturate")
+  def resizeChecked(width: Int): Expr[A] =
+    DigitalScalarContract.resize(value, width, "resize_checked")
   def named(name: String): Expr[A] = CandidateRuntime.expr(value, name, "named")
   def keep(reason: String): Expr[A] = CandidateRuntime.expr(value, reason, "keep")
 
 extension (value: Expr[UInt])
-  def toSigned: Expr[SInt] = CandidateRuntime.expr(value, "toSigned")
-  def reinterpretSigned: Expr[SInt] = CandidateRuntime.expr(value, "reinterpretSigned")
+  def toSigned: Expr[SInt] = DigitalScalarContract.toSigned(value)
+  def reinterpretSigned: Expr[SInt] = DigitalScalarContract.reinterpret(value, signed = true)
 
 extension (value: Expr[SInt])
-  def toUnsigned: Expr[UInt] = CandidateRuntime.expr(value, "toUnsigned")
-  def reinterpretUnsigned: Expr[UInt] = CandidateRuntime.expr(value, "reinterpretUnsigned")
+  def toUnsigned: Expr[UInt] = DigitalScalarContract.toUnsigned(value)
+  def reinterpretUnsigned: Expr[UInt] = DigitalScalarContract.reinterpret(value, signed = false)
 
 /** Static or symbolic dimension accepted by structural candidates. */
 type Dimension = Int | Expr[Integer]
@@ -219,22 +220,6 @@ final case class EmitQuality(
     waivers: Seq[CheckWaiver] = Seq.empty
 )
 
-/** Native Scala enum derivation and canonical hardware encoding candidate. */
-trait HwEnum[A]
-
-object HwEnum:
-  def derived[A]: HwEnum[A] = new HwEnum[A] {}
-
-final case class EnumEncoding[A](values: Map[A, BigInt])
-
-def enumEncoding[A](values: (A, BigInt)*)(using HwEnum[A]): EnumEncoding[A] =
-  EnumEncoding(values.toMap)
-
-final case class DecodedEnum[A](value: A, valid: Expr[Bool])
-
-def decodeEnum[A](bits: Expr[Bits], default: A)(using HwEnum[A]): DecodedEnum[A] =
-  DecodedEnum(default, CandidateRuntime.expr(bits, default))
-
 enum FsmEncoding:
   case Compact, OneHot, Gray, Auto
 
@@ -247,7 +232,9 @@ enum IllegalStatePolicy:
 final class FsmDefinition[S] private[nodal] (val name: String)
 
 object FsmDefinition:
-  def apply[S](name: String)(using HwEnum[S]): FsmDefinition[S] = new FsmDefinition(name)
+  def apply[S](name: String)(using evidence: HwEnum[S]): FsmDefinition[S] =
+    val _ = evidence
+    new FsmDefinition(name)
 
 final class FsmBuilder[S] private[nodal] (
     val definition: FsmDefinition[S],
@@ -276,6 +263,7 @@ def fsm[S](
     initial: S,
     encoding: FsmEncoding = FsmEncoding.Compact,
     illegalState: IllegalStatePolicy = IllegalStatePolicy.Error
-)(body: FsmBuilder[S] => Unit)(using HwEnum[S]): Unit =
+)(body: FsmBuilder[S] => Unit)(using evidence: HwEnum[S]): Unit =
+  val _ = evidence
   val builder = new FsmBuilder(definition, initial, encoding, illegalState)
   CandidateRuntime.statement(builder, body)

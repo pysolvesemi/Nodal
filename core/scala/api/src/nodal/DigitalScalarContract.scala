@@ -1,0 +1,237 @@
+package nodal
+
+import java.util.IdentityHashMap
+
+/** Exact source-level scalar conversions. Width proofs belong to the construction session;
+  * conversion operation names and typed operand edges are the target-neutral semantic contract.
+  */
+private[nodal] object DigitalScalarContract:
+  val Prefix: String = "digital_"
+  val Operations: Set[String] = Set(
+    "digital_extend",
+    "digital_truncate",
+    "digital_wrap",
+    "digital_saturate",
+    "digital_resize_checked",
+    "digital_to_signed",
+    "digital_to_unsigned",
+    "digital_reinterpret_signed",
+    "digital_reinterpret_unsigned",
+    "digital_to_real"
+  )
+
+  private def fail(number: Int, message: String): Nothing =
+    DigitalValueContract.fail(number, message)
+
+  private def scalarType(value: Expr[?]): KernelTypeDescriptor =
+    val descriptor = CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor)
+      .getOrElse(fail(5, "digital conversion requires an operand with an exact scalar type"))
+    if !Set("Bits", "UInt", "SInt").contains(descriptor.kind) then
+      fail(5, s"digital conversion does not support '${descriptor.kind}'")
+    descriptor
+
+  private def widthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
+    if descriptor.arguments.size != 1 then
+      fail(1, "digital scalar type requires exactly one width")
+    val bounds = descriptor.arguments.head match
+      case width: Int => (width.toLong, width.toLong)
+      case width: KernelExpr[?]
+          if width.resultType.contains(KernelTypeDescriptor("Integer")) &&
+            width.literal.exists(literal =>
+              literal.kind == "integer" && literal.dataType == KernelTypeDescriptor("Integer")
+            ) =>
+        val literal = width.literal.get.value.toIntOption.getOrElse(
+          fail(1, "digital width requires a representable public Integer literal")
+        )
+        (literal.toLong, literal.toLong)
+      case _: Expr[?] => ConstructionKernel.digitalWidthBounds(descriptor).getOrElse(
+          fail(6, "symbolic digital conversion requires an active construction width proof")
+        )
+      case _ => fail(1, "digital width requires a static Integer expression")
+    if bounds._1 <= 0L || bounds._2 < bounds._1 then
+      fail(1, "digital width must be positive for every legal parameter value")
+    bounds
+
+  private def requiredWidth(kind: String, value: BigInt): Long = kind match
+    case "SInt" => value.bitLength.toLong + 1L
+    case _ if value >= 0 => math.max(1, value.bitLength).toLong
+    case _ => Long.MaxValue
+
+  /** Constant proof only: never inspect a parameter default or a signal initializer. Large bit
+    * patterns are not allocated just to prove a conversion; an absent proof rejects checked
+    * narrowing. The finite traversal bound matches the captured digital expression profile.
+    */
+  private def knownValue(value: Expr[?]): Option[BigInt] =
+    val cache = new IdentityHashMap[Expr[?], Option[BigInt]]()
+    val active = new IdentityHashMap[Expr[?], java.lang.Boolean]()
+    def visit(current: Expr[?], depth: Int): Option[BigInt] =
+      if depth > 128 || active.containsKey(current) then None
+      else if cache.containsKey(current) then cache.get(current)
+      else
+        active.put(current, true)
+        val result = current match
+          case expression: KernelExpr[?] =>
+            expression.literal match
+              case Some(literal)
+                  if literal.kind == "integer" && expression.operation.contains("integer") &&
+                    expression.resultType.contains(literal.dataType) &&
+                    Set("Bits", "UInt", "SInt").contains(literal.dataType.kind) =>
+                literal.value.toIntOption.map(BigInt(_)).filter(value =>
+                  requiredWidth(literal.dataType.kind, value) <= widthBounds(literal.dataType)._1
+                )
+              case None
+                  if expression.operation.exists(Operations.contains) &&
+                    expression.operands.size == 1 =>
+                expression.operands.head match
+                  case operand: Expr[?] =>
+                    visit(operand, depth + 1).flatMap: constant =>
+                      val descriptor = expression.resultType.getOrElse(
+                        fail(5, "digital conversion result lacks its exact scalar type")
+                      )
+                      expression.operation.get match
+                        case "digital_extend" | "digital_resize_checked" |
+                            "digital_to_signed" | "digital_to_unsigned" => Some(constant)
+                        case "digital_to_real" => None
+                        case operation =>
+                          val (minimum, maximum) = widthBounds(descriptor)
+                          if requiredWidth(descriptor.kind, constant) <= minimum then Some(constant)
+                          else if minimum != maximum || maximum > 4096L then None
+                          else
+                            val width = maximum.toInt
+                            val modulus = BigInt(1) << width
+                            if operation == "digital_saturate" then
+                              val lower = if descriptor.kind == "SInt" then -(modulus >> 1)
+                              else BigInt(0)
+                              val upper = if descriptor.kind == "SInt" then (modulus >> 1) - 1
+                              else modulus - 1
+                              Some(constant.max(lower).min(upper))
+                            else
+                              val bits = ((constant % modulus) + modulus) % modulus
+                              Some(
+                                if descriptor.kind == "SInt" && bits.testBit(width - 1) then
+                                  bits - modulus
+                                else bits
+                              )
+                  case _ => None
+              case _ => None
+          case _ => None
+        active.remove(current)
+        cache.put(current, result)
+        result
+    visit(value, 0)
+
+  private def nonnegative(value: Expr[?]): Boolean =
+    if knownValue(value).exists(_ >= 0) then true
+    else
+      var current = value
+      var depth = 0
+      var result: Option[Boolean] = None
+      while depth <= 128 && result.isEmpty do
+        val descriptor = scalarType(current)
+        if descriptor.kind == "UInt" || descriptor.kind == "Bits" then result = Some(true)
+        else
+          current match
+            case expression: KernelExpr[?] if expression.operands.size == 1 =>
+              expression.operation match
+                case Some("digital_to_signed") => result = Some(true)
+                case Some("digital_extend" | "digital_resize_checked" | "digital_saturate") =>
+                  expression.operands.head match
+                    case operand: Expr[?] => current = operand
+                    case _ => result = Some(false)
+                case _ => result = Some(false)
+            case _ => result = Some(false)
+        depth += 1
+      result.getOrElse(false)
+
+  private def emit[A <: Data](
+      operation: String,
+      value: Expr[?],
+      descriptor: KernelTypeDescriptor
+  ): Expr[A] =
+    val expression = new KernelExpr[A](
+      Vector(value),
+      resultType = Some(descriptor),
+      operation = Some(operation)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def literal[A <: Data](kind: String, value: Int, width: Expr[Integer]): Expr[A] =
+    val descriptor = KernelTypeDescriptor(kind, Vector(width))
+    DigitalValueContract.validateLiteral(kind, BigInt(value), widthBounds(descriptor)._1)
+    val expression = new KernelExpr[A](
+      Vector(value, width),
+      resultType = Some(descriptor),
+      literal = Some(KernelLiteral("integer", value.toString, descriptor)),
+      operation = Some("integer")
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
+  def resize[A <: Data](value: Expr[A], width: Int, policy: String): Expr[A] =
+    val source = scalarType(value)
+    val (minimum, maximum) = widthBounds(source)
+    val result = source.copy(arguments = Vector(width))
+    val _ = widthBounds(result)
+    policy match
+      case "extend" if width.toLong < maximum =>
+        fail(7, "extend must not narrow for any legal source width")
+      case "truncate" if width.toLong > minimum =>
+        fail(7, "truncate must not widen for any legal source width")
+      case "resize_checked"
+          if width.toLong < maximum &&
+            !knownValue(value).exists(requiredWidth(source.kind, _) <= width.toLong) =>
+        fail(8, "checked resize requires a proof that every source value fits the result width")
+      case "extend" | "truncate" | "wrap" | "saturate" | "resize_checked" => ()
+      case _ => fail(5, s"unsupported digital resize policy '$policy'")
+    emit(s"$Prefix$policy", value, result)
+
+  def toSigned(value: Expr[UInt]): Expr[SInt] =
+    val source = scalarType(value)
+    if source.kind != "UInt" then fail(5, "toSigned requires an unsigned numeric operand")
+    val _ = widthBounds(source)
+    val width = source.arguments.head match
+      case literal: Int if literal < Int.MaxValue => literal + 1
+      case _: Int => fail(7, "numeric signed conversion exceeds the static width representation")
+      case symbolic: Expr[?] =>
+        CandidateRuntime.integerExpr(
+          "analog_add",
+          symbolic.asInstanceOf[Expr[Integer]],
+          CandidateRuntime.literalInteger(1)
+        )
+      case _ => fail(1, "digital width requires a static Integer expression")
+    val result = KernelTypeDescriptor("SInt", Vector(width))
+    val _ = widthBounds(result)
+    emit("digital_to_signed", value, result)
+
+  def toUnsigned(value: Expr[SInt]): Expr[UInt] =
+    val source = scalarType(value)
+    if source.kind != "SInt" then fail(5, "toUnsigned requires a signed numeric operand")
+    val _ = widthBounds(source)
+    if !nonnegative(value) then
+      fail(8, "numeric unsigned conversion requires a proof that every source value is nonnegative")
+    emit("digital_to_unsigned", value, source.copy(kind = "UInt"))
+
+  def reinterpret[A <: Data](value: Expr[?], signed: Boolean): Expr[A] =
+    val source = scalarType(value)
+    val expected = if signed then "UInt" else "SInt"
+    if source.kind != expected then
+      fail(5, s"signedness reinterpretation requires a $expected operand")
+    val _ = widthBounds(source)
+    val kind = if signed then "SInt" else "UInt"
+    emit(
+      if signed then "digital_reinterpret_signed" else "digital_reinterpret_unsigned",
+      value,
+      source.copy(kind = kind)
+    )
+
+  /** Explicit numeric conversion uses binary64 round-to-nearest, ties-to-even. Rounding is
+    * permitted; overflow to infinity is not. A width up to 1023 proves finite conversion for the
+    * entire unsigned source range; larger widths require an exact constant proof.
+    */
+  def toReal(value: Expr[UInt]): Expr[Real] =
+    val source = scalarType(value)
+    if source.kind != "UInt" then fail(5, "toReal requires an unsigned numeric operand")
+    if widthBounds(source)._2 > 1023L && !knownValue(value).exists(_.toDouble.isFinite) then
+      fail(8, "numeric Real conversion requires a proof of finite binary64 representation")
+    emit("digital_to_real", value, KernelTypeDescriptor("Real"))

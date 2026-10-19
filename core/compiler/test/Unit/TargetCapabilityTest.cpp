@@ -6,6 +6,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "nodal/Backend/AnalogVerticalSlice.h"
 #include "nodal/Backend/Backend.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
@@ -277,16 +278,45 @@ bool testSharedHierarchyAndDeepTypeScale(Harness &test) {
     analog = nodal::ShapedType::get(&test.context, "2", analog);
     digital = nodal::ShapedType::get(&test.context, "2", digital);
   }
-  // Repeated references must not require hierarchy expansion, and a deep
-  // wrapper must neither hide its digital element nor make analog data digital.
+  // Classification remains independent of canonical validity. The historical
+  // 128 Vec(2) wrappers exceed F54's 128-node path and signed-i64 footprint;
+  // they must still reveal their leaf capability without hierarchy expansion.
+  for (mlir::Type oversized : {analog, digital}) {
+    carrier.getResult(0).setType(oversized);
+    test.clear();
+    if (!test.require(mlir::failed(mlir::verify(*module)) &&
+                          llvm::StringRef(test.diagnostic).contains("NODAL-DIGITAL-054-004") &&
+                          llvm::StringRef(test.diagnostic).contains("recursive type nesting"),
+                      "oversized wrappers must reject the canonical depth limit") ||
+        !test.gate(*module, "verilog-a", oversized == analog))
+      return false;
+  }
+  mlir::Type overflow = nodal::UIntType::get(&test.context, 8);
+  for (unsigned depth = 0; depth != 64; ++depth)
+    overflow = nodal::ShapedType::get(&test.context, "2", overflow);
+  carrier.getResult(0).setType(overflow);
+  test.clear();
+  if (!test.require(
+          mlir::failed(mlir::verify(*module)) &&
+              llvm::StringRef(test.diagnostic).contains("recursive digital bit footprint"),
+          "finite-depth oversized footprint must reject independently"))
+    return false;
+  // Deep legal singleton wrappers exercise native validity at the exact shared
+  // depth budget, with no exponential logical storage footprint.
+  analog = mlir::Float64Type::get(&test.context);
+  digital = nodal::UIntType::get(&test.context, 8);
+  for (unsigned depth = 1; depth < nodal::digitalTypeMaximumDepth; ++depth) {
+    analog = nodal::ShapedType::get(&test.context, "1", analog);
+    digital = nodal::ShapedType::get(&test.context, "1", digital);
+  }
   carrier.getResult(0).setType(analog);
   if (!test.require(mlir::succeeded(mlir::verify(*module)),
-                    "deep analog wrapper witness must remain native-valid") ||
+                    "bounded deep analog wrapper witness must remain native-valid") ||
       !test.gate(*module, "verilog-a", true))
     return false;
   carrier.getResult(0).setType(digital);
   if (!test.require(mlir::succeeded(mlir::verify(*module)),
-                    "deep digital wrapper witness must remain native-valid"))
+                    "bounded deep digital wrapper witness must remain native-valid"))
     return false;
   std::string previous;
   for (unsigned repeat = 0; repeat != 2; ++repeat) {

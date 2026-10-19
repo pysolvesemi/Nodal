@@ -503,6 +503,104 @@ int checkGeneratedWaveformParameterLookup(mlir::MLIRContext &context) {
   return 0;
 }
 
+int checkSymbolicDigitalParameters(mlir::MLIRContext &context) {
+  auto fixture = [](llvm::StringRef kind, llvm::StringRef value, llvm::StringRef carrier = "i64",
+                    int64_t lower = 4, int64_t upper = 8, llvm::StringRef rootBindings = "",
+                    llvm::StringRef instanceBindings = "", llvm::StringRef extra = "") {
+    std::string source = "module";
+    if (!rootBindings.empty())
+      source += " attributes {nodal.root.module = @Child, nodal.root.parameter_bindings = {" +
+                rootBindings.str() + "}}";
+    source +=
+        R"mlir( {
+      "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+        "nodal.parameter"() <{classification = "structural", default_value = )mlir" +
+        std::to_string(upper) +
+        R"mlir( : i64, metadata = {}, parameter_kind = "integer", sym_name = "W", type = i64, variability = "symbolic"}> : () -> ()
+        %low = "nodal.const_literal"() <{metadata = {}, spelling = ")mlir" +
+        std::to_string(lower) + "\", value = " + std::to_string(lower) +
+        R"mlir( : i64}> : () -> i64
+        %high = "nodal.const_literal"() <{metadata = {}, spelling = ")mlir" +
+        std::to_string(upper) + "\", value = " + std::to_string(upper) +
+        R"mlir( : i64}> : () -> i64
+        "nodal.parameter_constraint"(%low, %high) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, parameter = @W, metadata = {}}> : (i64, i64) -> ()
+        "nodal.parameter_envelope"() <{effects = ["width"], parameter = @W, policy = "static_generate", metadata = {}}> : () -> ()
+      )mlir";
+    const std::string type = "!nodal.digital<\"" + kind.str() + "\", \"W\">";
+    source +=
+        "\"nodal.parameter\"() <{classification = \"ordinary\", default_value = " + value.str() +
+        " : " + carrier.str() +
+        ", metadata = {}, parameter_kind = \"integer\", sym_name = \"VALUE\", type = " + type +
+        ", variability = \"symbolic\"}> : () -> ()\n";
+    source += "%value = \"nodal.const_literal\"() <{metadata = {}, spelling = \"" + value.str() +
+              "\", value = " + value.str() + " : " + carrier.str() + "}> : () -> " + type + "\n";
+    source += "\"nodal.parameter_value\"(%value) <{metadata = {}, parameter = @VALUE}> : (" + type +
+              ") -> ()\n" + extra.str() + "}) : () -> ()\n";
+    if (!instanceBindings.empty())
+      source += "\"nodal.module\"() <{metadata = {}, sym_name = \"Top\"}> ({"
+                "\"nodal.instance\"() <{domain_bindings = {}, metadata = {}, module = @Child, "
+                "parameter_bindings = {" +
+                instanceBindings.str() + "}, sym_name = \"child\"}> : () -> ()}) : () -> ()\n";
+    return source + "}";
+  };
+  unsigned failures = 0;
+  auto check = [&](llvm::StringRef name, const std::string &source, bool expected) {
+    auto module =
+        mlir::parseSourceString<mlir::ModuleOp>(source, mlir::ParserConfig(&context, false));
+    bool good = false;
+    if (module) {
+      const bool actual = mlir::succeeded(nodal::verifyParameterModel(*module)) &&
+                          mlir::succeeded(mlir::verify(*module));
+      good = actual == expected;
+    }
+    failures += !good;
+    (good ? llvm::outs() : llvm::errs())
+        << "SYMBOLIC_DIGITAL_PARAMETER_" << (good ? "PASS " : "FAIL ") << name << '\n';
+  };
+  check("unsigned_all_widths", fixture("uint", "15"), true);
+  check("signed_minimum", fixture("sint", "-8"), true);
+  check("signed_maximum", fixture("sint", "7"), true);
+  check("unsigned_default_only_fit_reject", fixture("uint", "16"), false);
+  check("signed_underflow_reject", fixture("sint", "-9"), false);
+  check("signed_overflow_reject", fixture("sint", "8"), false);
+  check("negative_unsigned_reject", fixture("uint", "-1"), false);
+  check("minimum_width_root", fixture("uint", "15", "i64", 4, 8, "W = 4 : i64"), true);
+  check("maximum_width_root", fixture("uint", "15", "i64", 4, 8, "W = 8 : i64"), true);
+  check("illegal_width_root", fixture("uint", "15", "i64", 4, 8, "W = 3 : i64"), false);
+  check("legal_unsigned_root", fixture("uint", "1", "i64", 4, 8, "VALUE = 15 : i64"), true);
+  check("illegal_unsigned_root", fixture("uint", "1", "i64", 4, 8, "VALUE = 16 : i64"), false);
+  check("legal_signed_root", fixture("sint", "0", "i64", 4, 8, "VALUE = -8 : i64"), true);
+  check("illegal_signed_root", fixture("sint", "0", "i64", 4, 8, "VALUE = -9 : i64"), false);
+  check("legal_unsigned_instance", fixture("uint", "1", "i64", 4, 8, "", "VALUE = 15 : i64"), true);
+  check("illegal_unsigned_instance", fixture("uint", "1", "i64", 4, 8, "", "VALUE = 16 : i64"),
+        false);
+  check("illegal_signed_instance", fixture("sint", "0", "i64", 4, 8, "", "VALUE = 8 : i64"), false);
+  const llvm::StringRef wide = "340282366920938463463374607431768211455";
+  check("unsigned_highbit_carrier", fixture("uint", wide, "ui128", 128, 129), true);
+  check("unsigned_highbit_signed_destination", fixture("sint", wide, "ui128", 129, 130), true);
+  check("unsigned_highbit_signed_overflow", fixture("sint", wide, "ui128", 128, 129), false);
+  auto missingRange = fixture("uint", "1");
+  const auto begin = missingRange.find("        \"nodal.parameter_constraint\"");
+  const auto end = missingRange.find('\n', begin);
+  missingRange.erase(begin, end - begin + 1);
+  check("unbounded_width_reject", missingRange, false);
+  auto wrongOwner = fixture("uint", "1");
+  for (auto position = wrongOwner.find("\"W\">"); position != std::string::npos;
+       position = wrongOwner.find("\"W\">", position)) {
+    wrongOwner.replace(position, 4, "\"Other.W\">");
+    position += 10;
+  }
+  check("unowned_width_reject", wrongOwner, false);
+  const std::string symbolic = "!nodal.digital<\"uint\", \"W\">";
+  check("generic_symbolic_arithmetic_reject",
+        fixture("uint", "1", "i64", 4, 8, "", "",
+                "%sum = \"nodal.const_expr\"(%value, %value) <{metadata = {}, operator_name = "
+                "\"add\"}> : (" +
+                    symbolic + ", " + symbolic + ") -> " + symbolic + "\n"),
+        false);
+  return failures ? fail("symbolic digital parameter cases failed") : 0;
+}
+
 } // namespace
 
 int main() {
@@ -510,8 +608,8 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  if (checkInstanceParameterQueries(context) || checkGeneratedParameterQueries(context) ||
-      checkGeneratedWaveformParameterLookup(context))
+  if (checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
+      checkGeneratedParameterQueries(context) || checkGeneratedWaveformParameterLookup(context))
     return 1;
 
   auto valid = mlir::parseSourceString<mlir::ModuleOp>(kValid, &context);

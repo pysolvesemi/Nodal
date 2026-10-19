@@ -36,6 +36,50 @@ def Nodal_SIntType : Nodal_Type<"SInt", "sint"> {
   let genVerifyDecl = 1;
 }
 
+def Nodal_ParametricIntegerType : Nodal_Type<"ParametricInteger", "digital"> {
+  let summary = "Finite-width digital scalar with an owned symbolic width";
+  let description = [{
+    Kind is bits, uint, or sint. The width token names a structural parameter or
+    typed constant expression in the using module. It never contains a default
+    substitution or an untyped arithmetic expression. Concrete widths retain
+    the Bits, UInt, and SInt representations.
+  }];
+  let parameters = (ins
+    StringRefParameter<"bits, uint, or sint">:$kind,
+    StringRefParameter<"owned canonical static width token">:$width
+  );
+  let assemblyFormat = "`<` $kind `,` $width `>`";
+  let genVerifyDecl = 1;
+}
+
+def Nodal_ControlCapabilityType : Nodal_Type<"ControlCapability", "capability"> {
+  let summary = "Clock/reset boundary capability, distinct from Boolean and storage values";
+  let description = [{
+    Exact clock or reset identity on typed boundary transport. This carrier does
+    not encode timing, execution, CDC/RDC policy or reset behavior. It cannot be
+    manufactured by literals, scalar operations, selection or ordinary storage.
+  }];
+  let parameters = (ins StringRefParameter<"clock or reset">:$kind);
+  let assemblyFormat = "`<` $kind `>`";
+  let genVerifyDecl = 1;
+}
+
+def Nodal_StructType : Nodal_Type<"Struct", "struct"> {
+  let summary = "Directionless recursive digital value with ordered named fields";
+  let description = [{
+    Fields are an ordered ArrayAttr of dictionaries with exactly a name StringAttr
+    and a type TypeAttr. Field order, authored names, nested shape, and exact leaf
+    types are semantic identity; this representation neither flattens a value nor
+    selects storage or a target ABI layout.
+  }];
+  let parameters = (ins
+    StringRefParameter<"authored Struct name">:$name,
+    "::mlir::ArrayAttr":$fields
+  );
+  let assemblyFormat = "`<` $name `,` $fields `>`";
+  let genVerifyDecl = 1;
+}
+
 def Nodal_QuantityType : Nodal_Type<"Quantity", "quantity"> {
   let summary = "Target-neutral scalar analog quantity";
   let description = [{

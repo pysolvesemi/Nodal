@@ -14,6 +14,11 @@
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
@@ -22,6 +27,7 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -144,7 +150,8 @@ Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol) 
   return nullptr;
 }
 
-bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
+bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol,
+                               llvm::StringRef requiredEffect = "shape") {
   if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
     return false;
   for (Operation &operation : module->getRegion(0).front()) {
@@ -155,7 +162,8 @@ bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol) {
     if (!parameter || parameter.getValue() != symbol || !effects)
       continue;
     for (Attribute effect : effects)
-      if (auto value = llvm::dyn_cast<StringAttr>(effect); value && value.getValue() == "shape")
+      if (auto value = llvm::dyn_cast<StringAttr>(effect);
+          value && value.getValue() == requiredEffect)
         return true;
   }
   return false;
@@ -176,7 +184,8 @@ FailureOr<int64_t> staticShapeLiteral(Value value) {
 
 bool hasStaticShapeIndexDependencies(Value value, Operation *module,
                                      llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
-                                     bool directModule = false) {
+                                     bool directModule = false,
+                                     llvm::StringRef requiredEffect = "shape") {
   Operation *operation = value.getDefiningOp();
   if (!operation || operation->getParentOfType<nodal::ModuleOp>() != module || depth >= 512 ||
       (directModule && operation->getParentOp() != module) || !active.insert(operation).second)
@@ -189,12 +198,13 @@ bool hasStaticShapeIndexDependencies(Value value, Operation *module,
     Operation *parameter =
         reference ? findDirectModuleParameter(module, reference.getValue()) : nullptr;
     return parameter && nodal::isStructuralParameter(parameter) &&
-           parameterHasShapeEnvelope(module, reference.getValue());
+           parameterHasShapeEnvelope(module, reference.getValue(), requiredEffect);
   }
   if (!llvm::isa<nodal::ConstExprOp>(operation))
     return false;
   return llvm::all_of(operation->getOperands(), [&](Value operand) {
-    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule);
+    return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule,
+                                           requiredEffect);
   });
 }
 
@@ -241,7 +251,8 @@ Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath)
 }
 
 FailureOr<nodal::ParameterIntegerBounds>
-inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool directModule = false) {
+inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool directModule = false,
+                          llvm::StringRef requiredEffect = "shape") {
   int64_t literal = 0;
   if (!dimension.getAsInteger(10, literal)) {
     if (literal <= 0)
@@ -253,7 +264,7 @@ inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool dir
     auto type = parameter->getAttrOfType<TypeAttr>("type");
     auto bounds = nodal::inferParameterIntegerBounds(parameter);
     if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
-        !parameterHasShapeEnvelope(module, dimension) ||
+        !parameterHasShapeEnvelope(module, dimension, requiredEffect) ||
         !parameterHasPositiveFiniteRange(module, dimension) || failed(bounds) || bounds->lower <= 0)
       return failure();
     return *bounds;
@@ -264,7 +275,7 @@ inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool dir
       !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
     return failure();
   llvm::SmallPtrSet<Operation *, 16> active;
-  if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule))
+  if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule, requiredEffect))
     return failure();
   auto bounds = nodal::inferParameterIntegerBounds(value);
   if (failed(bounds) || bounds->lower <= 0)
@@ -1777,11 +1788,14 @@ LogicalResult nodal::verifyGeneratedAnalogOwnership(Operation *operation) {
 }
 
 FailureOr<nodal::StaticShapeDimension>
-nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension) {
+nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension,
+                                   llvm::StringRef requiredEffect) {
+  if (requiredEffect != "shape" && requiredEffect != "width")
+    return failure();
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || dimension.empty() ||
       dimension != dimension.trim())
     return failure();
-  auto bounds = inferShapeDimensionBounds(module, dimension, true);
+  auto bounds = inferShapeDimensionBounds(module, dimension, true, requiredEffect);
   if (failed(bounds))
     return failure();
   StaticShapeDimension result{*bounds};
@@ -1994,6 +2008,12 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(requireSingleBlock(getOperation())))
     return failure();
+  if (failed(verifyDigitalInterfaceModel(getOperation())) ||
+      failed(verifyDigitalTypeModel(getOperation())) ||
+      failed(verifyDigitalStorageModel(getOperation())) ||
+      failed(verifyEnumValueModel(getOperation())) ||
+      failed(verifyDigitalValueModel(getOperation())))
+    return failure();
   // Captured region and induction identities are module-local semantic keys.
   // Check each once; independent nested module definitions own their own keys.
   llvm::StringSet<> generatedRegions;
@@ -2105,6 +2125,8 @@ LogicalResult nodal::ConnectArrayOp::verify() {
 }
 
 LogicalResult nodal::InterfaceOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   if (failed(
           requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "interface symbol")))
     return failure();
@@ -2112,10 +2134,14 @@ LogicalResult nodal::InterfaceOp::verify() {
 }
 
 LogicalResult nodal::InterfaceRoleOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   return requireText(getOperation(), "kind", "interface role kind");
 }
 
 LogicalResult nodal::InterfaceMemberOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   const llvm::StringRef protocol = textAttr(getOperation(), "protocol");
   if (!oneOf(protocol, {"plain", "valid", "stream", "resolved", "conservative", "signal_flow"}))
     return emitOpError() << "unsupported interface protocol '" << protocol << "'";
@@ -2133,6 +2159,8 @@ LogicalResult nodal::InterfaceMemberOp::verify() {
 }
 
 LogicalResult nodal::InterfaceInstanceOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   if (failed(requireText(getOperation(), "role", "interface role")))
     return failure();
   if (!getOperation()->getAttrOfType<FlatSymbolRefAttr>("definition"))
@@ -2141,6 +2169,8 @@ LogicalResult nodal::InterfaceInstanceOp::verify() {
 }
 
 LogicalResult nodal::MemberAccessOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   if (failed(requireText(getOperation(), "path", "member path")))
     return failure();
   if (!getOperation()->getAttrOfType<FlatSymbolRefAttr>("instance"))
@@ -2149,6 +2179,8 @@ LogicalResult nodal::MemberAccessOp::verify() {
 }
 
 LogicalResult nodal::InterfaceAbiOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   if (failed(requireText(getOperation(), "logical_path", "logical path")) ||
       failed(requireText(getOperation(), "layout_policy", "layout policy")))
     return failure();
@@ -2193,6 +2225,11 @@ LogicalResult nodal::ResetRelationOp::verify() {
 }
 
 LogicalResult nodal::ConstantOp::verify() {
+  if (failed(verifyEnumLiteralOperation(getOperation())))
+    return failure();
+  if (getOperation()->getNumResults() == 1 &&
+      isDigitalScalarType(getOperation()->getResult(0).getType()))
+    return verifyDigitalLiteralOperation(getOperation());
   Attribute value = getOperation()->getAttr("value");
   if (!value || getOperation()->getNumResults() != 1 ||
       !attributeFits(value, getOperation()->getResult(0).getType()))
@@ -2761,10 +2798,14 @@ LogicalResult nodal::HardwareLoopOp::verify() {
 }
 
 LogicalResult nodal::ResolvedNetOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   return requireText(getOperation(), "name", "resolved-net name");
 }
 
 LogicalResult nodal::NetReadOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
   if (getOperation()->getResult(0).getType() != net.getElementType())
     return emitOpError("result must match resolved-net element type");
@@ -2772,6 +2813,8 @@ LogicalResult nodal::NetReadOp::verify() {
 }
 
 LogicalResult nodal::NetDriverOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
   auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
   auto driver = llvm::cast<nodal::DriverType>(getOperation()->getResult(0).getType());
   if (driver.getElementType() != net.getElementType())
@@ -2780,6 +2823,10 @@ LogicalResult nodal::NetDriverOp::verify() {
 }
 
 LogicalResult nodal::NetDriveOp::verify() {
+  if (hasDigitalInterfaceContract(getOperation()))
+    return verifyDigitalInterfaceOperation(getOperation());
+  if (!getOperation()->getOperand(3).getType().isSignlessInteger(1))
+    return emitOpError("legacy net drive enable must be i1");
   auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
   auto driver = llvm::cast<nodal::DriverType>(getOperation()->getOperand(1).getType());
   if (driver.getElementType() != net.getElementType() ||
@@ -3645,38 +3692,92 @@ LogicalResult nodal::TimingProvenanceOp::verify() {
 
 LogicalResult nodal::EnumOp::verify() {
   auto underlying = getOperation()->getAttrOfType<TypeAttr>("underlying_type");
-  if (!underlying || !finiteWidth(underlying.getValue()))
-    return emitOpError("underlying_type must be finite-width");
-  if (!oneOf(textAttr(getOperation(), "encoding"), {"sequential", "one_hot", "gray", "custom"}))
+  auto uintType =
+      underlying ? llvm::dyn_cast<nodal::UIntType>(underlying.getValue()) : nodal::UIntType();
+  if (!uintType || uintType.getWidth() < 1)
+    return emitOpError("underlying_type must be !nodal.uint with width at least one bit");
+  if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "enum symbol")))
+    return failure();
+  const llvm::StringRef encoding = textAttr(getOperation(), "encoding");
+  if (!oneOf(encoding, {"sequential", "one_hot", "gray", "custom"}))
     return emitOpError("unsupported enum encoding");
   if (failed(requireSingleBlock(getOperation())))
     return failure();
-  llvm::StringSet<> values;
-  unsigned cases = 0;
+  llvm::StringSet<> names;
+  llvm::DenseSet<llvm::APInt> values;
+  uint64_t cases = 0;
   for (Operation &operation : getOperation()->getRegion(0).front()) {
     auto enumCase = llvm::dyn_cast<nodal::EnumCaseOp>(&operation);
     if (!enumCase)
-      continue;
-    ++cases;
-    auto value = operation.getAttrOfType<IntegerAttr>("value");
-    if (!value || !integerFits(value, underlying.getValue()))
-      return enumCase.emitOpError("case value does not fit enum width");
-    llvm::SmallString<32> key;
-    value.getValue().toString(key, 10, true);
-    if (!values.insert(key).second)
+      return operation.emitOpError("enum body accepts only enum_case operations");
+    // Check cases here as well as independently: direct native callers must not
+    // rely on an earlier recursive verifier or on frontend validation.
+    if (failed(enumCase.verify()))
+      return failure();
+    if (!names.insert(textAttr(&operation, mlir::SymbolTable::getSymbolAttrName())).second)
+      return enumCase.emitOpError("duplicates an existing enum case name");
+    const llvm::APInt &code = operation.getAttrOfType<IntegerAttr>("value").getValue();
+    const unsigned activeBits = code.getActiveBits();
+    if (!values.insert(code.zextOrTrunc(activeBits ? activeBits : 1)).second)
       return enumCase.emitOpError("duplicates an existing enum value");
+
+    // Work with the supplied magnitude and the bounded declaration index, not
+    // an allocation or shift sized by the enum's potentially very large width.
+    if (encoding == "one_hot") {
+      if (!code.isPowerOf2() || code.logBase2() != cases)
+        return enumCase.emitOpError("one_hot code must equal 1 shifted by its declaration index");
+    } else if (encoding != "custom") {
+      llvm::APInt expected(64, cases);
+      if (encoding == "gray")
+        expected ^= expected.lshr(1);
+      if (!llvm::APInt::isSameValue(code, expected))
+        return enumCase.emitOpError() << encoding << " code does not match its declaration index";
+    }
+    if (cases == std::numeric_limits<uint64_t>::max())
+      return emitOpError("enum case count exceeds the supported declaration index");
+    ++cases;
   }
   if (cases == 0)
     return emitOpError("requires at least one enum case");
-  return success();
+  return verifyEnumDefinitionAbi(getOperation());
 }
+
+LogicalResult nodal::DigitalStorageOp::verify() {
+  return verifyDigitalStorageOperation(getOperation());
+}
+
+LogicalResult nodal::MemoryOp::verify() { return verifyDigitalMemoryOperation(getOperation()); }
+
+LogicalResult nodal::DigitalAssignOp::verify() {
+  return verifyDigitalAssignmentOperation(getOperation());
+}
+
+LogicalResult nodal::DigitalExprOp::verify() { return verifyDigitalValueOperation(getOperation()); }
+
+LogicalResult nodal::EnumExprOp::verify() { return verifyEnumValueOperation(getOperation()); }
 
 LogicalResult nodal::EnumCaseOp::verify() {
   if (failed(
           requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "enum case symbol")))
     return failure();
-  if (!getOperation()->getAttrOfType<IntegerAttr>("value"))
+  auto value = getOperation()->getAttrOfType<IntegerAttr>("value");
+  if (!value)
     return emitOpError("requires an integer value");
+  auto parent = llvm::dyn_cast_or_null<nodal::EnumOp>(getOperation()->getParentOp());
+  if (!parent)
+    return emitOpError("requires a direct enum parent");
+  auto underlying = parent->getAttrOfType<TypeAttr>("underlying_type");
+  auto uintType =
+      underlying ? llvm::dyn_cast<nodal::UIntType>(underlying.getValue()) : nodal::UIntType();
+  if (!uintType || uintType.getWidth() < 1)
+    return emitOpError("enum parent requires !nodal.uint with width at least one bit");
+  auto carrier = llvm::dyn_cast<IntegerType>(value.getType());
+  const llvm::APInt &code = value.getValue();
+  // Signless and signed attributes represent nonnegative numeric codes;
+  // explicitly unsigned carriers may also use their highest bit.
+  if (((!carrier || !carrier.isUnsigned()) && code.isNegative()) ||
+      static_cast<int64_t>(code.getActiveBits()) > uintType.getWidth())
+    return emitOpError("case value does not fit unsigned enum width");
   return success();
 }
 
@@ -3782,4 +3883,27 @@ LogicalResult nodal::AnalogUnknownOp::verify() {
 }
 LogicalResult nodal::AnalogEquationOp::verify() {
   return verifyAnalogEquationOperation(getOperation());
+}
+
+// F54 finite typed Interface and resolved-net contract.
+LogicalResult nodal::InterfaceConnectOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::InterfaceDriveOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::InterfaceObserveOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::NetReleaseOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::NetDriveLevelOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::NetPassThroughOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+LogicalResult nodal::NetSplitOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
 }

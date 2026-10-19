@@ -5,6 +5,8 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 
@@ -138,14 +140,29 @@ ConstantKind kindForType(Type type) {
     return integer.getWidth() == 1 ? ConstantKind::Boolean : ConstantKind::Integer;
   if (auto bits = llvm::dyn_cast<nodal::BitsType>(type))
     return bits.getWidth() == 1 ? ConstantKind::Boolean : ConstantKind::Integer;
-  if (llvm::isa<nodal::UIntType, nodal::SIntType, nodal::EnumType>(type))
+  if (llvm::isa<nodal::UIntType, nodal::SIntType, nodal::ParametricIntegerType, nodal::EnumType>(
+          type))
     return ConstantKind::Integer;
   return ConstantKind::Invalid;
+}
+
+bool hasEnumScalarEdge(Operation *operation) {
+  auto isEnum = [](Type type) { return llvm::isa<nodal::EnumType>(type); };
+  return llvm::any_of(operation->getOperandTypes(), isEnum) ||
+         llvm::any_of(operation->getResultTypes(), isEnum);
+}
+
+bool hasSymbolicDigitalEdge(Operation *operation) {
+  auto symbolic = [](Type type) { return llvm::isa<nodal::ParametricIntegerType>(type); };
+  return llvm::any_of(operation->getOperandTypes(), symbolic) ||
+         llvm::any_of(operation->getResultTypes(), symbolic);
 }
 
 bool integerTypeIsSigned(Type type) {
   if (llvm::isa<nodal::SIntType>(type))
     return true;
+  if (auto symbolic = llvm::dyn_cast<nodal::ParametricIntegerType>(type))
+    return symbolic.getKind() == "sint";
   if (auto integer = llvm::dyn_cast<IntegerType>(type))
     return integer.isSigned();
   return false;
@@ -165,30 +182,43 @@ llvm::StringRef inferredKind(Type type) {
   return {};
 }
 
-bool integerFits(IntegerAttr value, Type type) {
-  unsigned width = 0;
+bool integerFits(IntegerAttr value, Type type, Operation *module = nullptr) {
+  if (!value || !type)
+    return false;
+  if (nodal::isDigitalScalarType(type))
+    return nodal::digitalIntegerAttributeFits(value, type, module);
+  int64_t width = 0;
   bool isSigned = false;
   if (auto integer = llvm::dyn_cast<IntegerType>(type)) {
     width = integer.getWidth();
     isSigned = integer.isSigned();
   } else if (auto bits = llvm::dyn_cast<nodal::BitsType>(type)) {
-    width = static_cast<unsigned>(bits.getWidth());
+    width = bits.getWidth();
   } else if (auto valueType = llvm::dyn_cast<nodal::UIntType>(type)) {
-    width = static_cast<unsigned>(valueType.getWidth());
+    width = valueType.getWidth();
   } else if (auto valueType = llvm::dyn_cast<nodal::SIntType>(type)) {
-    width = static_cast<unsigned>(valueType.getWidth());
+    width = valueType.getWidth();
     isSigned = true;
   } else if (auto valueType = llvm::dyn_cast<nodal::EnumType>(type)) {
-    width = static_cast<unsigned>(valueType.getWidth());
+    width = valueType.getWidth();
   } else {
     return false;
   }
+  if (width <= 0)
+    return false;
+  auto carrier = llvm::dyn_cast<IntegerType>(value.getType());
+  const bool unsignedCarrier = carrier && carrier.isUnsigned();
+  const llvm::APInt &bits = value.getValue();
   if (isSigned)
-    return value.getValue().isSignedIntN(width);
-  return !value.getValue().isNegative() && value.getValue().isIntN(width);
+    return unsignedCarrier ? static_cast<int64_t>(bits.getActiveBits()) < width
+                           : static_cast<int64_t>(bits.getSignificantBits()) <= width;
+  return (unsignedCarrier || !bits.isNegative()) &&
+         static_cast<int64_t>(bits.getActiveBits()) <= width;
 }
 
-bool attributeFits(Attribute value, Type type) {
+bool attributeFits(Attribute value, Type type, Operation *module = nullptr) {
+  if (!value || !type)
+    return false;
   if (auto typed = llvm::dyn_cast<TypedAttr>(value)) {
     if (typed.getType() == type)
       return true;
@@ -198,7 +228,7 @@ bool attributeFits(Attribute value, Type type) {
   if (llvm::isa<BoolAttr>(value))
     return kindForType(type) == ConstantKind::Boolean;
   if (auto integer = llvm::dyn_cast<IntegerAttr>(value))
-    return integerFits(integer, type);
+    return integerFits(integer, type, module);
   return false;
 }
 
@@ -332,6 +362,8 @@ bool checkedMultiply(int64_t lhs, int64_t rhs, int64_t &result) {
 
 FailureOr<EvaluatedConstant> constantFromAttribute(Attribute value, Type type,
                                                    Operation *unit = nullptr) {
+  if (!value || !type)
+    return failure();
   EvaluatedConstant result;
   result.kind = kindForType(type);
   if (result.kind == ConstantKind::Real) {
@@ -363,7 +395,10 @@ FailureOr<EvaluatedConstant> constantFromAttribute(Attribute value, Type type,
     if (!integer)
       return failure();
     result.exactInteger = integer;
-    result.integerSigned = integerTypeIsSigned(type);
+    // A uiN carrier is a mathematical nonnegative magnitude even when a signed
+    // result has room for its high bit; never sign-extend that carrier.
+    auto carrier = llvm::dyn_cast<IntegerType>(integer.getType());
+    result.integerSigned = integerTypeIsSigned(type) && !(carrier && carrier.isUnsigned());
     const llvm::APInt &bits = integer.getValue();
     const bool narrow = result.integerSigned ? bits.isSignedIntN(64) : bits.getActiveBits() <= 63;
     result.integerIsNarrow = narrow;
@@ -490,6 +525,9 @@ FailureOr<EvaluatedConstant> evaluateParameterDefault(Operation *parameter,
 FailureOr<EvaluatedConstant>
 evaluateExpression(Operation *operation,
                    llvm::function_ref<FailureOr<EvaluatedConstant>(Value)> evaluateOperand) {
+  if (operation->getNumResults() != 1 || hasEnumScalarEdge(operation) ||
+      hasSymbolicDigitalEdge(operation))
+    return failure();
   llvm::StringRef name = textAttr(operation, "operator_name");
   const unsigned count = operation->getNumOperands();
   const bool unary = name == "neg" || name == "not";
@@ -688,6 +726,28 @@ FailureOr<EvaluatedConstant> normalizeForParameter(const EvaluatedConstant &valu
     result.exactInteger = value.exactInteger;
     result.integerIsNarrow = value.integerIsNarrow;
     result.integerSigned = value.integerSigned;
+    auto declaredType = parameter->getAttrOfType<TypeAttr>("type");
+    if (declaredType && nodal::isDigitalScalarType(declaredType.getValue())) {
+      if (!value.exactInteger && !value.integerIsNarrow)
+        return failure();
+      IntegerAttr exact =
+          value.exactInteger
+              ? value.exactInteger
+              : IntegerAttr::get(IntegerType::get(parameter->getContext(), 64), value.integerValue);
+      if (!nodal::digitalIntegerAttributeFits(exact, declaredType.getValue(),
+                                              enclosingNodalModule(parameter)))
+        return failure();
+    }
+    if (declaredType && llvm::isa<nodal::EnumType>(declaredType.getValue())) {
+      if (!value.exactInteger && !value.integerIsNarrow)
+        return failure();
+      IntegerAttr exact =
+          value.exactInteger
+              ? value.exactInteger
+              : IntegerAttr::get(IntegerType::get(parameter->getContext(), 64), value.integerValue);
+      if (failed(nodal::verifyEnumParameterValue(parameter, exact)))
+        return failure();
+    }
     return result;
   }
   if (kind == "boolean") {
@@ -717,11 +777,14 @@ bool attributeMatches(Attribute attribute, const EvaluatedConstant &value) {
       return false;
     if (value.exactInteger) {
       const unsigned width =
-          std::max(integer.getValue().getBitWidth(), value.exactInteger.getValue().getBitWidth());
+          std::max(integer.getValue().getBitWidth(), value.exactInteger.getValue().getBitWidth()) +
+          1;
       llvm::APInt lhs = value.integerSigned ? value.exactInteger.getValue().sextOrTrunc(width)
                                             : value.exactInteger.getValue().zextOrTrunc(width);
-      llvm::APInt rhs = value.integerSigned ? integer.getValue().sextOrTrunc(width)
-                                            : integer.getValue().zextOrTrunc(width);
+      auto carrier = llvm::cast<IntegerType>(integer.getType());
+      llvm::APInt rhs = value.integerSigned && !carrier.isUnsigned()
+                            ? integer.getValue().sextOrTrunc(width)
+                            : integer.getValue().zextOrTrunc(width);
       return lhs == rhs;
     }
     return value.integerIsNarrow && integer.getValue().isSignedIntN(64) &&
@@ -754,15 +817,15 @@ int compareConstants(const EvaluatedConstant &lhs, const EvaluatedConstant &rhs)
   if (lhs.exactInteger || rhs.exactInteger) {
     const unsigned lhsWidth = lhs.exactInteger ? lhs.exactInteger.getValue().getBitWidth() : 64;
     const unsigned rhsWidth = rhs.exactInteger ? rhs.exactInteger.getValue().getBitWidth() : 64;
-    const unsigned width = std::max(lhsWidth, rhsWidth);
+    const unsigned width = std::max(lhsWidth, rhsWidth) + 1;
     const bool signedCompare = lhs.integerSigned || rhs.integerSigned;
     llvm::APInt left = lhs.exactInteger
-                           ? (signedCompare ? lhs.exactInteger.getValue().sextOrTrunc(width)
-                                            : lhs.exactInteger.getValue().zextOrTrunc(width))
+                           ? (lhs.integerSigned ? lhs.exactInteger.getValue().sextOrTrunc(width)
+                                                : lhs.exactInteger.getValue().zextOrTrunc(width))
                            : llvm::APInt(width, static_cast<uint64_t>(lhs.integerValue), true);
     llvm::APInt right = rhs.exactInteger
-                            ? (signedCompare ? rhs.exactInteger.getValue().sextOrTrunc(width)
-                                             : rhs.exactInteger.getValue().zextOrTrunc(width))
+                            ? (rhs.integerSigned ? rhs.exactInteger.getValue().sextOrTrunc(width)
+                                                 : rhs.exactInteger.getValue().zextOrTrunc(width))
                             : llvm::APInt(width, static_cast<uint64_t>(rhs.integerValue), true);
     if (left == right)
       return 0;
@@ -2406,7 +2469,8 @@ LogicalResult nodal::verifyParameterDeclaration(Operation *operation) {
            << "NODAL-PARAMETER-KIND-001: unsupported variability '" << variability << "'";
   auto type = operation->getAttrOfType<TypeAttr>("type");
   Attribute defaultValue = operation->getAttr("default_value");
-  if (!type || !defaultValue || !attributeFits(defaultValue, type.getValue()))
+  if (!type || !defaultValue ||
+      !attributeFits(defaultValue, type.getValue(), enclosingNodalModule(operation)))
     return operation->emitOpError(
         "NODAL-PARAMETER-DEFAULT-001: default value is incompatible with parameter type");
 
@@ -2429,7 +2493,7 @@ LogicalResult nodal::verifyParameterDeclaration(Operation *operation) {
       return operation->emitOpError(
           "NODAL-PARAMETER-UNIT-001: only real parameters may reference a declared unit");
   }
-  return success();
+  return nodal::verifyEnumParameterDefault(operation);
 }
 
 LogicalResult nodal::UnitOp::verify() {
@@ -2453,6 +2517,11 @@ LogicalResult nodal::UnitOp::verify() {
 }
 
 LogicalResult nodal::ConstLiteralOp::verify() {
+  if (failed(nodal::verifyEnumLiteralOperation(getOperation())))
+    return failure();
+  if (getOperation()->getNumResults() == 1 &&
+      nodal::isDigitalScalarType(getOperation()->getResult(0).getType()))
+    return nodal::verifyDigitalLiteralOperation(getOperation());
   if (getOperation()->getNumResults() != 1 ||
       !attributeFits(getOperation()->getAttr("value"), getOperation()->getResult(0).getType()))
     return emitOpError(
@@ -2519,6 +2588,12 @@ LogicalResult nodal::ConstExprOp::verify() {
   const unsigned expected = name == "neg" || name == "not" ? 1 : 2;
   if (getOperation()->getNumOperands() != expected || getOperation()->getNumResults() != 1)
     return emitOpError("NODAL-CONSTANT-EXPR-001: operator arity is invalid");
+  if (hasEnumScalarEdge(getOperation()))
+    return emitOpError("NODAL-ENUM-054-020: enum values require closed enum operations; "
+                       "generic integer arithmetic cannot construct or convert enums");
+  if (hasSymbolicDigitalEdge(getOperation()))
+    return emitOpError("NODAL-CONSTANT-EXPR-001: symbolic digital values require closed digital "
+                       "operations; generic constant arithmetic is unsupported");
   ConstantKind resultKind = kindForType(getOperation()->getResult(0).getType());
   if (resultKind == ConstantKind::Invalid)
     return emitOpError("NODAL-CONSTANT-EXPR-001: result type is not a supported scalar kind");
@@ -2593,6 +2668,18 @@ LogicalResult nodal::ParameterOverrideOp::verify() {
       getOperation()->getNumOperands() != 1)
     return emitOpError(
         "NODAL-PARAMETER-OVERRIDE-001: override requires instance, parameter, and value");
+  Operation *instance = nodal::resolveStructuralInstance(
+      getOperation(), getOperation()->getAttrOfType<FlatSymbolRefAttr>("instance"));
+  Operation *target = instance ? nodal::resolveInstanceModuleDefinition(instance) : nullptr;
+  Operation *parameter = findDirectSymbol(
+      target, getOperation()->getAttrOfType<FlatSymbolRefAttr>("parameter").getValue(),
+      "nodal.parameter");
+  auto declared = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+  Type actual = getOperation()->getOperand(0).getType();
+  if (declared &&
+      (llvm::isa<nodal::EnumType>(declared.getValue()) || llvm::isa<nodal::EnumType>(actual)) &&
+      declared.getValue() != actual)
+    return emitOpError("NODAL-ENUM-054-020: enum override requires the exact semantic enum type");
   return verifyGeneratedStructuralOwnership(getOperation());
 }
 
@@ -2608,8 +2695,8 @@ LogicalResult nodal::ParameterEnvelopeOp::verify() {
         "NODAL-PARAMETER-ENVELOPE-001: envelope target, effects, or policy is invalid");
   for (Attribute effect : effects) {
     auto text = llvm::dyn_cast<StringAttr>(effect);
-    if (!text ||
-        !oneOf(text.getValue(), {"topology", "component_count", "equation_count", "shape", "rank"}))
+    if (!text || !oneOf(text.getValue(), {"topology", "component_count", "equation_count", "shape",
+                                          "rank", "width"}))
       return emitOpError(
           "NODAL-PARAMETER-ENVELOPE-001: envelope contains an unsupported structural effect");
   }
@@ -2803,6 +2890,14 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
       if (!actual || actual->getParentOp() != owner)
         return operation.emitOpError(
             "NODAL-PARAMETER-OVERRIDE-001: override requires an invariant module-owned expression");
+      auto declared = parameter->getAttrOfType<TypeAttr>("type");
+      Type actualType = operation.getOperand(0).getType();
+      if (declared &&
+          (llvm::isa<nodal::EnumType>(declared.getValue()) ||
+           llvm::isa<nodal::EnumType>(actualType)) &&
+          declared.getValue() != actualType)
+        return operation.emitOpError(
+            "NODAL-ENUM-054-020: enum override requires the exact semantic enum type");
       llvm::DenseSet<Operation *> stack;
       auto evaluated = evaluateValue(operation.getOperand(0), &operation, stack);
       FailureOr<EvaluatedConstant> normalized = failure();

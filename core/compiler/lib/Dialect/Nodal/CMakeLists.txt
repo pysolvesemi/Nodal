@@ -10,6 +10,11 @@ add_mlir_dialect_library(NodalDialect
   AnalogSemanticInventory.cpp
   AnalogStorageModel.cpp
   ShapeModel.cpp
+  DigitalInterfaceModel.cpp
+  DigitalTypeModel.cpp
+  DigitalStorageModel.cpp
+  DigitalValueModel.cpp
+  EnumValueModel.cpp
   TargetCapabilities.cpp
   TimeWaveform.cpp
   ConservativeConnectivity.cpp

@@ -1263,7 +1263,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
   - Focused implementation and validation: [F-051 readiness](../implementation/increment51-readiness.md). Verified squash integration `38ad908456f2d482fc5045a04bfdafeacdaa474d` preserves tested tree `f2bdb1e848ac5d75c2a113f0233638a407b17303`; parent/G complete. No CI was run.
 
-- [ ] **Increment 52 — Analog regression suite**
+- [x] **Increment 52 — Analog regression suite**
   - [x] **F-052.A — Architecture review, modularity, scalability and extensibility.** Build regression cases from the declared Verilog-A and simulator capability intersection, not an assumed universal analog profile.
   - [x] **F-052.B — Implementation and integration.** Cover RC/RLC, diode, controlled source, amplifier, comparator, oscillator/VCO, hierarchy, events, sweeps, and failures as core fixtures.
   - [x] **F-052.C — Focused positive, negative and predecessor regression.** Combine hierarchy, equations, state, functions, events and sweeps; retain failing stimuli and correct language-versus-solver classifications.
@@ -1272,9 +1272,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-052.D.2** Numerical behavior: Execute the applicable DC, transient and AC cases with declared independent references, units, stimuli and tolerances; add event/noise cases only under an explicitly qualified capability. Record numerical discrepancies and solver failures, not formal equivalence claims.
   - [x] **F-052.E — Optimization review and output quality.** Review fixture redundancy and result-retention cost without weakening meaningful cases or tolerances. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-052.F — Representative scale, determinism and compatibility.** Run representative parameter/sweep sizes and repeated seeded cases with deterministic manifests.
-  - [ ] **F-052.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 52; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-052.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 52; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused implementation and validation: [F-052 readiness](../implementation/increment52-readiness.md). A–F complete for the explicit finite consumer profile; parent/G await verified integration. No CI was run.
+  - Focused implementation and validation: [F-052 readiness](../implementation/increment52-readiness.md). Verified squash integration `f8bb457819983ba703e01109cbc00668ae5058a9` preserves tested tree `ef78ce962990e2e46f9cabc9e7d50fcde04f868e`; parent/G complete for the explicit finite consumer profile. No CI was run.
 
 - [ ] **Increment 53 — Cross-tool analog portability checks**
   - [ ] **F-053.A — Architecture review, modularity, scalability and extensibility.** Keep second-tool support optional and separately capability-qualified; compare only shared language and analysis semantics.

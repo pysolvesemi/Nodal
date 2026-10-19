@@ -1,7 +1,9 @@
 # Increment 52 readiness and implementation
 
-Status: focused implementation and replay complete; F-052 parent/G remain open until verified
-integration. Base `40562445ef681e1ed29bfdd899adbee7b06429d2` is the verified F51
+Status: complete after verified squash integration `f8bb457819983ba703e01109cbc00668ae5058a9`.
+The sole parent is `40562445ef681e1ed29bfdd899adbee7b06429d2`; the integrated
+tree exactly matches tested tree `ef78ce962990e2e46f9cabc9e7d50fcde04f868e`.
+All F-052 children and the parent are complete. No CI was run. Base `40562445ef681e1ed29bfdd899adbee7b06429d2` is the verified F51
 closure. Branch: `increment/52-analog-regression`.
 
 ## Architecture and selected capability profile
@@ -197,4 +199,4 @@ A/F: shared ownership, finite expansion/retention, deterministic sweeps and seed
 repeats reviewed. B/C/D: real source/model execution, physical references and
 meaningful failure stages and the final hierarchy/state interaction are recorded above.
 E: no additional optimization is justified by the selected measured costs.
-G and parent stay open until verified integration.
+G and the parent are complete after the verified integration above.

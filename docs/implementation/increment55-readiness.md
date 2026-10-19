@@ -1,7 +1,6 @@
 # Increment 55 readiness and implementation
 
-Status: implementation and focused acceptance complete; F-055.G and the parent
-remain open pending verified integration. Base
+Status: complete after verified squash `eee3d7ed9c9fb39e3bf79ff7c554cc0a90da632e` (PR151). Base
 `ec307cef5e11e2a852131fb8e16aa93195f397e4` is the verified F54 documentation closure.
 Branch: `increment/55-digital-expressions-iteration`.
 
@@ -672,7 +671,7 @@ is required before F55 closure and is now implemented. The approved
 records the minimum F58 gate dependency, ordinary Scala `if` syntax, explicit
 read-only result typing and compatibility limits. The production paths now retain
 actual predicates, isolated alternatives, captures and both yield edges. Final
-focused results are recorded below; verified branch integration remains open.
+focused results are recorded below; verified branch integration is recorded below.
 
 Implementation is divided at existing semantic owners: the frontend captures
 closed parameter/index predicates without invoking host equality or evaluating
@@ -815,7 +814,7 @@ separate. The final native compiler SHA-256 is
 `4cd1e5e3d5cb7a41aba6ec2339bc8ca8c5f0aa533642b5c87f60224515cd8331`.
 No CI, broad qualification, target execution or full F58/BT cross-owner closure is
 claimed. Original F55 A–F and amendment B.1.1 are complete at the implemented
-compiler boundary; G and the parent await verified integration.
+compiler boundary; G and the parent are complete after verified integration.
 
 ### Actual public source and IR demonstration
 
@@ -865,3 +864,12 @@ excerpt of the actual generated source IR, including both yielded edges:
       "nodal.structural_yield"(%structural_arm_6_arg0) <{metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "PublicStructuralValue.selected_56ecdd40.else.yield", source_end_column = 66 : i64, source_end_line = 20 : i64}}> : (!nodal.bits<8>) -> () loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
     }) : (!nodal.static_predicate, !nodal.bits<8>, !nodal.bits<8>) -> !nodal.bits<8> loc("core/scala/testkit/test/src/nodal_external/Increment55PublicStructuralIf.scala":20:3)
 ```
+
+## Verified integration
+
+PR151 squash `eee3d7ed9c9fb39e3bf79ff7c554cc0a90da632e` integrates exact tested tree
+`8f0fbbb76698c6961edb6b09e518a93a9a1ca779` onto the verified F54 closure base.
+The source branch head was `00e43eb98b87dd5219d7268a30f093dd130f90eb`.
+The squash retains `[skip ci]`; no CI was launched. F55 and G are complete.
+The actual source/IR demonstration and finite limitations above remain the
+completion record; later F56/F58/BT/target consumers are not claimed complete.

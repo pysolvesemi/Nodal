@@ -1,6 +1,6 @@
 # NodalStructuralIf-DG v0.1 — bounded F55/F58 checkpoint
 
-**Status:** Approved and implemented; focused acceptance passed, integration pending
+**Status:** Approved, implemented and integrated by PR151 (`eee3d7ed9c9fb39e3bf79ff7c554cc0a90da632e`)
 **Scope:** public-api
 **Baseline source revision:** `538fbc9cce950c62eaf56234f8db450860539d0a`
 **Compiler:** Scala 3.8.4, pinned JDK 25.0.2
@@ -20,7 +20,7 @@ This is the bounded gate needed before implementing mandatory
 F-055.B.1.1 under the approved Areas/symbolic-conditionals amendment. It supplies
 only the structural-predicate/ordinary-if prerequisite portion of F-058.A.1.
 The implemented checkpoint completes F-055.B.1.1 at its compiler boundary. It does
-not complete full F-058.A.1, F55 integration, Area, generated Area collections,
+not complete full F-058.A.1, Area, generated Area collections,
 conditional child hierarchy, F56 behavioral guards or F159. Focused results and
 the actual public-source demonstration are recorded in
 [increment55-readiness](../implementation/increment55-readiness.md#final-structural-checkpoint-acceptance).

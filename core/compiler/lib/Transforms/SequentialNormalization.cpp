@@ -13,7 +13,7 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(NormalizeSequentialPass)
   StringRef getArgument() const final { return "nodal-normalize-sequential"; }
   StringRef getDescription() const final {
-    return "Normalize owned register priority, hold and physical reset updates";
+    return "Normalize owned register priority/reset and guarded ordered memory ports";
   }
   void runOnOperation() final {
     OwningOpRef<mlir::ModuleOp> candidate = llvm::cast<mlir::ModuleOp>(getOperation()->clone());

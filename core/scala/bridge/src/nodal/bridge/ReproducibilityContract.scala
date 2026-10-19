@@ -368,6 +368,8 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      ) ++ value.memory.toVector.map(port =>
+        "memory" -> obj("memory" -> string(port.memory), "domain" -> string(port.domain))
       ) ++ value.structure.toVector.map(evidence =>
         "structure" -> obj(
           "schema_type" -> string(evidence.schemaType),
@@ -588,6 +590,20 @@ private[nodal] object ReproducibilityContract:
           ))
         )
       ))
+  ).toVector ++ Option.when(snapshot.memoryWrites.nonEmpty)(
+    "memory_writes" -> array(snapshot.memoryWrites.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "memory" -> string(value.memory),
+        "domain" -> string(value.domain),
+        "address" -> string(value.address),
+        "value" -> string(value.value),
+        "mask" -> string(value.mask),
+        "region" -> optionalString(value.region),
+        "source_ordinal" -> number(value.sourceOrdinal)
+      )
+    ))
   ).toVector)
 
   private def sequentialArm(value: KernelStructuralArmSnapshot): JsonValue = obj(

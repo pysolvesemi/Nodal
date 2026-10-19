@@ -26,6 +26,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
@@ -2225,7 +2226,7 @@ LogicalResult nodal::ModuleOp::verify() {
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
       failed(verifyStructuralIfModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
-      failed(verifySequentialModel(getOperation())) ||
+      failed(verifySequentialModel(getOperation())) || failed(verifyMemoryModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation(), false)) ||
       failed(verifyDigitalValueModel(getOperation(), false)) ||
       failed(verifyDigitalCollectionModel(getOperation())) ||
@@ -4148,6 +4149,9 @@ LogicalResult nodal::DigitalStorageOp::verify() {
 }
 
 LogicalResult nodal::MemoryOp::verify() { return verifyDigitalMemoryOperation(getOperation()); }
+LogicalResult nodal::MemoryReadOp::verify() { return verifyMemoryPort(getOperation()); }
+LogicalResult nodal::MemoryWriteOp::verify() { return verifyMemoryPort(getOperation()); }
+LogicalResult nodal::MemoryWriteEffectOp::verify() { return verifyMemoryPort(getOperation()); }
 
 LogicalResult nodal::DigitalAssignOp::verify() {
   return verifyDigitalAssignmentOperation(getOperation());

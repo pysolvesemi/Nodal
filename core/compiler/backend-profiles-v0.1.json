@@ -1112,6 +1112,24 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.memory_read",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.memory_write",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.memory_write_effect",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.module",
         "feature": "structural-hierarchy",
         "domain": "neutral",

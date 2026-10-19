@@ -57,6 +57,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var sequentialFactories = Set.empty[Symbol]
   private var sequentialKernelMethods = Set.empty[Symbol]
   private var sequentialWrites = Set.empty[Symbol]
+  private var memoryReads = Set.empty[Symbol]
   private var sequentialModules = Set.empty[Symbol]
   private var flatGraphRuntime = Set.empty[Symbol]
   private val flatFsm = new FlatFsmCapture
@@ -134,7 +135,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "enumSwitch",
       "enumSwitchCase"
     )
-    sequentialWrites = methods(requiredClass("nodal.Register"), ":=")
+    sequentialWrites = methods(requiredClass("nodal.Register"), ":=") ++
+      methods(requiredClass("nodal.Mem"), "write")
+    memoryReads = methods(requiredClass("nodal.Mem"), "read")
+    sequentialKernelMethods ++=
+      methods(requiredModule("nodal.ConstructionKernel"), "memoryRead", "memoryWrite")
     factories ++= sequentialFactories
     pureMethods =
       methods(
@@ -966,6 +971,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     private def reference(tree: RefTree, depth: Int): Boolean =
       val symbol = tree.symbol
       if !symbol.exists then fail("UNKNOWN", "callback contains an unresolved reference", tree)
+      else if memoryReads(symbol) then
+        fail(
+          "MEMORY-READ",
+          "memory read creation requires Module scope; capture an existing read value",
+          tree
+        )
       else if !immutable(symbol, tree) then false
       else if enumEvidence(symbol) then moduleReference(symbol.owner.sourceModule, tree, depth)
       else if symbol.is(Synthetic) && !symbol.is(Method) && symbol.owner.isTerm &&

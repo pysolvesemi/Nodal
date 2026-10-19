@@ -11,6 +11,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
@@ -181,7 +182,7 @@ public:
       auto source = behavioralCaptureSource(arg);
       if (failed(source) || failed(verifyDigitalValueScope(*source, h.operation)))
         return failure();
-      auto facts = resolveBehavioralIntegerExpression(*source, h.operation);
+      auto facts = probeBehavioralIntegerCapture(*source, h.operation);
       // Runtime Integer captures are storage values, never static proof bindings.
       if (failed(facts) || !facts->expression)
         continue;
@@ -271,8 +272,8 @@ LogicalResult verifySequentialBody(Block *body) {
       // Behavioral use admits only a pure result, never structural writes.
       bool pure = nested.getNumResults() == 1;
       nested.walk([&](Operation *child) {
-        if (llvm::isa<DigitalAssignOp, BehavioralIfOp, DigitalStorageOp, LocalDomainBindingOp>(
-                child))
+        if (llvm::isa<DigitalAssignOp, MemoryWriteOp, MemoryWriteEffectOp, MemoryReadOp,
+                      BehavioralIfOp, DigitalStorageOp, LocalDomainBindingOp>(child))
           pure = false;
       });
       if (!pure ||
@@ -281,7 +282,10 @@ LogicalResult verifySequentialBody(Block *body) {
         return reject(&nested, "behavioral value region must retain a verified read-only result");
       continue;
     }
-    if (llvm::isa<DigitalAssignOp>(nested)) {
+    if (llvm::isa<MemoryWriteOp>(nested)) {
+      if (failed(verifyMemoryPort(&nested)))
+        return failure();
+    } else if (llvm::isa<DigitalAssignOp>(nested)) {
       if (text(&nested, "kind") != "register_next")
         return reject(&nested, "behavioral arms update only domain-owned registers");
     } else if (!allowedPure(&nested) || nested.getNumRegions() || nested.getNumSuccessors() ||
@@ -372,6 +376,127 @@ LogicalResult verifySequentialUpdate(Operation *op) {
       return reject(op, "clocked update cannot use foreign or escaped values");
   return success();
 }
+FailureOr<Operation *> resolveSequentialDomain(Operation *use, Attribute reference) {
+  Operation *module = moduleOf(use);
+  auto symbol = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(reference);
+  Operation *domain = module && symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;
+  if (!domain || domain->getParentOp() != module)
+    return failure();
+  if (llvm::isa<DomainOp>(domain))
+    return domain;
+  if (!llvm::isa<DomainRequirementOp>(domain))
+    return failure();
+  Operation *binding = nullptr;
+  for (Operation &op : module->getRegion(0).front())
+    if (llvm::isa<DomainBindOp>(op) && op.getAttr("requirement") == reference) {
+      if (binding || op.getNumOperands() || op.getNumResults() || op.getNumRegions() ||
+          op.getNumSuccessors())
+        return failure();
+      binding = &op;
+    }
+  auto actual = binding ? binding->getAttrOfType<FlatSymbolRefAttr>("actual") : FlatSymbolRefAttr();
+  domain = actual ? SymbolTable::lookupSymbolIn(module, actual) : nullptr;
+  return llvm::isa_and_nonnull<DomainOp>(domain) && domain->getParentOp() == module
+             ? FailureOr<Operation *>(domain)
+             : FailureOr<Operation *>(failure());
+}
+FailureOr<Operation *> resolveSequentialBinding(Operation *use, Attribute reference) {
+  auto domain = resolveSequentialDomain(use, reference);
+  if (failed(domain))
+    return failure();
+  auto actual = FlatSymbolRefAttr::get(use->getContext(), text(*domain, "sym_name"));
+  Operation *binding = nullptr;
+  for (Operation &op : moduleOf(use)->getRegion(0).front())
+    if (llvm::isa<LocalDomainBindingOp>(op) && op.getAttr("domain") == actual) {
+      if (binding || failed(verifyLocalDomainBinding(&op)))
+        return failure();
+      binding = &op;
+    }
+  return binding ? FailureOr<Operation *>(binding) : FailureOr<Operation *>(failure());
+}
+LogicalResult verifySequentialSamples(Operation *module, ArrayRef<SequentialSample> samples,
+                                      SequentialModelLimits limits, unsigned alreadyCharged) {
+  unsigned work = alreadyCharged;
+  if (samples.empty())
+    return success();
+  SmallVector<std::pair<Value, Operation *>, 8> seeds;
+  for (auto sample : samples)
+    seeds.push_back({sample.value, sample.use});
+  DigitalAssignmentProofLimits graphLimits;
+  graphLimits.maximumNodes = limits.maximumOperations;
+  auto graph = analyzeDigitalAssignmentDependencies(module, seeds, graphLimits);
+  if (failed(graph))
+    return failure();
+  // Explicit requirements are constraints, never domainless boundaries. The
+  // finite local profile can prove a unique direct requirement-to-domain bind;
+  // hierarchy/chained or unresolved bindings remain unsupported until F57/F58.
+  llvm::DenseMap<Attribute, Operation *> requirementBindings;
+  llvm::DenseSet<Attribute> ambiguousBindings;
+  for (Operation &op : module->getRegion(0).front()) {
+    if (!llvm::isa<DomainBindOp>(op))
+      continue;
+    auto requirement = op.getAttrOfType<FlatSymbolRefAttr>("requirement");
+    if (requirement && !requirementBindings.try_emplace(requirement, &op).second)
+      ambiguousBindings.insert(requirement);
+  }
+  auto sameDomain = [&](Attribute reference, Attribute expected) {
+    auto symbol = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(reference);
+    Operation *declaration = symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;
+    if (!declaration || declaration->getParentOp() != module)
+      return false;
+    if (llvm::isa<DomainOp>(declaration))
+      return reference == expected;
+    if (!llvm::isa<DomainRequirementOp>(declaration) || ambiguousBindings.contains(reference))
+      return false;
+    Operation *binding = requirementBindings.lookup(reference);
+    if (!binding || binding->getNumOperands() || binding->getNumResults() ||
+        binding->getNumRegions() || binding->getNumSuccessors())
+      return false;
+    auto actual = binding->getAttrOfType<FlatSymbolRefAttr>("actual");
+    Operation *target = actual ? SymbolTable::lookupSymbolIn(module, actual) : nullptr;
+    return llvm::isa_and_nonnull<DomainOp>(target) && target->getParentOp() == module &&
+           actual == expected;
+  };
+  llvm::DenseSet<std::pair<unsigned, Attribute>> visited;
+  for (unsigned i = 0; i < samples.size(); ++i) {
+    auto sample = samples[i];
+    SmallVector<unsigned, 8> pending{graph->roots[i]};
+    while (!pending.empty()) {
+      unsigned id = pending.pop_back_val();
+      if (!visited.insert({id, sample.domain}).second)
+        continue;
+      if (++work > limits.maximumOperations)
+        return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
+      const auto &node = graph->nodes[id];
+      if (node.sourceDomain && !sameDomain(node.sourceDomain, sample.domain))
+        return sample.use->emitOpError("NODAL-CDC-001: foreign or unresolved Interface domain is "
+                                       "sampled without an explicit crossing");
+      if (node.value) {
+        auto access = resolveStaticShapeProjection(node.value, node.use);
+        Operation *source = succeeded(access) ? access->root.getDefiningOp() : nullptr;
+        if (((llvm::isa_and_nonnull<DigitalStorageOp>(source) &&
+              text(source, "kind") == "register") ||
+             llvm::isa_and_nonnull<MemoryReadOp>(source)) &&
+            !sameDomain(source->getAttr("domain"), sample.domain))
+          return sample.use->emitOpError(
+              "NODAL-CDC-001: foreign-domain state is sampled without an explicit crossing");
+        if (llvm::isa_and_nonnull<PortValueOp>(source)) {
+          auto ref = source->getAttrOfType<FlatSymbolRefAttr>("port");
+          Operation *port = ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
+          auto domain =
+              port ? port->getAttrOfType<FlatSymbolRefAttr>("domain") : FlatSymbolRefAttr();
+          bool unannotated =
+              domain && domain.getValue() == "none" && !SymbolTable::lookupSymbolIn(module, domain);
+          if (domain && !unannotated && !sameDomain(domain, sample.domain))
+            return sample.use->emitOpError("NODAL-CDC-001: foreign or unresolved input domain is "
+                                           "sampled without an explicit crossing");
+        }
+      }
+      pending.append(node.dependencies.begin(), node.dependencies.end());
+    }
+  }
+  return success();
+}
 namespace {
 struct Model {
   Model(Operation *module, SequentialModelLimits limits) : module(module), limits(limits) {}
@@ -380,96 +505,12 @@ struct Model {
   llvm::DenseMap<Value, Operation *> roots;
   SmallVector<Operation *, 8> registers;
   unsigned work = 0;
-  struct Sample {
-    Value value;
-    Attribute domain;
-    Operation *use;
-  };
-  SmallVector<Sample, 8> samples;
+  SmallVector<SequentialSample, 8> samples;
   LogicalResult sampled(Value value, Attribute domain, Operation *use) {
     samples.push_back({value, domain, use});
     return success();
   }
-  LogicalResult verifySamples() {
-    if (samples.empty())
-      return success();
-    SmallVector<std::pair<Value, Operation *>, 8> seeds;
-    for (auto sample : samples)
-      seeds.push_back({sample.value, sample.use});
-    DigitalAssignmentProofLimits graphLimits;
-    graphLimits.maximumNodes = limits.maximumOperations;
-    auto graph = analyzeDigitalAssignmentDependencies(module, seeds, graphLimits);
-    if (failed(graph))
-      return failure();
-    // Explicit requirements are constraints, never domainless boundaries. The
-    // finite local profile can prove a unique direct requirement-to-domain bind;
-    // hierarchy/chained or unresolved bindings remain unsupported until F57/F58.
-    llvm::DenseMap<Attribute, Operation *> requirementBindings;
-    llvm::DenseSet<Attribute> ambiguousBindings;
-    for (Operation &op : module->getRegion(0).front()) {
-      if (!llvm::isa<DomainBindOp>(op))
-        continue;
-      auto requirement = op.getAttrOfType<FlatSymbolRefAttr>("requirement");
-      if (requirement && !requirementBindings.try_emplace(requirement, &op).second)
-        ambiguousBindings.insert(requirement);
-    }
-    auto sameDomain = [&](Attribute reference, Attribute expected) {
-      auto symbol = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(reference);
-      Operation *declaration = symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;
-      if (!declaration || declaration->getParentOp() != module)
-        return false;
-      if (llvm::isa<DomainOp>(declaration))
-        return reference == expected;
-      if (!llvm::isa<DomainRequirementOp>(declaration) || ambiguousBindings.contains(reference))
-        return false;
-      Operation *binding = requirementBindings.lookup(reference);
-      if (!binding || binding->getNumOperands() || binding->getNumResults() ||
-          binding->getNumRegions() || binding->getNumSuccessors())
-        return false;
-      auto actual = binding->getAttrOfType<FlatSymbolRefAttr>("actual");
-      Operation *target = actual ? SymbolTable::lookupSymbolIn(module, actual) : nullptr;
-      return llvm::isa_and_nonnull<DomainOp>(target) && target->getParentOp() == module &&
-             actual == expected;
-    };
-    llvm::DenseSet<std::pair<unsigned, Attribute>> visited;
-    for (unsigned i = 0; i < samples.size(); ++i) {
-      auto sample = samples[i];
-      SmallVector<unsigned, 8> pending{graph->roots[i]};
-      while (!pending.empty()) {
-        unsigned id = pending.pop_back_val();
-        if (!visited.insert({id, sample.domain}).second)
-          continue;
-        if (++work > limits.maximumOperations)
-          return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
-        const auto &node = graph->nodes[id];
-        if (node.sourceDomain && !sameDomain(node.sourceDomain, sample.domain))
-          return sample.use->emitOpError("NODAL-CDC-001: foreign or unresolved Interface domain is "
-                                         "sampled without an explicit crossing");
-        if (node.value) {
-          auto access = resolveStaticShapeProjection(node.value, node.use);
-          Operation *source = succeeded(access) ? access->root.getDefiningOp() : nullptr;
-          if (llvm::isa_and_nonnull<DigitalStorageOp>(source) &&
-              text(source, "kind") == "register" &&
-              !sameDomain(source->getAttr("domain"), sample.domain))
-            return sample.use->emitOpError(
-                "NODAL-CDC-001: foreign-domain state is sampled without an explicit crossing");
-          if (llvm::isa_and_nonnull<PortValueOp>(source)) {
-            auto ref = source->getAttrOfType<FlatSymbolRefAttr>("port");
-            Operation *port = ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
-            auto domain =
-                port ? port->getAttrOfType<FlatSymbolRefAttr>("domain") : FlatSymbolRefAttr();
-            bool unannotated = domain && domain.getValue() == "none" &&
-                               !SymbolTable::lookupSymbolIn(module, domain);
-            if (domain && !unannotated && !sameDomain(domain, sample.domain))
-              return sample.use->emitOpError("NODAL-CDC-001: foreign or unresolved input domain is "
-                                             "sampled without an explicit crossing");
-          }
-        }
-        pending.append(node.dependencies.begin(), node.dependencies.end());
-      }
-    }
-    return success();
-  }
+  LogicalResult verifySamples() { return verifySequentialSamples(module, samples, limits, work); }
   LogicalResult verify() {
     if (!llvm::isa_and_nonnull<ModuleOp>(module) || module->getNumRegions() != 1 ||
         !module->getRegion(0).hasOneBlock())
@@ -553,6 +594,24 @@ struct Model {
           auto h = inspectBehavioralIfHeader(&op);
           for (Block *body : h->bodies)
             scopes.push_back({body, scope.root ? scope.root : &op, scope.depth + 1});
+        } else if (llvm::isa<MemoryReadOp, MemoryWriteOp, MemoryWriteEffectOp>(op)) {
+          auto port = inspectMemoryPort(&op);
+          if (failed(port))
+            return failure();
+          if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
+              op.getAttr("domain") != scope.root->getAttr("domain"))
+            return reject(&op, "FSM memory effects must retain their machine's actual domain");
+          unsigned values = llvm::isa<MemoryReadOp>(op)          ? 1
+                            : llvm::isa<MemoryWriteEffectOp>(op) ? 4
+                                                                 : 3;
+          for (unsigned operand = 0; operand < values; ++operand)
+            if (failed(sampled(op.getOperand(operand), op.getAttr("domain"), &op)))
+              return failure();
+          for (Operation *ancestor = op.getParentOp(); ancestor != module;
+               ancestor = ancestor->getParentOp())
+            if (llvm::isa<BehavioralIfOp, EnumSwitchOp>(ancestor) &&
+                failed(sampled(ancestor->getOperand(0), op.getAttr("domain"), ancestor)))
+              return failure();
         } else if ((llvm::isa<DigitalAssignOp>(op) && text(&op, "kind") == "register_next") ||
                    llvm::isa<SequentialUpdateOp>(op)) {
           if ((llvm::isa<DigitalAssignOp>(op) && op.getNumOperands() != 2) ||
@@ -606,7 +665,7 @@ public:
     llvm::DenseSet<Operation *> seen;
     // Authored block order, never DenseMap iteration, determines emitted order.
     for (Operation &op : model.module->getRegion(0).front())
-      if (llvm::isa<BehavioralIfOp>(op) ||
+      if (llvm::isa<BehavioralIfOp, MemoryWriteOp>(op) ||
           (llvm::isa<DigitalAssignOp>(op) && text(&op, "kind") == "register_next" &&
            bindingOf(op.getOperand(0).getDefiningOp())))
         roots.push_back(&op);
@@ -621,7 +680,7 @@ public:
       builder.setInsertionPoint(root);
       IRMapping mapping;
       StateMap next;
-      if (failed(operation(root, mapping, next, 0)))
+      if (failed(operation(root, mapping, next, 0, Value(), root)))
         return failure();
       for (auto [state, value] : next) {
         updates.push_back({state, value, root});
@@ -641,6 +700,20 @@ public:
           (found == model.roots.end() || !llvm::isa<SequentialUpdateOp>(found->second)))
         if (failed(update(state, state, nullptr)))
           return failure();
+    }
+    // A binding may materialize its actual clock after an authored write root.
+    // Commit owned memory effects only after all value producers and register
+    // updates, retaining their actual source-root/body sequence. Moving only
+    // these result-free effects neither clones clocks nor reorders other owners.
+    Block &body = model.module->getRegion(0).front();
+    SmallVector<Operation *, 8> memoryEffects;
+    for (Operation &op : body)
+      if (llvm::isa<MemoryWriteEffectOp>(op))
+        memoryEffects.push_back(&op);
+    llvm::DenseMap<Attribute, int64_t> memoryOrder;
+    for (Operation *op : memoryEffects) {
+      op->setAttr("order", builder.getI64IntegerAttr(memoryOrder[op->getAttr("memory")]++));
+      op->moveBefore(&body, body.end());
     }
     return success();
   }
@@ -686,9 +759,65 @@ private:
     builder.create(op);
     return success();
   }
-  LogicalResult operation(Operation *op, IRMapping &mapping, StateMap &next, unsigned depth) {
+  Value guardLiteral(Operation *op) {
+    if (failed(charge(op)))
+      return {};
+    OperationState literal(op->getLoc(), "nodal.const_literal");
+    literal.addTypes(BitsType::get(builder.getContext(), 1));
+    literal.addAttribute("value",
+                         builder.getIntegerAttr(
+                             IntegerType::get(builder.getContext(), 1, IntegerType::Unsigned), 1));
+    literal.addAttribute("spelling", builder.getStringAttr("1"));
+    literal.addAttribute("metadata", metadata(op, (path(op) + ".memory.enabled").str()));
+    return builder.create(literal)->getResult(0);
+  }
+  Value guardExpression(Operation *op, StringRef opcode, ArrayRef<Value> inputs) {
+    if (failed(charge(op)))
+      return {};
+    OperationState expression(op->getLoc(), "nodal.digital_expr");
+    expression.addOperands(inputs);
+    expression.addTypes(BitsType::get(builder.getContext(), 1));
+    expression.addAttribute("operator_name", builder.getStringAttr(opcode));
+    expression.addAttribute("metadata",
+                            metadata(op, (path(op) + ".memory.guard" + Twine(generated)).str()));
+    return builder.create(expression)->getResult(0);
+  }
+  Value booleanGuard(Operation *op, Value predicate) {
+    if (boolean(predicate.getType()))
+      return predicate;
+    if (failed(charge(op)))
+      return {};
+    OperationState conversion(op->getLoc(), "nodal.behavioral_predicate");
+    conversion.addOperands(predicate);
+    conversion.addTypes(BitsType::get(builder.getContext(), 1));
+    conversion.addAttribute("metadata", metadata(op, (path(op) + ".memory.predicate").str()));
+    return builder.create(conversion)->getResult(0);
+  }
+  LogicalResult operation(Operation *op, IRMapping &mapping, StateMap &next, unsigned depth,
+                          Value guard, Operation *sourceRoot) {
     if (depth > model.limits.maximumDepth)
       return reject(op, "normalization depth budget exceeded");
+    if (llvm::isa<MemoryWriteOp>(op)) {
+      auto port = inspectMemoryPort(op);
+      if (failed(port))
+        return failure();
+      if (!guard)
+        guard = guardLiteral(op);
+      if (!guard || failed(charge(op)))
+        return failure();
+      OperationState effect(op->getLoc(), "nodal.memory_write_effect");
+      for (Value value : op->getOperands())
+        effect.addOperands(mapping.lookupOrDefault(value));
+      effect.addOperands({guard, port->binding->getOperand(0)});
+      effect.addAttribute("memory", op->getAttr("memory"));
+      effect.addAttribute("domain", op->getAttr("domain"));
+      effect.addAttribute("edge", port->domain->getAttr("edge"));
+      effect.addAttribute("order", builder.getI64IntegerAttr(0));
+      effect.addAttribute("root_id", builder.getStringAttr(path(sourceRoot)));
+      effect.addAttribute("metadata", op->getAttr("metadata"));
+      builder.create(effect);
+      return success();
+    }
     if (llvm::isa<DigitalAssignOp>(op)) {
       Value target = mapping.lookupOrDefault(op->getOperand(0));
       auto root = stateRoot(target, op);
@@ -716,7 +845,25 @@ private:
     generated += 2 * next.size();
     choices[0] = next;
     choices[1] = next;
+    bool memoryWrites = false;
+    op->walk([&](MemoryWriteOp) { memoryWrites = true; });
+    Value condition;
+    if (memoryWrites) {
+      condition = booleanGuard(op, mapping.lookupOrDefault(op->getOperand(0)));
+      if (!condition)
+        return failure();
+    }
     for (unsigned arm = 0; arm < 2; ++arm) {
+      Value armGuard = guard;
+      if (memoryWrites) {
+        armGuard = arm == 0 ? condition : guardExpression(op, "bool_not", {condition});
+        if (!armGuard)
+          return failure();
+        if (guard)
+          armGuard = guardExpression(op, "bool_and", {guard, armGuard});
+        if (!armGuard)
+          return failure();
+      }
       IRMapping local = mapping;
       for (unsigned i = 0; i < h->captureCounts[arm]; ++i)
         local.map(h->bodies[arm]->getArgument(i),
@@ -724,7 +871,7 @@ private:
       // Copy the already selected state so a nested missing update holds the
       // earlier write in this root, rather than discarding it for old state.
       for (Operation &nested : *h->bodies[arm])
-        if (failed(operation(&nested, local, choices[arm], depth + 1)))
+        if (failed(operation(&nested, local, choices[arm], depth + 1, armGuard, sourceRoot)))
           return failure();
     }
     llvm::SetVector<Value> states;
@@ -761,6 +908,10 @@ LogicalResult verifySequentialModel(Operation *module, SequentialModelLimits lim
 LogicalResult normalizeSequentialModel(Operation *module, SequentialModelLimits limits) {
   if (failed(verifySequentialModel(module, limits)))
     return failure();
+  MemoryModelLimits memoryLimits;
+  memoryLimits.maximumOperations = limits.maximumOperations;
+  if (failed(preflightMemoryNormalization(module, memoryLimits)))
+    return failure(); // Never repair forged order or expand over-budget raw ports.
   Operation *root = module;
   while (root->getParentOp())
     root = root->getParentOp();

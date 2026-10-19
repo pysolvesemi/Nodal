@@ -32,6 +32,23 @@ final class DigitalCollectionRepeatedChildBridgeSource extends Module:
   val second = instance(new DigitalCollectionMapSource)
 
 object Increment55DigitalCollectionBridgeTests extends TestSuite:
+  // Inspect the existing comparison owner instead of duplicating its SSA normalization.
+  private def canonicalDefinitions(snapshot: ConstructionSnapshot): Map[String, String] =
+    val rendererClass = Class.forName("nodal.internal.bridge.ScalaToMlirBridge$Renderer")
+    val constructor = rendererClass.getDeclaredConstructors.head
+    constructor.setAccessible(true)
+    val renderer = constructor.newInstance(snapshot, Backend.Auto, java.lang.Boolean.FALSE)
+    val render = rendererClass.getDeclaredMethods.find(_.getName == "render").get
+    render.setAccessible(true)
+    val _ = render.invoke(renderer)
+    val canonical = rendererClass.getDeclaredMethods.find(
+      _.getName.endsWith("normalizedModuleStructure")
+    ).get
+    canonical.setAccessible(true)
+    snapshot.modules.filterNot(_.path == snapshot.root).map(module =>
+      module.path -> canonical.invoke(renderer, module).asInstanceOf[String]
+    ).toMap
+
   private def rejected(snapshot: ConstructionSnapshot, message: String): Unit =
     val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(snapshot)).failed.get
     assert(error.isInstanceOf[BridgeException])
@@ -96,21 +113,64 @@ object Increment55DigitalCollectionBridgeTests extends TestSuite:
       assert(identities.text.contains("!nodal.enum<"))
       assert(identities.text.linesIterator.count(_.contains("\"nodal.collection\"")) == 2)
 
-    test(
-      "two child instances preserve collection regions and source-significant definitions"
-    ):
+    test("equivalent child definitions retain distinct actual instance provenance"):
       val snapshot = ConstructionKernel.inspect(new DigitalCollectionRepeatedChildBridgeSource)
       val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+      val children = snapshot.modules.filterNot(_.path == snapshot.root).sortBy(_.path)
+      val canonical = canonicalDefinitions(snapshot)
+      assert(children.size == 2)
+      assert(canonical(children(0).path) == canonical(children(1).path))
       assert(snapshot.digitalCollections.size == 4)
-      // Constructor source identity and external reset-source metadata differ;
-      // these instances are not alpha-equivalent canonical definitions.
-      assert(document.text.linesIterator.count(_.contains("\"nodal.module\"")) == 3)
-      assert(document.text.linesIterator.count(_.contains("\"nodal.collection\"")) == 4)
+      assert(document.text.linesIterator.count(_.contains("\"nodal.module\"")) == 2)
+      assert(document.text.linesIterator.count(_.contains("\"nodal.collection\"")) == 2)
+      val instances = snapshot.modules.find(_.path == snapshot.root).get.instances
+      val lines = document.text.linesIterator.filter(_.contains("\"nodal.instance\""))
+        .toVector
+      assert(lines.size == 2)
+      instances.foreach: instance =>
+        val source = snapshot.sourceMap.find(_.semanticPath == instance.path).get.source
+        val line = lines.find(_.contains(s"semantic_path = \"${instance.path}\"")).get
+        assert(line.contains(s"child_path = \"${instance.childModule}\""))
+        assert(line.contains(s"source_end_line = ${source.endLine} : i64"))
       snapshot.digitalCollections.foreach(value =>
-        assert(document.text.contains(s"region_id = \"${value.path}\""))
+        assert(document.text.contains(s"semantic_path = \"${value.path}\""))
+      )
+      val directory = Path.of(".work", "f55-repeated-child-analysis")
+      Files.createDirectories(directory)
+      children.zipWithIndex.foreach((child, index) =>
+        Files.writeString(directory.resolve(s"child-$index.canonical.mlir"), canonical(child.path))
       )
       assert(document.text ==
         ScalaToMlirBridge.lower(new DigitalCollectionRepeatedChildBridgeSource).text)
+
+    test("different actual child clocks and definition source identities prevent reuse"):
+      val snapshot = ConstructionKernel.inspect(new DigitalCollectionRepeatedChildBridgeSource)
+      val children = snapshot.modules.filterNot(_.path == snapshot.root).sortBy(_.path)
+      val second = children(1)
+      val differentClock = snapshot.copy(modules =
+        snapshot.modules.map(module =>
+          if module.path == second.path then
+            module.copy(domains = module.domains.map(_.copy(edge = Some("falling"))))
+          else module
+        )
+      )
+      val source = snapshot.sourceMap.find(_.semanticPath == second.path).get
+      val differentSource = snapshot.copy(sourceMap =
+        snapshot.sourceMap.map(entry =>
+          if entry == source then
+            entry.copy(source = entry.source.copy(path = "distinct-authored-child.scala"))
+          else entry
+        )
+      )
+      Vector(differentClock, differentSource).foreach: value =>
+        val canonical = canonicalDefinitions(value)
+        assert(canonical(children(0).path) != canonical(second.path))
+        val text = ScalaToMlirBridge.fromSnapshot(value).text
+        assert(text.linesIterator.count(_.contains("\"nodal.module\"")) == 3)
+        assert(text.linesIterator.count(_.contains("\"nodal.collection\"")) == 4)
+        snapshot.digitalCollections.foreach(collection =>
+          assert(text.contains(s"region_id = \"${collection.path}\""))
+        )
 
     test("nested explicit captures preserve immutable scalar proof facts"):
       val snapshot = ConstructionKernel.inspect(new DigitalCollectionCapturedProofBridgeSource)

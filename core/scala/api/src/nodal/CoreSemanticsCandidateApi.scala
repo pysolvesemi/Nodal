@@ -158,9 +158,9 @@ final class Mem[A <: Data] private[nodal] (
     )
   )
 
-  def read(address: Expr[UInt]): Expr[A] = CandidateRuntime.expr(this, address)
+  def read(address: Expr[UInt]): Expr[A] = ConstructionKernel.memoryRead(this, address)
   def write(address: Expr[UInt], data: Expr[A], mask: Expr[Bits]): Unit =
-    CandidateRuntime.statement(this, address, data, mask)
+    ConstructionKernel.memoryWrite(this, address, data, mask)
 
 object Mem:
   def apply[A <: Data](

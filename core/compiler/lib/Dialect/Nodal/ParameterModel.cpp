@@ -3860,7 +3860,8 @@ namespace {
 /// Neither contextual width formals nor procedural loop induction are static.
 class StructuralIntegerQuery {
 public:
-  explicit StructuralIntegerQuery(bool behavioral = false) : behavioral(behavioral) {}
+  explicit StructuralIntegerQuery(bool behavioral = false, bool captureProbe = false)
+      : behavioral(behavioral), captureProbe(captureProbe) {}
   FailureOr<StructuralIntegerFacts> operation(Operation *op) {
     if (!op || op->getNumResults() != 1 || !op->getResult(0).getType().isSignlessInteger(64))
       return failure();
@@ -3907,12 +3908,22 @@ private:
         op->getNumSuccessors())
       return failure();
     if (op->getParentOp() == module) {
+      FailureOr<InstantiatedIntegerExpression> expression = failure();
+      if (captureProbe) {
+        // Capture classification must not diagnose a valid runtime Integer as
+        // an invalid static bound. The actual static-use path below is unchanged.
+        expression = resolveOwnedIntegerExpression(module, value,
+                                                   ParameterIntegerMode::MathematicalSigned64);
+        if (failed(expression))
+          return failure();
+      }
       llvm::DenseSet<Value> activeDependencies, visited;
       if (failed(verifyGeneratedBoundDependencies(value, module, use, activeDependencies, visited,
                                                   !behavioral)))
         return failure();
-      auto expression =
-          resolveOwnedIntegerExpression(module, value, ParameterIntegerMode::MathematicalSigned64);
+      if (!captureProbe)
+        expression = resolveOwnedIntegerExpression(module, value,
+                                                   ParameterIntegerMode::MathematicalSigned64);
       return failed(expression)
                  ? FailureOr<StructuralIntegerFacts>(failure())
                  : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
@@ -3979,6 +3990,7 @@ private:
                : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
   }
   bool behavioral;
+  bool captureProbe;
   unsigned work = 0;
   llvm::DenseMap<Value, StructuralIntegerFacts> memo;
   llvm::DenseSet<Value> active;
@@ -3992,5 +4004,8 @@ FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(Value value
 }
 FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(Value value, Operation *use) {
   return StructuralIntegerQuery(true).resolve(value, use);
+}
+FailureOr<StructuralIntegerFacts> probeBehavioralIntegerCapture(Value value, Operation *use) {
+  return StructuralIntegerQuery(true, true).resolve(value, use);
 }
 } // namespace nodal

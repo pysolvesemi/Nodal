@@ -532,4 +532,23 @@ private[nodal] object ConstructionKernel:
   def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
     active.foreach(_.assignSignalSelection(left, right))
 
+  def memoryRead[A <: Data](memory: Mem[A], address: Expr[UInt]): Expr[A] = active match
+    case Some(session) => session.memoryRead(memory, address)
+    case None => scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-MEMORY-056-001",
+        "memory read requires an active owning Module"
+      ))).get
+
+  def memoryWrite[A <: Data](
+      memory: Mem[A],
+      address: Expr[UInt],
+      value: Expr[A],
+      mask: Expr[Bits]
+  ): Unit = active match
+    case Some(session) => session.memoryWrite(memory, address, value, mask)
+    case None => scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-MEMORY-056-001",
+        "memory write requires an active owning Module"
+      ))).get
+
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))

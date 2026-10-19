@@ -11,6 +11,21 @@ struct SequentialModelLimits {
   unsigned maximumCaptures = 8192;
   unsigned maximumNormalizedOperations = 262144;
 };
+/// Shared narrow physical sampling proof. Memory and registers use the same
+/// dependency/domain owner, including unique local requirement bindings.
+struct SequentialSample {
+  mlir::Value value;
+  mlir::Attribute domain;
+  mlir::Operation *use;
+};
+mlir::FailureOr<mlir::Operation *> resolveSequentialDomain(mlir::Operation *use,
+                                                           mlir::Attribute reference);
+mlir::FailureOr<mlir::Operation *> resolveSequentialBinding(mlir::Operation *use,
+                                                            mlir::Attribute reference);
+mlir::LogicalResult verifySequentialSamples(mlir::Operation *module,
+                                            llvm::ArrayRef<SequentialSample> samples,
+                                            SequentialModelLimits limits = {},
+                                            unsigned alreadyCharged = 0);
 struct BehavioralIfHeader {
   mlir::Operation *operation = nullptr;
   mlir::Operation *module = nullptr;

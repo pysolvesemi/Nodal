@@ -1,6 +1,6 @@
 # NodalSequentialState-DG v0.4 — owned memory ports
 
-**Status:** Approved additive design; implementation and focused checks pending
+**Status:** Implemented finite profile; focused source, frontend, bridge and native checks pass
 **Scope:** public-api and compiler-boundary
 **Baseline:** `18acaa6b1443607908babfbc6f4fec28999062c4`
 
@@ -10,7 +10,9 @@ The explicit Foundation implementation authority recorded in
 [v0.1](NodalSequentialState-DG-v0.1.md) covers this required F-056.B.2 work.
 This gate selects the bounded missing port semantics; it does not assert that
 the user separately selected each signature or policy detail. The prototype
-policy applies, and all implementation/acceptance claims remain pending.
+policy applies. Implementation and focused acceptance are recorded in the
+[increment readiness note](../implementation/increment56-readiness.md#final-owned-memory-port-integration);
+parent completion still requires verified integration.
 
 [ADR0009 memory contracts](../architecture/0009-core-semantic-contracts.md#memory-contracts)
 requires explicit latency, masks, port domains, ordering/collisions and supported
@@ -112,8 +114,13 @@ memory-depth expansion or general linearity claim.
 ## Required replay and target allocation
 
 Actual public capture -> bridge -> native for all whole-element types, byte masks,
-zero masks, safe/unsafe symbolic bounds, foreign Interface/requirement/register
-provenance, priority/disjoint writes, and async versus synchronous dependencies.
+zero masks, safe/unsafe symbolic bounds, register provenance, priority/disjoint
+writes, and async versus synchronous dependencies. Verify actual Interface and
+requirement provenance independently at the represented bridge/native boundaries.
+The existing public `InterfacePort.observeMember` returns Unit, so it cannot supply
+a typed memory data expression; this checkpoint does not invent such an accessor
+or claim a public Interface-to-memory witness. Requirement association and physical
+inherited execution remain distinct under their existing ownership contracts.
 Causal distinct values must establish old/new/hold, latency 1 versus 2 and ordered
 write reversal. Forged symbols, arities, types, enum ABI, guards, domains, address
 proofs and order inventories reject independently and transactionally.

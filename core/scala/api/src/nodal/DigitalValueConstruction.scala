@@ -19,7 +19,8 @@ private[nodal] object DigitalValueConstruction:
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
         (operation == DigitalCollectionContract.Operation ||
           operation == StructuralIfRuntime.Operation ||
-          operation == SequentialRuntime.PredicateOperation || FlatFsmRuntime.Operations(operation))
+          operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+          FlatFsmRuntime.Operations(operation))
     )
 
   def snapshot(
@@ -30,7 +31,8 @@ private[nodal] object DigitalValueConstruction:
       renderType: (DataType[?], Long, Option[String]) => String,
       regionOf: KernelExpr[?] => Option[String],
       operandPath: (KernelExpr[?], Any) => Option[String],
-      argumentPaths: Set[String]
+      argumentPaths: Set[String],
+      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -92,7 +94,7 @@ private[nodal] object DigitalValueConstruction:
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
             (operation == DigitalCollectionContract.Operation ||
               operation == StructuralIfRuntime.Operation ||
-              operation == SequentialRuntime.PredicateOperation ||
+              operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
               FlatFsmRuntime.Operations(operation))
         )
       then
@@ -161,7 +163,7 @@ private[nodal] object DigitalValueConstruction:
           expression.operands.filterNot(value =>
             value.isInstanceOf[EnumOperationMetadata] ||
               value.isInstanceOf[StructOperationMetadata] ||
-              value.isInstanceOf[FlatFsmCompletionMetadata]
+              value.isInstanceOf[FlatFsmCompletionMetadata] || value.isInstanceOf[MemoryPortCapture]
           ).map: operand =>
             operand match
               case candidate: KernelExpr[?] =>
@@ -200,6 +202,7 @@ private[nodal] object DigitalValueConstruction:
               value.ordinal,
               value.name
             )
-          )
+          ),
+          memory = memoryPort(expression)
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

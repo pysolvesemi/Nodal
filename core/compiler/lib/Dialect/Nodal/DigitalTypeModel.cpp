@@ -6,6 +6,7 @@
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -282,6 +283,8 @@ public:
     }
     if (llvm::isa<LocalDomainBindingOp>(use))
       return verifyLocalDomainBinding(use);
+    if (llvm::isa<MemoryWriteEffectOp>(use))
+      return verifyMemoryPort(use);
     if (llvm::isa<SequentialUpdateOp>(use))
       return verifySequentialUpdate(use);
     if (llvm::isa<ResetAssertedOp>(use))

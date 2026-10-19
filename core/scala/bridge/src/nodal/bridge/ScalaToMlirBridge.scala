@@ -195,12 +195,12 @@ private[nodal] object ScalaToMlirBridge:
           StaticRegion(value.path, value.owner, body.arguments, body.captures)
         )
       )
-    private val staticArguments = staticRegions.flatMap(region =>
+    private val staticArguments = mutable.Map.from(staticRegions.flatMap(region =>
       region.arguments.filter(argument =>
         argument.dataType == "Integer" &&
           argument.role == "static_capture"
       ).map(argument => argument.path -> region)
-    ).toMap
+    ).toMap)
     private val ordinaryCollectionsByPath = snapshot.digitalCollections.filterNot(value =>
       DigitalReductionContract.Kinds.contains(value.kind)
     ).map(value => value.path -> value).toMap
@@ -2418,8 +2418,9 @@ ${indent(body, 2)}
           path: String,
           region: Option[String],
           output: mutable.ArrayBuffer[String],
-          requireTopology: Boolean
+          purpose: DigitalValueMlir.StaticPurpose
       ): (String, String) =
+        val requireTopology = purpose != DigitalValueMlir.StaticPurpose.RuntimeValue
         if region.isEmpty && path.toLongOption.nonEmpty then
           val literal = path.toLong
           if literal.toString != path then
@@ -2446,7 +2447,13 @@ ${indent(body, 2)}
         else
           digitalValues.requireVisible(path, module.path, region, path)
           if requireTopology then
-            try digitalValues.requireStructuralStaticInput(path, module.path)
+            try
+              digitalValues.requireStructuralStaticInput(
+                path,
+                module.path,
+                purpose,
+                staticArguments.contains
+              )
             catch
               case error: BridgeException =>
                 fail("NODAL-BRIDGE-043", error.diagnostic.message, Some(path))
@@ -2477,11 +2484,16 @@ ${indent(body, 2)}
         compoundShapeDimensionPaths(text, path).distinct.foreach: dependency =>
           val actualRegion = digitalValues.valueRegion(dependency)
           if actualRegion == region then
-            val _ = renderDigitalStatic(dependency, region, output, true)
+            val _ = renderDigitalStatic(
+              dependency,
+              region,
+              output,
+              DigitalValueMlir.StaticPurpose.TypeArithmetic
+            )
           else if actualRegion.nonEmpty then
             fail(
               "NODAL-BRIDGE-055",
-              "digital type contains an escaped local width identity",
+              "digital type contains an escaped local width identity outside its exact lexical scope",
               Some(path)
             )
       def withDigitalCollectionContexts(
@@ -2495,6 +2507,19 @@ ${indent(body, 2)}
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-055", error.getMessage, Some(collection.path))
+        // Only the shared reduction owner can admit paired width formals. Index them after
+        // its complete signature/context checks; all bounds still come from the active Query.
+        if DigitalReductionContract.Kinds.contains(collection.kind) then
+          val region = StaticRegion(
+            collection.path,
+            collection.owner,
+            collection.arguments,
+            collection.captures
+          )
+          val formalCount = reductionValues.arguments(collection).get.size - 2
+          collection.arguments.take(formalCount).foreach(argument =>
+            staticArguments.update(argument.path, region)
+          )
         val firstStatic = nextShapeStaticValue
         try
           contexts.foreach: query =>
@@ -2589,8 +2614,11 @@ ${indent(body, 2)}
           activeIntegerQuery = previous
           enclosingIntegerQuery = previousParent
 
-      val sequential =
-        new SequentialMlir.Plan(module, declaration => localDomainName(module, declaration))
+      val sequential = new SequentialMlir.Plan(
+        module,
+        declaration => localDomainName(module, declaration),
+        digitalValues.accessedMemories(module.path)
+      )
       val digital = digitalValues.renderModule(
         module,
         parseType,
@@ -2687,6 +2715,29 @@ ${indent(body, 2)}
               Vector("maximum_trip_count" -> integer(region.maximumTripCount)) ++
                 region.maximum.toVector.map(value => "declared_maximum" -> integer(value))
             )
+          ),
+        (expression, result, dataType, address) =>
+          DigitalStorageMlir.renderMemoryRead(
+            digitalValues.memoryPort(
+              module.path,
+              expression.memory.get.memory,
+              expression.memory.get.domain,
+              expression.path
+            ),
+            result,
+            dataType,
+            address,
+            stableLocalSymbol,
+            bridgeMetadata(expression.path, Vector.empty),
+            location(expression.path)
+          ),
+        (write, operands) =>
+          DigitalStorageMlir.renderMemoryWrite(
+            digitalValues.memoryPort(module.path, write.memory, write.domain, write.path),
+            operands,
+            stableLocalSymbol,
+            bridgeMetadata(write.path, Vector("source_ordinal" -> integer(write.sourceOrdinal))),
+            location(write.path)
           )
       )
       body ++= digital.lines
@@ -5714,7 +5765,9 @@ ${indent(body, 2)}
     private def compoundShapeDimensionPaths(text: String, path: String): Vector[String] =
       val expressions = parameterExpressionsByOwner.getOrElse(resolveOwningModule(path), Map.empty)
       def known(value: String): Boolean =
-        expressions.contains(value) || staticArguments.contains(value)
+        expressions.contains(value) || staticArguments.contains(value) ||
+          (digitalValues.valueRegion(value).nonEmpty &&
+            digitalValues.expressionType(value) == "Integer")
       text match
         case WidthType(_, width) => Vector(width).filter(known)
         case value if value.startsWith("Struct(") && value.endsWith(")") =>

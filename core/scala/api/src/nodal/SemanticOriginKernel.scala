@@ -724,6 +724,34 @@ private[nodal] final class SemanticOriginBuilder:
       resolved.update(candidate.key, ResolvedName(selected, candidate.provenance))
     resolved.toMap
 
+  /** Allocate snapshot-only effect identities in the completed semantic namespace. Authored
+    * declarations and expressions keep their names regardless of whether they precede an effect.
+    * Reuse the canonical allocator; this creates no second reservation registry.
+    */
+  def auxiliaryPaths(
+      semantic: SemanticOriginResult,
+      bases: Map[Long, Vector[String]]
+  ): Map[Long, Vector[String]] =
+    if bases.isEmpty then Map.empty
+    else
+      val owners = semantic.modulePaths.map(_.swap)
+      val paths = semantic.modulePaths.valuesIterator ++ semantic.domainPaths.valuesIterator ++
+        semantic.declarationPaths.valuesIterator ++ semantic.expressionPaths.valuesIterator ++
+        semantic.instancePaths.valuesIterator
+      val namespaces = paths.flatMap: path =>
+        val boundary = path.lastIndexOf('.')
+        owners.get(path.take(boundary)).map(owner => owner -> path.drop(boundary + 1))
+      .toVector.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+      bases.map: (module, names) =>
+        val prefix = semantic.modulePaths(module) + "."
+        val allocated = allocate(
+          names.zipWithIndex.map((base, index) =>
+            NameCandidate(index.toString, base, "auxiliary-effect")
+          ),
+          namespaces.getOrElse(module, Set.empty)
+        )
+        module -> names.indices.map(index => prefix + allocated(index.toString).name).toVector
+
   private def objectPath(
       paths: IdentityHashMap[AnyRef, String],
       value: Any

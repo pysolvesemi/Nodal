@@ -1,6 +1,7 @@
 # Increment 56 readiness and implementation
 
-Status: implementation in progress; all original F56 children remain open.
+Status: scoped implementation and focused acceptance checks complete; A–F and
+F-056.B.1.1 are complete. G and the parent await verified integration.
 Base: `b0fa301533b52bc3e0f150c54d3af498ced3f3b5`, the verified F55 documentation
 closure after PR151. Branch: `increment/56-sequential-fsm`.
 
@@ -21,7 +22,7 @@ owners reuse canonical value/region/type/static-predicate machinery. Guard
 parameters retain static provenance without classifying state existence as
 topology-changing. No old descriptor-only fixture is counted as execution proof.
 
-Subsequent required F56 work remains explicit:
+The original post-register obligations were:
 
 - exhaustive action switch and manual enum state;
 - flat FSM construction, entry/active/exit/transition actions and observations;
@@ -52,7 +53,8 @@ expression/capture machinery, exact type/enum ABI checks, transactional mutation
 explicit resource bounds and deterministic identities. Future FSM local encoding
 will remain separate from the external ABI. The measured bounded observations
 below do not establish whole-pipeline complexity or downstream execution. All
-original checklist children and the parent remain open.
+original checklist children were still open at that first checkpoint; the later
+FSM/CIRCT checkpoint completes B.1 and B.3, while the parent remains open.
 
 ## First checkpoint implementation and focused acceptance
 
@@ -241,7 +243,7 @@ Nodal semantic owner under v0.4. These checkpoints do not close the full F56 par
 ports with whole-element storage compatibility, explicit byte masks, real
 ordering/collision/domain semantics and bounded address proofs. Read construction
 is initially module-level and continuously enabled; read values remain usable
-in branches/actions. This gate is preparation, not completed implementation.
+in branches/actions. This preparation gate is implemented by the final memory checkpoint below.
 
 ## Flat-FSM and fixed-scalar target integration
 
@@ -331,7 +333,17 @@ core:
 ```
 
 Its emitted target has one positive-edge register, no initial value and an
-explicit `reset ? 0 : enable ? input : stored` next-state expression. The full
+explicit `reset ? 0 : enable ? input : stored` next-state expression. The
+executed CIRCT export contains this SystemVerilog (location comments omitted):
+
+```systemverilog
+  reg  [7:0] stored;
+  always_ff @(posedge clock)
+    stored <= _GEN;
+  assign _GEN = reset ? 8'h0 : enable ? input_0 : stored;
+  assign output_0 = stored;
+```
+ The full
 FSM witness retains three registers and an owning-edge labeled Error assertion.
 The generated `.mlir` and `.sv` artifacts are in
 `.work/increment56/flat-fsm-live/public/`. Reproduction after the maintained Scala
@@ -391,4 +403,224 @@ The earlier component behavioral/structural compiler harnesses retain their own
 passing artifact-bound results; final source domain checks were replayed with the
 maintained API. Focused Markdown, registry generation, formatting and whitespace
 checks pass. No CI was run. B.1 and B.3 are complete for their stated deliverables;
-B.2 and the F56 parent remain open for memory and final increment integration.
+At that checkpoint B.2 and the F56 parent remained open. The final memory
+checkpoint below completes B.2; G and the parent await verified integration.
+
+## Final owned memory-port integration
+
+The v0.4 implementation replaces candidate strings with typed `memory_read`,
+`memory_write` and canonical `memory_write_effect` operations tied to the sole
+MemoryOp. Reads retain the declared compact latency/collision policy; writes carry
+actual typed address/data/mask/guard/clock edges and independently checked dense
+per-memory order. The shared sequential normalizer composes real module-root and
+FSM phase order, then defers canonical edge effects until their lifted producers
+and physical clock dominate. This preserves pre-edge sampling and authored write
+priority without a second branch scheduler.
+
+MemoryModel recomputes type, ownership, bounds, masks, domain sampling and conflict
+facts. It reuses DigitalValueModel's checked exact-value facts and ParameterModel's
+all-legal bounds; runtime Integer storage is not promoted to static evidence.
+Synchronous reads are dependency cuts; asynchronous reads retain address edges.
+The existing sequential and Interface owners provide sampled-domain provenance.
+A non-previewing shared normalization preflight prevents recursive raw/canonical
+cross-memory preview while retaining final conflict checks on the normalized clone.
+
+The read-only edge query operates on canonical typed ports and caller-supplied
+pre-edge values/cells, returning sparse writes and first-stage responses. Its
+compact response equation represents latency without allocating the memory depth
+or a latency-length pipeline. It refuses unnormalized nested writes. Per-address
+known-byte coverage preserves partial-write priority and can recover a fully
+specified word after all bytes are overwritten; unknown bytes remain unspecified.
+There is no second mutable simulator registry, implicit zero initialization or
+memory reset invented from the owning domain's reset pin.
+
+Component replay has passed causal OldData/NewData/NoChange/Undefined, latency1/2,
+ordered byte-write reversal, zero/disjoint masks, all element families, actual
+Interface/requirement provenance and transactional budget/ownership negatives.
+Actual public guarded/FSM replay caught the late-clock producer placement defect
+that the first unit fixtures missed; the unchanged public witness and strict
+future-clock negative now pass in the component build. Final integrated main-tree memory replay and the directly affected F55 bridge
+repairs now pass. The parent remains open until verified integration.
+
+### Concrete memory consumer handoff
+
+F63/F65 should consume the checked canonical effects and compact read-response
+contract, preserving actual clock/edge, guard and dense per-memory order. Required
+later target witnesses are the public UInt32/data + UInt4/mask case, reversed
+ordered byte writes with distinct values, simultaneous disjoint writes, and the
+same-address OldData/NewData/NoChange/Undefined cases. NoChange must retain its
+first response-stage state; latency 2 must advance later stages even when that
+first stage holds. Uninitialized cells and pipeline stages remain unspecified.
+
+F66 should execute those same collision cases with distinct pre-edge contents and
+new data, including an all-zero mask and complete byte coverage built from several
+partial writes. F67 should compare normalized versus emitted behavior for each
+policy, byte priority and latency 1 versus 2, without assuming zero initialization.
+F72 should retain the digital memory's clock/reset boundary in mixed output;
+absence of a memory reset is intentional even when the owning domain has one.
+These are concrete downstream obligations, not claims that RAM emission or those
+later consumer executions passed here. The current CIRCT adapter rejects the
+complete memory-backed design before returning partial target output.
+
+### Directly affected widening-reduction compatibility repair
+
+The extra maintained F55 bridge selection exposed five failures on the published
+pre-memory F56 tree (18/23 groups passed). The Integer storage separation had
+changed the bridge static-argument index to admit only `static_capture`, excluding
+reduction width formals previously handled by the shared reduction owner. The
+repair retains runtime Integer separation: only formals admitted by successful
+reduction-context validation receive width facts, and bounds still come from the
+active shared query. Retained type arithmetic is distinguished from actual
+structural predicates and loop/Generate bounds; width formals do not thereby
+become legal topology predicates. Lexical ownership is checked separately from
+proof admission, including escaped or sibling formals.
+
+The unused-capture adversarial fixture also selected the newly introduced Clock
+input instead of its intended ordinary data input. Its selection now identifies
+the intended type, retaining the original unused-SSA assertion. Repeated child
+comparison preserves separate instance locations and child paths while allowing
+actual equivalent definitions to share one canonical module. Original retained
+F55 output had occurrence-derived definition spans/reset-source names; current
+physical clock/reset boundaries and true definition locations remove those
+incidental differences. Exact canonical equality and genuinely differing
+source/body controls, rather than module count alone, establish compatibility.
+All 40 focused collection/structural/widening bridge groups pass in both the
+isolated repair replay and the final maintained build. The 45 affected
+memory/storage/sequential/FSM/waveform groups were rerun on that final bridge and
+pass as well.
+
+### Executed public memory example
+
+The maintained `Increment56MemoryBridgeTests` native replay constructs the following
+actual public fixture in `Increment56MemoryBridgeSource.scala`. Its `new-data` case
+selects `collision = ReadUnderWrite.NewData`; other defaults stay unchanged.
+
+```scala
+final class Increment56MemoryPolicySource(
+    latency: Int = 1,
+    collision: ReadUnderWrite = ReadUnderWrite.OldData,
+    ordering: MemoryOrdering = MemoryOrdering.Ordered,
+    reverse: Boolean = false,
+    disjoint: Boolean = false,
+    zero: Boolean = false
+) extends Module:
+  val root = ClockDomain.external(
+    "root",
+    ClockEdge.Rising,
+    ResetPolicy.None,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val memory = Mem(UInt(16), 2, latency, collision, ordering, root)
+  val firstAddress = 0.U(1)
+  val secondAddress = (if disjoint then 1 else 0).U(1)
+  val firstValue = 0x1122.U(16)
+  val secondValue = 0x3344.U(16)
+  val firstMask = 1.U(2)
+  val secondMask = (if zero then 0 else 3).U(2)
+  if reverse then
+    memory.write(secondAddress, secondValue, secondMask)
+    memory.write(firstAddress, firstValue, firstMask)
+  else
+    memory.write(firstAddress, firstValue, firstMask)
+    memory.write(secondAddress, secondValue, secondMask)
+  val read = memory.read(firstAddress)
+```
+
+The corresponding normalized Nodal IR below is an actual excerpt from
+`.work/increment56/memory-live/public/new-data.normalized.mlir`; unrelated
+declarations and operand producers are omitted, with SSA names unchanged. This
+is canonical memory IR, not emitted RAM SystemVerilog. The existing register/FSM
+SystemVerilog demonstration above covers the implemented target profile.
+
+```mlir
+    "nodal.memory"() <{depth = "2", domain = @root, element_type = !nodal.uint<16>, metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "Increment56MemoryPolicySource.memory", source_end_column = 68 : i64, source_end_line = 197 : i64}, ordering = "ordered", read_latency = 1 : i64, read_under_write = "new_data", sym_name = "memory"}> : () -> ()
+    %3 = "nodal.memory_read"(%0) <{domain = @root, memory = @memory, metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "Increment56MemoryPolicySource.read", source_end_column = 39 : i64, source_end_line = 210 : i64}}> : (!nodal.uint<1>) -> !nodal.uint<16>
+    "nodal.memory_write_effect"(%0, %2, %1, %8, %7) <{domain = @root, edge = "rising", memory = @memory, metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "Increment56MemoryPolicySource.memory_write_0", source_end_column = 54 : i64, source_end_line = 208 : i64, source_ordinal = 0 : i64}, order = 0 : i64, root_id = "Increment56MemoryPolicySource.memory_write_0"}> : (!nodal.uint<1>, !nodal.uint<16>, !nodal.uint<2>, !nodal.bits<1>, !nodal.capability<"clock">) -> ()
+    "nodal.memory_write_effect"(%4, %6, %5, %9, %7) <{domain = @root, edge = "rising", memory = @memory, metadata = {bridge_schema = "nodal.scala-to-mlir", bridge_version = 1 : i64, semantic_path = "Increment56MemoryPolicySource.memory_write_1", source_end_column = 57 : i64, source_end_line = 209 : i64, source_ordinal = 1 : i64}, order = 1 : i64, root_id = "Increment56MemoryPolicySource.memory_write_1"}> : (!nodal.uint<1>, !nodal.uint<16>, !nodal.uint<2>, !nodal.bits<1>, !nodal.capability<"clock">) -> ()
+```
+
+Reproduce through `Increment56MemoryBridgeTests` with `NODAL_NODALC` pointing to
+the built `nodalc`; its `NativeCompilerRequest` supplies
+`--nodal-normalize-sequential` and writes raw/normalized fixtures beneath
+`.work/increment56-memory-bridge`. The executed configuration used the maintained
+release binary in Nodal-IR normalization mode, without RAM target emission. The
+second ordered write
+replaces both bytes with `0x3344`; reversing these actual writes instead leaves
+`0x3322`. Native edge-query cases independently establish that value difference
+and policy-specific old/new/hold responses.
+
+### Memory architecture and scale review
+
+The completed-namespace semantic-name allocator now reserves all authored names
+before assigning effect identities, including declarations appearing after a
+write. This retains one canonical identity owner; neither the bridge nor native
+verifier relaxes uniqueness. The bridge transports actual SSA operands, while
+native admission independently recomputes address, mask, domain and order facts.
+The canonical memory query is stateless and consumes explicit pre-edge values;
+no competing behavioral simulator or hidden state initialization was added.
+
+The maintained release memory test measured 32 independent ports, 496 charged
+pair queries, depth and latency of 1,000,000,000, and 110 normalized operations
+in 15 ms for that one local run. This demonstrates compact depth/latency retention,
+not a speedup or whole-pipeline linearity claim. Pairwise conflict proof remains
+bounded quadratic work. Strict over-budget, malformed-input and transactional
+failure controls passed. No additional optimization is justified here: changing
+write ordering, coalescing unknown-mask writes, synthesizing initial cells or
+folding NoChange into a stateless value would alter observable semantics.
+
+### Maintained memory checkpoint results
+
+The main-tree release replay passed 114 memory, 71 sequential, 59 flat-FSM,
+62 sequential-CIRCT, 79 target-capability, 362 digital-value, 119 digital-storage,
+34 assignment-guard and 69 structural-if cases (969 total), plus five exact
+memory capability/target-refusal checks. Maintained Scala compilation passed;
+55 source/sequential/FSM groups and 45 memory/storage/bridge/waveform groups
+passed, as did 17 selected source-identity/discovery predecessors. The real
+frontend plugin harness accepted its positive and separately compiled helper
+and rejected all eight exact memory allocation/effect/private-entry negatives.
+
+The public native replay covers 16 positive designs and six precise negative
+mutations; repeat normalization/idempotence passed 32 checks in the frozen
+component replay. All 16 main-tree normalized outputs equal those component
+outputs byte-for-byte. Two raw enum source-location records correctly name their
+different physical compilation roots; comparison after that exact root rebase
+matches, and emitted artifacts are not rewritten. The naming repair preserves
+18 earlier noncolliding raw outputs and 14 normalized outputs byte-for-byte in
+the same source context.
+
+Fifteen changed Scala files pass pinned formatting. The focused lint comparison
+retains exactly the 11 pre-existing diagnostics on unchanged offending statements;
+this is not a clean-lint claim. Original F15 fixtures remain unchanged: the plain
+UnifiedV03 compile-only example passes; exact pre-memory/current plugin controls
+retain the same inherited closed-dispatch `Seq.foreach` and unavailable
+`enumEncoding` summary failures. These controls do not claim an executed historical
+whole-tree build. The separate F55 width-consumer regression repair passes its final 40 maintained
+groups; the final bridge also passes the 45 directly affected groups again.
+
+## Final scoped acceptance and integration handoff
+
+A–F and the mandatory F-056.B.1.1 amendment are complete for the approved finite
+profiles. Earlier register/FSM/CIRCT evidence remains the evidence for those
+unchanged production paths; the final memory checkpoint and shared bridge repair
+results above cover their affected consumers. Native and source architecture
+reviews found no remaining concrete blocker after the causal fixes. There is no
+known required in-scope failure left. G and the parent stay open until the exact
+tested tree is squash-merged and independently verified.
+
+The maintained validation used pinned local toolchains, selected suite runners
+and `NODAL_NODALC=.work/increment56/memory-live/bin/nodalc`; complete commands and
+raw logs remain under `.work/increment56/memory-live`. A repository-native way to
+reproduce the public memory selection is:
+
+```sh
+NODAL_NODALC="$PWD/.work/native-release/bin/nodalc" \
+  ./mill core.scala.testkit.test.testOnly \
+  nodal.internal.testkit.Increment56MemoryBridgeTests
+```
+
+The final native SHA256 is
+`c4b9bf58f6cb7ad9f36135f9321e37fc8cbf8e233f6b1a487b8263cb1d83d911`.
+The final memory frontend harness used plugin SHA256
+`589adeeaed2a7ccf7ddcfeecc6fb5e179e9a8dbdbe66e82f18c23a0ed4e03b15`.
+No CI, simulator RAM execution or later consumer qualification is claimed.

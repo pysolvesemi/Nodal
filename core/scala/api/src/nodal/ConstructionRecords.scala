@@ -124,7 +124,28 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     caseIds: Vector[String],
     region: Option[String] = None,
     materializationIntent: Option[KernelDigitalIntent] = None,
-    structure: Option[KernelStructOperationSnapshot] = None
+    structure: Option[KernelStructOperationSnapshot] = None,
+    memory: Option[KernelMemoryPortSnapshot] = None
+)
+
+/** Exact declaration association. Address/type proofs remain attached to actual operands. */
+private[nodal] final case class KernelMemoryPortSnapshot(memory: String, domain: String)
+
+private[nodal] final case class KernelMemoryWriteSnapshot(
+    path: String,
+    owner: String,
+    memory: String,
+    domain: String,
+    address: String,
+    value: String,
+    mask: String,
+    region: Option[String] = None,
+    sourceOrdinal: Int = 0
+)
+
+private[nodal] final case class MemoryPortCapture(
+    memory: Mem[?],
+    lexicalDomain: Option[ClockDomain]
 )
 
 private[nodal] final case class KernelDigitalRegionArgument(
@@ -472,6 +493,7 @@ private[nodal] final case class ConstructionSnapshot(
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
     digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
+    memoryWrites: Vector[KernelMemoryWriteSnapshot] = Vector.empty,
     digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
     digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
     iterationIndices: Vector[KernelIterationIndexSnapshot] = Vector.empty,

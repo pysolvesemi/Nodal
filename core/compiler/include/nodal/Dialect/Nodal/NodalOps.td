@@ -151,6 +151,30 @@ def Nodal_MemoryOp : Nodal_Op<"memory", [HasParent<"ModuleOp">, Symbol]> {
   let hasVerifier = 1;
 }
 
+// F56 owned memory ports. Reads are continuously enabled intrinsic state ports;
+// write ingress receives its actual guard/clock/order from SequentialModel.
+def Nodal_MemoryReadOp : Nodal_Op<"memory_read", [HasParent<"ModuleOp">]> {
+  let summary = "Owned memory read with intrinsic exact latency and collision semantics";
+  let arguments = (ins AnyType:$address, FlatSymbolRefAttr:$memory,
+    FlatSymbolRefAttr:$domain, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_MemoryWriteOp : Nodal_Op<"memory_write",
+    [ParentOneOf<["ModuleOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
+  let summary = "Typed owned memory write before checked path/order normalization";
+  let arguments = (ins AnyType:$address, AnyType:$value, AnyType:$mask,
+    FlatSymbolRefAttr:$memory, FlatSymbolRefAttr:$domain, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+def Nodal_MemoryWriteEffectOp : Nodal_Op<"memory_write_effect", [HasParent<"ModuleOp">]> {
+  let summary = "Canonical pre-edge guarded write in authored per-memory port order";
+  let arguments = (ins AnyType:$address, AnyType:$value, AnyType:$mask,
+    AnyType:$guard, AnyType:$clock, FlatSymbolRefAttr:$memory, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, I64Attr:$order, StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
   let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);

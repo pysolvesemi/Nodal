@@ -9,6 +9,9 @@ import scala.collection.mutable
   * in EnumMlir.
   */
 private[nodal] object DigitalValueMlir:
+  enum StaticPurpose:
+    case RuntimeValue, Structural, TypeArithmetic
+
   final case class ScalarType(kind: String, width: String, lower: Long, upper: Long)
   final case class Rendered(lines: Vector[String], values: Map[String, (String, String)])
   final case class Projection(lines: Vector[String], value: (String, String))
@@ -235,6 +238,29 @@ private[nodal] object DigitalValueMlir:
         snapshot.shapeViews.filter(_.generatedScope.nonEmpty).map(_.path)
     private val assignmentsByRegion =
       snapshot.digitalAssignments.groupBy(value => value.owner -> value.region)
+    private val assignmentPaths = snapshot.digitalAssignments.map(_.path).toSet
+    private val memoryPortTargets = mutable.HashMap.empty[
+      (String, String, String),
+      (KernelDeclarationSnapshot, KernelDomainSnapshot)
+    ]
+    def memoryPort(
+        owner: String,
+        memory: String,
+        domain: String,
+        path: String
+    ): (KernelDeclarationSnapshot, KernelDomainSnapshot) =
+      memoryPortTargets.getOrElseUpdate(
+        (owner, memory, domain),
+        DigitalStorageMlir.memoryPort(modules(owner), memory, domain, path)
+      )
+    private val memoryWritesByRegion =
+      snapshot.memoryWrites.groupBy(value => value.owner -> value.region)
+    private val memoryPathsByOwner = (snapshot.digitalExpressions.flatMap(value =>
+      value.memory.map(port => value.owner -> port.memory)
+    ) ++ snapshot.memoryWrites.map(value => value.owner -> value.memory))
+      .groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+    def accessedMemories(owner: String): Set[String] =
+      memoryPathsByOwner.getOrElse(owner, Set.empty)
     private val selectorsByPath =
       (snapshot.shapeIndices.map(value => value.path -> value.indices) ++
         snapshot.shapeViews.map(value =>
@@ -412,7 +438,8 @@ private[nodal] object DigitalValueMlir:
         path: String,
         owner: String,
         topology: Boolean,
-        structural: Boolean = false
+        structural: Boolean = false,
+        admittedWidthFormal: String => Boolean = _ => false
     ): Unit =
       val pending = mutable.ArrayDeque(path)
       val seen = mutable.HashSet.empty[String]
@@ -423,6 +450,10 @@ private[nodal] object DigitalValueMlir:
           arguments.get(input) match
             case Some((scope, argument))
                 if generated.contains(scope.path) && argument.role == "induction" => ()
+            case Some((_, argument))
+                if admittedWidthFormal(input) &&
+                  (argument.role.startsWith("left_width:") ||
+                    argument.role.startsWith("right_width:")) => ()
             case Some((scope, argument)) =>
               val capture = scope.arguments.indexWhere(
                 _.path == input
@@ -466,11 +497,24 @@ private[nodal] object DigitalValueMlir:
                     path
                   )
 
-    private val admittedStructuralInputs = mutable.HashSet.empty[(String, String)]
-    def requireStructuralStaticInput(path: String, owner: String): Unit =
-      if !admittedStructuralInputs.contains(owner -> path) then
-        requireStaticPredicateInput(path, owner, topology = false, structural = true)
-        admittedStructuralInputs.add(owner -> path)
+    private val admittedStructuralInputs = mutable.HashSet.empty[(String, String, StaticPurpose)]
+    def requireStructuralStaticInput(
+        path: String,
+        owner: String,
+        purpose: StaticPurpose,
+        admittedWidthFormal: String => Boolean
+    ): Unit =
+      val key = (owner, path, purpose)
+      if !admittedStructuralInputs.contains(key) then
+        requireStaticPredicateInput(
+          path,
+          owner,
+          topology = false,
+          structural = true,
+          admittedWidthFormal =
+            if purpose == StaticPurpose.TypeArithmetic then admittedWidthFormal else _ => false
+        )
+        admittedStructuralInputs.add(key)
 
     snapshot.staticPredicates.foreach: predicate =>
       val comparison = Set("eq", "ne", "lt", "le", "gt", "ge").contains(predicate.operation)
@@ -1073,6 +1117,33 @@ private[nodal] object DigitalValueMlir:
         "digital assignment kind differs from its exact sink kind or uses an unsupported projected register update",
         assignment.path
       )
+    requireValid(
+      snapshot.memoryWrites.size <= 65536 &&
+        snapshot.memoryWrites.map(_.path).distinct.size == snapshot.memoryWrites.size,
+      "duplicate or excessive memory write identities",
+      snapshot.root
+    )
+    snapshot.memoryWrites.foreach: write =>
+      requireValid(
+        modules.contains(write.owner) && write.path.startsWith(write.owner + ".") &&
+          !expressions.contains(write.path) && !declarations.contains(write.path) &&
+          !staticExpressions.contains(write.path) && !arguments.contains(write.path) &&
+          !assignmentPaths.contains(write.path) &&
+          !conditionals.contains(write.path) && !machines.contains(write.path) &&
+          !switches.contains(write.path) && !regions.contains(write.path) &&
+          !predicates.contains(write.path) && !iterationIndices.contains(write.path) &&
+          write.path == write.path.trim && write.sourceOrdinal >= 0 &&
+          write.region.forall(region =>
+            regions.get(region).exists(_.owner == write.owner) && sequentialRoot(region).nonEmpty
+          ),
+        "memory write requires an exact module or sequential effect scope and source order",
+        write.path
+      )
+      val _ = memoryPort(write.owner, write.memory, write.domain, write.path)
+      Vector(write.address, write.value, write.mask).foreach(input =>
+        requireVisible(input, write.owner, write.region, write.path)
+      )
+
     assignmentsByRegion.foreach:
       case ((owner, region), assignments) =>
         if region.isEmpty && (loopsByOwner.contains(owner) || assignments.exists(
@@ -1156,6 +1227,21 @@ private[nodal] object DigitalValueMlir:
         "digital expression has invalid module ownership, identity or operand count",
         expression.path
       )
+      requireValid(
+        (expression.operation == "memory_read") == expression.memory.nonEmpty,
+        "only memory reads carry one exact memory port identity",
+        expression.path
+      )
+      expression.memory.foreach: port =>
+        requireValid(
+          expression.region.isEmpty && expression.operands.size == 1 &&
+            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+            expression.caseIds.isEmpty && expression.structure.isEmpty &&
+            expression.materializationIntent.isEmpty,
+          "memory read requires one module-level address without unrelated expression facts",
+          expression.path
+        )
+        val _ = memoryPort(expression.owner, port.memory, port.domain, expression.path)
       expression.region.foreach: region =>
         requireValid(
           regions.get(region).exists(_.owner == expression.owner),
@@ -1817,7 +1903,7 @@ private[nodal] object DigitalValueMlir:
         ) => Projection,
         additionalRoots: Vector[String],
         domainReference: String => String,
-        staticValue: (String, Option[String], mutable.ArrayBuffer[String], Boolean) => (
+        staticValue: (String, Option[String], mutable.ArrayBuffer[String], StaticPurpose) => (
             String,
             String
         ),
@@ -1845,7 +1931,14 @@ private[nodal] object DigitalValueMlir:
             (String, String),
             (String, String)
         ) => String,
-        effectMetadata: (String, Int) => String
+        effectMetadata: (String, Int) => String,
+        renderMemoryRead: (
+            KernelDigitalExpressionSnapshot,
+            String,
+            String,
+            (String, String)
+        ) => String,
+        renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
     ): Rendered =
       val lines = mutable.ArrayBuffer.empty[String]
       val values = mutable.HashMap.empty[String, (String, String)]
@@ -1866,6 +1959,31 @@ private[nodal] object DigitalValueMlir:
           proofs.remove(identity)
           emittedEffects.remove(identity)
 
+      def emitMemoryWrite(
+          write: KernelMemoryWriteSnapshot,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        val paths = Vector(write.address, write.value, write.mask)
+        val operands = paths.map(emit(_, depth + 1, write.region, output))
+        val declaration = memoryPort(module.path, write.memory, write.domain, write.path)._1
+        requireValid(
+          scalarType(expressionType(write.address), write.path).exists(_.kind == "UInt") &&
+            scalarType(expressionType(write.mask), write.path).exists(value =>
+              Set("Bits", "UInt").contains(value.kind)
+            ) && exactValueType(
+              expressionType(write.value),
+              declaration.dataType.get,
+              write.path
+            ) &&
+            paths.zip(operands).forall((path, operand) =>
+              operand._2 == nativeType(expressionType(path), path)
+            ),
+          "memory write requires UInt address, Bits mask and exact element value types",
+          write.path
+        )
+        output += renderMemoryWrite(write, operands)
+
       def emitScope(region: String, depth: Int, output: mutable.ArrayBuffer[String]): Unit =
         val scoped = Some(region)
         val effects = assignmentsByRegion.getOrElse(module.path -> scoped, Vector.empty)
@@ -1879,7 +1997,9 @@ private[nodal] object DigitalValueMlir:
                 output += renderAssignment(value, target, source)
               }
             )
-          ) ++ conditionalsByRegion.getOrElse(module.path -> scoped, Vector.empty)
+          ) ++ memoryWritesByRegion.getOrElse(module.path -> scoped, Vector.empty).map(value =>
+          (value.sourceOrdinal, value.path, () => emitMemoryWrite(value, depth + 1, output))
+        ) ++ conditionalsByRegion.getOrElse(module.path -> scoped, Vector.empty)
           .map(value =>
             (
               value.sourceOrdinal,
@@ -1909,7 +2029,8 @@ private[nodal] object DigitalValueMlir:
               depth + 1,
               scoped,
               output,
-              topology = sequentialRoot(region).isEmpty
+              topology = sequentialRoot(region).isEmpty,
+              typeArithmetic = true
             )
         )
         predicatesByRegion.getOrElse(scoped, Vector.empty).sortBy(_.path).foreach(value =>
@@ -2148,7 +2269,8 @@ private[nodal] object DigitalValueMlir:
               depth + 1,
               conditional.parentRegion,
               output,
-              topology = conditional.behavioralRoot.isEmpty
+              topology = conditional.behavioralRoot.isEmpty,
+              typeArithmetic = true
             ))
           )
           val rendered = Vector(conditional.trueArm, conditional.falseArm).zip(allCaptures).map:
@@ -2310,14 +2432,16 @@ private[nodal] object DigitalValueMlir:
         )
         val body = region.digitalBody.get
         val header = Vector(region.lower, region.upperExclusive, region.step).map: path =>
-          if path.toLongOption.nonEmpty then staticValue(path, region.parent, output, true)
+          if path.toLongOption.nonEmpty then
+            staticValue(path, region.parent, output, StaticPurpose.Structural)
           else emit(path, depth + 1, region.parent, output)
         requireValid(
           header.forall(_._2 == "i64"),
           "Generate bounds require three actual i64 operands",
           region.path
         )
-        val captures = body.captures.map(emit(_, depth + 1, region.parent, output))
+        val captures =
+          body.captures.map(emit(_, depth + 1, region.parent, output, typeArithmetic = true))
         val induction = s"%generated_index_$ordinal"
         ordinal += 1
         val local = mutable.ArrayBuffer.empty[String]
@@ -2376,7 +2500,8 @@ private[nodal] object DigitalValueMlir:
           depth: Int,
           region: Option[String],
           output: mutable.ArrayBuffer[String],
-          topology: Boolean = true
+          topology: Boolean = true,
+          typeArithmetic: Boolean = false
       ): (String, String) =
         requireValid(depth <= 128, "digital expression graph exceeds depth limit", path)
         requireVisible(path, module.path, region, path)
@@ -2450,7 +2575,11 @@ private[nodal] object DigitalValueMlir:
             value._2.kind == "parameter" && value._2.dataType.contains("Integer")
           )
         then
-          val value = staticValue(path, region, output, topology)
+          val purpose =
+            if !topology then StaticPurpose.RuntimeValue
+            else if typeArithmetic then StaticPurpose.TypeArithmetic
+            else StaticPurpose.Structural
+          val value = staticValue(path, region, output, purpose)
           values.update(path, value)
           heights.update(path, 0)
           proofs.update(path, Unknown)
@@ -2491,7 +2620,17 @@ private[nodal] object DigitalValueMlir:
               val unsigned = scalarType(sourceType, path).exists(_.kind != "SInt")
               val (text, height, proof) = expressions.get(path) match
                 case Some(expression) =>
-                  val operands = expression.operands.map(emit(_, depth + 1, region, output))
+                  val typeCaptures =
+                    collections.get(path).map(_.captures.toSet).getOrElse(Set.empty)
+                  val operands = expression.operands.map(input =>
+                    emit(
+                      input,
+                      depth + 1,
+                      region,
+                      output,
+                      typeArithmetic = typeCaptures.contains(input)
+                    )
+                  )
                   val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
                   val specialized =
                     DigitalInterfaceContract.ValueOperations.contains(expression.operation)
@@ -2502,7 +2641,24 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == "behavioral_predicate" then
+                  if expression.operation == "memory_read" then
+                    val port = expression.memory.get
+                    val declaration = memoryPort(module.path, port.memory, port.domain, path)._1
+                    requireValid(
+                      scalarType(
+                        expressionType(expression.operands.head),
+                        path
+                      ).exists(_.kind == "UInt") &&
+                        exactValueType(expression.dataType, declaration.dataType.get, path),
+                      "memory read requires UInt address and exact declared element result type",
+                      path
+                    )
+                    (
+                      Vector(renderMemoryRead(expression, result, dataType, operands.head)),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == "behavioral_predicate" then
                     requireValid(
                       expression.dataType == "Bool" && operands.map(_._2) == Vector(
                         "!nodal.static_predicate"
@@ -2601,7 +2757,7 @@ private[nodal] object DigitalValueMlir:
                         // Retained unused static operations are part of the closed pure body too.
                         staticByRegion.getOrElse(Some(path), Vector.empty).sortBy(_.path).foreach(
                           value =>
-                            staticValue(value.path, Some(path), local, true)
+                            staticValue(value.path, Some(path), local, StaticPurpose.TypeArithmetic)
                         )
                         bodyExpressions.filterNot(value =>
                           DigitalCombinationalContract.ReachableBooleanOperations.contains(
@@ -2918,14 +3074,15 @@ private[nodal] object DigitalValueMlir:
         lines += renderAssignment(assignment, target, value)
       def emitLoop(loop: KernelDigitalLoopSnapshot): Unit =
         val header = Vector(loop.lower, loop.upperExclusive, loop.step).map: path =>
-          if path.toLongOption.nonEmpty then staticValue(path, None, lines, true)
+          if path.toLongOption.nonEmpty then
+            staticValue(path, None, lines, StaticPurpose.Structural)
           else emit(path, 0, None, lines)
         requireValid(
           header.forall(_._2 == "i64"),
           "loop header requires static i64 operands",
           loop.path
         )
-        val captures = loop.captures.map(emit(_, 0, None, lines))
+        val captures = loop.captures.map(emit(_, 0, None, lines, typeArithmetic = true))
         val local = mutable.ArrayBuffer.empty[String]
         val blockArguments = loop.arguments.zipWithIndex.map: (argument, index) =>
           val name = s"%loop_${ordinal}_arg$index"
@@ -2981,6 +3138,10 @@ private[nodal] object DigitalValueMlir:
           s"({\n$nested\n}) : (${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(loop.path)}"
       val effects = assignmentsByRegion.getOrElse(module.path -> None, Vector.empty)
         .map(value => (value.sourceOrdinal, value.path, () => emitModuleAssignment(value))) ++
+        memoryWritesByRegion.getOrElse(module.path -> None, Vector.empty)
+          .map(value =>
+            (value.sourceOrdinal, value.path, () => emitMemoryWrite(value, 0, lines))
+          ) ++
         loopsByOwner.getOrElse(module.path, Vector.empty)
           .map(value => (value.sourceOrdinal, value.path, () => emitLoop(value))) ++
         moduleChoices.map(value =>
@@ -3000,6 +3161,7 @@ private[nodal] object DigitalValueMlir:
           .map(value => (value.sourceOrdinal, value.path, () => emitSwitch(value, 0, lines)))
       requireValid(
         effects.forall(_._1 == 0) && !loopsByOwner.contains(module.path) &&
+          !memoryWritesByRegion.contains(module.path -> None) &&
           conditionalsByRegion.getOrElse(module.path -> None, Vector.empty).isEmpty &&
           generatedByRegion.getOrElse(module.path -> None, Vector.empty).isEmpty ||
           effects.map(_._1).distinct.size == effects.size,

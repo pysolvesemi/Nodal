@@ -98,7 +98,7 @@ public:
       auto source = enumSwitchCaptureSource(arg);
       if (failed(source) || failed(verifyDigitalValueScope(*source, h.operation)))
         return failure();
-      auto facts = resolveBehavioralIntegerExpression(*source, h.operation);
+      auto facts = probeBehavioralIntegerCapture(*source, h.operation);
       // Only actual proved static origins enter the parameter environment.
       if (failed(facts) || !facts->expression)
         continue;

@@ -36,6 +36,16 @@ final class StructuralIfValueEffectsBridgeSource extends Module, StructuralIfClo
       ~second
   after := selected
 
+final class StructuralIfSiblingReductionsBridgeSource extends Module, StructuralIfClock:
+  val mode = param(0.integer)
+  val input = in(Vec(UInt(4), 3))
+  val runtimeWidth = in(Integer)
+  val selected: Expr[Vec[UInt]] = if mode == 0 then input else input
+  val first = input.reduce: (left, right) =>
+    if mode == 0 then left + right else left + right
+  val second = input.reduce: (left, right) =>
+    if mode == 0 then left + right else left + right
+
 object Increment55StructuralIfBridgeTests extends TestSuite:
   private def rejected(snapshot: ConstructionSnapshot, fragment: String): Unit =
     val error = scala.util.Try(ScalaToMlirBridge.fromSnapshot(snapshot)).failed.get
@@ -276,7 +286,10 @@ object Increment55StructuralIfBridgeTests extends TestSuite:
       )
       val snapshot = ConstructionKernel.inspect(new PublicStructuralWrites)
       val module = snapshot.modules.head
-      val extra = module.declarations.find(_.kind == "input").get.copy(
+      val extra = module.declarations.find(declaration =>
+        declaration.kind == "input" && declaration.name == "first" &&
+          declaration.dataType.contains("UInt(8)")
+      ).get.copy(
         path = module.path + ".unusedInput",
         name = "unusedInput"
       )
@@ -332,6 +345,56 @@ object Increment55StructuralIfBridgeTests extends TestSuite:
           )
         ),
         "induction"
+      )
+
+    test(
+      "reduction width identities require proved contexts and reject foreign or runtime formals"
+    ):
+      val snapshot = ConstructionKernel.inspect(new StructuralIfSiblingReductionsBridgeSource)
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.linesIterator.count(_.contains("\"nodal.collection\"")) == 2)
+      val first = snapshot.digitalCollections.find(_.path.endsWith(".first")).get
+      val second = snapshot.digitalCollections.find(_.path.endsWith(".second")).get
+      def changed(argument: KernelDigitalRegionArgument, index: Int): ConstructionSnapshot =
+        snapshot.copy(digitalCollections =
+          snapshot.digitalCollections.map(collection =>
+            if collection.path == first.path then
+              collection.copy(arguments = collection.arguments.updated(index, argument))
+            else collection
+          )
+        )
+      Vector("right_width:0", "static_capture", "capture").foreach: role =>
+        rejected(changed(first.arguments.head.copy(role = role), 0), "paired width formal")
+      rejected(
+        changed(first.arguments(2).copy(dataType = s"UInt(${second.arguments.head.path})"), 2),
+        "paired width formal"
+      )
+      val predicate = snapshot.staticPredicates.find(_.region.contains(first.path)).get
+      rejected(
+        snapshot.copy(staticPredicates =
+          snapshot.staticPredicates.map(value =>
+            if value.path == predicate.path then
+              value.copy(operands = value.operands.updated(0, first.arguments.head.path))
+            else value
+          )
+        ),
+        "proof-only width formals"
+      )
+      val runtime = snapshot.modules.head.declarations.find(_.name == "runtimeWidth").get
+      val modulePredicate = snapshot.staticPredicates.find(_.region.isEmpty).get
+      rejected(
+        snapshot.copy(staticPredicates =
+          snapshot.staticPredicates.map(value =>
+            if value.path == modulePredicate.path then
+              value.copy(operands = value.operands.updated(0, runtime.path))
+            else value
+          )
+        ),
+        "actual structural topology classification"
+      )
+      rejected(
+        changed(first.arguments(2).copy(dataType = s"UInt(${runtime.path})"), 2),
+        "paired width formal"
       )
 
     test("reduction alternatives validate actual arithmetic in every width context"):

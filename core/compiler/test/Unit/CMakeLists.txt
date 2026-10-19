@@ -675,3 +675,10 @@ target_link_libraries(nodal-sequential-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.sequential-circt-unit COMMAND nodal-sequential-circt-unit-tests)
 set_tests_properties(nodal.native.sequential-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-memory-model-unit-tests MemoryModelTest.cpp)
+llvm_update_compile_flags(nodal-memory-model-unit-tests)
+target_link_libraries(nodal-memory-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.memory-model-unit COMMAND nodal-memory-model-unit-tests)
+set_tests_properties(nodal.native.memory-model-unit PROPERTIES TIMEOUT 60)

@@ -6,6 +6,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -654,6 +655,14 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
             return failure();
       return read(node, *access, use);
     }
+  }
+  if (llvm::isa<MemoryReadOp>(definition)) {
+    auto port = inspectMemoryPort(definition);
+    if (failed(port))
+      return failure();
+    // Synchronous response is state. Its sampled address is checked separately
+    // by the same sampling owner; async response keeps its address edge here.
+    return port->latency ? success() : depend(node, definition->getOperand(0), definition);
   }
   if (llvm::isa<FlatFSMOp>(definition)) {
     SmallVector<Value, 8> dependencies;

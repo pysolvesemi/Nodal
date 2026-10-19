@@ -1652,6 +1652,10 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
             reference match
               case expression: KernelExpr[?] => pending ++= expression.operands
+              case memory: MemoryPortCapture =>
+                val declaration = memoryDeclaration(memory.memory, owner)
+                if declarationDomain(declaration, resolved).exists(_ != targetDomain) then
+                  behavioralFailure("memory value crosses an unrelated domain", "NODAL-CDC-001")
               case predicate: StaticPredicate => pending ++= predicate.operands
               case _ => ()
           case _ => ()
@@ -1697,64 +1701,109 @@ private final class ConstructionSession(val options: EmitOptions):
               guardsByRoot.getOrElse(identity, Vector.empty).foreach(record =>
                 dependencies(record, operation.owner, domain)
               )
+    def memoryPort(
+        capture: MemoryPortCapture,
+        owner: Long,
+        operands: Vector[Any],
+        region: Option[DigitalValueRegionRecord]
+    ): Unit =
+      val declaration = memoryDeclaration(capture.memory, owner)
+      val domain = declarationDomain(declaration, resolved).getOrElse(
+        memoryFailure("memory port has no resolved domain")
+      )
+      capture.lexicalDomain.foreach: lexical =>
+        if !resolved.get(domainRef(lexical)).contains(domain) then
+          behavioralFailure("memory port is inside a foreign active domain", "NODAL-CDC-001")
+      val root = sequentialRoot(region)
+      root.flatMap(flatFsms.get).foreach: machine =>
+        if !resolved.get(domainRef(machine.domain)).contains(domain) then
+          behavioralFailure("FSM memory write belongs to a different clock domain", "NODAL-CDC-001")
+      operands.foreach(dependencies(_, owner, domain))
+      root.foreach: identity =>
+        if checkedGuards.add((identity, owner, domain)) then
+          guardsByRoot.getOrElse(identity, Vector.empty).foreach(dependencies(_, owner, domain))
+    operations.iterator.filter(_.kind == "memory-write").foreach: operation =>
+      memoryPort(
+        operation.values.last.asInstanceOf[MemoryPortCapture],
+        operation.owner,
+        operation.values.slice(1, 4),
+        operation.digitalRegion
+      )
+    expressionValues.foreach: (reference, expression) =>
+      if expression.operation.contains("memory_read") then
+        val _ = memoryReadSnapshot(expression)
+        memoryPort(
+          expression.operands.last.asInstanceOf[MemoryPortCapture],
+          reference.module,
+          expression.operands.take(1),
+          None
+        )
     flatFsms.valuesIterator.foreach: record =>
       val targetDomain = pathOf(record.domain).get
       guardsByRoot.getOrElse(
         record.reference,
         Vector.empty
       ).foreach(dependencies(_, record.reference.module, targetDomain))
-    records.valuesIterator.flatMap(_.declarations).filter(_.kind == KernelSignalKind.Register)
-      .foreach: declaration =>
-        val target = declaration.reference
-        val domain = declarationDomain(declaration, resolved).flatMap(domainsByPath.get).getOrElse(
-          behavioralFailure("register update domain is not owned by this construction")
-        )
-        val behavioral = roots.get(target).exists(_.isLeft)
-        if domain.domain.clock.isEmpty && behavioral then
-          behavioralFailure("behavioral update requires an actual local Clock binding")
-        declaration.attributes.collectFirst { case ("initial", Some(value: Expr[?])) => value }
-          .foreach(dependencies(_, target.module, domainPath(domain.reference)))
-        if domain.domain.clock.nonEmpty then
-          def capability(value: Expr[?], expected: String): Unit =
-            if CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor) !=
-                Some(KernelTypeDescriptor(expected))
-            then behavioralFailure(s"local $expected binding requires its exact capability type")
-            var reference = assignmentReference(value)
-            val seen = mutable.HashSet.empty[ExpressionRef]
-            while reference.isInstanceOf[ExpressionRef] do
-              val expression = reference.asInstanceOf[ExpressionRef]
-              if !seen.add(expression) || seen.size > 128 then
-                behavioralFailure("clock/reset boundary projection is cyclic or exceeds its budget")
-              reference = shapeIndices.get(expression).map(_.input)
-                .orElse(shapeViews.get(expression).map(_.input)).getOrElse(
-                  behavioralFailure(
-                    "executable clock/reset requires an actual input boundary or static projection"
-                  )
+    val usedMemories = operations.iterator.filter(_.kind == "memory-write").map(
+      _.values.head.asInstanceOf[AnyRef]
+    ).toSet ++ expressionValues.valuesIterator.filter(_.operation.contains("memory_read")).map(
+      _.operands.last.asInstanceOf[MemoryPortCapture].memory
+    ).toSet
+    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+      declaration.kind == KernelSignalKind.Register ||
+        (declaration.kind == KernelSignalKind.Memory && usedMemories(declaration.value))
+    ).foreach: declaration =>
+      val target = declaration.reference
+      val domain = declarationDomain(declaration, resolved).flatMap(domainsByPath.get).getOrElse(
+        behavioralFailure("register update domain is not owned by this construction")
+      )
+      val behavioral = roots.get(target).exists(_.isLeft)
+      if domain.domain.clock.isEmpty && (behavioral || declaration.kind == KernelSignalKind.Memory)
+      then
+        behavioralFailure("behavioral update requires an actual local Clock binding")
+      declaration.attributes.collectFirst { case ("initial", Some(value: Expr[?])) => value }
+        .foreach(dependencies(_, target.module, domainPath(domain.reference)))
+      if domain.domain.clock.nonEmpty then
+        def capability(value: Expr[?], expected: String): Unit =
+          if CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor) !=
+              Some(KernelTypeDescriptor(expected))
+          then behavioralFailure(s"local $expected binding requires its exact capability type")
+          var reference = assignmentReference(value)
+          val seen = mutable.HashSet.empty[ExpressionRef]
+          while reference.isInstanceOf[ExpressionRef] do
+            val expression = reference.asInstanceOf[ExpressionRef]
+            if !seen.add(expression) || seen.size > 128 then
+              behavioralFailure("clock/reset boundary projection is cyclic or exceeds its budget")
+            reference = shapeIndices.get(expression).map(_.input)
+              .orElse(shapeViews.get(expression).map(_.input)).getOrElse(
+                behavioralFailure(
+                  "executable clock/reset requires an actual input boundary or static projection"
                 )
-            val root = reference.asInstanceOf[DeclarationRef]
-            if root.module != domain.reference.module ||
-              records(root.module).declarations(root.index).kind != KernelSignalKind.Input
-            then
-              behavioralFailure(
-                "executable clock/reset input belongs to another module or is not an input"
               )
-          capability(domain.domain.clock.get, "Clock")
-          if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
-            capability(domain.domain.reset, "Reset")
-          if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
+          val root = reference.asInstanceOf[DeclarationRef]
+          if root.module != domain.reference.module ||
+            records(root.module).declarations(root.index).kind != KernelSignalKind.Input
+          then
             behavioralFailure(
-              "generated and inherited clock execution requires its later domain profile"
+              "executable clock/reset input belongs to another module or is not an input"
             )
-          domain.domain.resetPolicy match
-            case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
-              behavioralFailure("async-assert/sync-release requires actual release synchronization")
-            case Some(ResetPolicy.None) =>
-              if declaration.attributes.exists:
-                  case ("initial", Some(_: Expr[?])) => true
-                  case _ => false
-              then behavioralFailure("resetless register cannot have a reset initializer")
-            case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
-            case _ => behavioralFailure("executable register requires an explicit reset policy")
+        capability(domain.domain.clock.get, "Clock")
+        if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
+          capability(domain.domain.reset, "Reset")
+        if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
+          behavioralFailure(
+            "generated and inherited clock execution requires its later domain profile"
+          )
+        domain.domain.resetPolicy match
+          case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
+            behavioralFailure("async-assert/sync-release requires actual release synchronization")
+          case Some(ResetPolicy.None) =>
+            if declaration.attributes.exists:
+                case ("initial", Some(_: Expr[?])) => true
+                case _ => false
+            then behavioralFailure("resetless register cannot have a reset initializer")
+          case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
+          case _ => behavioralFailure("executable register requires an explicit reset policy")
 
   private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
     staticPredicates.toVector.map: (reference, predicate) =>
@@ -3696,6 +3745,8 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
+      memoryFailure("memory reads require the owned Mem.read entrypoint")
     case expression: KernelExpr[?]
         if expression.operation.exists(operation =>
           operation.startsWith(
@@ -5605,8 +5656,148 @@ private final class ConstructionSession(val options: EmitOptions):
     append(value)
     rendered.toString
 
+  private def memoryFailure(message: String): Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(
+      "NODAL-MEMORY-056-001",
+      message,
+      moduleStack.lastOption.map(value => provisionalModulePath(value.handle))
+    ))
+    poisonConstructor(failure, "memory port")
+    scala.util.Failure[Nothing](failure).get
+
+  private def memoryTransaction[A](body: => A): A =
+    try body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "memory port")
+        scala.util.Failure[Nothing](failure).get
+
+  private def memoryDeclaration(memory: Mem[?], owner: Long): DeclarationRecord =
+    val reference = Option(declarationIds.get(memory)).getOrElse(
+      memoryFailure("memory port requires an actual captured declaration")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != owner || declaration.kind != KernelSignalKind.Memory ||
+      (declaration.value ne memory) || domainRef(memory.domain).module != owner
+    then memoryFailure("memory port and its declared domain must belong to the active Module")
+    declaration
+
+  private def memoryOperand(value: Expr[?], owner: Long): KernelTypeDescriptor =
+    val reference = valueReference(value)
+    val module = reference match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    if module != owner then memoryFailure("memory operand belongs to another Module")
+    CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor).getOrElse(
+      memoryFailure("memory operand requires an exact captured type")
+    )
+
+  def memoryRead[A <: Data](memory: Mem[A], address: Expr[UInt]): Expr[A] = memoryTransaction:
+    closeBehavioralChain()
+    if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
+      analogSemanticContext.nonEmpty
+    then
+      memoryFailure(
+        "memory read creation requires Module scope; capture an existing read into actions"
+      )
+    val owner = currentModule.handle
+    val _ = memoryDeclaration(memory, owner)
+    if memoryOperand(address, owner).kind != "UInt" then
+      memoryFailure("memory address requires an exact UInt value")
+    validateCollectionDependencies(Vector(address))
+    validateGeneratedDependencies(Vector(address))
+    val result = new KernelExpr[A](
+      Vector(address, MemoryPortCapture(memory, currentDomain)),
+      resultType = Some(CandidateRuntime.typeDescriptor(memory.element)),
+      operation = Some("memory_read")
+    )
+    val _ = captureExpression(result)
+    result
+
+  def memoryWrite[A <: Data](
+      memory: Mem[A],
+      address: Expr[UInt],
+      value: Expr[A],
+      mask: Expr[Bits]
+  ): Unit = memoryTransaction:
+    val owner = currentModule.handle
+    val _ = memoryDeclaration(memory, owner)
+    if memoryOperand(address, owner).kind != "UInt" then
+      memoryFailure("memory address requires an exact UInt value")
+    if !DigitalEnumContract.sameType(
+        memoryOperand(value, owner),
+        CandidateRuntime.typeDescriptor(memory.element)
+      )
+    then memoryFailure("memory write value requires the exact declared recursive element type")
+    if !Set("Bits", "UInt")(memoryOperand(mask, owner).kind) then
+      memoryFailure("memory mask requires Bits or UInt")
+    if collectionStack.exists(region => !sequentialRegion(region)) ||
+      activeGeneratedRegion.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then memoryFailure("memory write requires Module scope or a checked sequential action")
+    captureOperation(
+      "memory-write",
+      Vector(memory, address, value, mask, MemoryPortCapture(memory, currentDomain)),
+      permitMemory = true
+    )
+
+  private def memoryPortSnapshot(capture: MemoryPortCapture, owner: Long)
+      : KernelMemoryPortSnapshot =
+    val declaration = memoryDeclaration(capture.memory, owner)
+    KernelMemoryPortSnapshot(
+      declarationPath(declaration.reference),
+      domainPath(domainRef(capture.memory.domain))
+    )
+
+  private def memoryReadSnapshot(expression: KernelExpr[?]): Option[KernelMemoryPortSnapshot] =
+    val metadata = expression.operands.collect { case value: MemoryPortCapture => value }
+    if expression.operation.contains("memory_read") then
+      val reference = expressionIds.get(expression)
+      if metadata.size != 1 || expression.operands.size != 2 ||
+        expression.operands.lastOption != metadata.headOption || expressionRegions.contains(
+          reference
+        )
+      then memoryFailure("memory read has malformed operands or lexical ownership")
+      Some(memoryPortSnapshot(metadata.head, reference.module))
+    else
+      if metadata.nonEmpty then
+        memoryFailure("memory port metadata is attached to another operation")
+      None
+
+  private def memoryWriteRecords: Vector[(KernelMemoryWriteSnapshot, Operation)] =
+    val writes = operations.iterator.filter(_.kind == "memory-write").toVector
+    val bases = writes.groupMapReduce(_.owner)(_ => 1)(_ + _).map: (owner, count) =>
+      owner -> Vector.tabulate(count)(ordinal => s"memory_write_$ordinal")
+    val paths = semanticOrigin.auxiliaryPaths(semanticResult.get, bases)
+    val ordinals = mutable.HashMap.empty[Long, Int]
+    writes.iterator.map: operation =>
+      val ordinal = ordinals.getOrElse(operation.owner, 0)
+      ordinals.update(operation.owner, ordinal + 1)
+      val owner = modulePath(operation.owner)
+      val metadata = operation.values.last.asInstanceOf[MemoryPortCapture]
+      val port = memoryPortSnapshot(metadata, operation.owner)
+      def operand(index: Int): String = collectionOperandPath(
+        operation.values(index),
+        operation.digitalRegion,
+        operation.owner
+      ).getOrElse(memoryFailure("memory write operand has no captured identity"))
+      KernelMemoryWriteSnapshot(
+        paths(operation.owner)(ordinal),
+        owner,
+        port.memory,
+        port.domain,
+        operand(1),
+        operand(2),
+        operand(3),
+        operation.digitalRegion.map(region => expressionPath(region.reference)),
+        operation.sourceOrdinal
+      ) -> operation
+    .toVector
+
   def operation(kind: String, values: Any*): Unit =
-    validateCollectionDependencies(values.toVector)
+    captureOperation(kind, values.toVector, permitMemory = false)
+
+  private def captureOperation(kind: String, values: Vector[Any], permitMemory: Boolean): Unit =
+    validateCollectionDependencies(values)
     val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
       analogStack.isEmpty && analogSemanticContext.isEmpty &&
       !AnalogProceduralConstruction.generatedProcedureActive &&
@@ -5616,20 +5807,38 @@ private final class ConstructionSession(val options: EmitOptions):
           DigitalCombinationalContract.isValueTypeKind(dataType) ||
             (activeBehavioral.nonEmpty && Set("Integer", "Real")(dataType.kind))
         )
+    val memoryWrite = permitMemory && kind == "memory-write" && values.size == 5 &&
+      values.headOption.exists(
+        _.isInstanceOf[Mem[?]]
+      ) && values.last.isInstanceOf[MemoryPortCapture]
+    if kind == "memory-write" && !memoryWrite then memoryFailure("malformed memory write effect")
     closeBehavioralChain()
-    if activeBehavioral.nonEmpty && !digitalAssignment then
+    if activeBehavioral.nonEmpty && !digitalAssignment && !memoryWrite then
       behavioralFailure(s"hardware '$kind' effect is not permitted in a behavioral update")
-    requireNoCollectionEffect(s"hardware '$kind' effect", assignment = digitalAssignment)
+    requireNoCollectionEffect(
+      s"hardware '$kind' effect",
+      assignment = digitalAssignment || memoryWrite
+    )
     val loop = Option.when(digitalAssignment)(activeLoop).flatten
     val effectRegion =
-      Option.when(digitalAssignment)(activeValueRegion.filter(_.permitsAssignment)).flatten
+      Option.when(digitalAssignment || memoryWrite)(
+        activeValueRegion.filter(_.permitsAssignment)
+      ).flatten
     if !digitalAssignment then requireLoopEffect(s"hardware '$kind' effect")
     loop.foreach: region =>
       if !effectRegion.nonEmpty || region.loop.get.generated != activeGeneratedRegion
       then
         collectionFailure("digital assignments require their exact loop lexical scope")
       validateDigitalLoopDomain(region)
-    effectRegion.foreach: region =>
+    if memoryWrite then
+      if collectionStack.exists(region => !sequentialRegion(region)) then
+        memoryFailure("memory write cannot escape the sequential effect profile")
+      effectRegion.foreach: region =>
+        values.slice(1, 4).foreach:
+          case value: Expr[?] =>
+            val _ = bindCollectionValue(value, Some(region), currentModule.handle)
+          case _ => memoryFailure("memory write requires exact typed operands")
+    effectRegion.filter(_ => digitalAssignment).foreach: region =>
       if values.size != 2 then collectionFailure("digital assignment requires two operands")
       val target = digitalAssignmentRoot(
         values.head,
@@ -5703,13 +5912,14 @@ private final class ConstructionSession(val options: EmitOptions):
           region.assignmentCount += 1
           ordinal
         case None =>
-          if Set("assignment", "value-connect")(kind) then nextEffectOrdinal() else 0
+          if Set("assignment", "value-connect", "memory-write")(kind) then nextEffectOrdinal()
+          else 0
       val captured = Operation(
         owner,
         kind,
         values.toVector,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
-        if structuralTopology && activeGeneratedRegion.nonEmpty then
+        if memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty) then
           semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
@@ -7162,7 +7372,10 @@ private final class ConstructionSession(val options: EmitOptions):
         enumSwitches.valuesIterator.map(record =>
           new KernelDataType[Data](KernelTypeDescriptor("Enum", Vector(record.canonical)))
         ).toVector,
-      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots ++
+      storageRoots.toVector ++ assignmentRoots.toVector ++
+        operations.iterator.filter(_.kind == "memory-write").flatMap(_.values.collect {
+          case value: Expr[?] => value
+        }).toVector ++ interfaces.valueRoots ++
         collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
         structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
         behavioralIfs.valuesIterator.map(_.predicate).toVector ++
@@ -7188,7 +7401,8 @@ private final class ConstructionSession(val options: EmitOptions):
         val reference = expressionIds.get(expression)
         collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
       ,
-      collectionArguments.keysIterator.map(expressionPath).toSet
+      collectionArguments.keysIterator.map(expressionPath).toSet,
+      memoryReadSnapshot
     )
 
   private def parameterExpressionSnapshots(
@@ -7525,6 +7739,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val snapshot = ConstructionSnapshot(
       emitQuality = options.quality,
       digitalAssignments = digitalAssignmentSnapshots(resolved),
+      memoryWrites = memoryWriteRecords.map(_._1),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
       enumDefinitions = digitalCapture._1,
@@ -7562,7 +7777,9 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
+        (semantic.sourceMap ++ memoryWriteRecords.flatMap((write, record) =>
+          record.source.map(SourceMapEntry(write.path, _))
+        ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
           (edge, record) =>
             edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
         ) ++ arrayBindings.flatMap((binding, record) =>

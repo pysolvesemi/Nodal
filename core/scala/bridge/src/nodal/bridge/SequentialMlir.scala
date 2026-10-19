@@ -19,15 +19,21 @@ private[nodal] object SequentialMlir:
 
   private def bindings(
       module: KernelModuleSnapshot,
-      resolveDomain: KernelDeclarationSnapshot => String
+      resolveDomain: KernelDeclarationSnapshot => String,
+      accessedMemories: Set[String]
   )
       : Vector[(KernelDomainSnapshot, Vector[String], String)] =
     val declarations = module.declarations.map(value => value.path -> value).toMap
     if declarations.size != module.declarations.size then
       fail("physical domain declarations must have unique identities", module.path)
-    val stateDomains = module.declarations.filter(_.kind == "register").flatMap(value =>
+    val declaredStateDomains = module.declarations.filter(value =>
+      value.kind == "register" || (value.kind == "memory" && accessedMemories.contains(value.path))
+    ).flatMap(value =>
       value.domain.toVector ++ value.attributes.collect { case ("declared_domain", path) => path }
     ).toSet
+    val stateDomains = declaredStateDomains ++ module.domains.filter(value =>
+      declaredStateDomains.contains(value.path)
+    ).flatMap(_.binding)
     module.domains.sortBy(_.path).flatMap: domain =>
       val fields = domain.attributes.toMap
       if fields.size != domain.attributes.size then
@@ -62,7 +68,12 @@ private[nodal] object SequentialMlir:
           (path, dataType) =>
             declarations.get(path).exists(declaration =>
               declaration.kind == "input" && declaration.dataType.contains(dataType) &&
-                declaration.generatedScope.isEmpty && resolveDomain(declaration) == domain.name
+                declaration.generatedScope.isEmpty && module.domains.filter(value =>
+                  value.name == resolveDomain(declaration)
+                ).exists(value =>
+                  value.path == domain.path ||
+                    (value.kind == "required" && value.binding.contains(domain.path))
+                )
             )
         if hasState && !exactInputs then
           val missing = operands.find(path => !declarations.contains(path))
@@ -75,9 +86,10 @@ private[nodal] object SequentialMlir:
 
   final class Plan(
       module: KernelModuleSnapshot,
-      resolveDomain: KernelDeclarationSnapshot => String
+      resolveDomain: KernelDeclarationSnapshot => String,
+      accessedMemories: Set[String] = Set.empty
   ):
-    private val physical = bindings(module, resolveDomain)
+    private val physical = bindings(module, resolveDomain, accessedMemories)
     def roots: Vector[String] = physical.flatMap(_._2).distinct
 
     def render(

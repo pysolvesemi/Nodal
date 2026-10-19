@@ -65,11 +65,10 @@ private[nodal] object DigitalStorageMlir:
       declaration.path
     )
 
-  private def domain(
+  private def declaredDomain(
       module: KernelModuleSnapshot,
-      declaration: KernelDeclarationSnapshot,
-      symbol: (String, String) => String
-  ): String =
+      declaration: KernelDeclarationSnapshot
+  ): KernelDomainSnapshot =
     val actual = declaration.domain.getOrElse(
       fail("stateful storage has no clock/reset domain", declaration.path)
     )
@@ -84,7 +83,85 @@ private[nodal] object DigitalStorageMlir:
       "stateful storage domain must identify exactly one owned local domain or requirement",
       declaration.path
     )
-    "@" + quoted(symbol("domain", selected.head.name))
+    selected.head
+
+  private def domain(
+      module: KernelModuleSnapshot,
+      declaration: KernelDeclarationSnapshot,
+      symbol: (String, String) => String
+  ): String = "@" + quoted(symbol("domain", declaredDomain(module, declaration).name))
+
+  /** A port names the actual declaration, then resolves its declared requirement once. It never
+    * accepts an independently asserted domain or a spelling-only memory reference.
+    */
+  def memoryPort(
+      module: KernelModuleSnapshot,
+      memory: String,
+      portDomain: String,
+      path: String
+  ): (KernelDeclarationSnapshot, KernelDomainSnapshot) =
+    val matches = module.declarations.filter(_.path == memory)
+    requireValid(matches.size == 1, "memory port requires one actual owned declaration", path)
+    val declaration = matches.head
+    validateOwner(module, declaration)
+    requireValid(
+      declaration.kind == "memory",
+      "memory port target is not a memory declaration",
+      path
+    )
+    val declared = declaredDomain(module, declaration)
+    requireValid(
+      portDomain == declared.path,
+      "memory port domain differs from its actual declaration association",
+      path
+    )
+    val actual = if declared.kind == "required" then
+      val binding = declared.binding.getOrElse(
+        fail("memory port requirement has no direct local domain binding", path)
+      )
+      val targets = module.domains.filter(_.path == binding)
+      requireValid(targets.size == 1, "memory port requirement binding is not uniquely local", path)
+      targets.head
+    else declared
+    requireValid(
+      Set("bound", "external").contains(actual.kind) && actual.binding.isEmpty &&
+        actual.path.startsWith(module.path + "."),
+      "memory port requires an actual direct local physical domain",
+      path
+    )
+    declaration -> actual
+
+  private def memoryPortAttributes(
+      association: (KernelDeclarationSnapshot, KernelDomainSnapshot),
+      symbol: (String, String) => String,
+      metadata: String
+  ): String =
+    val (declaration, actual) = association
+    s"memory = @${quoted(symbol("memory", declaration.name))}, " +
+      s"domain = @${quoted(symbol("domain", actual.name))}, metadata = $metadata"
+
+  def renderMemoryRead(
+      association: (KernelDeclarationSnapshot, KernelDomainSnapshot),
+      result: String,
+      resultType: String,
+      address: (String, String),
+      symbol: (String, String) => String,
+      metadata: String,
+      sourceLocation: String
+  ): String =
+    val attributes = memoryPortAttributes(association, symbol, metadata)
+    s"$result = \"nodal.memory_read\"(${address._1}) <{$attributes}> : (${address._2}) -> $resultType$sourceLocation"
+
+  def renderMemoryWrite(
+      association: (KernelDeclarationSnapshot, KernelDomainSnapshot),
+      operands: Vector[(String, String)],
+      symbol: (String, String) => String,
+      metadata: String,
+      sourceLocation: String
+  ): String =
+    val attributes = memoryPortAttributes(association, symbol, metadata)
+    s"\"nodal.memory_write\"(${operands.map(_._1).mkString(", ")}) <{$attributes}> : " +
+      s"(${operands.map(_._2).mkString(", ")}) -> ()$sourceLocation"
 
   def renderValue(
       module: KernelModuleSnapshot,

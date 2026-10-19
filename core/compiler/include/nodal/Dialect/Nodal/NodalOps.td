@@ -1606,6 +1606,8 @@ def Nodal_CrossingOp : Nodal_Op<"crossing"> {
     FlatSymbolRefAttr:$source_domain,
     FlatSymbolRefAttr:$destination_domain,
     StrAttr:$kind,
+    OptionalAttr<StrAttr>:$contract,
+    OptionalAttr<I64Attr>:$stages,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);

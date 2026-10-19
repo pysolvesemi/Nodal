@@ -1232,6 +1232,28 @@ private[nodal] object DigitalValueMlir:
         "only memory reads carry one exact memory port identity",
         expression.path
       )
+      requireValid(
+        (expression.operation == "cdc_sync") == expression.crossing.nonEmpty,
+        "only owned level crossings carry an executable crossing contract",
+        expression.path
+      )
+      expression.crossing.foreach: crossing =>
+        requireValid(
+          expression.region.isEmpty && expression.operands.size == 1 &&
+            expression.dataType == "Bool" && expressionType(expression.operands.head) == "Bool" &&
+            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+            expression.caseIds.isEmpty && expression.structure.isEmpty &&
+            expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
+            crossing.stages >= 2 && crossing.stages <= 32 &&
+            crossing.sourceDomain != crossing.destinationDomain &&
+            Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
+              modules(expression.owner).domains.exists(value =>
+                value.path == domain && value.kind != "required"
+              )
+            ),
+          "level crossing requires one module-owned Bool input, distinct actual endpoints and 2..32 stages",
+          expression.path
+        )
       expression.memory.foreach: port =>
         requireValid(
           expression.region.isEmpty && expression.operands.size == 1 &&
@@ -2641,7 +2663,30 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == "memory_read" then
+                  if expression.operation == "cdc_sync" then
+                    val crossing = expression.crossing.get
+                    requireValid(
+                      dataType == "!nodal.bits<1>" && operands.map(_._2) == Vector(dataType),
+                      "level crossing requires the exact Bool native type",
+                      path
+                    )
+                    val attributes =
+                      s"{kind = ${quoted("sync")}, contract = ${quoted("level_v1")}, " +
+                        s"stages = ${crossing.stages} : i64, source_domain = ${domainReference(crossing.sourceDomain)}, " +
+                        s"destination_domain = ${domainReference(crossing.destinationDomain)}, metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.crossing",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == "memory_read" then
                     val port = expression.memory.get
                     val declaration = memoryPort(module.path, port.memory, port.domain, path)._1
                     requireValid(

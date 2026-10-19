@@ -133,3 +133,8 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalSequentialState-DG v0.4](NodalSequentialState-DG-v0.4.md): approved
   bounded owned memory-port semantics, masks, ordering, collision and domain
   verification; implementation and focused checks pending.
+
+- [Clock/reset execution v0.1](NodalClockResetExecution-DG-v0.1.md): Foundation 57
+  shared domain/level foundation and explicit elastic Stream, handshake snapshot
+  and derived-domain compatibility decisions. Category implementation remains
+  separately validated.

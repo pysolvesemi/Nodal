@@ -12,16 +12,27 @@ struct SequentialModelLimits {
   unsigned maximumNormalizedOperations = 262144;
 };
 /// Shared narrow physical sampling proof. Memory and registers use the same
-/// dependency/domain owner, including unique local requirement bindings.
+/// dependency graph and DomainModel requirement/binding proof owner.
 struct SequentialSample {
   mlir::Value value;
   mlir::Attribute domain;
   mlir::Operation *use;
+  /// Crossings require an actual attributed source and reject every unannotated
+  /// boundary. Constants may accompany a source but cannot establish one.
+  bool requireAttributedSource = false;
+  /// Values and controlling guards consumed by one actual target update share
+  /// this owner identity. Independent register/memory effects remain separate.
+  mlir::Operation *group = nullptr;
 };
-mlir::FailureOr<mlir::Operation *> resolveSequentialDomain(mlir::Operation *use,
-                                                           mlir::Attribute reference);
-mlir::FailureOr<mlir::Operation *> resolveSequentialBinding(mlir::Operation *use,
-                                                            mlir::Attribute reference);
+struct DigitalDependencyGraph;
+/// Same sampling proof against an already constructed graph. This nonrecursive
+/// entry is used by crossing source checks during assignment-graph admission.
+mlir::LogicalResult verifySequentialSampleDependencies(mlir::Operation *module,
+                                                       llvm::ArrayRef<SequentialSample> samples,
+                                                       const DigitalDependencyGraph &graph,
+                                                       llvm::ArrayRef<unsigned> roots,
+                                                       SequentialModelLimits limits = {},
+                                                       unsigned alreadyCharged = 0);
 mlir::LogicalResult verifySequentialSamples(mlir::Operation *module,
                                             llvm::ArrayRef<SequentialSample> samples,
                                             SequentialModelLimits limits = {},
@@ -37,7 +48,6 @@ mlir::FailureOr<BehavioralIfHeader> inspectBehavioralIfHeader(mlir::Operation *o
 mlir::FailureOr<mlir::Value> behavioralCaptureSource(mlir::BlockArgument argument);
 mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
 behavioralIntegerContextsAtUse(mlir::Operation *use);
-mlir::LogicalResult verifyLocalDomainBinding(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralPredicate(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralIfOperation(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialBody(mlir::Block *body);

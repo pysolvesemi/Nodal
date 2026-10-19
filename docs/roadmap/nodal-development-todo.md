@@ -1356,6 +1356,8 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
   - [ ] **F-057.F — Representative scale, determinism and compatibility.** Exercise many domains, nested relationships and crossing instances; keep deterministic waiver and constraint identities.
   - [ ] **F-057.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 57; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
+  - Scoped progress: [owned Bool level synchronizers and shared domain/sampling proof](../implementation/increment57-readiness.md#accepted-scoped-level-checkpoint) pass 468 native cases, 106 maintained Scala groups and 17 selected predecessors, with actual source-located SystemVerilog and independent-chain checks. Required reset, protocol, clock-structure, relationship/hierarchy, waiver and low-level categories remain open; no F57 child or parent is closed by this checkpoint.
+
 - [ ] **Increment 58 — Domain-aware hierarchy, reusable statecharts, and bounded recursive control**
   - [ ] **F-058.A — Architecture review, modularity, scalability and extensibility.** Compose roles, domains, symbolic hierarchy and immutable statecharts using 54-57 contracts; bound structural and runtime recursion separately.
   - [ ] **F-058.B — Implementation and integration**

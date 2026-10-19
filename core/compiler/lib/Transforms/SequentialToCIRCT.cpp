@@ -11,8 +11,10 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Transforms/Passes.h"
@@ -22,6 +24,8 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
+
+#include <string>
 
 using namespace mlir;
 namespace nodal {
@@ -95,7 +99,7 @@ void correlate(Operation *target, Operation *source) {
 class ModuleLowering {
 public:
   ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost)
-      : source(source), builder(builder), cost(cost) {}
+      : source(source), builder(builder), cost(cost), domains(source) {}
 
   LogicalResult preflight() {
     SmallVector<std::pair<Value, Operation *>> seeds;
@@ -131,6 +135,14 @@ public:
                              "asynchronous semantics remain distinct");
       } else if (isa<DomainRequirementOp, DomainBindOp, LocalDomainBindingOp>(op)) {
         // Verified provenance only; actual values already carry the connection.
+      } else if (isa<CrossingOp>(op)) {
+        auto crossing = inspectLevelCrossing(&op, domains);
+        if (failed(crossing))
+          return failure();
+        // The canonical model verifies type, endpoints, source sampling and
+        // independent identity. Only the finite target expansion belongs here.
+        crossings.push_back(*crossing);
+        expansion = 2 * crossing->stages + 5;
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -243,6 +255,21 @@ public:
         materializations.try_emplace(text(decision, "path"), decision);
       }
     }
+    // Reserve generated names after every authored exact name is known.
+    // Symbols keep even identical-source chains distinct through target CSE.
+    for (const auto &crossing : crossings) {
+      SmallVector<StringAttr> names;
+      for (unsigned stage = 0; stage < crossing.stages; ++stage) {
+        std::string base = "__nodal_sync_" + std::to_string(crossingNames.size()) + "_stage_" +
+                           std::to_string(stage);
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.push_back(builder.getStringAttr(name));
+      }
+      crossingNames.try_emplace(crossing.operation, std::move(names));
+    }
     return success();
   }
 
@@ -308,8 +335,49 @@ public:
       values[reg->getResult(0)] = state.getResult();
       stateEdges.emplace_back(update, edge);
     }
+    SmallVector<std::pair<Operation *, circt::Backedge>> crossingEdges;
+    for (const auto &crossing : crossings) {
+      Operation *op = crossing.operation;
+      Value clock = values.lookup(crossing.destinationBinding->getOperand(0));
+      if (!clock) {
+        backedges.abandon();
+        return reject(op, "crossing destination clock was not mapped to a module input");
+      }
+      if (text(crossing.destinationDomain, "edge") == "falling")
+        clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
+      Value reset, zero;
+      if (text(crossing.destinationDomain, "reset_policy") == "sync") {
+        reset = values.lookup(crossing.destinationBinding->getOperand(1));
+        if (!reset) {
+          backedges.abandon();
+          return reject(op, "crossing destination reset was not mapped to a module input");
+        }
+        reset = resetActive(reset, crossing.destinationBinding);
+        zero = constant(op, 1, 0);
+      }
+      auto input = backedges.get(builder.getI1Type(), op->getLoc());
+      Value previous = input;
+      const auto &names = crossingNames.find(op)->second;
+      for (unsigned stage = 0; stage < crossing.stages; ++stage) {
+        Value next = reset ? mux(op, reset, zero, previous) : previous;
+        auto state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, clock,
+                                                   circt::StringAttrOrRef(names[stage]));
+        correlate(state, op);
+        // Keep the complete canonical source mapping and stage identity. The
+        // symbol, rather than an advisory metadata marker, prevents CSE merging.
+        state->setAttr("nodal.crossing", op->getAttr("metadata"));
+        state->setAttr("nodal.crossing_contract", op->getAttr("contract"));
+        state->setAttr("nodal.crossing_stages", op->getAttr("stages"));
+        state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
+        state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
+        state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(stage));
+        previous = state.getResult();
+      }
+      values[op->getResult(0)] = previous;
+      crossingEdges.emplace_back(op, input);
+    }
     for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp>(op))
+      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp, CrossingOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -376,6 +444,14 @@ public:
         resolved.insert(current);
         pending.pop_back();
       }
+    }
+    for (auto &[crossing, edge] : crossingEdges) {
+      Value input = values.lookup(crossing->getOperand(0));
+      if (!input) {
+        backedges.abandon();
+        return reject(crossing, "crossing actual source input did not lower");
+      }
+      edge.setValue(input);
     }
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
@@ -546,6 +622,9 @@ private:
   nodal::ModuleOp source;
   OpBuilder &builder;
   uint64_t &cost;
+  DomainModel domains;
+  SmallVector<LevelCrossing> crossings;
+  llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;
   llvm::DenseMap<Operation *, SmallVector<Value>> portValues;
   llvm::DenseMap<Value, Operation *> updates;
@@ -564,7 +643,7 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SequentialToCIRCTPass)
   StringRef getArgument() const final { return "nodal-sequential-to-circt"; }
   StringRef getDescription() const final {
-    return "Transactionally lower verified finite scalar register/FSM dataflow to "
+    return "Transactionally lower verified finite scalar register/FSM/level-crossing dataflow to "
            "HW/Comb/Seq/Verif";
   }
   void getDependentDialects(DialectRegistry &registry) const final {

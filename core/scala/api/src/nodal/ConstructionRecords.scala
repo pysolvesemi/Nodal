@@ -125,7 +125,15 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     region: Option[String] = None,
     materializationIntent: Option[KernelDigitalIntent] = None,
     structure: Option[KernelStructOperationSnapshot] = None,
-    memory: Option[KernelMemoryPortSnapshot] = None
+    memory: Option[KernelMemoryPortSnapshot] = None,
+    crossing: Option[KernelLevelCrossingSnapshot] = None
+)
+
+/** Executable level contract. Identity and actual input edge belong to the enclosing expression. */
+private[nodal] final case class KernelLevelCrossingSnapshot(
+    sourceDomain: String,
+    destinationDomain: String,
+    stages: Int
 )
 
 /** Exact declaration association. Address/type proofs remain attached to actual operands. */

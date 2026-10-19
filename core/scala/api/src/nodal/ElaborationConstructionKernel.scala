@@ -163,6 +163,14 @@ private[nodal] object ConstructionKernel:
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
       expression.literal.flatMap(_.value.toDoubleOption)
     case _ => active.flatMap(_.waveformConstant(value))
+  def classifyPulse(value: Expr[Bool]): Unit = active.foreach(_.classifyPulse(value))
+
+  def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] = active match
+    case Some(session) => session.levelSync(bit, to, stages)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "NODAL-CDC-057-001: Cdc.sync requires an active Module and lexical ClockDomain"
+      )).get
+
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

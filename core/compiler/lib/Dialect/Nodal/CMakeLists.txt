@@ -13,6 +13,8 @@ add_mlir_dialect_library(NodalDialect
   DigitalInterfaceModel.cpp
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
+  DomainModel.cpp
+  CrossingModel.cpp
   MemoryModel.cpp
   SequentialModel.cpp
   FlatFSMModel.cpp

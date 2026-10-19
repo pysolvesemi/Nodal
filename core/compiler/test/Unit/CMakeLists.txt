@@ -682,3 +682,17 @@ target_link_libraries(nodal-memory-model-unit-tests PRIVATE
   NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.memory-model-unit COMMAND nodal-memory-model-unit-tests)
 set_tests_properties(nodal.native.memory-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-domain-model-unit-tests DomainModelTest.cpp)
+llvm_update_compile_flags(nodal-domain-model-unit-tests)
+target_link_libraries(nodal-domain-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.domain-model-unit COMMAND nodal-domain-model-unit-tests)
+set_tests_properties(nodal.native.domain-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-crossing-model-unit-tests CrossingModelTest.cpp)
+llvm_update_compile_flags(nodal-crossing-model-unit-tests)
+target_link_libraries(nodal-crossing-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.crossing-model-unit COMMAND nodal-crossing-model-unit-tests)
+set_tests_properties(nodal.native.crossing-model-unit PROPERTIES TIMEOUT 60)

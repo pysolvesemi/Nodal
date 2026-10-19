@@ -2617,7 +2617,9 @@ ${indent(body, 2)}
       val sequential = new SequentialMlir.Plan(
         module,
         declaration => localDomainName(module, declaration),
-        digitalValues.accessedMemories(module.path)
+        digitalValues.accessedMemories(module.path),
+        snapshot.digitalExpressions.filter(_.owner == module.path).flatMap(_.crossing)
+          .flatMap(value => Vector(value.sourceDomain, value.destinationDomain)).toSet
       )
       val digital = digitalValues.renderModule(
         module,

@@ -11,10 +11,12 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -229,6 +231,115 @@ std::string replace(std::string value, const std::string &from, const std::strin
   value.replace(at, from.size(), to);
   return value;
 }
+
+std::string levelSetup(std::string policy = "none", std::string edge = "rising",
+                       std::string polarity = "active_high") {
+  std::string body = "\"nodal.domain\"() <{sym_name = \"source\", edge = \"rising\", "
+                     "reset_policy = \"none\", metadata = {}}> : () -> ()\n";
+  body += replace(port("sourceClock", "!nodal.capability<\"clock\">"), "domain = @core",
+                  "domain = @source");
+  body += "\"nodal.local_domain_binding\"(%sourceClock) <{domain = @source, reset_polarity = "
+          "\"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">) -> ()\n";
+  body += "\"nodal.domain\"() <{sym_name = \"core\", edge = \"" + edge + "\", reset_policy = \"" +
+          policy + "\", metadata = {}}> : () -> ()\n";
+  body += port("clock", "!nodal.capability<\"clock\">");
+  if (policy != "none")
+    body += port("reset", "!nodal.capability<\"reset\">");
+  body += "\"nodal.local_domain_binding\"(%clock" +
+          std::string(policy == "none" ? "" : ", %reset") +
+          ") <{domain = @core, reset_polarity = \"" + polarity +
+          "\", metadata = {}}> : (!nodal.capability<\"clock\">" +
+          (policy == "none" ? "" : ", !nodal.capability<\"reset\">") + ") -> ()\n";
+  body += replace(port("input", bit), "domain = @core", "domain = @source");
+  body += expression("actualSource", "bool_not", "%input", bit, bit);
+  return body;
+}
+std::string levelCrossing(std::string name, unsigned stages = 2,
+                          std::string input = "actualSource") {
+  return "%" + name + " = \"nodal.crossing\"(%" + input +
+         ") <{source_domain = @source, destination_domain = @core, kind = \"sync\", "
+         "contract = \"level_v1\", stages = " +
+         std::to_string(stages) + ": i64, " + metadata(name) + "}> : (" + bit + ") -> " + bit +
+         "\n";
+}
+std::string levelBody(unsigned stages = 2, bool independent = false, std::string policy = "none",
+                      std::string edge = "rising", std::string polarity = "active_high") {
+  std::string body = levelSetup(policy, edge, polarity) + levelCrossing("sample", stages) +
+                     port("result", bit, "output") + assign("result", "sample", false, bit);
+  if (independent)
+    body += levelCrossing("independent", stages) + port("otherResult", bit, "output") +
+            assign("otherResult", "independent", false, bit);
+  return body;
+}
+// Check the emitted data graph at each pre-edge state, with the actual owning
+// clock and all stage/source identities. Input inversion makes bypass obvious.
+bool checkLevel(mlir::ModuleOp module, unsigned stages, unsigned chains, bool reset = false,
+                bool falling = false, bool activeLow = false) {
+  auto hw = *module.getOps<circt::hw::HWModuleOp>().begin();
+  std::map<std::string, SmallVector<circt::seq::CompRegOp>> found;
+  bool good = true;
+  llvm::StringSet<> symbols, names;
+  module.walk([&](circt::seq::CompRegOp reg) {
+    auto path = reg->getAttrOfType<StringAttr>("nodal.source_path");
+    auto metadata = reg->getAttrOfType<DictionaryAttr>("nodal.crossing");
+    auto index = reg->getAttrOfType<IntegerAttr>("nodal.crossing_stage");
+    auto symbol = reg.getInnerSymAttr();
+    good &= path && metadata && index && symbol && !reg.getReset() && !reg.getInitialValue();
+    if (!path || !metadata || !index || !symbol)
+      return;
+    good &= metadata.getAs<StringAttr>("semantic_path") == path;
+    good &= reg->getAttrOfType<FlatSymbolRefAttr>("nodal.crossing_source_domain").getValue() ==
+            "source";
+    good &= reg->getAttrOfType<FlatSymbolRefAttr>("nodal.crossing_destination_domain").getValue() ==
+            "core";
+    good &= symbols.insert(symbol.getSymName().getValue()).second &&
+            names.insert(reg.getNameAttr().getValue()).second;
+    Value clock = reg.getClk();
+    if (falling) {
+      auto inversion = clock.getDefiningOp<circt::seq::ClockInverterOp>();
+      good &= bool(inversion);
+      if (inversion)
+        clock = inversion->getOperand(0);
+    }
+    auto argument = dyn_cast<BlockArgument>(clock);
+    good &= argument &&
+            hw.getPortList()[hw.getPortIdForInputId(argument.getArgNumber())].name.getValue() ==
+                "clock";
+    auto &chain = found[path.getValue().str()];
+    good &= uint64_t(index.getInt()) == chain.size();
+    chain.push_back(reg);
+  });
+  good &= found.size() == chains;
+  for (auto &[path, chain] : found) {
+    good &= chain.size() == stages;
+    if (chain.size() != stages)
+      continue;
+    for (unsigned sample = 0; sample < 2; ++sample) {
+      std::map<std::string, uint64_t> inputs{{"input", sample}, {"reset", activeLow ? 1 : 0}};
+      for (unsigned i = 0; i < stages; ++i)
+        inputs["state:" + chain[i].getNameAttr().getValue().str()] = (sample + i) % 2;
+      for (unsigned i = 0; i < stages; ++i) {
+        good &= evaluate(chain[i].getInput(), inputs, 0) ==
+                (i ? inputs.at("state:" + chain[i - 1].getNameAttr().getValue().str()) : !sample);
+        if (reset) {
+          inputs["reset"] = activeLow ? 0 : 1;
+          good &= evaluate(chain[i].getInput(), inputs, 1) == 0;
+          inputs["reset"] = activeLow ? 1 : 0;
+        }
+      }
+    }
+  }
+  if (chains == 1 && found.size() == 1)
+    good &= hw.getBodyBlock()->getTerminator()->getOperand(0) ==
+            found.begin()->second.back().getResult();
+  if (chains == 2 && found.size() == 2) {
+    auto *outputs = hw.getBodyBlock()->getTerminator();
+    good &= outputs->getOperand(0) != outputs->getOperand(1);
+    good &= outputs->getOperand(0) == found["Fixture.sample"].back().getResult();
+    good &= outputs->getOperand(1) == found["Fixture.independent"].back().getResult();
+  }
+  return good;
+}
 } // namespace
 int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
@@ -251,6 +362,24 @@ int main(int argc, char **argv) {
       return 1;
     }
     llvm::outs() << print(*module) << '\n';
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--emit-level") {
+    for (auto name : {"resetless", "sync-low-falling", "boundary32"}) {
+      std::string source =
+          wrap(levelBody(std::string(name) == "boundary32" ? 32 : 2, true,
+                         std::string(name) == "sync-low-falling" ? "sync" : "none",
+                         std::string(name) == "sync-low-falling" ? "falling" : "rising",
+                         std::string(name) == "sync-low-falling" ? "active_low" : "active_high"));
+      auto module = parseSourceString<mlir::ModuleOp>(source, &context);
+      if (!module || failed(lower(*module))) {
+        llvm::errs() << diagnostics;
+        return 1;
+      }
+      std::string path = std::string(argv[2]) + "-" + name;
+      std::ofstream(path + ".nodal.mlir") << source;
+      std::ofstream(path + ".circt.mlir") << print(*module) << '\n';
+    }
     return 0;
   }
   unsigned cases = 0, failures = 0;
@@ -368,6 +497,68 @@ int main(int argc, char **argv) {
     std::string before = changed ? print(*changed) : "";
     report("malformed-actual-clock-is-atomic",
            changed && failed(lower(*changed)) && print(*changed) == before);
+  }
+  for (unsigned stages : {2u, 32u})
+    test("level-resetless-" + std::to_string(stages), levelBody(stages),
+         [&](mlir::ModuleOp m) { return checkLevel(m, stages, 1); });
+  for (bool falling : {false, true})
+    for (bool low : {false, true})
+      test("level-sync-" + std::string(falling ? "falling-" : "rising-") + (low ? "low" : "high"),
+           levelBody(2, false, "sync", falling ? "falling" : "rising",
+                     low ? "active_low" : "active_high"),
+           [&](mlir::ModuleOp m) { return checkLevel(m, 2, 1, true, falling, low); });
+  test("level-independent-identical-source-cse", levelBody(2, true), [&](mlir::ModuleOp m) {
+    PassManager pm(&context);
+    pm.addPass(createCSEPass());
+    pm.addPass(createCanonicalizerPass());
+    return succeeded(pm.run(m)) && checkLevel(m, 2, 2);
+  });
+  test("level-generated-names-are-hygienic",
+       levelSetup() + port("__nodal_sync_0_stage_0", bit) + levelCrossing("sample") +
+           port("result", bit, "output") + assign("result", "sample", false, bit),
+       [&](mlir::ModuleOp m) {
+         bool good = checkLevel(m, 2, 1);
+         m.walk([&](circt::seq::CompRegOp r) {
+           good &= r.getNameAttr().getValue() != "__nodal_sync_0_stage_0";
+         });
+         return good;
+       });
+  negative("level-async-target-rejection-is-atomic", wrap(levelBody(2, false, "async")),
+           "synchronous or resetless");
+  negative(
+      "level-unsupported-sibling-is-atomic",
+      "module {" + owner(levelBody()) +
+          owner(replace(levelBody(2, false, "async"), "Fixture.sample", "Other.sample"), "Other") +
+          "}",
+      "synchronous or resetless");
+  {
+    auto changed = parseSourceString<mlir::ModuleOp>(wrap(levelBody()), &context);
+    if (changed)
+      changed->walk([&](Operation *op) {
+        if (op->getName().getStringRef() == "nodal.crossing")
+          op->setAttr("stages", IntegerAttr::get(IntegerType::get(&context, 64), 1));
+      });
+    std::string before = changed ? print(*changed) : "";
+    report("level-malformed-stage-is-atomic",
+           changed && failed(lower(*changed)) && print(*changed) == before);
+  }
+  {
+    auto changed = parseSourceString<mlir::ModuleOp>(wrap(levelBody()), &context);
+    if (changed)
+      changed->walk([&](Operation *op) {
+        if (op->getName().getStringRef() == "nodal.crossing")
+          op->setAttr("contract", StringAttr::get(&context, "unimplemented"));
+      });
+    std::string before = changed ? print(*changed) : "";
+    report("level-unsupported-contract-is-atomic",
+           changed && failed(lower(*changed)) && print(*changed) == before);
+  }
+  {
+    std::string body = levelSetup();
+    for (unsigned i = 0; i < 3800; ++i)
+      body += levelCrossing("bounded" + std::to_string(i), 32);
+    negative("level-total-expansion-preflight-is-atomic", wrap(body),
+             "target expansion exceeds 262144 operations before allocation");
   }
   std::string alias = expression("alias", "digital_alias", "%input", u8, u8,
                                  ", digital_intent = {kind = \"keep\", value = \"inspection\"}");

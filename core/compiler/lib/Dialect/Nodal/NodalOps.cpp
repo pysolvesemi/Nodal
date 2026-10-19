@@ -14,6 +14,7 @@
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
@@ -23,6 +24,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
@@ -2225,6 +2227,7 @@ LogicalResult nodal::ModuleOp::verify() {
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
       failed(verifyStructuralIfModel(getOperation())) ||
+      failed(verifyCrossingModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifySequentialModel(getOperation())) || failed(verifyMemoryModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation(), false)) ||
@@ -4068,16 +4071,7 @@ LogicalResult nodal::BridgeOp::verify() {
   return success();
 }
 
-LogicalResult nodal::CrossingOp::verify() {
-  auto source = getOperation()->getAttrOfType<FlatSymbolRefAttr>("source_domain");
-  auto destination = getOperation()->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
-  if (!source || !destination || source == destination)
-    return emitOpError("requires distinct crossing domains");
-  const llvm::StringRef kind = textAttr(getOperation(), "kind");
-  if (!oneOf(kind, {"sync", "gray", "pulse", "handshake", "fifo", "reset", "bridge", "waived"}))
-    return emitOpError() << "unsupported crossing kind '" << kind << "'";
-  return success();
-}
+LogicalResult nodal::CrossingOp::verify() { return verifyCrossingOperation(getOperation()); }
 
 LogicalResult nodal::StateOwnerOp::verify() {
   if (!getOperation()->getAttrOfType<SymbolRefAttr>("state") ||

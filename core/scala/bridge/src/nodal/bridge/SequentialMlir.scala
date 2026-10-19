@@ -20,7 +20,8 @@ private[nodal] object SequentialMlir:
   private def bindings(
       module: KernelModuleSnapshot,
       resolveDomain: KernelDeclarationSnapshot => String,
-      accessedMemories: Set[String]
+      accessedMemories: Set[String],
+      crossingDomains: Set[String]
   )
       : Vector[(KernelDomainSnapshot, Vector[String], String)] =
     val declarations = module.declarations.map(value => value.path -> value).toMap
@@ -31,7 +32,7 @@ private[nodal] object SequentialMlir:
     ).flatMap(value =>
       value.domain.toVector ++ value.attributes.collect { case ("declared_domain", path) => path }
     ).toSet
-    val stateDomains = declaredStateDomains ++ module.domains.filter(value =>
+    val stateDomains = crossingDomains ++ declaredStateDomains ++ module.domains.filter(value =>
       declaredStateDomains.contains(value.path)
     ).flatMap(_.binding)
     module.domains.sortBy(_.path).flatMap: domain =>
@@ -87,9 +88,13 @@ private[nodal] object SequentialMlir:
   final class Plan(
       module: KernelModuleSnapshot,
       resolveDomain: KernelDeclarationSnapshot => String,
-      accessedMemories: Set[String] = Set.empty
+      accessedMemories: Set[String] = Set.empty,
+      crossingDomains: Set[String] = Set.empty
   ):
-    private val physical = bindings(module, resolveDomain, accessedMemories)
+    private val physical = bindings(module, resolveDomain, accessedMemories, crossingDomains)
+    crossingDomains.foreach: domain =>
+      if !physical.exists(_._1.path == domain) then
+        fail("level crossing endpoint requires an actual supported physical domain binding", domain)
     def roots: Vector[String] = physical.flatMap(_._2).distinct
 
     def render(

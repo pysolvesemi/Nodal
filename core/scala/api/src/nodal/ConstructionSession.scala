@@ -45,6 +45,78 @@ private final class ConstructionSession(val options: EmitOptions):
     noiseOperators.find(value => references.contains(value._1)).foreach: value =>
       reject(value._1, "NODAL-ANALOG-039-001", s"noise effect '${value._2}'")
 
+  private final case class LevelCrossing(
+      input: Expr[Bool],
+      destination: ClockDomain,
+      stages: Int,
+      var sourceDomain: Option[String] = None,
+      var destinationDomain: Option[String] = None
+  )
+  private val levelCrossings = mutable.LinkedHashMap.empty[ExpressionRef, LevelCrossing]
+  private var crossingStageCount = 0L
+  private val pulseValues = new IdentityHashMap[Expr[Bool], java.lang.Boolean]()
+
+  private def crossingFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-CDC-057-001")
+
+  def classifyPulse(value: Expr[Bool]): Unit =
+    val _ = pulseValues.put(value, java.lang.Boolean.TRUE)
+
+  def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
+    try
+      closeBehavioralChain()
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then
+        crossingFailure(
+          "Cdc.sync requires module-level construction; callbacks are unsupported"
+        )
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure(
+          "Cdc.sync destination and any active lexical domain must belong to the active Module"
+        )
+      if stages < 2 || stages > 32 then crossingFailure("Cdc.sync stages must be between 2 and 32")
+      if crossingStageCount + stages > 262144 then
+        crossingFailure("Cdc.sync generated state exceeds its expansion budget")
+      val reference = valueReference(bit)
+      val inputOwner = reference match
+        case value: DeclarationRef => value.module
+        case value: ExpressionRef => value.module
+      if inputOwner != owner ||
+        CandidateRuntime.expressionDataType(bit).map(CandidateRuntime.typeDescriptor) !=
+          Some(KernelTypeDescriptor("Bool"))
+      then crossingFailure("Cdc.sync input requires an actual owned Bool value")
+      val result = new KernelExpr[Bool](
+        Vector(bit),
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some("cdc_sync")
+      )
+      val captured = captureExpression(result).get
+      levelCrossings.update(captured, LevelCrossing(bit, to, stages))
+      crossingStageCount += stages
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "level crossing")
+        scala.util.Failure[Nothing](failure).get
+
+  private def levelCrossingSnapshot(expression: KernelExpr[?])
+      : Option[KernelLevelCrossingSnapshot] =
+    if expression.operation.contains("cdc_sync") then
+      val record = levelCrossings.getOrElse(
+        expressionIds.get(expression),
+        crossingFailure("level crossing requires its actual owned construction record")
+      )
+      Some(KernelLevelCrossingSnapshot(
+        record.sourceDomain.getOrElse(crossingFailure("level crossing source is unresolved")),
+        record.destinationDomain.getOrElse(
+          crossingFailure("level crossing destination is unresolved")
+        ),
+        record.stages
+      ))
+    else None
+
   private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
   private val moduleIds = new IdentityHashMap[AnyRef, java.lang.Long]()
@@ -1592,7 +1664,10 @@ private final class ConstructionSession(val options: EmitOptions):
     .toVector
 
   /** Validate actual pre-edge dependencies and update-root ownership, without evaluating guards. */
-  private def verifySequentialAssignments(resolved: Map[DomainRef, String]): Unit =
+  private def verifySequentialAssignments(
+      resolved: Map[DomainRef, String],
+      interfaces: DigitalInterfaceContract.Capture
+  ): Unit =
     val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
     val guardPairs: Vector[(ExpressionRef, Expr[?])] =
       behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
@@ -1616,49 +1691,244 @@ private final class ConstructionSession(val options: EmitOptions):
           target,
           continuousDrivers.getOrElse(target, Vector.empty) :+ operation.values(1)
         )
+    // Interface capture is the owner of resolved connectivity and member/driver rules.
+    // Feed its actual edges into this same sampler rather than constructing a CDC-only net graph.
+    val declarationsByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
+      declarationPath(value.reference) -> value.reference
+    ).toMap
+    val valuesByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
+      declarationPath(value.reference) -> value.value
+    ).toMap ++
+      expressionValues.iterator.map((reference, value) => expressionPath(reference) -> value)
+    interfaces.connectivity.foreach: connection =>
+      declarationsByPath.get(connection.target).foreach: target =>
+        val dependencies = (connection.value.toVector ++ connection.enable.toVector ++
+          connection.source.toVector).map(path =>
+          valuesByPath.getOrElse(
+            path,
+            crossingFailure("Interface dependency has no actual captured value")
+          )
+        )
+        continuousDrivers.update(
+          target,
+          continuousDrivers.getOrElse(target, Vector.empty) ++ dependencies
+        )
+      if connection.kind == "inout-pass-through" then
+        connection.source.flatMap(declarationsByPath.get).foreach: source =>
+          continuousDrivers.update(
+            source,
+            continuousDrivers.getOrElse(source, Vector.empty) :+
+              valuesByPath(connection.target)
+          )
     val domainsByPath = records.valuesIterator.flatMap(_.domains).map(domain =>
       domainPath(domain.reference) -> domain
     ).toMap
     def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
       sequentialRoot(region)
-    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
-      val pending = mutable.ArrayDeque[Any](value)
-      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
-      var count = 0
-      while pending.nonEmpty do
-        val current = pending.removeLast()
-        current match
-          case reference: AnyRef
-              if Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
-            count += 1
-            if count > 65536 then
-              behavioralFailure("sequential dependency graph exceeds its budget")
-            Option(declarationIds.get(reference)).foreach: declarationRef =>
-              if declarationRef.module != owner then
-                behavioralFailure("sequential dependency belongs to another module")
-              val declaration = records(owner).declarations(declarationRef.index)
-              if declaration.kind != KernelSignalKind.Register then
-                pending ++= continuousDrivers.getOrElse(declarationRef, Vector.empty)
-              val sourceDomain = declarationDomain(declaration, resolved)
-              if sourceDomain.exists(_ != targetDomain) ||
-                (declaration.kind == KernelSignalKind.Register && sourceDomain.isEmpty)
-              then behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
-            Option(expressionIds.get(reference)).foreach: expressionRef =>
-              if expressionRef.module != owner then
-                behavioralFailure("sequential expression belongs to another module")
-              collectionArguments.get(expressionRef).foreach: (region, _) =>
-                region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
-                  pending.append(value._1)
+    // One actual dependency traversal serves ordinary samples and strict crossing-source inference.
+    // A verified crossing is a destination-owned cut; its source edge remains in its snapshot.
+    final case class SampleFacts(
+        domains: Set[String],
+        sources: Set[DeclarationRef | ExpressionRef],
+        crossings: Set[ExpressionRef]
+    )
+    val sampleCache = mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
+    val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
+    var fsmControlEdges = 0L
+    def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
+      fsmControlCache.getOrElseUpdate(
+        header, {
+          val values = flatFsms(header.machine).actionSampleDependencies(header)
+          fsmControlEdges += values.size
+          if fsmControlEdges > 262144 then
+            crossingFailure("FSM causal sample controls exceed their edge budget")
+          values
+        }
+      )
+    var cachedFacts = 0L
+    def sampleFacts(value: Any, owner: Long, strict: Boolean): SampleFacts =
+      val cache =
+        sampleCache.getOrElseUpdate((owner, strict), new IdentityHashMap[AnyRef, SampleFacts]())
+      val root = value.asInstanceOf[AnyRef]
+      Option(cache.get(root)).getOrElse:
+        val pending = mutable.ArrayDeque[Any](value)
+        var edges = 0
+        def enqueue(values: IterableOnce[Any]): Unit = values.iterator.foreach: next =>
+          edges += 1
+          if edges > 262144 then
+            behavioralFailure("sequential dependency edges exceed their budget")
+          pending.append(next)
+        val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+        val domains = mutable.HashSet.empty[String]
+        val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
+        val crossings = mutable.HashSet.empty[ExpressionRef]
+        var count = 0
+        while pending.nonEmpty do
+          val current = pending.removeLast()
+          current match
+            case reference: AnyRef
+                if Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
+              count += 1
+              if count > 65536 then
+                behavioralFailure("sequential dependency graph exceeds its budget")
+              if strict && reference.isInstanceOf[Expr[?]] && pulseValues.containsKey(reference)
+              then
+                crossingFailure("Pulse-classified input cannot be relabeled as a level")
+              val declarationRef = Option(declarationIds.get(reference))
+              declarationRef.foreach: declarationRef =>
+                if declarationRef.module != owner then
+                  behavioralFailure("sequential dependency belongs to another module")
+                val declaration = records(owner).declarations(declarationRef.index)
+                if Set(
+                    KernelSignalKind.Register,
+                    KernelSignalKind.Input,
+                    KernelSignalKind.DigitalInout
+                  )
+                    .contains(declaration.kind)
+                then sourceRoots += declarationRef
+                val drivers = continuousDrivers.getOrElse(declarationRef, Vector.empty)
+                if declaration.kind != KernelSignalKind.Register then enqueue(drivers)
+                val sourceDomain = declarationDomain(declaration, resolved)
+                if strict && drivers.isEmpty && Set(
+                    KernelSignalKind.Wire,
+                    KernelSignalKind.Output,
+                    KernelSignalKind.DigitalInout
+                  )
+                    .contains(declaration.kind)
+                then crossingFailure("wire/output dependency has no actual driver")
+                domains ++= sourceDomain
+                if sourceDomain.isEmpty &&
+                  (declaration.kind == KernelSignalKind.Register ||
+                    (strict && drivers.isEmpty && declaration.kind != KernelSignalKind.Parameter))
+                then crossingFailure("input dependency has unknown or unresolved source domain")
+              val expressionRef = Option(expressionIds.get(reference))
+              expressionRef.foreach: expressionRef =>
+                if expressionRef.module != owner then
+                  behavioralFailure("sequential expression belongs to another module")
+                collectionArguments.get(expressionRef).foreach: (region, index) =>
+                  region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
+                    enqueue(Vector(value._1))
+                  )
+                  region.fsmAction.foreach: header =>
+                    val machine = flatFsms(header.machine)
+                    if index == 0 then enqueue(Vector(machine.storage))
+                    else if index == 1 || index == 2 then
+                      enqueue(machine.futureSampleDependencies)
+                fsmResults.get(expressionRef).foreach: (machine, _) =>
+                  enqueue(machine.futureSampleDependencies)
+              expressionRef.flatMap(levelCrossings.get) match
+                case Some(crossing) =>
+                  crossings += expressionRef.get
+                  sourceRoots += expressionRef.get
+                  domains += resolved.getOrElse(
+                    domainRef(crossing.destination),
+                    crossingFailure("crossing destination has no actual resolved domain")
+                  )
+                case None => reference match
+                    case expression: KernelExpr[?] =>
+                      if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
+                        !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                        !expressionRef.exists(reference =>
+                          shapeIndices.contains(reference) || shapeViews.contains(reference)
+                        )
+                      then crossingFailure("input dependency has unsupported source provenance")
+                      if expression.operation.contains("memory_read") then
+                        sourceRoots += expressionRef.get
+                        val ports = expression.operands.collect { case port: MemoryPortCapture =>
+                          port
+                        }
+                        // Synchronous reads cut address provenance; asynchronous reads retain it.
+                        // Every address also has its independent memory-domain sample below.
+                        if ports.exists(_.memory.readLatency == 0) then enqueue(expression.operands)
+                        else enqueue(ports)
+                      else enqueue(expression.operands)
+                    case memory: MemoryPortCapture =>
+                      val declaration = memoryDeclaration(memory.memory, owner)
+                      declarationDomain(declaration, resolved) match
+                        case Some(domain) => domains += domain
+                        case None => crossingFailure("memory input has no resolved source domain")
+                    case predicate: StaticPredicate => enqueue(predicate.operands)
+                    case _: Expr[?] if strict && declarationRef.isEmpty && expressionRef.isEmpty =>
+                      crossingFailure("input dependency has no actual captured owner")
+                    case _ => ()
+            case _ => ()
+        val result = SampleFacts(
+          domains.toSet,
+          if strict then sourceRoots.toSet else Set.empty,
+          crossings.toSet
+        )
+        cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size
+        if cachedFacts > 262144 then
+          crossingFailure("cached sample facts exceed their bounded graph budget")
+        cache.put(root, result)
+        result
+    def verifyReconvergence(facts: SampleFacts, owner: Long): Unit =
+      if facts.crossings.size > 1 then
+        val firstBoundary = mutable.HashMap.empty[DeclarationRef | ExpressionRef, ExpressionRef]
+        var lineageEdges = 0
+        facts.crossings.toVector.sortBy(_.index).foreach: boundary =>
+          val roots = sampleFacts(levelCrossings(boundary).input, owner, strict = true).sources
+          roots.foreach: root =>
+            lineageEdges += 1
+            if lineageEdges > 262144 then
+              crossingFailure("crossing lineage exceeds its edge budget")
+            firstBoundary.get(root).foreach: previous =>
+              if previous != boundary then
+                behavioralFailure(
+                  "independent level synchronizers with a shared source reconverge at one sample",
+                  "NODAL-CDC-057-002"
                 )
-            reference match
-              case expression: KernelExpr[?] => pending ++= expression.operands
-              case memory: MemoryPortCapture =>
-                val declaration = memoryDeclaration(memory.memory, owner)
-                if declarationDomain(declaration, resolved).exists(_ != targetDomain) then
-                  behavioralFailure("memory value crosses an unrelated domain", "NODAL-CDC-001")
-              case predicate: StaticPredicate => pending ++= predicate.operands
-              case _ => ()
-          case _ => ()
+            firstBoundary.update(root, boundary)
+    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
+      val facts = sampleFacts(value, owner, strict = false)
+      if facts.domains.exists(_ != targetDomain) then
+        behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
+      verifyReconvergence(facts, owner)
+    val sampleGroups = mutable.HashMap.empty[Any, mutable.HashSet[ExpressionRef]]
+    def dependenciesWithGuards(
+        values: Vector[Any],
+        owner: Long,
+        targetDomain: String,
+        region: Option[DigitalValueRegionRecord],
+        group: Any
+    ): Unit =
+      val crossings = sampleGroups.getOrElseUpdate(group, mutable.HashSet.empty[ExpressionRef])
+      def include(value: Any): Unit =
+        dependencies(value, owner, targetDomain)
+        crossings ++= sampleFacts(value, owner, strict = false).crossings
+        if crossings.size > 65536 then
+          crossingFailure("causal sample lineage exceeds its node budget")
+      values.foreach(include)
+      var current = region
+      var depth = 0
+      while current.nonEmpty do
+        depth += 1
+        if depth > 128 then crossingFailure("causal sample guards exceed their depth budget")
+        current.get.behavioralArm.foreach(header =>
+          include(behavioralIfs(header.conditional).predicate)
+        )
+        current.get.switchArm.foreach(header => include(enumSwitches(header.switch).selector))
+        current.get.fsmAction.foreach(header => fsmControls(header).foreach(include))
+        current = current.get.parent
+      verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet), owner)
+    levelCrossings.foreach: (reference, crossing) =>
+      val facts = sampleFacts(crossing.input, reference.module, strict = true)
+      verifyReconvergence(facts, reference.module)
+      val sources = facts.domains
+      if sources.size != 1 then
+        crossingFailure("Cdc.sync input must have exactly one known source domain")
+      val destination = resolved.getOrElse(
+        domainRef(crossing.destination),
+        crossingFailure("Cdc.sync destination has no actual resolved domain")
+      )
+      val source = sources.head
+      if source == destination then
+        crossingFailure("Cdc.sync requires distinct source and destination domains")
+      if !domainsByPath.get(source).exists(_.reference.module == reference.module) ||
+        !domainsByPath.get(destination).exists(_.reference.module == reference.module)
+      then crossingFailure("Cdc.sync endpoints must resolve to actual domains in the same Module")
+      crossing.sourceDomain = Some(source)
+      crossing.destinationDomain = Some(destination)
     operations.zipWithIndex.foreach: (operation, index) =>
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
@@ -1695,7 +1965,13 @@ private final class ConstructionSession(val options: EmitOptions):
                 "FSM action target belongs to a different clock domain",
                 "NODAL-CDC-001"
               )
-          dependencies(source, operation.owner, domain)
+          dependenciesWithGuards(
+            Vector(source),
+            operation.owner,
+            domain,
+            operation.digitalRegion,
+            target
+          )
           root.left.toOption.foreach: identity =>
             if checkedGuards.add((identity, operation.owner, domain)) then
               guardsByRoot.getOrElse(identity, Vector.empty).foreach(record =>
@@ -1705,7 +1981,8 @@ private final class ConstructionSession(val options: EmitOptions):
         capture: MemoryPortCapture,
         owner: Long,
         operands: Vector[Any],
-        region: Option[DigitalValueRegionRecord]
+        region: Option[DigitalValueRegionRecord],
+        group: Any
     ): Unit =
       val declaration = memoryDeclaration(capture.memory, owner)
       val domain = declarationDomain(declaration, resolved).getOrElse(
@@ -1718,7 +1995,7 @@ private final class ConstructionSession(val options: EmitOptions):
       root.flatMap(flatFsms.get).foreach: machine =>
         if !resolved.get(domainRef(machine.domain)).contains(domain) then
           behavioralFailure("FSM memory write belongs to a different clock domain", "NODAL-CDC-001")
-      operands.foreach(dependencies(_, owner, domain))
+      dependenciesWithGuards(operands, owner, domain, region, group)
       root.foreach: identity =>
         if checkedGuards.add((identity, owner, domain)) then
           guardsByRoot.getOrElse(identity, Vector.empty).foreach(dependencies(_, owner, domain))
@@ -1727,7 +2004,8 @@ private final class ConstructionSession(val options: EmitOptions):
         operation.values.last.asInstanceOf[MemoryPortCapture],
         operation.owner,
         operation.values.slice(1, 4),
-        operation.digitalRegion
+        operation.digitalRegion,
+        operation
       )
     expressionValues.foreach: (reference, expression) =>
       if expression.operation.contains("memory_read") then
@@ -1736,14 +2014,23 @@ private final class ConstructionSession(val options: EmitOptions):
           expression.operands.last.asInstanceOf[MemoryPortCapture],
           reference.module,
           expression.operands.take(1),
-          None
+          None,
+          reference
         )
     flatFsms.valuesIterator.foreach: record =>
       val targetDomain = pathOf(record.domain).get
       guardsByRoot.getOrElse(
         record.reference,
         Vector.empty
-      ).foreach(dependencies(_, record.reference.module, targetDomain))
+      ).foreach(value =>
+        dependenciesWithGuards(
+          Vector(value),
+          record.reference.module,
+          targetDomain,
+          None,
+          declarationIds.get(record.storage)
+        )
+      )
     val usedMemories = operations.iterator.filter(_.kind == "memory-write").map(
       _.values.head.asInstanceOf[AnyRef]
     ).toSet ++ expressionValues.valuesIterator.filter(_.operation.contains("memory_read")).map(
@@ -2490,8 +2777,12 @@ private final class ConstructionSession(val options: EmitOptions):
       explicitName,
       domain.orElse(
         Option.when(
-          Set(KernelSignalKind.Input, KernelSignalKind.Output).contains(kind) &&
-            resolvedType.exists(isBoundaryCapability)
+          Set(
+            KernelSignalKind.Input,
+            KernelSignalKind.Output,
+            KernelSignalKind.DigitalInout
+          ).contains(kind) &&
+            resolvedType.exists(isClockedDigitalType)
         )(currentDomain).flatten
       ),
       attributes,
@@ -3745,6 +4036,8 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?] if expression.operation.contains("cdc_sync") =>
+      crossingFailure("level crossings require the owned Cdc.sync entrypoint")
     case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
       memoryFailure("memory reads require the owned Mem.read entrypoint")
     case expression: KernelExpr[?]
@@ -7098,7 +7391,7 @@ private final class ConstructionSession(val options: EmitOptions):
     roots.foreach(visit)
     reachable.toSet
 
-  private def isBoundaryCapability(dataType: DataType[?]): Boolean =
+  private def boundaryElementKind(dataType: DataType[?]): String =
     var current = dataType
     var depth = 0
     var descriptor = CandidateRuntime.typeDescriptor(current)
@@ -7108,7 +7401,14 @@ private final class ConstructionSession(val options: EmitOptions):
       descriptor = CandidateRuntime.typeDescriptor(current)
       depth += 1
     if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
-    Set("Clock", "Reset").contains(descriptor.kind)
+    descriptor.kind
+
+  private def isBoundaryCapability(dataType: DataType[?]): Boolean =
+    Set("Clock", "Reset").contains(boundaryElementKind(dataType))
+
+  private def isClockedDigitalType(dataType: DataType[?]): Boolean =
+    Set("Bool", "Bits", "UInt", "SInt", "Enum", "Struct", "Clock", "Reset")
+      .contains(boundaryElementKind(dataType))
 
   private def capabilitySourceRoot(value: AnyRef): Option[DeclarationRef] =
     var current =
@@ -7402,7 +7702,8 @@ private final class ConstructionSession(val options: EmitOptions):
         collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
       ,
       collectionArguments.keysIterator.map(expressionPath).toSet,
-      memoryReadSnapshot
+      memoryReadSnapshot,
+      levelCrossingSnapshot
     )
 
   private def parameterExpressionSnapshots(
@@ -7733,7 +8034,7 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
           .toVector.sortBy(_.path)
         )
-    verifySequentialAssignments(resolved)
+    verifySequentialAssignments(resolved, interfaceCapture)
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
     val snapshot = ConstructionSnapshot(

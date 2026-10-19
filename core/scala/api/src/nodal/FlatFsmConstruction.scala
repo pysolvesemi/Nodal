@@ -52,6 +52,38 @@ private[nodal] final class FlatFsmRecord[S](
   val views =
     mutable.HashMap.empty[(Option[ExpressionRef], Boolean), DecodedEnum[Expr[EnumValue[S]]]]
 
+  // Queries run after graph capture closes. The graph owner retains the exact structural
+  // priority prefixes used by normalization, including Exclusive transition selection.
+  private lazy val samplingOutgoing = transitions.toVector.groupBy(_.sourceCase)
+  private lazy val samplingIndices = samplingOutgoing.valuesIterator.flatMap(_.zipWithIndex)
+    .map((edge, index) => edge.ordinal -> (edge.sourceCase, index)).toMap
+  private lazy val samplingIncoming = transitions.toVector.groupBy(_.destinationCase)
+
+  lazy val futureSampleDependencies: Vector[Any] = storage +: transitions.map(_.guard).toVector
+
+  def actionSampleDependencies(header: FlatFsmActionHeader): Vector[Any] =
+    val selected = header.phase match
+      case "transition" =>
+        Vector(samplingIndices.getOrElse(
+          header.transitionOrdinal.get,
+          FlatFsmRuntime.fail("action has no actual transition")
+        ))
+      case "exit" =>
+        samplingOutgoing.getOrElse(header.ownerCase.get, Vector.empty).lastOption.toVector
+          .map(edge => samplingIndices(edge.ordinal))
+      case "entry" =>
+        samplingIncoming.getOrElse(header.ownerCase.get, Vector.empty)
+          .map(edge => samplingIndices(edge.ordinal))
+      case "active" => Vector.empty
+      case _ => FlatFsmRuntime.fail("action has no known sampling phase")
+    val prefixes = mutable.LinkedHashMap.empty[String, Int]
+    selected.foreach: (source, index) =>
+      prefixes.update(source, prefixes.getOrElse(source, -1).max(index))
+    val guards = prefixes.iterator.flatMap((source, last) =>
+      samplingOutgoing(source).iterator.take(last + 1).map(_.guard)
+    ).toVector
+    storage +: guards
+
 private[nodal] final case class FlatFsmCompletionMetadata(record: FlatFsmRecord[?])
 private[nodal] final case class FlatFsmObservation(record: FlatFsmRecord[?], future: Boolean)
 

@@ -1,9 +1,11 @@
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
@@ -14,6 +16,7 @@
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <algorithm>
 #include <limits>
@@ -74,13 +77,26 @@ public:
     }
     if (failed(verify()))
       return failure();
-    for (Node &node : nodes)
-      result.nodes.push_back({node.value, node.use, std::move(node.dependencies),
-                              interfaceDomains.lookup(node.value)});
+    for (Node &node : nodes) {
+      Operation *crossing = node.value ? node.value.getDefiningOp() : nullptr;
+      if (!crossingSourceRoots.count(crossing))
+        crossing = nullptr;
+      auto domain = crossing ? crossing->getAttrOfType<FlatSymbolRefAttr>("destination_domain")
+                             : interfaceDomains.lookup(node.value);
+      result.nodes.push_back({node.value, node.use, std::move(node.dependencies), domain, crossing,
+                              crossing ? crossingSourceRoots.lookup(crossing) : 0});
+    }
+    result.crossings = std::move(crossings);
+    SequentialModelLimits sampleLimits;
+    sampleLimits.maximumOperations = limits.maximumNodes;
+    if (failed(verifyCrossingSourceDependencies(module, result, sampleLimits)))
+      return failure();
     return result;
   }
 
 private:
+  llvm::DenseMap<Operation *, unsigned> crossingSourceRoots;
+  SmallVector<DigitalCrossingDependency> crossings;
   FailureOr<unsigned> valueNode(Value value, Operation *use, Operation *family = nullptr,
                                 unsigned guard = 0);
   FailureOr<unsigned> assignmentNode(Operation *operation, Operation *loop, unsigned guard);
@@ -656,6 +672,13 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
       return read(node, *access, use);
     }
   }
+  if (llvm::isa<CrossingOp>(definition)) {
+    if (!crossingSourceRoots.count(definition))
+      return reject(definition, "descriptor crossing cannot authorize an executable graph cut");
+    // Header and input root were checked while inventorying this actual module.
+    // Full source proof runs once against the completed graph, never recursively.
+    return success();
+  }
   if (llvm::isa<MemoryReadOp>(definition)) {
     auto port = inspectMemoryPort(definition);
     if (failed(port))
@@ -798,6 +821,9 @@ LogicalResult AssignmentQuery::verify() {
     Operation *iteration;
     unsigned depth;
   };
+  const DomainModel domains(module);
+  llvm::StringSet<> crossingIdentities;
+  uint64_t crossingStages = 0;
   SmallVector<Scope, 8> scopes{{&module->getRegion(0).front(), nullptr, 0}};
   for (unsigned cursor = 0; cursor < scopes.size(); ++cursor) {
     Scope scope = scopes[cursor];
@@ -805,7 +831,22 @@ LogicalResult AssignmentQuery::verify() {
     for (Operation &operation : *scope.body) {
       if (failed(guardWork(&operation)))
         return failure();
-      if (llvm::isa<DigitalAssignOp>(operation)) {
+      if (llvm::isa<CrossingOp>(operation) &&
+          (operation.hasAttr("contract") || operation.hasAttr("stages"))) {
+        auto header = inspectLevelCrossing(&operation, domains);
+        if (failed(header))
+          return failure();
+        if (!crossingIdentities.insert(header->identity).second)
+          return reject(&operation, "executable crossings require distinct semantic identities");
+        crossingStages += header->stages;
+        if (crossingStages > SequentialModelLimits().maximumNormalizedOperations)
+          return reject(&operation, "crossing state expansion exceeds finite sequential budget");
+        auto root = valueNode(operation.getOperand(0), &operation);
+        if (failed(root))
+          return failure();
+        crossingSourceRoots.try_emplace(&operation, *root);
+        crossings.push_back({&operation, *root});
+      } else if (llvm::isa<DigitalAssignOp>(operation)) {
         if (failed(collect(&operation, scope.iteration, ordinal++)))
           return failure();
       } else if (isBoundedDigitalLoop(&operation) ||
@@ -936,6 +977,6 @@ analyzeDigitalAssignmentDependencies(Operation *module,
   return AssignmentQuery(module, limits).graph(seeds);
 }
 LogicalResult verifyDigitalAssignmentModel(Operation *module, DigitalAssignmentProofLimits limits) {
-  return AssignmentQuery(module, limits).verify();
+  return succeeded(AssignmentQuery(module, limits).graph({})) ? success() : failure();
 }
 } // namespace nodal

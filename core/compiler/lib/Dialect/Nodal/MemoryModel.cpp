@@ -6,6 +6,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -148,8 +149,9 @@ FailureOr<MemoryPortFacts> inspectMemoryPort(Operation *op) {
   if (!llvm::isa_and_nonnull<MemoryOp>(memory) || memory->getParentOp() != module ||
       failed(verifyDigitalMemoryOperation(memory)))
     return bad("memory reference must identify the actual sole local typed declaration");
-  auto domain = resolveSequentialDomain(op, memory->getAttr("domain"));
-  auto binding = resolveSequentialBinding(op, memory->getAttr("domain"));
+  const DomainModel domains(op);
+  auto domain = domains.resolveDomain(memory->getAttr("domain"));
+  auto binding = domains.resolveBinding(memory->getAttr("domain"));
   if (failed(domain) || failed(binding) ||
       op->getAttr("domain") != FlatSymbolRefAttr::get(op->getContext(), text(*domain, "sym_name")))
     return bad("port requires the memory's uniquely bound actual physical local domain");

@@ -19,6 +19,12 @@ mlir::LogicalResult flatFSMResultDependencies(mlir::Value result,
                                               llvm::SmallVectorImpl<mlir::Value> &dependencies);
 mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
 flatFSMIntegerContextsAtUse(mlir::Operation *use);
+/// Actual implicit phase controls for each action body, using the same phase
+/// owner as expansion. Charges retained dependency roots before growing output.
+mlir::LogicalResult flatFSMActionControlDependencies(
+    mlir::Operation *operation,
+    llvm::SmallVectorImpl<llvm::SmallVector<mlir::Value, 4>> &dependencies, unsigned &work,
+    unsigned maximumWork);
 /// Mutates only the caller's detached candidate; SequentialModel commits.
 mlir::LogicalResult expandFlatFSMModel(mlir::Operation *module, unsigned &generated,
                                        unsigned maximumGenerated);

@@ -368,6 +368,13 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      ) ++ value.crossing.toVector.map(crossing =>
+        "crossing" -> obj(
+          "contract" -> string("level_v1"),
+          "source_domain" -> string(crossing.sourceDomain),
+          "destination_domain" -> string(crossing.destinationDomain),
+          "stages" -> number(crossing.stages)
+        )
       ) ++ value.memory.toVector.map(port =>
         "memory" -> obj("memory" -> string(port.memory), "domain" -> string(port.domain))
       ) ++ value.structure.toVector.map(evidence =>
@@ -709,6 +716,19 @@ private[nodal] object ReproducibilityContract:
     array(entries)
 
   private def crossingReport(snapshot: ConstructionSnapshot): JsonValue =
+    val executableEntries = snapshot.digitalExpressions.filter(_.crossing.nonEmpty).sortBy(_.path)
+      .map: expression =>
+        val crossing = expression.crossing.get
+        obj(
+          "record_kind" -> string("executable_crossing"),
+          "kind" -> string("sync"),
+          "contract" -> string("level_v1"),
+          "semantic_path" -> string(expression.path),
+          "source_value" -> string(expression.operands.head),
+          "source_domain" -> string(crossing.sourceDomain),
+          "destination_domain" -> string(crossing.destinationDomain),
+          "stages" -> number(crossing.stages)
+        )
     val originEntries = snapshot.origins
       .filter: origin =>
         val operation = origin.operation.toLowerCase(java.util.Locale.ROOT)
@@ -752,7 +772,7 @@ private[nodal] object ReproducibilityContract:
           "name" -> string(entry.name),
           "origin" -> string(entry.origin)
         )
-    array(originEntries ++ waiverEntries ++ generatedEntries)
+    array(executableEntries ++ originEntries ++ waiverEntries ++ generatedEntries)
 
   /** Artifact projection of the authoritative snapshot graph; these fields are provenance, never an
     * additional binding or shape proof owner.

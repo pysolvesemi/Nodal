@@ -20,6 +20,7 @@ private[nodal] object DigitalValueConstruction:
         (operation == DigitalCollectionContract.Operation ||
           operation == StructuralIfRuntime.Operation ||
           operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+          operation == "cdc_sync" ||
           FlatFsmRuntime.Operations(operation))
     )
 
@@ -32,7 +33,8 @@ private[nodal] object DigitalValueConstruction:
       regionOf: KernelExpr[?] => Option[String],
       operandPath: (KernelExpr[?], Any) => Option[String],
       argumentPaths: Set[String],
-      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot]
+      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot],
+      crossing: KernelExpr[?] => Option[KernelLevelCrossingSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -95,6 +97,7 @@ private[nodal] object DigitalValueConstruction:
             (operation == DigitalCollectionContract.Operation ||
               operation == StructuralIfRuntime.Operation ||
               operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+              operation == "cdc_sync" ||
               FlatFsmRuntime.Operations(operation))
         )
       then
@@ -203,6 +206,7 @@ private[nodal] object DigitalValueConstruction:
               value.name
             )
           ),
-          memory = memoryPort(expression)
+          memory = memoryPort(expression),
+          crossing = crossing(expression)
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

@@ -664,7 +664,9 @@ object Gray:
 final class Pulse private[nodal] (val value: Expr[Bool])
 
 object Pulse:
-  def apply(value: Expr[Bool]): Pulse = new Pulse(value)
+  def apply(value: Expr[Bool]): Pulse =
+    ConstructionKernel.classifyPulse(value)
+    new Pulse(value)
 
 /** Minimal stream carrier used only to freeze the asynchronous-FIFO crossing shape. */
 final class Stream[A <: Data] private[nodal] (val payload: Expr[A])
@@ -680,7 +682,7 @@ final case class CdcWaiver(
 
 object Cdc:
   def sync(bit: Expr[Bool], to: ClockDomain, stages: Int = 2): Expr[Bool] =
-    CandidateRuntime.booleanExpr("cdc_sync", bit, to, stages)
+    ConstructionKernel.levelSync(bit, to, stages)
 
   def gray[A <: Data](
       grayValue: Gray[A],

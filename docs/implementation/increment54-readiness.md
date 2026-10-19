@@ -1,7 +1,6 @@
 # Increment 54 readiness and implementation
 
-Status: focused implementation acceptance complete; F-054.G and the parent remain
-open for verified integration. Base
+Status: complete and integrated. Base
 `7dff755dbd22c8f91d70e1d1f863bc3d33273326` is the verified F53 documentation
 closure; branch `increment/54-digital-type-port-layer`.
 
@@ -235,6 +234,16 @@ python3 scripts/generate_backend_capability_registry.py --check
 ```
 
 The implementation and its architecture review satisfy F-054.A–F and linked
-F-054.B.2.1 at the documented construction/native boundary. F-054.G and the parent
-await the actual verified squash integration. No CI, target HDL simulation,
+F-054.B.2.1 at the documented construction/native boundary. F-054.G and the parent are complete after the verified squash integration. No CI, target HDL simulation,
 synthesis, four-state execution or full qualification was run for this increment.
+
+
+## Verified integration
+
+PR [150](https://github.com/pysolvesemi/Nodal/pull/150) was squash-merged into
+`dev` as `00f3894c59777e931ba98715d0e44e3da9cfa488`, with sole parent
+`7dff755dbd22c8f91d70e1d1f863bc3d33273326` and exact tested tree
+`2d1cc43f4de2c4ec8a912a22a9168fe2c24b3e14`. The merged flag, dev ref,
+ancestry and tree were verified. The squash includes `[skip ci]` and
+`skip-checks: true`; Actions inventory for the merge is zero. This documentation
+closure changes no production source and requires no production requalification.

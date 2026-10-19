@@ -1291,7 +1291,7 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 ## Phase 4 — Digital semantics, portable Verilog, open-source verification, mixed signal, and Verilog-AMS
 
-- [ ] **Increment 54 — Digital signed/unsigned type, literal, native enum ABI, and port layer**
+- [x] **Increment 54 — Digital signed/unsigned type, literal, native enum ABI, and port layer**
   - [x] **F-054.A — Architecture review, modularity, scalability and extensibility.** Reuse frozen 15/19 typed values, roles, enum ABI and storage intent; do not derive signedness or shape from backend syntax.
   - [x] **F-054.B — Implementation and integration**
     - [x] **F-054.B.1** Implement directionless storable `Struct`, non-storable digital `Interface`, named `Role`, plain/`Valid`/`Stream` interface members, scalar/vector resolved-net types, typed digital inout endpoints, read/drive/high-impedance semantics, drive modes, and exact port/member ABI identity.
@@ -1302,9 +1302,9 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
     - [x] **F-054.D.2** Focused tool handoff: Name representative affected 65/66 parse-and-simulation, 67 synthesis/equivalence/core-proof and 72 AMS-output cases. Limit early claims to executed local checks; no full proof campaign or later consumer parent is a prerequisite.
   - [x] **F-054.E — Optimization review and output quality.** Review type/shape interning and enum metadata growth; preserve exact symbolic widths and stable ABI names. Apply the proportionate review rule above; document no new optimization required when justified.
   - [x] **F-054.F — Representative scale, determinism and compatibility.** Exercise ranked nested types, interface arrays and many enum cases; retain deterministic ABI hashes.
-  - [ ] **F-054.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 54; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+  - [x] **F-054.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 54; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
 
-  - Focused acceptance: [F54 implementation and exact capability profile](../implementation/increment54-readiness.md), 74 distinct Scala cases, nine native suites, affected predecessors and 47 registry cases pass. G/parent await verified integration.
+  - Focused acceptance: [F54 implementation and exact capability profile](../implementation/increment54-readiness.md), 74 distinct Scala cases, nine native suites, affected predecessors and 47 registry cases pass. Verified squash `00f3894c59777e931ba98715d0e44e3da9cfa488` (PR150); G/parent complete.
 
 - [ ] **Increment 55 — Digital expressions, bounded hardware iteration, and continuous assignments**
   - Original scope retained: Add typed expression DAGs with arithmetic, logic, bitwise, comparisons, concatenation, extraction, conditionals, multidimensional index/slice/flatten/reshape, exact width/sign/shape and mixed-sign rules, arithmetic/logical shifts, explicit signed casts/conversions, continuous assignment, typed hardware `map`/`zip`/`reduce`/`fold`/`scan`, safe single-use inlining, shared/observable/target-required materialization with reason codes, and bounded hardware iteration with finite static/symbolic bounds, ordered effects, dependency/index/driver checks, and deterministic unrolled versus procedural-loop lowering candidates. Reject runtime trip counts, structural declarations, hidden multi-cycle behavior, unbounded/data-dependent loops, accidental flat-carrier arithmetic, latches, and combinational cycles.

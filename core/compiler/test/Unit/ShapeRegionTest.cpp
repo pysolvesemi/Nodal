@@ -191,6 +191,50 @@ int main() {
       check(nodal::verifyStaticShapeRegionPartition(root, regions, use(*module), {1, 1}) ==
                 Status::ResourceLimit,
             "explicit-work-resource-boundary");
+      auto left = nodal::resolveStaticShapeProjection(value(*module, "c0"), use(*module));
+      auto middle = nodal::resolveStaticShapeProjection(value(*module, "c1"), use(*module));
+      auto right = nodal::resolveStaticShapeProjection(value(*module, "c2"), use(*module));
+      auto whole = nodal::resolveStaticShapeProjection(root, use(*module));
+      check(mlir::succeeded(left) && mlir::succeeded(middle) && mlir::succeeded(right) &&
+                mlir::succeeded(whole),
+            "physical-relation-projections");
+      if (mlir::succeeded(left) && mlir::succeeded(middle) && mlir::succeeded(right) &&
+          mlir::succeeded(whole)) {
+        auto overlap = nodal::compareStaticShapeProjections(*left, *right, use(*module));
+        check(overlap.status == Status::Proved &&
+                  overlap.overlap == nodal::ShapeRegionOverlap::Disjoint,
+              "billion-row-columns-pairwise-disjoint-without-lanes");
+        overlap = nodal::compareStaticShapeProjections(*left, *left, use(*module));
+        check(overlap.status == Status::Proved &&
+                  overlap.overlap == nodal::ShapeRegionOverlap::Overlapping,
+              "same-column-overlaps");
+        check(nodal::verifyStaticShapeProjectionCoverage(*whole, {*left, *middle, *right},
+                                                         use(*module)) == Status::Proved,
+              "billion-row-read-complete-coverage-without-lanes");
+        check(nodal::verifyStaticShapeProjectionCoverage(*whole, {*left, *right}, use(*module)) ==
+                  Status::Invalid,
+              "aggregate-read-missing-middle-column-rejected");
+        check(nodal::verifyStaticShapeProjectionCoverage(*left, {*left}, use(*module)) ==
+                  Status::Proved,
+              "partial-read-only-needs-selected-image-covered");
+        check(nodal::verifyStaticShapeProjectionCoverage(*left, {*right}, use(*module)) ==
+                  Status::Invalid,
+              "disjoint-writer-does-not-define-read");
+        check(nodal::compareStaticShapeProjections(*left, *right, use(*module), {1, 1}).status ==
+                  Status::ResourceLimit,
+              "physical-relation-query-budget");
+        check(nodal::verifyStaticShapeProjectionCoverage(
+                  *whole, {*left, *middle, *right}, use(*module), {1, 1}) == Status::ResourceLimit,
+              "physical-coverage-query-budget");
+        auto forged = *left;
+        forged.wholeRoot = true;
+        forged.canonicalKey = "whole";
+        forged.rootFlatBounds = nodal::ParameterIntegerBounds{0, 2999999999};
+        overlap = nodal::compareStaticShapeProjections(forged, *right, use(*module));
+        check(overlap.status == Status::Proved &&
+                  overlap.overlap == nodal::ShapeRegionOverlap::Disjoint,
+              "physical-relation-rechecks-ssa-not-forged-cache");
+      }
       nodal::StaticShapeRegion reshaped;
       check(region(*module, "reshaped", reshaped) == Status::Proved &&
                 reshaped.kind == nodal::StaticShapeRegion::Kind::Box,

@@ -27,9 +27,9 @@ mlir::LogicalResult verifyInstanceShapeDimension(mlir::Operation *instance,
 
 /// Resolve a canonical dimension without substituting parameter defaults.
 /// Requires positive finite i64 bounds and direct-module structural ownership.
-mlir::FailureOr<StaticShapeDimension> resolveStaticShapeDimension(mlir::Operation *module,
-                                                                  llvm::StringRef dimension,
-                                                                  llvm::StringRef requiredEffect = "shape");
+mlir::FailureOr<StaticShapeDimension>
+resolveStaticShapeDimension(mlir::Operation *module, llvm::StringRef dimension,
+                            llvm::StringRef requiredEffect = "shape");
 
 /// Prove a nonempty shape's worst-case cardinality fits positive signed i64.
 mlir::FailureOr<int64_t> inferStaticShapeMaximumCardinality(mlir::Operation *module,
@@ -110,6 +110,27 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(mlir::Value root,
                                                         llvm::ArrayRef<StaticShapeRegion> regions,
                                                         mlir::Operation *use,
                                                         ShapeRegionProofLimits limits = {});
+
+/// Exact all-legal pairwise relation. Unknown (including unsupported mapping)
+/// cannot establish independent writers. Actual SSA chains are rechecked, and
+/// physical selector identities are preserved; no supplied flags are trusted.
+enum class ShapeRegionOverlap { Disjoint, Overlapping, Unknown };
+struct StaticShapeOverlap {
+  ShapeRegionProofStatus status = ShapeRegionProofStatus::Unsupported;
+  ShapeRegionOverlap overlap = ShapeRegionOverlap::Unknown;
+};
+StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &left,
+                                                 const StaticShapeProjection &right,
+                                                 mlir::Operation *use,
+                                                 ShapeRegionProofLimits limits = {});
+
+/// Prove every physical point of a read is covered exactly once by the supplied
+/// disjoint writes. Uses the same canonical cut/partition engine, with bounded
+/// authored-region work rather than physical lane enumeration.
+ShapeRegionProofStatus
+verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
+                                    llvm::ArrayRef<StaticShapeProjection> writes,
+                                    mlir::Operation *use, ShapeRegionProofLimits limits = {});
 
 /// One physical scalar. Coordinates and/or a flat ordinal are exact expressions;
 /// opaque selector atoms retain actual SSA identity, including active induction.

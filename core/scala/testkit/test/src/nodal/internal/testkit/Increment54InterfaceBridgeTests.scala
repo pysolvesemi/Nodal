@@ -211,6 +211,16 @@ final class InterfaceCapabilitiesBridgeSource extends Module:
   )
   val left = interfacePort(definition, source, "left", core)
   val right = interfacePort(definition, sink, "right", core)
+  core {
+    val clock = in(Clock)
+    val reset = in(Reset)
+    val clocks = in(Vec(Clock, 2))
+    val resets = in(Vec(Reset, 2))
+    left.driveMember("clock", clock)
+    left.driveMember("reset", reset)
+    left.driveMember("clocks", clocks)
+    left.driveMember("resets", resets)
+  }
   left.connectExact(right)
   right.observeMember("clock")
   right.observeMember("reset")
@@ -481,6 +491,7 @@ object Increment54InterfaceBridgeTests extends TestSuite:
       assert(document.text.contains("!nodal.capability<\"clock\">"))
       assert(document.text.contains("!nodal.capability<\"reset\">"))
       assert(document.text.contains("!nodal.shaped<\"2\", !nodal.capability<\"clock\">>"))
+      assert(captured.digitalConnectivity.count(_.kind == "interface-drive") == 4)
       Vector(false, true).foreach: stream =>
         val error = scala.util.Try(
           ConstructionKernel.inspect(new InterfaceInvalidCapabilityPayloadSource(stream))
@@ -536,6 +547,23 @@ object Increment54InterfaceBridgeTests extends TestSuite:
         )
       )
       assert(rejected(wrongDomain).startsWith("NODAL-BRIDGE"))
+      Vector(
+        "Reset" -> "NODAL-BRIDGE-054-INTERFACE",
+        "Struct(InvalidCapability{clock:Clock})" -> "NODAL-BRIDGE-054"
+      ).foreach: (dataType, diagnostic) =>
+        val changed = captured.copy(modules =
+          captured.modules.map(value =>
+            if value.path != module.path then value
+            else
+              value.copy(declarations =
+                value.declarations.map(declaration =>
+                  if declaration.path == input.path then declaration.copy(dataType = Some(dataType))
+                  else declaration
+                )
+              )
+          )
+        )
+        assert(rejected(changed) == diagnostic)
 
     test("mixed analog declarations preserve canonical identity and exact dimensions"):
       val snapshot = ConstructionKernel.inspect(new InterfaceMixedDeclarationBridgeSource)

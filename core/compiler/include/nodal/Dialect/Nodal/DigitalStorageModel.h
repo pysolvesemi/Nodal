@@ -6,10 +6,25 @@
 
 namespace nodal {
 
-/// Verify module-local storage declaration names once, independently of the
-/// number of SSA uses. MLIR symbols cannot return values, so structural storage
-/// carries actual SSA identity and an explicit name instead of a symbol trait.
+/// Verify module-local storage names, ordinary assignment drivers and shared
+/// combinational dependencies, including actual typed Interface/net roots,
+/// independently of the number of SSA uses. MLIR symbols cannot return values, so structural
+/// storage carries actual SSA identity and an explicit name instead of a symbol trait.
 mlir::LogicalResult verifyDigitalStorageModel(mlir::Operation *module);
+
+/// Shared graph for ordinary assignments and typed Interface/net values/effects.
+/// ShapeModel owns physical overlap proofs; InterfaceModel owns connectivity.
+/// Limits bound the actual authored SSA graph and relation queries, not lanes.
+/// Registers terminate reads; register_next is not combinational execution.
+/// Future loop integration must add verified iteration/ordering facts here.
+struct DigitalAssignmentProofLimits {
+  unsigned maximumNodes = 65536;
+  unsigned maximumEdges = 262144;
+  unsigned maximumRelations = 16384;
+  unsigned maximumShapeWork = 4096;
+};
+mlir::LogicalResult verifyDigitalAssignmentModel(mlir::Operation *module,
+                                                 DigitalAssignmentProofLimits limits = {});
 
 /// Verify an owned structural wire/register declaration. The actual SSA result
 /// retains the recursive value type; register initialization and domain are

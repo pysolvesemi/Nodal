@@ -63,7 +63,7 @@ LogicalResult verifyDigitalStorageModel(Operation *module) {
   for (Operation &operation : module->getRegion(0).front())
     if (llvm::isa<DigitalStorageOp>(operation) && !names.insert(text(&operation, "name")).second)
       return reject(&operation, "digital storage declaration names must be unique in their module");
-  return success();
+  return verifyDigitalAssignmentModel(module);
 }
 
 LogicalResult verifyDigitalStorageOperation(Operation *operation) {

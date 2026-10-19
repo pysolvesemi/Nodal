@@ -365,3 +365,64 @@ replay. Bounded shared type/DAG traversal is reused; representative sharing chec
 do not establish a whole-pipeline scaling claim. These are verified native MLIR
 witnesses, not generated HDL. F55/BT remains open for scoped reduction proof/capture,
 driver validation and bounded writable iteration.
+
+## Combinational driver prerequisite checkpoint
+
+The approved [driver gate](../design-gates/NodalDigitalDrivers-DG-v0.1.md) integrates
+actual SSA/storage dependencies with canonical Shape and Interface owners.
+Consumed ordinary storage requires physical driver coverage; conflicting writers
+and combinational feedback reject, including standalone Interface/net graphs.
+The existing F54 consumed-undriven wire fixture receives a real exact-type driver;
+independent causal undriven negatives remain required.
+
+Fresh integrated replay passes 890 native checks and 63 selected Scala cases.
+The 21 actual public graphs comprise 11 idempotent positives and ten exact-cause
+negatives; graph counts are not additional test-case counts. Native storage 103,
+Interface 151, Shape region 55, materialization 40, value 362, type 103 and
+collection 76 all pass. The Scala selection covers driver/source admission, F54
+storage and Interface, materialization, Struct, collections and six Shape
+predecessors. Formatting, changed-file syntactic lint and whitespace checks pass.
+Historical isolated stage results remain separate from these integrated results. Public readonly Vec projections remain readonly until the
+separate writable Signal capability is integrated. Register-next intent, bounded
+loop ordering/cross-iteration proof and widening reductions remain open. No F55
+checklist is closed by this design checkpoint.
+
+The affected Interface replay exposed a Struct-prerequisite bridge regression:
+exact type comparison unconditionally selected storage validation, rejecting valid
+Clock/Reset Interface boundary drives. The shared comparator now accepts an
+explicit boundary validation context only at Interface effect rendering; ordinary
+values, width-family comparisons and nested Struct fields retain storage
+restrictions. Actual source-root/domain provenance checks are unchanged. The
+strengthened 14-case Interface suite passes scalar/Vec Clock and Reset drives,
+cross-kind and nested-storage negatives, and all 13 native source round trips.
+An earlier contended run also recorded a process-group status timeout; it is
+retained as a failed attempt. Frozen artifact replays are idempotent and the
+unchanged assertion passes on focused replay, without changing native output or
+loosening the shared runner timeout.
+
+The frozen native compiler SHA-256 is
+`8ad2acdb89dc06a205de58f1d74bf16992ce49b71187f53cb15ecc81815cdb48`.
+Exact commands, final source hashes, positive/negative artifacts and failed-attempt
+logs are retained under `.work/increment55/driver-live`. Fresh Struct replay keeps
+28 gets, two makes and 59 materialization records; changed-edge stale inventory
+rejects. The architecture uses iterative actual-SSA expansion and cycle detection,
+with bounded canonical physical-region queries. Same-root comparisons may be
+quadratic in authored regions; no physical lane enumeration or general scaling
+claim is introduced. F55 and its linked BT children remain open.
+
+A final review found that skipping register_next as a writer also omitted its
+consumed RHS. A synthetic consumer root now traverses that actual RHS without
+adding a register write/feedback edge. The undriven-RHS regression fails against
+the preceding implementation (105/106) and passes after the repair; driven RHS
+and registered self-read remain valid. Rebuilt native suites pass 893/893, with
+storage increased to 106. The eight directly affected Scala cases pass again,
+now containing 24 actual public graphs (13 positives, 11 exact-cause negatives).
+The earlier 63-case selection remains recorded separately; it was not silently
+reclassified as rerun after this final graph-root repair.
+
+Final repaired compiler SHA-256 is
+`bdd1465e7571e6cbfaea10b0857df4d39930267dc8f9823fc769df51517d8be7`.
+The `register-rhs-*` logs in the same local evidence directory retain the causal
+before/after check, fresh source artifacts, native replay and unchanged-binary
+hash. Register priority and execution remain F56-owned; consumed-source
+definedness is part of this F55 combinational graph contract.

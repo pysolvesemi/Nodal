@@ -269,6 +269,31 @@ FailureOr<Value> digitalCollectionCaptureSource(BlockArgument argument) {
   return source;
 }
 
+LogicalResult digitalCollectionArgumentDependencies(BlockArgument argument,
+                                                    llvm::SmallVectorImpl<Value> &dependencies) {
+  Operation *collection = argument.getOwner()->getParentOp();
+  auto contract = signature(collection);
+  if (failed(contract) || contract->body != argument.getOwner())
+    return failure();
+  llvm::SmallVector<Value, 4> sources;
+  unsigned ordinal = argument.getArgNumber();
+  if (ordinal >= contract->ordinaryArguments) {
+    sources.push_back(collection->getOperand(contract->inputs + contract->seeds + ordinal -
+                                             contract->ordinaryArguments));
+  } else if (contract->seeds && ordinal == 0) {
+    // The accumulator is a bounded recurrence. Seed-only provenance would hide
+    // reads from previous iterations; keep all actual recurrent inputs/captures.
+    sources.append(collection->operand_begin(), collection->operand_end());
+  } else {
+    sources.push_back(collection->getOperand(contract->seeds ? 0 : ordinal));
+  }
+  for (Value source : sources)
+    if (failed(verifyCollectionValueScope(source, collection)))
+      return failure();
+  dependencies.append(sources.begin(), sources.end());
+  return success();
+}
+
 std::string digitalValueSemanticPath(Value value) {
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
     Operation *scope = argument.getOwner()->getParentOp();

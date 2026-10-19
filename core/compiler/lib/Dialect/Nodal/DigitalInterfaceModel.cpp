@@ -130,6 +130,7 @@ class Model {
 public:
   explicit Model(Operation *module) : module(module) {}
   LogicalResult verify();
+  LogicalResult dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result);
 
 private:
   LogicalResult definition(Operation *operation);
@@ -162,7 +163,7 @@ private:
   llvm::StringMap<Operation *> driverIdentities;
   llvm::DenseSet<Value> usedDrivers;
   llvm::DenseSet<Operation *> seenAbi;
-  std::set<std::pair<Operation *, std::string>> ordinaryDrivers;
+  std::map<std::pair<Operation *, std::string>, Operation *> ordinaryDrivers;
   SmallVector<std::pair<unsigned, Operation *>> conditionalDrivers;
   SmallVector<std::pair<unsigned, Operation *>> splits;
 };
@@ -679,7 +680,9 @@ void Model::unite(unsigned a, unsigned b) {
     ++ranks[a];
 }
 LogicalResult Model::addOrdinaryDriver(const Access &access, Operation *operation) {
-  if (!ordinaryDrivers.emplace(access.instance->operation, access.path.str()).second)
+  if (!ordinaryDrivers
+           .emplace(std::make_pair(access.instance->operation, access.path.str()), operation)
+           .second)
     return reject(operation, "ordinary Interface member has multiple authored drivers");
   return success();
 }
@@ -1050,6 +1053,93 @@ LogicalResult Model::verify() {
   }
   return success();
 }
+LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result) {
+  SmallVector<DigitalInterfaceValueDependencies> collected;
+  llvm::DenseMap<Value, unsigned> positions;
+  std::map<std::pair<Operation *, std::string>, Value> members;
+  llvm::DenseMap<unsigned, Value> components;
+  auto add = [&](Value value) -> DigitalInterfaceValueDependencies & {
+    auto [entry, inserted] = positions.try_emplace(value, collected.size());
+    if (inserted)
+      collected.push_back({value, {}});
+    return collected[entry->second];
+  };
+  // Choose representatives in authored source order, never hash iteration order.
+  // Aliases point one way to their canonical value; pass-through alone is not a
+  // combinational feedback edge and must not manufacture a two-node cycle.
+  for (Operation &operation : module->getRegion(0).front()) {
+    for (Value value : operation.getResults()) {
+      auto net = netIndices.find(value);
+      if (net != netIndices.end()) {
+        auto [known, inserted] = components.try_emplace(representative(net->second), value);
+        auto &entry = add(value);
+        if (!inserted)
+          entry.sources.emplace_back(known->second, &operation);
+        continue;
+      }
+      auto access = accesses.find(value);
+      if (access == accesses.end() || analog(access->second.member->protocol))
+        continue;
+      auto key = std::make_pair(access->second.instance->operation, access->second.path.str());
+      auto [known, inserted] = members.try_emplace(key, value);
+      auto &entry = add(value);
+      if (!inserted)
+        entry.sources.emplace_back(known->second, &operation);
+    }
+  }
+  for (const auto &[key, operation] : ordinaryDrivers) {
+    auto known = members.find(key);
+    if (known == members.end())
+      return reject(operation, "ordinary dependency has no canonical actual member");
+    Value source = operation->getOperand(1);
+    if (named(operation, "nodal.interface_connect")) {
+      const Access &left = accesses.find(operation->getOperand(0))->second;
+      source = operation->getOperand(left.entry->access == "in" ? 1 : 0);
+    }
+    add(known->second).sources.emplace_back(source, operation);
+  }
+  for (auto [index, operation] : conditionalDrivers) {
+    auto &entry = add(components.find(representative(index))->second);
+    if (named(operation, "nodal.interface_drive")) {
+      entry.sources.emplace_back(operation->getOperand(1), operation);
+    } else {
+      if (llvm::isa<NetDriveOp>(operation))
+        entry.sources.emplace_back(operation->getOperand(2), operation);
+      entry.sources.emplace_back(operation->getOperand(llvm::isa<NetDriveOp>(operation) ? 3 : 2),
+                                 operation);
+    }
+  }
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!marked(&operation))
+      continue;
+    if (llvm::isa<NetReadOp>(operation))
+      add(operation.getResult(0)).sources.emplace_back(operation.getOperand(0), &operation);
+  }
+  llvm::DenseMap<unsigned, Operation *> componentDriver;
+  for (auto [index, operation] : conditionalDrivers)
+    componentDriver.try_emplace(representative(index), operation);
+  for (auto [index, operation] : splits) {
+    Operation *driver = componentDriver.lookup(representative(index));
+    // verify() proved exactly one conditional driver. A split exposes that
+    // driver's data/enable, not an independently invented resolved signal.
+    if (!driver)
+      return reject(operation, "split dependency has no verified conditional driver");
+    auto &data = add(operation->getResult(0));
+    if (llvm::isa<NetDriveOp>(driver))
+      data.sources.emplace_back(driver->getOperand(2), driver);
+    add(operation->getResult(1))
+        .sources.emplace_back(driver->getOperand(llvm::isa<NetDriveOp>(driver) ? 3 : 2), driver);
+  }
+  uint64_t edges = 0;
+  for (const auto &entry : collected)
+    edges += entry.sources.size();
+  if (collected.size() > digitalTypeMaximumNodes || edges > digitalTypeMaximumNodes)
+    return reject(module, "typed dependency graph exceeds its finite represented-node limit");
+  result.append(std::make_move_iterator(collected.begin()),
+                std::make_move_iterator(collected.end()));
+  return success();
+}
+
 } // namespace
 
 bool hasDigitalInterfaceContract(Operation *operation) {
@@ -1073,4 +1163,11 @@ LogicalResult verifyDigitalInterfaceOperation(Operation *operation) {
   return success();
 }
 LogicalResult verifyDigitalInterfaceModel(Operation *module) { return Model(module).verify(); }
+LogicalResult collectDigitalInterfaceDependencies(
+    Operation *module, SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies) {
+  Model model(module);
+  if (failed(model.verify()))
+    return failure();
+  return model.dependencies(dependencies);
+}
 } // namespace nodal

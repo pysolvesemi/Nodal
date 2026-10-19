@@ -2274,7 +2274,13 @@ ${indent(body, 2)}
         location,
         validateInterfaceCapabilitySource,
         (valuePath, expected, usePath) =>
-          exactDigitalValueType(digitalValues.expressionType(valuePath), expected, usePath)
+          compareDigitalValueType(
+            digitalValues.expressionType(valuePath),
+            expected,
+            usePath,
+            widthFamily = false,
+            storageContext = false
+          )
       )
 
       // Keep one canonical static DAG per module: defaults, dimensions and
@@ -4840,11 +4846,13 @@ ${indent(body, 2)}
         left: String,
         right: String,
         path: String,
-        widthFamily: Boolean
+        widthFamily: Boolean,
+        storageContext: Boolean = true
     ): Boolean =
-      // Validate through the existing type owner before comparing semantic dimensions.
-      val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext = true)
-      val _ = parseTypeChecked(right, path, 0, Array(65536), storageContext = true)
+      // Interface boundaries permit Clock/Reset; ordinary values and nested Struct
+      // fields retain the existing storage restrictions in the shared type owner.
+      val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext)
+      val _ = parseTypeChecked(right, path, 0, Array(65536), storageContext)
       val owner = resolveOwningModule(path)
       val pending = mutable.ArrayDeque((left, right, 0))
       val visited = mutable.HashSet.empty[(String, String)]

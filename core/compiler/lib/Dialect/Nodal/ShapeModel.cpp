@@ -1082,10 +1082,86 @@ ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &pro
   return deriveRegion(projection, query, result);
 }
 
-ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
-                                                        llvm::ArrayRef<StaticShapeRegion> regions,
-                                                        Operation *use,
-                                                        ShapeRegionProofLimits limits) {
+StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &left,
+                                                 const StaticShapeProjection &right, Operation *use,
+                                                 ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  auto unknown = [&](RegionStatus status) {
+    return StaticShapeOverlap{status, ShapeRegionOverlap::Unknown};
+  };
+  StaticShapeRegion a, b;
+  auto status = deriveRegion(left, query, a, true);
+  if (status != RegionStatus::Proved)
+    return unknown(status);
+  status = deriveRegion(right, query, b, true);
+  if (status != RegionStatus::Proved)
+    return unknown(status);
+  if (a.root != b.root)
+    return {RegionStatus::Proved, ShapeRegionOverlap::Disjoint};
+  auto dimensions = query.dimensions(a.root.getType());
+  if (!dimensions)
+    return unknown(query.failedStatus());
+  auto compareBoxes = [&](llvm::ArrayRef<RegionAxis> first,
+                          llvm::ArrayRef<RegionAxis> second) -> ShapeRegionOverlap {
+    if (first.size() != second.size())
+      return ShapeRegionOverlap::Unknown;
+    bool intersection = true;
+    for (auto [x, y] : llvm::zip(first, second)) {
+      if (query.less(x.upperExclusive, y.lower, true) ||
+          query.less(y.upperExclusive, x.lower, true))
+        return ShapeRegionOverlap::Disjoint;
+      intersection &=
+          query.less(x.lower, y.upperExclusive) && query.less(y.lower, x.upperExclusive);
+    }
+    return intersection ? ShapeRegionOverlap::Overlapping : ShapeRegionOverlap::Unknown;
+  };
+  auto result = [&](ShapeRegionOverlap overlap) {
+    return query.status != RegionStatus::Proved
+               ? unknown(query.status)
+               : StaticShapeOverlap{overlap == ShapeRegionOverlap::Unknown
+                                        ? RegionStatus::Unsupported
+                                        : RegionStatus::Proved,
+                                    overlap};
+  };
+  // Preserve coordinate certificates before trying an ordinal normalization.
+  // A column and another column need no algebra in the other axes to be disjoint.
+  auto aBox = regionBox(a, query, *dimensions), bBox = regionBox(b, query, *dimensions);
+  if (aBox && bBox)
+    return result(compareBoxes(*aBox, *bBox));
+  auto aInterval = regionInterval(a, query, *dimensions),
+       bInterval = regionInterval(b, query, *dimensions);
+  if (aInterval && bInterval)
+    return result(compareBoxes({*aInterval}, {*bInterval}));
+  auto boxes = [&](const StaticShapeRegion &region,
+                   const std::optional<RegionBox> &box) -> std::optional<std::vector<RegionBox>> {
+    if (box)
+      return std::vector<RegionBox>{*box};
+    if (region.kind != StaticShapeRegion::Kind::Interval)
+      return std::nullopt;
+    return splitInterval(region.interval, *dimensions, query);
+  };
+  auto first = boxes(a, aBox), second = boxes(b, bBox);
+  if (!first || !second)
+    return unknown(query.failedStatus());
+  if (first->size() > limits.maximumStates || second->size() > limits.maximumStates)
+    return unknown(RegionStatus::ResourceLimit);
+  bool uncertain = false;
+  for (const auto &x : *first)
+    for (const auto &y : *second) {
+      if (!query.spend())
+        return unknown(query.status);
+      auto overlap = compareBoxes(x, y);
+      if (overlap == ShapeRegionOverlap::Overlapping)
+        return result(overlap);
+      uncertain |= overlap == ShapeRegionOverlap::Unknown;
+    }
+  return result(uncertain ? ShapeRegionOverlap::Unknown : ShapeRegionOverlap::Disjoint);
+}
+
+static ShapeRegionProofStatus verifyRegionCoverage(Value root,
+                                                   llvm::ArrayRef<StaticShapeRegion> regions,
+                                                   Operation *use, ShapeRegionProofLimits limits,
+                                                   bool lastIsRead = false) {
   RegionQuery query(use, limits);
   if (!root || !query.module || !root.getDefiningOp() ||
       root.getDefiningOp()->getParentOfType<nodal::ModuleOp>() != query.module)
@@ -1098,8 +1174,9 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
   // for two plainly adjacent rows of [2,N]. Normalization is an optimization,
   // not permission to discard the stronger original coordinate certificate.
   std::vector<RegionBox> boxes;
+  std::vector<unsigned> origins;
   bool allBoxes = true;
-  for (const auto &region : regions) {
+  for (auto [regionIndex, region] : llvm::enumerate(regions)) {
     if (region.root != root)
       return RegionStatus::Invalid;
     auto box = regionBox(region, query, *dimensions);
@@ -1108,14 +1185,16 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
       break;
     }
     boxes.push_back(*box);
+    origins.push_back(regionIndex);
   }
   if (!allBoxes) {
     boxes.clear();
+    origins.clear();
     // A common ordinal space still handles exact nonrectangular flat images
     // without decomposing them. Preserve coordinate/decomposition fallback.
     bool allIntervals = true;
     std::vector<RegionAxis> intervals;
-    for (const auto &region : regions) {
+    for (auto [regionIndex, region] : llvm::enumerate(regions)) {
       if (region.root != root)
         return RegionStatus::Invalid;
       auto interval = regionInterval(region, query, *dimensions);
@@ -1130,20 +1209,25 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
       if (!cardinality)
         return query.failedStatus();
       *dimensions = {*cardinality};
-      for (const auto &interval : intervals)
+      for (auto [regionIndex, interval] : llvm::enumerate(intervals)) {
         boxes.push_back({interval});
+        origins.push_back(regionIndex);
+      }
     } else {
-      for (const auto &region : regions) {
+      for (auto [regionIndex, region] : llvm::enumerate(regions)) {
         if (region.root != root)
           return RegionStatus::Invalid;
         if (auto box = regionBox(region, query, *dimensions)) {
           boxes.push_back(*box);
+          origins.push_back(regionIndex);
         } else {
           auto split = splitInterval(region.interval, *dimensions, query);
           if (!split)
             return query.failedStatus();
-          for (auto &box : *split)
+          for (auto &box : *split) {
             boxes.push_back(std::move(box));
+            origins.push_back(regionIndex);
+          }
         }
         if (boxes.size() > limits.maximumStates)
           return RegionStatus::ResourceLimit;
@@ -1205,8 +1289,15 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
     if (!query.spend())
       return query.failedStatus();
     unsigned axis = state.first;
+    unsigned reads = 0;
+    if (lastIsRead) {
+      for (unsigned index : state.second)
+        reads += origins[index] == regions.size() - 1;
+      if (!reads)
+        continue; // Coverage outside the selected read is not required.
+    }
     if (axis == dimensions->size()) {
-      if (state.second.size() != 1)
+      if (state.second.size() != 1 + reads)
         return RegionStatus::Invalid;
       continue;
     }
@@ -1221,14 +1312,48 @@ ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
       }
       if (query.status != RegionStatus::Proved)
         return query.status;
-      if (active.empty())
+      if (active.empty()) {
+        if (lastIsRead)
+          continue;
         return RegionStatus::Invalid;
+      }
       pending.emplace_back(axis + 1, std::move(active));
       if (pending.size() > limits.maximumStates)
         return RegionStatus::ResourceLimit;
     }
   }
   return RegionStatus::Proved;
+}
+
+ShapeRegionProofStatus verifyStaticShapeRegionPartition(Value root,
+                                                        llvm::ArrayRef<StaticShapeRegion> regions,
+                                                        Operation *use,
+                                                        ShapeRegionProofLimits limits) {
+  return verifyRegionCoverage(root, regions, use, limits);
+}
+
+ShapeRegionProofStatus
+verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
+                                    llvm::ArrayRef<StaticShapeProjection> writes, Operation *use,
+                                    ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  SmallVector<StaticShapeRegion, 4> regions;
+  for (const auto &write : writes) {
+    if (write.root != read.root)
+      return RegionStatus::Invalid;
+    StaticShapeRegion region;
+    auto status = deriveRegion(write, query, region, true);
+    if (status != RegionStatus::Proved)
+      return status;
+    regions.push_back(std::move(region));
+  }
+  StaticShapeRegion selected;
+  auto status = deriveRegion(read, query, selected, true);
+  if (status != RegionStatus::Proved)
+    return status;
+  regions.push_back(std::move(selected));
+  limits.maximumWork -= std::min(limits.maximumWork, query.work);
+  return verifyRegionCoverage(read.root, regions, use, limits, true);
 }
 
 namespace {

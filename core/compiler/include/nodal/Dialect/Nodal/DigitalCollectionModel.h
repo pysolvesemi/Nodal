@@ -4,6 +4,8 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <string>
 
 namespace nodal {
@@ -19,6 +21,14 @@ mlir::LogicalResult verifyCollectionValueScope(mlir::Value value, mlir::Operatio
 /// Success with a null value denotes an element/accumulator argument. Malformed
 /// headers or non-dominating/foreign capture sources fail; no supplied facts are used.
 mlir::FailureOr<mlir::Value> digitalCollectionCaptureSource(mlir::BlockArgument argument);
+
+/// Read-only conservative dependencies of an actual callback argument. Elements
+/// depend on the complete actual input; captures retain their actual SSA source.
+/// Fold/scan accumulators depend on seed and recurrent input/capture operands,
+/// never on a fictitious immutable block-argument storage root. No lane expansion.
+mlir::LogicalResult
+digitalCollectionArgumentDependencies(mlir::BlockArgument argument,
+                                      llvm::SmallVectorImpl<mlir::Value> &dependencies);
 
 /// Canonical source identity for an actual collection argument, or a producer's
 /// semantic_path. Argument identity is derived from region_id and argument ordinal.

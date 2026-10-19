@@ -2123,6 +2123,8 @@ ${indent(body, 2)}
         (text, path) => parseTypeChecked(text, path, 0, Array(65536), storageContext = true),
         digitalScalarType,
         digitalWidthRelation,
+        digitalWidthFormula,
+        exactDigitalValueType,
         renderDigitalDeclarationValue,
         DigitalStorageMlir.initializer,
         path => bridgeMetadata(path, Vector.empty),
@@ -2175,7 +2177,15 @@ ${indent(body, 2)}
             value(assignment.target),
             value(assignment.value),
             bridgeMetadata(assignment.path, Vector.empty),
-            location(assignment.path)
+            location(assignment.path),
+            if containsBoundaryCapability(target._2) || containsBoundaryCapability(source._2) then
+              target._2 == source._2
+            else
+              exactDigitalValueType(
+                digitalValues.expressionType(assignment.target),
+                digitalValues.expressionType(assignment.value),
+                assignment.path
+              )
           )
 
       body ++= interfaceValues.renderEffects(
@@ -3449,6 +3459,7 @@ ${indent(body, 2)}
     private def staticConstantOperator(expression: KernelParameterExpressionSnapshot): String =
       expression.operation match
         case "analog_add" => "add"
+        case "static_integer_max" => "max"
         case "analog_sub" => "sub"
         case "analog_mul" => "mul"
         case "analog_div" => "div"
@@ -4012,6 +4023,8 @@ ${indent(body, 2)}
                     case "add" | "sub" | "mul" | "div" =>
                       operands.size == 2 && Set("f64", "i64").contains(dataType) &&
                       operands.forall(_._2 == dataType)
+                    case "max" =>
+                      operands.size == 2 && dataType == "i64" && operands.forall(_._2 == "i64")
                     case "neg" =>
                       operands.size == 1 && Set("f64", "i64").contains(dataType) &&
                       operands.head._2 == dataType
@@ -4630,7 +4643,19 @@ ${indent(body, 2)}
             initial,
             stableLocalSymbol,
             bridgeMetadata(declaration.path, Vector.empty),
-            location(declaration.path)
+            location(declaration.path),
+            DigitalStorageMlir.initializer(declaration).forall: input =>
+              exactDigitalValueType(
+                digitalValues.expressionType(input),
+                declaration.dataType.getOrElse(
+                  fail(
+                    "NODAL-BRIDGE-055",
+                    "storage declaration has no exact type",
+                    Some(declaration.path)
+                  )
+                ),
+                declaration.path
+              )
           ))
         case kind =>
           val (name, key, category) = kind match
@@ -4685,28 +4710,86 @@ ${indent(body, 2)}
         offset: Int,
         path: String
     ): Boolean =
-      if source.lower == source.upper && result.lower == result.upper then
-        BigInt(source.lower) + offset == BigInt(result.lower)
-      else
-        val owner = resolveOwningModule(path)
-        def same(left: String, right: String): Boolean =
-          try StructuralParameterBinding.sameInteger(snapshot, owner, left, right)
-          catch
-            case error: IllegalArgumentException =>
-              fail("NODAL-BRIDGE-054", error.getMessage, Some(path))
-        if offset == 0 then same(source.width, result.width)
+      val owner = resolveOwningModule(path)
+      try
+        if offset == 0 then
+          StructuralParameterBinding.sameInteger(snapshot, owner, source.width, result.width)
         else
-          parameterExpressionsByOwner.getOrElse(owner, Map.empty).get(result.width).exists:
-            expression =>
-              expression.operation == "analog_add" && expression.operands.size == 2 &&
-                ((same(
-                  expression.operands(0),
-                  source.width
-                ) && same(expression.operands(1), offset.toString)) ||
-                  (same(expression.operands(1), source.width) && same(
-                    expression.operands(0),
-                    offset.toString
-                  )))
+          StructuralParameterBinding.sameIntegerOperation(
+            snapshot,
+            owner,
+            result.width,
+            "analog_add",
+            Vector(source.width, offset.toString)
+          )
+      catch
+        case error: IllegalArgumentException =>
+          fail("NODAL-BRIDGE-054", error.getMessage, Some(path))
+
+    private def digitalWidthFormula(
+        result: DigitalValueMlir.ScalarType,
+        operation: String,
+        operands: Vector[DigitalValueMlir.ScalarType],
+        increment: Long,
+        path: String
+    ): Boolean =
+      try
+        StructuralParameterBinding.sameIntegerOperation(
+          snapshot,
+          resolveOwningModule(path),
+          result.width,
+          operation,
+          operands.map(_.width),
+          increment
+        )
+      catch
+        case error: IllegalArgumentException =>
+          fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
+
+    private def exactDigitalValueType(left: String, right: String, path: String): Boolean =
+      // Validate through the existing type owner before comparing semantic dimensions.
+      val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext = true)
+      val _ = parseTypeChecked(right, path, 0, Array(65536), storageContext = true)
+      val owner = resolveOwningModule(path)
+      val pending = mutable.ArrayDeque((left, right, 0))
+      val visited = mutable.HashSet.empty[(String, String)]
+      var equal = true
+      def sameDimension(a: String, b: String): Boolean =
+        try StructuralParameterBinding.sameInteger(snapshot, owner, a, b)
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
+      def structParts(text: String): (String, Vector[(String, String)]) =
+        val inside = text.drop(7).dropRight(1)
+        val open = inside.indexOf('{')
+        val fields = splitStructFields(inside.drop(open + 1).dropRight(1), path).map: field =>
+          val colon = field.indexOf(':')
+          field.take(colon) -> field.drop(colon + 1)
+        inside.take(open) -> fields
+      while pending.nonEmpty && equal do
+        val (a, b, depth) = pending.removeLast()
+        if depth > 128 || visited.size >= 65536 then
+          fail("NODAL-BRIDGE-055", "digital type comparison exceeds structural budget", Some(path))
+        if visited.add(a -> b) && a != b then
+          (a, b) match
+            case (WidthType(aKind, aWidth), WidthType(bKind, bWidth)) =>
+              equal = aKind == bKind && sameDimension(aWidth, bWidth)
+            case _ if a.startsWith("Vec(") && b.startsWith("Vec(") =>
+              val (aElement, aDimensions) = vecTypeParts(a, path)
+              val (bElement, bDimensions) = vecTypeParts(b, path)
+              equal = aDimensions.size == bDimensions.size &&
+                aDimensions.zip(bDimensions).forall((x, y) => sameDimension(x, y))
+              pending.append((aElement, bElement, depth + 1))
+            case _ if a.startsWith("Struct(") && b.startsWith("Struct(") =>
+              val (aName, aFields) = structParts(a)
+              val (bName, bFields) = structParts(b)
+              equal = aName == bName && aFields.map(_._1) == bFields.map(_._1)
+              aFields.zip(bFields).foreach: (x, y) =>
+                pending.append((x._2, y._2, depth + 1))
+            case _ if a.startsWith("Enum(") && b.startsWith("Enum(") =>
+              equal = enumValues.parseType(a, path) == enumValues.parseType(b, path)
+            case _ => equal = false
+      equal
 
     // Inputs are already canonical native types produced by the shared type renderer.
     private def containsBoundaryCapability(nativeType: String): Boolean =
@@ -5315,6 +5398,7 @@ ${indent(body, 2)}
                       case None =>
                         val operation = expression.operation match
                           case "analog_add" => IterationDomain.Arithmetic.Add
+                          case "static_integer_max" => IterationDomain.Arithmetic.Maximum
                           case "analog_sub" => IterationDomain.Arithmetic.Subtract
                           case "analog_mul" => IterationDomain.Arithmetic.Multiply
                           case "analog_div" => IterationDomain.Arithmetic.Divide

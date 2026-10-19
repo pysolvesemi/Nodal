@@ -5,7 +5,7 @@ import scala.annotation.targetName
 /** Public core semantic surface frozen by Increment 15. Implementation remains inert. */
 opaque type SInt <: Data = Bits
 
-object SInt:
+object SInt extends DigitalNumericOperators[SInt]:
   def apply(width: Int): DataType[SInt] =
     CandidateRuntime.dataType[SInt]("SInt", width)
 
@@ -14,13 +14,16 @@ object SInt:
 
   extension (left: Expr[SInt])
     @targetName("sintAddition")
-    def +(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+    def +(right: Expr[SInt]): Expr[SInt] =
+      DigitalCombinationalContract.arithmetic("digital_add", left, right)
 
     @targetName("sintSubtraction")
-    def -(right: Expr[SInt]): Expr[SInt] = CandidateRuntime.expr(left, right)
+    def -(right: Expr[SInt]): Expr[SInt] =
+      DigitalCombinationalContract.arithmetic("digital_sub", left, right)
 
     @targetName("sintArithmeticShiftRight")
-    def >>(amount: Int): Expr[SInt] = CandidateRuntime.expr(left, amount)
+    def >>(amount: Int): Expr[SInt] =
+      DigitalCombinationalContract.shift("digital_shr", left, amount)
 
 extension (value: Int)
   def S(width: Int): Expr[SInt] = CandidateRuntime.literalSInt(value, width)
@@ -28,7 +31,8 @@ extension (value: Int)
 
 extension (left: Expr[UInt])
   @targetName("uintLogicalShiftRight")
-  def >>(amount: Int): Expr[UInt] = CandidateRuntime.expr(left, amount)
+  def >>(amount: Int): Expr[UInt] =
+    DigitalCombinationalContract.shift("digital_shr", left, amount)
 
 extension [A <: Data](value: Expr[A])
   def extend(width: Int): Expr[A] = DigitalScalarContract.resize(value, width, "extend")

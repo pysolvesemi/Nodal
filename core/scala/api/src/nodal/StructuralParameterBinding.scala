@@ -7,7 +7,9 @@ import scala.collection.mutable
   */
 private[nodal] object StructuralParameterBinding:
   private def invalid(message: String): Nothing =
-    throw new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
+    scala.util.Failure[Nothing](
+      new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
+    ).get
 
   final case class IntegerNode(
       literal: Option[Long],
@@ -147,21 +149,29 @@ private[nodal] object StructuralParameterBinding:
             invalid("forged Integer literal expression")
           literal(value.toLongOption.getOrElse(invalid("Integer literal exceeds signed 64 bits")))
         case None =>
-          val operation = expression.operation match
-            case "analog_add" => IterationDomain.Arithmetic.Add
-            case "analog_sub" => IterationDomain.Arithmetic.Subtract
-            case "analog_mul" => IterationDomain.Arithmetic.Multiply
-            case "analog_div" => IterationDomain.Arithmetic.Divide
-            case "analog_neg" => IterationDomain.Arithmetic.Negate
-            case _ => invalid("structural expression is not supported pure Integer arithmetic")
-          val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
-          if expression.operands.size != arity then invalid("Integer expression has invalid arity")
-          val operands = expression.operands.map(resolve(expression.owner, _, defaults))
-          val bounds = IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
-            .fold(problem => invalid(problem.message), identity)
-          if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) then
-            literal(bounds.lower)
-          else intern(Key.Apply(expression.operation, operands), bounds)
+          compose(
+            expression.operation,
+            expression.operands.map(resolve(expression.owner, _, defaults))
+          )
+
+    def compose(operationName: String, operands: Vector[Int]): Int =
+      val operation = operationName match
+        case "analog_add" => IterationDomain.Arithmetic.Add
+        case "analog_sub" => IterationDomain.Arithmetic.Subtract
+        case "analog_mul" => IterationDomain.Arithmetic.Multiply
+        case "analog_div" => IterationDomain.Arithmetic.Divide
+        case "analog_neg" => IterationDomain.Arithmetic.Negate
+        case "static_integer_max" => IterationDomain.Arithmetic.Maximum
+        case _ => invalid("structural expression is not supported pure Integer arithmetic")
+      val arity = if operation == IterationDomain.Arithmetic.Negate then 1 else 2
+      if operands.size != arity then invalid("Integer expression has invalid arity")
+      val bounds = IterationDomain.arithmetic(operation, operands.map(facts(_).bounds))
+        .fold(problem => invalid(problem.message), identity)
+      if operation == IterationDomain.Arithmetic.Maximum && operands(0) == operands(1) then
+        operands(0)
+      else if operands.forall(index => facts(index).key.isInstanceOf[Key.Literal]) then
+        literal(bounds.lower)
+      else intern(Key.Apply(operationName, operands), bounds)
 
     def resolve(owner: String, token: String, defaults: Boolean = false): Int =
       token.toLongOption match
@@ -237,6 +247,7 @@ private[nodal] object StructuralParameterBinding:
                           case "analog_mul" => Some(IterationDomain.Arithmetic.Multiply)
                           case "analog_div" => Some(IterationDomain.Arithmetic.Divide)
                           case "analog_neg" => Some(IterationDomain.Arithmetic.Negate)
+                          case "static_integer_max" => Some(IterationDomain.Arithmetic.Maximum)
                           case _ => None
                         operation.filter(op =>
                           inputs.size == (if op == IterationDomain.Arithmetic.Negate then 1 else 2)
@@ -291,6 +302,24 @@ private[nodal] object StructuralParameterBinding:
   ): Boolean =
     val query = new Query(snapshot, None)
     query.resolve(owner, left) == query.resolve(owner, right)
+
+  /** Compare a retained result with checked composition in the same query-local identity space.
+    * Operation names are the captured static Integer opcodes, not renderer spellings.
+    */
+  def sameIntegerOperation(
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      resultToken: String,
+      operation: String,
+      operandTokens: Vector[String],
+      increment: Long = 0L
+  ): Boolean =
+    val query = new Query(snapshot, None)
+    val result = query.resolve(owner, resultToken)
+    val composed = query.compose(operation, operandTokens.map(query.resolve(owner, _)))
+    val expected = if increment == 0L then composed
+    else query.compose("analog_add", Vector(composed, query.resolve(owner, increment.toString)))
+    result == expected
 
   def defaultInteger(snapshot: ConstructionSnapshot, owner: String, reference: String): Long =
     new Query(snapshot, None).checkedLiteral(owner, reference)

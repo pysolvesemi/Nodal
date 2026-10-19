@@ -399,6 +399,9 @@ private[nodal] object ConstructionKernel:
   def digitalWidthBounds(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
     active.map(_.digitalWidthBounds(descriptor))
 
+  def sameStaticInteger(left: Dimension, right: Dimension): Option[Boolean] =
+    active.map(_.sameStaticInteger(left, right))
+
   def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
     descriptor.arguments == Vector(expected) ||
       active.exists(_.digitalWidthEquals(descriptor, expected))

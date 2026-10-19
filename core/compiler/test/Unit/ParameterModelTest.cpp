@@ -237,6 +237,180 @@ mlir::Operation *namedOperation(mlir::Operation *scope, llvm::StringRef name) {
   return found;
 }
 
+int checkParameterRenderBudget(mlir::MLIRContext &context) {
+  auto fixture = [&](unsigned levels, llvm::StringRef opcode) {
+    std::string source = R"mlir(module {
+      "nodal.module"() <{metadata = {}, sym_name = "Budget"}> ({
+        %v0 = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    )mlir";
+    for (unsigned index = 1; index <= levels; ++index) {
+      const auto current = std::to_string(index), previous = std::to_string(index - 1);
+      source += "%v" + current + " = \"nodal.const_expr\"(%v" + previous;
+      if (opcode != "neg")
+        source += ", %v" + previous;
+      source += ") <{metadata = {}, operator_name = \"" + opcode.str() + "\"}> : (i64";
+      if (opcode != "neg")
+        source += ", i64";
+      source += ") -> i64\n";
+    }
+    source += "}) : () -> () }";
+    return mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  };
+  auto output = [&](mlir::ModuleOp module) {
+    mlir::Value value;
+    module.walk([&](nodal::ConstExprOp op) { value = op->getResult(0); });
+    return nodal::renderParameterConstantExpression(value);
+  };
+  auto small = fixture(8, "max");
+  auto large = fixture(40, "max");
+  auto deep = fixture(513, "neg");
+  auto repeated = fixture(40, "add");
+  if (!small || !large || !deep || !repeated)
+    return fail("parameter rendering budget fixtures did not parse");
+  size_t expectedSize = 1;
+  for (unsigned index = 0; index < 8; ++index)
+    expectedSize = 4 * expectedSize + 11;
+  auto rendered = output(*small);
+  if (mlir::failed(rendered) || rendered->size() != expectedSize)
+    return fail("bounded shared maximum DAG did not preserve its ordinary expanded spelling");
+  if (mlir::succeeded(output(*large)) || mlir::succeeded(output(*deep)) ||
+      mlir::succeeded(output(*repeated)))
+    return fail("oversized or deep parameter rendering escaped bounded DAG preflight");
+  mlir::Operation *last = nullptr;
+  small->walk([&](nodal::ConstExprOp op) { last = op.getOperation(); });
+  last->setOperand(0, last->getResult(0));
+  if (mlir::succeeded(nodal::renderParameterConstantExpression(last->getResult(0))))
+    return fail("cyclic parameter rendering escaped bounded DAG preflight");
+  return 0;
+}
+
+int checkStaticIntegerMaximum(mlir::MLIRContext &context) {
+  constexpr llvm::StringLiteral source = R"mlir(
+module {
+  "nodal.module"() <{metadata = {}, sym_name = "Child"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "W", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "X", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "MAXIMUM", type = i64, variability = "fixed"}> : () -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %nine = "nodal.const_literal"() <{metadata = {}, spelling = "9", value = 9 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @W}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @X}> : (i64, i64) -> ()
+    %w = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @W}> : () -> i64
+    %x = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @X}> : () -> i64
+    %maximum = "nodal.const_expr"(%w, %x) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    "nodal.parameter_value"(%maximum) <{metadata = {}, parameter = @MAXIMUM}> : (i64) -> ()
+  }) : () -> ()
+  "nodal.module"() <{metadata = {}, sym_name = "Parent"}> ({
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "A", type = i64, variability = "symbolic"}> : () -> ()
+    "nodal.parameter"() <{classification = "ordinary", default_value = 4 : i64, metadata = {}, parameter_kind = "integer", sym_name = "B", type = i64, variability = "symbolic"}> : () -> ()
+    %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    %three = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    %six = "nodal.const_literal"() <{metadata = {}, spelling = "6", value = 6 : i64}> : () -> i64
+    %nine = "nodal.const_literal"() <{metadata = {}, spelling = "9", value = 9 : i64}> : () -> i64
+    "nodal.parameter_constraint"(%one, %nine) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @A}> : (i64, i64) -> ()
+    "nodal.parameter_constraint"(%three, %six) <{constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}, parameter = @B}> : (i64, i64) -> ()
+    %a = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @A}> : () -> i64
+    %b = "nodal.const_parameter_ref"() <{metadata = {}, parameter = @B}> : () -> i64
+    %maximum = "nodal.const_expr"(%a, %b) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    %same = "nodal.const_expr"(%a, %a) <{metadata = {}, operator_name = "max"}> : (i64, i64) -> i64
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "u"}> : () -> ()
+    "nodal.parameter_override"(%a) <{instance = @u, parameter = @W, metadata = {}}> : (i64) -> ()
+    "nodal.parameter_override"(%b) <{instance = @u, parameter = @X, metadata = {}}> : (i64) -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {}, sym_name = "d"}> : () -> ()
+    "nodal.instance"() <{domain_bindings = {}, metadata = {}, module = @Child, parameter_bindings = {W = 8 : i64, X = 6 : i64}, sym_name = "v"}> : () -> ()
+  }) : () -> ()
+}
+)mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module || mlir::failed(mlir::verify(*module)) ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("static Integer maximum model did not verify");
+  auto *parent = namedOperation(module->getOperation(), "Parent");
+  auto *child = namedOperation(module->getOperation(), "Child");
+  auto *formal = namedOperation(child, "MAXIMUM");
+  llvm::SmallVector<mlir::Value, 2> expressions;
+  parent->walk([&](nodal::ConstExprOp op) { expressions.push_back(op->getResult(0)); });
+  auto bounds = nodal::inferParameterIntegerBounds(expressions[0]);
+  auto owned = nodal::resolveOwnedIntegerExpression(parent, expressions[0]);
+  auto other = nodal::resolveOwnedIntegerExpression(parent, expressions[1]);
+  auto bound = nodal::resolveInstanceIntegerParameter(namedOperation(parent, "u"), formal);
+  auto a = nodal::resolveOwnedIntegerParameter(parent, namedOperation(parent, "A"));
+  auto b = nodal::resolveOwnedIntegerParameter(parent, namedOperation(parent, "B"));
+  if (mlir::failed(bounds) || bounds->lower != 3 || bounds->upper != 9 || mlir::failed(owned) ||
+      mlir::failed(other) || mlir::failed(bound) || mlir::failed(a) || mlir::failed(b) ||
+      owned->root->kind != nodal::InstantiatedIntegerNode::Kind::Apply ||
+      owned->root->opcode != "max" ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*owned, *bound) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*owned, *other) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*owned,
+                                                      nodal::makeLiteralIntegerExpression(4)))
+    return fail("static maximum lost all-legal bounds or symbolic declaration identity");
+  auto composed = nodal::composeIntegerExpression("max", {*a, *b});
+  auto idempotent = nodal::composeIntegerExpression("max", {*a, *a});
+  if (mlir::failed(composed) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*owned, *composed) ||
+      mlir::failed(idempotent) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*a, *idempotent) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*a, *other) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*a, *composed))
+    return fail("static maximum composition disagrees with exact owned operand identities");
+  auto childMaximum = nodal::resolveOwnedIntegerParameter(child, formal);
+  auto childWidth = nodal::resolveOwnedIntegerParameter(child, namedOperation(child, "W"));
+  if (mlir::failed(childMaximum) || mlir::failed(childWidth) ||
+      nodal::equivalentInstantiatedIntegerExpressions(*childMaximum, *childWidth))
+    return fail("static maximum collapsed independent parameters with equal defaults and bounds");
+  for (auto entry : {std::make_pair("d", int64_t{4}), std::make_pair("v", int64_t{8})}) {
+    auto resolved =
+        nodal::resolveInstanceIntegerParameter(namedOperation(parent, entry.first), formal);
+    if (mlir::failed(resolved) || !nodal::equivalentInstantiatedIntegerExpressions(
+                                      *resolved, nodal::makeLiteralIntegerExpression(entry.second)))
+      return fail("static maximum did not substitute a finalized default or override exactly");
+  }
+  auto invariant = nodal::getInvariantParameterDefault(formal);
+  if (mlir::failed(invariant) || invariant->has_value())
+    return fail("fixed maximum with symbolic dependencies incorrectly became an invariant default");
+  auto rendered = nodal::renderParameterConstantExpression(expressions[0]);
+  if (mlir::failed(rendered) || *rendered != "(A > B ? A : B)")
+    return fail("static maximum rendering did not retain its symbolic operands");
+
+  const auto minimum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::min());
+  const auto maximum = nodal::makeLiteralIntegerExpression(std::numeric_limits<int64_t>::max());
+  auto endpoints = nodal::composeIntegerExpression("max", {minimum, maximum});
+  if (mlir::failed(endpoints) ||
+      !nodal::equivalentInstantiatedIntegerExpressions(*endpoints, maximum) ||
+      mlir::succeeded(nodal::composeIntegerExpression(
+          "add", {*endpoints, nodal::makeLiteralIntegerExpression(1)})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("max", {})) ||
+      mlir::succeeded(nodal::composeIntegerExpression("max", {minimum})))
+    return fail("static maximum literal boundary, overflow, or arity checks failed");
+
+  auto *operation = expressions[0].getDefiningOp();
+  const auto originalOperands = llvm::SmallVector<mlir::Value, 2>(operation->getOperands());
+  operation->setOperands({originalOperands[0]});
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])) ||
+      mlir::succeeded(nodal::renderParameterConstantExpression(expressions[0])))
+    return fail("malformed maximum arity escaped independent native checks");
+  operation->setOperands(originalOperands);
+  auto childValue = formal;
+  mlir::Value foreign;
+  childValue->getParentOp()->walk([&](nodal::ConstExprOp op) { foreign = op->getResult(0); });
+  operation->setOperand(1, foreign);
+  if (mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("maximum accepted a foreign-module operand");
+  operation->setOperands(originalOperands);
+  expressions[0].setType(mlir::Float64Type::get(&context));
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::inferParameterIntegerBounds(expressions[0])))
+    return fail("maximum accepted a non-Integer result");
+  expressions[0].setType(mlir::IntegerType::get(&context, 64));
+  operation->setAttr("unit", mlir::FlatSymbolRefAttr::get(&context, "unavailable"));
+  if (mlir::succeeded(mlir::verify(operation)) ||
+      mlir::succeeded(nodal::resolveOwnedIntegerExpression(parent, expressions[0])))
+    return fail("maximum accepted dimensional metadata");
+  return 0;
+}
+
 int checkInstanceParameterQueries(mlir::MLIRContext &context) {
   auto module = mlir::parseSourceString<mlir::ModuleOp>(kInstanceShapeParameters, &context);
   if (!module || mlir::failed(mlir::verify(*module)) ||
@@ -608,7 +782,8 @@ int main() {
   registry.insert<nodal::NodalDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
-  if (checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
+  if (checkParameterRenderBudget(context) || checkStaticIntegerMaximum(context) ||
+      checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
       checkGeneratedParameterQueries(context) || checkGeneratedWaveformParameterLookup(context))
     return 1;
 

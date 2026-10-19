@@ -1,13 +1,15 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
-#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
 #include <optional>
@@ -91,26 +93,9 @@ FailureOr<ParameterIntegerBounds> widthBounds(Type type, Operation *module) {
   return bounds;
 }
 
-FailureOr<InstantiatedIntegerExpression> widthExpression(Type type, Operation *module) {
-  auto bounds = widthBounds(type, module);
-  if (failed(bounds))
-    return failure();
-  if (auto symbolic = llvm::dyn_cast<ParametricIntegerType>(type)) {
-    auto dimension = resolveStaticShapeDimension(module, symbolic.getWidth(), "width");
-    if (failed(dimension))
-      return failure();
-    if (dimension->parameter)
-      return resolveOwnedIntegerParameter(module, dimension->parameter);
-    if (dimension->expression)
-      return resolveOwnedIntegerExpression(module, dimension->expression);
-    return makeLiteralIntegerExpression(dimension->literal);
-  }
-  return makeLiteralIntegerExpression(bounds->lower);
-}
-
 bool widthRelated(Type source, Type result, Operation *module, int64_t increment) {
-  auto left = widthExpression(source, module);
-  auto right = widthExpression(result, module);
+  auto left = inferDigitalWidthExpression(source, module);
+  auto right = inferDigitalWidthExpression(result, module);
   if (failed(left) || failed(right))
     return false;
   if (increment) {
@@ -120,6 +105,45 @@ bool widthRelated(Type source, Type result, Operation *module, int64_t increment
     left = std::move(next);
   }
   return equivalentInstantiatedIntegerExpressions(*left, *right);
+}
+
+bool numericKind(StringRef kind) { return kind == "uint" || kind == "sint"; }
+
+bool isBool(Type type) {
+  auto bits = llvm::dyn_cast<BitsType>(type);
+  return bits && bits.getWidth() == 1;
+}
+
+unsigned expressionArity(StringRef opcode) {
+  return llvm::StringSwitch<unsigned>(opcode)
+      .Cases({"digital_extend", "digital_truncate", "digital_wrap"}, 1)
+      .Cases({"digital_saturate", "digital_resize_checked", "digital_to_signed"}, 1)
+      .Cases({"digital_to_unsigned", "digital_reinterpret_signed", "digital_reinterpret_unsigned"},
+             1)
+      .Cases({"digital_to_real", "digital_neg", "digital_not", "bool_not"}, 1)
+      .Cases({"digital_add", "digital_sub", "digital_mul"}, 2)
+      .Cases({"digital_eq", "digital_ne", "digital_lt", "digital_le"}, 2)
+      .Cases({"digital_gt", "digital_ge", "digital_and", "digital_or"}, 2)
+      .Cases({"digital_xor", "digital_concat", "digital_shl", "digital_shr"}, 2)
+      .Cases({"digital_logical_shr", "bool_and", "bool_or"}, 2)
+      .Cases({"digital_select", "digital_extract"}, 3)
+      .Default(0);
+}
+
+LogicalResult checkLiteral(Operation *operation);
+
+/// A static index is an actual, owned UInt literal SSA value. An invariant
+/// hardware expression or a parameter's default is not a static literal.
+std::optional<int64_t> staticIndex(Value value) {
+  if (scalarKind(value.getType()) != "uint")
+    return std::nullopt;
+  Operation *definition = value.getDefiningOp();
+  if (!definition || failed(checkLiteral(definition)))
+    return std::nullopt;
+  auto exact = integerValue(definition->getAttrOfType<IntegerAttr>("value"));
+  if (failed(exact) || exact->isNegative() || exact->getActiveBits() > 63)
+    return std::nullopt;
+  return exact->getZExtValue();
 }
 
 LogicalResult checkLiteral(Operation *operation) {
@@ -168,6 +192,76 @@ struct Facts {
   unsigned height = 1;
 };
 
+std::optional<llvm::APInt> boundedConstant(llvm::APInt value) {
+  unsigned bits = std::max(1u, value.getSignificantBits());
+  if (bits > maximumProofBits + 1)
+    return std::nullopt;
+  return value.sextOrTrunc(bits);
+}
+
+std::optional<llvm::APInt> binaryConstant(StringRef opcode, const llvm::APInt &left,
+                                          const llvm::APInt &right) {
+  unsigned bits = std::max(left.getBitWidth(), right.getBitWidth());
+  if (opcode == "digital_add" || opcode == "digital_sub")
+    ++bits;
+  else if (opcode == "digital_mul")
+    bits = left.getBitWidth() + right.getBitWidth();
+  // At most two bounded mathematical magnitudes are allocated, regardless of
+  // hardware width. A result beyond the proof budget becomes unknown.
+  llvm::APInt a = left.sext(bits), b = right.sext(bits);
+  if (opcode == "digital_add")
+    return boundedConstant(a + b);
+  if (opcode == "digital_sub")
+    return boundedConstant(a - b);
+  if (opcode == "digital_mul")
+    return boundedConstant(a * b);
+  if (opcode == "digital_and" || opcode == "bool_and")
+    return boundedConstant(a & b);
+  if (opcode == "digital_or" || opcode == "bool_or")
+    return boundedConstant(a | b);
+  if (opcode == "digital_xor")
+    return boundedConstant(a ^ b);
+  bool result;
+  if (opcode == "digital_eq")
+    result = a == b;
+  else if (opcode == "digital_ne")
+    result = a != b;
+  else if (opcode == "digital_lt")
+    result = a.slt(b);
+  else if (opcode == "digital_le")
+    result = a.sle(b);
+  else if (opcode == "digital_gt")
+    result = a.sgt(b);
+  else if (opcode == "digital_ge")
+    result = a.sge(b);
+  else
+    return std::nullopt;
+  return llvm::APInt(2, result);
+}
+
+std::optional<llvm::APInt> shiftedConstant(StringRef opcode, StringRef kind,
+                                           ParameterIntegerBounds width, const llvm::APInt &source,
+                                           int64_t amount) {
+  if (source.isZero() || !amount)
+    return source;
+  if (opcode == "digital_shl") {
+    if (amount > maximumProofBits)
+      return std::nullopt;
+    return boundedConstant(source.sext(source.getBitWidth() + amount).shl(amount));
+  }
+  if (opcode == "digital_logical_shr" && kind == "sint" && source.isNegative()) {
+    if (width.lower != width.upper || width.upper > maximumProofBits)
+      return std::nullopt;
+    unsigned bits = static_cast<unsigned>(width.upper);
+    if (amount >= bits)
+      return llvm::APInt(1, 0);
+    return boundedConstant(source.sextOrTrunc(bits).lshr(amount).zext(bits + 1));
+  }
+  if (amount >= source.getBitWidth())
+    return llvm::APInt(1, source.isNegative());
+  return boundedConstant(source.ashr(amount));
+}
+
 std::optional<llvm::APInt> convertedConstant(StringRef opcode, StringRef kind,
                                              ParameterIntegerBounds width,
                                              const llvm::APInt &source) {
@@ -211,16 +305,22 @@ public:
         return failure();
       return known->second;
     }
-    if (++nodes > maximumProofNodes || !active.insert(input).second)
+    if ((visited.insert(input).second && ++nodes > maximumProofNodes) ||
+        !active.insert(input).second)
       return failure();
-    auto bounds = widthBounds(input.getType(), module);
-    if (failed(bounds))
+    if (!validValueType(input.getType()))
       return failure();
     Facts result;
     result.nonnegative = scalarKind(input.getType()) != "sint";
     if (Operation *definition = input.getDefiningOp()) {
       StringRef name = definition->getName().getStringRef();
-      if (name == "nodal.constant" || name == "nodal.const_literal") {
+      if ((name == "nodal.constant" || name == "nodal.const_literal") &&
+          llvm::isa<EnumType>(input.getType())) {
+        // Enum data remains opaque to scalar arithmetic, but its exact declared
+        // code must still be independently validated before selecting it.
+        if (failed(verifyEnumLiteralOperation(definition)))
+          return failure();
+      } else if (name == "nodal.constant" || name == "nodal.const_literal") {
         if (failed(checkLiteral(definition)))
           return failure();
         auto attribute = definition->getAttrOfType<IntegerAttr>("value");
@@ -245,17 +345,28 @@ public:
   FailureOr<Facts> expression(Operation *operation, unsigned depth = 0) {
     if (!module || owner(operation) != module || depth > maximumProofDepth ||
         operation->getName().getStringRef() != "nodal.digital_expr" ||
-        operation->getNumOperands() != 1 || operation->getNumResults() != 1 ||
-        operation->getNumRegions() != 0 || operation->getNumSuccessors() != 0 ||
+        operation->getNumResults() != 1 || operation->getNumRegions() != 0 ||
+        operation->getNumSuccessors() != 0 ||
         !operation->getAttrOfType<DictionaryAttr>("metadata")) {
-      (void)reject(operation, "digital conversion requires one owned operand/result and metadata");
+      (void)reject(operation, "digital expression requires one owned result and metadata");
       return failure();
     }
+    if (visited.insert(operation->getResult(0)).second && ++nodes > maximumProofNodes) {
+      (void)reject(operation, "digital expression graph exceeds its finite node budget");
+      return failure();
+    }
+    StringRef opcode = text(operation, "operator_name");
+    unsigned arity = expressionArity(opcode);
+    if (!arity || operation->getNumOperands() != arity) {
+      (void)reject(operation, "digital expression requires a supported opcode and exact arity");
+      return failure();
+    }
+    if (arity != 1 || opcode == "digital_neg" || opcode == "digital_not" || opcode == "bool_not")
+      return combinational(operation, depth);
     Value input = operation->getOperand(0);
     Type sourceType = input.getType(), resultType = operation->getResult(0).getType();
     StringRef sourceKind = scalarKind(sourceType), resultKind = scalarKind(resultType);
-    StringRef opcode = text(operation, "operator_name");
-    auto sourceWidth = widthBounds(sourceType, module);
+    auto sourceWidth = scalarBounds(sourceType);
     auto source = value(input, depth + 1);
     if (failed(sourceWidth) || failed(source)) {
       (void)reject(operation, "digital operand requires an owned, valid scalar width/value proof");
@@ -281,7 +392,7 @@ public:
       }
       return result;
     }
-    auto resultWidth = widthBounds(resultType, module);
+    auto resultWidth = scalarBounds(resultType);
     if (failed(resultWidth)) {
       (void)reject(operation, "digital result requires an exact positive scalar width");
       return failure();
@@ -325,8 +436,225 @@ public:
   }
 
 private:
+  FailureOr<InstantiatedIntegerExpression> scalarWidth(Type type) {
+    if (!isDigitalScalarType(type))
+      return failure();
+    auto found = widthFacts.find(type);
+    if (found != widthFacts.end())
+      return found->second;
+    auto expression = inferDigitalWidthExpression(type, module);
+    if (succeeded(expression))
+      widthFacts.try_emplace(type, *expression);
+    return expression;
+  }
+
+  FailureOr<ParameterIntegerBounds> scalarBounds(Type type) {
+    auto expression = scalarWidth(type);
+    if (failed(expression))
+      return failure();
+    return expression->bounds;
+  }
+
+  bool validValueType(Type type) {
+    auto found = validTypes.find(type);
+    if (found != validTypes.end())
+      return found->second;
+    // Select may carry owned enum/aggregate data. Analog scalar roots and
+    // capabilities remain with their distinct semantic owners.
+    bool valid = isDigitalScalarType(type)
+                     ? succeeded(scalarWidth(type))
+                     : llvm::isa<EnumType, ShapedType, StructType>(type) &&
+                           isDigitalStorageType(type) &&
+                           succeeded(inferDigitalStorageMaximumBits(type, module));
+    validTypes.try_emplace(type, valid);
+    return valid;
+  }
+
+  bool matchesWidth(Type result, const InstantiatedIntegerExpression &expected) {
+    auto actual = scalarWidth(result);
+    return succeeded(actual) && equivalentInstantiatedIntegerExpressions(expected, *actual);
+  }
+
+  bool sameStorageType(Type left, Type right) {
+    // Operand/result storage validity is checked before this query. The cache
+    // belongs to this actual module, so aliases cannot borrow another owner's proof.
+    if (left == right)
+      return true;
+    const auto pair = std::make_pair(left, right);
+    auto found = storageEqualities.find(pair);
+    if (found != storageEqualities.end())
+      return found->second;
+    bool equal = equivalentDigitalStorageTypes(left, right, module);
+    storageEqualities.try_emplace(pair, equal);
+    return equal;
+  }
+
+  FailureOr<Facts> combinational(Operation *operation, unsigned depth) {
+    StringRef opcode = text(operation, "operator_name");
+    Type resultType = operation->getResult(0).getType();
+    llvm::SmallVector<Facts, 3> inputs;
+    Facts result;
+    for (Value operand : operation->getOperands()) {
+      auto proof = value(operand, depth + 1);
+      if (failed(proof)) {
+        (void)reject(operation, "digital expression requires valid owned operand proofs");
+        return failure();
+      }
+      result.height = std::max(result.height, proof->height + 1);
+      inputs.push_back(std::move(*proof));
+    }
+    if (depth + result.height - 1 > maximumProofDepth) {
+      (void)reject(operation, "digital expression graph exceeds its finite depth budget");
+      return failure();
+    }
+    if (opcode == "digital_select") {
+      Type branchType = operation->getOperand(1).getType();
+      if (!isBool(operation->getOperand(0).getType()) || !validValueType(resultType) ||
+          !sameStorageType(branchType, resultType) ||
+          !sameStorageType(branchType, operation->getOperand(2).getType())) {
+        (void)reject(operation,
+                     "digital select requires Bits<1> and identical complete storage types");
+        return failure();
+      }
+      result.nonnegative = inputs[1].nonnegative && inputs[2].nonnegative;
+      if (inputs[0].constant) {
+        const Facts &selected = inputs[inputs[0].constant->isZero() ? 2 : 1];
+        result.constant = selected.constant;
+        result.nonnegative = selected.nonnegative;
+      } else if (inputs[1].constant && inputs[2].constant) {
+        auto equal = binaryConstant("digital_eq", *inputs[1].constant, *inputs[2].constant);
+        if (equal && !equal->isZero())
+          result.constant = inputs[1].constant;
+      }
+      return result;
+    }
+    llvm::SmallVector<ParameterIntegerBounds, 3> widths;
+    llvm::SmallVector<InstantiatedIntegerExpression, 3> expressions;
+    for (Value operand : operation->getOperands()) {
+      auto expression = scalarWidth(operand.getType());
+      if (failed(expression)) {
+        (void)reject(operation, "digital scalar operation requires exact owned scalar widths");
+        return failure();
+      }
+      widths.push_back(expression->bounds);
+      expressions.push_back(std::move(*expression));
+    }
+    auto resultWidth = scalarBounds(resultType);
+    if (failed(resultWidth)) {
+      (void)reject(operation, "digital scalar result requires an exact positive width");
+      return failure();
+    }
+    StringRef kind = scalarKind(operation->getOperand(0).getType());
+    StringRef resultKind = scalarKind(resultType);
+    bool sameKinds = inputs.size() == 1 || kind == scalarKind(operation->getOperand(1).getType());
+    bool sameWidths = inputs.size() == 1 ||
+                      equivalentInstantiatedIntegerExpressions(expressions[0], expressions[1]);
+    bool valid = false;
+    bool comparison = opcode == "digital_eq" || opcode == "digital_ne" || opcode == "digital_lt" ||
+                      opcode == "digital_le" || opcode == "digital_gt" || opcode == "digital_ge";
+    bool bitwise = opcode == "digital_and" || opcode == "digital_or" || opcode == "digital_xor" ||
+                   opcode == "digital_not";
+    bool boolean = opcode == "bool_and" || opcode == "bool_or" || opcode == "bool_not";
+    std::optional<int64_t> amount, lower, upper;
+    if (opcode == "digital_add" || opcode == "digital_sub") {
+      auto maximum = composeIntegerExpression("max", {expressions[0], expressions[1]});
+      auto expected =
+          succeeded(maximum)
+              ? composeIntegerExpression("add", {*maximum, makeLiteralIntegerExpression(1)})
+              : FailureOr<InstantiatedIntegerExpression>(failure());
+      valid = numericKind(kind) && sameKinds &&
+              resultKind == (opcode == "digital_sub" ? StringRef("sint") : kind) &&
+              succeeded(expected) && matchesWidth(resultType, *expected);
+    } else if (opcode == "digital_mul" || opcode == "digital_concat") {
+      auto expected = composeIntegerExpression("add", {expressions[0], expressions[1]});
+      valid = succeeded(expected) && matchesWidth(resultType, *expected) &&
+              (opcode == "digital_concat" ? resultKind == "bits"
+                                          : numericKind(kind) && sameKinds && resultKind == kind);
+    } else if (opcode == "digital_neg") {
+      auto expected =
+          composeIntegerExpression("add", {expressions[0], makeLiteralIntegerExpression(1)});
+      valid = numericKind(kind) && resultKind == "sint" && succeeded(expected) &&
+              matchesWidth(resultType, *expected);
+    } else if (comparison) {
+      bool equality = opcode == "digital_eq" || opcode == "digital_ne";
+      valid = sameKinds && isBool(resultType) &&
+              (numericKind(kind) || (equality && kind == "bits" && sameWidths));
+    } else if (bitwise || boolean) {
+      valid =
+          sameKinds && sameWidths && resultKind == kind && matchesWidth(resultType, expressions[0]);
+      if (boolean)
+        valid &= isBool(resultType) && llvm::all_of(operation->getOperandTypes(), isBool);
+    } else if (opcode == "digital_shl" || opcode == "digital_shr" ||
+               opcode == "digital_logical_shr") {
+      amount = staticIndex(operation->getOperand(1));
+      auto expected = opcode == "digital_shl" && amount && *amount != 0
+                          ? composeIntegerExpression(
+                                "add", {expressions[0], makeLiteralIntegerExpression(*amount)})
+                          : FailureOr<InstantiatedIntegerExpression>(expressions[0]);
+      valid = amount && kind == resultKind && succeeded(expected) &&
+              matchesWidth(resultType, *expected);
+    } else if (opcode == "digital_extract") {
+      lower = staticIndex(operation->getOperand(1));
+      upper = staticIndex(operation->getOperand(2));
+      valid = lower && upper && *upper > *lower && *upper <= widths[0].lower &&
+              resultKind == "bits" &&
+              matchesWidth(resultType, makeLiteralIntegerExpression(*upper - *lower));
+    }
+    if (!valid) {
+      (void)reject(operation, "invalid exact digital kind, width, static index or result proof");
+      return failure();
+    }
+    result.nonnegative = resultKind != "sint";
+    if ((opcode == "digital_add" || opcode == "digital_mul") && inputs[0].nonnegative &&
+        inputs[1].nonnegative)
+      result.nonnegative = true;
+    if ((opcode == "digital_shl" || opcode == "digital_shr") && inputs[0].nonnegative)
+      result.nonnegative = true;
+    if (opcode == "digital_logical_shr" && (*amount > 0 || inputs[0].nonnegative))
+      result.nonnegative = true;
+    if (!inputs[0].constant)
+      return result;
+    const llvm::APInt &first = *inputs[0].constant;
+    if (opcode == "digital_neg") {
+      result.constant = boundedConstant(-first.sext(first.getBitWidth() + 1));
+    } else if (opcode == "digital_not" || opcode == "bool_not") {
+      if (kind == "sint")
+        result.constant = boundedConstant(~first);
+      else if (resultWidth->lower == resultWidth->upper && resultWidth->upper <= maximumProofBits) {
+        unsigned bits = static_cast<unsigned>(resultWidth->upper);
+        result.constant = boundedConstant((~first.sextOrTrunc(bits)).zext(bits + 1));
+      }
+    } else if (amount) {
+      result.constant = shiftedConstant(opcode, kind, widths[0], first, *amount);
+    } else if (opcode == "digital_extract" && *upper - *lower <= maximumProofBits) {
+      unsigned bits = static_cast<unsigned>(*upper - *lower);
+      llvm::APInt shifted =
+          *lower >= first.getBitWidth() ? llvm::APInt(1, first.isNegative()) : first.ashr(*lower);
+      result.constant = boundedConstant(shifted.sextOrTrunc(bits).zext(bits + 1));
+    } else if (inputs.size() == 2 && inputs[1].constant) {
+      if (opcode == "digital_concat") {
+        if (widths[0].lower == widths[0].upper && widths[1].lower == widths[1].upper &&
+            widths[0].upper <= maximumProofBits && widths[1].upper <= maximumProofBits) {
+          unsigned bits = static_cast<unsigned>(resultWidth->upper);
+          auto left = first.sextOrTrunc(widths[0].upper).zext(bits + 1).shl(widths[1].upper);
+          auto right = inputs[1].constant->sextOrTrunc(widths[1].upper).zext(bits + 1);
+          result.constant = boundedConstant(left | right);
+        }
+      } else {
+        result.constant = binaryConstant(opcode, first, *inputs[1].constant);
+      }
+    }
+    if (result.constant)
+      result.nonnegative = !result.constant->isNegative();
+    return result;
+  }
+
   Operation *module;
   llvm::DenseMap<Value, Facts> facts;
+  llvm::DenseMap<Type, bool> validTypes;
+  llvm::DenseMap<Type, InstantiatedIntegerExpression> widthFacts;
+  llvm::DenseMap<std::pair<Type, Type>, bool> storageEqualities;
+  llvm::DenseSet<Value> visited;
   llvm::DenseSet<Value> active;
   unsigned nodes = 0;
 };

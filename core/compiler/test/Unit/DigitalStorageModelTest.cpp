@@ -239,6 +239,57 @@ int main() {
               assign(element, element, "cell"),
           true);
   }
+  const std::string symbolicN = "!nodal.digital<\"uint\", \"N\">";
+  const std::string firstWidth = "!nodal.digital<\"uint\", \"Fixture.first\">";
+  const std::string secondWidth = "!nodal.digital<\"uint\", \"Fixture.second\">";
+  const std::string symbolicWidths =
+      parameter() + literal("i64", "1", "one") +
+      "%maximum = \"nodal.const_expr\"(%N, %N) <{operator_name = \"max\", metadata = "
+      "{semantic_path = \"Fixture.maximum\"}}> : (i64, i64) -> i64\n"
+      "%first = \"nodal.const_expr\"(%maximum, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.first\"}}> : (i64, i64) -> i64\n"
+      "%otherMaximum = \"nodal.const_expr\"(%N, %N) <{operator_name = \"max\", metadata = "
+      "{semantic_path = \"Fixture.otherMaximum\"}}> : (i64, i64) -> i64\n"
+      "%second = \"nodal.const_expr\"(%otherMaximum, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.second\"}}> : (i64, i64) -> i64\n";
+  const std::string arithmetic = port(symbolicN, "left") + port(symbolicN, "right") +
+                                 "%source = \"nodal.digital_expr\"(%left, %right) <{operator_name "
+                                 "= \"digital_add\", metadata = {}}> : (" +
+                                 symbolicN + ", " + symbolicN + ") -> " + firstWidth + "\n";
+  check("assignment-fresh-equivalent-symbolic-arithmetic",
+        symbolicWidths + arithmetic + port(secondWidth, "destination", "output") +
+            assign(secondWidth, firstWidth, "destination"),
+        true);
+  const std::string manualWidth = "!nodal.digital<\"uint\", \"Fixture.manual\">";
+  const std::string manualWidthExpression =
+      "%manual = \"nodal.const_expr\"(%N, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.manual\"}}> : (i64, i64) -> i64\n";
+  check("assignment-symbolic-add-to-manual-plus-one-output",
+        symbolicWidths + manualWidthExpression + arithmetic +
+            port(manualWidth, "destination", "output") +
+            assign(manualWidth, firstWidth, "destination"),
+        true);
+  check("register-initializer-equivalent-symbolic-type",
+        symbolicWidths + domain() + literal(firstWidth, "0") +
+            storage(secondWidth, "state", "register", "%initial", firstWidth, "clock"),
+        true);
+  const std::string otherParameter =
+      "\"nodal.parameter\"() <{sym_name = \"M\", type = i64, default_value = 2 : i64, "
+      "parameter_kind = \"integer\", classification = \"structural\", variability = \"symbolic\", "
+      "metadata = {}}> : () -> ()\n"
+      "\"nodal.parameter_constraint\"(%low, %high) <{parameter = @M, constraint_kind = \"range\", "
+      "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @M, policy = \"static_generate\", effects = "
+      "[\"shape\", \"width\"], metadata = {}}> : () -> ()\n";
+  const std::string symbolicM = "!nodal.digital<\"uint\", \"M\">";
+  check("assignment-keeps-actual-parameter-identity",
+        parameter() + otherParameter + port(symbolicN) + storage(symbolicM) +
+            assign(symbolicM, symbolicN),
+        false);
+  check("initializer-keeps-actual-parameter-identity",
+        parameter() + otherParameter + domain() + literal(symbolicN, "0") +
+            storage(symbolicM, "state", "register", "%initial", symbolicN, "clock"),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

@@ -290,6 +290,57 @@ int main() {
   report("same-interned-type-cannot-reuse-foreign-owner-proof",
          failed(nodal::verifyDigitalTypeModel(&foreign->getBody()->front())));
 
+  const std::string identityBody =
+      parameter() + parameter("V") +
+      "%a = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path = "
+      "\"Fixture.a\"}}> : (i64, i64) -> i64\n"
+      "%b = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path = "
+      "\"Fixture.b\"}}> : (i64, i64) -> i64\n";
+  auto identityModel =
+      parseSourceString<mlir::ModuleOp>(model(identityBody), ParserConfig(&context, false));
+  Operation *identityOwner = &identityModel->getBody()->front();
+  const std::string identityBefore = print(identityModel->getOperation());
+  auto equivalent = [&](StringRef name, StringRef left, StringRef right, bool expected) {
+    Type a = parseType(left), b = parseType(right);
+    bool result = a && b && nodal::equivalentDigitalStorageTypes(a, b, identityOwner) == expected &&
+                  nodal::equivalentDigitalStorageTypes(b, a, identityOwner) == expected;
+    report(name, result && identityBefore == print(identityModel->getOperation()));
+  };
+  equivalent("equivalent-fresh-owned-width-DAG", digital("Fixture.a"), digital("Fixture.b"), true);
+  equivalent("equivalence-keeps-parameter-identity", digital("W"), digital("V"), false);
+  equivalent("equivalence-keeps-scalar-kind", digital("W", "uint"), digital("W", "sint"), false);
+  equivalent("equivalence-keeps-literal-kind", "!nodal.bits<1>", "i1", false);
+  equivalent("equivalence-keeps-enum-identity", "!nodal.enum<\"Mode\", 2>",
+             "!nodal.enum<\"Other\", 2>", false);
+  equivalent("equivalent-shape-and-element-DAGs", shape("2,Fixture.a", digital("Fixture.a")),
+             shape("2,Fixture.b", digital("Fixture.b")), true);
+  equivalent("equivalence-keeps-shape-rank", shape("2,3", digital()), shape("6", digital()), false);
+  equivalent("equivalence-keeps-shape-parameter", shape("W", digital()), shape("V", digital()),
+             false);
+  equivalent("equivalent-nested-struct-widths",
+             structure(field("lanes", shape("Fixture.a", digital("Fixture.a")))),
+             structure(field("lanes", shape("Fixture.b", digital("Fixture.b")))), true);
+  equivalent("equivalence-keeps-struct-name", structure(field("x", digital()), "A"),
+             structure(field("x", digital()), "B"), false);
+  equivalent("equivalence-keeps-field-name", structure(field("x", digital())),
+             structure(field("y", digital())), false);
+  equivalent("equivalence-keeps-field-order",
+             structure(field("x", digital()) + ", " + field("y", digital())),
+             structure(field("y", digital()) + ", " + field("x", digital())), false);
+  equivalent("equivalence-rejects-capabilities", "!nodal.capability<\"clock\">",
+             "!nodal.capability<\"clock\">", false);
+  report("equivalence-does-not-reuse-foreign-module-proof",
+         !nodal::equivalentDigitalStorageTypes(parseType(digital("Fixture.a")),
+                                               parseType(digital("Fixture.b")),
+                                               &foreign->getBody()->front()));
+  auto firstWidth =
+      nodal::inferDigitalWidthExpression(parseType(digital("Fixture.a")), identityOwner);
+  auto secondWidth =
+      nodal::inferDigitalWidthExpression(parseType(digital("Fixture.b")), identityOwner);
+  report("shared-exact-width-expression-owner",
+         succeeded(firstWidth) && succeeded(secondWidth) &&
+             nodal::equivalentInstantiatedIntegerExpressions(*firstWidth, *secondWidth));
+
   llvm::outs() << "DIGITAL_TYPE_MODEL_SUMMARY " << (cases - failures) << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

@@ -30,7 +30,7 @@ private[nodal] object DigitalScalarContract:
       fail(5, s"digital conversion does not support '${descriptor.kind}'")
     descriptor
 
-  private def widthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
+  def widthBounds(descriptor: KernelTypeDescriptor): (Long, Long) =
     if descriptor.arguments.size != 1 then
       fail(1, "digital scalar type requires exactly one width")
     val bounds = descriptor.arguments.head match
@@ -64,10 +64,13 @@ private[nodal] object DigitalScalarContract:
   private def knownValue(value: Expr[?]): Option[BigInt] =
     val cache = new IdentityHashMap[Expr[?], Option[BigInt]]()
     val active = new IdentityHashMap[Expr[?], java.lang.Boolean]()
+    var remaining = 65536
     def visit(current: Expr[?], depth: Int): Option[BigInt] =
       if depth > 128 || active.containsKey(current) then None
       else if cache.containsKey(current) then cache.get(current)
+      else if remaining == 0 then None
       else
+        remaining -= 1
         active.put(current, true)
         val result = current match
           case expression: KernelExpr[?] =>
@@ -79,6 +82,20 @@ private[nodal] object DigitalScalarContract:
                 literal.value.toIntOption.map(BigInt(_)).filter(value =>
                   requiredWidth(literal.dataType.kind, value) <= widthBounds(literal.dataType)._1
                 )
+              case Some(literal)
+                  if literal.kind == "boolean" && expression.operation.contains("boolean") &&
+                    expression.resultType.contains(KernelTypeDescriptor("Bool")) &&
+                    literal.dataType == KernelTypeDescriptor("Bool") =>
+                literal.value match
+                  case "true" => Some(BigInt(1))
+                  case "false" => Some(BigInt(0))
+                  case _ => None
+              case None
+                  if expression.operation.exists(operation =>
+                    DigitalCombinationalContract.Operations.contains(operation) ||
+                      DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
+                  ) =>
+                DigitalCombinationalContract.constantValue(expression, visit(_, depth + 1))
               case None
                   if expression.operation.exists(Operations.contains) &&
                     expression.operands.size == 1 =>

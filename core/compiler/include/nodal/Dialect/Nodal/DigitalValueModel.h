@@ -22,9 +22,11 @@ bool digitalIntegerAttributeFits(mlir::IntegerAttr value, mlir::Type type, mlir:
 /// ConstLiteral additionally requires spelling to reproduce its integer value.
 mlir::LogicalResult verifyDigitalLiteralOperation(mlir::Operation *operation);
 
-/// Closed unary scalar conversions, independently checking arity, owner, exact
-/// type/width identities and finite checked-value proofs. No allocation depends
-/// on the declared scalar width; constant proof magnitudes are bounded.
+/// Closed digital combinational expressions and unary scalar conversions,
+/// independently checking arity, owner, exact type/width identities, static
+/// literal indices and finite checked-value proofs. Select preserves complete
+/// storage types. Bit-pattern allocation and mathematical proofs are bounded
+/// independently of the declared scalar width; no parameter default is used.
 mlir::LogicalResult verifyDigitalValueOperation(mlir::Operation *operation);
 
 /// Verify digital expressions and literals in one owning nodal.module. This

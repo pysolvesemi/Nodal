@@ -40,6 +40,18 @@ mlir::FailureOr<int64_t> inferDigitalControlMaximumElements(mlir::Type type,
 mlir::FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(mlir::Type type,
                                                                 mlir::Operation *module);
 
+/// Exact owned scalar-width identity in the canonical static Integer DAG.
+/// Equal bounds/defaults never substitute for parameter or expression identity.
+mlir::FailureOr<InstantiatedIntegerExpression> inferDigitalWidthExpression(mlir::Type type,
+                                                                           mlir::Operation *module);
+
+/// Same complete storage type within one actual module: retain scalar kind,
+/// nominal enum/Struct identity, ordered fields and shape rank, while comparing
+/// independently authored width/extent expressions by their exact all-legal DAG.
+/// Both recursive types are validated; capabilities and cross-owner bindings
+/// are excluded. The bounded query memoizes type pairs without physical expansion.
+bool equivalentDigitalStorageTypes(mlir::Type left, mlir::Type right, mlir::Operation *module);
+
 /// Prove one directionless storage type's worst-case recursive bit footprint,
 /// reusing the module type verifier's checked shape/width arithmetic. The use is
 /// either the owning module or an operation directly in it; diagnostics identify

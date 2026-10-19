@@ -297,7 +297,8 @@ public:
     else if (opcode == "enum_is_one_of")
       valid = count == 1 && operand(0, enumType) && booleanResult;
     else if (opcode == "enum_select") {
-      if (!isDigitalStorageType(result))
+      auto module = operation->getParentOfType<nodal::ModuleOp>();
+      if (!isDigitalStorageType(result) || !equivalentDigitalStorageTypes(result, result, module))
         return reject(
             operation,
             "enum selection requires directionless storage data, not Clock/Reset capabilities");
@@ -307,7 +308,9 @@ public:
         for (unsigned index = 0; index < ids.size(); ++index)
           valid &= llvm::cast<StringAttr>(ids[index]).getValue() == definition.cases[index].id;
         for (unsigned index = 1; index < count; ++index)
-          valid &= operand(index, result);
+          valid &=
+              operand(index, result) ||
+              equivalentDigitalStorageTypes(operation->getOperand(index).getType(), result, module);
       }
     } else {
       return reject(operation, "unsupported closed enum operation");

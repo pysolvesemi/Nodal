@@ -44,11 +44,16 @@ case object Bool extends DataType[Bool]
 case object Clock extends DataType[Clock]
 case object Reset extends DataType[Reset]
 
-object Bits:
+object Bits extends DigitalBitsOperators[Bits]:
+  extension (left: Expr[Bits])
+    @targetName("bitsLogicalShiftRight")
+    def >>(amount: Int): Expr[Bits] =
+      DigitalCombinationalContract.shift("digital_shr", left, amount)
+
   def apply(width: Int): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
   def apply(width: Expr[Integer]): DataType[Bits] = new WidthDataType[Bits]("Bits", width)
 
-object UInt:
+object UInt extends DigitalUIntOperators:
   def apply(width: Int): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
   def apply(width: Expr[Integer]): DataType[UInt] = new WidthDataType[UInt]("UInt", width)
 
@@ -905,7 +910,8 @@ extension (left: Expr[Integer])
 
 extension (left: Expr[UInt])
   @targetName("uintAddition")
-  def +(right: Expr[UInt]): Expr[UInt] = CandidateRuntime.expr(left, right)
+  def +(right: Expr[UInt]): Expr[UInt] =
+    DigitalCombinationalContract.arithmetic("digital_add", left, right)
 
 extension (left: Expr[Bool])
   def &&(right: Expr[Bool]): Expr[Bool] =

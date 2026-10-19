@@ -1620,9 +1620,20 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
 }
 
 def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
-  let summary = "Closed typed hardware digital scalar conversion";
+  let summary = "Closed typed hardware digital expression";
   let description = [{
-    Exactly one Bits/UInt/SInt operand and one exact typed result. Closed
+    One exact typed result and opcode-specific owned operands. Numeric add/sub
+    use max operand width plus one; sub and neg produce SInt, neg grows one bit,
+    and multiplication adds widths. Numeric operands have the same UInt/SInt
+    kind. Comparisons produce Bits<1>; Bits equality and bitwise operations
+    require exact equal widths. concat places its left operand high and produces
+    Bits of summed width. select requires a Bits<1> predicate and identical
+    complete digital storage branch/result types. Shifts take a UInt literal
+    amount: shl grows width, shr preserves width with arithmetic SInt semantics,
+    and logical_shr zero-fills. extract takes UInt literal lower-inclusive and
+    upper-exclusive bounds and returns Bits of their difference. bool_and/or/not
+    require Bits<1>. Division, remainder and dynamic shifts are unsupported.
+    Closed unary
     digital_extend/truncate/wrap/saturate/resize_checked operations retain kind;
     truncation keeps low bits, wrapping is modulo 2^width, and saturation clamps
     to the result range. Checked resize requires all-value or exact-constant

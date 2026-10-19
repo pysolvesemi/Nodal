@@ -107,6 +107,9 @@ InstantiatedIntegerExpression makeOpaqueIntegerExpression(mlir::Value identity,
                                                           ParameterIntegerBounds bounds);
 /// Checked composition of already proved immutable expressions. Reuses the
 /// parameter arithmetic policy and retains opaque identities through arithmetic.
+/// Supports add/sub/mul/div/mod/neg and static Integer max; max retains symbolic
+/// operand identity even for equal bounds or defaults, folds literal pairs, and
+/// normalizes max(W, W) only when both actual operand identities are equal.
 mlir::FailureOr<InstantiatedIntegerExpression>
 composeIntegerExpression(llvm::StringRef opcode,
                          llvm::ArrayRef<InstantiatedIntegerExpression> operands);

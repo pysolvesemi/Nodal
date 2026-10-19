@@ -68,6 +68,7 @@ private[nodal] object DigitalValueConstruction:
       if expression.operation.exists(operation =>
           operation.startsWith(DigitalEnumContract.Prefix) ||
             DigitalScalarContract.Operations.contains(operation) ||
+            DigitalCombinationalContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation)
         )
       then
@@ -103,6 +104,8 @@ private[nodal] object DigitalValueConstruction:
         if !isEnum && !isProjection && expression.literal.isEmpty &&
           !expression.operation.exists(operation =>
             DigitalScalarContract.Operations.contains(operation) ||
+              DigitalCombinationalContract.Operations.contains(operation) ||
+              DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
               DigitalInterfaceContract.ValueOperations.contains(operation)
           )
         then

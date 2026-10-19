@@ -395,6 +395,52 @@ int main() {
             operation.erase();
           });
         });
+  const std::string widths =
+      "\"nodal.parameter\"() <{sym_name = \"W\", type = i64, default_value = 4 : i64, "
+      "classification = \"structural\", parameter_kind = \"integer\", variability = \"symbolic\", "
+      "metadata = {}}> : () -> ()\n"
+      "\"nodal.parameter\"() <{sym_name = \"V\", type = i64, default_value = 4 : i64, "
+      "classification = \"structural\", parameter_kind = \"integer\", variability = \"symbolic\", "
+      "metadata = {}}> : () -> ()\n"
+      "%low = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", metadata = {}}> : () "
+      "-> i64\n"
+      "%high = \"nodal.const_literal\"() <{value = 8 : i64, spelling = \"8\", metadata = {}}> : () "
+      "-> i64\n"
+      "\"nodal.parameter_constraint\"(%low, %high) <{parameter = @W, constraint_kind = \"range\", "
+      "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_constraint\"(%low, %high) <{parameter = @V, constraint_kind = \"range\", "
+      "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @W, policy = \"static_generate\", effects = "
+      "[\"width\"], metadata = {}}> : () -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @V, policy = \"static_generate\", effects = "
+      "[\"width\"], metadata = {}}> : () -> ()\n"
+      "%W = \"nodal.const_parameter_ref\"() <{parameter = @W, metadata = {}}> : () -> i64\n"
+      "%first = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path "
+      "= \"Fixture.first\"}}> : (i64, i64) -> i64\n"
+      "%second = \"nodal.const_expr\"(%W, %W) <{operator_name = \"add\", metadata = {semantic_path "
+      "= \"Fixture.second\"}}> : (i64, i64) -> i64\n";
+  auto symbolicSelect = [&](StringRef name, StringRef left, StringRef right, bool expected) {
+    check(name,
+          model(widths + literal() + input(left, "fallback") + input(right, "a") +
+                input(right, "b") + input(right, "c") +
+                expression("selected", "select", "%idle, %fallback, %a, %b, %c",
+                           type() + ", " + left.str() + ", " + right.str() + ", " + right.str() +
+                               ", " + right.str(),
+                           left,
+                           "[\"example.Mode.Idle\", \"example.Mode.Run\", \"example.Mode.Stop\"]")),
+          expected);
+  };
+  const std::string first = "!nodal.digital<\"uint\", \"Fixture.first\">";
+  const std::string second = "!nodal.digital<\"uint\", \"Fixture.second\">";
+  symbolicSelect("enum-select-fresh-equivalent-widths", first, second, true);
+  symbolicSelect(
+      "enum-select-equivalent-nested-storage",
+      "!nodal.shaped<\"2\", !nodal.struct<\"Packet\", [{name = \"value\", type = " + first + "}]>>",
+      "!nodal.shaped<\"2\", !nodal.struct<\"Packet\", [{name = \"value\", type = " + second +
+          "}]>>",
+      true);
+  symbolicSelect("enum-select-retains-actual-parameter-identity", "!nodal.digital<\"uint\", \"W\">",
+                 "!nodal.digital<\"uint\", \"V\">", false);
   llvm::outs() << "Enum value model: " << total << " cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

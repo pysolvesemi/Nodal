@@ -84,7 +84,7 @@ LogicalResult verifyDigitalStorageOperation(Operation *operation) {
     if (operation->getNumOperands()) {
       Value initial = operation->getOperand(0);
       Operation *definition = initial.getDefiningOp();
-      if (initial.getType() != type)
+      if (!equivalentDigitalStorageTypes(initial.getType(), type, operation->getParentOp()))
         return reject(operation,
                       "register initializer must have exactly the declared recursive type");
       if (!definition || definition->getParentOp() != operation->getParentOp() ||
@@ -135,8 +135,8 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
     return reject(operation, "digital assignment requires two values owned by one direct module");
   Value target = operation->getOperand(0), value = operation->getOperand(1);
   const bool control = isDigitalControlBoundaryType(target.getType());
-  if (target.getType() != value.getType() ||
-      (!control && failed(inferDigitalStorageMaximumBits(target.getType(), operation))))
+  if (control ? target.getType() != value.getType()
+              : !equivalentDigitalStorageTypes(target.getType(), value.getType(), module))
     return reject(operation,
                   "digital assignment requires exactly matching recursive storage types");
   for (Value operand : operation->getOperands()) {

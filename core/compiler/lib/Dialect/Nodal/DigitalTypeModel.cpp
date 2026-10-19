@@ -30,6 +30,31 @@ bool identifier(StringRef value) {
 
 bool validWidthKind(StringRef kind) { return kind == "bits" || kind == "uint" || kind == "sint"; }
 
+StringRef scalarKind(Type type) {
+  if (llvm::isa<BitsType>(type))
+    return "bits";
+  if (llvm::isa<UIntType>(type))
+    return "uint";
+  if (llvm::isa<SIntType>(type))
+    return "sint";
+  if (auto symbolic = llvm::dyn_cast<ParametricIntegerType>(type))
+    if (validWidthKind(symbolic.getKind()))
+      return symbolic.getKind();
+  return {};
+}
+
+FailureOr<InstantiatedIntegerExpression> dimensionExpression(Operation *module, StringRef token,
+                                                             StringRef effect) {
+  auto dimension = resolveStaticShapeDimension(module, token, effect);
+  if (failed(dimension))
+    return failure();
+  if (dimension->parameter)
+    return resolveOwnedIntegerParameter(module, dimension->parameter);
+  if (dimension->expression)
+    return resolveOwnedIntegerExpression(module, dimension->expression);
+  return makeLiteralIntegerExpression(dimension->literal);
+}
+
 bool shapeSpelling(StringRef dimensions) {
   if (dimensions.empty())
     return false;
@@ -162,6 +187,12 @@ public:
     return result->maximumBits;
   }
 
+  bool equivalentStorageTypes(Type left, Type right) {
+    if (failed(storageMaximumBits(left, module)) || failed(storageMaximumBits(right, module)))
+      return false;
+    return equivalentStoragePair(left, right, 1);
+  }
+
   LogicalResult verify(Operation *use) {
     currentUse = use;
     bool capability = false;
@@ -216,6 +247,64 @@ public:
   }
 
 private:
+  bool equivalentStoragePair(Type left, Type right, unsigned depth) {
+    if (depth > digitalTypeMaximumDepth || ++comparisonWork > digitalTypeMaximumNodes)
+      return false;
+    const auto pair = std::make_pair(left, right);
+    if (equivalentPairs.contains(pair))
+      return true;
+    bool equal = left == right;
+    StringRef kind = scalarKind(left);
+    if (!equal && !kind.empty() && kind == scalarKind(right)) {
+      auto lhs = widthExpression(left), rhs = widthExpression(right);
+      equal =
+          succeeded(lhs) && succeeded(rhs) && equivalentInstantiatedIntegerExpressions(*lhs, *rhs);
+    } else if (!equal) {
+      if (auto lhs = llvm::dyn_cast<nodal::ShapedType>(left)) {
+        auto rhs = llvm::dyn_cast<nodal::ShapedType>(right);
+        if (rhs) {
+          llvm::SmallVector<StringRef, 4> a, b;
+          lhs.getDimensions().split(a, ',');
+          rhs.getDimensions().split(b, ',');
+          equal = a.size() == b.size() &&
+                  equivalentStoragePair(lhs.getElementType(), rhs.getElementType(), depth + 1);
+          for (unsigned index = 0; equal && index < a.size(); ++index) {
+            if (++comparisonWork > digitalTypeMaximumNodes)
+              return false;
+            auto x = dimensionExpression(module, a[index], "shape");
+            auto y = dimensionExpression(module, b[index], "shape");
+            equal =
+                succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
+          }
+        }
+      } else if (auto lhs = llvm::dyn_cast<StructType>(left)) {
+        auto rhs = llvm::dyn_cast<StructType>(right);
+        equal = rhs && lhs.getName() == rhs.getName() &&
+                lhs.getFields().size() == rhs.getFields().size();
+        for (unsigned index = 0; equal && index < lhs.getFields().size(); ++index) {
+          auto a = llvm::cast<DictionaryAttr>(lhs.getFields()[index]);
+          auto b = llvm::cast<DictionaryAttr>(rhs.getFields()[index]);
+          equal = a.getAs<StringAttr>("name") == b.getAs<StringAttr>("name") &&
+                  equivalentStoragePair(a.getAs<TypeAttr>("type").getValue(),
+                                        b.getAs<TypeAttr>("type").getValue(), depth + 1);
+        }
+      }
+    }
+    if (equal)
+      equivalentPairs.insert(pair);
+    return equal;
+  }
+
+  FailureOr<InstantiatedIntegerExpression> widthExpression(Type type) {
+    auto known = widthExpressions.find(type);
+    if (known != widthExpressions.end())
+      return known->second;
+    auto expression = inferDigitalWidthExpression(type, module);
+    if (succeeded(expression))
+      widthExpressions.try_emplace(type, *expression);
+    return expression;
+  }
+
   FailureOr<TypeFacts> reject(StringRef message) {
     currentUse->emitOpError("NODAL-DIGITAL-054-004: ") << message;
     return failure();
@@ -351,10 +440,13 @@ private:
   Operation *module;
   Operation *currentUse = nullptr;
   unsigned work = 0;
+  unsigned comparisonWork = 0;
   StorageTypeChecker storage;
   llvm::DenseMap<std::pair<Type, unsigned>, TypeFacts> facts;
   llvm::DenseSet<std::pair<Type, unsigned>> active;
   llvm::DenseMap<Attribute, bool> attributes;
+  llvm::DenseSet<std::pair<Type, Type>> equivalentPairs;
+  llvm::DenseMap<Type, InstantiatedIntegerExpression> widthExpressions;
 };
 } // namespace
 
@@ -438,6 +530,22 @@ FailureOr<ParameterIntegerBounds> inferDigitalWidthBounds(Type type, Operation *
   if (width <= 0)
     return failure();
   return ParameterIntegerBounds{width, width};
+}
+
+FailureOr<InstantiatedIntegerExpression> inferDigitalWidthExpression(Type type, Operation *module) {
+  auto bounds = inferDigitalWidthBounds(type, module);
+  if (failed(bounds) || bounds->lower <= 0 || bounds->upper < bounds->lower)
+    return failure();
+  if (auto symbolic = llvm::dyn_cast<ParametricIntegerType>(type))
+    return dimensionExpression(module, symbolic.getWidth(), "width");
+  return makeLiteralIntegerExpression(bounds->lower);
+}
+
+bool equivalentDigitalStorageTypes(Type left, Type right, Operation *module) {
+  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  ModuleTypeVerifier verifier(module);
+  return verifier.equivalentStorageTypes(left, right);
 }
 
 LogicalResult verifyDigitalTypeModel(Operation *module) {

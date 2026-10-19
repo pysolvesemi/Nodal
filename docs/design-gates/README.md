@@ -81,3 +81,12 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
   cross-tool comparison contract.
 
 - [NodalDigitalTypeEnum-DG v0.1](NodalDigitalTypeEnum-DG-v0.1.md): approved additive F54 hardware enum carrier, exact digital type contracts and explicit legacy decode migration under standing Foundation authority.
+
+- [NodalDigitalExpressions-DG v0.1](NodalDigitalExpressions-DG-v0.1.md): approved
+  additive F55 lossless scalar arithmetic, exact symbolic width algebra and
+  independently verified combinational value semantics. Remaining collection and
+  iteration decisions stay open in the increment readiness record.
+
+- [NodalDigitalCollections-DG v0.1](NodalDigitalCollections-DG-v0.1.md): approved
+  F55 typed map/zipWith/fold/scan regions, explicit seed-excluded scan convention
+  and honest migration from the inert pair-losing zip candidate.

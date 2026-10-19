@@ -169,6 +169,28 @@ private[nodal] object DigitalEnumContract:
     val memo =
       new java.util.IdentityHashMap[AnyRef, java.util.IdentityHashMap[AnyRef, java.lang.Boolean]]()
     var examined = 0
+    def dimension(value: Any): Option[Dimension] = value match
+      case literal: Int => Some(literal)
+      case expression: Expr[?]
+          if CandidateRuntime.expressionDataType(expression)
+            .exists(value =>
+              CandidateRuntime.typeDescriptor(value) == KernelTypeDescriptor("Integer")
+            ) =>
+        Some(expression.asInstanceOf[Expr[Integer]])
+      case _ => None
+    def literal(value: Dimension): Option[Int] = value match
+      case integer: Int => Some(integer)
+      case expression: KernelExpr[?] if expression.operation.contains("integer") =>
+        expression.literal.filter(value =>
+          value.kind == "integer" && value.dataType == KernelTypeDescriptor("Integer")
+        ).flatMap(_.value.toIntOption).filter(value => expression.operands == Vector(value))
+      case _ => None
+    def sameDimension(left: Dimension, right: Dimension): Boolean =
+      // Reuse the construction owner's checked, interned static algebra. Parameter identity and
+      // ordered operation trees remain exact; neither defaults nor equal intervals are evidence.
+      ConstructionKernel.sameStaticInteger(left, right).getOrElse(
+        literal(left).exists(value => literal(right).contains(value))
+      )
     def same(a: Any, b: Any, depth: Int): Boolean =
       if depth >= 128 then fail(17, "enum selection result type exceeds the structural depth bound")
       val ar = a.asInstanceOf[AnyRef]
@@ -202,7 +224,10 @@ private[nodal] object DigitalEnumContract:
               case (x: Seq[?], y: Seq[?]) =>
                 x.size == y.size &&
                 x.iterator.zip(y.iterator).forall((x, y) => same(x, y, depth))
-              case _ => a == b
+              case _ =>
+                (dimension(a), dimension(b)) match
+                  case (Some(x), Some(y)) => sameDimension(x, y)
+                  case _ => a == b
             row.put(br, java.lang.Boolean.valueOf(result))
             result
     same(left, right, 0)
@@ -314,7 +339,7 @@ private[nodal] object DigitalEnumContract:
       EnumOperationMetadata(resolved)
     )
 
-  private def validateSelectionResult(descriptor: KernelTypeDescriptor): Unit =
+  def validateSelectionResult(descriptor: KernelTypeDescriptor): Unit =
     val visited = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
     var remaining = 65536
     def visit(value: Any, depth: Int): Unit =

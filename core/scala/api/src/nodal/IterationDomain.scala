@@ -68,7 +68,7 @@ private[nodal] object IterationDomain:
     require(lower <= upper, "iteration bound interval must be ordered")
 
   enum Arithmetic:
-    case Add, Subtract, Multiply, Divide, Negate
+    case Add, Subtract, Multiply, Divide, Negate, Maximum
 
   /** Wide intermediates also serve trip-count proofs, where distance can exceed signed 64 bits. */
   private def wideArithmetic(
@@ -90,6 +90,7 @@ private[nodal] object IterationDomain:
         operation match
           case Arithmetic.Add => Right((lower + rightLower, upper + rightUpper))
           case Arithmetic.Subtract => Right((lower - rightUpper, upper - rightLower))
+          case Arithmetic.Maximum => Right((lower.max(rightLower), upper.max(rightUpper)))
           case Arithmetic.Multiply =>
             val values = Vector(
               lower * rightLower,

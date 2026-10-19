@@ -184,7 +184,7 @@ private[nodal] object DigitalValueMlir:
             )
         scalarLiteral(literal, scalarType)._1
 
-    private def expressionType(path: String): String =
+    def expressionType(path: String): String =
       expressions.get(path).map(_.dataType).orElse(declarations.get(path).flatMap(_._2.dataType))
         .getOrElse(fail("digital operand requires an exact type", path))
 
@@ -205,7 +205,7 @@ private[nodal] object DigitalValueMlir:
             "invalid Boolean literal in digital closure",
             value.path
           )
-          literal -> Unknown
+          literal -> Proof(Some(if literal == "true" then BigInt(1) else BigInt(0)), true)
         case "Real" =>
           requireValid(
             value.operation == "real_literal",
@@ -325,6 +325,203 @@ private[nodal] object DigitalValueMlir:
             (preservesNonnegative && input.nonnegative)
         )
 
+    /** Validate the untrusted snapshot independently of source construction. The existing value
+      * schedule supplies proofs once per SSA node; width algebra stays with its canonical owner.
+      */
+    private def combinational(
+        value: KernelDigitalExpressionSnapshot,
+        inputs: Vector[Proof],
+        scalarType: (String, String) => Option[ScalarType],
+        widthRelation: (ScalarType, ScalarType, Int, String) => Boolean,
+        widthFormula: (ScalarType, String, Vector[ScalarType], Long, String) => Boolean,
+        exactValueType: (String, String, String) => Boolean
+    ): Proof =
+      val path = value.path
+      val operation = value.operation
+      val arity = operation match
+        case "digital_neg" | "digital_not" | "bool_not" => 1
+        case "digital_add" | "digital_sub" | "digital_mul" | "digital_eq" | "digital_ne" |
+            "digital_lt" | "digital_le" | "digital_gt" | "digital_ge" | "digital_and" |
+            "digital_or" | "digital_xor" | "digital_concat" | "digital_shl" | "digital_shr" |
+            "digital_logical_shr" | "bool_and" | "bool_or" => 2
+        case "digital_extract" | "digital_select" => 3
+        case _ => 0
+      requireValid(
+        arity != 0 && value.operands.size == arity && inputs.size == arity &&
+          value.literal.isEmpty && value.enumIdentity.isEmpty && value.caseIds.isEmpty,
+        "digital combinational expression requires an exact opcode, arity and ordinary value facts",
+        path
+      )
+      val operandTypes = value.operands.map(expressionType)
+      if operation == "digital_select" then
+        val selected = value.dataType
+        val finite = selected == "Bool" || scalarType(selected, path).nonEmpty ||
+          selected.startsWith("Enum(") || selected.startsWith("Vec(") ||
+          selected.startsWith("Struct(")
+        requireValid(
+          operandTypes.head == "Bool" && finite &&
+            exactValueType(operandTypes(1), selected, path) &&
+            exactValueType(operandTypes(2), selected, path),
+          "digital selection requires Bool and identical complete finite branch types",
+          path
+        )
+        val constant = inputs.head.constant.flatMap(number =>
+          inputs(if number == 0 then 2 else 1).constant
+        ).orElse(inputs(1).constant.filter(number => inputs(2).constant.contains(number)))
+        val nonnegative = inputs.head.constant.map(number =>
+          inputs(if number == 0 then 2 else 1).nonnegative
+        ).getOrElse(inputs(1).nonnegative && inputs(2).nonnegative)
+        Proof(constant, nonnegative || constant.exists(_ >= 0))
+      else if DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) then
+        requireValid(
+          value.dataType == "Bool" && operandTypes.forall(_ == "Bool"),
+          "digital Boolean expression requires actual Bool operands and result",
+          path
+        )
+        val constant = if operation == "bool_not" then
+          inputs.head.constant.map(number => if number == 0 then BigInt(1) else BigInt(0))
+        else
+          for left <- inputs(0).constant; right <- inputs(1).constant yield
+            val truth = if operation == "bool_and" then left != 0 && right != 0
+            else left != 0 || right != 0
+            if truth then BigInt(1) else BigInt(0)
+        Proof(constant, true)
+      else
+        val sources = operandTypes.zip(value.operands).map: (dataType, operand) =>
+          scalarType(dataType, operand).getOrElse(
+            fail("digital scalar operation requires exact Bits, UInt or SInt operands", path)
+          )
+        val source = sources.head
+        val comparison = Set(
+          "digital_eq",
+          "digital_ne",
+          "digital_lt",
+          "digital_le",
+          "digital_gt",
+          "digital_ge"
+        ).contains(operation)
+        val result = if comparison then
+          requireValid(value.dataType == "Bool", "digital comparison requires a Bool result", path)
+          ScalarType("Bool", "1", 1, 1)
+        else
+          scalarType(value.dataType, path).getOrElse(
+            fail("digital scalar operation requires an exact bit-vector result", path)
+          )
+        def numeric(kind: String): Boolean = kind == "UInt" || kind == "SInt"
+        def equalWidth(left: ScalarType, right: ScalarType): Boolean =
+          widthRelation(left, right, 0, path)
+        def literalWidth(number: Long): ScalarType =
+          ScalarType("UInt", number.toString, number, number)
+        def formula(operator: String, operands: Vector[ScalarType], increment: Long = 0L): Boolean =
+          widthFormula(result, operator, operands, increment, path)
+        def staticIndex(index: Int): Long =
+          val operand = expressions.get(value.operands(index)).getOrElse(
+            fail("digital shift and extraction indices require actual UInt literal operands", path)
+          )
+          requireValid(
+            operand.operation == "integer" && sources(index).kind == "UInt" &&
+              operand.operands.isEmpty && operand.literal.nonEmpty,
+            "digital shift and extraction indices require actual UInt literal operands",
+            path
+          )
+          inputs(index).constant.filter(number => number >= 0 && number <= Int.MaxValue)
+            .map(_.toLong).getOrElse(
+              fail("digital static index is outside the nonnegative Int range", path)
+            )
+        var amount = 0L
+        var lower = 0L
+        var upper = 0L
+        val valid = operation match
+          case "digital_add" | "digital_sub" =>
+            numeric(source.kind) && sources(1).kind == source.kind &&
+            result.kind == (if operation == "digital_sub" then "SInt" else source.kind) &&
+            formula("static_integer_max", sources, 1L)
+          case "digital_mul" =>
+            numeric(source.kind) && sources(1).kind == source.kind && result.kind == source.kind &&
+            formula("analog_add", sources)
+          case "digital_neg" =>
+            numeric(source.kind) && result.kind == "SInt" &&
+            formula("analog_add", Vector(source, literalWidth(1)))
+          case _ if comparison =>
+            source.kind == sources(1).kind &&
+            (numeric(source.kind) ||
+              (Set("digital_eq", "digital_ne").contains(operation) &&
+                source.kind == "Bits" && equalWidth(source, sources(1))))
+          case "digital_and" | "digital_or" | "digital_xor" | "digital_not" =>
+            sources.forall(other => other.kind == source.kind && equalWidth(source, other)) &&
+            result.kind == source.kind && equalWidth(source, result)
+          case "digital_concat" =>
+            result.kind == "Bits" && formula("analog_add", sources)
+          case "digital_shl" | "digital_shr" | "digital_logical_shr" =>
+            amount = staticIndex(1)
+            source.kind == result.kind &&
+            (if operation == "digital_shl" && amount != 0 then
+               formula("analog_add", Vector(source, literalWidth(amount)))
+             else equalWidth(source, result))
+          case "digital_extract" =>
+            lower = staticIndex(1)
+            upper = staticIndex(2)
+            upper > lower && upper <= source.lower && result.kind == "Bits" &&
+            equalWidth(result, literalWidth(upper - lower))
+          case _ => false
+        requireValid(
+          valid,
+          "digital combinational expression violates exact kind, width or static range proof",
+          path
+        )
+        def at(index: Int): Option[BigInt] = inputs(index).constant
+        def pair(function: (BigInt, BigInt) => BigInt): Option[BigInt] =
+          for left <- at(0); right <- at(1) yield function(left, right)
+        def test(function: (BigInt, BigInt) => Boolean): Option[BigInt] =
+          pair((left, right) => if function(left, right) then BigInt(1) else BigInt(0))
+        def fixedWidth(info: ScalarType): Option[Int] =
+          Option.when(info.lower == info.upper && info.upper <= 4096)(info.upper.toInt)
+        def bits(number: BigInt, width: Int): BigInt = number & ((BigInt(1) << width) - 1)
+        def decoded(number: BigInt, width: Int): BigInt =
+          val encoded = bits(number, width)
+          if result.kind == "SInt" && encoded.testBit(width - 1) then
+            encoded - (BigInt(1) << width)
+          else encoded
+        val constant = (operation match
+          case "digital_add" => pair(_ + _)
+          case "digital_sub" => pair(_ - _)
+          case "digital_mul" => pair(_ * _)
+          case "digital_neg" => at(0).map(-_)
+          case "digital_eq" => test(_ == _)
+          case "digital_ne" => test(_ != _)
+          case "digital_lt" => test(_ < _)
+          case "digital_le" => test(_ <= _)
+          case "digital_gt" => test(_ > _)
+          case "digital_ge" => test(_ >= _)
+          case "digital_and" => pair(_ & _)
+          case "digital_or" => pair(_ | _)
+          case "digital_xor" => pair(_ ^ _)
+          case "digital_not" =>
+            for number <- at(0); width <- fixedWidth(result) yield decoded(~number, width)
+          case "digital_concat" =>
+            for
+              left <- at(0); right <- at(1)
+              leftWidth <- fixedWidth(source); rightWidth <- fixedWidth(sources(1))
+            yield (bits(left, leftWidth) << rightWidth) | bits(right, rightWidth)
+          case "digital_extract" if upper - lower <= 4096 =>
+            at(0).map(number => bits(number >> lower.toInt, (upper - lower).toInt))
+          case "digital_shl" =>
+            at(0).filter(number => amount <= 4096 || number == 0).map(_ << amount.toInt)
+          case "digital_shr" => at(0).map(_ >> amount.toInt)
+          case "digital_logical_shr" if amount == 0 => at(0)
+          case "digital_logical_shr" if source.kind != "SInt" || inputs.head.nonnegative =>
+            at(0).map(_ >> amount.toInt)
+          case "digital_logical_shr" =>
+            for number <- at(0); width <- fixedWidth(source)
+            yield decoded(bits(number, width) >> amount.toInt, width)
+          case _ => None
+        ).filter(_.bitLength <= 4096)
+        val nonnegative = result.kind != "SInt" || constant.exists(_ >= 0) ||
+          (Set("digital_add", "digital_mul").contains(operation) && inputs.forall(_.nonnegative)) ||
+          (Set("digital_shl", "digital_shr").contains(operation) && inputs.head.nonnegative) ||
+          (operation == "digital_logical_shr" && (amount > 0 || inputs.head.nonnegative))
+        Proof(constant, nonnegative)
+
     /** Topological emission scales with unique nodes and edges, never with use-tree expansion. */
     def renderModule(
         module: KernelModuleSnapshot,
@@ -332,6 +529,8 @@ private[nodal] object DigitalValueMlir:
         computedType: (String, String) => String,
         scalarType: (String, String) => Option[ScalarType],
         widthRelation: (ScalarType, ScalarType, Int, String) => Boolean,
+        widthFormula: (ScalarType, String, Vector[ScalarType], Long, String) => Boolean,
+        exactValueType: (String, String, String) => Boolean,
         declarationValue: (
             KernelDeclarationSnapshot,
             String,
@@ -453,19 +652,34 @@ private[nodal] object DigitalValueMlir:
                     height,
                     Proof(None, unsigned)
                   )
-                else if expression.operation.startsWith("digital_") then
-                  requireValid(
-                    expression.operands.size == 1,
-                    "digital conversion requires one operand",
-                    path
+                else if expression.operation.startsWith("digital_") ||
+                  DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                    expression.operation
                   )
-                  val proof = scalarConversion(
-                    expression,
-                    expressionType(expression.operands.head),
-                    proofs(expression.operands.head),
-                    scalarType,
-                    widthRelation
-                  )
+                then
+                  val proof =
+                    if DigitalScalarContract.Operations.contains(expression.operation) then
+                      requireValid(
+                        expression.operands.size == 1,
+                        "digital conversion requires one operand",
+                        path
+                      )
+                      scalarConversion(
+                        expression,
+                        expressionType(expression.operands.head),
+                        proofs(expression.operands.head),
+                        scalarType,
+                        widthRelation
+                      )
+                    else
+                      combinational(
+                        expression,
+                        expression.operands.map(proofs),
+                        scalarType,
+                        widthRelation,
+                        widthFormula,
+                        exactValueType
+                      )
                   val attributes =
                     s"{operator_name = ${quoted(expression.operation)}, metadata = ${metadata(path)}}"
                   (
@@ -482,8 +696,11 @@ private[nodal] object DigitalValueMlir:
                   )
                 else
                   val (literal, proof) = scalarLiteral(expression, scalarType)
+                  val spelling = if expression.dataType == "Bool" then
+                    if expression.literal.contains("true") then "1" else "0"
+                  else expression.literal.get
                   val attributes =
-                    s"{value = $literal, spelling = ${quoted(expression.literal.get)}, metadata = ${metadata(path)}}"
+                    s"{value = $literal, spelling = ${quoted(spelling)}, metadata = ${metadata(path)}}"
                   (
                     Vector(operation(
                       "nodal.const_literal",
@@ -513,7 +730,7 @@ private[nodal] object DigitalValueMlir:
                     path
                   )
                   requireValid(
-                    expressionType(input) == sourceType,
+                    exactValueType(expressionType(input), sourceType, path),
                     "digital initializer requires the exact storage type",
                     path
                   )
@@ -531,9 +748,10 @@ private[nodal] object DigitalValueMlir:
             proofs.update(path, proof)
             active.remove(path)
             value
-      byOwner.getOrElse(module.path, Vector.empty).sortBy(_.path).foreach(value =>
-        emit(value.path, 0)
-      )
+      val moduleExpressions = byOwner.getOrElse(module.path, Vector.empty)
+      moduleExpressions.filterNot(value =>
+        DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
+      ).sortBy(_.path).foreach(value => emit(value.path, 0))
       assignmentsByOwner.getOrElse(module.path, Vector.empty).sortBy(_.path).foreach: assignment =>
         Vector(assignment.target, assignment.value).foreach(path =>
           emit(assignmentRoot(path, module.path), 0)
@@ -548,4 +766,13 @@ private[nodal] object DigitalValueMlir:
         emit(path, 0)
       module.declarations.filter(value => Set("wire", "register").contains(value.kind))
         .sortBy(_.path).foreach(value => emit(value.path, 0))
+      moduleExpressions.filter(value =>
+        DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
+      ).foreach(value =>
+        requireValid(
+          values.contains(value.path),
+          "ordinary Boolean operations require a reachable digital value root",
+          value.path
+        )
+      )
       Rendered(lines.toVector, values.toMap)

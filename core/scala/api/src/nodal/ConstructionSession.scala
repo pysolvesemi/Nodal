@@ -896,6 +896,13 @@ private final class ConstructionSession(val options: EmitOptions):
     val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
     (bounds.lower, bounds.upper)
 
+  def sameStaticInteger(left: Dimension, right: Dimension): Boolean =
+    new StructuralBoundAnalysis(
+      currentModule.handle,
+      "NODAL-DIGITAL-054-001",
+      "digital type extent"
+    ).sameIdentity(left, right)
+
   def digitalWidthEquals(descriptor: KernelTypeDescriptor, expected: Int): Boolean =
     val bounds = digitalWidthBound(descriptor, currentModule.handle).bounds
     bounds.lower == expected.toLong && bounds.upper == expected.toLong
@@ -1504,7 +1511,8 @@ private final class ConstructionSession(val options: EmitOptions):
         if expression.operation.exists(operation =>
           operation.startsWith(
             DigitalEnumContract.Prefix
-          ) || DigitalScalarContract.Operations.contains(operation)
+          ) || DigitalScalarContract.Operations.contains(operation) ||
+            DigitalCombinationalContract.Operations.contains(operation)
         ) =>
       if activeGeneratedRegion.nonEmpty then
         fail(
@@ -2292,6 +2300,7 @@ private final class ConstructionSession(val options: EmitOptions):
               case None =>
                 val operation = expression.operation match
                   case Some("analog_add") => IterationDomain.Arithmetic.Add
+                  case Some("static_integer_max") => IterationDomain.Arithmetic.Maximum
                   case Some("analog_sub") => IterationDomain.Arithmetic.Subtract
                   case Some("analog_mul") => IterationDomain.Arithmetic.Multiply
                   case Some("analog_div") => IterationDomain.Arithmetic.Divide
@@ -2319,9 +2328,13 @@ private final class ConstructionSession(val options: EmitOptions):
                         identity
                       )
                 val operandIds = operands.map(_.identity.get)
-                val key = if operandIds.forall(id => identityKeys(id)._1 == 0) then
-                  (0, bounds.lower.toString, Vector.empty[Int])
-                else (2, expression.operation.get, operandIds)
+                val key =
+                  if operation == IterationDomain.Arithmetic.Maximum &&
+                    operandIds(0) == operandIds(1)
+                  then identityKeys(operandIds.head)
+                  else if operandIds.forall(id => identityKeys(id)._1 == 0) then
+                    (0, bounds.lower.toString, Vector.empty[Int])
+                  else (2, expression.operation.get, operandIds)
                 StructuralBound(
                   expression,
                   bounds,
@@ -4471,7 +4484,9 @@ private final class ConstructionSession(val options: EmitOptions):
               DigitalEnumContract.Prefix
             ) || DigitalScalarContract.Operations.contains(
               operation
-            ) || DigitalInterfaceContract.ValueOperations.contains(operation)
+            ) || DigitalInterfaceContract.ValueOperations.contains(operation) ||
+              DigitalCombinationalContract.Operations.contains(operation) ||
+              DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
           ) => expression)
     DigitalValueConstruction.snapshot(
       records.valuesIterator.flatMap(

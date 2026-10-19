@@ -590,3 +590,10 @@ target_link_libraries(nodal-digital-interface-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.digital-interface-model-unit COMMAND nodal-digital-interface-model-unit-tests)
 set_tests_properties(nodal.native.digital-interface-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-digital-collection-model-unit-tests DigitalCollectionModelTest.cpp)
+llvm_update_compile_flags(nodal-digital-collection-model-unit-tests)
+target_link_libraries(nodal-digital-collection-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-collection-model-unit COMMAND nodal-digital-collection-model-unit-tests)
+set_tests_properties(nodal.native.digital-collection-model-unit PROPERTIES TIMEOUT 30)

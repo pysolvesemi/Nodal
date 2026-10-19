@@ -82,7 +82,8 @@ private[nodal] object DigitalInterfaceContract:
       dimensions: Vector[String],
       renderType: DataType[?] => String,
       validateProtocolPayload: DataType[?] => Unit,
-      validateBoundarySource: Expr[?] => Unit
+      validateBoundarySource: Expr[?] => Unit,
+      samePayloadTypes: (DataType[?], DataType[?]) => Boolean
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
   final case class Capture(
@@ -359,6 +360,13 @@ private[nodal] object DigitalInterfaceContract:
       if valueType(value, context) != expected then
         fail(8, s"digital operand must have exact type '$expected'")
       owned(value, context.owner)
+    def exactPayload(value: Expr[?], expected: DataType[?], context: Declaration): String =
+      val actual = CandidateRuntime.expressionDataType(value).getOrElse(
+        fail(8, "digital operand requires an exact type")
+      )
+      if !context.samePayloadTypes(actual, expected)
+      then fail(8, "digital operand must have the exact owned payload type")
+      owned(value, context.owner)
     val viewLayouts =
       new IdentityHashMap[InterfacePort[?, ?], Vector[ConstructionInterfaceLayout.Leaf]]()
     def endpointLeaves(endpoint: InterfacePort[?, ?], depth: Int = 0)
@@ -531,7 +539,7 @@ private[nodal] object DigitalInterfaceContract:
             val target = s"${context.path}.${leaf.name}"
             if leaf.mode.isEmpty && !driven.add(target) then
               fail(10, "ordinary interface member has multiple drivers")
-            val capturedValue = exact(value, expected, context)
+            val capturedValue = exactPayload(value, leaf.dataType.get, context)
             context.validateBoundarySource(value)
             Vector(effect(
               operation,
@@ -573,7 +581,7 @@ private[nodal] object DigitalInterfaceContract:
             Vector(effect(
               operation,
               context.path,
-              value = Some(exact(value, expected, context)),
+              value = Some(exactPayload(value, endpoint.dataType, context)),
               enable = Some(exact(enable, "Bool", context)),
               dataType = Some(expected)
             ))

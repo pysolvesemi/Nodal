@@ -151,7 +151,9 @@ private[nodal] object ConstructionKernel:
   def requireProceduralSources(expressions: Vector[KernelExpr[?]]): Unit =
     active.foreach(_.requireProceduralSources(expressions))
 
-  def analogReferencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+  def referencePath(value: Any): Option[String] = active.flatMap(_.pathOf(value))
+
+  def analogReferencePath(value: Any): Option[String] = referencePath(value)
 
   def proceduralShapeDimension(value: Any): String =
     active.getOrElse(throw new IllegalStateException("shape requires active construction"))
@@ -177,6 +179,14 @@ private[nodal] object ConstructionKernel:
 
   def expression(value: AnyRef): Unit =
     if !AnalogUserFunctionRuntime.capture(value) then active.foreach(_.registerExpression(value))
+
+  def collection(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] = active match
+    case Some(session) => session.captureCollection(kind, inputs, seed)(body)
+    case None => DigitalCollectionContract.fail(1, "collection requires an active Module")
 
   def declareNodeArray(
       value: NodeArray[?],

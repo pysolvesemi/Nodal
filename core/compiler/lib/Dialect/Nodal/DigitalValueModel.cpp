@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -312,7 +313,20 @@ public:
       return failure();
     Facts result;
     result.nonnegative = scalarKind(input.getType()) != "sint";
-    if (Operation *definition = input.getDefiningOp()) {
+    if (auto argument = llvm::dyn_cast<BlockArgument>(input)) {
+      auto source = digitalCollectionCaptureSource(argument);
+      if (failed(source))
+        return failure();
+      if (*source) {
+        auto captured = value(*source, depth + 1);
+        if (failed(captured))
+          return failure();
+        result = std::move(*captured);
+        ++result.height;
+        if (depth + result.height - 1 > maximumProofDepth)
+          return failure();
+      }
+    } else if (Operation *definition = input.getDefiningOp()) {
       StringRef name = definition->getName().getStringRef();
       if ((name == "nodal.constant" || name == "nodal.const_literal") &&
           llvm::isa<EnumType>(input.getType())) {
@@ -355,6 +369,12 @@ public:
       (void)reject(operation, "digital expression graph exceeds its finite node budget");
       return failure();
     }
+    for (Value operand : operation->getOperands())
+      if (failed(verifyCollectionValueScope(operand, operation))) {
+        (void)reject(operation,
+                     "digital operands require visible owned values and explicit region captures");
+        return failure();
+      }
     StringRef opcode = text(operation, "operator_name");
     unsigned arity = expressionArity(opcode);
     if (!arity || operation->getNumOperands() != arity) {
@@ -461,11 +481,7 @@ private:
       return found->second;
     // Select may carry owned enum/aggregate data. Analog scalar roots and
     // capabilities remain with their distinct semantic owners.
-    bool valid = isDigitalScalarType(type)
-                     ? succeeded(scalarWidth(type))
-                     : llvm::isa<EnumType, ShapedType, StructType>(type) &&
-                           isDigitalStorageType(type) &&
-                           succeeded(inferDigitalStorageMaximumBits(type, module));
+    bool valid = isDigitalCombinationalValueType(type, module);
     validTypes.try_emplace(type, valid);
     return valid;
   }
@@ -661,6 +677,15 @@ private:
 } // namespace
 
 bool isDigitalScalarType(Type type) { return type && !scalarKind(type).empty(); }
+
+bool isDigitalCombinationalValueType(Type type, Operation *module) {
+  if (!type || !llvm::isa_and_nonnull<nodal::ModuleOp>(module))
+    return false;
+  return isDigitalScalarType(type)
+             ? succeeded(inferDigitalWidthExpression(type, module))
+             : llvm::isa<EnumType, ShapedType, StructType>(type) && isDigitalStorageType(type) &&
+                   succeeded(inferDigitalStorageMaximumBits(type, module));
+}
 
 bool digitalIntegerAttributeFits(IntegerAttr value, Type type, Operation *module) {
   auto carrier = value ? llvm::dyn_cast<IntegerType>(value.getType()) : IntegerType();

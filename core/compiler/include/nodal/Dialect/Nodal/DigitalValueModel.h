@@ -11,6 +11,11 @@ namespace nodal {
 /// Enum values, builtin integers and analog quantities have separate owners.
 bool isDigitalScalarType(mlir::Type type);
 
+/// The common pure digital value profile: scalar Bits/UInt/SInt and owned
+/// enum/Struct/Vec values with finite exact type proofs. Root Integer/Real and
+/// capabilities are excluded; ordinary stored aggregate leaves remain intact.
+bool isDigitalCombinationalValueType(mlir::Type type, mlir::Operation *module);
+
 /// Shared mathematical integer attribute fit for literals and parameter values.
 /// The owning module resolves symbolic widths over all legal settings; unsigned
 /// APInt carriers remain nonnegative even when their high bit is set. This is a

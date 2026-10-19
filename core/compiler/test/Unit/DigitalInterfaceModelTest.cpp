@@ -290,6 +290,44 @@ int main() {
   check("exact-role-connect", pair + connect(), true);
   check("drive-and-observe", pair + literal("value") + drive() + observe(), true);
   check("direct-member-drive-same-domain", pair + drive("a", "b"), true);
+  const std::string widthA = "!nodal.digital<\"uint\", \"Fixture.widthA\">";
+  const std::string widthB = "!nodal.digital<\"uint\", \"Fixture.widthB\">";
+  const std::string widthRoots =
+      parameter() +
+      "%n = \"nodal.const_parameter_ref\"() <{parameter = @N, metadata = {}}> : () -> i64\n" +
+      literal("one", "i64", "1") +
+      "%wa = \"nodal.const_expr\"(%n, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.widthA\"}}> : (i64, i64) -> i64\n"
+      "%wb = \"nodal.const_expr\"(%n, %one) <{operator_name = \"add\", metadata = "
+      "{semantic_path = \"Fixture.widthB\"}}> : (i64, i64) -> i64\n";
+  const std::string equivalentPayload = domain() + widthRoots + definition(widthA) +
+                                        instance("left", "source", "out", widthA) +
+                                        member("a", "left", widthA) + port("value", widthB);
+  const std::string equivalentDrive = "\"nodal.interface_drive\"(%a, %value) <{metadata = {" + tag +
+                                      "}}> : (" + widthA + ", " + widthB + ") -> ()\n";
+  check("drive-canonical-symbolic-payload", equivalentPayload + equivalentDrive, true);
+  const std::string typedNet = resolved("push_pull", widthA);
+  const std::string typedDriver = "!nodal.driver<" + widthA + ">";
+  const std::string netPayload =
+      domain() + widthRoots + port("value", widthB) + literal("enable", boolean) +
+      "%net = \"nodal.resolved_net\"() <{name = \"net\", metadata = {" + tag +
+      ", placement = \"top_level_pin\", profile = \"portable_boundary_only\"}}> : () -> " +
+      typedNet + "\n" +
+      "%driver = \"nodal.net_driver\"(%net) <{driver_id = \"driver\", metadata = {" + tag +
+      "}}> : (" + typedNet + ") -> " + typedDriver + "\n" +
+      "\"nodal.net_drive\"(%net, %driver, %value, %enable) <{mode = \"push_pull\", metadata = {" +
+      tag + "}}> : (" + typedNet + ", " + typedDriver + ", " + widthB + ", " + boolean +
+      ") -> ()\n";
+  check("net-drive-canonical-symbolic-payload", netPayload, true);
+
+  check(
+      "drive-distinct-symbolic-payload",
+      replace(equivalentPayload,
+              "%n, %one) <{operator_name = \"add\", metadata = {semantic_path = \"Fixture.widthB",
+              "%one, %n) <{operator_name = \"add\", metadata = {semantic_path = \"Fixture.widthB") +
+          equivalentDrive,
+      false);
+
   check("direct-member-drive-domain-mismatch",
         domain("otherClock") + replace(pair, "domain = @clock", "domain = @otherClock") +
             drive("a", "b"),

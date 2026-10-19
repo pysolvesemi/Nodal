@@ -90,3 +90,6 @@ and explicit measurement/assertion evidence over F-048/F-049 shared services.
 - [NodalDigitalCollections-DG v0.1](NodalDigitalCollections-DG-v0.1.md): approved
   F55 typed map/zipWith/fold/scan regions, explicit seed-excluded scan convention
   and honest migration from the inert pair-losing zip candidate.
+- [NodalDigitalArithmetic-DG v0.2](NodalDigitalArithmetic-DG-v0.2.md): approved
+  additive F55 bounded division/remainder and exact numeric minimum/maximum;
+  dynamic numerators with proven nonzero constant divisors and explicit limits.

@@ -790,7 +790,8 @@ private[nodal] object InterfaceMlir:
         symbol: (String, String) => String,
         sourceMetadata: String => String,
         sourceLocation: String => String,
-        validateCapabilitySource: (String, String, String, String) => Unit
+        validateCapabilitySource: (String, String, String, String) => Unit,
+        exactPayloadType: (String, String, String) => Boolean
     ): Vector[String] =
       val output = mutable.ArrayBuffer.empty[String]
       val accessed = mutable.HashMap.empty[(String, String), (String, String)]
@@ -834,7 +835,7 @@ private[nodal] object InterfaceMlir:
             val target = member(effect.target, effect.endpointRole)
             val value = resolve(effect.value.get)
             requireValid(
-              value._2 == nativeType(effect.dataType.get, effect.path),
+              exactPayloadType(effect.value.get, effect.dataType.get, effect.path),
               "interface driver value differs from exact member payload",
               effect.path
             )
@@ -892,7 +893,8 @@ private[nodal] object InterfaceMlir:
                 val value = resolve(effect.value.get)
                 val enable = resolve(effect.enable.get)
                 requireValid(
-                  value._2 == payload && enable._2 == "!nodal.bits<1>",
+                  exactPayloadType(effect.value.get, effect.dataType.get, effect.path) &&
+                    enable._2 == "!nodal.bits<1>",
                   "net driver value/enable lost exact types",
                   effect.path
                 )

@@ -4,8 +4,9 @@ import nodal.*
 
 import scala.collection.mutable
 
-/** One bounded typed value DAG for enum and scalar consumers. Width and declaration ownership
-  * remain in the existing module/type renderer; enum ABI policy remains in EnumMlir.
+/** One bounded typed value DAG for finite digital values and isolated collection callbacks. Width
+  * and declaration ownership remain in the existing module/type renderer; enum ABI policy remains
+  * in EnumMlir.
   */
 private[nodal] object DigitalValueMlir:
   final case class ScalarType(kind: String, width: String, lower: Long, upper: Long)
@@ -53,6 +54,30 @@ private[nodal] object DigitalValueMlir:
     ).toMap
     private val expressions = snapshot.digitalExpressions.map(value => value.path -> value).toMap
     private val byOwner = snapshot.digitalExpressions.groupBy(_.owner)
+    private val collections = snapshot.digitalCollections.map(value => value.path -> value).toMap
+    private val arguments = snapshot.digitalCollections.flatMap(collection =>
+      collection.arguments.map(argument => argument.path -> (collection, argument))
+    ).toMap
+    private val byRegion = snapshot.digitalExpressions.groupBy(_.region)
+
+    def valueOwner(path: String): Option[String] =
+      expressions.get(path).map(_.owner).orElse(declarations.get(path).map(_._1))
+        .orElse(arguments.get(path).map(_._1.owner))
+
+    def valueRegion(path: String): Option[String] =
+      expressions.get(path).flatMap(_.region).orElse(arguments.get(path).map(_._1.path))
+
+    def requireVisible(
+        path: String,
+        owner: String,
+        region: Option[String],
+        consumer: String
+    ): Unit =
+      requireValid(
+        valueOwner(path).contains(owner) && valueRegion(path) == region,
+        "digital operand must belong to its exact lexical scope; free values need explicit captures",
+        consumer
+      )
     private val shapeInputs =
       snapshot.shapeIndices.map(value => value.path -> (value.owner, value.input)) ++
         snapshot.shapeViews.map(value => value.path -> (value.owner, value.input))
@@ -86,12 +111,7 @@ private[nodal] object DigitalValueMlir:
       )
       Vector(assignment.target, assignment.value).foreach: input =>
         val root = assignmentRoot(input, assignment.owner)
-        val owner = expressions.get(root).map(_.owner).orElse(declarations.get(root).map(_._1))
-        requireValid(
-          owner.contains(assignment.owner),
-          "digital assignment operand has another owner",
-          assignment.path
-        )
+        requireVisible(root, assignment.owner, None, assignment.path)
       val target = declarations.get(assignmentRoot(assignment.target, assignment.owner)).map(_._2)
         .getOrElse(fail("digital assignment target requires an owned declaration", assignment.path))
       val valid = assignment.kind match
@@ -117,14 +137,93 @@ private[nodal] object DigitalValueMlir:
         "digital expression has invalid module ownership, identity or operand count",
         expression.path
       )
-      expression.operands.foreach: operand =>
-        val owner =
-          expressions.get(operand).map(_.owner).orElse(declarations.get(operand).map(_._1))
+      expression.region.foreach: region =>
         requireValid(
-          owner.contains(expression.owner),
-          "digital operand has no declaration or belongs to another module",
+          collections.get(region).exists(_.owner == expression.owner),
+          "digital expression has no exact collection region owner",
           expression.path
         )
+      expression.operands.foreach: operand =>
+        requireVisible(operand, expression.owner, expression.region, expression.path)
+
+    requireValid(
+      snapshot.digitalCollections.size <= 65536 &&
+        collections.size == snapshot.digitalCollections.size &&
+        arguments.size == snapshot.digitalCollections.map(_.arguments.size).sum,
+      "duplicate or excessive collection or argument identities",
+      snapshot.root
+    )
+    snapshot.digitalCollections.foreach: collection =>
+      val path = collection.path
+      requireValid(
+        modules.contains(collection.owner) && path.startsWith(collection.owner + ".") &&
+          DigitalCollectionContract.Kinds.contains(collection.kind) &&
+          collection.inputs.size == (if collection.kind == "zip_with" then 2 else 1) &&
+          collection.seed.nonEmpty == Set("fold_left", "scan_left").contains(collection.kind) &&
+          collection.captures.distinct.size == collection.captures.size &&
+          collection.arguments.size <= 4098,
+        "collection kind, identity, operand segments or argument count is invalid",
+        path
+      )
+      val operands = collection.inputs ++ collection.seed ++ collection.captures
+      requireValid(
+        expressions.get(path).exists(value =>
+          value.operation == DigitalCollectionContract.Operation &&
+            value.owner == collection.owner && value.region == collection.parentRegion &&
+            value.operands == operands && value.dataType == collection.dataType &&
+            value.literal.isEmpty && value.enumIdentity.isEmpty && value.caseIds.isEmpty
+        ),
+        "collection must have one matching ordinary digital result record",
+        path
+      )
+      collection.arguments.zipWithIndex.foreach: (argument, index) =>
+        requireValid(
+          argument.path == s"$path.arg$index" && !expressions.contains(argument.path) &&
+            !declarations.contains(argument.path),
+          "collection argument identity must be canonical and distinct from all values",
+          path
+        )
+      var parent = collection.parentRegion
+      val ancestors = mutable.HashSet(path)
+      while parent.nonEmpty do
+        val identity = parent.get
+        requireValid(
+          ancestors.add(identity) && ancestors.size <= 128,
+          "collection lexical owners contain a cycle or exceed depth limit",
+          path
+        )
+        val outer = collections.getOrElse(
+          identity,
+          fail("collection parent region is absent", path)
+        )
+        requireValid(
+          outer.owner == collection.owner,
+          "collection parent has another module owner",
+          path
+        )
+        parent = outer.parentRegion
+      operands.foreach(requireVisible(_, collection.owner, collection.parentRegion, path))
+      requireVisible(collection.yieldValue, collection.owner, Some(path), path)
+    snapshot.digitalExpressions.filter(_.operation == DigitalCollectionContract.Operation).foreach:
+      expression =>
+        requireValid(
+          collections.contains(expression.path),
+          "collection result has no region record",
+          expression.path
+        )
+    (snapshot.shapeIndices.map(value => (value.path, value.owner, value.input, value.region)) ++
+      snapshot.shapeViews.map(value =>
+        (value.path, value.owner, value.input, value.region)
+      )).foreach: (path, owner, input, region) =>
+      if expressions.contains(path) || region.nonEmpty then
+        requireValid(
+          expressions.get(path).exists(value =>
+            value.operation == "shape_reference" && value.region == region
+          ),
+          "digital shape projection and expression must share one exact region",
+          path
+        )
+        requireVisible(input, owner, region, path)
 
     def parameterDefault(
         declaration: KernelDeclarationSnapshot,
@@ -148,6 +247,12 @@ private[nodal] object DigitalValueMlir:
         path: String,
         scalarType: (String, String) => Option[ScalarType]
     ): String =
+      expressions.get(reference).foreach: value =>
+        requireValid(
+          value.owner == owner && value.region.isEmpty,
+          "digital parameter literal cannot escape its module lexical scope",
+          path
+        )
       if expectedType.startsWith("Enum(") then
         enums.literalAttribute(
           expressions.getOrElse(
@@ -186,6 +291,7 @@ private[nodal] object DigitalValueMlir:
 
     def expressionType(path: String): String =
       expressions.get(path).map(_.dataType).orElse(declarations.get(path).flatMap(_._2.dataType))
+        .orElse(arguments.get(path).map(_._2.dataType))
         .getOrElse(fail("digital operand requires an exact type", path))
 
     private def scalarLiteral(
@@ -531,6 +637,7 @@ private[nodal] object DigitalValueMlir:
         widthRelation: (ScalarType, ScalarType, Int, String) => Boolean,
         widthFormula: (ScalarType, String, Vector[ScalarType], Long, String) => Boolean,
         exactValueType: (String, String, String) => Boolean,
+        vectorType: (String, String) => (String, Vector[String]),
         declarationValue: (
             KernelDeclarationSnapshot,
             String,
@@ -561,8 +668,14 @@ private[nodal] object DigitalValueMlir:
           Set("Bits", "UInt").contains(info.kind) &&
             info.lower == expected.toLong && info.upper == expected.toLong
         )
-      def emit(path: String, depth: Int): (String, String) =
+      def emit(
+          path: String,
+          depth: Int,
+          region: Option[String],
+          output: mutable.ArrayBuffer[String]
+      ): (String, String) =
         requireValid(depth <= 128, "digital expression graph exceeds depth limit", path)
+        requireVisible(path, module.path, region, path)
         values.get(path) match
           case Some(value) =>
             requireValid(
@@ -577,6 +690,11 @@ private[nodal] object DigitalValueMlir:
             var actualResult = result
             ordinal += 1
             val sourceType = expressionType(path)
+            requireValid(
+              region.isEmpty || (sourceType != "Integer" && sourceType != "Real"),
+              "collection expressions require finite digital values",
+              path
+            )
             val payloadType =
               if expressions.get(path).exists(_.operation != "shape_reference") then
                 computedType(sourceType, path)
@@ -587,7 +705,7 @@ private[nodal] object DigitalValueMlir:
             val unsigned = scalarType(sourceType, path).exists(_.kind != "SInt")
             val (text, height, proof) = expressions.get(path) match
               case Some(expression) =>
-                val operands = expression.operands.map(emit(_, depth + 1))
+                val operands = expression.operands.map(emit(_, depth + 1, region, output))
                 val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
                 val specialized =
                   DigitalInterfaceContract.ValueOperations.contains(expression.operation)
@@ -598,7 +716,119 @@ private[nodal] object DigitalValueMlir:
                       "a digital capability cannot be used as an ordinary typed value",
                       path
                     )
-                if specialized then
+                if expression.operation == DigitalCollectionContract.Operation then
+                  val collection = collections(path)
+                  val vectors =
+                    collection.inputs.map(input => vectorType(expressionType(input), path))
+                  def shaped(element: String, dimensions: Vector[String]): String =
+                    s"Vec($element;${dimensions.mkString("x")})"
+                  if collection.kind == "zip_with" then
+                    requireValid(
+                      exactValueType(
+                        shaped("Bool", vectors(0)._2),
+                        shaped("Bool", vectors(1)._2),
+                        path
+                      ),
+                      "collection zip requires identical complete dimensions",
+                      path
+                    )
+                  val primary = collection.seed match
+                    case Some(seed) =>
+                      Vector(expressionType(seed) -> "accumulator", vectors.head._1 -> "element")
+                    case None => vectors.zipWithIndex.map((value, index) =>
+                        value._1 -> (if vectors.size == 1 then "element" else s"element$index")
+                      )
+                  val expected = primary ++
+                    collection.captures.map(input => expressionType(input) -> "capture")
+                  requireValid(
+                    collection.arguments.size == expected.size,
+                    "collection block arguments do not match operand segments",
+                    path
+                  )
+                  val local = mutable.ArrayBuffer.empty[String]
+                  val blockArguments = collection.arguments.zip(expected).zipWithIndex.map:
+                    case ((argument, (expectedType, role)), index) =>
+                      requireValid(
+                        argument.role == role &&
+                          exactValueType(argument.dataType, expectedType, path) &&
+                          argument.dataType != "Integer" && argument.dataType != "Real",
+                        "collection block argument must retain the complete finite operand type and role",
+                        argument.path
+                      )
+                      val name = s"${result}_arg$index"
+                      val argumentType = computedType(argument.dataType, argument.path)
+                      values.update(argument.path, name -> argumentType)
+                      // Only immutable explicit capture edges carry facts. An element
+                      // or recurrence accumulator remains unknown, even with a literal seed.
+                      val capture = collection.captures.lift(index - primary.size)
+                      heights.update(argument.path, capture.map(heights(_) + 1).getOrElse(0))
+                      proofs.update(
+                        argument.path,
+                        capture.map(proofs).getOrElse(Proof(
+                          None,
+                          scalarType(argument.dataType, argument.path).exists(_.kind != "SInt")
+                        ))
+                      )
+                      s"$name: $argumentType"
+                  val bodyExpressions = byRegion.getOrElse(Some(path), Vector.empty)
+                  bodyExpressions.filterNot(value =>
+                    DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                      value.operation
+                    )
+                  ).sortBy(_.path).foreach(value => emit(value.path, depth + 1, Some(path), local))
+                  val yielded = emit(collection.yieldValue, depth + 1, Some(path), local)
+                  val yieldedType = expressionType(collection.yieldValue)
+                  requireValid(
+                    yieldedType != "Integer" && yieldedType != "Real",
+                    "collection yield requires a finite digital value",
+                    path
+                  )
+                  collection.seed.foreach(seed =>
+                    requireValid(
+                      exactValueType(expressionType(seed), yieldedType, path),
+                      "collection fold/scan yield must exactly match the complete seed type",
+                      path
+                    )
+                  )
+                  val expectedResult = if collection.kind == "fold_left" then yieldedType
+                  else shaped(yieldedType, vectors.head._2)
+                  requireValid(
+                    exactValueType(expression.dataType, expectedResult, path),
+                    "collection result must retain exact element type and every input dimension",
+                    path
+                  )
+                  bodyExpressions.filter(value =>
+                    DigitalCombinationalContract.ReachableBooleanOperations.contains(
+                      value.operation
+                    )
+                  ).foreach(value =>
+                    requireValid(
+                      values.contains(value.path),
+                      "ordinary Boolean operations require a reachable digital value root",
+                      value.path
+                    )
+                  )
+                  local +=
+                    s"${quoted("nodal.collection_yield")}(${yielded._1}) <{metadata = ${metadata(path)}}> : (${yielded._2}) -> ()${sourceLocation(path)}"
+                  val attributes =
+                    s"{kind = ${quoted(collection.kind)}, region_id = ${quoted(path)}, " +
+                      s"operandSegmentSizes = array<i32: ${collection.inputs.size}, ${collection.seed.size}, ${collection.captures.size}>, metadata = ${metadata(path)}}"
+                  val block = s"^bb0(${blockArguments.mkString(", ")}):\n" + local.mkString("\n")
+                  val nested = block.linesIterator.map("  " + _).mkString("\n")
+                  val text =
+                    s"$result = ${quoted("nodal.collection")}(${operands.map(_._1).mkString(", ")}) <$attributes> ({\n$nested\n}) : " +
+                      s"(${operands.map(_._2).mkString(", ")}) -> $dataType${sourceLocation(path)}"
+                  (
+                    Vector(text),
+                    math.max(height, heights(collection.yieldValue) + 1),
+                    Proof(None, unsigned)
+                  )
+                else if specialized then
+                  requireValid(
+                    region.isEmpty,
+                    "interface effects are not pure collection operations",
+                    path
+                  )
                   val projected = specializedValue(expression, result, dataType, operands)
                   requireValid(
                     projected.value._2 == dataType,
@@ -625,7 +855,7 @@ private[nodal] object DigitalValueMlir:
                         path
                       )
                       dependencies += dependency
-                      emit(dependency, depth + 1)
+                      emit(dependency, depth + 1, region, output)
                   )
                   requireValid(
                     dependencies.toVector == Vector(shapeByPath(path)._2) &&
@@ -734,27 +964,27 @@ private[nodal] object DigitalValueMlir:
                     "digital initializer requires the exact storage type",
                     path
                   )
-                val initial = initialPath.map(emit(_, depth + 1))
+                val initial = initialPath.map(emit(_, depth + 1, region, output))
                 val height = initialPath.map(heights(_) + 1).getOrElse(0)
                 (
                   declarationValue(declaration, result, dataType, initial),
                   height,
                   Proof(None, unsigned)
                 )
-            lines ++= text
+            output ++= text
             val value = actualResult -> dataType
             values.update(path, value)
             heights.update(path, height)
             proofs.update(path, proof)
             active.remove(path)
             value
-      val moduleExpressions = byOwner.getOrElse(module.path, Vector.empty)
+      val moduleExpressions = byOwner.getOrElse(module.path, Vector.empty).filter(_.region.isEmpty)
       moduleExpressions.filterNot(value =>
         DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
-      ).sortBy(_.path).foreach(value => emit(value.path, 0))
+      ).sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
       assignmentsByOwner.getOrElse(module.path, Vector.empty).sortBy(_.path).foreach: assignment =>
         Vector(assignment.target, assignment.value).foreach(path =>
-          emit(assignmentRoot(path, module.path), 0)
+          emit(assignmentRoot(path, module.path), 0, None, lines)
         )
       additionalRoots.distinct.sorted.foreach: path =>
         val owner = expressions.get(path).map(_.owner).orElse(declarations.get(path).map(_._1))
@@ -763,9 +993,9 @@ private[nodal] object DigitalValueMlir:
           "specialized digital root has another owner",
           path
         )
-        emit(path, 0)
+        emit(path, 0, None, lines)
       module.declarations.filter(value => Set("wire", "register").contains(value.kind))
-        .sortBy(_.path).foreach(value => emit(value.path, 0))
+        .sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
       moduleExpressions.filter(value =>
         DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
       ).foreach(value =>
@@ -775,4 +1005,4 @@ private[nodal] object DigitalValueMlir:
           value.path
         )
       )
-      Rendered(lines.toVector, values.toMap)
+      Rendered(lines.toVector, values.iterator.filter((path, _) => valueRegion(path).isEmpty).toMap)

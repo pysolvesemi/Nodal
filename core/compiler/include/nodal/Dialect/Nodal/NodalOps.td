@@ -1619,6 +1619,36 @@ def Nodal_EnumCaseOp : Nodal_Op<"enum_case",
   let hasVerifier = 1;
 }
 
+// F55: typed pure collection templates; no lane expansion or target execution.
+def Nodal_CollectionOp : Nodal_Op<"collection",
+    [IsolatedFromAbove, SingleBlock, AttrSizedOperandSegments]> {
+  let summary = "Isolated typed digital collection callback region";
+  let description = [{
+    kind is map, zip_with, fold_left or scan_left. Inputs are actual Vec values;
+    fold/scan have one seed; captures are explicit values with corresponding
+    block arguments. map args are element then captures; zip args are A, B,
+    then captures; fold/scan args are accumulator, element, then captures.
+    map/zip preserve every input dimension and yield one whole result element.
+    fold/scan yield exactly the seed type. scan excludes the seed and preserves
+    the input shape and cardinality, in canonical row-major traversal order.
+    One isolated block terminates with collection_yield. Region shape and
+    finite type proofs never substitute defaults or expand physical lanes.
+  }];
+  let arguments = (ins Variadic<AnyType>:$inputs, Optional<AnyType>:$seed,
+    Variadic<AnyType>:$captures, StrAttr:$kind, StrAttr:$region_id,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_CollectionYieldOp : Nodal_Op<"collection_yield",
+    [HasParent<"CollectionOp">, Terminator]> {
+  let summary = "One whole typed collection callback result";
+  let arguments = (ins AnyType:$value, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_DigitalExprOp : Nodal_Op<"digital_expr"> {
   let summary = "Closed typed hardware digital expression";
   let description = [{

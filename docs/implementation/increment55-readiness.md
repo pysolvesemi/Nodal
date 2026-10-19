@@ -36,8 +36,11 @@ No placeholder, forged zero induction or discarded pair field satisfies F55.
 
 ## Pending decisions and focused validation
 
-Division/remainder need an explicit dynamic-zero policy; no reviewed historical
-contract supplies one. Runtime shifts need full all-legal amount bounds. Symbolic
+ADR 0016 requires division/remainder and minimum/maximum. The approved additive
+[arithmetic gate](../design-gates/NodalDigitalArithmetic-DG-v0.2.md) defines exact
+width/sign rules and a proven-nonzero-constant divisor profile; implementation
+remains pending. Frozen shifts take Int amounts, so runtime shift overloads are
+not an additional F55 prerequisite and remain explicitly unsupported. Symbolic
 width-changing reductions require genuine type recurrence, not a fixed-width
 accumulator with hidden truncation. Collection, loop and materialization contracts
 will be specified before their implementation depends on them.
@@ -85,12 +88,96 @@ The next collection tranche follows the approved
 [typed collection gate](../design-gates/NodalDigitalCollections-DG-v0.1.md): map,
 zipWith, exact homogeneous fold and seed-excluded, shape-preserving scan. A real
 isolated SSA region retains callback arguments, captures and yield. Widening
-reduce/balanced-tree recurrence, callback-effect validation, bounded loop writes
-and unified hdlRange integration remain open; homogeneous fold is not a substitute.
+reduce/balanced-tree recurrence, bounded loop writes and unified hdlRange
+integration remain open; homogeneous fold is not a substitute. Callback-effect
+validation is implemented in the collection checkpoint below.
 
-A directly affected follow-on remains after the scalar checkpoint: interface-drive
-and resolved-net payload gates still compare raw native type spellings. They must
-reuse the same canonical, same-owner type identity when admitting fresh equivalent
-symbolic arithmetic results, retaining all domain, driver and capability checks.
-The corresponding source/bridge gates need the same causal witness before F55
-closure; a scalar assignment positive does not establish Interface drive support.
+The scalar checkpoint identified a directly affected follow-on: interface-drive
+and resolved-net payload gates compared raw native type spellings. The collection
+checkpoint below repairs those gates through canonical same-owner identity and
+adds a distinct causal Interface witness; a scalar assignment positive alone does
+not establish Interface drive support.
+
+## Typed collection checkpoint
+
+The real public map/zipWith/fold/scan path now captures one typed lexical body,
+explicit input/seed/capture edges, actual arguments and a yield. Source, bridge and
+native verification reuse their existing type, width, shape and SSA owners.
+Collection callbacks are checked by one phase in the existing Scala plugin;
+private runtime carriers refuse an uninstrumented callback before execution.
+Same-compilation pure helpers and immutable captures are supported. Unknown host
+effects, mutable/lazy state, host topology, recursive/open-dispatch helpers and
+unavailable helper bodies reject. This is a finite checked profile, not a general
+Scala purity proof or a reflection security boundary.
+
+Native collection checks pass 76/76, with scalar/enum/type/storage/interface and
+capability regressions. Affected F43 index/view/slice checks pass 40/40, 43/43 and
+46/46. A broad computed-source admission initially weakened an existing slice
+negative; the repaired shared provenance gate retains that rejection. Public
+source checks pass 11/11 and bridge checks pass 13/13, including ten actual
+source-to-native idempotent roundtrips. Selected predecessor checks pass: scalar
+bridge 9/9, digital bridge 5/5, enum bridge 9/9, composed shape 4/4, slice 2/2
+and Interface payload 1/1. The Interface case verifies both root and child drives
+and the exact distinct-parameter negative. Its first child attempt failed solely
+because the test omitted its working directory; the corrected test uses the
+existing diagnostic-preserving verifier helper. A checked-conversion
+witness exposed missing constant facts across immutable collection captures; the
+repair follows actual verified capture operands, never element or accumulator
+arguments. A positive fold seed cannot prove every later accumulator positive.
+The exact old-binary failing IR now verifies, and the public nested-capture and
+forged-negative-literal regression passes; shared scalar checks pass 203/203. The standalone callback harness
+passes 18 exact source-located negatives, typed positives, bounded traversal,
+public runtime capture and refusal before uninstrumented callback effects.
+
+The current collection body supports literal local selectors, symbolic input
+shapes/element widths, nested collections and whole stored aggregate values.
+Module-static nonliteral selector captures are explicitly unsupported at this
+boundary; root runtime Real/Integer values and unit-bearing analog producers are
+not admitted. Input cardinality does not cause per-lane callback execution or SSA
+expansion. Source/native traversal budgets remain explicit; repeated nested
+signature/type queries are not claimed to make the whole pipeline linear.
+
+The directly affected Interface/resolved-net payload gates now reuse canonical
+same-owner type equivalence instead of raw symbolic type spellings. Clock/Reset
+boundary types and actual driver/domain/provenance checks remain strict. Source
+final-capture type comparison uses the actual declaration's module owner, including
+child modules; the public root/child witness passes the final replay.
+
+Widening reduce/balanced-tree recurrence, bounded loop effects and unified hdlRange,
+materialization, and the arithmetic v0.2 follow-on remain required open work.
+
+### Executed public collection witness
+
+The source-to-native replay uses `DigitalCollectionMapSource` in
+`Increment55DigitalCollectionTests.scala`, with its explicit `DigitalCollectionClock`
+fixture. Its actual body includes:
+
+```scala
+val rows = param(2.integer, range = 1 to 1000000)
+val input = in(Vec(UInt(4), rows, 3))
+val mapped = input.map(value => value + 1.U(4))
+val narrowed = mapped.map(value => value.truncate(4))
+val selected = narrowed.at(0, 0)
+val output = out(UInt(4))
+output := selected
+```
+
+The verified result retains symbolic dimensions, two typed collection regions,
+the widening addition and explicit truncation, followed by the actual selected
+output assignment. It is a source/normalized-IR witness; digital target execution
+remains with the later target owners. Repeated child instances are also replayed,
+retaining their distinct source-significant constructor/domain metadata rather
+than forcing a false reusable-definition equivalence.
+
+Focused replay uses `Increment55DigitalCollectionTests` and
+`Increment55DigitalCollectionBridgeTests` through the existing Mill test owner,
+the native `nodal-digital-collection-model-unit-tests` and
+`nodal-digital-value-model-unit-tests` targets, and the callback runner documented
+in `tests/scala/digital-collections/README.md`. The final native replay binary has
+SHA-256 `0a68932fae99f49e638a07b37b69fc730a1aad10feb90e5ad33a44d379808627`.
+Raw logs and the ten source/normalized pairs remain under `.work/increment55`.
+Focused source/native architecture review found no remaining concrete defect in
+this checkpoint. Formatting, affected syntactic lint, generated capability
+registry consistency, Markdown and whitespace checks pass, with the ten inherited
+shared construction lint diagnostics described above unchanged. No F55 checklist
+child is closed by this intermediate checkpoint.

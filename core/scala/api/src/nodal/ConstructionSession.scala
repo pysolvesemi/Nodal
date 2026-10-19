@@ -51,6 +51,12 @@ private final class ConstructionSession(val options: EmitOptions):
   private val domainIds = new IdentityHashMap[AnyRef, DomainRef]()
   private val declarationIds = new IdentityHashMap[AnyRef, DeclarationRef]()
   private val expressionIds = new IdentityHashMap[AnyRef, ExpressionRef]()
+  private val expressionRegions = mutable.HashMap.empty[ExpressionRef, DigitalCollectionRecord]
+  private val collectionRegions =
+    mutable.LinkedHashMap.empty[ExpressionRef, DigitalCollectionRecord]
+  private val collectionArguments =
+    mutable.HashMap.empty[ExpressionRef, (DigitalCollectionRecord, Int)]
+  private val collectionStack = mutable.ArrayBuffer.empty[DigitalCollectionRecord]
   private val instanceIds = new IdentityHashMap[AnyRef, InstanceRecord]()
   private val instanceObjects = new IdentityHashMap[AnyRef, Instance[? <: Module]]()
   private val records: mutable.LinkedHashMap[Long, ModuleRecord] = mutable.LinkedHashMap.empty
@@ -113,6 +119,261 @@ private final class ConstructionSession(val options: EmitOptions):
     fail("NODAL-CONSTRUCT-016", "hardware construction has no active Module")
   )
 
+  private def activeCollection: Option[DigitalCollectionRecord] = collectionStack.lastOption
+
+  private def rejectCollection(code: String, message: String, path: Option[String]): Nothing =
+    val failure = new ConstructionException(KernelDiagnostic(code, message, path))
+    poisonConstructor(failure, path.getOrElse("digital collection"))
+    scala.util.Failure[Nothing](failure).get
+
+  private def collectionFailure(message: String): Nothing =
+    rejectCollection(
+      "NODAL-COLLECTION-055-005",
+      message,
+      activeCollection.map(value => expressionPath(value.reference))
+    )
+
+  private def requireNoCollectionEffect(role: String): Unit =
+    activeCollection.foreach: region =>
+      rejectCollection(
+        "NODAL-COLLECTION-055-006",
+        s"$role is not permitted in a pure collection callback",
+        Some(expressionPath(region.reference))
+      )
+
+  private def valueReference(value: Expr[?]): DeclarationRef | ExpressionRef =
+    Option(declarationIds.get(value)).map(value => value: DeclarationRef | ExpressionRef)
+      .orElse(Option(expressionIds.get(value)).map(value => value: DeclarationRef | ExpressionRef))
+      .getOrElse(collectionFailure("collection value has no captured construction identity"))
+
+  private def valueRegion(reference: DeclarationRef | ExpressionRef)
+      : Option[DigitalCollectionRecord] =
+    reference match
+      case expression: ExpressionRef => expressionRegions.get(expression)
+      case _ => None
+
+  private def newCollectionArgument(
+      region: DigitalCollectionRecord,
+      dataType: DataType[?],
+      role: String
+  ): KernelExpr[?] =
+    DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(dataType))
+    val argument = new KernelExpr[Data](
+      Vector.empty,
+      resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+      operation = Some(DigitalCollectionContract.Argument)
+    )
+    val module = records(region.reference.module)
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    collectionArguments.update(reference, region -> region.arguments.size)
+    region.arguments += argument -> role
+    val _ =
+      captureExpression(argument, retained = Some(reference), scopeOverride = Some(Some(region)))
+    argument
+
+  /** Resolve each free edge through every intervening region. This retains actual parent values as
+    * capture operands and introduces a genuine typed block argument at each isolation boundary.
+    */
+  private def bindCollectionValue(
+      value: Expr[?],
+      destination: Option[DigitalCollectionRecord],
+      owner: Long,
+      create: Boolean = true
+  ): Expr[?] =
+    val reference = valueReference(value)
+    val sourceOwner = reference match
+      case declaration: DeclarationRef => declaration.module
+      case expression: ExpressionRef => expression.module
+    if sourceOwner != owner then collectionFailure("collection value belongs to another Module")
+    val sourceRegion = valueRegion(reference)
+    if sourceRegion == destination then value
+    else
+      destination match
+        case None =>
+          collectionFailure("collection argument or body value escaped its lexical region")
+        case Some(region) =>
+          val parentValue = bindCollectionValue(value, region.parent, owner, create)
+          val parentReference = valueReference(parentValue)
+          region.captures.get(parentReference) match
+            case Some((_, argument)) => argument
+            case None if create =>
+              val dataType = CandidateRuntime.expressionDataType(parentValue).getOrElse(
+                collectionFailure("collection capture requires an exact type")
+              )
+              validateShapeType(dataType, owner, cardinality = true, storageContext = true)
+              val argument = newCollectionArgument(region, dataType, "capture")
+              region.captures.update(parentReference, parentValue -> argument)
+              argument
+            case None => collectionFailure("collection free edge has no explicit capture argument")
+
+  private def collectionOperandPath(
+      value: Any,
+      region: Option[DigitalCollectionRecord],
+      owner: Long
+  )
+      : Option[String] = value match
+    case expression: Expr[?] =>
+      pathOf(bindCollectionValue(expression, region, owner, create = false))
+    case _ => pathOf(value)
+
+  /** Escapes are checked on all construction consumers, including assignment/initializer paths that
+    * do not otherwise enter the digital expression closure.
+    */
+  private def validateCollectionDependencies(values: Vector[Any]): Unit =
+    val pending = mutable.ArrayDeque.from(values)
+    while pending.nonEmpty do
+      pending.removeLast() match
+        case value: Expr[?] =>
+          Option(expressionIds.get(value)).flatMap(expressionRegions.get).foreach: _ =>
+            val _ = bindCollectionValue(value, activeCollection, currentModule.handle)
+        case values: Seq[?] => pending ++= values
+        case Some(value) => pending.append(value)
+        case _ => ()
+
+  private def collectionExpressionScope(
+      expression: KernelExpr[?],
+      retained: Option[ExpressionRef]
+  ): Option[DigitalCollectionRecord] =
+    val current = activeCollection
+    if current.isEmpty then
+      validateCollectionDependencies(expression.operands)
+      None
+    else
+      val operation = expression.operation.getOrElse("")
+      val staticInteger = expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+        !retained.exists(collectionArguments.contains) &&
+        (expression.literal.exists(_.kind == "integer") || Set(
+          "analog_add",
+          "analog_sub",
+          "analog_mul",
+          "analog_div",
+          "analog_neg",
+          "static_integer_max"
+        ).contains(operation))
+      val knownArgument = retained.exists(collectionArguments.contains) &&
+        operation == DigitalCollectionContract.Argument
+      val knownCollection = retained.exists(collectionRegions.contains) &&
+        operation == DigitalCollectionContract.Operation
+      val pure = expression.literal.nonEmpty || operation.startsWith(DigitalEnumContract.Prefix) ||
+        DigitalScalarContract.Operations.contains(operation) ||
+        DigitalCombinationalContract.Operations.contains(operation) ||
+        DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
+        Set("shape_index", "shape_view", "shape_slice").contains(operation) ||
+        knownArgument || knownCollection
+      if !pure && !staticInteger then
+        requireNoCollectionEffect(s"unsupported hardware expression '$operation'")
+      if !staticInteger then
+        val dataType = expression.resultType.getOrElse(
+          collectionFailure("collection body expression requires an exact type")
+        )
+        try DigitalCombinationalContract.validateValueType(dataType)
+        catch
+          case failure: ConstructionException =>
+            rejectCollection(
+              "NODAL-COLLECTION-055-006",
+              s"unsupported collection body value: ${failure.diagnostic.message}",
+              current.map(value => expressionPath(value.reference))
+            )
+      val destination = if staticInteger then None else current
+      val runtimeOperands =
+        if Set("shape_index", "shape_view", "shape_slice").contains(operation) then
+          expression.operands.take(1)
+        else expression.operands
+      runtimeOperands.collect { case value: Expr[?] => value }.foreach: value =>
+        val _ = bindCollectionValue(value, destination, currentModule.handle)
+      destination
+
+  def captureCollection(
+      kind: String,
+      inputs: Vector[Expr[?]],
+      seed: Option[Expr[?]]
+  )(body: Vector[Expr[?]] => Expr[?]): Expr[?] =
+    if activeGeneratedRegion.nonEmpty then
+      fail(
+        "NODAL-ITERATION-043-004",
+        "digital collection in structural generation requires its digital profile"
+      )
+    val module = currentModule
+    if collectionStack.size >= 128 || collectionRegions.size >= 65536 then
+      DigitalCollectionContract.fail(
+        5,
+        "collection nesting or region inventory exceeds its finite budget"
+      )
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      DigitalCollectionContract.fail(
+        6,
+        "digital collection requires a combinational digital context"
+      )
+    val argumentTypes = DigitalCollectionContract.arguments(kind, inputs, seed)
+    val parent = activeCollection
+    val boundInputs = inputs.map(bindCollectionValue(_, parent, module.handle))
+    val boundSeed = seed.map(bindCollectionValue(_, parent, module.handle))
+    (boundInputs ++ boundSeed).foreach: value =>
+      validateShapeType(
+        CandidateRuntime.expressionDataType(value).get,
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
+    val reference = ExpressionRef(module.handle, module.expressionCount)
+    module.expressionCount += 1
+    val region = new DigitalCollectionRecord(reference, parent, kind, boundInputs, boundSeed)
+    collectionRegions.update(reference, region)
+    collectionStack += region
+    try
+      val arguments =
+        argumentTypes.map((dataType, role) => newCollectionArgument(region, dataType, role))
+      val yielded = bindCollectionValue(body(arguments), Some(region), module.handle)
+      DigitalCombinationalContract.validateValueType(DigitalCollectionContract.descriptor(yielded))
+      val resultType = DigitalCollectionContract.result(kind, boundInputs.head, boundSeed, yielded)
+      validateShapeType(
+        CandidateRuntime.dataTypeFromDescriptor(resultType),
+        module.handle,
+        cardinality = true,
+        storageContext = true
+      )
+      region.yielded = Some(yielded)
+      collectionStack.remove(collectionStack.size - 1)
+      val result = new KernelExpr[Data](
+        boundInputs ++ boundSeed ++ region.captures.valuesIterator.map(_._1).toVector,
+        resultType = Some(resultType),
+        operation = Some(DigitalCollectionContract.Operation)
+      )
+      region.result = Some(result)
+      val _ = captureExpression(result, retained = Some(reference))
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, expressionPath(reference))
+        scala.util.Failure[Nothing](failure).get
+    finally
+      if collectionStack.lastOption.contains(region) then
+        collectionStack.remove(collectionStack.size - 1)
+
+  private def collectionSnapshots(): Vector[KernelDigitalCollectionSnapshot] =
+    collectionRegions.valuesIterator.map: region =>
+      val result = region.result.getOrElse(collectionFailure("collection capture did not complete"))
+      val owner = region.reference.module
+      KernelDigitalCollectionSnapshot(
+        expressionPath(region.reference),
+        modulePath(owner),
+        region.parent.map(value => expressionPath(value.reference)),
+        region.kind,
+        region.inputs.map(value => pathOf(value).get),
+        region.seed.flatMap(pathOf),
+        region.captures.valuesIterator.map(value => pathOf(value._1).get).toVector,
+        region.arguments.toVector.map: (argument, role) =>
+          KernelDigitalRegionArgument(
+            pathOf(argument).get,
+            renderType(CandidateRuntime.expressionDataType(argument).get, owner),
+            role
+          ),
+        pathOf(region.yielded.get).get,
+        renderType(CandidateRuntime.expressionDataType(result).get, owner)
+      )
+    .toVector
+
   private def activeGeneratedRegion: Option[GeneratedRegionRecord] =
     moduleStack.lastOption.flatMap(module =>
       generationStack.reverseIterator.find(_.owner == module.handle)
@@ -125,6 +386,7 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def requireNoGeneratedEffect(role: String): Unit =
+    requireNoCollectionEffect(role)
     activeGeneratedRegion.foreach: region =>
       fail(
         "NODAL-ITERATION-043-004",
@@ -155,6 +417,7 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   def beginModule(module: Module): Unit =
+    requireNoCollectionEffect("Module declaration")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
     val handle = nextModule
@@ -279,6 +542,8 @@ private final class ConstructionSession(val options: EmitOptions):
       attributes: Vector[(String, Any)],
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
+    requireNoCollectionEffect(s"${kind.label} declaration")
+    validateCollectionDependencies(attributes.map(_._2))
     val activeGeneratedVariable =
       kind == KernelSignalKind.Variable && AnalogProceduralConstruction.generatedProcedureActive
     if kind != KernelSignalKind.AnalogNode && kind != KernelSignalKind.AnalogNodeArray &&
@@ -1054,6 +1319,8 @@ private final class ConstructionSession(val options: EmitOptions):
       owner: Long,
       code: String
   ): (DeclarationRef | ExpressionRef, Option[DataType[? <: Data]], String) =
+    validateCollectionDependencies(Vector(input))
+    activeCollection.foreach(region => bindCollectionValue(input, Some(region), owner))
     val reference: DeclarationRef | ExpressionRef = input match
       case candidate: AnyRef =>
         Option(declarationIds.get(candidate))
@@ -1084,6 +1351,15 @@ private final class ConstructionSession(val options: EmitOptions):
         val dimensions = Option.when(lexical)(CandidateRuntime.expressionDataType(input).toVector
           .flatMap(dataType => CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector)
           .flatMap { case values: Seq[?] => values.toVector; case _ => Vector.empty })
+          .orElse(expressionValues.get(expression).filter(value =>
+            DigitalValueConstruction.isDigitalValue(value) || collectionArguments.contains(
+              expression
+            )
+          ).flatMap(CandidateRuntime.expressionDataType).map(dataType =>
+            CandidateRuntime.typeDescriptor(dataType).arguments.lift(1).toVector.flatMap:
+              case values: Seq[?] => values.toVector
+              case _ => Vector.empty
+          ))
           .orElse(shapeViews.get(expression).map(_.dimensions))
           .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
             .map(_.resultDimensions))
@@ -1488,15 +1764,26 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def captureExpression(
       value: AnyRef,
-      structuralOperands: Vector[Any] = Vector.empty
+      structuralOperands: Vector[Any] = Vector.empty,
+      retained: Option[ExpressionRef] = None,
+      scopeOverride: Option[Option[DigitalCollectionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      val scope = scopeOverride.getOrElse(value match
+        case expression: KernelExpr[?] => collectionExpressionScope(expression, retained)
+        case _ =>
+          requireNoCollectionEffect("non-value hardware construction")
+          validateCollectionDependencies(structuralOperands)
+          None)
       validateGeneratedDependencies(value match
         case expression: KernelExpr[?] => expression.operands
         case _ => structuralOperands)
-      val reference = ExpressionRef(module.handle, module.expressionCount)
-      module.expressionCount += 1
+      val reference = retained.getOrElse:
+        val fresh = ExpressionRef(module.handle, module.expressionCount)
+        module.expressionCount += 1
+        fresh
       expressionIds.put(value, reference)
+      scope.foreach(region => expressionRegions.update(reference, region))
       val operands = value match
         case expression: KernelExpr[?] =>
           expressionValues.update(reference, expression)
@@ -2219,6 +2506,7 @@ private final class ConstructionSession(val options: EmitOptions):
         false
 
   def withDomain[A](domain: ClockDomain)(body: => A): A =
+    requireNoCollectionEffect("clock-domain context")
     if !domainIds.containsKey(domain) then
       fail("NODAL-DOMAIN-018", "lexical ClockDomain is outside this transaction")
     domainRef(domain)
@@ -2465,6 +2753,7 @@ private final class ConstructionSession(val options: EmitOptions):
       step: Int | Expr[Integer],
       maximum: Option[Int]
   )(body: Expr[Integer] => Unit): Unit =
+    requireNoCollectionEffect("structural generation")
     val module = currentModule
     val analysis = new StructuralBoundAnalysis(module.handle)
     val lowerBound = analysis(lower)
@@ -2788,6 +3077,7 @@ private final class ConstructionSession(val options: EmitOptions):
       right: Expr[Real],
       options: EquationOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (leftDimension, rightDimension) = requireCompatibleDimensions(
       left,
@@ -2821,6 +3111,7 @@ private final class ConstructionSession(val options: EmitOptions):
       right: Expr[Real],
       options: InitialEquationOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (leftDimension, rightDimension) = requireCompatibleDimensions(
       left,
@@ -2854,6 +3145,7 @@ private final class ConstructionSession(val options: EmitOptions):
       value: Expr[Real],
       options: ContributionOptions
   ): Unit =
+    requireNoCollectionEffect("analog equation or contribution")
     val owner = provisionalModulePath(currentModule.handle)
     val (targetDimension, valueDimension) = requireCompatibleDimensions(
       target,
@@ -3208,6 +3500,8 @@ private final class ConstructionSession(val options: EmitOptions):
     rendered.toString
 
   def operation(kind: String, values: Any*): Unit =
+    requireNoCollectionEffect(s"hardware '$kind' effect")
+    validateCollectionDependencies(values.toVector)
     if kind == "statement" then
       val effect = moduleStack.lastOption.flatMap(module =>
         values.headOption.map(renderAny(_, module.handle))
@@ -3308,8 +3602,9 @@ private final class ConstructionSession(val options: EmitOptions):
       .getOrElse(s"${modulePath(reference.module)}.${declarationName(reference)}")
 
   private def expressionPath(reference: ExpressionRef): String =
-    semanticResult
-      .flatMap(_.expressionPaths.get(reference.module -> reference.index))
+    collectionArguments.get(reference).map: (region, ordinal) =>
+      s"${expressionPath(region.reference)}.arg$ordinal"
+    .orElse(semanticResult.flatMap(_.expressionPaths.get(reference.module -> reference.index)))
       .getOrElse(s"${modulePath(reference.module)}.expr_${reference.index}")
 
   private def instancePath(parent: Long, ordinal: Int): String =
@@ -3356,6 +3651,10 @@ private final class ConstructionSession(val options: EmitOptions):
 
   /** Called only after finish has resolved final names and structural aliases. */
   def selectedReference(value: AnyRef): KernelSelectedReference =
+    if Option(expressionIds.get(value)).exists(expressionRegions.contains) then
+      collectionFailure(
+        "collection body value cannot escape through a selected construction result"
+      )
     val path = selectedPath(value).getOrElse(
       fail("NODAL-SELECTION-050-001", "selected handle is outside this construction transaction")
     )
@@ -4040,12 +4339,20 @@ private final class ConstructionSession(val options: EmitOptions):
         path = if index.conservative.nonEmpty then conservativeEndpointPath(index)
         else expressionPath(index.reference),
         owner = modulePath(index.reference.module),
-        input = inputPath,
+        input = expressionValues.get(index.reference).flatMap(_.operands.headOption)
+          .flatMap(collectionOperandPath(
+            _,
+            expressionRegions.get(index.reference),
+            index.reference.module
+          ))
+          .getOrElse(inputPath),
         indices = index.indices.map(generatedBound),
         resultDimensions =
           index.resultDimensions.map(renderShapeDimension(_, index.reference.module)),
         sourceUses = index.sourceUses.map(use => expressionPath(use._1)).sorted,
-        generatedScope = generatedScopeSnapshot(index.generatedScope)
+        generatedScope = generatedScopeSnapshot(index.generatedScope),
+        region =
+          expressionRegions.get(index.reference).map(value => expressionPath(value.reference))
       )
 
   private def shapeViewSnapshots(): Vector[KernelShapeViewSnapshot] =
@@ -4056,7 +4363,13 @@ private final class ConstructionSession(val options: EmitOptions):
       KernelShapeViewSnapshot(
         path = expressionPath(view.reference),
         owner = modulePath(view.reference.module),
-        input = inputPath,
+        input = expressionValues.get(view.reference).flatMap(_.operands.headOption)
+          .flatMap(collectionOperandPath(
+            _,
+            expressionRegions.get(view.reference),
+            view.reference.module
+          ))
+          .getOrElse(inputPath),
         dimensions = view.dimensions.map(renderShapeDimension(_, view.reference.module)),
         slice = view.slice.map(selection =>
           KernelShapeSliceSnapshot(
@@ -4065,7 +4378,8 @@ private final class ConstructionSession(val options: EmitOptions):
             generatedBound(selection.upperExclusive)
           )
         ),
-        generatedScope = generatedScopeSnapshot(view.generatedScope)
+        generatedScope = generatedScopeSnapshot(view.generatedScope),
+        region = expressionRegions.get(view.reference).map(value => expressionPath(value.reference))
       )
 
   private def relationName(relation: ClockRelation): String =
@@ -4492,13 +4806,21 @@ private final class ConstructionSession(val options: EmitOptions):
       records.valuesIterator.flatMap(
         _.declarations.iterator.flatMap(_.dataType)
       ).toVector ++ interfaces.dataTypes,
-      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots,
+      storageRoots.toVector ++ assignmentRoots.toVector ++ interfaces.valueRoots ++
+        collectionRegions.valuesIterator.flatMap(_.yielded).toVector,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,
       expressions,
-      pathOf,
-      renderType
+      renderType,
+      expression =>
+        Option(expressionIds.get(expression)).flatMap(expressionRegions.get)
+          .map(value => expressionPath(value.reference)),
+      (expression, operand) =>
+        val reference = expressionIds.get(expression)
+        collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
+      ,
+      collectionArguments.keysIterator.map(expressionPath).toSet
     )
 
   private def parameterExpressionSnapshots(
@@ -4679,6 +5001,10 @@ private final class ConstructionSession(val options: EmitOptions):
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
+    val collectionArgumentSources = collectionArguments.keysIterator.flatMap: reference =>
+      semantic.expressionPaths.get(reference.module -> reference.index).flatMap(sourceByPath.get)
+        .map(source => SourceMapEntry(expressionPath(reference), source))
+    .toVector
     val rootSources = operations.iterator.flatMap(_.values.collect {
       case root: InstanceArrayRootRecord => root
     })
@@ -4715,7 +5041,18 @@ private final class ConstructionSession(val options: EmitOptions):
               validateShapeType(dataType, module.handle, cardinality = true, storageContext = true),
             value =>
               if CandidateRuntime.expressionDataType(value).exists(isBoundaryCapability) then
-                validateBoundarySource(value, declaration, resolved)
+                validateBoundarySource(value, declaration, resolved),
+            (left, right) =>
+              val analysis = new StructuralBoundAnalysis(
+                module.handle,
+                "NODAL-DIGITAL-054-001",
+                "digital interface payload"
+              )
+              DigitalEnumContract.sameType(
+                CandidateRuntime.typeDescriptor(left),
+                CandidateRuntime.typeDescriptor(right),
+                Some(analysis.sameIdentity)
+              )
           )
         )
       ).toVector,
@@ -4763,6 +5100,7 @@ private final class ConstructionSession(val options: EmitOptions):
       digitalConnectivity = interfaceCapture.connectivity,
       enumDefinitions = digitalCapture._1,
       digitalExpressions = digitalCapture._2,
+      digitalCollections = collectionSnapshots(),
       root = modulePath(rootHandle),
       rootParameterBindings = rootParameterBindings.toVector.map:
         case (parameter, value) =>
@@ -4788,7 +5126,7 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
+        (semantic.sourceMap ++ collectionArgumentSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
           (edge, record) =>
             edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))
         ) ++ arrayBindings.flatMap((binding, record) =>

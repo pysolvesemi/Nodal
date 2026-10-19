@@ -263,6 +263,9 @@ private[nodal] object ScalaToMlirBridge:
       def dimensions: Vector[String] = record match
         case view: KernelShapeViewSnapshot => view.dimensions
         case index: KernelShapeIndexSnapshot => index.resultDimensions
+      def region: Option[String] = record match
+        case index: KernelShapeIndexSnapshot => index.region
+        case view: KernelShapeViewSnapshot => view.region
       def scope: Option[KernelGeneratedScope] = record match
         case index: KernelShapeIndexSnapshot => index.generatedScope
         case view: KernelShapeViewSnapshot => view.generatedScope
@@ -1315,12 +1318,28 @@ ${indent(body, 2)}
               validatedShapes.get(shape.input) match
                 case Some((owner, dimensions, root, chain)) if owner == shape.owner =>
                   (dimensions, root, chain)
+                case _ if digitalValues.valueOwner(shape.input).contains(shape.owner) =>
+                  digitalValues.requireVisible(shape.input, shape.owner, shape.region, shape.path)
+                  (
+                    vecTypeParts(digitalValues.expressionType(shape.input), shape.path)._2,
+                    None,
+                    Vector.empty[StructuralShapeCoordinates.Projection]
+                  )
                 case _ => fail(
                     shape.code,
-                    "shape input must be an earlier captured shaped result in the same Module",
+                    "shape input must be an owned visible typed value in the same Module",
                     Some(shape.path)
                   )
         validateShapeUse(shape.input, shape.scope, nodeRoot, shape.path)
+        if nodeRoot.isEmpty &&
+          (shape.region.nonEmpty || digitalValues.valueOwner(shape.input).nonEmpty)
+        then digitalValues.requireVisible(shape.input, shape.owner, shape.region, shape.path)
+        if shape.region.nonEmpty && (shape.scope.nonEmpty || nodeRoot.nonEmpty) then
+          fail(
+            shape.code,
+            "collection projections cannot carry structural capabilities",
+            Some(shape.path)
+          )
         if shape.scope.nonEmpty && nodeRoot.isEmpty then
           fail(
             shape.code,
@@ -1719,6 +1738,8 @@ ${indent(body, 2)}
 
       val digitalTypeRoots = snapshot.digitalExpressions.filter(_.owner == module.path)
         .map(value => value.path -> value.dataType) ++
+        snapshot.digitalCollections.filter(_.owner == module.path).flatMap(_.arguments)
+          .map(value => value.path -> value.dataType) ++
         snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
           .map(value => value.path -> value.dataType)
       val digitalStaticRoots = digitalTypeRoots.flatMap: (path, dataType) =>
@@ -1823,6 +1844,11 @@ ${indent(body, 2)}
           scope: Option[KernelGeneratedScope],
           onlyPath: Option[String] = None
       ): Unit =
+        val collectionBody = onlyPath.flatMap(structuralShapesByPath.get).exists(_.region.nonEmpty)
+        val selectorBody = if collectionBody then shapeBody else body
+        val selectorValues = if collectionBody then
+          mutable.LinkedHashMap.empty[String, (String, String)]
+        else shapeStaticValues
         instanceArrayRootsByOwner.getOrElse(
           module.path,
           Vector.empty
@@ -1878,7 +1904,8 @@ ${indent(body, 2)}
           case Some(path) => structuralShapesByPath.get(path).toVector
           case None => structuralShapesByOwner.getOrElse(module.path, Vector.empty)
         selectedShapes.filter(shape =>
-          shape.scope == scope && !renderedShapePaths.contains(shape.path)
+          shape.scope == scope && (shape.region.isEmpty || onlyPath.contains(shape.path)) &&
+            !renderedShapePaths.contains(shape.path)
         ).foreach: shape =>
           shape.dimensions.distinct.filter(expressionsByPath.contains).foreach: dimensionPath =>
             val (_, dataType) = emitStaticValue(
@@ -1923,14 +1950,27 @@ ${indent(body, 2)}
                   result
               (portValue, shapedType, parseType(element, shape.path))
             case None =>
-              emittedShapes.getOrElse(
-                shape.input,
-                fail(
-                  shape.code,
-                  "structural shaped input was not emitted before its consumer",
-                  Some(shape.path)
-                )
-              )
+              shapeValues.get(shape.input).filter(_ =>
+                digitalValues.valueOwner(shape.input).contains(module.path)
+              ) match
+                case Some((value, actualType)) =>
+                  val sourceType = digitalValues.expressionType(shape.input)
+                  val (element, _) = vecTypeParts(sourceType, shape.path)
+                  if actualType != parseType(sourceType, shape.input) then
+                    fail(
+                      shape.code,
+                      "shape input carrier differs from its exact value type",
+                      Some(shape.path)
+                    )
+                  (value, actualType, parseType(element, shape.path))
+                case None => emittedShapes.getOrElse(
+                    shape.input,
+                    fail(
+                      shape.code,
+                      "structural shaped input was not emitted before its consumer",
+                      Some(shape.path)
+                    )
+                  )
           val elementType = elementText
           val conservative = elementType == "!nodal.terminal<\"electrical\">"
           val resultType =
@@ -1942,10 +1982,10 @@ ${indent(body, 2)}
               def staticValue(token: String): (String, String) =
                 token.toLongOption match
                   case Some(literal) =>
-                    shapeStaticValues.getOrElseUpdate(
+                    selectorValues.getOrElseUpdate(
                       s"literal:$literal", {
                         val result = allocateShapeStaticValue()
-                        body += operation(
+                        selectorBody += operation(
                           "nodal.const_literal",
                           results = Vector(result),
                           resultTypes = Vector("i64"),
@@ -1960,6 +2000,12 @@ ${indent(body, 2)}
                       }
                     )
                   case None =>
+                    if collectionBody then
+                      fail(
+                        shape.code,
+                        "collection slice bounds currently require static literals",
+                        Some(view.path)
+                      )
                     val path = shapeDimensionStaticPath(module, token).getOrElse(
                       fail(shape.code, "shape slice value has no static identity", Some(view.path))
                     )
@@ -2046,6 +2092,12 @@ ${indent(body, 2)}
                     )
                     result -> "index"
                   case None =>
+                    if collectionBody then
+                      fail(
+                        shape.code,
+                        "collection index currently requires a static literal",
+                        Some(index.path)
+                      )
                     val value =
                       shapeValues.get(position).filter(_._2 == "i64").getOrElse(emitStaticValue(
                         position,
@@ -2106,12 +2158,12 @@ ${indent(body, 2)}
         if shape.owner != module.path || shape.scope.nonEmpty || shape.isNodeSelection then
           fail("NODAL-BRIDGE-054", "digital projection has invalid scope or capability", Some(path))
         val input = resolve(shape.input)
-        values.update(shape.input, input)
+        val projectionValues = mutable.LinkedHashMap(shape.input -> input)
         val projected = mutable.ArrayBuffer.empty[String]
-        renderShapes(projected, values, None, Some(path))
+        renderShapes(projected, projectionValues, None, Some(path))
         DigitalValueMlir.Projection(
           projected.toVector,
-          values.getOrElse(
+          projectionValues.getOrElse(
             path,
             fail("NODAL-BRIDGE-054", "digital projection has no actual SSA result", Some(path))
           )
@@ -2125,6 +2177,7 @@ ${indent(body, 2)}
         digitalWidthRelation,
         digitalWidthFormula,
         exactDigitalValueType,
+        vecTypeParts,
         renderDigitalDeclarationValue,
         DigitalStorageMlir.initializer,
         path => bridgeMetadata(path, Vector.empty),
@@ -2203,7 +2256,9 @@ ${indent(body, 2)}
         stableLocalSymbol,
         path => bridgeMetadata(path, Vector.empty),
         location,
-        validateInterfaceCapabilitySource
+        validateInterfaceCapabilitySource,
+        (valuePath, expected, usePath) =>
+          exactDigitalValueType(digitalValues.expressionType(valuePath), expected, usePath)
       )
 
       // Keep one canonical static DAG per module: defaults, dimensions and

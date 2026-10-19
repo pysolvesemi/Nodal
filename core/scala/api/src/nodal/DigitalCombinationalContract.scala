@@ -166,13 +166,19 @@ private[nodal] object DigitalCombinationalContract:
       case _ => fail(1, "unsupported digital shift operation")
     emit(operation, result, value, staticOperand(amount))
 
+  /** Shared root capability profile for computed combinational values. Aggregate storage validation
+    * remains with the existing complete-type owner.
+    */
+  def validateValueType(result: KernelTypeDescriptor): Unit =
+    if !Set("Bits", "UInt", "SInt", "Bool", "Enum", "Vec", "Struct").contains(result.kind) then
+      fail(1, "digital selection requires finite digital values or storable digital aggregates")
+    DigitalEnumContract.validateSelectionResult(result)
+
   def select[A <: Data](condition: Expr[Bool], whenTrue: Expr[A], whenFalse: Expr[A]): Expr[A] =
     if descriptor(condition) != KernelTypeDescriptor("Bool") then
       fail(1, "digital selection requires a Bool predicate")
     val result = descriptor(whenTrue)
-    if !Set("Bits", "UInt", "SInt", "Bool", "Enum", "Vec", "Struct").contains(result.kind) then
-      fail(1, "digital selection requires finite digital values or storable digital aggregates")
-    DigitalEnumContract.validateSelectionResult(result)
+    validateValueType(result)
     if !DigitalEnumContract.sameType(result, descriptor(whenFalse)) then
       fail(3, "digital selection branches require identical complete types")
     emit("digital_select", result, condition, whenTrue, whenFalse)

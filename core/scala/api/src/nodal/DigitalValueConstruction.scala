@@ -8,13 +8,25 @@ import scala.collection.mutable
   * transaction.
   */
 private[nodal] object DigitalValueConstruction:
+  def isDigitalValue(expression: KernelExpr[?]): Boolean =
+    expression.literal.nonEmpty || expression.operation.exists(operation =>
+      operation.startsWith(DigitalEnumContract.Prefix) ||
+        DigitalScalarContract.Operations.contains(operation) ||
+        DigitalCombinationalContract.Operations.contains(operation) ||
+        DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
+        DigitalInterfaceContract.ValueOperations.contains(operation) ||
+        operation == DigitalCollectionContract.Operation
+    )
+
   def snapshot(
       declarationTypes: Vector[DataType[?]],
       valueRoots: Vector[Expr[?]],
       projectionPaths: Set[String],
       expressions: Vector[(KernelExpr[?], String, String, Long)],
-      pathOf: Any => Option[String],
-      renderType: (DataType[?], Long) => String
+      renderType: (DataType[?], Long) => String,
+      regionOf: KernelExpr[?] => Option[String],
+      operandPath: (KernelExpr[?], Any) => Option[String],
+      argumentPaths: Set[String]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -69,7 +81,8 @@ private[nodal] object DigitalValueConstruction:
           operation.startsWith(DigitalEnumContract.Prefix) ||
             DigitalScalarContract.Operations.contains(operation) ||
             DigitalCombinationalContract.Operations.contains(operation) ||
-            DigitalInterfaceContract.ValueOperations.contains(operation)
+            DigitalInterfaceContract.ValueOperations.contains(operation) ||
+            operation == DigitalCollectionContract.Operation
         )
       then
         pending.append((expression, 0))
@@ -85,7 +98,8 @@ private[nodal] object DigitalValueConstruction:
         nodes += 1
         if nodes > 65536 then fail("digital expression graph exceeds 65536 nodes")
         if !byExpression.containsKey(expression) then fail("digital operand has no captured owner")
-        if expression.literal.isEmpty then
+        if expression.literal.isEmpty && !argumentPaths.contains(byExpression.get(expression)._1)
+        then
           val operands = if projectionPaths.contains(byExpression.get(expression)._1) then
             expression.operands.take(1)
           else expression.operands
@@ -94,20 +108,15 @@ private[nodal] object DigitalValueConstruction:
             case _ => ()
 
     val snapshots = expressions.collect:
-      case (expression, path, owner, handle) if reachable.containsKey(expression) =>
+      case (expression, path, owner, handle)
+          if reachable.containsKey(expression) && !argumentPaths.contains(path) =>
         val metadata = expression.operands.collect { case value: EnumOperationMetadata => value }
         val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix))
         val isProjection = projectionPaths.contains(path)
         if isEnum && (metadata.size != 1 || expression.operands.lastOption != metadata.headOption)
         then
           fail("enum expression requires one final resolved ABI record")
-        if !isEnum && !isProjection && expression.literal.isEmpty &&
-          !expression.operation.exists(operation =>
-            DigitalScalarContract.Operations.contains(operation) ||
-              DigitalCombinationalContract.Operations.contains(operation) ||
-              DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
-              DigitalInterfaceContract.ValueOperations.contains(operation)
-          )
+        if !isEnum && !isProjection && !isDigitalValue(expression)
         then
           fail("operand expression is outside the implemented typed digital profile")
         if !isEnum && metadata.nonEmpty then fail("non-enum expression carries enum metadata")
@@ -121,7 +130,10 @@ private[nodal] object DigitalValueConstruction:
                 )
                 if captured._2 != owner then fail("digital operand belongs to another module")
               case _ => ()
-            pathOf(operand).getOrElse(fail("digital operand has no semantic identity"))
+            operandPath(
+              expression,
+              operand
+            ).getOrElse(fail("digital operand has no semantic identity"))
         val dataType = CandidateRuntime.expressionDataType(expression).getOrElse(
           fail("digital operand has no exact data type")
         )
@@ -138,6 +150,7 @@ private[nodal] object DigitalValueConstruction:
           renderType(dataType, handle),
           expression.literal.map(_.value),
           metadata.headOption.map(_.abi.identity),
-          metadata.headOption.map(_.caseIds).getOrElse(Vector.empty)
+          metadata.headOption.map(_.caseIds).getOrElse(Vector.empty),
+          regionOf(expression)
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

@@ -2,6 +2,7 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -235,6 +236,10 @@ public:
   LogicalResult expression(Operation *operation) {
     if (!operation->getParentOfType<nodal::ModuleOp>())
       return reject(operation, "enum expression requires an owning nodal module");
+    for (Value operand : operation->getOperands())
+      if (failed(verifyCollectionValueScope(operand, operation)))
+        return reject(operation,
+                      "enum operands require visible owned values and explicit region captures");
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("enum_ref");
     auto ids = operation->getAttrOfType<ArrayAttr>("case_ids");
     auto metadata = operation->getAttrOfType<DictionaryAttr>("metadata");

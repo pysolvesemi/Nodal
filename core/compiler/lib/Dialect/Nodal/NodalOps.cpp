@@ -14,6 +14,7 @@
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
@@ -24,6 +25,7 @@
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
+#include "nodal/Support/BackendCapabilityRegistry.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -310,6 +312,17 @@ bool isStorageType(Type type) {
   if (auto shaped = llvm::dyn_cast<nodal::ShapedType>(type))
     type = shaped.getElementType();
   return llvm::isa<nodal::VariableType>(type);
+}
+
+LogicalResult verifyDigitalShapeValueScope(Operation *operation) {
+  if (!operation->getNumOperands() ||
+      !nodal::isDigitalStorageType(operation->getOperand(0).getType()))
+    return success();
+  for (Value value : operation->getOperands())
+    if (failed(nodal::verifyCollectionValueScope(value, operation)))
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-002: digital projection requires visible owned SSA values");
+  return success();
 }
 
 bool isProceduralShapeProjection(Operation *operation) {
@@ -2012,7 +2025,8 @@ LogicalResult nodal::ModuleOp::verify() {
       failed(verifyDigitalTypeModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation())) ||
-      failed(verifyDigitalValueModel(getOperation())))
+      failed(verifyDigitalValueModel(getOperation())) ||
+      failed(verifyDigitalCollectionModel(getOperation())))
     return failure();
   // Captured region and induction identities are module-local semantic keys.
   // Check each once; independent nested module definitions own their own keys.
@@ -2238,6 +2252,8 @@ LogicalResult nodal::ConstantOp::verify() {
 }
 
 LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
+  if (failed(verifyDigitalShapeValueScope(operation)))
+    return failure();
   auto shaped = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   if (!shaped)
     return operation->emitOpError("NODAL-SHAPE-043-002: input must have !nodal.shaped type");
@@ -2252,14 +2268,19 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
         "NODAL-SHAPE-043-002: index rank is empty or exceeds shaped rank");
   llvm::SmallVector<llvm::StringRef> dimensions;
   shaped.getDimensions().split(dimensions, ',', -1, true);
+  auto module = operation->getParentOfType<nodal::ModuleOp>();
+  const bool digital = nodal::isDigitalStorageType(shaped);
+  auto equalElement = [&](Type left, Type right) {
+    return digital ? nodal::equivalentDigitalStorageTypes(left, right, module) : left == right;
+  };
   if (indices == rank) {
-    if (operation->getResult(0).getType() != shaped.getElementType())
+    if (!equalElement(operation->getResult(0).getType(), shaped.getElementType()))
       return operation->emitOpError(
           "NODAL-SHAPE-043-002: full-rank result must match shaped element type");
   } else {
     auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
     llvm::SmallVector<llvm::StringRef> resultDimensions;
-    if (!result || result.getElementType() != shaped.getElementType())
+    if (!result || !equalElement(result.getElementType(), shaped.getElementType()))
       return operation->emitOpError(
           "NODAL-SHAPE-043-002: prefix result must retain the shaped element type");
     result.getDimensions().split(resultDimensions, ',', -1, true);
@@ -2267,7 +2288,13 @@ LogicalResult nodal::verifyShapeIndexMapping(Operation *operation) {
       return operation->emitOpError(
           "NODAL-SHAPE-043-002: prefix result rank must match the unselected input axes");
     for (unsigned axis = 0; axis < resultDimensions.size(); ++axis)
-      if (resultDimensions[axis].trim() != dimensions[axis + indices].trim())
+      if (digital ? !nodal::equivalentDigitalStorageTypes(
+                        nodal::ShapedType::get(operation->getContext(), resultDimensions[axis],
+                                               shaped.getElementType()),
+                        nodal::ShapedType::get(operation->getContext(), dimensions[axis + indices],
+                                               shaped.getElementType()),
+                        module)
+                  : resultDimensions[axis].trim() != dimensions[axis + indices].trim())
         return operation->emitOpError(
             "NODAL-SHAPE-043-002: prefix result dimensions must match the unselected input axes");
   }
@@ -2362,6 +2389,8 @@ LogicalResult nodal::ShapeFlattenOp::verify() {
 }
 
 LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
+  if (failed(verifyDigitalShapeValueScope(operation)))
+    return failure();
   if (failed(requireText(operation, "dimensions", "dimensions")) ||
       failed(requireText(operation, "origin", "origin")) ||
       failed(requireText(operation, "materialization", "materialization")) ||
@@ -2382,7 +2411,12 @@ LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
 
   auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
-  if (!input || !result || input.getElementType() != result.getElementType())
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
+  const bool digital = input && nodal::isDigitalStorageType(input);
+  if (!input || !result ||
+      (digital ? !nodal::equivalentDigitalStorageTypes(input.getElementType(),
+                                                       result.getElementType(), owner)
+               : input.getElementType() != result.getElementType()))
     return operation->emitOpError(
         "NODAL-SHAPE-043-003: fixed shape view requires shaped input/result with equal element "
         "types");
@@ -2402,9 +2436,13 @@ LogicalResult nodal::verifyShapeViewMapping(Operation *operation) {
     return operation->emitOpError(
         "NODAL-SHAPE-043-003: fixed shape view requires structural storage intent");
 
-  auto owner = operation->getParentOfType<nodal::ModuleOp>();
   if (!owner)
     return operation->emitOpError("NODAL-SHAPE-043-003: shape view requires an owning module");
+  const std::string inputIdentity =
+      digital ? nodal::digitalValueSemanticPath(operation->getOperand(0)) : std::string();
+  if (!inputIdentity.empty() && textAttr(operation, "origin") != inputIdentity)
+    return operation->emitOpError(
+        "NODAL-SHAPE-043-003: digital view origin must match its actual input identity");
   auto shapeSignature = [&](llvm::StringRef dimensions)
       -> std::optional<std::pair<uint64_t, std::multiset<std::string>>> {
     llvm::SmallVector<llvm::StringRef> tokens;
@@ -2550,13 +2588,24 @@ LogicalResult nodal::ShapeViewOp::verify() {
 }
 
 LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
+  if (failed(verifyDigitalShapeValueScope(operation)))
+    return failure();
   auto input = llvm::dyn_cast<nodal::ShapedType>(operation->getOperand(0).getType());
   auto result = llvm::dyn_cast<nodal::ShapedType>(operation->getResult(0).getType());
-  if (!input || !result || input.getElementType() != result.getElementType())
+  auto owner = operation->getParentOfType<nodal::ModuleOp>();
+  const bool digital = input && nodal::isDigitalStorageType(input);
+  if (!input || !result ||
+      (digital ? !nodal::equivalentDigitalStorageTypes(input.getElementType(),
+                                                       result.getElementType(), owner)
+               : input.getElementType() != result.getElementType()))
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice requires shaped input/result with equal element types");
-  auto owner = operation->getParentOfType<nodal::ModuleOp>();
   Operation *source = operation->getOperand(0).getDefiningOp();
+  const bool structuralSource =
+      source &&
+      llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::TerminalArrayOp, nodal::ShapeIndexOp,
+                nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) &&
+      (!llvm::isa<nodal::ShapeViewOp>(source) || textAttr(source, "materialization") == "view");
   const bool procedural = isProceduralShapeProjection(operation);
   const bool conservative = llvm::isa<nodal::TerminalType>(input.getElementType());
   if (procedural) {
@@ -2571,12 +2620,17 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
         failed(verifyGeneratedStructuralOwnership(operation)))
       return operation->emitOpError(
           "NODAL-SHAPE-043-004: conservative slice requires an owned visible structural input");
+  } else if (digital) {
+    // Existing structural roots retain their checked identity. Additional
+    // computed roots come from the shared digital capability registry, rather
+    // than granting every shaped neutral operation readable-value authority.
+    if (!owner || failed(nodal::verifyCollectionValueScope(operation->getOperand(0), operation)) ||
+        (source && !structuralSource &&
+         !nodal::isDigitalBackendOperation(source->getName().getStringRef())))
+      return operation->emitOpError(
+          "NODAL-SHAPE-043-004: digital slice requires a visible owned readable value");
   } else if (!owner || operation->getParentOp() != owner || !source ||
-             source->getParentOp() != owner ||
-             !llvm::isa<nodal::PortValueOp, nodal::NodeArrayOp, nodal::TerminalArrayOp,
-                        nodal::ShapeIndexOp, nodal::ShapeViewOp, nodal::ShapeSliceOp>(source) ||
-             (llvm::isa<nodal::ShapeViewOp>(source) &&
-              textAttr(source, "materialization") != "view"))
+             source->getParentOp() != owner || !structuralSource)
     return operation->emitOpError(
         "NODAL-SHAPE-043-004: slice input requires a directly owned structural shape value");
 
@@ -2591,7 +2645,10 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   auto ownedPath = [&](llvm::StringRef path) {
     return path == path.trim() && path.starts_with(ownerPrefix) && path.size() > ownerPrefix.size();
   };
-  llvm::StringRef sourcePath = metadataSemanticPath(source);
+  const std::string sourceIdentity = nodal::isDigitalStorageType(input)
+                                         ? nodal::digitalValueSemanticPath(operation->getOperand(0))
+                                         : metadataSemanticPath(source).str();
+  llvm::StringRef sourcePath = sourceIdentity;
   llvm::StringRef resultPath = metadataSemanticPath(operation);
   if ((!procedural && (!storage || storage.getValue() != "structural" || !access ||
                        access.getValue() != "read_only")) ||
@@ -2603,7 +2660,7 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   for (Operation &candidate : conservative ? *operation->getBlock() : owner->getRegion(0).front())
     if (&candidate != operation && metadataSemanticPath(&candidate) == resultPath)
       return operation->emitOpError("NODAL-SHAPE-043-004: slice semantic identity must be unique");
-  if (llvm::isa<nodal::PortValueOp>(source)) {
+  if (llvm::isa_and_nonnull<nodal::PortValueOp>(source)) {
     auto port = source->getAttrOfType<FlatSymbolRefAttr>("port");
     Operation *declaration = nullptr;
     for (Operation &candidate : owner->getRegion(0).front())
@@ -2673,8 +2730,13 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation) {
   };
   auto staticBounds = [&](Value value) -> FailureOr<nodal::ParameterIntegerBounds> {
     llvm::SmallPtrSet<Operation *, 16> active;
+    const bool localDigitalSelector =
+        nodal::isDigitalStorageType(input) &&
+        operation->getParentOp()->getName().getStringRef() == "nodal.collection" &&
+        llvm::isa_and_nonnull<nodal::ConstLiteralOp>(value.getDefiningOp()) &&
+        succeeded(nodal::verifyCollectionValueScope(value, operation));
     if (!value.getType().isInteger(64) ||
-        !hasStaticShapeIndexDependencies(value, owner, active, 0, true))
+        !hasStaticShapeIndexDependencies(value, owner, active, 0, !localDigitalSelector))
       return failure();
     if (llvm::isa<nodal::ConstExprOp>(value.getDefiningOp())) {
       llvm::StringRef path = metadataSemanticPath(value.getDefiningOp());
@@ -3750,6 +3812,14 @@ LogicalResult nodal::MemoryOp::verify() { return verifyDigitalMemoryOperation(ge
 
 LogicalResult nodal::DigitalAssignOp::verify() {
   return verifyDigitalAssignmentOperation(getOperation());
+}
+
+LogicalResult nodal::CollectionOp::verify() {
+  return verifyDigitalCollectionOperation(getOperation());
+}
+
+LogicalResult nodal::CollectionYieldOp::verify() {
+  return verifyDigitalCollectionYield(getOperation());
 }
 
 LogicalResult nodal::DigitalExprOp::verify() { return verifyDigitalValueOperation(getOperation()); }

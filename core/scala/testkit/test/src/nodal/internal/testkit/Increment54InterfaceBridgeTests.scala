@@ -29,6 +29,42 @@ final class InterfaceSymbolicBridgeSource extends Module:
   endpoint.driveMember("data", input)
   inverted.observeMember("data")
 
+final class InterfaceCombinationalWidthSource(invalid: Boolean = false) extends Module:
+  val core = ClockDomain.external(
+    "core",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val width = param(4.integer, range = 1 to 8)
+  val other = param(4.integer, range = 1 to 8)
+  val input = in(UInt(if invalid then other else width))
+  val enable = in(Bool)
+  val definition = Interface[InterfaceCaptureLink](
+    "CombinationalPayload",
+    InterfaceMember.value("data", UInt(width + 1.integer))
+  )
+  val endpoint = interfacePort(
+    definition,
+    Role[SourceRole]("source", RoleAccess.Out("data")),
+    "endpoint",
+    core
+  )
+  val pad = digitalInout(
+    UInt(width + 1.integer),
+    DriveMode.pushPull,
+    InoutPlacement.TopLevelPin,
+    ResolutionProfile.PortableBoundaryOnly,
+    "pad"
+  )
+  val sum = input + input
+  endpoint.driveMember("data", sum)
+  pad.drive(sum, enable)
+
+final class InterfaceCombinationalChildSource extends Module:
+  val child = instance(new InterfaceCombinationalWidthSource)
+
 final class InterfaceMixedDeclarationBridgeSource extends Module:
   val core = ClockDomain.external(
     "core",
@@ -389,6 +425,27 @@ object Increment54InterfaceBridgeTests extends TestSuite:
       assert(document.text.contains("\"nodal.const_expr\""))
       assert(!document.text.contains("lane_0"))
       assert(document == ScalaToMlirBridge.lower(new InterfaceSymbolicBridgeSource))
+
+    test("combinational symbolic payloads retain canonical type through interface and net drives"):
+      val captured = ConstructionKernel.inspect(new InterfaceCombinationalWidthSource)
+      val document = ScalaToMlirBridge.fromSnapshot(captured)
+      assert(document.text.contains("digital_add"))
+      assert(document.text.contains("nodal.interface_drive"))
+      assert(document.text.contains("nodal.net_drive"))
+      val directory = Path.of(".work", "increment55-interface-payload").toAbsolutePath
+      Files.createDirectories(directory)
+      assert(verified(document, directory).contains("nodal.interface_drive"))
+      val child = ScalaToMlirBridge.lower(new InterfaceCombinationalChildSource)
+      val childDirectory = directory.resolve("child")
+      Files.createDirectories(childDirectory)
+      assert(verified(child, childDirectory).contains("nodal.interface_drive"))
+
+      val rejected = scala.util.Try(
+        ConstructionKernel.inspect(new InterfaceCombinationalWidthSource(true))
+      ).failed.get
+      assert(rejected.isInstanceOf[ConstructionException])
+      assert(rejected.asInstanceOf[ConstructionException].diagnostic.code ==
+        "NODAL-INTERFACE-054-008")
 
     test("interface-only payload widths retain owned compound roots and reject invalid bounds"):
       val captured = ConstructionKernel.inspect(new InterfaceOnlyWidthSource(false))

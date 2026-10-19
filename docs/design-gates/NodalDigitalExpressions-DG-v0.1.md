@@ -63,9 +63,12 @@ arity, operand ownership, exact width DAGs, result types and literal index/shift
 obligations. Ordinary Bool operations enter this graph only through actual digital
 roots; matching an operation name cannot reclassify an analog effect graph.
 
-This first contract does not choose division-by-zero, dynamic-shift, collection
-recurrence or loop-lowering policies implicitly. Those remaining F55 obligations
-stay open until their explicit contract and implementation are added. No target
+Division/remainder and numeric minimum/maximum follow the additive
+[arithmetic contract](NodalDigitalArithmetic-DG-v0.2.md); their implementation remains
+open. Static shifts satisfy the frozen Int-amount surface; runtime amounts remain
+explicitly unsupported, rather than an inferred new overload requirement. Collection
+recurrence and loop lowering remain open until their contracts and implementation
+are added. No target
 HDL execution, timing, CDC or state update behavior is claimed here.
 
 ## Alternatives and checks

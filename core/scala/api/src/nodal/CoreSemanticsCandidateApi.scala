@@ -74,9 +74,25 @@ extension [A <: Data](value: Expr[Vec[A]])
   def reshape(dimensions: Dimension*): Expr[Vec[A]] =
     CandidateRuntime.shapeView(value, dimensions.toVector)
   def map[B <: Data](function: Expr[A] => Expr[B]): Expr[Vec[B]] =
-    CandidateRuntime.expr(value, function, "map")
+    DigitalCollectionContract.map(value, function)
+  def zipWith[B <: Data, C <: Data](other: Expr[Vec[B]])(
+      function: (Expr[A], Expr[B]) => Expr[C]
+  ): Expr[Vec[C]] = DigitalCollectionContract.zipWith(value, other, function)
+  def fold[B <: Data](initial: Expr[B])(
+      function: (Expr[B], Expr[A]) => Expr[B]
+  ): Expr[B] = DigitalCollectionContract.fold(value, initial, function, scan = false)
+    .asInstanceOf[Expr[B]]
+  def scan[B <: Data](initial: Expr[B])(
+      function: (Expr[B], Expr[A]) => Expr[B]
+  ): Expr[Vec[B]] = DigitalCollectionContract.fold(value, initial, function, scan = true)
+    .asInstanceOf[Expr[Vec[B]]]
   def zip[B <: Data](other: Expr[Vec[B]]): Expr[Vec[A]] =
-    CandidateRuntime.expr(value, other, "zip")
+    val _ = other
+    DigitalCollectionContract.fail(
+      4,
+      "inert zip cannot represent both operands; migrate to zipWith",
+      ConstructionKernel.referencePath(value)
+    )
   def reduce(function: (Expr[A], Expr[A]) => Expr[A]): Expr[A] =
     CandidateRuntime.expr(value, function, "reduce")
 

@@ -800,6 +800,18 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.collection",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.collection_yield",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.component_contract",
         "feature": "partial-topology-records",
         "domain": "analog",

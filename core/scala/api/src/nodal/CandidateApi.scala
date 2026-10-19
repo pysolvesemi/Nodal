@@ -1234,7 +1234,7 @@ private[nodal] object CandidateRuntime:
       AnalogProceduralConstruction.requireContinuousContext("structural declaration")
     ConstructionKernel.declare(value, kind, dataType, explicitName, domain, attributes)
 
-  private def dataTypeFromDescriptor(
+  private[nodal] def dataTypeFromDescriptor(
       descriptor: KernelTypeDescriptor
   ): DataType[? <: Data] = descriptor.kind match
     case "Real" => Real

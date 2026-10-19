@@ -165,7 +165,11 @@ private[nodal] object DigitalEnumContract:
   def abi(value: Expr[?]): ResolvedEnumAbi = abi(descriptor(value))
 
   /** Exact structural identity, excluding enum policy/provenance when the actual ABI agrees. */
-  def sameType(left: KernelTypeDescriptor, right: KernelTypeDescriptor): Boolean =
+  def sameType(
+      left: KernelTypeDescriptor,
+      right: KernelTypeDescriptor,
+      integerIdentity: Option[(Dimension, Dimension) => Boolean] = None
+  ): Boolean =
     val memo =
       new java.util.IdentityHashMap[AnyRef, java.util.IdentityHashMap[AnyRef, java.lang.Boolean]]()
     var examined = 0
@@ -188,7 +192,10 @@ private[nodal] object DigitalEnumContract:
     def sameDimension(left: Dimension, right: Dimension): Boolean =
       // Reuse the construction owner's checked, interned static algebra. Parameter identity and
       // ordered operation trees remain exact; neither defaults nor equal intervals are evidence.
-      ConstructionKernel.sameStaticInteger(left, right).getOrElse(
+      integerIdentity.map(_(
+        left,
+        right
+      )).orElse(ConstructionKernel.sameStaticInteger(left, right)).getOrElse(
         literal(left).exists(value => literal(right).contains(value))
       )
     def same(a: Any, b: Any, depth: Int): Boolean =

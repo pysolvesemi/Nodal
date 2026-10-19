@@ -712,7 +712,10 @@ LogicalResult Model::effect(Operation *operation) {
             "Interface drive requires scalar push-pull; constrained nets use explicit drivers");
       expected = net.getElementType();
     }
-    if (operation->getOperand(1).getType() != expected ||
+    if (!(isDigitalControlBoundaryType(expected)
+              ? operation->getOperand(1).getType() == expected
+              : equivalentDigitalStorageTypes(operation->getOperand(1).getType(), expected,
+                                              module)) ||
         failed(localValue(operation->getOperand(1), operation)))
       return reject(operation, "Interface drive value must have the exact owned member type");
     if (isDigitalControlBoundaryType(expected)) {
@@ -884,7 +887,8 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
   if (conditional) {
     if ((net.mode != "push_pull" && net.mode != "open_source") ||
         text(operation, "mode") != net.mode ||
-        operation->getOperand(2).getType() != type.getElementType() ||
+        !equivalentDigitalStorageTypes(operation->getOperand(2).getType(), type.getElementType(),
+                                       module) ||
         failed(localValue(operation->getOperand(2), operation)))
       return reject(operation,
                     "conditional value drive requires permitted mode and exact owned value type");

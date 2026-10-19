@@ -114,7 +114,27 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     dataType: String,
     literal: Option[String],
     enumIdentity: Option[String],
-    caseIds: Vector[String]
+    caseIds: Vector[String],
+    region: Option[String] = None
+)
+
+private[nodal] final case class KernelDigitalRegionArgument(
+    path: String,
+    dataType: String,
+    role: String
+)
+
+private[nodal] final case class KernelDigitalCollectionSnapshot(
+    path: String,
+    owner: String,
+    parentRegion: Option[String],
+    kind: String,
+    inputs: Vector[String],
+    seed: Option[String],
+    captures: Vector[String],
+    arguments: Vector[KernelDigitalRegionArgument],
+    yieldValue: String,
+    dataType: String
 )
 
 private[nodal] final case class KernelDigitalAssignmentSnapshot(
@@ -145,7 +165,8 @@ private[nodal] final case class KernelShapeIndexSnapshot(
     indices: Vector[String],
     resultDimensions: Vector[String] = Vector.empty,
     sourceUses: Vector[String] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    region: Option[String] = None
 )
 
 private[nodal] final case class KernelShapeSliceSnapshot(
@@ -160,7 +181,8 @@ private[nodal] final case class KernelShapeViewSnapshot(
     input: String,
     dimensions: Vector[String],
     slice: Option[KernelShapeSliceSnapshot] = None,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    region: Option[String] = None
 )
 
 private[nodal] final case class KernelModuleSnapshot(
@@ -316,7 +338,8 @@ private[nodal] final case class ConstructionSnapshot(
     digitalExpressions: Vector[KernelDigitalExpressionSnapshot] = Vector.empty,
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
-    digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty
+    digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
+    digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty
 )
 
 /** Immutable selected facts. Operand tags prevent authored strings from posing as references. */
@@ -483,6 +506,20 @@ private final case class Operation(
     generatedScope: Option[GeneratedRegionRecord] = None,
     source: Option[SourceSpan] = None
 )
+
+/** Mutable lexical capture state owned exclusively by ConstructionSession. */
+private final class DigitalCollectionRecord(
+    val reference: ExpressionRef,
+    val parent: Option[DigitalCollectionRecord],
+    val kind: String,
+    val inputs: Vector[Expr[?]],
+    val seed: Option[Expr[?]]
+):
+  val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
+  val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
+    mutable.LinkedHashMap.empty
+  var yielded: Option[Expr[?]] = None
+  var result: Option[KernelExpr[?]] = None
 
 private final class AnalogRegionRecord(
     val module: Long,

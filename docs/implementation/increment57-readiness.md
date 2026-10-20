@@ -1485,3 +1485,36 @@ Hashes and native logs: `.work/waiver-relation-global-fix/`; source log:
 `.work/owned-waiver-source-final-tests.log`. The known global frequency gap is
 resolved. Fresh eleven-witness source emission also passed; final native/HDL
 replay and event execution remain open. No CI or broad qualification ran.
+
+### Owned waiver selected-scope acceptance
+
+The final regenerated source selection passes **58/58** groups: waiver 8,
+relationship 46 and reproducibility 4. All **10** positive actual Scala-to-native
+witnesses admit, including hierarchical and transitive lineage cases; the forged
+source-domain witness rejects with `NODAL-CDC-001`. Hierarchical target lowering
+still rejects transactionally with `NODAL-CIRCT-056-001`, without partial output.
+The same regenerated scalar UInt(8), Bool, Vec(UInt(3),2), nested UInt(8) and
+escaped-text Bool witnesses pass **180/180** actual Icarus identity samples,
+including X/Z with clocks held. Target inspection confirms exact waiver count,
+escaped retained obligations and no invented state, reset or assertions.
+
+Replay uses the repaired immutable compiler
+`.work/waiver-relation-global-fix/frozen/nodalc`, SHA256
+`1aa6f3f5486b6ad1f85db96ba471f751478ee8c05fb5cc84dc51d4cfdaab676f`.
+It was linked from the tested checkpoint's existing objects/archives while all
+64 link inputs remained hash-identical; concurrent event source edits were not
+compiled into that binary. Source/native receipts are
+`.work/owned-waiver-source-native-final/results.json`, actual HDL and waveform
+logs are `.work/owned-waiver-source-target-final/`, and the maintained reproduction
+runner is `tests/scala/owned-waivers/run_target.py`.
+
+Implemented architecture matches the approved v0.9 gate: one executable source
+record, derived reporting, canonical fixed-whole ABI, independent native ingress,
+shared mode-aware sampling/lineage and immutable relationship query, and ordinary
+identity target transport. The waiver is never a synchronizer, physical safety
+certificate, delivery guarantee or reset exemption. Existing graph work budgets
+and visited identities bound traversal; no broad performance improvement is
+claimed. This completes the selected waiver scope, including its reporting and
+global frequency prerequisites. Root event execution, remaining representative
+scale review and final F57 integration remain open. No CI or broad qualification
+ran; remote publication remains separately pending approval.

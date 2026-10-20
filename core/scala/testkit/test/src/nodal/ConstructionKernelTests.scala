@@ -110,7 +110,7 @@ final class KernelTop extends Module:
 
   root:
     val counter = Reg(0.U(8))
-    counter := counter + 1.U(8)
+    counter := (counter + 1.U(8)).truncate(8)
     val leaf = instance(new KernelLeaf)
     leaf.domain(root)
 
@@ -179,13 +179,15 @@ object ConstructionKernelTests extends TestSuite:
       assert(
         leaf.declarations.exists(declaration =>
           declaration.kind == "register" &&
-            declaration.domain.contains("KernelTop.root")
+            declaration.domain.contains("KernelTop.leaf.core") &&
+            declaration.resolvedDomain.contains("KernelTop.root")
         )
       )
       assert(
         leaf.declarations.exists(declaration =>
           declaration.kind == "memory" &&
-            declaration.domain.contains("KernelTop.root")
+            declaration.domain.contains("KernelTop.leaf.core") &&
+            declaration.resolvedDomain.contains("KernelTop.root")
         )
       )
 

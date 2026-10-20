@@ -106,3 +106,11 @@ object Increment57HierarchySourceTests extends TestSuite:
           )
     test("initialized child cannot bind resetless domain"):
       assert(scala.util.Try(ConstructionKernel.inspect(new HierarchyResetlessFailure)).isFailure)
+
+    test("requirements sharing an actual retain the exact sampled local endpoint"):
+      val snapshot = ConstructionKernel.inspect(new Increment57HierarchyExactSource)
+      val child = snapshot.modules.find(_.className == "Increment57HierarchyExactSourceLeaf").get
+      val crossing = snapshot.digitalExpressions.flatMap(_.crossing).head
+      assert(crossing.sourceDomain == child.domains.find(_.name == "source").get.path)
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.contains("source_domain = @\"source\""))

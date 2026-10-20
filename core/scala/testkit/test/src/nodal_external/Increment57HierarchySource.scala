@@ -130,3 +130,44 @@ final class Increment57HierarchyParentCrossingSource extends Module:
   destination:
     val output = out(Bool)
     output := child(_.outputPort.get)
+
+/** Two distinct requirements can bind one actual without losing the sampled local endpoint. */
+final class Increment57HierarchyExactSourceLeaf extends Module:
+  val alias = ClockDomain.required("alias")
+  val source = ClockDomain.required("source")
+  val destination = ClockDomain.required("destination")
+  var inputPort = Option.empty[Signal[Bool]]
+  var outputPort = Option.empty[Signal[Bool]]
+  source:
+    val input = in(Bool)
+    inputPort = Some(input)
+  destination:
+    val output = out(Bool)
+    output := Cdc.sync(inputPort.get, to = destination, stages = 2)
+    outputPort = Some(output)
+
+final class Increment57HierarchyExactSource extends Module:
+  val source = ClockDomain.external(
+    "source",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val destination = ClockDomain.external(
+    "destination",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    20.MHz
+  )
+  var inputValue = Option.empty[Signal[Bool]]
+  source:
+    val input = in(Bool)
+    inputValue = Some(input)
+  val child = instance(new Increment57HierarchyExactSourceLeaf)
+    .domain(_.alias, source).domain(_.source, source).domain(_.destination, destination)
+  child(_.inputPort.get) := inputValue.get
+  destination:
+    val state = Reg(false.B)
+    state := child(_.outputPort.get)

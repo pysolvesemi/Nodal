@@ -20,3 +20,4 @@ object Increment57HierarchyReplay:
     save("parent-crossing", new Increment57HierarchyParentCrossingSource)
     save("siblings", new HierarchyBridgeRepeatedBindings)
     save("siblings-resetless", new HierarchyBridgeRepeatedBindings(resetlessSecond = true))
+    save("exact-source-requirement", new Increment57HierarchyExactSource)

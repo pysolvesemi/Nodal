@@ -1226,3 +1226,30 @@ independently discharge every reachable occurrence, and unsupported hierarchy
 target export must reject transactionally rather than silently flatten or omit
 behavior. Those checks and directly affected source predecessors remain pending.
 All coarse F57 items remain open; no CI or broad qualification ran.
+
+### Hierarchy source identity and predecessor repair
+
+Source sampling now retains the authored local requirement identity separately
+from the concrete resolved domain, including multiple requirements bound to one
+actual domain. Physical aliases remain equivalent for actual source attribution;
+there is no first-match reconstruction of a local endpoint. Finish-time UInt
+checks use the actual declaration owner rather than an inactive construction
+scope. A predecessor fixture now explicitly truncates its widened UInt addition,
+without weakening exact assignment typing; hierarchy snapshots distinguish local
+requirements from resolved parent bindings.
+
+The frozen eight-file follow-up passes **145/145** focused source checks in
+`.work/hierarchy-source-tests5.log`, including hierarchy negatives, exact alias
+transport, ConstructionKernel and selected relationship/reset/owned-clock and
+crossing predecessors. Separately, the previously run **84** analog/bridge and
+sequential-capture predecessor cases pass; these selections are not asserted to
+be disjoint. Exact follow-up hashes are in
+`.work/hierarchy-source-followup.sha256`.
+
+Representative construction checks exercise 48 typed siblings (49 modules),
+10 nested modules, and rejection at the declared 129-level bound. Observed local
+snapshot/bridge times were approximately 1120/395 ms and 126/69 ms respectively;
+these are bounded examples, not a general performance claim. The ninth actual
+alias witness and final native contextual checkpoint remain pending. Independent
+unused-output/Interface observation coverage is a separate required follow-on;
+this source checkpoint does not claim it. No CI or broad qualification ran.

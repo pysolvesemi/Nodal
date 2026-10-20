@@ -57,6 +57,7 @@ final class BridgeTop extends Module:
     val child = instance(new BridgeLeaf)
     child.domain(root)
     child.param(_.width, 12.U(8))
+    child(_.input) := input
     output := input
 
 final class BridgeHierarchyLeaf(gain: Param[Real] = 2.0) extends Module:
@@ -185,6 +186,10 @@ object ScalaToMlirBridgeTests extends TestSuite:
       assert(first.text.contains("parameter_bindings"))
       assert(first.text.contains("domain_bindings = {core = @root}"))
       assert(!first.text.contains("\"nodal.domain_bind\""))
+      assert(occurrences(first.text, "\"nodal.requirement_clock\"") == 1)
+      assert(occurrences(first.text, "\"nodal.requirement_reset\"") == 1)
+      assert(occurrences(first.text, "\"nodal.instance_domain_binding\"") == 1)
+      assert(occurrences(first.text, "\"nodal.instance_port\"") == 1)
       assert(first.text.contains("nodal.bridge.declarations"))
       assert(first.text.contains("nodal.bridge.origins"))
       assert(first.text.contains("loc(\""))

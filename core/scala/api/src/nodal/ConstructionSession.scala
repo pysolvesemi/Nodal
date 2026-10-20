@@ -55,6 +55,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       depth: Option[Int] = None,
       var results: Vector[(ExpressionRef, String)] = Vector.empty,
       var sourceDomain: Option[String] = None,
+      var sourceEndpoint: Option[DomainRef] = None,
       var destinationDomain: Option[String] = None
   ):
     def sourceInputs: Vector[Expr[?]] = Vector(input) ++ valid
@@ -295,18 +296,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         expressionIds.get(expression),
         crossingFailure("crossing requires its actual owned construction record")
       )
-      val actualSource =
-        record.sourceDomain.getOrElse(crossingFailure("crossing source is unresolved"))
-      val owner = expressionIds.get(expression).module
-      val candidates = records(owner).domains.filter(domain =>
-        occurrenceDomains.get(domain.reference).contains(actualSource)
+      val source = record.sourceEndpoint.getOrElse(
+        crossingFailure("crossing source lost its exact local endpoint identity")
       )
-      val source = candidates.find(domain => domainPath(domain.reference) == actualSource).orElse(
-        Option.when(candidates.size == 1)(candidates.head)
-      )
-        .getOrElse(crossingFailure("crossing source requires one exact local endpoint identity"))
       Some(KernelExecutableCrossingSnapshot(
-        domainPath(source.reference),
+        domainPath(source),
         domainPath(domainRef(record.destination)),
         record.stages,
         record.kind,
@@ -2561,7 +2555,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         sources: Set[DeclarationRef | ExpressionRef],
         crossings: Set[ExpressionRef],
         pulseClassified: Boolean = false,
-        externalSources: Set[DeclarationRef] = Set.empty
+        externalSources: Set[DeclarationRef] = Set.empty,
+        localEndpoints: Set[DomainRef] = Set.empty
     )
     val sampleCache =
       mutable.HashMap.empty[(Long, Boolean, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
@@ -2589,8 +2584,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         facts.iterator.flatMap(_.domains).toSet,
         facts.iterator.flatMap(_.sources).toSet,
         facts.iterator.flatMap(_.crossings).toSet,
-        facts.exists(_.pulseClassified)
+        facts.exists(_.pulseClassified),
+        localEndpoints = facts.iterator.flatMap(_.localEndpoints).toSet
       )
+    def exactSourceEndpoint(facts: SampleFacts, owner: Long, actual: String): DomainRef =
+      // Physical sampling facts and authored local endpoint identity are separate. In particular,
+      // two requirements can bind one actual without becoming interchangeable source symbols.
+      val endpoints = if facts.localEndpoints.nonEmpty then facts.localEndpoints.toVector
+      else
+        records(owner).domains.filter(domain =>
+          resolved.get(domain.reference).contains(actual)
+        ).map(_.reference).toVector
+      if endpoints.size != 1 || !resolved.get(endpoints.head).contains(actual) then
+        crossingFailure("crossing source requires one exact local endpoint identity")
+      endpoints.head
     def sourceDomain(reference: ExpressionRef, crossing: ExecutableCrossing): String =
       crossing.sourceDomain.getOrElse:
         // Infer through source-owned ready results in the same bounded worklist. A real payload
@@ -2605,6 +2612,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
         val result = facts.domains.head
         crossing.sourceDomain = Some(result)
+        crossing.sourceEndpoint = Some(exactSourceEndpoint(facts, reference.module, result))
         result
     def sampleFacts(
         value: Any,
@@ -2630,6 +2638,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             pending.append((next, context))
         val visited = mutable.HashMap.empty[Long, IdentityHashMap[AnyRef, java.lang.Boolean]]
         val domains = mutable.HashSet.empty[String]
+        val localEndpoints = mutable.HashSet.empty[DomainRef]
+        def retainEndpoint(initial: DomainRef): Unit =
+          var endpoint = initial
+          var depth = 0
+          while endpoint.module != owner && selectedRequirementBindings.contains(endpoint) do
+            depth += 1
+            if depth > 128 then crossingFailure("source endpoint forwarding exceeds depth budget")
+            endpoint = selectedRequirementBindings(endpoint)._1
+          if endpoint.module == owner then localEndpoints += endpoint
+        def retainDeclarationEndpoint(declaration: DeclarationRecord): Unit =
+          localDeclarationDomain(declaration, resolved).foreach(path =>
+            retainEndpoint(domainsByPath(path).reference)
+          )
         val externalSources = mutable.HashSet.empty[DeclarationRef]
         val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
         val crossings = mutable.HashSet.empty[ExpressionRef]
@@ -2663,6 +2684,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                     )
                   case Some(_) => enqueue(drivers)
                   case None if parentInputReferences.contains(declarationRef) =>
+                    retainDeclarationEndpoint(declaration)
                     val proxy = parentInputReferences(declarationRef)
                     enqueue(
                       Vector(records(proxy.module).declarations(proxy.index).value),
@@ -2695,6 +2717,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       )(declaration.kind)
                     then crossingFailure("wire/output dependency has no actual driver")
                     domains ++= sourceDomain
+                    if sourceDomain.nonEmpty then retainDeclarationEndpoint(declaration)
                     val externalControl = allowExternalControl && sourceDomain.isEmpty &&
                       declaration.kind == KernelSignalKind.Input && declaration.dataType.exists(t =>
                         CandidateRuntime.typeDescriptor(t) == KernelTypeDescriptor("Bool")
@@ -2726,8 +2749,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   sourceRoots += crossing.identity(expressionRef.get)
                   if crossing.role(expressionRef.get) == "ready" then
                     if inferSourceOwnership then enqueue(crossing.sourceInputs)
-                    else domains += sourceDomain(expressionRef.get, crossing)
+                    else
+                      domains += sourceDomain(expressionRef.get, crossing)
+                      crossing.sourceEndpoint.foreach(retainEndpoint)
                   else
+                    retainEndpoint(domainRef(crossing.destination))
                     domains += resolved.getOrElse(
                       domainRef(crossing.destination),
                       crossingFailure("crossing destination has no actual resolved domain")
@@ -2753,7 +2779,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                     case memory: MemoryPortCapture =>
                       val declaration = memoryDeclaration(memory.memory, activeOwner)
                       declarationDomain(declaration, resolved) match
-                        case Some(domain) => domains += domain
+                        case Some(domain) =>
+                          domains += domain
+                          retainDeclarationEndpoint(declaration)
                         case None => crossingFailure("memory input has no resolved source domain")
                     case predicate: StaticPredicate => enqueue(predicate.operands)
                     case _: Expr[?] if strict && declarationRef.isEmpty && expressionRef.isEmpty =>
@@ -2765,9 +2793,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           if strict then sourceRoots.toSet else Set.empty,
           crossings.toSet,
           pulseClassified,
-          externalSources.toSet
+          externalSources.toSet,
+          localEndpoints.toSet
         )
-        cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size
+        cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size +
+          result.localEndpoints.size
         if cachedFacts > 262144 then
           crossingFailure("cached sample facts exceed their bounded graph budget")
         cache.put(root, result)
@@ -2888,6 +2918,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         crossingFailure(s"Cdc.${crossing.kind} destination has no actual resolved domain")
       )
       val source = sourceDomain(reference, crossing)
+      val endpoint = exactSourceEndpoint(facts, reference.module, source)
+      if !crossing.sourceEndpoint.contains(endpoint) then
+        crossingFailure("crossing source endpoint changed during dependency inference")
       crossing.ready.foreach: ready =>
         val readyFacts = sampleFacts(ready, reference.module, strict = true)
         if readyFacts.domains.exists(_ != destination) then
@@ -2943,7 +2976,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               sourceType <- CandidateRuntime.expressionDataType(source)
             yield DigitalEnumContract.sameType(
               CandidateRuntime.typeDescriptor(targetType),
-              CandidateRuntime.typeDescriptor(sourceType)
+              CandidateRuntime.typeDescriptor(sourceType),
+              Some(new StructuralBoundAnalysis(
+                operation.owner,
+                "NODAL-DIGITAL-054-001",
+                "register update type extent",
+                signed64Literals = true
+              ).sameIdentity)
             )
           if !exact.contains(true) then
             behavioralFailure("register update requires exactly matching types")

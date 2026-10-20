@@ -1,9 +1,9 @@
 # Increment 57 readiness and implementation
 
-Status: selected implementation and focused local validation accepted locally.
-F-057.A–F are complete locally; F-057.G and the increment parent remain open for
-blocked publication and verified integration. Earlier checkpoint status below is
-historical and superseded by the final local acceptance section.
+Status: selected implementation, focused local validation and verified integration
+complete. F-057.A–G and the increment parent are complete for the approved finite
+profiles. Earlier checkpoint and publication-blocked status below is historical;
+the final integration record supersedes it.
 Base: `16530a5b0630b709dcc500d2512fa276c755faab`, the verified F56 documentation
 closure after PR152. Branch: `increment/57-clock-reset-crossings`.
 
@@ -1863,3 +1863,25 @@ independent synchronizers, dropping source obligations or making reset/event
 startup deterministic would violate the selected semantics. Hierarchy native
 proof is supported; general hierarchical HDL lowering remains explicitly owned by
 F58 and rejects transactionally here rather than producing partial output.
+
+
+## Verified integration and completion
+
+PR153 was squash-merged as `db7c2d280df2e250bb7e6e0114e7dcb5abaeb5f4` into
+`dev`. The merge has sole parent `16530a5b0630b709dcc500d2512fa276c755faab`
+and exact tested tree `25e1d9aa5048eeb6ef7d0337e02c0fe55d927f9b`. Its expected
+published head was `05b94a9c605128b5c3d4c1e06f4a4b3cb1b9f99a`, preserving the
+same final tested tree as local checkpoint `6b6b299646fd4d0f69d84af62007f3bf3c0489fd`.
+The merged PR flag, expected head, merge parent/tree and live `dev` ref were
+verified. Fetched Git objects independently confirm that parent/tree and the
+actual merge message containing `[skip ci]` and `skip-checks: true`.
+
+The earlier publication approval blocker was resolved by the owner's explicit
+approval; all 25 retained commits were published before merging. F-057.G and the
+F57 parent are now complete, alongside the locally accepted A–F children.
+CI: not run under the owner-authorized prototype policy. The exact generated
+SystemVerilog demonstration, scoped checks, architecture review and finite-profile
+limits above remain authoritative; this integration does not imply broader
+qualification or physical timing certification. This two-document closure changes
+no production source and requires only Markdown, checklist and diff checks.
+F58 and later Foundation obligations retain their own open checklists.

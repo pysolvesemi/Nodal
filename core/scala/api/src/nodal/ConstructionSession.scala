@@ -1140,6 +1140,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val fsmResults = mutable.HashMap.empty[ExpressionRef, (FlatFsmRecord[?], String)]
   private val fsmObservations = new IdentityHashMap[AnyRef, FlatFsmObservation]()
   private val openFsms = mutable.ArrayBuffer.empty[FlatFsmRecord[?]]
+  private var compositionObservationRoot: Option[ExpressionRef] = None
   private val privateFsmStorage = mutable.HashSet.empty[DeclarationRef]
   private def contextualFsmInitializer(declaration: DeclarationRecord): Boolean =
     privateFsmStorage(declaration.reference) &&
@@ -1179,11 +1180,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       pending.removeLast() match
         case reference: Expr[?] =>
           Option(fsmObservations.get(reference)).foreach: observation =>
-            if !observation.record.open || observation.record.reference.module != currentModule.handle
+            if (!observation.record.open && !compositionObservationRoot.exists(root =>
+                observation.record.composition.exists(_.root == root)
+              )) || observation.record.reference.module != currentModule.handle
             then
               FlatFsmRuntime.fail("machine observation escaped its open builder scope")
             result.foreach: previous =>
-              if previous.record ne observation.record then
+              if (previous.record ne observation.record) && !compositionObservationRoot.exists(
+                  root =>
+                    previous.record.composition.exists(
+                      _.root == root
+                    ) && observation.record.composition.exists(_.root == root)
+                )
+              then
                 FlatFsmRuntime.fail("observations belong to different open machine scopes")
             result = Some(FlatFsmObservation(
               observation.record,
@@ -1211,6 +1220,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       FlatFsmRuntime.fail("machine builder is closed or belongs to another construction")
     record
 
+  private def requireFsmObservation[S](builder: FsmBuilder[S]): FlatFsmRecord[S] =
+    val record = builder.record
+    if compositionObservationRoot.exists(root => record.composition.exists(_.root == root)) &&
+      record.reference.module == currentModule.handle && flatFsms.get(
+        record.reference
+      ).contains(record)
+    then record
+    else requireFsm(builder)
+
   private def requireFsmState[S](builder: StateBuilder[S]): FlatFsmRecord[S] =
     val record = requireFsm(builder.machine)
     if !builder.record.open || !record.states.contains(builder.record) || activeValueRegion.nonEmpty
@@ -1225,16 +1243,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         poisonConstructor(failure, "flat FSM/action switch")
         scala.util.Failure[Nothing](failure).get
 
-  def captureFlatFsm[S](
+  private def allocateFlatFsm[S](
       definition: FsmDefinition[S],
       initial: S,
       encoding: FsmEncoding,
       custom: Option[FsmLocalEncoding[S]],
       illegalState: IllegalStatePolicy,
-      body: FsmBuilder[S] => Unit,
       evidence: HwEnum[S],
-      control: Option[FsmControl]
-  ): Unit = fsmTransaction:
+      control: Option[FsmControl],
+      composed: Boolean
+  ): FsmBuilder[S] =
     if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
       analogSemanticContext.nonEmpty || openFsms.nonEmpty || flatFsms.size >= 4096
     then
@@ -1298,7 +1316,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         statusStorage.get,
         value,
         projection[Bool](FlatFsmRuntime.EnteredOperation, KernelTypeDescriptor("Bool")),
-        projection[Bool](FlatFsmRuntime.ExitedOperation, KernelTypeDescriptor("Bool"))
+        projection[Bool](FlatFsmRuntime.ExitedOperation, KernelTypeDescriptor("Bool")),
+        Option.when(composed)(projection[Bool](
+          FlatFsmRuntime.EstablishmentOperation,
+          KernelTypeDescriptor("Bool")
+        ))
       )
     )
     val record = new FlatFsmRecord(
@@ -1324,15 +1346,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     lifecycle.foreach: value =>
       fsmResults.update(expressionIds.get(value.entered), record -> "entered")
       fsmResults.update(expressionIds.get(value.exited), record -> "exited")
+      value.establishment.foreach(result =>
+        fsmResults.update(expressionIds.get(result), record -> "establishment")
+      )
     record.privateStorage.foreach(value => privateFsmStorage += declarationIds.get(value))
+    new FsmBuilder(definition, initial, encoding, illegalState, record)
+
+  private def captureAllocatedFlatFsm[S](
+      builder: FsmBuilder[S],
+      body: FsmBuilder[S] => Unit
+  ): Unit =
+    val record = builder.record
     semanticOrigin.captureExpression(
-      module.handle,
-      reference.index,
+      record.reference.module,
+      record.reference.index,
       record,
       record.privateStorage ++ record.controlInputs
     )
     openFsms += record
-    val builder = new FsmBuilder(definition, initial, encoding, illegalState, record)
     try
       body(builder)
       FlatFsmGraphContract.validate(record, pathOf)
@@ -1341,6 +1372,220 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       record.states.foreach(_.open = false)
       val removed = openFsms.remove(openFsms.size - 1)
       if removed ne record then FlatFsmRuntime.fail("machine builder stack is corrupt")
+
+  def captureFlatFsm[S](
+      definition: FsmDefinition[S],
+      initial: S,
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      body: FsmBuilder[S] => Unit,
+      evidence: HwEnum[S],
+      control: Option[FsmControl]
+  ): Unit = fsmTransaction:
+    captureAllocatedFlatFsm(
+      allocateFlatFsm(
+        definition,
+        initial,
+        encoding,
+        custom,
+        illegalState,
+        evidence,
+        control,
+        false
+      ),
+      body
+    )
+
+  def captureFsmComposition[S](
+      spec: FsmInstanceSpec[S],
+      control: FsmControl,
+      observe: FsmRun[S] => Unit
+  ): Unit = fsmTransaction:
+    val root = new FsmOccurrence(spec)
+    val plan = mutable.ArrayBuffer[FsmOccurrence[?]](root)
+    var cursor = 0
+    def prepare[T](occurrence: FsmOccurrence[T]): Unit =
+      FsmCompositionRuntime.validateBindings(occurrence.spec)
+      val bySlot = occurrence.spec.bindings.children.map(value => value.slot -> value).toMap
+      occurrence.children = occurrence.spec.definition.children.map: slot =>
+        val binding = bySlot(slot)
+        FsmChildOccurrence(binding.slot, new FsmOccurrence(binding.instance))
+      occurrence.children.foreach(value => plan += value.occurrence)
+    while cursor < plan.size do
+      if plan.size > 4096 then FlatFsmRuntime.fail("composition exceeds 4096 occurrences")
+      prepare(plan(cursor))
+      cursor += 1
+    if flatFsms.size.toLong + plan.size > 4096 then
+      FlatFsmRuntime.fail("module machines exceed 4096 occurrences")
+    def allocate[T](occurrence: FsmOccurrence[T]): Unit =
+      val value = occurrence.spec
+      occurrence.builder = Some(allocateFlatFsm(
+        value.definition.definition,
+        value.definition.initial,
+        value.encoding,
+        value.custom,
+        value.illegalState,
+        value.definition.evidence,
+        Some(control),
+        true
+      ))
+    plan.foreach(allocate)
+    val rootReference = root.builder.get.record.reference
+    def attach[T](value: FsmOccurrence[T]): Unit =
+      val definition = value.spec.definition
+      val record = value.builder.get.record
+      val fragments = definition.fragments.map(fragment =>
+        fragment.name -> fragment.states.map(state =>
+          DigitalEnumContract.selectedCase(state.value, definition.evidence, record.canonical)
+        )
+      )
+      record.composition = Some(new FlatFsmCompositionRecord(
+        rootReference,
+        definition.definition.name,
+        definition.semanticHash,
+        fragments,
+        definition.compositionCost,
+        definition.fragments.exists(_.states.exists(_.isTerminal))
+      ))
+    plan.foreach(attach)
+    def capture[T](occurrence: FsmOccurrence[T]): Unit =
+      val spec = occurrence.spec
+      val builder = occurrence.builder.get
+      val record = builder.record
+      val guards = spec.bindings.guards.map(value => value.slot -> value.value).toMap
+      val actions = spec.bindings.actions.map(value => value.slot -> value.body).toMap
+      val children =
+        occurrence.children.map(value => value.slot -> value.occurrence.builder.get.record).toMap
+      captureAllocatedFlatFsm(
+        builder,
+        machine =>
+          spec.definition.fragments.foreach: fragment =>
+            fragment.states.foreach: state =>
+              captureFlatFsmState(
+                machine,
+                state.value,
+                stateBuilder =>
+                  state.commands.foreach:
+                    case edge: FsmDefinitionEdge[T] =>
+                      captureFlatFsmTransition(
+                        stateBuilder,
+                        guards(edge.guard),
+                        edge.mode,
+                        edge.destination,
+                        edge.action.map(actions)
+                      )
+                    case action: FsmDefinitionAction[T] =>
+                      captureFlatFsmAction(stateBuilder, action.phase, actions(action.slot))
+                    case join: FsmDefinitionJoin[T] =>
+                      val selected = join.child.toVector match
+                        case values if values.nonEmpty => values
+                        case _ => state.childSlots
+                      val actual = selected.map(children)
+                      val result = new KernelExpr[Bool](
+                        actual.map(_.lifecycle.get.storage),
+                        resultType = Some(KernelTypeDescriptor("Bool")),
+                        operation = Some(FlatFsmRuntime.JoinOperation)
+                      )
+                      val _ = captureExpression(result)
+                      record.composition.get.joins += FlatFsmJoinRecord(
+                        result,
+                        stateBuilder.record.caseId,
+                        actual,
+                        join.policy,
+                        if join.child.nonEmpty then "one_child" else "all_children"
+                      )
+                      captureFlatFsmTransition(
+                        stateBuilder,
+                        result,
+                        join.mode,
+                        join.destination,
+                        None
+                      )
+                  if state.isTerminal then captureFlatFsmTerminal(stateBuilder)
+              )
+      )
+      spec.definition.fragments.flatMap(_.states).filter(_.childSlots.nonEmpty).foreach: state =>
+        val ownerCase =
+          DigitalEnumContract.selectedCase(state.value, record.evidence, record.canonical)
+        val owned = state.childSlots.map(slot => (slot: AnyRef) -> children(slot))
+        val lifecycle = record.lifecycle.get
+        val operands = Vector(
+          record.storage,
+          lifecycle.storage,
+          record.nextLocal,
+          record.taken,
+          lifecycle.entered,
+          lifecycle.exited,
+          lifecycle.establishment.get,
+          lifecycle.control.enable
+        )
+        def result(operation: String, role: String): KernelExpr[Bool] =
+          val value = new KernelExpr[Bool](
+            operands,
+            resultType = Some(KernelTypeDescriptor("Bool")),
+            operation = Some(operation)
+          )
+          val _ = captureExpression(value)
+          val ordinal = record.local.cases.indexWhere(_.id == ownerCase)
+          fsmResults.update(expressionIds.get(value), record -> s"children.$ordinal.$role")
+          value
+        val childControl = new FsmControl(
+          result(FlatFsmRuntime.RestartOperation, "restart"),
+          result(FlatFsmRuntime.CancelOperation, "cancel"),
+          result(FlatFsmRuntime.EnableOperation, "enable")
+        )
+        record.composition.get.groups += FlatFsmChildGroup(ownerCase, owned, childControl)
+        owned.foreach: (slot, child) =>
+          child.lifecycle.get.control = childControl
+          child.composition.get.parent =
+            Some((record, ownerCase, slot.asInstanceOf[FsmChild[T, ?]].name))
+    plan.foreach(capture)
+    compositionObservationRoot = Some(rootReference)
+    try observe(new FsmRun(root.builder.get))
+    finally compositionObservationRoot = None
+
+  def fsmChild[P, C](builder: FsmBuilder[P], slot: FsmChild[P, C]): FsmChildRun[C] =
+    val record = requireFsmObservation(builder)
+    if slot == null || (slot.owner ne record.definition) || compositionObservationRoot.isEmpty then
+      FsmDefinitionRuntime.fail(
+        "child observation requires its exact composition callback and slot owner"
+      )
+    val child = record.composition.toVector.flatMap(_.groups).flatMap(_.children)
+      .find((candidate, _) => candidate eq slot).map(_._2)
+      .getOrElse(FsmDefinitionRuntime.fail("child observation names a missing or foreign slot"))
+    // The exact typed slot is the identity witness for this one existential child record.
+    val typed = child.asInstanceOf[FlatFsmRecord[C]]
+    if typed.definition ne slot.definition.definition then
+      FsmDefinitionRuntime.fail("child definition identity mismatch")
+    var active: Expr[Bool] = true.B
+    var current = child
+    while current.composition.flatMap(_.parent).nonEmpty do
+      val (parent, ownerCase, _) = current.composition.get.parent.get
+      val code = parent.local.cases.find(_.id == ownerCase).get.code
+      val owner = DigitalCombinationalContract.compare(
+        "digital_eq",
+        parent.storage,
+        FlatFsmRuntime.bits(code, parent.local.width)
+      )
+      val running = DigitalCombinationalContract.compare(
+        "digital_eq",
+        parent.lifecycle.get.storage,
+        FlatFsmRuntime.bits(1, 2)
+      )
+      active = SequentialRuntime.and(active, SequentialRuntime.and(owner, running))
+      current = parent
+    val observed = markFsmObservation(record, active, future = false)
+    new FsmChildRun(
+      observed,
+      new FsmRun(new FsmBuilder(
+        typed.definition,
+        slot.definition.initial,
+        typed.encoding,
+        typed.illegalState,
+        typed
+      ))
+    )
 
   def captureFlatFsmState[S](
       builder: FsmBuilder[S],
@@ -1437,12 +1682,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   private def flatFsmLocal[S](builder: FsmBuilder[S], next: Boolean): Expr[Bits] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     fsmActionRegion(record).map(_.arguments(if next then 1 else 0)._1.asInstanceOf[Expr[Bits]])
       .getOrElse(if next then record.nextLocal else record.storage)
 
   def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     record.views.getOrElseUpdate(
       activeValueRegion.map(_.reference) -> next, {
         val local = flatFsmLocal(builder, next)
@@ -1480,14 +1725,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   def flatFsmTaken[S](builder: FsmBuilder[S]): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val value = fsmActionRegion(
       record
     ).map(_.arguments(2)._1.asInstanceOf[Expr[Bool]]).getOrElse(record.taken)
     markFsmObservation(record, value, future = true)
 
   def flatFsmEvent[S](builder: FsmBuilder[S], state: S, entering: Boolean): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val view = flatFsmStateView(builder, entering)
     val matches = DigitalEnumContract.isOneOf(view.value, Vector(state), record.evidence)
     val event = record.lifecycle.map(value => if entering then value.entered else value.exited)
@@ -1495,7 +1740,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     markFsmObservation(record, SequentialRuntime.and(event, matches), future = true)
 
   def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val current = flatFsmStateView(builder, next = false)
     val membership = new KernelExpr[Bool](
       Vector(current.value, FlatFsmCompletionMetadata(record)),
@@ -1510,7 +1755,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     markFsmObservation(record, result, future = false)
 
   def flatFsmStatus[S](builder: FsmBuilder[S]): DecodedEnum[Expr[EnumValue[FsmStatus]]] =
-    val record = requireFsm(builder)
+    val record = requireFsmObservation(builder)
     val lifecycle =
       record.lifecycle.getOrElse(FlatFsmRuntime.fail("ordinary machine has no lifecycle"))
     val storage = bindCollectionValue(lifecycle.storage, activeValueRegion, currentModule.handle)
@@ -1642,6 +1887,40 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             pathOf(value.control.enable).get,
             pathOf(value.entered).get,
             pathOf(value.exited).get
+          )
+        ),
+        record.composition.map(value =>
+          KernelFsmCompositionSnapshot(
+            expressionPath(value.root),
+            value.parent.map(parent => expressionPath(parent._1.reference)),
+            value.parent.map(_._2),
+            value.parent.map(_._3),
+            pathOf(record.lifecycle.get.establishment.get).get,
+            value.groups.toVector.map(group =>
+              KernelFsmChildGroup(
+                group.ownerCase,
+                group.children.map(child => expressionPath(child._2.reference)),
+                pathOf(group.control.restart).get,
+                pathOf(group.control.cancel).get,
+                pathOf(group.control.enable).get
+              )
+            ),
+            value.joins.toVector.map(join =>
+              KernelFsmJoinSnapshot(
+                pathOf(join.result).get,
+                join.ownerCase,
+                join.children.map(child => expressionPath(child.reference)),
+                join.policy,
+                join.selection
+              )
+            ),
+            value.definitionName,
+            value.definitionHash,
+            value.fragments,
+            value.cost.occurrences,
+            value.cost.records,
+            value.cost.depth,
+            value.completionPossible
           )
         )
       )
@@ -1868,11 +2147,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case declaration: DeclarationRef =>
         records(declaration.module).generatedRegions.find(region =>
           region.areaFamily && region.declarations.contains(declaration)
-        ).flatMap(generated =>
-          loopRegions.valuesIterator.find(_.loop.exists(
-            _.generated.contains(generated)
-          ))
-        )
+        ).flatMap(_.digitalRegion)
 
   private def generatedRegionFor(region: Option[DigitalValueRegionRecord])
       : Option[GeneratedRegionRecord] =
@@ -2220,6 +2495,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case _ => None
       case _ => None
 
+  /** Project only where the actual handle and ordinal definitions dominate. The resulting Data
+    * value, not the non-Data family capability, crosses isolated callbacks by ordinary captures.
+    */
+  private def generatedMemberScope(
+      expression: KernelExpr[?],
+      member: GeneratedAreaMemberRecord
+  ): Option[DigitalValueRegionRecord] =
+    val familyBody = member.family.digitalRegion.getOrElse(
+      collectionFailure("generated member has no actual digital family body")
+    )
+    val ancestry = mutable.ArrayBuffer.empty[Option[DigitalValueRegionRecord]]
+    var current = activeValueRegion
+    while current.nonEmpty do
+      if ancestry.contains(current) || ancestry.size >= 128 then
+        collectionFailure("generated member lexical ancestry is cyclic or excessive")
+      ancestry += current
+      current = current.get.parent
+    ancestry += None
+    val dependencies = familyBody.parent +: expression.operands.collect:
+      case value: Expr[?] => valueRegion(valueReference(value))
+    val positions = dependencies.map(ancestry.indexOf)
+    if positions.exists(_ < 0) then
+      collectionFailure("generated member handle or ordinal escaped its lexical scope")
+    ancestry(positions.min)
+
   private def collectionExpressionScope(
       expression: KernelExpr[?],
       retained: Option[ExpressionRef]
@@ -2293,7 +2593,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           .exists(value => valueRegion(valueReference(value)).nonEmpty)
         val moduleStatic = staticInteger && !localStaticDependency && affine.isEmpty &&
           (!current.exists(_.isLoop) || current.exists(_.loop.exists(_.generated.nonEmpty)))
-        val destination = if moduleStatic then None else current
+        val destination = generatedMemberRecord(expression) match
+          case Some(member) => generatedMemberScope(expression, member)
+          case None => if moduleStatic then None else current
         if !knownArgument then
           expression.resultType.foreach(bindCollectionType(_, destination, currentModule.handle))
         val runtimeOperands =
@@ -4933,11 +5235,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
     val leaves = ConstructionInterfaceLayout.leaves(value.definition, value.role)
     if leaves.exists(leaf =>
-        leaf.mode.nonEmpty || leaf.analogType.nonEmpty ||
-          leaf.dataType.exists(isBoundaryCapability)
+        leaf.analogType.nonEmpty || leaf.dataType.exists(isBoundaryCapability) ||
+          (leaf.mode.nonEmpty && kind == KernelSignalKind.InterfaceArray)
       )
     then
-      fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires ordinary digital data leaves")
+      fail(
+        "NODAL-HIERARCHY-058-INTERFACE",
+        "child Interface requires digital leaves and scalar resolved components"
+      )
     instanceInterfacePorts.iterator.collectFirst:
       case (reference, (existing, target)) if (existing eq instance) && target == port =>
         records(
@@ -7618,6 +7923,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(record)
       ))
     )
+    record.digitalRegion = digitalRegion
     digitalRegion.foreach(_.structuralGenerate = areaFamily)
     val domainCount = module.domains.size
     val analogRegionCount = analogRegions.size
@@ -9635,9 +9941,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             maximum = region.maximum,
             maximumTripCount = region.maximumTripCount,
             declarations = region.declarations.toVector.map(declarationPath),
-            digitalBody = loopRegions.valuesIterator.find(value =>
-              value.structuralGenerate && value.loop.exists(_.generated.contains(region))
-            ).map(value =>
+            digitalBody = region.digitalRegion.filter(_.structuralGenerate).map(value =>
               KernelDigitalGeneratedBody(
                 value.captures.valuesIterator.map(capture => pathOf(capture._1).get).toVector,
                 regionArguments(value),
@@ -10657,7 +10961,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             ,
             dataType => interfaceActualType(declaration.reference, dataType),
             instanceInterfacePorts.get(declaration.reference).map: (_, port) =>
-              dataType => renderType(dataType, port.module)
+              dataType => renderType(dataType, port.module), {
+              val dimensions = interfaceDimensions(declaration)
+              if dimensions.isEmpty then Bool else Vec(Bool, dimensions*)
+            }
           )
         )
       ).toVector,

@@ -246,8 +246,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "status",
       "running",
       "completed",
-      "cancelled"
+      "cancelled",
+      "child"
     )
+    pureMethods ++= methods(requiredClass("nodal.FsmChildRun"), "active", "run")
     pureMethods ++= moduleMethods("nodal.FsmControl", "apply")
     // These factories construct immutable control data only. Runtime predicates/actions enter
     // through separately checked bindings; none of these methods executes an authored callback.
@@ -257,7 +259,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "nodal.FsmAction",
       "nodal.FsmState",
       "nodal.FsmFragment",
-      "nodal.FsmDef"
+      "nodal.FsmDef",
+      "nodal.FsmChild"
     ).foreach: name =>
       pureMethods ++= moduleMethods(name, "apply")
     pureMethods ++= methods(
@@ -267,7 +270,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "entry",
       "active",
       "exit",
-      "terminal"
+      "terminal",
+      "children",
+      "onAllComplete",
+      "onAnyComplete",
+      "onChildComplete"
     )
     pureModules += requiredModule("nodal.TransitionMode")
     pureMethods ++=

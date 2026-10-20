@@ -280,3 +280,51 @@ final class Increment58OrdinaryAreaStructuralWhen extends Module:
           when(enable):
             stored := false.B
     val _ = group
+
+final class Increment58GeneratedGuardedSelection extends Module:
+  val clock = ClockDomain.external(
+    "clock",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val mode = param(0.integer, range = 0 to 1)
+  val selectedOrdinal = param(0.integer, range = 0 to 1)
+  val enable = in(Bool)
+  val active = in(Bool)
+  clock:
+    val lanes =
+      for i <- hdlRange(0, 3) yield new Area:
+        val stored = Reg(false.B)
+        val readonly: Expr[Bool] = stored
+        val _ = i
+    val target = Reg(false.B)
+    val selected = lanes(selectedOrdinal)
+    if mode == 0 then
+      when(enable):
+        when(active):
+          target := selected.readonly
+    else
+      when(active):
+        target := selected.readonly
+
+final class Increment58GeneratedGuardOnlyExistence extends Module:
+  val clock = ClockDomain.external(
+    "clock",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val count = param(3.integer, range = 0 to 8)
+  val enable = in(Bool)
+  clock:
+    val lanes =
+      for i <- hdlRange(0, count) yield
+        val _ = i
+        new Increment58OrdinalArea
+    val target = Reg(0.U(8))
+    if count > 0 then
+      when(enable):
+        target := lanes(0).stored

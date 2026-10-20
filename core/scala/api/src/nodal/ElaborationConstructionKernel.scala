@@ -375,6 +375,16 @@ private[nodal] object ConstructionKernel:
     control
   )
 
+  def fsmComposition[S](
+      spec: FsmInstanceSpec[S],
+      control: FsmControl,
+      observe: FsmRun[S] => Unit
+  ): Unit =
+    flatFsmSession.captureFsmComposition(spec, control, observe)
+
+  def fsmChild[P, C](builder: FsmBuilder[P], slot: FsmChild[P, C]): FsmChildRun[C] =
+    flatFsmSession.fsmChild(builder, slot)
+
   def flatFsmState[S](builder: FsmBuilder[S], value: S, body: StateBuilder[S] => Unit): Unit =
     flatFsmSession.captureFlatFsmState(builder, value, body)
 

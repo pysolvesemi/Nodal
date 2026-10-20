@@ -73,13 +73,12 @@ private[nodal] object ScalaToMlirBridge:
       sourceProvenance: Boolean = false
   ): NodalMlirDocument =
     if snapshot.generatedRegions.exists(region =>
-        region.yieldedArea.nonEmpty || region.exports.nonEmpty
-      ) ||
-      snapshot.digitalExpressions.exists(_.generatedMember.nonEmpty)
+        region.digitalBody.isEmpty && (region.yieldedArea.nonEmpty || region.exports.nonEmpty)
+      )
     then
       throw new BridgeException(BridgeDiagnostic(
         "NODAL-BRIDGE-058",
-        "generated Area family transport requires its verified native family schema"
+        "generated Area family requires its actual digital body; nested family transport is unavailable"
       ))
     val renderer = new Renderer(snapshot, backend, sourceProvenance)
     val text = renderer.render()
@@ -1206,7 +1205,9 @@ ${indent(body, 2)}
               Some(path)
             )
           )
-          if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) then
+          if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) &&
+            !digitalValues.generatedStorage(path)
+          then
             fail(
               "NODAL-BRIDGE-043",
               "generated declaration must be a local conservative node, array or procedural variable",
@@ -1405,7 +1406,9 @@ ${indent(body, 2)}
           )
       modules.foreach: module =>
         module.declarations.foreach: declaration =>
-          if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" then
+          if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" &&
+            !digitalValues.generatedStorage(declaration.path)
+          then
             fail(
               "NODAL-BRIDGE-043",
               "generated declaration scope is only supported on local conservative arrays",
@@ -5396,7 +5399,10 @@ ${indent(body, 2)}
                   )
                 ),
                 declaration.path
-              )
+              ),
+            activeIntegerQuery.flatMap(_.scope).flatMap(digitalGeneratedByPath.get)
+              .filter(_.yieldedArea.nonEmpty)
+              .map(region => KernelGeneratedScope(region.path, region.induction))
           ))
         case kind =>
           val (name, key, category) = kind match

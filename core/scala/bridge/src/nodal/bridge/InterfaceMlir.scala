@@ -356,7 +356,8 @@ private[nodal] object InterfaceMlir:
             ) &&
             binding.size == 1 && binding.head.actual == endpoint.domain &&
             endpoint.members.forall(value =>
-              Set("plain", "valid", "stream").contains(value.protocol)
+              Set("plain", "valid", "stream").contains(value.protocol) ||
+                value.protocol == "resolved" && endpoint.dimensions.isEmpty
             ),
           "Interface projection changes exact child, selected roles, ABI or actual domain binding",
           endpoint.path
@@ -577,8 +578,9 @@ private[nodal] object InterfaceMlir:
           case "interface-drive" =>
             requireValid(
               effect.source.isEmpty && effect.value.nonEmpty &&
-                (if endpoint.boundary.nonEmpty then target.access == "in"
-                 else Set("out", "drive").contains(target.access)) &&
+                (if target.protocol == "resolved" then target.access == "drive"
+                 else if endpoint.boundary.nonEmpty then target.access == "in"
+                 else target.access == "out") &&
                 target.mode.forall(_ == "push-pull"),
               "member drive violates actual role or mode",
               effect.path

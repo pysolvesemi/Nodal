@@ -41,6 +41,7 @@ private[nodal] final class FlatFsmRecord[S](
     val lifecycle: Option[FlatFsmLifecycleRecord]
 ):
   var open = true
+  var composition: Option[FlatFsmCompositionRecord] = None
   var captureCount = 0
   private var ordinal = 0
   def nextOrdinal(): Int =
@@ -92,9 +93,10 @@ private[nodal] final class FlatFsmRecord[S](
 
 private[nodal] final case class FlatFsmLifecycleRecord(
     storage: Register[Bits],
-    control: FsmControl,
+    var control: FsmControl,
     entered: KernelExpr[Bool],
-    exited: KernelExpr[Bool]
+    exited: KernelExpr[Bool],
+    establishment: Option[KernelExpr[Bool]] = None
 )
 
 private[nodal] final case class FlatFsmCompletionMetadata(record: FlatFsmRecord[?])
@@ -114,3 +116,28 @@ private[nodal] final class EnumSwitchRecord[S](
   var captureCount = 0
   val cases = mutable.ArrayBuffer.empty[(String, () => Unit)]
   val arms = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+
+private[nodal] final class FlatFsmCompositionRecord(
+    val root: ExpressionRef,
+    val definitionName: String,
+    val definitionHash: String,
+    val fragments: Vector[(String, Vector[String])],
+    val cost: FsmCompositionCost,
+    val completionPossible: Boolean
+):
+  var parent: Option[(FlatFsmRecord[?], String, String)] = None
+  val groups = mutable.ArrayBuffer.empty[FlatFsmChildGroup]
+  val joins = mutable.ArrayBuffer.empty[FlatFsmJoinRecord]
+
+private[nodal] final case class FlatFsmChildGroup(
+    ownerCase: String,
+    children: Vector[(AnyRef, FlatFsmRecord[?])],
+    control: FsmControl
+)
+private[nodal] final case class FlatFsmJoinRecord(
+    result: Expr[Bool],
+    ownerCase: String,
+    children: Vector[FlatFsmRecord[?]],
+    policy: String,
+    selection: String
+)

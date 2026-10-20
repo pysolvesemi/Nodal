@@ -393,7 +393,38 @@ private[nodal] final case class KernelFlatFsmSnapshot(
     nextLocal: String,
     transitionTaken: String,
     sourceOrdinal: Int,
-    control: Option[KernelFlatFsmControl] = None
+    control: Option[KernelFlatFsmControl] = None,
+    composition: Option[KernelFsmCompositionSnapshot] = None
+)
+private[nodal] final case class KernelFsmChildGroup(
+    ownerCase: String,
+    children: Vector[String],
+    restart: String,
+    cancel: String,
+    enable: String
+)
+private[nodal] final case class KernelFsmJoinSnapshot(
+    result: String,
+    ownerCase: String,
+    children: Vector[String],
+    policy: String,
+    selection: String
+)
+private[nodal] final case class KernelFsmCompositionSnapshot(
+    root: String,
+    parent: Option[String],
+    ownerCase: Option[String],
+    slot: Option[String],
+    establishment: String,
+    groups: Vector[KernelFsmChildGroup],
+    joins: Vector[KernelFsmJoinSnapshot],
+    definitionName: String,
+    definitionHash: String,
+    fragments: Vector[(String, Vector[String])],
+    occurrences: Int,
+    records: Int,
+    depth: Int,
+    completionPossible: Boolean
 )
 private[nodal] final case class KernelEnumSwitchSnapshot(
     path: String,
@@ -685,6 +716,7 @@ private final class GeneratedRegionRecord(
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
   var yieldedArea: Option[AreaRecord] = None
   var familyHandle: Option[GeneratedAreas[?]] = None
+  var digitalRegion: Option[DigitalValueRegionRecord] = None
 
 private final case class ConservativeArrayBindingRecord(
     left: DeclarationRef | ExpressionRef,

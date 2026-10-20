@@ -12,6 +12,13 @@ private[nodal] final case class FsmDefinitionEdge[S](
 private[nodal] final case class FsmDefinitionAction[S](phase: String, slot: FsmAction[S])
     extends FsmDefinitionCommand[S]
 
+private[nodal] final case class FsmDefinitionJoin[S](
+    policy: String,
+    child: Option[FsmChild[S, ?]],
+    mode: TransitionMode,
+    destination: S
+) extends FsmDefinitionCommand[S]
+
 /** Immutable graph admission and explicit binding adapter. FlatFsm owns all executable semantics.
   */
 private[nodal] object FsmDefinitionRuntime:
@@ -39,22 +46,29 @@ private[nodal] object FsmDefinitionRuntime:
 
   def bindings[S](
       guards: Seq[FsmGuardBinding[S]],
-      actions: Seq[FsmActionBinding[S]]
+      actions: Seq[FsmActionBinding[S]],
+      children: Seq[FsmChildBinding[S]] = Vector.empty[FsmChildBinding[S]]
   ): FsmBindings[S] =
     val predicates = bounded(guards, FlatFsmRuntime.MaximumRecords, "guard bindings")
     val effects =
       bounded(actions, FlatFsmRuntime.MaximumRecords - predicates.size, "action bindings")
-    if predicates.contains(null) || effects.contains(null) then
+    val descendants = bounded(
+      children,
+      FlatFsmRuntime.MaximumRecords - predicates.size - effects.size,
+      "child bindings"
+    )
+    if predicates.contains(null) || effects.contains(null) || descendants.contains(null) then
       fail("runtime binding cannot be null")
     if predicates.map(_.slot).distinct.size != predicates.size ||
-      effects.map(_.slot).distinct.size != effects.size
+      effects.map(_.slot).distinct.size != effects.size ||
+      descendants.map(_.slot).distinct.size != descendants.size
     then fail("runtime binding repeats a slot")
-    new FsmBindings(predicates, effects)
+    new FsmBindings(predicates, effects, descendants)
 
-  private def append[S](state: FsmState[S], command: FsmDefinitionCommand[S]): FsmState[S] =
+  private[nodal] def append[S](state: FsmState[S], command: FsmDefinitionCommand[S]): FsmState[S] =
     if state.commands.size >= FlatFsmRuntime.MaximumRecords then
       fail("state declarations exceed 65536 records")
-    new FsmState(state.value, state.commands :+ command, state.isTerminal)
+    new FsmState(state.value, state.commands :+ command, state.isTerminal, state.childSlots)
 
   def edge[S](
       state: FsmState[S],
@@ -71,7 +85,7 @@ private[nodal] object FsmDefinitionRuntime:
     if action == null then fail("state action requires an actual typed slot")
     append(state, FsmDefinitionAction(phase, action))
 
-  private def bounded[A](values: Seq[A], maximum: Int, label: String): Vector[A] =
+  private[nodal] def bounded[A](values: Seq[A], maximum: Int, label: String): Vector[A] =
     if values == null then fail(s"$label cannot be null")
     val result = values.iterator.take(maximum + 1).toVector
     if result.size > maximum then fail(s"$label exceed the bounded record limit")
@@ -105,7 +119,9 @@ private[nodal] object FsmDefinitionRuntime:
     val states = frozen.flatMap(_.states)
     // Inspect vector sizes before traversing or copying any commands. A legal individual
     // state does not authorize 4096 copies of its maximum-size declaration inventory.
-    if states.map(_.commands.size.toLong).sum > FlatFsmRuntime.MaximumRecords then
+    if states.map(state => state.commands.size.toLong + state.childSlots.size).sum >
+        FlatFsmRuntime.MaximumRecords
+    then
       fail("definition transitions/actions exceed 65536 records")
     val edges = Vector.newBuilder[(String, String, TransitionMode)]
     var records = 0L
@@ -119,15 +135,22 @@ private[nodal] object FsmDefinitionRuntime:
           guards += edge.guard
           edge.action.foreach(actions += _)
           edges += ((source, caseId(edge.destination), edge.mode))
+        case join: FsmDefinitionJoin[S] =>
+          records += 1
+          edges += ((source, caseId(join.destination), join.mode))
         case action: FsmDefinitionAction[S] =>
           records += 1
           if records > FlatFsmRuntime.MaximumRecords then
             fail("definition transitions/actions exceed 65536 records")
           actions += action.slot
+    val children = states.flatMap(_.childSlots)
+    val cost = FsmCompositionRuntime.cost(states, records.toInt, children)
+    FsmCompositionRuntime.admitStates(owner, states, children)
     val named = guards.toVector.map(value => (value.name, value.owner)) ++
-      actions.toVector.map(value => (value.name, value.owner))
+      actions.toVector.map(value => (value.name, value.owner)) ++
+      children.map(value => (value.name, value.owner))
     if named.exists((_, definition) => definition ne owner) then
-      fail("definition references a foreign guard or action slot")
+      fail("definition references a foreign guard, action or child slot")
     if named.map(_._1).distinct.size != named.size then
       fail("distinct slots must have distinct names within one definition")
     FlatFsmGraphContract.validateStructure(
@@ -137,7 +160,17 @@ private[nodal] object FsmDefinitionRuntime:
       edges.result(),
       fail
     )
-    new FsmDef(owner, initial, frozen, guards.toVector, actions.toVector, evidence)
+    new FsmDef(
+      owner,
+      initial,
+      frozen,
+      guards.toVector,
+      actions.toVector,
+      evidence,
+      children,
+      cost,
+      FsmCompositionRuntime.definitionHash(owner, initialId, frozen, evidence)
+    )
 
   def control(restart: Expr[Bool], cancel: Expr[Bool], enable: Expr[Bool]): FsmControl =
     if Vector(restart, cancel, enable).exists(value =>
@@ -157,6 +190,8 @@ private[nodal] object FsmDefinitionRuntime:
       observe: FsmInstance[S] => Unit
   ): Unit =
     if observe == null then fail("instance requires observations")
+    if definition.children.nonEmpty then
+      fail("definitions with children require instantiateControlled with explicit root controls")
     capture(
       definition,
       bindings,
@@ -178,15 +213,22 @@ private[nodal] object FsmDefinitionRuntime:
   ): Unit =
     if control == null || observe == null then
       fail("controlled instance requires controls and observations")
-    capture(
-      definition,
-      bindings,
-      encoding,
-      custom,
-      illegalState,
-      Some(control),
-      machine => observe(new FsmRun(machine))
-    )
+    if definition.children.nonEmpty then
+      ConstructionKernel.fsmComposition(
+        FsmInstanceSpec(definition, bindings, encoding, custom, illegalState),
+        control,
+        observe
+      )
+    else
+      capture(
+        definition,
+        bindings,
+        encoding,
+        custom,
+        illegalState,
+        Some(control),
+        machine => observe(new FsmRun(machine))
+      )
 
   private def capture[S](
       definition: FsmDef[S],
@@ -200,7 +242,9 @@ private[nodal] object FsmDefinitionRuntime:
     if bindings == null then fail("instance requires bindings")
     val guards = bindings.guards.map(value => value.slot -> value.value).toMap
     val actions = bindings.actions.map(value => value.slot -> value.body).toMap
-    if guards.keySet != definition.guards.toSet || actions.keySet != definition.actions.toSet then
+    if guards.keySet != definition.guards.toSet || actions.keySet != definition.actions.toSet ||
+      bindings.children.nonEmpty
+    then
       fail(
         "instance must bind every referenced slot exactly once without foreign or unused bindings"
       )
@@ -226,6 +270,8 @@ private[nodal] object FsmDefinitionRuntime:
                       edge.destination,
                       edge.action.map(actions)
                     )
+                  case _: FsmDefinitionJoin[S] =>
+                    fail("completion edges require the controlled composition capture owner")
                   case action: FsmDefinitionAction[S] =>
                     ConstructionKernel.flatFsmAction(builder, action.phase, actions(action.slot))
                 if state.isTerminal then ConstructionKernel.flatFsmTerminal(builder)

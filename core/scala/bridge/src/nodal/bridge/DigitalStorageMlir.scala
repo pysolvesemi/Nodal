@@ -62,11 +62,12 @@ private[nodal] object DigitalStorageMlir:
 
   private def validateOwner(
       module: KernelModuleSnapshot,
-      declaration: KernelDeclarationSnapshot
+      declaration: KernelDeclarationSnapshot,
+      scope: Option[KernelGeneratedScope] = None
   ): Unit =
     requireValid(
       declaration.path.startsWith(module.path + ".") &&
-        module.declarations.contains(declaration) && declaration.generatedScope.isEmpty &&
+        module.declarations.contains(declaration) && declaration.generatedScope == scope &&
         declaration.name.nonEmpty && declaration.dataType.nonEmpty,
       "digital storage requires an exact type and direct module ownership",
       declaration.path
@@ -196,9 +197,10 @@ private[nodal] object DigitalStorageMlir:
       symbol: (String, String) => String,
       metadata: String,
       sourceLocation: String,
-      exactType: Boolean
+      exactType: Boolean,
+      scope: Option[KernelGeneratedScope] = None
   ): String =
-    validateOwner(module, declaration)
+    validateOwner(module, declaration, scope)
     val authoredInitial = initializer(declaration)
     requireValid(
       authoredInitial.nonEmpty == initial.nonEmpty && exactType,

@@ -3,8 +3,9 @@
 **Status:** Approved
 **Scope:** public-api
 **Compiler:** Scala 3.8.4, JDK 25.0.2
-**Implementation status:** Bounded source capture under implementation; native
-transport, generated drivers and target admission are not complete.
+**Implementation status:** Bounded source capture, direct-storage transport and
+native default-gate admission have focused evidence. Shared-source integration
+and actual generated target admission remain under implementation.
 
 ## Authority and selected boundary
 
@@ -80,7 +81,7 @@ region records, not default predicate evaluation or a second effect engine.
 
 ## Native contract and staged admission
 
-The next native stage owns a parameterless `!nodal.generated_family`, an optional
+The bounded native stage owns a parameterless `!nodal.generated_family`, an optional
 single `nodal.generate` result, closed nested `nodal.generated_export` records and
 `nodal.generated_member` with static ordinal and explicit monotonic access. Storage
 exports retain exact SSA operands. Export and member operations carry `member`,
@@ -92,8 +93,9 @@ Instance/Interface declarations through a verified structural carrier, not fake
 SSA or emitted-name lookup. Native independently verifies owner, type, capability,
 ordinal, existence and driver legality through Shape/GeneratedDomain.
 
-The bridge must fail closed until this transport exists, never discard new export
-or member facts. Actual target admission requires one `sv.generate.for`, a shared
+The bridge transports supported direct families and fails closed for a retained
+family without an admitted digital body; it never discards export/member facts.
+Actual target admission requires one `sv.generate.for`, a shared
 body/storage profile, inherited clock/reset and actual static member selection.
 The source million-lane metadata witness establishes one source template only;
 it does not establish target resource admission or emitted scale.
@@ -142,6 +144,40 @@ The probes establish primitive feasibility only; Nodal family lowering, inverse
 member mapping, waveform behavior and nested/generated-instance occurrence support
 remain open. Probe commands, pinned hashes and results are retained under
 `.work/f58-generate-target-probe/`.
+
+## Qualified public lane witness and staged evidence
+
+The maintained public [lane witnesses](../../core/scala/testkit/test/src/nodal_external/Increment58GeneratedLaneRegisters.scala)
+use existing pinned-Scala spellings rather than adding another initializer API:
+`Reg(0.U(8).extract(0, 8))` has exact `Bits(8)` storage, `enable.at(i)` selects a
+per-lane Bool, and `dataOut.writable.at(i) := stored` retains the shaped output.
+The symbolic witness declares `LANES` with the legal envelope 1 through 8; the
+second witness uses concrete bound 3. Both retain the required lightweight
+`for ... hdlRange ... yield new Area`, ordinary structural `if`, behavioral
+`when`, lane-zero inversion, other-lane copying and `lanes(0).stored` alias.
+The roadmap's proposed `Reg(Bits(8)) init 0` spelling is not claimed as an
+implemented API.
+
+On 2026-10-20, strict Scala 3.8.4/JDK 25.0.2 compilation of the maintained source,
+tests and [six-case replay](../../core/scala/testkit/test/src/nodal/internal/testkit/Increment58GeneratedAreaReplay.scala)
+against frozen checkpoint-7 classes plus the exact scope/bridge overlays passed.
+All six actual replay documents passed `--nodal-gate-default` on frozen native
+compiler SHA-256
+`01059e71197a1ef88b7e673a76d4479b5631a309cf6b813d1788c7c952425f8b`.
+They cover the original lane composition, ordinary Module/Area structural updates,
+readonly selection, guarded nested callback captures, and both exact lane witnesses.
+Commands and outputs remain under `.work/f58-generated-areas/maintained-third/`.
+This isolated evidence does not substitute for the pending matched shared-source
+suite, actual emitted target structure or waveform behavior.
+
+`preserveConstantLoops=true` is required but is not yet an implemented target
+option. The target owner will implement that option and the concrete-bound
+preservation witness; symbolic families must remain parameterized independently.
+Production target lowering currently rejects these generated forms. Reset priority,
+enable-low hold, one active driver per lane, flat output mapping, firstLane aliasing
+and illegal-configuration rejection still require actual target validation.
+Guard-dependent existence, nested generated families and structural symbol exports
+remain open; source/bridge rejection is not completion of those requirements.
 
 ## Focused validation and architecture review
 

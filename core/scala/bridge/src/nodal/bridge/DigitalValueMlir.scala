@@ -189,6 +189,7 @@ private[nodal] object DigitalValueMlir:
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
     ).toMap
     private val machines = snapshot.flatFsms.map(value => value.path -> value).toMap
+    private val composition = new FsmCompositionMlir.Plan(snapshot, fail)
     private def machineInputs(value: KernelFlatFsmSnapshot): Vector[String] =
       Vector(value.storage) ++ value.control.toVector.flatMap(control =>
         Vector(control.storage, control.restart, control.cancel, control.enable)
@@ -202,6 +203,8 @@ private[nodal] object DigitalValueMlir:
           (control.entered, "flat_fsm_entered", "Bool"),
           (control.exited, "flat_fsm_exited", "Bool")
         )
+      ) ++ value.composition.toVector.map(composition =>
+        (composition.establishment, FlatFsmRuntime.EstablishmentOperation, "Bool")
       )
     private val privateMachineStorage = snapshot.flatFsms.flatMap(value =>
       Vector(value.storage) ++ value.control.map(_.storage)
@@ -222,6 +225,21 @@ private[nodal] object DigitalValueMlir:
     ).toMap
     private val generated = snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
       .map(value => value.path -> value).toMap
+    private val generatedDeclarationOwners = generated.valuesIterator.flatMap(region =>
+      region.declarations.map(_ -> region)
+    ).toMap
+    private val generatedExports = generated.valuesIterator.flatMap(region =>
+      region.exports.map(exported => (region.path -> exported.member) -> exported)
+    ).toMap
+    requireValid(
+      generated.valuesIterator.map(
+        _.declarations.size.toLong
+      ).sum == generatedDeclarationOwners.size &&
+        generated.valuesIterator.map(_.exports.size.toLong).sum == generatedExports.size &&
+        generatedExports.size <= 65536,
+      "generated declaration/export inventories must be unique and bounded",
+      snapshot.root
+    )
     private val generatedByRegion =
       generated.values.toVector.groupBy(value => value.owner -> value.parent)
     private final case class Region(
@@ -300,6 +318,7 @@ private[nodal] object DigitalValueMlir:
           Vector.empty
         ).map(_.path)
         result ++= argumentsByRegion.getOrElse(current, Vector.empty)
+        result ++= generated.get(current).toVector.flatMap(_.declarations)
         pending ++= childrenByRegion.getOrElse(Some(current), Vector.empty).map(_.path)
       result.toVector
 
@@ -316,6 +335,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(staticExpressions.get(path).flatMap(_.region))
         .orElse(iterationIndices.get(path).map(_.region))
         .orElse(arguments.get(path).map(_._1.path))
+        .orElse(declarations.get(path).flatMap(_._2.generatedScope.map(_.owner)))
 
     def requireVisible(
         path: String,
@@ -716,6 +736,24 @@ private[nodal] object DigitalValueMlir:
               parent.get,
               fail("structural parent scope is absent", arm.path)
             ).parentRegion
+    private def behavioralParentRoot(parent: Option[String], owner: String): Option[String] =
+      var current = parent
+      var root = Option.empty[String]
+      val seen = mutable.HashSet.empty[String]
+      while current.nonEmpty do
+        val path = current.get
+        val region = regions.getOrElse(path, fail("behavioral lexical parent is absent", path))
+        requireValid(
+          seen.add(path) && seen.size <= 128 && region.owner == owner &&
+            (sequentialRoot(path).nonEmpty || arms.contains(path) ||
+              generated.get(path).exists(_.yieldedArea.nonEmpty)),
+          "behavioral ancestry requires actual sequential, structural or family regions",
+          path
+        )
+        root = root.orElse(sequentialRoot(path))
+        current = region.parentRegion
+      root
+
     snapshot.behavioralIfs.foreach: conditional =>
       requireValid(
         modules.contains(
@@ -727,8 +765,8 @@ private[nodal] object DigitalValueMlir:
           conditional.parentRegion.forall(path =>
             regions.get(path).exists(_.owner == conditional.owner)
           ) &&
-          (if conditional.parentRegion.isEmpty then conditional.root == conditional.path
-           else conditional.parentRegion.flatMap(sequentialRoot).contains(conditional.root)),
+          conditional.root == behavioralParentRoot(conditional.parentRegion, conditional.owner)
+            .getOrElse(conditional.path),
         "behavioral if requires one owned outer update root and a behavioral lexical parent",
         conditional.path
       )
@@ -801,11 +839,44 @@ private[nodal] object DigitalValueMlir:
         body.arguments.size == body.captures.size + 1 && body.arguments.size <= 4098 &&
           body.arguments.head.path == value.induction && body.arguments.head.dataType == "Integer" &&
           body.arguments.head.role == "induction" && body.sourceOrdinal >= 0 &&
-          body.captures.distinct.size == body.captures.size && value.declarations.isEmpty &&
+          body.captures.distinct.size == body.captures.size &&
+          (value.yieldedArea.nonEmpty || value.declarations.isEmpty) &&
           !snapshot.digitalLoops.exists(_.generatedRegion.contains(value.path)),
         "digital Generate requires one actual induction and one retained whole-body partition",
         value.path
       )
+      requireValid(
+        value.exports.isEmpty || value.yieldedArea.nonEmpty,
+        "generated exports require an actual yielded Area family",
+        value.path
+      )
+      value.yieldedArea.foreach: area =>
+        requireValid(
+          value.parent.isEmpty && snapshot.areas.exists(record =>
+            record.path == area && record.owner == value.owner &&
+              record.generatedScope.contains(KernelGeneratedScope(value.path, value.induction))
+          ) && value.exports.size <= 65536 &&
+            value.exports.map(_.member).distinct.size == value.exports.size,
+          "generated storage family requires a direct owned Area and unique bounded export keys",
+          value.path
+        )
+        value.declarations.foreach: path =>
+          val storage = declarations.get(path).filter(_._1 == value.owner).map(_._2)
+            .getOrElse(fail("generated storage has no actual module declaration", path))
+          requireValid(
+            Set("wire", "register")(storage.kind) &&
+              storage.generatedScope.contains(KernelGeneratedScope(value.path, value.induction)),
+            "family storage must retain its exact generated owner and induction",
+            path
+          )
+        value.exports.foreach: exported =>
+          requireValid(
+            exported.member.split("\\.", -1).forall(_.matches("[A-Za-z_][A-Za-z0-9_]*")) &&
+              generatedDeclarationOwners.get(exported.target).exists(_.path == value.path) &&
+              Set("read_only", "read_write")(exported.access),
+            "generated export requires a canonical key, exact direct storage and attested access",
+            value.path
+          )
       body.captures.foreach(requireVisible(_, value.owner, value.parent, value.path))
       body.arguments.drop(1).zipWithIndex.foreach: (argument, index) =>
         requireValid(
@@ -816,6 +887,77 @@ private[nodal] object DigitalValueMlir:
           "digital Generate capture alias has an invalid canonical identity or role",
           argument.path
         )
+
+    def generatedStorage(path: String): Boolean = declarations.get(path).exists: (_, declaration) =>
+      declaration.generatedScope.exists(scope =>
+        generatedDeclarationOwners.get(path).exists(region =>
+          region.yieldedArea.nonEmpty && region.path == scope.owner &&
+            region.induction == scope.induction && Set("wire", "register")(declaration.kind)
+        )
+      )
+
+    private def generatedAccess(exported: KernelGeneratedAreaExport, access: String): String =
+      if access == "read_only" then "read"
+      else
+        requireValid(
+          access == "read_write" && exported.access == "read_write",
+          "generated member cannot expand export access",
+          exported.target
+        )
+        declarations(exported.target)._2.kind
+
+    private def generatedMemberExport(expression: KernelDigitalExpressionSnapshot)
+        : (KernelGeneratedRegionSnapshot, KernelGeneratedAreaExport) =
+      val member = expression.generatedMember.get
+      val family = generated.getOrElse(
+        member.family,
+        fail("generated member has no actual family", expression.path)
+      )
+      val exported = generatedExports.get(member.family -> member.member)
+        .getOrElse(fail("generated member has no actual export", expression.path))
+      requireValid(
+        family.yieldedArea.nonEmpty && family.owner == expression.owner &&
+          family.parent == expression.region &&
+          expression.dataType == declarations(exported.target)._2.dataType.get &&
+          expression.literal.isEmpty && expression.enumIdentity.isEmpty && expression.caseIds.isEmpty &&
+          expression.structure.isEmpty && expression.materializationIntent.isEmpty &&
+          expression.memory.isEmpty && expression.crossing.isEmpty && expression.waiver.isEmpty &&
+          expression.reset.isEmpty && expression.clock.isEmpty &&
+          expression.operands.isEmpty,
+        "generated projection requires its exact export type and handle-definition scope",
+        expression.path
+      )
+      val _ = generatedAccess(exported, member.access)
+      member.ordinal.toLongOption match
+        case Some(value) => requireValid(
+            member.ordinal == value.toString,
+            "generated ordinal literal must be canonical signed i64",
+            expression.path
+          )
+        case None =>
+          requireVisible(member.ordinal, expression.owner, expression.region, expression.path)
+          requireStaticPredicateInput(member.ordinal, expression.owner, topology = true)
+      val (header, bounds, selected) = try
+        val header = Vector(family.lower, family.upperExclusive, family.step)
+          .map(loopBoundQuery.resolve(family.owner, _))
+        (
+          header,
+          header.map(loopBoundQuery.bounds),
+          loopBoundQuery.bounds(loopBoundQuery.resolve(expression.owner, member.ordinal))
+        )
+      catch
+        case error: IllegalArgumentException => fail(error.getMessage, expression.path)
+      val domain = IterationDomain.structural(
+        bounds(0),
+        bounds(1),
+        bounds(2),
+        family.maximum,
+        identicalBounds = header(0) == header(1)
+      )
+        .fold(problem => fail(problem.message, expression.path), identity)
+      IterationDomain.verifyOrdinal(domain, selected)
+        .fold(problem => fail(problem.message, expression.path), identity)
+      family -> exported
 
     private def assignmentRoot(
         path: String,
@@ -905,7 +1047,9 @@ private[nodal] object DigitalValueMlir:
     requireValid(
       machines.size == snapshot.flatFsms.size && machines.size <= 4096 &&
         switches.size == snapshot.enumSwitches.size && switches.size <= 65536 &&
-        machineResults.size == snapshot.flatFsms.map(value => 2 + 2 * value.control.size).sum &&
+        machineResults.size == snapshot.flatFsms.map(value =>
+          2 + 2 * value.control.size + value.composition.size
+        ).sum &&
         privateMachineStorage.size == snapshot.flatFsms.map(value => 1 + value.control.size).sum &&
         snapshot.flatFsms.map(_.storage).distinct.size == machines.size &&
         actions.size == snapshot.flatFsms.map(_.actions.size).sum &&
@@ -1180,13 +1324,20 @@ private[nodal] object DigitalValueMlir:
           predicates.get(input).foreach(value => frontier ++= value.operands)
           staticExpressions.get(input).foreach(value => frontier ++= value.operands)
     expressions.valuesIterator.filter(value =>
-      Set("flat_fsm_next", "flat_fsm_taken", "flat_fsm_entered", "flat_fsm_exited")(value.operation)
+      Set(
+        "flat_fsm_next",
+        "flat_fsm_taken",
+        "flat_fsm_entered",
+        "flat_fsm_exited",
+        FlatFsmRuntime.EstablishmentOperation
+      )(value.operation)
     ).foreach: value =>
       requireValid(
         machineResults.contains(value.path),
         "flat FSM projection has no actual machine owner",
         value.path
       )
+    composition.validate()
     snapshot.enumSwitches.foreach: value =>
       val canonical = enumDefinitions.get(value.enumIdentity).getOrElse(
         fail("enum switch canonical enum is absent", value.path)
@@ -1281,7 +1432,8 @@ private[nodal] object DigitalValueMlir:
             wholeRegisterTarget(assignment.target))
         case _ => false
       requireValid(
-        valid && target.generatedScope.isEmpty && !privateMachineStorage(target.path),
+        valid && (target.generatedScope.isEmpty || generatedStorage(target.path)) &&
+          !privateMachineStorage(target.path),
         "digital assignment kind differs from its exact sink kind or uses an unsupported projected register update",
         assignment.path
       )
@@ -1388,6 +1540,13 @@ private[nodal] object DigitalValueMlir:
     val waiverIds = mutable.HashSet.empty[(String, String)]
     snapshot.digitalExpressions.foreach: expression =>
       DigitalMaterializationMlir.validate(expression)
+      requireValid(
+        (expression.operation == GeneratedAreaRuntime.MemberOperation) == expression.generatedMember.nonEmpty,
+        "only generated member operations carry family projection metadata",
+        expression.path
+      )
+      expression.generatedMember.foreach: _ =>
+        val _ = generatedMemberExport(expression)
       requireValid(
         DigitalAggregateContract.Operations.contains(expression.operation) ==
           expression.structure.nonEmpty,
@@ -2635,8 +2794,8 @@ private[nodal] object DigitalValueMlir:
           val counts = if machine.actions.isEmpty then "array<i32>"
           else s"array<i32: ${machine.actions.map(_.captures.size).mkString(", ")}>"
           val attributes = dictionary(Vector(
-            "contract_version" -> quoted(if machine.control.nonEmpty then "flat-fsm-v2"
-            else "flat-fsm-v1"),
+            "contract_version" -> quoted(if machine.composition.nonEmpty then "flat-fsm-v3"
+            else if machine.control.nonEmpty then "flat-fsm-v2" else "flat-fsm-v1"),
             "machine_id" -> quoted(machine.path),
             "enum_ref" -> enums.reference(machine.enumIdentity, machine.path),
             "domain" -> domainReference(machine.domain),
@@ -2673,6 +2832,49 @@ private[nodal] object DigitalValueMlir:
             proofs.update(path, Unknown)
           emittedEffects += machine.path
           active.remove(machine.path)
+
+      def emitComposition(path: String, depth: Int, output: mutable.ArrayBuffer[String]): Unit =
+        if !values.contains(path) then
+          val join = composition.joins.get(path)
+          val activation = composition.activations.get(path)
+          val parent = join.map(_.parent).orElse(activation.map(_.parent)).get
+          val ownerCase = join.map(_.value.ownerCase).orElse(activation.map(_.value.ownerCase)).get
+          val children = join.map(_.value.children).orElse(activation.map(_.value.children)).get
+          val resultPaths = join.map(value => Vector(value.value.result)).getOrElse(
+            Vector(
+              activation.get.value.restart,
+              activation.get.value.cancel,
+              activation.get.value.enable
+            )
+          )
+          val identity = if join.nonEmpty then resultPaths.head
+          else activation.get.value.restart.stripSuffix(".restart")
+          requireValid(
+            depth <= 128 && active.add(identity),
+            "composition value dependency is cyclic",
+            path
+          )
+          val inputs = if join.nonEmpty then composition.identityInputs(parent, children)
+          else composition.activationInputs(parent) ++ composition.childIdentityInputs(children)
+          val operands = inputs.map(emit(_, depth + 1, None, output, topology = false))
+          val result = s"%fsm_composition_$ordinal"
+          ordinal += 1
+          val attributes =
+            s"{composition_contract = \"fsm-composition-v1\", domain = ${domainReference(parent.domain)}, owner_case = ${quoted(ownerCase)}" +
+              join.map(value =>
+                s", mode = ${quoted(value.value.policy)}, selection = ${quoted(value.value.selection)}"
+              ).getOrElse("") +
+              s", metadata = ${metadata(identity, false)}}"
+          val resultTypes = resultPaths.map(_ => "!nodal.bits<1>")
+          val name = if join.nonEmpty then "nodal.fsm_join" else "nodal.fsm_activation"
+          output += s"$result:${resultPaths.size} = ${quoted(name)}(${operands.map(_._1).mkString(", ")}) <$attributes> : " +
+            s"(${operands.map(_._2).mkString(", ")}) -> (${resultTypes.mkString(", ")})${sourceLocation(identity)}"
+          val height = inputs.map(heights).maxOption.getOrElse(0) + 1
+          resultPaths.zipWithIndex.foreach: (resultPath, index) =>
+            values.update(resultPath, s"$result#$index" -> "!nodal.bits<1>")
+            heights.update(resultPath, height)
+            proofs.update(resultPath, Unknown)
+          active.remove(identity)
 
       def emitConditional(
           conditional: Conditional,
@@ -2908,7 +3110,16 @@ private[nodal] object DigitalValueMlir:
                 if index == 0 then Unknown else proofs(body.captures(index - 1))
               )
               if argument.dataType == "Integer" then bindStaticArgument(argument.path, value)
+            region.declarations.foreach(path => emit(path, depth + 1, Some(region.path), local))
             emitScope(region.path, depth + 1, local)
+            region.exports.foreach: exported =>
+              val value = emit(exported.target, depth + 1, Some(region.path), local)
+              val access = generatedAccess(exported, exported.access)
+              val identity = s"${region.path}.export.${exported.member}"
+              val attributes =
+                s"member = ${quoted(exported.member)}, access = ${quoted(access)}, " +
+                  s"metadata = ${metadata(identity, false)}"
+              local += s"${quoted("nodal.generated_export")}(${value._1}) <{$attributes}> : (${value._2}) -> ()${sourceLocation(exported.target)}"
           }
         )
         // Generate is non-isolated: source capture aliases must serialize as actual outer
@@ -2928,8 +3139,18 @@ private[nodal] object DigitalValueMlir:
           .linesIterator.map("  " + _).mkString("\n")
         val attributes = s"{induction = \"i\", region_id = ${quoted(region.path)}, " +
           s"induction_path = ${quoted(region.induction)}, metadata = ${effectMetadata(region.path, body.sourceOrdinal)}}"
-        output += s"${quoted("nodal.generate")}(${header.map(_._1).mkString(", ")}) <$attributes> " +
-          s"({\n$block\n}) : (${header.map(_._2).mkString(", ")}) -> ()${sourceLocation(region.path)}"
+        val handle = region.yieldedArea.map: _ =>
+          val result = s"%generated_family_$ordinal"
+          ordinal += 1
+          values.update(region.path, result -> "!nodal.generated_family")
+          heights.update(region.path, header.map(_._1).size)
+          proofs.update(region.path, Unknown)
+          result
+        output += handle.map(_ + " = ").getOrElse("") +
+          s"${quoted("nodal.generate")}(${header.map(_._1).mkString(", ")}) <$attributes> " +
+          s"({\n$block\n}) : (${header.map(_._2).mkString(", ")}) -> ${
+              if handle.nonEmpty then "!nodal.generated_family" else "()"
+            }${sourceLocation(region.path)}"
 
       def emitFifo(
           identity: String,
@@ -3031,6 +3252,9 @@ private[nodal] object DigitalValueMlir:
               result -> "!nodal.static_predicate"
             }
           )
+        else if composition.joins.contains(path) || composition.activations.contains(path) then
+          emitComposition(path, depth + 1, output)
+          values.getOrElse(path, fail("composition result has no actual producer", path))
         else if machineResults.contains(path) then
           emitMachine(machineResults(path), depth + 1, output)
           values.getOrElse(path, fail("flat FSM result has no actual producer", path))
@@ -3143,7 +3367,36 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.clock.nonEmpty then
+                  if expression.generatedMember.nonEmpty then
+                    val member = expression.generatedMember.get
+                    val (family, exported) = generatedMemberExport(expression)
+                    val handle = values.getOrElse(
+                      family.path,
+                      fail("generated member must follow its actual family producer", path)
+                    )
+                    val selected = if member.ordinal.toLongOption.nonEmpty then
+                      staticValue(member.ordinal, region, output, StaticPurpose.Structural)
+                    else emit(member.ordinal, depth + 1, region, output)
+                    requireValid(
+                      handle._2 == "!nodal.generated_family" && selected._2 == "i64",
+                      "generated member requires exact family and static ordinal operands",
+                      path
+                    )
+                    val attributes = s"{member = ${quoted(member.member)}, " +
+                      s"access = ${quoted(generatedAccess(exported, member.access))}, metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.generated_member",
+                        result,
+                        dataType,
+                        Vector(handle, selected),
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.clock.nonEmpty then
                     val clock = expression.clock.get
                     val controlDomains = clock.controlKinds.zip(clock.controlDomains).map:
                       case ("domain", Some(domain)) => domainReference(domain)
@@ -3664,8 +3917,11 @@ private[nodal] object DigitalValueMlir:
                 case None =>
                   val declaration = declarations(path)._2
                   requireValid(
-                    declaration.generatedScope.isEmpty,
-                    "digital operand cannot escape a generated declaration scope",
+                    declaration.generatedScope.isEmpty ||
+                      (generatedStorage(path) && declaration.generatedScope.exists(scope =>
+                        region.contains(scope.owner)
+                      )),
+                    "digital operand cannot escape its exact generated declaration scope",
                     path
                   )
                   val initialPath = declarationInitializer(declaration)
@@ -3682,7 +3938,14 @@ private[nodal] object DigitalValueMlir:
                       "digital initializer requires the exact storage type",
                       path
                     )
-                  val initial = initialPath.map(emit(_, depth + 1, region, output))
+                  val initial = initialPath.map: input =>
+                    val initialRegion = valueRegion(input)
+                    requireValid(
+                      initialRegion == region || initialRegion.isEmpty,
+                      "generated storage initializer must be local or module-owned",
+                      path
+                    )
+                    emit(input, depth + 1, initialRegion, output)
                   val height = initialPath.map(heights(_) + 1).getOrElse(0)
                   (
                     declarationValue(declaration, result, dataType, initial),
@@ -3709,13 +3972,20 @@ private[nodal] object DigitalValueMlir:
             path
           )
           emit(path, 0, None, lines)
-        module.declarations.filter(value => Set("wire", "register").contains(value.kind))
+        module.declarations.filter(value =>
+          Set("wire", "register").contains(value.kind) &&
+            value.generatedScope.isEmpty
+        )
           .sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
       val moduleChoices = conditionalsByRegion.getOrElse(module.path -> None, Vector.empty)
       // A value choice may contain writes. Materialize its dependencies on demand at the
       // authored effect position; retain the predecessor pure-root schedule otherwise.
       if moduleChoices.isEmpty && !snapshot.flatFsms.exists(_.owner == module.path) &&
-        !switchesByRegion.contains(module.path -> None)
+        !switchesByRegion.contains(module.path -> None) &&
+        !generatedByRegion.getOrElse(
+          module.path -> None,
+          Vector.empty
+        ).exists(_.yieldedArea.nonEmpty)
       then emitModuleRoots()
       // Port values are the canonical storage operands. Materialize all process headers before
       // updates; native target lowering supplies the pre-event state cuts/backedges.
@@ -3835,7 +4105,11 @@ private[nodal] object DigitalValueMlir:
       )
       effects.sortBy(value => (value._1, value._2)).foreach(value => value._3())
       if moduleChoices.nonEmpty || snapshot.flatFsms.exists(_.owner == module.path) ||
-        switchesByRegion.contains(module.path -> None)
+        switchesByRegion.contains(module.path -> None) ||
+        generatedByRegion.getOrElse(
+          module.path -> None,
+          Vector.empty
+        ).exists(_.yieldedArea.nonEmpty)
       then emitModuleRoots()
       predicatesByRegion.getOrElse(None, Vector.empty).filter(_.owner == module.path)
         .sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))

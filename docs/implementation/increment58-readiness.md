@@ -650,3 +650,51 @@ The source replay and maintained bench remain pending in the next source
 checkpoint; these are matched integration observations, not a claim that this
 native-only commit contains that source. This repair adds no separate executor
 and does not close remaining timer/protocol/recursive-control obligations.
+
+## Checkpoint 13 — composed source, generated storage replay and resolved projections
+
+Immutable typed child slots now retain exact parent/state ownership and explicit
+runtime bindings. Two-phase capture allocates each actual local/lifecycle pair
+once, then captures canonical parent/child executors and registered-status joins.
+All/Any and ordered per-child Priority reuse existing transition semantics;
+finite topology, depth, occurrence and selected-join operand work are preflighted
+before expansion. Repeated immutable reuse is charged by physical occurrence,
+not object count. Artifact records retain definition hashes, exact composition
+identities, structural completion possibility and independently checked costs.
+No product-state encoding or second state engine is introduced.
+
+The generated-Area source bridge retains exact family/export/member identities,
+actual body ownership and the least legal enclosing projection scope. Maintained
+source witnesses include per-lane enable, exact Bits payload, inversion, reset
+hold and aliases for symbolic and concrete lane families. Scalar resolved child
+Interface projections preserve absolute read/drive/connect rights and finalized
+actual member types without creating new nets. Exact endpoint shape comparison
+uses an explicit actual-dimensions witness, not a fictitious Bool member lookup;
+an ordinary UInt-only Interface regression protects the shared correction.
+
+Focused source acceptance comprises **47 passing groups**: generated Area 14,
+composed FSM 10, controlled FSM 7, required-domain FSM 6, artifact 4, resolved
+Interface 5 and resolved native replay 1. The fifth matched run established the
+first five suites; after a test-only parent-parameter rename made the distinct
+formal/actual witness observable, the sixth matched run passed resolved 5+1.
+The native group executes two actual default gates. Earlier failed compiles,
+fixture assertions and a missing compiler environment are retained in logs;
+none is counted as passing or hidden by weakened assertions.
+
+Four actual compiled composition source profiles pass the complete default gate,
+CIRCT lowering, firtool export and Icarus waveforms on compiler `ef01aec4` from
+checkpoint 12. All/Any/Priority use three distinct local/lifecycle register pairs;
+nested uses four, plus the two explicit action-value registers in each witness.
+The generated output visibly joins registered Completed status rather than a
+Cartesian state encoding. Maintained commands and hashes are in
+`.work/f58-statecharts/composition/target-final-{all,any,priority,nested}`.
+Six actual shared-classpath generated-Area replays independently pass the default
+gate on the same frozen compiler, with identical predecessor source hashes;
+receipts are in `.work/f58-generated-areas/shared-checkpoint`. These six are
+native semantic witnesses, not generated-family target waveform claims.
+
+Nested generated declaration capture, generated module/Interface carriers,
+retained target loops, complete resolved/inout/conservative topology, timed and
+protocol states, explicit finite construction and runtime call/return stacks
+remain required continuation. This source checkpoint closes no F58 parent or
+child checklist item. Markdown, Python syntax and diff checks pass.

@@ -592,6 +592,45 @@ private[nodal] object ReproducibilityContract:
           "entered" -> string(control.entered),
           "exited" -> string(control.exited)
         )
+      ) ++ value.composition.map(composition =>
+        "composition" -> obj(
+          "contract" -> string("fsm-composition-v1"),
+          "root" -> string(composition.root),
+          "parent" -> optionalString(composition.parent),
+          "owner_case" -> optionalString(composition.ownerCase),
+          "slot" -> optionalString(composition.slot),
+          "definition_name" -> string(composition.definitionName),
+          "definition_hash" -> string(composition.definitionHash),
+          "fragments" -> array(composition.fragments.map((name, cases) =>
+            obj("name" -> string(name), "cases" -> array(cases.map(string)))
+          )),
+          "occurrences" -> number(composition.occurrences),
+          "records" -> number(composition.records),
+          "depth" -> number(composition.depth),
+          "structural_completion_possible" -> bool(composition.completionPossible),
+          "inactive_observation" -> string(
+            "qualify-with-active; storage-may-be-retained-or-uninitialized"
+          ),
+          "establishment" -> string(composition.establishment),
+          "groups" -> array(composition.groups.map(group =>
+            obj(
+              "owner_case" -> string(group.ownerCase),
+              "children" -> array(group.children.map(string)),
+              "restart" -> string(group.restart),
+              "cancel" -> string(group.cancel),
+              "enable" -> string(group.enable)
+            )
+          )),
+          "joins" -> array(composition.joins.map(join =>
+            obj(
+              "result" -> string(join.result),
+              "owner_case" -> string(join.ownerCase),
+              "children" -> array(join.children.map(string)),
+              "mode" -> string(join.policy),
+              "selection" -> string(join.selection)
+            )
+          ))
+        )
       ))*)
     ))).toVector ++ Option.when(snapshot.eventProcesses.nonEmpty)("event_processes" ->
     array(snapshot.eventProcesses.sortBy(_.path).map(value =>

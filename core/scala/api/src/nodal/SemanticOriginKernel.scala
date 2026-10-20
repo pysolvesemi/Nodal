@@ -170,6 +170,7 @@ private[nodal] final class SemanticOriginBuilder:
     "PipelineInterfaceCandidateApi.scala",
     "CompilerApi.scala",
     "FsmDefinitionApi.scala",
+    "FsmCompositionApi.scala",
     "GeneratedAreaApi.scala"
   )
   private val ignoredSourceSegments = Set(

@@ -44,7 +44,8 @@ final class FsmActionBinding[S] private[nodal] (
   */
 final class FsmBindings[S] private[nodal] (
     private[nodal] val guards: Vector[FsmGuardBinding[S]],
-    private[nodal] val actions: Vector[FsmActionBinding[S]]
+    private[nodal] val actions: Vector[FsmActionBinding[S]],
+    private[nodal] val children: Vector[FsmChildBinding[S]]
 )
 
 object FsmBindings:
@@ -57,11 +58,18 @@ object FsmBindings:
   ): FsmBindings[S] =
     FsmDefinitionRuntime.bindings(guards, actions)
 
+  def apply[S](
+      guards: Seq[FsmGuardBinding[S]],
+      actions: Seq[FsmActionBinding[S]],
+      children: Seq[FsmChildBinding[S]]
+  ): FsmBindings[S] = FsmDefinitionRuntime.bindings(guards, actions, children)
+
 /** An immutable state declaration. Every fluent operation returns a new declaration. */
 final class FsmState[S] private[nodal] (
     val value: S,
     private[nodal] val commands: Vector[FsmDefinitionCommand[S]],
-    private[nodal] val isTerminal: Boolean
+    private[nodal] val isTerminal: Boolean,
+    private[nodal] val childSlots: Vector[FsmChild[S, ?]]
 ):
   def on(guard: FsmGuard[S], mode: TransitionMode = TransitionMode.Exclusive)(to: S): FsmState[S] =
     FsmDefinitionRuntime.edge(this, guard, mode, to, None)
@@ -82,12 +90,25 @@ final class FsmState[S] private[nodal] (
   def exit(action: FsmAction[S]): FsmState[S] =
     FsmDefinitionRuntime.stateAction(this, "exit", action)
 
+  def children(slots: FsmChild[S, ?]*): FsmState[S] =
+    FsmCompositionRuntime.children(this, slots)
+
+  def onAllComplete(mode: TransitionMode = TransitionMode.Exclusive)(to: S): FsmState[S] =
+    FsmCompositionRuntime.join(this, "all", None, mode, to)
+
+  def onAnyComplete(mode: TransitionMode = TransitionMode.Exclusive)(to: S): FsmState[S] =
+    FsmCompositionRuntime.join(this, "any", None, mode, to)
+
+  def onChildComplete(child: FsmChild[S, ?], mode: TransitionMode = TransitionMode.Priority)(
+      to: S
+  ): FsmState[S] = FsmCompositionRuntime.join(this, "all", Some(child), mode, to)
+
   def terminal(): FsmState[S] =
     if isTerminal then FsmDefinitionRuntime.fail("state repeats terminal declaration")
-    new FsmState(value, commands, true)
+    new FsmState(value, commands, true, childSlots)
 
 object FsmState:
-  def apply[S](value: S): FsmState[S] = new FsmState(value, Vector.empty, false)
+  def apply[S](value: S): FsmState[S] = new FsmState(value, Vector.empty, false, Vector.empty)
 
 /** A frozen, reusable contribution. A fragment may be partial; its complete definition may not. */
 final class FsmFragment[S] private[nodal] (
@@ -139,6 +160,7 @@ object FsmStatus:
 
 /** Read-only controlled observations with the same lexical lifetime as the machine instance. */
 final class FsmRun[S] private[nodal] (private val builder: FsmBuilder[S]):
+  def child[C](slot: FsmChild[S, C]): FsmChildRun[C] = ConstructionKernel.fsmChild(builder, slot)
   val state: FsmInstance[S] = new FsmInstance(builder)
   def status: DecodedEnum[Expr[EnumValue[FsmStatus]]] = ConstructionKernel.flatFsmStatus(builder)
   def running: Expr[Bool] = status.value.isOneOf(FsmStatus.Running)
@@ -152,7 +174,10 @@ final class FsmDef[S] private[nodal] (
     val fragments: Vector[FsmFragment[S]],
     private[nodal] val guards: Vector[FsmGuard[S]],
     private[nodal] val actions: Vector[FsmAction[S]],
-    private[nodal] val evidence: HwEnum[S]
+    private[nodal] val evidence: HwEnum[S],
+    private[nodal] val children: Vector[FsmChild[S, ?]],
+    private[nodal] val compositionCost: FsmCompositionCost,
+    private[nodal] val semanticHash: String
 ):
   def instantiate(
       bindings: FsmBindings[S],

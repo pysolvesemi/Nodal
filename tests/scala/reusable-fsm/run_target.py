@@ -155,6 +155,58 @@ endmodule
 """
 
 
+def composed_bench(top: str, profile: str) -> str:
+    early = profile in ("composed-any", "composed-priority")
+    nested = profile == "composed-nested"
+    completion = (
+        "tick; check(1,2,2,3,0,0,11,22);" if early else
+        "finishSecond=1; tick; check(0,1,2,2,1,1,11,22); " +
+        ("tick; check(0,1,2,2,0,0,11,22); " if nested else "") +
+        "tick; check(1,2,2,2,0,0,11,22);"
+    )
+    settle = "tick; tick; tick;" if nested else "tick; tick;"
+    return f"""module tb;
+reg clock=0,reset=1,restart=0,cancel=0,enable=0,finishFirst=0,finishSecond=0;
+wire state,firstActive,secondActive;
+wire [1:0] status,firstStatus,secondStatus;
+wire [7:0] firstValue,secondValue;
+{top} dut(.clock(clock),.reset(reset),.restart(restart),.cancel(cancel),.enable(enable),
+ .finishFirst(finishFirst),.finishSecond(finishSecond),.status(status),.state(state),
+ .firstStatus(firstStatus),.secondStatus(secondStatus),.firstActive(firstActive),
+ .secondActive(secondActive),.firstValue(firstValue),.secondValue(secondValue));
+task tick; reg [24:0] saved; begin
+ #2; clock=1; #1; saved={{state,status,firstStatus,secondStatus,firstActive,secondActive,firstValue,secondValue}};
+ clock=0; #1;
+ if({{state,status,firstStatus,secondStatus,firstActive,secondActive,firstValue,secondValue}} !== saved)
+  $fatal(1,"composition sampled the wrong edge");
+end endtask
+task check(input localState,input [1:0] root,a,b,input activeA,activeB,input [7:0] x,y); begin
+ if(state !== localState || status !== root || firstStatus !== a || secondStatus !== b ||
+    firstActive !== activeA || secondActive !== activeB || firstValue !== x || secondValue !== y)
+  $fatal(1,"composition mismatch local=%d root=%d children=%d,%d active=%d,%d values=%d,%d",
+   state,status,firstStatus,secondStatus,firstActive,secondActive,firstValue,secondValue);
+end endtask
+initial begin
+ tick; check(0,0,0,0,0,0,0,0); reset=0;
+ finishFirst=1; tick; check(0,0,0,0,0,0,0,0);
+ restart=1; tick; check(0,1,1,1,1,1,11,22);
+ restart=0; tick; check(0,1,1,1,1,1,11,22);
+ enable=1; tick; check(0,1,2,1,1,1,11,22);
+ {completion}
+ finishFirst=0; finishSecond=0; tick;
+ restart=1; cancel=1; enable=0; tick; check(0,1,1,1,1,1,11,22);
+ tick; check(0,3,3,3,0,0,11,22);
+ cancel=0; tick; check(0,1,1,1,1,1,11,22);
+ restart=0; enable=1; finishFirst=1; finishSecond=1;
+ {settle} check(1,2,2,2,0,0,11,22);
+ reset=1; #1; check(1,2,2,2,0,0,11,22); tick; check(0,0,0,0,0,0,0,0);
+ $display("REUSABLE_FSM_TARGET_PASS {profile}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
@@ -162,6 +214,7 @@ def main() -> None:
     parser.add_argument("--profile", choices=(
         "legacy", "controlled", "terminal",
         "required", "required-material", "required-forwarded",
+        "composed-all", "composed-any", "composed-priority", "composed-nested",
     ), default="legacy")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
@@ -175,7 +228,8 @@ def main() -> None:
     args.out = args.out.resolve()
     source = args.input.read_text()
     required = args.profile.startswith("required")
-    expected_machines = 1 if args.profile == "terminal" or required else 2
+    composed = args.profile.startswith("composed-")
+    expected_machines = (4 if args.profile == "composed-nested" else 3) if composed else (1 if args.profile == "terminal" or required else 2)
     if source.count('"nodal.flat_fsm"') != expected_machines:
         raise RuntimeError(f"expected {expected_machines} actual Scala machine definitions")
     if source.count('illegal_policy = "recover_to_initial"') != expected_machines:
@@ -237,7 +291,9 @@ def main() -> None:
         top = modules[0]
     manifest["top"] = top
     manifest["modules"] = modules
-    if args.profile == "controlled":
+    if composed:
+        bench = composed_bench(top, args.profile)
+    elif args.profile == "controlled":
         bench = controlled_bench(top)
     elif args.profile == "terminal":
         bench = terminal_bench(top)

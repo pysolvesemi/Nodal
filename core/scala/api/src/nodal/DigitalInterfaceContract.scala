@@ -91,7 +91,8 @@ private[nodal] object DigitalInterfaceContract:
       boundary: Option[KernelInterfaceBoundarySnapshot] = None,
       memberValueType: DataType[?] => DataType[?] = identity,
       actualMemberType: DataType[?] => DataType[?] = identity,
-      renderFormalType: Option[DataType[?] => String] = None
+      renderFormalType: Option[DataType[?] => String] = None,
+      shapeWitness: DataType[?] = Bool
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
 
@@ -513,7 +514,7 @@ private[nodal] object DigitalInterfaceContract:
             val b = declaration(right, operation.owner)
             if left.definition.name != right.definition.name || a.domain != b.domain ||
               a.path == b.path ||
-              !a.samePayloadTypes(a.memberValueType(Bool), b.memberValueType(Bool))
+              !a.samePayloadTypes(a.shapeWitness, b.shapeWitness)
             then
               fail(
                 5,
@@ -569,8 +570,9 @@ private[nodal] object DigitalInterfaceContract:
                 "driveMember requires an exact digital leaf name, including protocol payload/valid/ready"
               )
             )
-            val writable = if context.boundary.nonEmpty then leaf.access == "in"
-            else Set("out", "drive").contains(leaf.access)
+            val writable = if leaf.mode.nonEmpty then leaf.access == "drive"
+            else if context.boundary.nonEmpty then leaf.access == "in"
+            else leaf.access == "out"
             if leaf.analogType.nonEmpty || !writable || endpoint.role.name == "monitor"
             then
               fail(3, "role does not permit driving this digital member")

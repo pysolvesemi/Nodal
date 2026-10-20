@@ -19,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <vector>
 using namespace mlir;
 namespace {
 std::string hash = "cb807326542df7db5314f8d795ea4384c2b40209497084c69a41f9ccd9faf46b";
@@ -167,6 +168,69 @@ std::string controlledMachine(bool actions = true, std::string policy = "recover
               event + "\"}}> : (" + bits(1) + ", " + bits(1) + ") -> " + bits(1) + "\n";
   return result;
 }
+std::string requiredFixture(bool controlled = true, bool conditional = true, bool error = false,
+                            bool bothReset = false) {
+  auto child = controlled ? controlledSetup() : setup();
+  child = "\"nodal.domain_requirement\"() <{sym_name = \"core\", metadata = {}}> : () -> ()\n" +
+          child.substr(child.find("%initial"));
+  if (conditional)
+    for (std::string name : controlled ? std::vector<std::string>{"state", "status"}
+                                       : std::vector<std::string>{"state"})
+      child = replace(child, "name = \"" + name + "\", kind = \"register\"",
+                      "name = \"" + name +
+                          "\", kind = \"register\", initializer_policy = \"if_reset\"");
+  child += controlled ? controlledMachine(true, error ? "error" : "recover_to_initial")
+                      : machine(true, error ? "error" : "recover_to_initial");
+  std::string top;
+  for (bool first : {true, false}) {
+    bool reset = first || bothReset;
+    std::string domain = first ? "core" : "other";
+    top += "\"nodal.domain\"() <{sym_name = \"" + domain +
+           "\", edge = \"rising\", reset_policy = \"" + (reset ? "sync" : "none") +
+           "\", metadata = {}}> : () -> ()\n";
+    for (std::string role :
+         reset ? std::vector<std::string>{"clock", "reset"} : std::vector<std::string>{"clock"}) {
+      auto name = role + "_" + domain;
+      top += "\"nodal.port\"() <{sym_name = \"" + name +
+             "\", direction = \"input\", type = !nodal.capability<\"" + role + "\">, domain = @" +
+             domain + ", metadata = {}}> : () -> ()\n%" + name +
+             " = \"nodal.port_value\"() <{port = @" + name +
+             ", metadata = {}}> : () -> !nodal.capability<\"" + role + "\">\n";
+    }
+    top += "\"nodal.local_domain_binding\"(%clock_" + domain + (reset ? ", %reset_" + domain : "") +
+           ") <{domain = @" + domain +
+           ", reset_polarity = \"active_high\", metadata = {}}> : "
+           "(!nodal.capability<\"clock\">" +
+           (reset ? std::string(", !nodal.capability<\"reset\">") : "") + ") -> ()\n";
+    auto name = "child_" + domain;
+    top += "\"nodal.instance\"() <{sym_name = \"" + name +
+           "\", module = @Fixture, domain_bindings = {core = @" + domain +
+           "}, parameter_bindings = {}, metadata = {}}> : () -> ()\n";
+    top += "\"nodal.instance_domain_binding\"(%clock_" + domain +
+           (reset ? ", %reset_" + domain : "") + ") <{instance = @" + name +
+           ", requirement = @core, actual = @" + domain +
+           ", origin = \"named\", metadata = {}}> : (!nodal.capability<\"clock\">" +
+           (reset ? std::string(", !nodal.capability<\"reset\">") : "") + ") -> ()\n";
+    for (std::string input :
+         controlled ? std::vector<std::string>{"go", "again", "done", "restart", "cancel", "enable"}
+                    : std::vector<std::string>{"go", "again", "done"}) {
+      auto value = name + "_" + input;
+      top += "%" + value + " = \"nodal.instance_port\"() <{instance = @" + name + ", port = \"" +
+             input + "\", direction = \"input\", metadata = {}}> : () -> !nodal.bits<1>\n";
+      top += "\"nodal.digital_assign\"(%" + value +
+             ", %zero) <{kind = \"continuous\", metadata = {}}> : "
+             "(!nodal.bits<1>, !nodal.bits<1>) -> ()\n";
+    }
+  }
+  return "module attributes {nodal.root.module = @Top} {\n" + enumeration() +
+         "\"nodal.module\"() <{sym_name = \"Top\", metadata = {}}> ({\n"
+         "%zero = \"nodal.const_literal\"() <{value = false, spelling = \"0\", metadata = "
+         "{}}> : () -> !nodal.bits<1>\n" +
+         top +
+         "}) : () -> ()\n"
+         "\"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" +
+         child + "}) : () -> ()\n}";
+}
 std::string print(Operation *op) {
   std::string s;
   llvm::raw_string_ostream out(s);
@@ -302,6 +366,10 @@ std::string scaleFixture() {
 } // namespace
 int main(int argc, char **argv) {
   if (argc == 2 && StringRef(argv[1]).starts_with("--emit-")) {
+    if (StringRef(argv[1]) == "--emit-required") {
+      llvm::outs() << requiredFixture();
+      return 0;
+    }
     bool recovery = StringRef(argv[1]) == "--emit-recovery";
     llvm::outs() << wrap(setup() + machine(true, recovery ? "recover_to_initial" : "error"));
     return 0;
@@ -345,6 +413,90 @@ int main(int argc, char **argv) {
       llvm::outs() << "PASS " << name << '\n';
   };
   auto controlled = wrap(controlledSetup() + controlledMachine());
+  check("contextual-reset-same-controlled-definition", requiredFixture(), true,
+        [](nodal::ModuleOp module) {
+          unsigned conditional = 0, queries = 0, resetProjections = 0;
+          bool valid = true;
+          module.walk([&](nodal::SequentialUpdateOp op) {
+            if (op->hasAttr("initializer_policy")) {
+              ++conditional;
+              valid &= op->getNumOperands() == 4 && !op->hasAttr("edge") &&
+                       !op->hasAttr("reset_policy") && !op->hasAttr("reset_polarity");
+            }
+          });
+          module.walk([&](nodal::ResetAssertedOp op) {
+            ++queries;
+            valid &= op->getNumOperands() == 0 && !op->hasAttr("reset_polarity");
+          });
+          module.walk([&](nodal::RequirementResetOp) { ++resetProjections; });
+          return valid && conditional == 2 && queries == 1 && resetProjections == 0;
+        });
+  check("contextual-reset-ordinary-machine", requiredFixture(false), true);
+  check("contextual-error-assertion-materializes-exact-clock", requiredFixture(true, true, true),
+        true, [](nodal::ModuleOp module) {
+          unsigned clocks = 0, assertions = 0;
+          bool valid = true;
+          module.walk([&](nodal::RequirementClockOp) { ++clocks; });
+          module.walk([&](nodal::SequentialAssertOp op) {
+            ++assertions;
+            auto controls = nodal::inspectSequentialDomainControls(op, op->getAttr("domain"));
+            valid &= succeeded(controls) && controls->contextual() &&
+                     nodal::matchesSequentialDomainClock(op->getOperand(1), *controls) &&
+                     !op->hasAttr("edge");
+          });
+          return valid && clocks == 1 && assertions == 1;
+        });
+  const std::string requirement =
+      "\"nodal.domain_requirement\"() <{sym_name = \"core\", metadata = {}}> : () -> ()\n";
+  auto projected = replace(
+      requiredFixture(true, true, false, true), requirement,
+      requirement +
+          "%projected_clock = \"nodal.requirement_clock\"() <{requirement = @core, metadata = "
+          "{}}> : () -> !nodal.capability<\"clock\">\n"
+          "%projected_reset = \"nodal.requirement_reset\"() <{requirement = @core, metadata = "
+          "{}}> : () -> !nodal.capability<\"reset\">\n" +
+          literal("unrelated_initial", 0, 1) + state("unrelated", bits(1), "unrelated_initial") +
+          "\"nodal.sequential_update\"(%unrelated, %unrelated, %projected_clock, %projected_reset, "
+          "%unrelated_initial) <{domain = @core, root_id = \"Fixture.unrelated\", metadata = "
+          "{}}> : (!nodal.bits<1>, !nodal.bits<1>, !nodal.capability<\"clock\">, "
+          "!nodal.capability<\"reset\">, !nodal.bits<1>) -> ()\n");
+  check(
+      "contextual-reset-dependencies-independent-of-unrelated-projection", projected, true,
+      [](nodal::ModuleOp module) {
+        bool valid = true;
+        unsigned machines = 0;
+        module.walk([&](nodal::FlatFSMOp op) {
+          ++machines;
+          auto controls = nodal::inspectSequentialDomainControls(op, op->getAttr("domain"));
+          if (failed(controls) || !controls->contextual() || !controls->reset ||
+              controls->reset.use_empty()) {
+            valid = false;
+            return;
+          }
+          SmallVector<Value> resultDependencies;
+          valid &=
+              succeeded(nodal::flatFSMResultDependencies(op->getResult(0), resultDependencies)) &&
+              !llvm::is_contained(resultDependencies, controls->reset);
+          SmallVector<SmallVector<Value, 4>> actionDependencies;
+          unsigned work = 0;
+          valid &= succeeded(nodal::flatFSMActionControlDependencies(op, actionDependencies, work,
+                                                                     65536)) &&
+                   actionDependencies.size() == 5;
+          for (const auto &roots : actionDependencies)
+            valid &= !llvm::is_contained(roots, controls->reset);
+        });
+        return valid && machines == 1;
+      },
+      false);
+  check("contextual-FSM-missing-conditional-policy", requiredFixture(true, false), false);
+  check("contextual-FSM-unknown-conditional-policy",
+        replace(requiredFixture(), "initializer_policy = \"if_reset\"",
+                "initializer_policy = \"guess\""),
+        false);
+  check("physical-FSM-cannot-claim-contextual-policy",
+        replace(controlled, "name = \"state\", kind = \"register\"",
+                "name = \"state\", kind = \"register\", initializer_policy = \"if_reset\""),
+        false);
   check(
       "controlled-distinct-result-semantic-identities", controlled, true,
       [](nodal::ModuleOp module) {

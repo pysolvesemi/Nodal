@@ -61,6 +61,10 @@ struct DigitalDependencyNode {
   /// Actual root event trigger classification survives aliases without becoming
   /// state or an attributed source domain. It cannot control an ordinary clock.
   bool eventTrigger = false;
+  /// An exact unresolved local requirement whose reset controls this value or
+  /// action. This is an obligation, never an absent Reset capability. Closed
+  /// hierarchy composition resolves it independently for every occurrence.
+  mlir::FlatSymbolRefAttr contextualReset;
 };
 struct DigitalCrossingSample {
   unsigned root;

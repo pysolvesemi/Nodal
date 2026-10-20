@@ -138,7 +138,8 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
 def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage", [HasParent<"ModuleOp">]> {
   let summary = "Owned typed structural wire or domain-owned register";
   let arguments = (ins Variadic<AnyType>:$initial, StrAttr:$name,
-    StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain, DictionaryAttr:$metadata);
+    StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain,
+    OptionalAttr<StrAttr>:$initializer_policy, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -2010,7 +2011,7 @@ def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleO
   let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
     Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
     OptionalAttr<StrAttr>:$edge, OptionalAttr<StrAttr>:$reset_policy,
-    OptionalAttr<StrAttr>:$reset_polarity,
+    OptionalAttr<StrAttr>:$reset_polarity, OptionalAttr<StrAttr>:$initializer_policy,
     StrAttr:$root_id, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
@@ -2039,15 +2040,15 @@ def Nodal_EnumSwitchOp : Nodal_Op<"enum_switch", [IsolatedFromAbove, NoTerminato
 }
 def Nodal_ResetAssertedOp : Nodal_Op<"reset_asserted", [HasParent<"ModuleOp">]> {
   let summary = "Actual bound reset capability and polarity as a Boolean";
-  let arguments = (ins AnyType:$reset, FlatSymbolRefAttr:$domain,
-    StrAttr:$reset_polarity, DictionaryAttr:$metadata);
+  let arguments = (ins Variadic<AnyType>:$reset, FlatSymbolRefAttr:$domain,
+    OptionalAttr<StrAttr>:$reset_polarity, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleOp">]> {
   let summary = "Actual clock sampled property with exact owning domain";
   let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
-    StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
+    OptionalAttr<StrAttr>:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 

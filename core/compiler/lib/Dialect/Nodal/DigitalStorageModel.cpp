@@ -1,4 +1,3 @@
-#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 #include "mlir/IR/SymbolTable.h"
@@ -6,6 +5,8 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -80,6 +81,13 @@ LogicalResult verifyDigitalStorageOperation(Operation *operation) {
   if (failed(inferDigitalStorageMaximumBits(type, operation)))
     return reject(operation, "wire/register requires an owned finite directionless storage type");
   StringRef kind = text(operation, "kind");
+  if (operation->hasAttr("initializer_policy") &&
+      (text(operation, "initializer_policy") != "if_reset" || kind != "register" ||
+       operation->getNumOperands() != 1 ||
+       !DomainModel(operation).unresolvedRequirement(operation->getAttr("domain")) ||
+       !hasLocalHierarchyObligations(operation->getParentOp())))
+    return reject(operation, "if_reset requires initialized register storage in an exact "
+                             "unresolved local requirement");
   if (kind == "wire") {
     if (operation->getNumOperands() || operation->hasAttr("domain"))
       return reject(operation, "a structural wire has neither a state initializer nor a domain");

@@ -171,18 +171,23 @@ struct HierarchyTargetPlan {
         if (isa<InstanceDomainBindingOp>(op))
           actualBindings.try_emplace(
               std::make_pair(op.getAttr("instance"), op.getAttr("requirement")), &op);
-      auto demand = [&](Attribute domain, bool reset) {
+      auto demand = [&](Attribute domain, bool clock, bool reset) {
         if (!local.unresolvedRequirement(domain))
           return;
         auto &entry = demands[domain];
-        entry.first = true;
+        entry.first |= clock;
         entry.second |= reset;
       };
       for (Operation &op : context.module->getRegion(0).front()) {
         if (isa<RequirementClockOp, RequirementResetOp>(op)) {
           if (llvm::any_of(op.getResult(0).getUsers(),
                            [](Operation *use) { return !isa<InstanceDomainBindingOp>(use); }))
-            demand(op.getAttr("requirement"), isa<RequirementResetOp>(op));
+            demand(op.getAttr("requirement"), isa<RequirementClockOp>(op),
+                   isa<RequirementResetOp>(op));
+        } else if (isa<ResetAssertedOp>(op)) {
+          demand(op.getAttr("domain"), false, true);
+        } else if (isa<SequentialUpdateOp>(op) && text(&op, "initializer_policy") == "if_reset") {
+          demand(op.getAttr("domain"), true, true);
         } else if (isa<CrossingOp, AsyncFifoOp>(op)) {
           auto crossing = inspectExecutableCrossing(&op, *proof, index);
           if (failed(crossing))
@@ -192,8 +197,8 @@ struct HierarchyTargetPlan {
           // Level chains do not sample the source clock; Gray destination
           // payload stages intentionally have no fabricated reset value.
           if (crossing->kind != CrossingKind::Level)
-            demand(op.getAttr("source_domain"), true);
-          demand(op.getAttr("destination_domain"), crossing->kind != CrossingKind::Gray);
+            demand(op.getAttr("source_domain"), true, true);
+          demand(op.getAttr("destination_domain"), true, crossing->kind != CrossingKind::Gray);
         } else if (isa<InstanceOp>(op)) {
           auto child = proof->childOccurrence(index, &op);
           if (failed(child))
@@ -206,7 +211,7 @@ struct HierarchyTargetPlan {
                  port.requirement});
             if (!binding)
               return reject(&op, "inferred child domain port lacks its exact actual binding");
-            demand(binding->getAttr("actual"), port.reset);
+            demand(binding->getAttr("actual"), port.clock, port.reset);
           }
         }
       }
@@ -227,8 +232,9 @@ struct HierarchyTargetPlan {
         port.edge = binding->domain.declaration->getAttrOfType<StringAttr>("edge");
         port.policy = binding->domain.declaration->getAttrOfType<StringAttr>("reset_policy");
         port.polarity = binding->resetPolarity;
-        candidate.signature += text(&op, "sym_name").str() + ":" + port.edge.getValue().str() +
-                               ":" + (port.reset ? port.policy.getValue().str() : "none") + ":" +
+        candidate.signature += text(&op, "sym_name").str() + ":" +
+                               (port.clock ? port.edge.getValue().str() : "") + ":" +
+                               (port.reset ? port.policy.getValue().str() : "none") + ":" +
                                (port.reset ? port.polarity.getValue().str() : "") + ";";
         candidate.domains.push_back(std::move(port));
       }
@@ -279,7 +285,8 @@ struct HierarchyTargetPlan {
       };
       for (auto &port : variant.domains) {
         auto name = cast<FlatSymbolRefAttr>(port.requirement).getValue();
-        port.clockName = reserve("__nodal_" + name.str() + "_clock");
+        if (port.clock)
+          port.clockName = reserve("__nodal_" + name.str() + "_clock");
         if (port.reset)
           port.resetName = reserve("__nodal_" + name.str() + "_reset");
       }
@@ -572,7 +579,8 @@ public:
       targetNames.insert(text(port, "sym_name"));
     if (variant)
       for (const auto &port : variant->domains) {
-        targetNames.insert(port.clockName);
+        if (port.clock)
+          targetNames.insert(port.clockName);
         if (port.reset)
           targetNames.insert(port.resetName);
       }
@@ -751,7 +759,8 @@ public:
                                     builder.getStringAttr(reset ? "reset" : "clock"))});
           targetPorts.push_back(info);
         };
-        add(port.clockName, false);
+        if (port.clock)
+          add(port.clockName, false);
         if (port.reset)
           add(port.resetName, true);
       }
@@ -793,7 +802,7 @@ public:
     }
     if (variant)
       for (const auto &port : variant->domains) {
-        Value clock = body->getArgument(inputIndex++);
+        Value clock = port.clock ? body->getArgument(inputIndex++) : Value();
         Value reset = port.reset ? body->getArgument(inputIndex++) : Value();
         domainInputs.try_emplace(port.requirement, std::make_pair(clock, reset));
       }
@@ -878,7 +887,8 @@ public:
         }
       for (const auto &port : child.domains) {
         Operation *binding = instanceBindings.lookup({instance, port.requirement});
-        inputs.push_back(values.lookup(binding->getOperand(0)));
+        if (port.clock)
+          inputs.push_back(values.lookup(binding->getOperand(0)));
         if (port.reset)
           inputs.push_back(values.lookup(binding->getOperand(1)));
       }
@@ -1010,7 +1020,7 @@ public:
       Operation *state;
       StringRef policy = updateSemantics(update, "reset_policy");
       if (policy == "async" || policy == "async_assert_sync_release") {
-        Value rawReset = values.lookup(update->getOperand(3));
+        Value rawReset = updateReset(update);
         if (!rawReset)
           return reject(update, "effective reset did not map before consumer");
         auto initial = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
@@ -1297,12 +1307,12 @@ public:
       edge.setValue(next);
     }
     for (auto &[update, edge] : resetValueEdges)
-      edge.setValue(values.lookup(update->getOperand(4)));
+      edge.setValue(updateInitial(update));
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
       if (updateSemantics(update, "reset_policy") == "sync") {
-        Value reset = resetActive(values.lookup(update->getOperand(3)), update);
-        next = mux(update, reset, values.lookup(update->getOperand(4)), next);
+        Value reset = resetActive(updateReset(update), update);
+        next = mux(update, reset, updateInitial(update), next);
       }
       edge.setValue(next);
     }
@@ -1321,8 +1331,8 @@ public:
           circt::seq::FromClockOp::create(builder, op.getLoc(), values.lookup(op.getOperand(1)));
       auto assertion = circt::verif::ClockedAssertOp::create(
           builder, op.getLoc(), values.lookup(op.getOperand(0)),
-          text(&op, "edge") == "falling" ? circt::verif::ClockEdge::Neg
-                                         : circt::verif::ClockEdge::Pos,
+          updateSemantics(&op, "edge") == "falling" ? circt::verif::ClockEdge::Neg
+                                                    : circt::verif::ClockEdge::Pos,
           clock, Value(), op.getAttrOfType<StringAttr>("root_id"));
       correlate(assertion, &op);
     }
@@ -1813,8 +1823,19 @@ private:
       return "none";
     auto facts = bindingFacts(update->getAttr("domain"));
     assert(succeeded(facts) && "mandatory occurrence proof established update binding");
+    if (key == "reset_policy" && text(update, "initializer_policy") == "if_reset" && !facts->reset)
+      return "none";
     return key == "reset_polarity" ? facts->resetPolarity.getValue()
                                    : text(facts->domain.declaration, key);
+  }
+  Value updateReset(Operation *update) const {
+    if (text(update, "initializer_policy") == "if_reset")
+      return domainInputs.lookup(update->getAttr("domain")).second;
+    return values.lookup(update->getOperand(3));
+  }
+  Value updateInitial(Operation *update) const {
+    return values.lookup(
+        update->getOperand(text(update, "initializer_policy") == "if_reset" ? 3 : 4));
   }
   FailureOr<CrossingControls> crossingControls(Operation *at, Attribute reference,
                                                bool resetNeeded = true) {
@@ -2142,8 +2163,9 @@ private:
                 {value, constant(at, bits, llvm::APInt::getAllOnes(bits))});
   }
   Value resetActive(Value value, Operation *at) {
-    StringRef polarity = isa<SequentialUpdateOp>(at) ? updateSemantics(at, "reset_polarity")
-                                                     : text(at, "reset_polarity");
+    StringRef polarity = isa<SequentialUpdateOp, ResetAssertedOp>(at)
+                             ? updateSemantics(at, "reset_polarity")
+                             : text(at, "reset_polarity");
     return polarity == "active_low" ? invert(at, value) : value;
   }
   Value resize(Operation *at, Value value, unsigned bits, bool sign) {
@@ -2225,8 +2247,17 @@ private:
     }
     if (isa<SequentialSelectOp>(op))
       return mux(op, inputs[0], inputs[1], inputs[2]);
-    if (named(op, "nodal.reset_asserted"))
-      return resetActive(inputs[0], op);
+    if (named(op, "nodal.reset_asserted")) {
+      if (!inputs.empty())
+        return resetActive(inputs[0], op);
+      auto facts = bindingFacts(op->getAttr("domain"));
+      if (failed(facts))
+        return {};
+      if (!facts->reset)
+        return constant(op, 1, 0);
+      Value reset = domainInputs.lookup(op->getAttr("domain")).second;
+      return reset ? resetActive(reset, op) : Value();
+    }
     StringRef code = text(op, "operator_name");
     if (isa<EnumExprOp>(op)) {
       auto ids = op->getAttrOfType<ArrayAttr>("case_ids");

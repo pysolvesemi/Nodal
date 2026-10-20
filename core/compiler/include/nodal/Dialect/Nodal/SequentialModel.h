@@ -3,7 +3,35 @@
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/SmallVector.h"
+namespace mlir {
+class OpBuilder;
+}
 namespace nodal {
+enum class SequentialResetAvailability { Absent, Present, Contextual };
+/// Query-local control facts. A missing formal projection is not evidence that
+/// a requirement is resetless. Material semantics remain occurrence-owned.
+struct SequentialDomainControls {
+  mlir::Operation *module = nullptr;
+  mlir::Operation *declaration = nullptr;
+  mlir::Operation *binding = nullptr;
+  mlir::Value clock, reset;
+  SequentialResetAvailability resetAvailability = SequentialResetAvailability::Absent;
+  bool contextual() const { return resetAvailability == SequentialResetAvailability::Contextual; }
+};
+/// Independently check a local executable binding or an exact unresolved local
+/// requirement. Formal admission is structural only and requires mandatory
+/// whole-root occurrence verification before any executable publication.
+mlir::FailureOr<SequentialDomainControls>
+inspectSequentialDomainControls(mlir::Operation *use, mlir::Attribute reference);
+/// Exact local Clock match, accepting any verified projection of the same
+/// formal requirement rather than assigning identity to one projection record.
+bool matchesSequentialDomainClock(mlir::Value clock, const SequentialDomainControls &controls);
+/// Reuse a dominating exact formal Clock or create one at the module start.
+/// Caller owns the private transaction, charges one operation conservatively,
+/// and verifies the whole root before publication. Never creates Reset.
+mlir::FailureOr<mlir::Value> getOrCreateSequentialDomainClock(mlir::Operation *use,
+                                                              mlir::OpBuilder &builder,
+                                                              mlir::DictionaryAttr metadata);
 /// Finite actual-IR budgets, independent of parameter values or physical lanes.
 struct SequentialModelLimits {
   unsigned maximumOperations = 65536;

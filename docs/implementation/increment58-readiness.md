@@ -366,3 +366,40 @@ pipeline. Receipts are in `.work/f58-symbolic-target-checkpoint4/`,
 Failed earlier export receipts remain separate; hand-edited diagnostic IR is not
 acceptance evidence. The native compiler has 800 passing focused cases as
 recorded in checkpoint 4.
+
+## Checkpoint 6: contextual native state and complete Interface payload ABI
+
+Native sequential consumers can retain an exact unresolved local domain
+requirement until closed-root occurrence proof. The shared sequential owner
+supplies contextual clock/reset intent; the hierarchy owner recognizes the
+consumer itself as an inference obligation, without requiring a pre-existing
+Clock projection. Missing roots and unbound requirements still reject. Explicit
+`if_reset` private-state initialization is resolved per actual reset-bearing or
+resetless occurrence, without fabricating a Reset projection or startup value.
+Ordinary mandatory initializers retain their reset requirements. FSM execution
+continues through the same flat executor and sequential-update normalization.
+
+Complete Interface payload admission now retains formal child declarations and
+separate checked actual types. The existing digital type comparator proves both
+exact occurrence contexts; complete imported ABI admission is cached by
+(definition, instance), not definition alone. Unaccessed leaves and sibling
+instances with different bindings cannot inherit another occurrence's proof.
+This is native admission and provenance, not Interface target lowering.
+
+The matched native compiler `3a8ddf17` passed 831 cases in 12 focused suites:
+digital type 114, materialization 46, Interface 196, observations 25, sequential
+71, FSM 77, sequential target 149, hierarchy target 22, hierarchy control 27,
+hierarchy data 64, boundary ABI 28 and symbolic target 12. Before/after native
+source manifests agree. Receipts are under `.work/f58-contextual-native-third/`.
+The nine previously accepted actual-source hierarchy profiles also pass complete
+gate, target export and simulation on this compiler, with receipts under
+`.work/f58-{symbolic,hierarchy}-target-checkpoint6/`.
+
+New formal-FSM and symbolic Interface public-source integration remains a
+separate in-progress checkpoint, including canonical single-definition reuse;
+this native checkpoint does not claim those unfinished source results. Derived
+views remain bounded and query-local. Repeated identical Interface leaf type
+proofs are a known local optimization opportunity, not a new semantic owner or
+a claimed performance improvement. Generated semantics/target loops, aggregate
+field adapters, resolved and conservative topology, hierarchical/parallel FSMs,
+timed protocols and bounded call/return remain open as previously recorded.

@@ -238,15 +238,16 @@ public:
     rightEnvironment = rightContext;
     return equivalentStoragePair(left, right, 1, false);
   }
-  bool equivalentInstanceStorageTypes(Operation *instance, Type formal, Type actual) {
-    Operation *parent = instance->getParentOp();
-    ModuleTypeVerifier other(parent);
-    if (failed(storageMaximumBits(formal, module)) ||
-        failed(other.storageMaximumBits(actual, parent)))
+  bool equivalentInstanceStorageTypes(Type left, Operation *leftContext, Type right,
+                                      Operation *rightOwner, Operation *rightContext) {
+    ModuleTypeVerifier other(rightOwner);
+    if (failed(storageMaximumBits(left, module)) ||
+        failed(other.storageMaximumBits(right, rightOwner)))
       return false;
-    leftInstance = instance;
-    rightModule = parent;
-    return equivalentStoragePair(formal, actual, 1, false);
+    leftInstance = leftContext;
+    rightInstance = rightContext;
+    rightModule = rightOwner;
+    return equivalentStoragePair(left, right, 1, false);
   }
 
   LogicalResult verify(Operation *use) {
@@ -351,12 +352,13 @@ private:
     const auto pair = std::make_pair(left, right);
     if (equivalentPairs.contains(pair))
       return true;
-    bool equal =
-        left == right && module == rightModule && !leftInstance && environment == rightEnvironment;
+    bool equal = left == right && module == rightModule && !leftInstance && !rightInstance &&
+                 environment == rightEnvironment;
     StringRef kind = scalarKind(left);
     if (!equal && !kind.empty() && kind == scalarKind(right)) {
       auto lhs = widthExpression(left);
-      auto rhs = inferDigitalWidthExpression(right, rightModule, rightEnvironment);
+      auto rhs = rightInstance ? inferInstanceDigitalWidthExpression(right, rightInstance)
+                               : inferDigitalWidthExpression(right, rightModule, rightEnvironment);
       equal = succeeded(lhs) && succeeded(rhs) &&
               (widthFamily || equivalentInstantiatedIntegerExpressions(*lhs, *rhs));
     } else if (!equal) {
@@ -373,7 +375,8 @@ private:
             if (++comparisonWork > digitalTypeMaximumNodes)
               return false;
             auto x = dimensionExpression(module, a[index], "shape", environment, leftInstance);
-            auto y = dimensionExpression(rightModule, b[index], "shape", rightEnvironment);
+            auto y = dimensionExpression(rightModule, b[index], "shape", rightEnvironment,
+                                         rightInstance);
             equal =
                 succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
           }
@@ -559,6 +562,7 @@ private:
   Operation *module;
   Operation *rightModule;
   Operation *leftInstance = nullptr;
+  Operation *rightInstance = nullptr;
   const ParameterIntegerEnvironment *environment;
   const ParameterIntegerEnvironment *rightEnvironment;
   Operation *currentUse = nullptr;
@@ -713,10 +717,23 @@ bool equivalentDigitalStorageTypesAcross(Type left, const ParameterIntegerEnviro
       .equivalentStorageTypesAcross(left, right, rightContext);
 }
 bool equivalentInstanceDigitalStorageTypes(Operation *instance, Type formal, Type actual) {
-  Operation *child = resolveInstanceModuleDefinition(instance);
-  if (!child || !isa_and_nonnull<nodal::ModuleOp>(instance->getParentOp()))
+  return instance && equivalentDigitalStorageTypesAcrossInstances(instance->getParentOp(), formal,
+                                                                  instance, actual, nullptr);
+}
+bool equivalentDigitalStorageTypesAcrossInstances(Operation *parent, Type left,
+                                                  Operation *leftInstance, Type right,
+                                                  Operation *rightInstance) {
+  if (!isa_and_nonnull<nodal::ModuleOp>(parent))
     return false;
-  return ModuleTypeVerifier(child).equivalentInstanceStorageTypes(instance, formal, actual);
+  auto owner = [&](Operation *instance) -> Operation * {
+    if (!instance)
+      return parent;
+    return instance->getParentOp() == parent ? resolveInstanceModuleDefinition(instance) : nullptr;
+  };
+  Operation *leftOwner = owner(leftInstance), *rightOwner = owner(rightInstance);
+  return leftOwner && rightOwner &&
+         ModuleTypeVerifier(leftOwner).equivalentInstanceStorageTypes(left, leftInstance, right,
+                                                                      rightOwner, rightInstance);
 }
 
 LogicalResult verifyDigitalTypeOperation(Operation *operation,

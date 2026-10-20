@@ -126,6 +126,23 @@ int main() {
         SymbolTable::lookupSymbolIn(parent, "literal"));
   equal("default-used-only-as-actual-binding", shape("N", digital("W")),
         shape("4", "!nodal.uint<4>"), true, SymbolTable::lookupSymbolIn(parent, "defaults"));
+  auto contextualEqual = [&](StringRef name, Operation *owner, StringRef left,
+                             Operation *leftInstance, StringRef right, Operation *rightInstance,
+                             bool expected) {
+    report(name, nodal::equivalentDigitalStorageTypesAcrossInstances(
+                     owner, type(left), leftInstance, type(right), rightInstance) == expected);
+  };
+  contextualEqual("two-sided-same-exact-occurrence", parent, shape("N", digital("W")), u,
+                  shape("N", digital("W")), u, true);
+  contextualEqual("two-sided-parent-null-context", parent, digital("Q"), nullptr, digital("W"), u,
+                  true);
+  contextualEqual("two-sided-identical-tokens-different-bindings", parent, digital("W"), u,
+                  digital("W"), SymbolTable::lookupSymbolIn(parent, "literal"), false);
+  contextualEqual("two-sided-literal-versus-default-shape", parent, shape("N", digital("W")),
+                  SymbolTable::lookupSymbolIn(parent, "literal"), shape("N", digital("W")),
+                  SymbolTable::lookupSymbolIn(parent, "defaults"), false);
+  contextualEqual("two-sided-foreign-parent-rejected", child, digital("W"), u, digital("W"),
+                  nullptr, false);
   const auto formal =
       structure("Packet", field("first", digital("W")) + ", " + field("second", "!nodal.bits<1>"));
   const auto actual =

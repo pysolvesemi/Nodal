@@ -359,6 +359,56 @@ std::string hierarchyArrayFixture(StringRef actual = "P", bool symbolic = true) 
          top + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
          child + "}) : () -> ()\n}\n";
 }
+std::string hierarchyPayloadFixture(StringRef actual = "P", bool access = true,
+                                    StringRef siblingBinding = "") {
+  std::string source = hierarchyArrayFixture();
+  const std::string childMarker = "\"nodal.module\"() <{sym_name = \"Child\"";
+  size_t childStart = source.find(childMarker);
+  std::string top = source.substr(0, childStart), child = source.substr(childStart);
+  auto replaceAll = [](std::string text, StringRef from, StringRef to) {
+    size_t position = 0;
+    while ((position = text.find(from.str(), position)) != std::string::npos) {
+      text.replace(position, from.size(), to.str());
+      position += to.size();
+    }
+    return text;
+  };
+  const std::string parentPayload = "!nodal.digital<\"uint\", \"P\">";
+  const std::string childPayload = "!nodal.digital<\"uint\", \"N\">";
+  if (!access) {
+    const std::string parentType = "!nodal.shaped<\"P\", " + boolean + ">";
+    const std::string childType = "!nodal.shaped<\"N\", " + boolean + ">";
+    top = replace(top, member("projected", "projected", parentType), "");
+    top = replace(top, member("top", "top", parentType), "");
+    top = replace(top, connect("top", "projected", parentType), "");
+    child = replace(child, member("exported", "exported", childType), "");
+    child = replace(child, observe("exported", childType), "");
+  }
+  top = replaceAll(top, boolean, parentPayload);
+  child = replaceAll(child, boolean, childPayload);
+  top = replace(top, "semantic_path = \"Top.projected\", dimensions = [\"P\"]",
+                "semantic_path = \"Top.projected\", dimensions = [\"P\"], actual_types = "
+                "[{path = \"data\", type = !nodal.digital<\"uint\", \"" +
+                    actual.str() + "\">}]");
+  if (!siblingBinding.empty()) {
+    std::string extra =
+        "%sibling_actual = \"nodal.const_parameter_ref\"() <{parameter = @" + siblingBinding.str() +
+        ", metadata = {}}> : () -> i64\n" +
+        "\"nodal.instance\"() <{sym_name = \"other\", module = @Child, parameter_bindings = {}, "
+        "domain_bindings = {required = @clock}, metadata = {}}> : () -> ()\n" +
+        "\"nodal.parameter_override\"(%sibling_actual) <{instance = @other, parameter = @N, "
+        "metadata = {}}> : (i64) -> ()\n" +
+        replace(hierarchyBinding("required", "clock"), "instance = @child", "instance = @other") +
+        "\"nodal.interface_boundary\"() <{sym_name = \"other_projected\", instance = @other, "
+        "endpoint = \"exported\", metadata = {" +
+        tag + ", semantic_path = \"Top.other_projected\", dimensions = [\"" + siblingBinding.str() +
+        "\"], actual_types = [{path = \"data\", type = !nodal.digital<\"uint\", \"" +
+        siblingBinding.str() + "\">}]}}> : () -> ()\n";
+    const size_t close = top.rfind("}) : () -> ()");
+    top.insert(close, extra);
+  }
+  return top + child;
+}
 std::string hiddenDefinition(StringRef hiddenType = boolean, bool changedRole = false) {
   std::string result = definition(boolean);
   for (auto pair :
@@ -1033,6 +1083,30 @@ int main() {
             replace(hierarchyFixture(), "semantic_path = \"Top.projected\"",
                     "semantic_path = \"Top.projected\", dimensions = [\"2\"]"),
             false);
+  hierarchy("symbolic-payload-exact-parent-instantiation", hierarchyPayloadFixture(), true);
+  hierarchy("symbolic-payload-complete-no-access", hierarchyPayloadFixture("P", false), true);
+  hierarchy("symbolic-payload-equal-bounds-other-identity", hierarchyPayloadFixture("Q", false),
+            false);
+  hierarchy("symbolic-payload-default-not-actual", hierarchyPayloadFixture("2", false), false);
+  hierarchy("symbolic-payload-missing-actual-inventory",
+            replace(hierarchyPayloadFixture("P", false),
+                    ", actual_types = [{path = \"data\", type = !nodal.digital<\"uint\", \"P\">}]",
+                    ""),
+            false);
+  hierarchy("symbolic-payload-forged-member-name",
+            replace(hierarchyPayloadFixture("P", false), "actual_types = [{path = \"data\"",
+                    "actual_types = [{path = \"other\""),
+            false);
+  hierarchy("symbolic-payload-duplicate-actual-member",
+            replace(hierarchyPayloadFixture("P", false),
+                    "actual_types = [{path = \"data\", type = !nodal.digital<\"uint\", \"P\">}]",
+                    "actual_types = [{path = \"data\", type = !nodal.digital<\"uint\", \"P\">}, "
+                    "{path = \"data\", type = !nodal.digital<\"uint\", \"P\">}]"),
+            false);
+  hierarchy("symbolic-payload-same-definition-sibling-context-match",
+            hierarchyPayloadFixture("P", false, "P"), true);
+  hierarchy("symbolic-payload-same-definition-sibling-context-mismatch",
+            hierarchyPayloadFixture("P", false, "Q"), false);
   auto endpointQuery = [&](StringRef name, const std::string &source, bool expected, auto inspect) {
     ++cases;
     diagnosticText.clear();
@@ -1069,6 +1143,18 @@ int main() {
                          endpoints[1].declarationOwner != endpoints[1].domainOwner &&
                          endpoints[1].dimensions.size() == 1 &&
                          llvm::cast<StringAttr>(endpoints[1].dimensions[0]).getValue() == "N";
+                });
+  endpointQuery("projected-payload-query-retains-formal-type-owner",
+                hierarchyPayloadFixture("P", false), true, [&](const auto &endpoints) {
+                  return endpoints.size() == 2 && endpoints[1].instance &&
+                         endpoints[1].declarationOwner != endpoints[1].domainOwner &&
+                         endpoints[1].leaves.size() == 1 &&
+                         endpoints[1].leaves[0].type ==
+                             endpoints[1]
+                                 .leaves[0]
+                                 .declaration->template getAttrOfType<TypeAttr>("type")
+                                 .getValue() &&
+                         endpoints[0].leaves[0].type != endpoints[1].leaves[0].type;
                 });
   endpointQuery("logical-endpoints-retain-unaccessed-leaves-and-exact-boundary", hiddenFixture(),
                 true, [&](auto endpoints) {

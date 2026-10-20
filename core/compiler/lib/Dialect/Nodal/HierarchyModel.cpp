@@ -49,6 +49,15 @@ FailureOr<InstancePort> child(Operation *op) {
 bool hierarchyOperation(Operation *op) {
   return isa<RequirementClockOp, RequirementResetOp, InstanceDomainBindingOp, InstancePortOp>(op);
 }
+bool contextualSequentialOperation(Operation *op) {
+  if (!isa<ResetAssertedOp, SequentialAssertOp, SequentialUpdateOp, FlatFSMOp>(op) &&
+      !(isa<DigitalStorageOp>(op) && text(op, "kind") == "register"))
+    return false;
+  // The consumer itself establishes an obligation. Requiring a pre-existing
+  // capability would make projection inference circular and let an isolated
+  // formal consumer avoid the mandatory closed-root proof.
+  return DomainModel(op).unresolvedRequirement(op->getAttr("domain"));
+}
 } // namespace
 FailureOr<HierarchyInstance> resolveHierarchyInstance(Operation *use, Attribute reference) {
   Operation *module = use ? use->getParentOp() : nullptr;
@@ -147,7 +156,7 @@ bool hasLocalHierarchyObligations(Operation *module) {
       !module->getRegion(0).hasOneBlock())
     return false;
   for (Operation &op : module->getRegion(0).front())
-    if (hierarchyOperation(&op))
+    if (hierarchyOperation(&op) || contextualSequentialOperation(&op))
       return true;
   return false;
 }
@@ -434,7 +443,9 @@ LogicalResult HierarchyModel::verifyBindings() const {
         auto actual = resolveBinding(index, op.getAttr("domain"));
         if (failed(actual))
           return reject(&op, "reachable state requires its actual occurrence domain binding");
-        if (op.getNumOperands() && !actual->reset)
+        if (failed(verifyDigitalStorageOperation(&op)))
+          return failure();
+        if (op.getNumOperands() && text(&op, "initializer_policy") != "if_reset" && !actual->reset)
           return reject(&op, "initialized child state requires a valid actual reset binding");
         if (failed(verifyContextualResetForBinding(*actual, *this)))
           return failure();
@@ -451,6 +462,8 @@ LogicalResult HierarchyModel::verifyBindings() const {
           return reject(&op,
                         "reachable requirement lacks a unique concrete clock/reset binding at " +
                             context.path);
+        if (failed(verifyContextualResetForBinding(*actual, *this)))
+          return failure();
       } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
         if (failed(resolveCapability({index, op.getResult(0), &op})))
           return reject(&op,
@@ -497,6 +510,7 @@ LogicalResult verifyHierarchyModule(Operation *module) {
     instances |= isa<InstanceOp>(op);
     executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp, EventProcessOp>(op) ||
                   (isa<CrossingOp, AsyncFifoOp>(op) && op->hasAttr("contract"));
+    hierarchy |= contextualSequentialOperation(op);
     if (!hierarchyOperation(op))
       return WalkResult::advance();
     hierarchy = true;

@@ -117,6 +117,7 @@ struct Instance {
   std::string dimensions;
   Operation *childInstance = nullptr;
   Operation *childEndpoint = nullptr;
+  llvm::StringMap<Type> actualTypes;
 };
 struct Access {
   Instance *instance = nullptr;
@@ -163,11 +164,12 @@ private:
   unsigned work = 0;
   std::map<Operation *, std::unique_ptr<Definition>> definitions;
   llvm::StringMap<Definition *> semanticDefinitions;
+  llvm::StringMap<Operation *> semanticDefinitionInstances;
   llvm::StringMap<llvm::StringMap<const Role *>> semanticRoles;
   std::map<Operation *, Instance> instances;
   std::map<Operation *, std::unique_ptr<Model>> childDefinitions;
   std::set<std::pair<Operation *, Operation *>> boundaryIdentities;
-  std::set<Operation *> comparedDefinitions;
+  std::set<std::pair<Operation *, Operation *>> comparedDefinitions;
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
   SmallVector<Net> nets;
@@ -578,11 +580,12 @@ LogicalResult Model::boundary(Operation *operation) {
   // against the local canonical definition, including unaccessed members and
   // any identically named role maps; disjoint selected roles remain additive.
   for (const auto &[unused, imported] : child->definitions) {
-    if (!comparedDefinitions.insert(imported->operation).second)
+    if (!comparedDefinitions.emplace(imported->operation, boundary->instance).second)
       continue;
     auto found = semanticDefinitions.find(imported->semanticIdentity);
     if (found == semanticDefinitions.end()) {
       semanticDefinitions.try_emplace(imported->semanticIdentity, imported.get());
+      semanticDefinitionInstances.try_emplace(imported->semanticIdentity, boundary->instance);
     } else {
       const Definition &local = *found->second;
       if (local.members.size() != imported->members.size())
@@ -592,7 +595,14 @@ LogicalResult Model::boundary(Operation *operation) {
         if (++work > digitalTypeMaximumNodes)
           return reject(operation, "Interface boundary comparison exceeds its structural budget");
         auto known = local.members.find(member.getKey());
-        if (known == local.members.end() || known->second.type != member.second.type ||
+        if (known == local.members.end() ||
+            ((analog(member.second.protocol) || member.second.protocol == "resolved" ||
+              isDigitalControlBoundaryType(member.second.type))
+                 ? known->second.type != member.second.type
+                 : !equivalentDigitalStorageTypesAcrossInstances(
+                       module, known->second.type,
+                       semanticDefinitionInstances.lookup(imported->semanticIdentity),
+                       member.second.type, boundary->instance)) ||
             known->second.protocol != member.second.protocol ||
             known->second.analogMetadata != member.second.analogMetadata ||
             known->second.analogReferences != member.second.analogReferences)
@@ -648,15 +658,47 @@ LogicalResult Model::boundary(Operation *operation) {
     if (!shape.empty() && failed(inferStaticShapeMaximumCardinality(module, shape)))
       return reject(operation, "Interface boundary shape requires finite structural cardinality");
   }
-  for (auto &entry : original.definition->members)
-    if (analog(entry.second.protocol) || entry.second.protocol == "resolved" ||
-        isDigitalControlBoundaryType(entry.second.type) ||
-        failed(inferDigitalBitPatternFixedBits(entry.second.type, boundary->module)))
+  auto actualInventory = metadata(operation).getAs<ArrayAttr>("actual_types");
+  if ((metadata(operation).get("actual_types") && !actualInventory) ||
+      (actualInventory && actualInventory.size() != original.definition->members.size()))
+    return reject(operation,
+                  "Interface boundary actual types require the complete member inventory");
+  llvm::StringMap<Type> actualTypes;
+  unsigned memberIndex = 0;
+  for (Operation &memberOperation : original.definition->operation->getRegion(0).front()) {
+    if (!llvm::isa<InterfaceMemberOp>(memberOperation))
+      continue;
+    if (++work > digitalTypeMaximumNodes)
+      return reject(operation, "Interface boundary actual types exceed their structural budget");
+    StringRef path = symbol(&memberOperation);
+    const Member &member = original.definition->members.find(path)->second;
+    if (analog(member.protocol) || member.protocol == "resolved" ||
+        isDigitalControlBoundaryType(member.type) ||
+        failed(inferDigitalBitPatternMaximumBits(member.type, boundary->module)))
+      return reject(operation, "child Interface projection requires ordinary digital data leaves");
+    Type actual = member.type;
+    if (actualInventory) {
+      auto item = llvm::dyn_cast<DictionaryAttr>(actualInventory[memberIndex]);
+      auto type = item ? item.getAs<TypeAttr>("type") : TypeAttr();
+      if (!item || item.size() != 2 || text(item, "path") != path || !type)
+        return reject(operation, "Interface boundary actual types change ordered member identity");
+      actual = type.getValue();
+    } else if (failed(inferDigitalBitPatternFixedBits(member.type, boundary->module))) {
+      return reject(operation, "symbolic Interface boundary requires explicit actual member types");
+    }
+    ++memberIndex;
+    if (!equivalentInstanceDigitalStorageTypes(boundary->instance, member.type, actual))
       return reject(operation,
-                    "child Interface projection currently requires concrete digital data leaves");
+                    "Interface actual member type differs from exact finalized child binding");
+    Type shaped =
+        shape.empty() ? actual : nodal::ShapedType::get(module->getContext(), shape, actual);
+    if (failed(inferDigitalBitPatternMaximumBits(shaped, module)))
+      return reject(operation, "Interface actual payload requires finite owned bit-pattern shape");
+    actualTypes.try_emplace(path, actual);
+  }
   instances.emplace(operation,
                     Instance{operation, original.definition, original.role, boundary->domain, shape,
-                             boundary->instance, boundary->endpoint});
+                             boundary->instance, boundary->endpoint, std::move(actualTypes)});
   return success();
 }
 
@@ -691,7 +733,7 @@ LogicalResult Model::access(Operation *operation) {
                       "non-monitor Interface views require fully complementary digital leaves");
     }
   }
-  Type expected = member->second.type;
+  Type expected = instance.childInstance ? instance.actualTypes.lookup(path) : member->second.type;
   if (!instance.dimensions.empty())
     expected = nodal::ShapedType::get(module->getContext(), instance.dimensions, expected);
   if (operation->getResult(0).getType() != expected)

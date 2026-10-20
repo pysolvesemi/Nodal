@@ -88,6 +88,86 @@ LogicalResult checkRegister(Operation *reg, Operation *domain) {
 }
 } // namespace
 
+FailureOr<SequentialDomainControls> inspectSequentialDomainControls(Operation *use,
+                                                                    Attribute reference) {
+  Operation *module = isa_and_nonnull<ModuleOp>(use) ? use
+                      : use                          ? use->getParentOfType<ModuleOp>()
+                                                     : nullptr;
+  if (!module || !reference)
+    return failure();
+  DomainModel domains(module);
+  auto binding = domains.resolveBinding(reference);
+  if (succeeded(binding)) {
+    auto domain = domains.resolveDomain(reference);
+    if (failed(domain))
+      return failure();
+    SequentialDomainControls result;
+    result.module = module;
+    result.declaration = *domain;
+    result.binding = *binding;
+    result.clock = (*binding)->getOperand(0);
+    if ((*binding)->getNumOperands() == 2) {
+      result.reset = (*binding)->getOperand(1);
+      result.resetAvailability = SequentialResetAvailability::Present;
+    }
+    return result;
+  }
+  Operation *requirement = domains.unresolvedRequirement(reference);
+  if (!requirement || !hasLocalHierarchyObligations(module))
+    return failure();
+  SequentialDomainControls result;
+  result.module = module;
+  result.declaration = requirement;
+  result.resetAvailability = SequentialResetAvailability::Contextual;
+  for (Operation &candidate : module->getRegion(0).front()) {
+    if (!isa<RequirementClockOp, RequirementResetOp>(candidate) ||
+        candidate.getAttr("requirement") != reference)
+      continue;
+    if (failed(verifyRequirementProjection(&candidate)))
+      return failure();
+    // Queries do not move declarations or manufacture a dominating SSA value.
+    if (use != module) {
+      Operation *anchor = use;
+      while (anchor && anchor->getParentOp() != module)
+        anchor = anchor->getParentOp();
+      if (!anchor || anchor == &candidate || !candidate.isBeforeInBlock(anchor))
+        continue;
+    }
+    Value &slot = isa<RequirementClockOp>(candidate) ? result.clock : result.reset;
+    if (!slot)
+      slot = candidate.getResult(0);
+  }
+  return result;
+}
+bool matchesSequentialDomainClock(Value clock, const SequentialDomainControls &controls) {
+  if (!controls.contextual())
+    return clock && clock == controls.clock;
+  Operation *projection = clock ? clock.getDefiningOp() : nullptr;
+  return isa_and_nonnull<RequirementClockOp>(projection) &&
+         projection->getParentOp() == controls.module &&
+         projection->getAttr("requirement") ==
+             FlatSymbolRefAttr::get(controls.declaration->getContext(),
+                                    text(controls.declaration, "sym_name")) &&
+         succeeded(verifyRequirementProjection(projection));
+}
+FailureOr<Value> getOrCreateSequentialDomainClock(Operation *use, OpBuilder &builder,
+                                                  DictionaryAttr metadata) {
+  auto controls = inspectSequentialDomainControls(use, use ? use->getAttr("domain") : Attribute());
+  if (failed(controls))
+    return failure();
+  if (controls->clock)
+    return controls->clock;
+  if (!controls->contextual())
+    return failure();
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(&controls->module->getRegion(0).front());
+  OperationState projection(use->getLoc(), "nodal.requirement_clock");
+  projection.addTypes(ControlCapabilityType::get(use->getContext(), "clock"));
+  projection.addAttribute("requirement", use->getAttr("domain"));
+  projection.addAttribute("metadata", metadata);
+  return builder.create(projection)->getResult(0);
+}
+
 FailureOr<BehavioralIfHeader> inspectBehavioralIfHeader(Operation *op) {
   if (!llvm::isa_and_nonnull<BehavioralIfOp>(op) || op->getNumRegions() != 2 ||
       op->getNumResults() || op->getNumSuccessors() || !op->getNumOperands() ||
@@ -243,15 +323,20 @@ LogicalResult verifySequentialBody(Block *body) {
 }
 LogicalResult verifyResetAsserted(Operation *op) {
   if (!llvm::isa_and_nonnull<ResetAssertedOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
-      op->getNumOperands() != 1 || op->getNumResults() != 1 ||
+      op->getNumOperands() > 1 || op->getNumResults() != 1 ||
       !boolean(op->getResult(0).getType()) || op->getNumRegions() || op->getNumSuccessors() ||
       !closed(op, {"domain", "reset_polarity", "metadata"}) || !canonical(path(op)))
     return reject(op, "reset assertion requires exact actual Reset and Bool result");
-  const DomainModel domains(op);
-  Operation *binding = domains.findLocalBinding(op->getAttr("domain"));
-  if (!binding || failed(verifyLocalDomainBinding(binding)) || binding->getNumOperands() != 2 ||
-      op->getOperand(0) != binding->getOperand(1) ||
-      op->getAttr("reset_polarity") != binding->getAttr("reset_polarity") ||
+  auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+  if (failed(controls))
+    return reject(op, "reset assertion requires a verified local binding or exact requirement");
+  if (controls->contextual())
+    return op->getNumOperands() == 0 && !op->hasAttr("reset_polarity")
+               ? success()
+               : reject(op, "formal reset assertion retains only its exact requirement identity");
+  if (controls->resetAvailability != SequentialResetAvailability::Present ||
+      op->getNumOperands() != 1 || op->getOperand(0) != controls->reset ||
+      op->getAttr("reset_polarity") != controls->binding->getAttr("reset_polarity") ||
       failed(verifyDigitalValueScope(op->getOperand(0), op)))
     return reject(op, "reset assertion must retain its exact physical binding and polarity");
   return success();
@@ -263,11 +348,10 @@ LogicalResult verifySequentialAssertion(Operation *op) {
       !canonical(text(op, "root_id")) || !closed(op, {"domain", "edge", "root_id", "metadata"}) ||
       !canonical(path(op)))
     return reject(op, "sampled assertion requires actual Bool, Clock and source identity");
-  const DomainModel domains(op);
-  Operation *binding = domains.findLocalBinding(op->getAttr("domain"));
-  if (!binding || failed(verifyLocalDomainBinding(binding)) ||
-      op->getOperand(1) != binding->getOperand(0) ||
-      op->getAttr("edge") != (*domains.resolveDomain(binding->getAttr("domain")))->getAttr("edge"))
+  auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+  if (failed(controls) || !matchesSequentialDomainClock(op->getOperand(1), *controls) ||
+      (controls->contextual() ? op->hasAttr("edge")
+                              : op->getAttr("edge") != controls->declaration->getAttr("edge")))
     return reject(op, "sampled assertion requires its exact physical domain clock and edge");
   for (Value operand : op->getOperands())
     if (failed(verifyDigitalValueScope(operand, op)))
@@ -294,9 +378,10 @@ LogicalResult verifySequentialSelect(Operation *op) {
 LogicalResult verifySequentialUpdate(Operation *op) {
   if (!llvm::isa_and_nonnull<SequentialUpdateOp>(op) || op->getNumResults() ||
       op->getNumRegions() || op->getNumSuccessors() ||
-      (op->getNumOperands() != 3 && op->getNumOperands() != 5) ||
+      (op->getNumOperands() != 3 && op->getNumOperands() != 4 && op->getNumOperands() != 5) ||
       !llvm::isa<ModuleOp>(op->getParentOp()) || !canonical(text(op, "root_id")) ||
-      !closed(op, {"domain", "edge", "reset_policy", "reset_polarity", "root_id", "metadata"}))
+      !closed(op, {"domain", "edge", "reset_policy", "reset_polarity", "initializer_policy",
+                   "root_id", "metadata"}))
     return reject(op,
                   "clocked update requires explicit typed clock/reset and stable root identity");
   auto root = stateRoot(op->getOperand(0), op);
@@ -306,13 +391,17 @@ LogicalResult verifySequentialUpdate(Operation *op) {
   Operation *reg = root->getDefiningOp();
   Operation *binding = domains.findLocalBinding(reg->getAttr("domain"));
   bool initialized = reg->getNumOperands() == 1;
+  bool conditional = text(reg, "initializer_policy") == "if_reset";
   if (op->getAttr("domain") != reg->getAttr("domain") ||
-      op->getNumOperands() != (initialized ? 5u : 3u) ||
-      (initialized && op->getOperand(4) != reg->getOperand(0)))
+      op->getAttr("initializer_policy") != reg->getAttr("initializer_policy") ||
+      op->getNumOperands() != (conditional   ? 4u
+                               : initialized ? 5u
+                                             : 3u) ||
+      (initialized && op->getOperand(conditional ? 3 : 4) != reg->getOperand(0)))
     return reject(
         op, "clock/reset/reset-value fields must exactly match their owned domain and register");
   if (binding) {
-    if (failed(verifyLocalDomainBinding(binding)) ||
+    if (conditional || failed(verifyLocalDomainBinding(binding)) ||
         failed(checkRegister(reg, *domains.resolveDomain(binding->getAttr("domain")))))
       return reject(op, "clocked update requires a verified physical local binding");
     Operation *domain = *domains.resolveDomain(binding->getAttr("domain"));
@@ -342,7 +431,7 @@ LogicalResult verifySequentialUpdate(Operation *op) {
              succeeded(verifyRequirementProjection(producer));
     };
     if (!projection(op->getOperand(2), false) ||
-        (initialized && !projection(op->getOperand(3), true)))
+        (initialized && !conditional && !projection(op->getOperand(3), true)))
       return reject(op, "formal clocked update must use its exact local requirement projections");
   }
   if (!equivalentDigitalStorageTypes(root->getType(), op->getOperand(1).getType(),
@@ -865,7 +954,7 @@ struct Model {
                    llvm::isa<SequentialUpdateOp>(op)) {
           if ((llvm::isa<DigitalAssignOp>(op) && op.getNumOperands() != 2) ||
               (llvm::isa<SequentialUpdateOp>(op) && op.getNumOperands() != 3 &&
-               op.getNumOperands() != 5))
+               op.getNumOperands() != 4 && op.getNumOperands() != 5))
             return reject(&op, "sequential update operand arity is invalid");
           auto target = stateRoot(op.getOperand(0), &op);
           if (failed(target))
@@ -1007,11 +1096,15 @@ private:
       op.addAttribute("reset_polarity", binding->getAttr("reset_polarity"));
     } else {
       Value clock = formalCapability(reg, false);
-      Value reset = reg->getNumOperands() ? formalCapability(reg, true) : Value();
-      if (!clock || (reg->getNumOperands() && !reset))
+      bool conditional = text(reg, "initializer_policy") == "if_reset";
+      Value reset = reg->getNumOperands() && !conditional ? formalCapability(reg, true) : Value();
+      if (!clock || (reg->getNumOperands() && !conditional && !reset))
         return failure();
       op.addOperands({state, next, clock});
-      if (reg->getNumOperands())
+      if (conditional) {
+        op.addOperands(reg->getOperand(0));
+        op.addAttribute("initializer_policy", reg->getAttr("initializer_policy"));
+      } else if (reg->getNumOperands())
         op.addOperands({reset, reg->getOperand(0)});
     }
     std::string identity =
@@ -1028,23 +1121,30 @@ private:
   }
   Value formalCapability(Operation *reg, bool reset) {
     auto requirement = reg->getAttrOfType<FlatSymbolRefAttr>("domain");
+    if (!reset) {
+      if (failed(charge(reg)))
+        return {};
+      auto clock = getOrCreateSequentialDomainClock(
+          reg, builder,
+          metadata(
+              reg,
+              (text(model.module, "sym_name") + "." + requirement.getValue() + ".clock").str()));
+      return succeeded(clock) ? *clock : Value();
+    }
     for (Operation &candidate : model.module->getRegion(0).front())
-      if ((reset ? isa<RequirementResetOp>(candidate) : isa<RequirementClockOp>(candidate)) &&
-          candidate.getAttr("requirement") == requirement)
+      if (isa<RequirementResetOp>(candidate) && candidate.getAttr("requirement") == requirement)
         return candidate.getResult(0);
     if (!model.domains.unresolvedRequirement(requirement) || failed(charge(reg)))
       return {};
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&model.module->getRegion(0).front());
-    OperationState projection(reg->getLoc(),
-                              reset ? "nodal.requirement_reset" : "nodal.requirement_clock");
-    projection.addTypes(
-        ControlCapabilityType::get(builder.getContext(), reset ? "reset" : "clock"));
+    OperationState projection(reg->getLoc(), "nodal.requirement_reset");
+    projection.addTypes(ControlCapabilityType::get(builder.getContext(), "reset"));
     projection.addAttribute("requirement", requirement);
-    projection.addAttribute("metadata",
-                            metadata(reg, (text(model.module, "sym_name") + "." +
-                                           requirement.getValue() + (reset ? ".reset" : ".clock"))
-                                              .str()));
+    projection.addAttribute(
+        "metadata",
+        metadata(reg,
+                 (text(model.module, "sym_name") + "." + requirement.getValue() + ".reset").str()));
     return builder.create(projection)->getResult(0);
   }
   Value guardLiteral(Operation *op) {

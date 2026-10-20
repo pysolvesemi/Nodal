@@ -76,6 +76,12 @@ bool equivalentDigitalStorageTypesAcross(mlir::Type left,
 /// Generated lexical instances require their separately admitted family view.
 bool equivalentInstanceDigitalStorageTypes(mlir::Operation *instance, mlir::Type formal,
                                            mlir::Type actual);
+/// Compare two complete logical types in one actual parent context. A nonnull
+/// instance supplies its exact immediate child's declaration owner; null means
+/// a parent-owned type. Both substitutions use finalized canonical bindings.
+bool equivalentDigitalStorageTypesAcrossInstances(mlir::Operation *parent, mlir::Type left,
+                                                  mlir::Operation *leftInstance, mlir::Type right,
+                                                  mlir::Operation *rightInstance);
 
 /// Construction-only width-family relation. Both complete types are validated.
 /// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered

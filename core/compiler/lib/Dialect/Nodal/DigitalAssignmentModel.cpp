@@ -62,6 +62,7 @@ struct Node {
   Operation *assignment = nullptr;
   Operation *eventProcess = nullptr;
   bool eventTrigger = false;
+  FlatSymbolRefAttr contextualReset;
 };
 
 /// One graph for actual SSA dependencies and implicit reads through ordinary
@@ -111,7 +112,7 @@ public:
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
                               crossing, index, endpoint.role, 0, boundary, waiver,
-                              node.eventProcess, node.eventTrigger});
+                              node.eventProcess, node.eventTrigger, node.contextualReset});
     }
     result.eventUpdates = std::move(eventUpdates);
     result.crossings = std::move(crossings);
@@ -672,10 +673,23 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
 LogicalResult AssignmentQuery::expand(unsigned node) {
   Value value = nodes[node].value;
   Operation *use = nodes[node].use;
-  if (!value)
+  if (!value) {
+    Operation *resetOwner = nodes[node].assignment;
+    if (isa_and_nonnull<SequentialUpdateOp>(resetOwner) && resetOwner->getNumOperands() == 3)
+      resetOwner = nullptr;
+    if (resetOwner && !isa<SequentialUpdateOp>(resetOwner))
+      resetOwner = resetOwner->getParentOfType<FlatFSMOp>();
+    if (resetOwner) {
+      auto controls = inspectSequentialDomainControls(resetOwner, resetOwner->getAttr("domain"));
+      if (failed(controls))
+        return reject(resetOwner, "state action lacks its exact domain control authority");
+      if (controls->contextual())
+        nodes[node].contextualReset = resetOwner->getAttrOfType<FlatSymbolRefAttr>("domain");
+    }
     return nodes[node].assignment
                ? depend(node, nodes[node].assignment->getOperand(1), nodes[node].assignment)
                : success();
+  }
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
     // A captured storage reference is still read at this actual body use, not
     // when its reference crossed the region header. Preserve that read point.
@@ -760,6 +774,11 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     for (Value input : dependencies)
       if (failed(depend(node, input, definition)))
         return failure();
+    auto controls = inspectSequentialDomainControls(definition, definition->getAttr("domain"));
+    if (failed(controls))
+      return failure();
+    if (controls->contextual())
+      nodes[node].contextualReset = definition->getAttrOfType<FlatSymbolRefAttr>("domain");
     return success();
   }
   if (named(definition, "nodal.structural_if")) {
@@ -801,6 +820,15 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     return reject(definition,
                   "ordinary assignment dependency is outside the verified combinational profile; "
                   "capability-only operations do not acquire execution semantics");
+  if (isa<ResetAssertedOp>(definition)) {
+    if (failed(verifyResetAsserted(definition)))
+      return failure();
+    auto controls = inspectSequentialDomainControls(definition, definition->getAttr("domain"));
+    if (failed(controls))
+      return failure();
+    if (controls->contextual())
+      nodes[node].contextualReset = definition->getAttrOfType<FlatSymbolRefAttr>("domain");
+  }
   for (Value operand : definition->getOperands())
     if (failed(depend(node, operand, definition)))
       return failure();
@@ -979,8 +1007,8 @@ LogicalResult AssignmentQuery::verify() {
         if (failed(header) || failed(verifyFlatFSMOperation(&operation)) ||
             scope.depth >= limits.maximumGuardDepth)
           return failure();
-        for (unsigned i = header->privateStateCount();
-             i < header->guardOffset + header->guards; ++i)
+        for (unsigned i = header->privateStateCount(); i < header->guardOffset + header->guards;
+             ++i)
           if (failed(valueNode(operation.getOperand(i), &operation)))
             return failure();
         for (Block *body : header->bodies)
@@ -1134,6 +1162,31 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
   SmallVector<SequentialSample, 8> samples;
   SmallVector<unsigned> sampleRoots;
   unsigned edges = 0;
+  // Seed actual reset producers in their existing local graph. A formal query
+  // can be the only consumer, so ordinary local SSA uses do not suffice. The
+  // occurrence owner resolves forwarding; no foreign SSA enters a definition.
+  DenseMap<Operation *, SmallVector<std::pair<Value, Operation *>, 4>> resetSeeds;
+  DenseMap<Operation *, DenseSet<Value>> resetSeedValues;
+  unsigned resetWork = 0;
+  for (auto [index, context] : llvm::enumerate(hierarchy->occurrences()))
+    for (Operation &op : context.module->getRegion(0).front()) {
+      if (!isa<DomainRequirementOp>(op))
+        continue;
+      if (++resetWork > limits.maximumNodes)
+        return reject(&op, "contextual reset inventory exceeds finite hierarchy budget");
+      auto actual = hierarchy->resolveBinding(
+          index, FlatSymbolRefAttr::get(op.getContext(), text(&op, "sym_name")));
+      if (failed(actual))
+        return failure();
+      if (!actual->reset)
+        continue;
+      auto reset = hierarchy->resolveCapability(*actual->reset);
+      if (failed(reset))
+        return failure();
+      Operation *owner = hierarchy->occurrences()[reset->occurrence].module;
+      if (resetSeedValues[owner].insert(reset->value).second)
+        resetSeeds[owner].emplace_back(reset->value, reset->use);
+    }
   for (const auto &context : hierarchy->occurrences()) {
     if (indexes.count(context.module))
       continue;
@@ -1149,6 +1202,9 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
         continue;
       seeds.emplace_back(op.getResult(0), *op.getResult(0).getUsers().begin());
     }
+    auto resetRoots = resetSeeds.find(context.module);
+    if (resetRoots != resetSeeds.end())
+      seeds.append(resetRoots->second.begin(), resetRoots->second.end());
     auto localGraph = analyzeDigitalAssignmentDependencies(context.module, seeds, limits);
     if (failed(localGraph))
       return failure();
@@ -1253,6 +1309,25 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
   // share state, synchronizers, physical inputs or cached dependency facts.
   for (unsigned id = 0; id < graph.nodes.size(); ++id) {
     auto &node = graph.nodes[id];
+    if (node.contextualReset) {
+      auto actual = hierarchy->resolveBinding(node.occurrence, node.contextualReset);
+      if (failed(actual))
+        return reject(node.use, "contextual reset intent lacks an actual occurrence binding");
+      if (actual->reset) {
+        auto reset = hierarchy->resolveCapability(*actual->reset);
+        if (failed(reset))
+          return failure();
+        Operation *owner = hierarchy->occurrences()[reset->occurrence].module;
+        const auto &local = definitions[indexes.lookup(owner)];
+        auto found = local.values.find(reset->value);
+        if (found == local.values.end())
+          return reject(node.use, "contextual reset lost its exact physical dependency root");
+        if (++edges > limits.maximumEdges)
+          return reject(node.use, "contextual reset edges exceed finite hierarchy budget");
+        node.dependencies.push_back(offsets[reset->occurrence] + found->second);
+      }
+      // No edge is permitted only after the actual binding proves resetless.
+    }
     if (!node.value)
       continue;
     auto access = resolveStaticShapeProjection(node.value, node.use);

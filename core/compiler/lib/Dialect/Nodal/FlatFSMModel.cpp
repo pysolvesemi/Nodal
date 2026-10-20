@@ -1,11 +1,9 @@
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
-#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
@@ -40,20 +38,6 @@ bool closed(DictionaryAttr attrs, ArrayRef<StringRef> keys) {
   return attrs && llvm::all_of(attrs, [&](NamedAttribute a) {
            return llvm::is_contained(keys, a.getName().getValue());
          });
-}
-Operation *binding(Operation *op) {
-  Operation *module = op->getParentOfType<ModuleOp>();
-  if (!module)
-    return nullptr;
-  Operation *result = nullptr;
-  for (Operation &candidate : module->getRegion(0).front())
-    if (llvm::isa<LocalDomainBindingOp>(candidate) &&
-        candidate.getAttr("domain") == op->getAttr("domain")) {
-      if (result)
-        return nullptr;
-      result = &candidate;
-    }
-  return result;
 }
 int64_t ordinal(DictionaryAttr a) {
   auto n = a ? a.getAs<IntegerAttr>("ordinal") : IntegerAttr();
@@ -345,11 +329,13 @@ LogicalResult flatFSMResultDependencies(Value result, SmallVectorImpl<Value> &de
   if (failed(h))
     return failure();
   deps.append(op->operand_begin(), op->operand_begin() + h->guardOffset + h->guards);
-  Operation *bound = binding(op);
-  if (!bound || failed(verifyLocalDomainBinding(bound)))
+  auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+  if (failed(controls))
     return failure();
-  if (bound->getNumOperands() == 2)
-    deps.push_back(bound->getOperand(1));
+  // Contextual reset intent is also retained by the occurrence dependency
+  // owner; a missing local Reset projection never means resetless.
+  if (!controls->contextual() && controls->reset)
+    deps.push_back(controls->reset);
   return success();
 }
 LogicalResult flatFSMActionControlDependencies(Operation *op,
@@ -361,8 +347,8 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
   auto g = graph(*h);
   if (failed(g))
     return failure();
-  Operation *bound = binding(op);
-  if (!bound || failed(verifyLocalDomainBinding(bound)))
+  auto domainControls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+  if (failed(domainControls))
     return failure();
   auto charge = [&]() {
     if (++work > maximumWork)
@@ -382,10 +368,10 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
         return failure();
       roots.push_back(op->getOperand(i));
     }
-    if (bound->getNumOperands() == 2) {
+    if (!domainControls->contextual() && domainControls->reset) {
       if (failed(charge()))
         return failure();
-      roots.push_back(bound->getOperand(1));
+      roots.push_back(domainControls->reset);
     }
     llvm::MapVector<unsigned, unsigned> lastBySource;
     auto selected = [&](unsigned edge) {
@@ -473,9 +459,9 @@ LogicalResult verifyFlatFSMOperation(Operation *op) {
                   "flat FSM graph, encoding, coverage, ordering or action ownership is invalid");
   if (text(op, "illegal_policy") != "error" && text(op, "illegal_policy") != "recover_to_initial")
     return reject(op, "flat FSM requires explicit Error or RecoverToInitial");
-  Operation *bound = binding(op);
-  if (!bound || failed(verifyLocalDomainBinding(bound)))
-    return reject(op, "flat FSM requires an exact physical domain binding");
+  auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+  if (failed(controls))
+    return reject(op, "flat FSM requires an exact local binding or unresolved requirement");
   for (unsigned index = 0; index < h->privateStateCount(); ++index) {
     Operation *state = op->getOperand(index).getDefiningOp();
     if (!llvm::isa_and_nonnull<DigitalStorageOp>(state) || text(state, "kind") != "register" ||
@@ -483,9 +469,12 @@ LogicalResult verifyFlatFSMOperation(Operation *op) {
         failed(verifyDigitalStorageOperation(state)) ||
         (index && op->getOperand(index) == op->getOperand(0)))
       return reject(op, "flat FSM requires distinct actual private registers in its exact domain");
-    if ((bound->getNumOperands() == 2) != (state->getNumOperands() == 1))
-      return reject(
-          op, "FSM storage resets with reset and is deliberately uninitialized without reset");
+    bool initialized = controls->resetAvailability != SequentialResetAvailability::Absent;
+    if (initialized != (state->getNumOperands() == 1) ||
+        (controls->contextual() ? text(state, "initializer_policy") != "if_reset"
+                                : state->hasAttr("initializer_policy")))
+      return reject(op,
+                    "FSM storage requires exact physical or conditional contextual initialization");
     if (state->getNumOperands()) {
       Operation *initial = state->getOperand(0).getDefiningOp();
       auto code = initial ? initial->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
@@ -514,11 +503,16 @@ public:
         builder(this->h.operation->getContext()) {}
   LogicalResult run() {
     Operation *op = h.operation;
+    auto domainControls = inspectSequentialDomainControls(op, op->getAttr("domain"));
+    if (failed(domainControls))
+      return reject(op, "FSM expansion lost its exact domain control admission");
     // Exact emitted operation count, independent of physical lane enumeration.
     // Reject before allocating even the detached expansion; charge() below is
     // an independent guard against a future emitter/preflight disagreement.
     uint64_t cost = 2 + 2 * g.codes.size() + (g.codes.size() - 1) + 1;
-    cost += binding(op)->getNumOperands() == 2;
+    cost += domainControls->resetAvailability != SequentialResetAvailability::Absent;
+    cost += domainControls->contextual() && !domainControls->clock &&
+            text(op, "illegal_policy") == "error";
     for (const auto &edges : g.outgoing)
       if (!edges.empty())
         cost += 5 * edges.size() - 2;
@@ -579,13 +573,14 @@ public:
       decoded.push_back(d);
     }
     Value valid = any(decoded), reset = zero;
-    Operation *bound = binding(op);
-    if (bound->getNumOperands() == 2) {
+    if (domainControls->resetAvailability != SequentialResetAvailability::Absent) {
       OperationState query(op->getLoc(), "nodal.reset_asserted");
-      query.addOperands(bound->getOperand(1));
+      if (!domainControls->contextual())
+        query.addOperands(domainControls->reset);
       query.addTypes(zero.getType());
       query.addAttribute("domain", op->getAttr("domain"));
-      query.addAttribute("reset_polarity", bound->getAttr("reset_polarity"));
+      if (!domainControls->contextual())
+        query.addAttribute("reset_polarity", domainControls->binding->getAttr("reset_polarity"));
       query.addAttribute("metadata", metadata(".reset"));
       Operation *made = create(query);
       if (!made)
@@ -703,12 +698,16 @@ public:
       return failure();
     if (text(op, "illegal_policy") == "error") {
       Value property = expression("bool_or", {reset, illegalProperty}, zero.getType());
-      Operation *domain =
-          SymbolTable::lookupSymbolIn(h.module, op->getAttrOfType<FlatSymbolRefAttr>("domain"));
+      if (!domainControls->clock && !charge())
+        return failure();
+      auto clock = getOrCreateSequentialDomainClock(op, builder, metadata(".clock"));
+      if (failed(clock))
+        return failure();
       OperationState assertion(op->getLoc(), "nodal.sequential_assert");
-      assertion.addOperands({property, bound->getOperand(0)});
+      assertion.addOperands({property, *clock});
       assertion.addAttribute("domain", op->getAttr("domain"));
-      assertion.addAttribute("edge", domain->getAttr("edge"));
+      if (!domainControls->contextual())
+        assertion.addAttribute("edge", domainControls->declaration->getAttr("edge"));
       assertion.addAttribute("root_id", builder.getStringAttr(text(op, "machine_id")));
       assertion.addAttribute("metadata", metadata(".illegal"));
       if (!create(assertion))

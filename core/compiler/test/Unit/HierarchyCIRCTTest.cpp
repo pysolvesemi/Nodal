@@ -6,6 +6,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
@@ -109,6 +110,23 @@ std::string replace(std::string text, StringRef from, StringRef to) {
   if (at == std::string::npos)
     llvm::report_fatal_error("missing hierarchy target mutation");
   return text.replace(at, from.size(), to.str());
+}
+std::string conditionalFixture(bool queryOnly = false) {
+  std::string top = domain("a", "rising", "active_low") +
+                    domain("b", "falling", "active_high", false) + port("x", "input", "a") +
+                    port("y", "input", "b") + instance("left", "Child", "a", "x") +
+                    instance("right", "Child", "b", "y", false) +
+                    port("leftResult", "output", "a") + assign("leftResult", "left_output") +
+                    port("rightResult", "output", "b") + assign("rightResult", "right_output");
+  std::string child =
+      queryOnly ? requirement() + port("input", "input", "req") + port("output", "output", "req") +
+                      "%asserted = \"nodal.reset_asserted\"() <{domain = @req, metadata = "
+                      "{semantic_path = \"Child.asserted\"}}> : () -> " +
+                      bit + "\n" + assign("output", "asserted")
+                : replace(leaf(), "kind = \"register\", domain = @req,",
+                          "kind = \"register\", domain = @req, initializer_policy = \"if_reset\",");
+  return "module attributes {nodal.root.module = @Top} {\n" + owner("Top", top) +
+         owner("Child", child) + "}\n";
 }
 std::string print(Operation *op) {
   std::string result;
@@ -238,6 +256,54 @@ int main() {
     }
     report("gray-destination-payload-does-not-demand-reset", minimal);
   }
+  positive("conditional-initializer-partitions-reset-bearing-and-resetless-occurrences",
+           conditionalFixture(), 3, 2, 2, 1);
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(conditionalFixture(true), ParserConfig(&context, false));
+    bool ok = bool(parsed);
+    unsigned obligations = 0;
+    if (ok) {
+      for (auto module : parsed->getOps<nodal::ModuleOp>())
+        if (module->getAttrOfType<StringAttr>("sym_name").getValue() == "Child") {
+          auto query = *module.getBody().front().getOps<nodal::ResetAssertedOp>().begin();
+          auto graph = nodal::analyzeDigitalAssignmentDependencies(
+              module, {{query->getResult(0), *query->getResult(0).getUsers().begin()}});
+          ok &= succeeded(graph);
+          if (succeeded(graph))
+            for (auto &node : graph->nodes)
+              obligations += bool(node.contextualReset);
+        }
+      ok &= obligations == 1;
+    }
+    report("formal-reset-query-retains-explicit-occurrence-dependency", ok);
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    ok &= parsed && succeeded(manager.run(*parsed));
+    if (ok) {
+      std::string output = print(*parsed);
+      unsigned children = 0, resetPorts = 0, resetlessFalse = 0;
+      parsed->walk([&](circt::hw::HWModuleOp module) {
+        auto definition = module->getAttrOfType<StringAttr>("nodal.definition");
+        if (!definition || definition.getValue() != "Child")
+          return;
+        ++children;
+        auto *body = module.getBodyBlock();
+        resetPorts += body->getNumArguments() == 2;
+        if (body->getNumArguments() == 1) {
+          auto value = body->back().getOperand(0).getDefiningOp();
+          auto constant = value ? value->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+          resetlessFalse += constant && constant.getValue().isZero();
+        }
+      });
+      ok = children == 2 && resetPorts == 1 && resetlessFalse == 1 &&
+           !StringRef(output).contains("__nodal_req_clock") &&
+           StringRef(output).contains("__nodal_req_reset") &&
+           StringRef(output).contains("comb.xor");
+    }
+    report("reset-query-alone-infers-no-clock-and-proves-resetless-false", ok);
+  }
   auto negative = [&](StringRef name, const std::string &input, StringRef diagnostic) {
     diagnostics.clear();
     auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
@@ -267,6 +333,47 @@ int main() {
                                   "default_value = 4 : i64, variability = \"symbolic\", metadata "
                                   "= {}}> : () -> ()\n")),
            "target Integer parameter envelope must fit signed 32-bit arithmetic");
+  negative("conditional-initializer-policy-is-closed",
+           replace(conditionalFixture(), "initializer_policy = \"if_reset\"",
+                   "initializer_policy = \"sometimes\""),
+           "if_reset requires");
+  negative("conditional-initializer-cannot-hide-missing-value",
+           replace(replace(conditionalFixture(), "digital_storage\"(%zero)", "digital_storage\"()"),
+                   "}> : (!nodal.bits<1>) -> !nodal.bits<1>", "}> : () -> !nodal.bits<1>"),
+           "if_reset requires");
+  negative("formal-reset-query-cannot-guess-polarity",
+           replace(conditionalFixture(true), "domain = @req, metadata = {semantic_path",
+                   "domain = @req, reset_polarity = \"active_high\", metadata = {semantic_path"),
+           "formal reset assertion retains only");
+  negative(
+      "formal-query-cannot-bypass-closed-root-selection",
+      replace(conditionalFixture(true), "module attributes {nodal.root.module = @Top}", "module"),
+      "requires one exact outer nodal.root.module selector");
+  negative(
+      "formal-consumer-root-cannot-remain-unbound",
+      replace(conditionalFixture(true), "nodal.root.module = @Top", "nodal.root.module = @Child"),
+      "reachable requirement lacks a unique concrete clock/reset binding");
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(conditionalFixture(), ParserConfig(&context, false));
+    bool valid = bool(parsed);
+    unsigned conditional = 0, resets = 0;
+    if (valid) {
+      for (auto module : parsed->getOps<nodal::ModuleOp>())
+        valid &= succeeded(nodal::normalizeSequentialModel(module));
+      parsed->walk([&](nodal::SequentialUpdateOp update) {
+        conditional +=
+            update->getNumOperands() == 4 &&
+            update->getAttrOfType<StringAttr>("initializer_policy").getValue() == "if_reset" &&
+            !update->hasAttr("edge") && !update->hasAttr("reset_policy") &&
+            !update->hasAttr("reset_polarity");
+      });
+      parsed->walk([&](nodal::RequirementResetOp) { ++resets; });
+      valid &= conditional == 1 && resets == 0 && succeeded(verify(*parsed));
+    }
+    report("conditional-normalization-preserves-initial-without-reset-projection", valid);
+  }
   diagnostics.clear();
   auto normalized = parseSourceString<mlir::ModuleOp>(fixture(), ParserConfig(&context, false));
   bool ok = bool(normalized);

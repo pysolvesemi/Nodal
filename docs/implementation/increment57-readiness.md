@@ -825,3 +825,34 @@ Architecture review: one shared model owns schema and role mapping; all sampled
 roots retain coherent identity without combinational feedback. Packed bank and
 read selection grow with bounded depth, using a logarithmic read mux rather than
 bitwise graph expansion. No CI, broad qualification or F57 closure is claimed.
+
+### Elastic FIFO actual target checkpoint
+
+The maintained `tests/scala/async-fifos/run_target.py` and profile helper consume
+actual frozen Scala replay output, then run nodalc, CIRCT and Icarus without
+rewriting emitted HDL. Current waveform matrix passes **84/84** across all 14
+profiles: both clock edges and reset polarities, exact depths 2/4/8/256, packed
+Vec/Struct, nonzero-encoded Enum, Sync on one actual physical clock, unattached
+sink, continuous-valid source and a three-clock two-FIFO chain.
+
+A transfer scoreboard checks only accepted valid-and-ready transactions. Exact
+capacity, wrap, stopped and simultaneous edges, pointer visibility/return delays,
+backpressure, invalid offers and coordinated queue flush are witnessed. The
+chain admits exactly eight blocked entries and then preserves order through
+repeated backpressured wraps. Unattached ready remains false despite the unused
+external input; the continuously offered source obeys the same stall contract.
+
+Actual negative simulations fail nonzero with the specific expected endpoint
+obligation: source payload/valid stall violations, missing/unknown reset epochs,
+eight forced-unknown real pointer controls, and destination payload/valid stall
+mutations. Fallback testbench failures do not count. Export retains exact packed
+ABI and physical timing obligations. The supported firtool option
+`disallowLocalVariables` accommodates Icarus syntax, with randomization disabled.
+
+Affected actual target predecessors on current nodalc pass: snapshot handshake
+**44/44**, Gray/Pulse **45/45**, scalar/shaped reset **12/12**. Logs/manifests are
+under `.work/fifo-target-actual`, `.work/fifo-handshake-predecessor`,
+`.work/fifo-gray-pulse-predecessor` and `.work/fifo-reset-predecessor` (with adjacent
+`.log` files). These are executed waveform checks, not a physical CDC proof.
+Source/API final focused checks and publication remain a separate pending slice;
+this harness checkpoint does not close F57. No CI or broad qualification ran.

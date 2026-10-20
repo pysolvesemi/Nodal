@@ -2,6 +2,8 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/SV/SVDialect.h"
+#include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
@@ -11,10 +13,20 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/PhysicalControlModel.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -22,6 +34,8 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
+
+#include <string>
 
 using namespace mlir;
 namespace nodal {
@@ -70,6 +84,26 @@ Type targetType(Type type) {
   unsigned bits = width(type);
   return bits && bits <= maximumWidth ? IntegerType::get(type.getContext(), bits) : Type();
 }
+/// Fixed physical control arrays use one bit per row-major scalar element.
+/// ShapeModel remains the owner of extent proof; defaults never size an ABI.
+Type targetControlShapeType(Type type, Operation *module) {
+  if (!isa<nodal::ShapedType>(type) || getDigitalControlBoundaryKind(type).empty())
+    return {};
+  unsigned bits = 1;
+  while (auto shape = dyn_cast<nodal::ShapedType>(type)) {
+    SmallVector<StringRef> dimensions;
+    shape.getDimensions().split(dimensions, ',');
+    for (StringRef dimension : dimensions) {
+      auto extent = resolveStaticShapeDimension(module, dimension);
+      if (failed(extent) || extent->bounds.lower != extent->bounds.upper ||
+          extent->bounds.lower <= 0 || extent->bounds.lower > maximumWidth / bits)
+        return {};
+      bits *= extent->bounds.lower;
+    }
+    type = shape.getElementType();
+  }
+  return IntegerType::get(type.getContext(), bits);
+}
 bool scalarOpcode(StringRef op) {
   return llvm::StringSwitch<bool>(op)
       .Cases({"digital_alias", "digital_select", "bool_and", "bool_or", "bool_not"}, true)
@@ -95,30 +129,58 @@ void correlate(Operation *target, Operation *source) {
 class ModuleLowering {
 public:
   ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost)
-      : source(source), builder(builder), cost(cost) {}
+      : source(source), builder(builder), cost(cost), domains(source) {}
 
   LogicalResult preflight() {
+    if (failed(domains.verifyRelationships()) || failed(planControlProjections()))
+      return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
       StringRef name = op.getName().getStringRef();
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
-      for (Type type : op.getOperandTypes())
-        if (!targetType(type))
-          return reject(&op, "operand requires fixed scalar width 1..4096 or a direct clock/reset");
-      for (Type type : op.getResultTypes())
-        if (!targetType(type))
-          return reject(&op, "result requires fixed scalar width 1..4096 or a direct clock/reset");
-      uint64_t expansion = 1;
-      if (isa<PortOp>(op)) {
-        auto type = op.getAttrOfType<TypeAttr>("type");
-        if (!type || !targetType(type.getValue()) ||
-            (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
+      bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op);
+      if (!structural) {
+        bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
+                         llvm::any_of(op.getResultTypes(), aggregatePayload);
+        if (aggregate &&
+            !isa<PortValueOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp, EventProcessOp>(
+                op) &&
+            !(isa<DigitalExprOp>(op) && (text(&op, "operator_name") == "digital_alias" ||
+                                         text(&op, "operator_name") == "digital_select")))
           return reject(
-              &op, "only fixed scalar input/output and direct Clock/Reset ports are supported");
-        if (text(&op, "direction") == "output" && isa<ControlCapabilityType>(type.getValue()))
+              &op,
+              "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
+              "crossings, event storage and whole boundary/alias/select connections; projections "
+              "require an explicit packed-offset lowering");
+        for (Type type : op.getOperandTypes())
+          if (!targetValueType(type))
+            return reject(
+                &op, "operand requires fixed scalar/packed width 1..4096 or a direct clock/reset");
+        for (Type type : op.getResultTypes())
+          if (!targetValueType(type) &&
+              !(isa<PortValueOp>(op) && targetControlShapeType(type, source)))
+            return reject(
+                &op, "result requires fixed scalar/packed width 1..4096 or a fixed control input");
+      }
+      uint64_t expansion = 1;
+      if (structural) {
+        // Shape/index expressions are compile-time proof, not hardware values.
+        expansion = controlProjections.contains(&op) ? 2 : 0;
+      } else if (isa<PortOp>(op)) {
+        auto type = op.getAttrOfType<TypeAttr>("type");
+        Type lowered = type ? targetValueType(type.getValue()) : Type();
+        if (type && !lowered)
+          lowered = targetControlShapeType(type.getValue(), source);
+        if (!type || !lowered ||
+            (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
+          return reject(&op, "only fixed scalar/packed input/output and fixed Clock/Reset input "
+                             "ports are supported");
+        if (text(&op, "direction") == "output" &&
+            !getDigitalControlBoundaryKind(type.getValue()).empty())
           return reject(&op, "clock/reset output capabilities require a later boundary profile");
         ports.push_back(&op);
+        portTypes.try_emplace(&op, lowered);
       } else if (isa<PortValueOp>(op)) {
         auto ref = op.getAttrOfType<FlatSymbolRefAttr>("port");
         auto *port = SymbolTable::lookupSymbolIn(source, ref);
@@ -126,11 +188,56 @@ public:
         if (text(port, "direction") == "output")
           seeds.emplace_back(op.getResult(0), &op);
       } else if (isa<DomainOp>(op)) {
-        if (text(&op, "reset_policy") != "sync" && text(&op, "reset_policy") != "none")
-          return reject(&op, "CIRCT profile supports synchronous or resetless domains; native "
-                             "asynchronous semantics remain distinct");
+        // Unused descriptors remain descriptors. Executable bindings and every
+        // stateful consumer are independently verified before this transaction.
       } else if (isa<DomainRequirementOp, DomainBindOp, LocalDomainBindingOp>(op)) {
         // Verified provenance only; actual values already carry the connection.
+      } else if (named(&op, "nodal.clock_gate") || named(&op, "nodal.clock_mux")) {
+        if (failed(inspectOwnedClock(&op, domains)))
+          return failure();
+        clocks.push_back(&op);
+        // Closed fixed implementation: one uninitialized gate latch, or 22 mux
+        // control/release bits. Output-domain release is a separately charged
+        // authored reset_sync. Include monitors and correlation comments.
+        expansion = named(&op, "nodal.clock_mux") ? 192 : 16;
+      } else if (isa<ClockRelationshipOp>(op)) {
+        if (failed(verifyClockRelationship(&op)))
+          return failure();
+        relationships.push_back(&op);
+        expansion = 3;
+      } else if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
+        if (failed(verifyResetProducer(&op)))
+          return failure();
+        resets.push_back(&op);
+        expansion = isa<ResetSyncOp>(op) ? 3 * op.getAttrOfType<IntegerAttr>("stages").getInt() + 5
+                                         : 2 * op.getNumOperands() + 2;
+      } else if (isa<CrossingOp, AsyncFifoOp>(op)) {
+        auto crossing = inspectExecutableCrossing(&op, domains);
+        if (failed(crossing))
+          return failure();
+        // The canonical model verifies type, endpoints, source sampling and
+        // independent identity. Only the finite target expansion belongs here.
+        crossings.push_back(*crossing);
+        // Bounds cover state, reset logic, source-clock runtime monitors and
+        // retained obligations. Payload bits were independently bounded by the
+        // native model; this profile additionally requires fixed scalar/packed types.
+        expansion = crossing->kind == CrossingKind::Fifo        ? 10 * crossing->depth + 192
+                    : crossing->kind == CrossingKind::Handshake ? 80
+                    : crossing->kind == CrossingKind::Pulse     ? 64
+                    : crossing->kind == CrossingKind::Gray      ? 2 * crossing->stages + 32
+                                                                : 3 * crossing->stages + 8;
+      } else if (isa<WaiverOp>(op)) {
+        if (failed(inspectExecutableWaiver(&op, domains)))
+          return failure();
+        expansion = 2; // One retained obligation and at most one identity wire; no state.
+      } else if (isa<EventProcessOp>(op)) {
+        auto event = inspectEventProcess(&op);
+        if (failed(event))
+          return failure();
+        events.push_back(*event);
+        // One private clock conversion, optional inversion, retained contract,
+        // and one next-value backedge plus state for each canonical output.
+        expansion = 3 + 2 * event->storagePorts.size();
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -140,13 +247,11 @@ public:
           return reject(&op, "unknown scalar storage kind");
         expansion = 4;
       } else if (isa<SequentialUpdateOp>(op)) {
-        if (text(&op, "reset_policy") != "none" && text(&op, "reset_policy") != "sync")
-          return reject(&op, "asynchronous and AASR updates are outside this CIRCT profile");
         if (!updates.try_emplace(op.getOperand(0), &op).second)
           return reject(&op, "register requires exactly one normalized clocked update");
         expansion = 5;
       } else if (isa<DigitalAssignOp>(op)) {
-        if (text(&op, "kind") != "continuous")
+        if (text(&op, "kind") != "continuous" && text(&op, "kind") != "event_update")
           return reject(&op, "unnormalized or unbound register intent is not executable");
       } else if (isa<ConstantOp, ConstLiteralOp>(op)) {
         if (!op.getAttrOfType<IntegerAttr>("value"))
@@ -187,6 +292,11 @@ public:
         expansion = code == "enum_is_one_of" || code == "enum_is_valid" ? 3 * tests + 2 : 3;
       } else
         return reject(&op, "operation is outside the finite scalar CIRCT profile");
+      // Producer references are temporary graph operations too. Charge their
+      // exact result count before creating any backedges, in addition to the
+      // persistent target expansion. Alias results are conservatively included.
+      if (!structural && !isa<PortValueOp>(op))
+        expansion += op.getNumResults();
       if (expansion > maximumGeneratedOperations - cost)
         return reject(&op, "target expansion exceeds 262144 operations before allocation");
       cost += expansion;
@@ -204,11 +314,24 @@ public:
     auto graph = analyzeDigitalAssignmentDependencies(source, seeds);
     if (failed(graph))
       return failure();
+    for (const auto &update : graph->eventUpdates) {
+      const auto &write = graph->nodes[update.root];
+      if (write.value || write.use != update.operation || write.dependencies.size() != 1)
+        return reject(update.operation, "event update requires its canonical assignment edge");
+      auto ref =
+          update.operation->getOperand(0).getDefiningOp()->getAttrOfType<FlatSymbolRefAttr>("port");
+      Operation *port = SymbolTable::lookupSymbolIn(source, ref);
+      Value rhs = graph->nodes[write.dependencies.front()].value;
+      if (!rhs || !eventUpdates.try_emplace(port, rhs).second)
+        return reject(update.operation, "event output requires one canonical whole-value update");
+    }
     // The finite profile has only direct whole-scalar connections. Read the
     // canonical graph's unique write edge, rather than collecting another set
     // of mutable driver facts or reimplementing physical overlap/coverage.
     for (unsigned i = 0; i < seeds.size(); ++i) {
       const auto &root = graph->nodes[graph->roots[i]];
+      if (root.eventProcess)
+        continue; // A verified event output reads persistent old state, not its writer.
       if (root.dependencies.size() != 1)
         return reject(seeds[i].second,
                       "scalar connection requires one verified whole-value writer");
@@ -243,6 +366,123 @@ public:
         materializations.try_emplace(text(decision, "path"), decision);
       }
     }
+    // Reserve generated names after every authored exact name is known.
+    // Symbols keep even identical-source chains distinct through target CSE.
+    for (const auto &event : events) {
+      for (Operation *port : event.storagePorts) {
+        if (!eventUpdates.count(port))
+          return reject(port, "event storage lacks its verified canonical update");
+        std::string base = "__nodal_event_" + std::to_string(eventNames.size()) + "_" +
+                           text(port, "sym_name").str();
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        eventNames.try_emplace(port, builder.getStringAttr(name));
+      }
+    }
+    for (const auto &crossing : crossings) {
+      SmallVector<StringAttr> names;
+      SmallVector<std::string> roles;
+      if (crossing.kind == CrossingKind::Pulse)
+        roles = {"source_toggle",       "previous_pulse", "forward_0", "forward_1",
+                 "destination_history", "return_0",       "return_1"};
+      else if (crossing.kind == CrossingKind::Handshake)
+        roles = {"source_payload",           "destination_payload",
+                 "source_request",           "destination_request_0",
+                 "destination_request_1",    "destination_acknowledgement",
+                 "source_acknowledgement_0", "source_acknowledgement_1"};
+      else if (crossing.kind == CrossingKind::Fifo) {
+        roles = {"source_binary",
+                 "source_gray",
+                 "source_read_gray_0",
+                 "source_read_gray_1",
+                 "destination_binary",
+                 "destination_gray",
+                 "destination_write_gray_0",
+                 "destination_write_gray_1"};
+        for (unsigned entry = 0; entry < crossing.depth; ++entry)
+          roles.push_back("bank_" + std::to_string(entry));
+        for (StringRef role : {"source_previous_payload", "source_stalled",
+                               "destination_previous_payload", "destination_stalled"})
+          roles.push_back(role.str());
+      } else {
+        for (unsigned stage = 0; stage < crossing.stages; ++stage)
+          roles.push_back("stage_" + std::to_string(stage));
+        if (crossing.kind == CrossingKind::Gray) {
+          roles.push_back("previous_payload");
+          roles.push_back("seen_sample");
+        }
+      }
+      StringRef kind = crossing.kind == CrossingKind::Level   ? "sync"
+                       : crossing.kind == CrossingKind::Gray  ? "gray"
+                       : crossing.kind == CrossingKind::Pulse ? "pulse"
+                       : crossing.kind == CrossingKind::Fifo  ? "fifo"
+                                                              : "handshake";
+      for (const std::string &role : roles) {
+        std::string base =
+            "__nodal_" + kind.str() + "_" + std::to_string(crossingNames.size()) + "_" + role;
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.push_back(builder.getStringAttr(name));
+      }
+      crossingNames.try_emplace(crossing.operation, std::move(names));
+    }
+    for (Operation *clock : clocks) {
+      SmallVector<StringRef> roles;
+      if (named(clock, "nodal.clock_gate"))
+        roles = {"gate", "output"};
+      else
+        roles = {"select_0",
+                 "select_1",
+                 "controller",
+                 "selected",
+                 "branch0_request_0",
+                 "branch0_request_1",
+                 "branch0_enable",
+                 "branch1_request_0",
+                 "branch1_request_1",
+                 "branch1_enable",
+                 "branch0_ack_0",
+                 "branch0_ack_1",
+                 "branch1_ack_0",
+                 "branch1_ack_1",
+                 "controller_release_0",
+                 "controller_release_1",
+                 "branch0_release_0",
+                 "branch0_release_1",
+                 "branch1_release_0",
+                 "branch1_release_1",
+                 "output"};
+      auto &names = clockNames[clock];
+      for (StringRef role : roles) {
+        std::string base =
+            "__nodal_clock_" + std::to_string(clockNames.size() - 1) + "_" + role.str();
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.try_emplace(role, builder.getStringAttr(name));
+      }
+    }
+    for (Operation *reset : resets) {
+      if (!isa<ResetSyncOp>(reset))
+        continue;
+      SmallVector<StringAttr> names;
+      unsigned stages = reset->getAttrOfType<IntegerAttr>("stages").getInt();
+      for (unsigned i = 0; i < stages; ++i) {
+        std::string base =
+            "__nodal_reset_" + std::to_string(resetNames.size()) + "_" + std::to_string(i);
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.push_back(builder.getStringAttr(name));
+      }
+      resetNames.try_emplace(reset, std::move(names));
+    }
     return success();
   }
 
@@ -252,14 +492,18 @@ public:
     for (Operation *port : ports) {
       circt::hw::PortInfo info;
       info.name = port->getAttrOfType<StringAttr>("sym_name");
-      info.type = targetType(port->getAttrOfType<TypeAttr>("type").getValue());
+      info.type = portTypes.lookup(port);
       bool input = text(port, "direction") == "input";
       info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
       info.argNum = input ? inputIndex++ : outputIndex++;
       info.loc = port->getLoc();
+      NamedAttrList attributes;
       if (!sourcePath(port).empty())
-        info.attrs = builder.getDictionaryAttr(
-            {builder.getNamedAttr("nodal.source_path", builder.getStringAttr(sourcePath(port)))});
+        attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port)));
+      Type originalType = port->getAttrOfType<TypeAttr>("type").getValue();
+      if (aggregatePayload(originalType))
+        attributes.set("nodal.packed_abi", packedLayout(originalType));
+      info.attrs = builder.getDictionaryAttr(attributes);
       targetPorts.push_back(info);
     }
     builder.setInsertionPoint(source);
@@ -269,6 +513,19 @@ public:
     correlate(target, source);
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
+    for (Operation *port : ports) {
+      Type type = port->getAttrOfType<TypeAttr>("type").getValue();
+      if (!aggregatePayload(type))
+        continue;
+      std::string contract;
+      llvm::raw_string_ostream stream(contract);
+      stream << "// NODAL packed ABI: " << text(port, "sym_name")
+             << "; layout=recursive-row-major-fields-lsb-first; " << packedLayout(type);
+      auto comment =
+          circt::sv::VerbatimOp::create(builder, port->getLoc(), builder.getStringAttr(contract),
+                                        ValueRange{}, builder.getArrayAttr({}));
+      correlate(comment, port);
+    }
     circt::BackedgeBuilder backedges(builder, source.getLoc());
     inputIndex = 0;
     for (Operation *port : ports) {
@@ -277,6 +534,40 @@ public:
       for (Value value : portValues[port])
         values[value] = body->getArgument(inputIndex);
       ++inputIndex;
+    }
+    // A projection is a statically proved reference into its actual input pin,
+    // not a runtime array operation. Install scalar mappings before any reset
+    // producers, synchronizer stages, assertions or registers consume them.
+    for (const auto &[original, control] : physicalControls) {
+      Value input = values.lookup(control.root);
+      if (!input)
+        return reject(original.getDefiningOp(), "physical control root did not map");
+      Value bit = circt::comb::ExtractOp::create(builder, original.getLoc(), input,
+                                                 *control.literalOffset, 1);
+      correlate(bit.getDefiningOp(), original.getDefiningOp());
+      if (cast<ControlCapabilityType>(original.getType()).getKind() == "clock") {
+        bit = circt::seq::ToClockOp::create(builder, original.getLoc(), bit);
+        correlate(bit.getDefiningOp(), original.getDefiningOp());
+      }
+      values[original] = bit;
+    }
+    // Clock/reset/state graphs interleave: a gate may consume register or CDC
+    // output, and a release chain may consume that gate. Install every actual
+    // result reference before consumers, then resolve the independently checked
+    // dependency graph. A phase ordering must never replace a derived control
+    // by a raw pin or reject a legitimate state-to-clock dependency.
+    SmallVector<std::pair<Value, circt::Backedge>> producerEdges;
+    for (Operation &op : source.getBody().front()) {
+      if (isa<PortValueOp>(op) || controlProjections.contains(&op) ||
+          controlSelectors.contains(&op))
+        continue;
+      for (Value original : op.getResults()) {
+        if (aliases.count(original))
+          continue;
+        auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
+        values[original] = edge;
+        producerEdges.emplace_back(original, edge);
+      }
     }
     SmallVector<std::pair<Value, circt::Backedge>> connectionEdges;
     // Install graph cuts first. No combinational value can accidentally become
@@ -287,11 +578,106 @@ public:
       Value original = op.getResult(0);
       if (!aliases.count(original))
         continue;
-      auto edge = backedges.get(targetType(original.getType()), op.getLoc());
+      auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
     }
-    SmallVector<std::pair<Operation *, circt::Backedge>> stateEdges;
+    SmallVector<std::pair<Value, circt::Backedge>> eventEdges;
+    for (const auto &event : events) {
+      Operation *op = event.operation;
+      Value trigger = values.lookup(event.trigger);
+      if (!trigger)
+        return reject(op, "verified event trigger did not map to its actual root input");
+      Value clock = circt::seq::ToClockOp::create(builder, op->getLoc(), trigger);
+      correlate(clock.getDefiningOp(), op);
+      if (event.edge == "falling") {
+        clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
+        correlate(clock.getDefiningOp(), op);
+      }
+      // Predeclare every physical output and all of its SSA aliases before
+      // evaluating any RHS. The existing expression/backedge path consequently
+      // observes one common pre-event state, independent of assignment order.
+      for (Operation *port : event.storagePorts) {
+        auto edge = backedges.get(portTypes.lookup(port), port->getLoc());
+        auto state = circt::seq::CompRegOp::create(builder, port->getLoc(), Value(edge), clock,
+                                                   circt::StringAttrOrRef(eventNames.lookup(port)));
+        state->setAttr("inner_sym", circt::hw::InnerSymAttr::get(eventNames.lookup(port)));
+        correlate(state, port);
+        state->setAttr("nodal.event_process", op->getAttr("sym_name"));
+        state->setAttr("nodal.event_contract", op->getAttr("contract"));
+        state->setAttr("nodal.event_obligations", op->getAttr("obligations"));
+        state->setAttr("nodal.event_source", op->getAttr("metadata"));
+        Type original = port->getAttrOfType<TypeAttr>("type").getValue();
+        if (aggregatePayload(original))
+          state->setAttr("nodal.packed_abi", packedLayout(original));
+        for (Value alias : portValues[port])
+          values[alias] = state.getResult();
+        eventEdges.emplace_back(eventUpdates.lookup(port), edge);
+      }
+      // Retain environment assumptions in emitted HDL without making authored
+      // source identity executable syntax or claiming a physical timing proof.
+      std::string detail = "// NODAL root event " + sourcePath(op).str() + ": " + event.edge.str() +
+                           "; known_levels_definite_edges; external_sampling=user_setup_hold; "
+                           "startup=unspecified; updates=simultaneous_pre_event; "
+                           "environment assumptions, not electrical certification";
+      for (char &c : detail)
+        if (c == '\n' || c == '\r' || c == '{' || c == '}')
+          c = ' ';
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(), builder.getStringAttr(detail + "; actual trigger {{0}}"),
+          ValueRange{trigger}, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.event_process", op->getAttrDictionary());
+    }
+    for (Operation *op : resets) {
+      if (isa<ResetBoundaryOp>(op)) {
+        Value raw = values.lookup(op->getOperand(0));
+        if (!raw)
+          return reject(op, "physical reset boundary did not map");
+        values[op->getResult(0)] = raw;
+        if (text(op, "release") == "external") {
+          auto binding = domains.resolveClockBinding(op->getAttr("release_domain"));
+          auto domain = domains.resolveDomain(op->getAttr("release_domain"));
+          Value clock = circt::seq::FromClockOp::create(builder, op->getLoc(),
+                                                        values.lookup((*binding)->getOperand(0)));
+          std::string comment =
+              "// NODAL external reset release assumption: " + text(*domain, "sym_name").str() +
+              " " + text(*domain, "edge").str() + " physical clock {{0}}; " + sourcePath(op).str();
+          circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(comment),
+                                        ValueRange{clock}, builder.getArrayAttr({}));
+        }
+      } else if (isa<ResetCombineOp>(op)) {
+        SmallVector<Value> asserted;
+        for (Value input : op->getOperands()) {
+          Value raw = values.lookup(input);
+          if (!raw)
+            return reject(op, "reset composition input did not map");
+          asserted.push_back(resetActive(raw, input.getDefiningOp()));
+        }
+        Value joined = asserted.size() == 1 ? asserted.front()
+                                            : make(op, "comb.or", builder.getI1Type(), asserted);
+        values[op->getResult(0)] = resetActive(joined, op);
+      } else {
+        Value raw = values.lookup(op->getOperand(0));
+        Value clock = values.lookup(op->getOperand(1));
+        if (!raw || !clock)
+          return reject(op, "reset synchronizer input/clock did not map");
+        auto domain = domains.resolveDomain(op->getAttr("destination_domain"));
+        if (text(*domain, "edge") == "falling")
+          clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
+        Value asserted = resetActive(raw, op->getOperand(0).getDefiningOp());
+        Value one = constant(op, 1, 1), previous = constant(op, 1, 0);
+        for (StringAttr name : resetNames.find(op)->second) {
+          auto state =
+              circt::seq::FirRegOp::create(builder, op->getLoc(), previous, clock, name, asserted,
+                                           one, circt::hw::InnerSymAttr::get(name), true);
+          correlate(state, op);
+          previous = state.getResult();
+        }
+        values[op->getResult(0)] = resetActive(previous, op);
+      }
+    }
+    SmallVector<std::pair<Operation *, circt::Backedge>> stateEdges, resetValueEdges;
     for (Operation *reg : registers) {
       Operation *update = updates.lookup(reg->getResult(0));
       Value clock = values.lookup(update->getOperand(2));
@@ -301,15 +687,212 @@ public:
       }
       if (text(update, "edge") == "falling")
         clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
-      auto edge = backedges.get(targetType(reg->getResult(0).getType()), reg->getLoc());
-      auto state = circt::seq::CompRegOp::create(builder, reg->getLoc(), Value(edge), clock);
-      state->setAttr("name", reg->getAttr("name"));
+      auto edge = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
+      Operation *state;
+      StringRef policy = text(update, "reset_policy");
+      if (policy == "async" || policy == "async_assert_sync_release") {
+        Value rawReset = values.lookup(update->getOperand(3));
+        if (!rawReset)
+          return reject(update, "effective reset did not map before consumer");
+        auto initial = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
+        state = circt::seq::FirRegOp::create(
+            builder, reg->getLoc(), Value(edge), clock, reg->getAttrOfType<StringAttr>("name"),
+            resetActive(rawReset, update), Value(initial), circt::hw::InnerSymAttr(), true);
+        resetValueEdges.emplace_back(update, initial);
+      } else {
+        state = circt::seq::CompRegOp::create(builder, reg->getLoc(), Value(edge), clock);
+        state->setAttr("name", reg->getAttr("name"));
+      }
       correlate(state, reg);
-      values[reg->getResult(0)] = state.getResult();
+      values[reg->getResult(0)] = state->getResult(0);
       stateEdges.emplace_back(update, edge);
     }
+    SmallVector<std::pair<Value, circt::Backedge>> crossingEdges;
+    for (const auto &crossing : crossings) {
+      Operation *op = crossing.operation;
+      auto destination = crossingControls(crossing.destinationDomain, crossing.destinationBinding);
+      if (failed(destination)) {
+        backedges.abandon();
+        return reject(op, "crossing destination physical clock/reset did not map");
+      }
+      auto input = backedges.get(targetValueType(op->getOperand(0).getType()), op->getLoc());
+      crossingEdges.emplace_back(op->getOperand(0), input);
+      Value previous = input;
+      if (crossing.kind == CrossingKind::Level || crossing.kind == CrossingKind::Gray) {
+        for (unsigned stage = 0; stage < crossing.stages; ++stage)
+          previous = crossingState(crossing, stage, previous, *destination, "forward",
+                                   crossing.kind != CrossingKind::Gray);
+        values[op->getResult(0)] = previous;
+        if (crossing.kind == CrossingKind::Level)
+          continue;
+      }
+      auto sourceControl = crossingControls(crossing.sourceDomain, crossing.sourceBinding);
+      if (failed(sourceControl)) {
+        backedges.abandon();
+        return reject(op, "crossing source physical clock/reset did not map");
+      }
+      if (crossing.kind == CrossingKind::Fifo) {
+        auto sourceValid = backedges.get(builder.getI1Type(), op->getLoc());
+        auto destinationReady = backedges.get(builder.getI1Type(), op->getLoc());
+        crossingEdges.emplace_back(op->getOperand(1), sourceValid);
+        crossingEdges.emplace_back(op->getOperand(2), destinationReady);
+        lowerFifo(crossing, input, sourceValid, destinationReady, *sourceControl, *destination,
+                  backedges);
+      } else if (crossing.kind == CrossingKind::Gray) {
+        // The payload history has no reset value. In particular, an enum with
+        // no zero encoding must not acquire a fabricated source reset state.
+        // Only the seen marker resets, and the first real sample seeds history.
+        Value history = crossingState(crossing, crossing.stages, input, *sourceControl,
+                                      "previous_payload", false);
+        Value seen = crossingState(crossing, crossing.stages + 1, constant(op, 1, 1),
+                                   *sourceControl, "seen_sample");
+        unsigned bits = cast<IntegerType>(history.getType()).getWidth();
+        Value delta = make(op, "comb.xor", history.getType(), {Value(input), history});
+        Value minusOne = make(op, "comb.sub", history.getType(), {delta, constant(op, bits, 1)});
+        Value changed = make(op, "comb.and", history.getType(), {delta, minusOne});
+        Value legal = compare(op, "digital_eq", changed, constant(op, bits, 0), false);
+        Value enable = sourceControl->reset ? make(op, "comb.and", builder.getI1Type(),
+                                                   {seen, invert(op, sourceControl->reset)})
+                                            : seen;
+        crossingAssertion(crossing, *sourceControl, enable, legal,
+                          "NODAL Gray transition must change at most one bit per source sample");
+        crossingComment(crossing,
+                        "Gray obligations: transition=one_bit_per_source_sample (checked); "
+                        "skew=less_than_source_period; stability=stable_between_source_samples. "
+                        "Payload stages have no invented reset value; output is unspecified during "
+                        "startup and N-sample reset recovery. Physical skew and between-sample "
+                        "stability are environment obligations, "
+                        "not proved by the digital monitor.");
+      } else if (crossing.kind == CrossingKind::Handshake) {
+        // The two payload registers have no reset encoding. Only actual
+        // protocol control state establishes the common reset epoch.
+        auto sourceNext = backedges.get(Value(input).getType(), op->getLoc());
+        auto destinationNext = backedges.get(Value(input).getType(), op->getLoc());
+        auto requestNext = backedges.get(builder.getI1Type(), op->getLoc());
+        auto acknowledgementNext = backedges.get(builder.getI1Type(), op->getLoc());
+        Value held =
+            crossingState(crossing, 0, sourceNext, *sourceControl, "source_payload", false);
+        Value delivered =
+            crossingState(crossing, 1, destinationNext, *destination, "destination_payload", false);
+        Value request = crossingState(crossing, 2, requestNext, *sourceControl, "source_request");
+        Value request0 = crossingState(crossing, 3, request, *destination, "destination_request_0");
+        Value request1 =
+            crossingState(crossing, 4, request0, *destination, "destination_request_1");
+        Value acknowledgement = crossingState(crossing, 5, acknowledgementNext, *destination,
+                                              "destination_acknowledgement");
+        Value ack0 =
+            crossingState(crossing, 6, acknowledgement, *sourceControl, "source_acknowledgement_0");
+        Value ack1 = crossingState(crossing, 7, ack0, *sourceControl, "source_acknowledgement_1");
+        Value idle = compare(op, "digital_eq", request, ack1, false);
+        Value pending = compare(op, "digital_ne", request1, acknowledgement, false);
+        sourceNext.setValue(mux(op, idle, input, held));
+        requestNext.setValue(mux(op, idle, invert(op, request), request));
+        destinationNext.setValue(mux(op, pending, held, delivered));
+        // Ack changes on the same edge that captures the old held payload,
+        // never merely when request arrives in either synchronizer stage.
+        acknowledgementNext.setValue(mux(op, pending, request1, acknowledgement));
+        values[op->getResult(0)] = delivered;
+        Value sourceKnown =
+            make(op, "comb.concat", builder.getIntegerType(3), {request, ack0, ack1});
+        Value destinationKnown = make(op, "comb.concat", builder.getIntegerType(3),
+                                      {request0, request1, acknowledgement});
+        crossingAssertion(
+            crossing, *sourceControl, invert(op, sourceControl->reset), sourceKnown,
+            "NODAL handshake source controls require an established common reset epoch",
+            "(^({{2}})) !== 1'bx");
+        crossingAssertion(
+            crossing, *destination, invert(op, destination->reset), destinationKnown,
+            "NODAL handshake destination controls require an established common reset epoch",
+            "(^({{2}})) !== 1'bx");
+        crossingComment(
+            crossing,
+            "Handshake obligations: delivery=latest_snapshot_coalescing; "
+            "bundled_data=settled_before_request_capture; reset_epoch=common_assertion. "
+            "Source payload is held through returned capture acknowledgement; public "
+            "payload changes while busy may coalesce. Payload state has no invented reset "
+            "value and output is unspecified before first delivery/during recovery. "
+            "Physical bundled-data settling is an environment timing obligation, not "
+            "proved by the digital monitor. Hold common assertion long enough for both "
+            "domains to observe reset; no one-sided restart. Known-state startup checks "
+            "do not universally detect repeated one-sided synchronous resets.");
+      } else {
+        // Acknowledgement samples destination HISTORY, not the second forward
+        // stage: readiness therefore means the destination has delivered the
+        // event, rather than merely bringing a pending event into its domain.
+        auto toggleNext = backedges.get(builder.getI1Type(), op->getLoc());
+        Value toggle = crossingState(crossing, 0, toggleNext, *sourceControl, "source_toggle");
+        Value priorPulse = crossingState(crossing, 1, input, *sourceControl, "previous_pulse");
+        Value forward = crossingState(crossing, 2, toggle, *destination, "forward");
+        forward = crossingState(crossing, 3, forward, *destination, "forward");
+        Value history = crossingState(crossing, 4, forward, *destination, "destination_history");
+        Value ack = crossingState(crossing, 5, history, *sourceControl, "return_acknowledgement");
+        ack = crossingState(crossing, 6, ack, *sourceControl, "return_acknowledgement");
+        toggleNext.setValue(make(op, "comb.xor", builder.getI1Type(), {toggle, Value(input)}));
+        values[op->getResult(0)] = make(op, "comb.xor", builder.getI1Type(), {forward, history});
+        Value ready = compare(op, "digital_eq", toggle, ack, false);
+        Value legalPulse =
+            make(op, "comb.and", builder.getI1Type(), {ready, invert(op, priorPulse)});
+        Value legal = make(op, "comb.or", builder.getI1Type(), {invert(op, input), legalPulse});
+        crossingAssertion(
+            crossing, *sourceControl, invert(op, sourceControl->reset), legal,
+            "NODAL pulse requires returned acknowledgement and single-source-cycle width");
+        crossingComment(crossing,
+                        "Pulse obligations: spacing=returned_acknowledgement; "
+                        "width=single_source_cycle; reset_epoch=common_assertion. Hold common "
+                        "assertion long enough for both domains to observe reset; no one-sided "
+                        "restart. Delivery is not promised before the common reset epoch or "
+                        "after a spacing/width violation.");
+      }
+    }
+    for (Operation *op : clocks) {
+      Value result = lowerClock(op, backedges);
+      if (!result) {
+        backedges.abandon();
+        return failure();
+      }
+      values[op->getResult(0)] = result;
+    }
+    for (Operation *op : relationships) {
+      SmallVector<Value, 2> actualClocks;
+      for (Value operand : op->getOperands()) {
+        Value mapped = values.lookup(operand);
+        if (!mapped) {
+          backedges.abandon();
+          return reject(op, "relationship actual clock did not map");
+        }
+        actualClocks.push_back(circt::seq::FromClockOp::create(builder, op->getLoc(), mapped));
+      }
+      std::string detail;
+      llvm::raw_string_ostream stream(detail);
+      stream << "// NODAL clock relationship " << sourcePath(op) << ": kind=" << text(op, "kind")
+             << "; source=" << op->getAttr("source")
+             << "; destination=" << op->getAttr("destination") << "; proof=" << text(op, "proof")
+             << "; obligations=" << op->getAttr("obligations");
+      for (StringRef field : {"multiply", "divide", "phase", "phase_known"})
+        if (Attribute value = op->getAttr(field))
+          stream << "; " << field << "=" << value;
+      stream << "; retained environment assumptions, not runtime physical certification";
+      // Never let an authored identity inject a new line or a Verbatim operand.
+      std::string prefix = detail;
+      for (unsigned i = 0; i != prefix.size(); ++i) {
+        char &c = prefix[i];
+        if (c == '\n' || c == '\r')
+          c = ' ';
+        else if (c == '{' || c == '}')
+          c = c == '{' ? '(' : ')';
+      }
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(), builder.getStringAttr(prefix + "; actual clocks {{0}} -> {{1}}"),
+          actualClocks, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.clock_relationship", op->getAttrDictionary());
+    }
     for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp>(op))
+      if (!op.getNumResults() || controlProjections.contains(&op) ||
+          controlSelectors.contains(&op) || named(&op, "nodal.clock_gate") ||
+          named(&op, "nodal.clock_mux") ||
+          isa<DigitalStorageOp, PortValueOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
+              ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -377,6 +960,24 @@ public:
         pending.pop_back();
       }
     }
+    for (auto &[original, edge] : crossingEdges) {
+      Value input = values.lookup(original);
+      if (!input) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "crossing actual sampled input did not lower");
+      }
+      edge.setValue(input);
+    }
+    for (auto &[original, edge] : eventEdges) {
+      Value next = values.lookup(original);
+      if (!next) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "event actual update RHS did not lower");
+      }
+      edge.setValue(next);
+    }
+    for (auto &[update, edge] : resetValueEdges)
+      edge.setValue(values.lookup(update->getOperand(4)));
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
       if (text(update, "reset_policy") == "sync") {
@@ -384,6 +985,14 @@ public:
         next = mux(update, reset, values.lookup(update->getOperand(4)), next);
       }
       edge.setValue(next);
+    }
+    for (auto &[original, edge] : producerEdges) {
+      Value result = values.lookup(original);
+      if (!result || result == Value(edge)) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "actual producer did not resolve its target value");
+      }
+      edge.setValue(result);
     }
     for (Operation &op : source.getBody().front()) {
       if (!named(&op, "nodal.sequential_assert"))
@@ -409,6 +1018,540 @@ public:
   }
 
 private:
+  static bool aggregatePayload(Type type) {
+    return isa<nodal::ShapedType, StructType>(type) && getDigitalControlBoundaryKind(type).empty();
+  }
+  Type targetValueType(Type type) {
+    if (Type scalar = targetType(type))
+      return scalar;
+    if (!aggregatePayload(type))
+      return {};
+    auto [entry, inserted] = packedTypes.try_emplace(type, Type());
+    if (inserted) {
+      // Canonical type/enum/shape owners establish exactness. A finite maximum
+      // or an overridable parameter default is never an actual packed width.
+      auto bits = inferDigitalBitPatternFixedBits(type, source);
+      if (succeeded(bits) && *bits > 0 && *bits <= maximumWidth)
+        entry->second = builder.getIntegerType(*bits);
+    }
+    return entry->second;
+  }
+  DictionaryAttr packedLayout(Type type) {
+    auto found = packedLayouts.find(type);
+    if (found != packedLayouts.end())
+      return found->second;
+    // This is target representation metadata, not a second type validator.
+    // Exact width/shape facts were established by the canonical owners above.
+    // Record structural strides rather than expanding physical vector lanes.
+    auto bits = inferDigitalBitPatternFixedBits(type, source);
+    assert(succeeded(bits) && *bits <= maximumWidth);
+    NamedAttrList layout;
+    std::string identity;
+    llvm::raw_string_ostream stream(identity);
+    type.print(stream);
+    layout.set("source_type", builder.getStringAttr(identity));
+    layout.set("width", builder.getI64IntegerAttr(*bits));
+    layout.set("order", builder.getStringAttr("recursive-row-major-fields-lsb-first"));
+    if (auto shape = dyn_cast<nodal::ShapedType>(type)) {
+      layout.set("kind", builder.getStringAttr("vec"));
+      DictionaryAttr element = packedLayout(shape.getElementType());
+      layout.set("element", element);
+      SmallVector<StringRef> dimensions;
+      shape.getDimensions().split(dimensions, ',');
+      SmallVector<Attribute> extents, strides(dimensions.size());
+      int64_t stride = element.getAs<IntegerAttr>("width").getInt();
+      for (StringRef dimension : dimensions) {
+        auto extent = resolveStaticShapeDimension(source, dimension);
+        assert(succeeded(extent) && extent->bounds.lower == extent->bounds.upper);
+        extents.push_back(builder.getI64IntegerAttr(extent->bounds.lower));
+      }
+      for (unsigned i = dimensions.size(); i; --i) {
+        strides[i - 1] = builder.getI64IntegerAttr(stride);
+        stride *= cast<IntegerAttr>(extents[i - 1]).getInt();
+      }
+      layout.set("dimensions", builder.getArrayAttr(extents));
+      layout.set("bit_strides", builder.getArrayAttr(strides));
+    } else if (auto structure = dyn_cast<StructType>(type)) {
+      layout.set("kind", builder.getStringAttr("struct"));
+      SmallVector<Attribute> fields;
+      int64_t offset = 0;
+      for (Attribute attribute : structure.getFields()) {
+        auto field = cast<DictionaryAttr>(attribute);
+        DictionaryAttr child = packedLayout(field.getAs<TypeAttr>("type").getValue());
+        fields.push_back(builder.getDictionaryAttr(
+            {builder.getNamedAttr("name", field.getAs<StringAttr>("name")),
+             builder.getNamedAttr("bit_offset", builder.getI64IntegerAttr(offset)),
+             builder.getNamedAttr("layout", child)}));
+        offset += child.getAs<IntegerAttr>("width").getInt();
+      }
+      layout.set("fields", builder.getArrayAttr(fields));
+    } else
+      layout.set("kind", builder.getStringAttr("scalar"));
+    auto result = builder.getDictionaryAttr(layout);
+    packedLayouts.try_emplace(type, result);
+    return result;
+  }
+  void correlateClock(Operation *target, Operation *op, StringRef role) {
+    correlate(target, op);
+    target->setAttr("nodal.clock", op->getAttr("metadata"));
+    target->setAttr("nodal.clock_contract", op->getAttr("contract"));
+    target->setAttr("nodal.clock_domain", op->getAttr("domain"));
+    target->setAttr("nodal.clock_parents", op->getAttr("parent_domains"));
+    target->setAttr("nodal.clock_obligations", op->getAttr("obligations"));
+    target->setAttr("nodal.clock_role", builder.getStringAttr(role));
+  }
+  std::string clockSourceComment(Operation *op) {
+    std::string path = sourcePath(op).str();
+    for (char &character : path)
+      if (character == '\n' || character == '\r')
+        character = ' ';
+      else if (character == '{')
+        character = '(';
+      else if (character == '}')
+        character = ')';
+    return "// NODAL owned clock " + path + ": ";
+  }
+  void clockComment(Operation *op, StringRef contract) {
+    std::string detail;
+    llvm::raw_string_ostream stream(detail);
+    stream << clockSourceComment(op) << contract << "; domain=" << op->getAttr("domain")
+           << "; parents=" << op->getAttr("parent_domains") << "; edge=" << text(op, "edge")
+           << "; obligations=" << op->getAttr("obligations");
+    auto comment =
+        circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(detail),
+                                      ValueRange{}, builder.getArrayAttr({}));
+    correlateClock(comment, op, "contract");
+  }
+  void clockAssertion(Operation *op, Value clock, Value reset, Value known, StringRef role,
+                      bool falling = false) {
+    // Immediate, four-state assertions also execute with Icarus. Unknown reset
+    // never hides an unknown control: only a known asserted local reset skips.
+    std::string check =
+        clockSourceComment(op) + role.str() + " known-state check\n" + "always @(" +
+        (falling ? "negedge" : "posedge") + " {{0}}) begin\n" + "  if (({{1}}) !== 1'b1) begin\n" +
+        "    assert ((^({{2}})) !== 1'bx) else $fatal(1, \"NODAL-CLOCK-057: " + role.str() +
+        " requires known controls and an established reset epoch\");\n  end\nend";
+    auto assertion =
+        circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(check),
+                                      ValueRange{clock, reset, known}, builder.getArrayAttr({}));
+    correlateClock(assertion, op, role);
+    assertion->setAttr("nodal.clock_check", op->getAttr("contract"));
+  }
+  Value clockState(Operation *op, StringRef role, Value input, Value clock, Value reset,
+                   uint64_t resetValue = 0) {
+    StringAttr name = clockNames.find(op)->second.lookup(role);
+    auto state = circt::seq::FirRegOp::create(
+        builder, op->getLoc(), input, clock, name, reset,
+        constant(op, cast<IntegerType>(input.getType()).getWidth(), resetValue),
+        circt::hw::InnerSymAttr::get(name), true);
+    correlateClock(state, op, role);
+    return state.getResult();
+  }
+  Value lowerClock(Operation *op, circt::BackedgeBuilder &backedges) {
+    bool falling = text(op, "edge") == "falling";
+    Value first = values.lookup(op->getOperand(0));
+    Value firstBit = circt::seq::FromClockOp::create(builder, op->getLoc(), first);
+    if (falling)
+      first = circt::seq::ClockInverterOp::create(builder, op->getLoc(), first);
+    if (named(op, "nodal.clock_gate")) {
+      auto gate = circt::seq::ClockGateOp::create(
+          builder, op->getLoc(), first, values.lookup(op->getOperand(1)),
+          values.lookup(op->getOperand(2)),
+          circt::hw::InnerSymAttr::get(clockNames.find(op)->second.lookup("gate")));
+      correlateClock(gate, op, "gate");
+      Value result = gate.getResult();
+      if (falling) {
+        result = circt::seq::ClockInverterOp::create(builder, op->getLoc(), result);
+        correlateClock(result.getDefiningOp(), op, "physical_output");
+      }
+      Value reset = constant(op, 1, 0);
+      auto binding = domains.resolveClockBinding(op->getAttrOfType<ArrayAttr>("parent_domains")[0]);
+      if (failed(binding))
+        return {};
+      if ((*binding)->getNumOperands() == 2)
+        reset = resetActive(values.lookup((*binding)->getOperand(1)), *binding);
+      Value controls = make(op, "comb.concat", builder.getIntegerType(2),
+                            {values.lookup(op->getOperand(1)), values.lookup(op->getOperand(2))});
+      clockAssertion(op, firstBit, reset, controls, "gate enable/testEnable", falling);
+      clockComment(op,
+                   "gate_v1: transparent during the inactive parent phase; enable OR testEnable; "
+                   "no invented latch initialization; startup known after a complete inactive "
+                   "phase with known controls; inactive_phase_aperture is an environment "
+                   "setup/hold obligation, not a metastability proof");
+      Value bit = circt::seq::FromClockOp::create(builder, op->getLoc(), result);
+      StringAttr outputName = clockNames.find(op)->second.lookup("output");
+      auto wire =
+          circt::hw::WireOp::create(builder, op->getLoc(), bit, circt::StringAttrOrRef(outputName),
+                                    circt::hw::InnerSymAttr::get(outputName));
+      correlateClock(wire, op, "observable_output");
+      return circt::seq::ToClockOp::create(builder, op->getLoc(), wire.getResult());
+    }
+    Value second = values.lookup(op->getOperand(1));
+    if (falling)
+      second = circt::seq::ClockInverterOp::create(builder, op->getLoc(), second);
+    Value active0 = circt::seq::FromClockOp::create(builder, op->getLoc(), first);
+    Value active1 = circt::seq::FromClockOp::create(builder, op->getLoc(), second);
+    Value inactive0 = circt::seq::ClockInverterOp::create(builder, op->getLoc(), first);
+    Value inactive1 = circt::seq::ClockInverterOp::create(builder, op->getLoc(), second);
+    Value assertion =
+        resetActive(values.lookup(op->getOperand(3)), op->getOperand(3).getDefiningOp());
+    auto release = [&](StringRef prefix, Value clock) {
+      Value stage0 =
+          clockState(op, prefix.str() + "_release_0", constant(op, 1, 0), clock, assertion, 1);
+      Value stage1 = clockState(op, prefix.str() + "_release_1", stage0, clock, assertion, 1);
+      return std::make_pair(stage0, stage1);
+    };
+    auto controllerRelease = release("controller", first);
+    auto branch0Release = release("branch0", inactive0);
+    auto branch1Release = release("branch1", inactive1);
+    Value controllerReset = controllerRelease.second;
+    Value selected0 =
+        clockState(op, "select_0", values.lookup(op->getOperand(2)), first, controllerReset);
+    Value selected1 = clockState(op, "select_1", selected0, first, controllerReset);
+    auto controllerNext = backedges.get(builder.getIntegerType(3), op->getLoc());
+    auto selectedNext = backedges.get(builder.getI1Type(), op->getLoc());
+    Value controller = clockState(op, "controller", controllerNext, first, controllerReset);
+    Value selected = clockState(op, "selected", selectedNext, first, controllerReset);
+    // Exact five-state encoding. After two initial samples, WaitOff consumes
+    // the second stage only on the following edge (old-state semantics).
+    enum : uint64_t { Init0, Init1, WaitOff, WaitOn, Run };
+    auto inState = [&](uint64_t state) {
+      return compare(op, "digital_eq", controller, constant(op, 3, state), false);
+    };
+    Value initializing0 = inState(Init0), initializing1 = inState(Init1);
+    Value waitingOff = inState(WaitOff), waitingOn = inState(WaitOn), running = inState(Run);
+    Value requesting = make(op, "comb.or", builder.getI1Type(), {waitingOn, running});
+    Value request0 = make(op, "comb.and", builder.getI1Type(), {requesting, invert(op, selected)});
+    Value request1 = make(op, "comb.and", builder.getI1Type(), {requesting, selected});
+    auto branch = [&](StringRef prefix, Value request, Value clock,
+                      std::pair<Value, Value> localRelease, Value active) {
+      Value reset = localRelease.second;
+      Value sync0 = clockState(op, prefix.str() + "_request_0", request, clock, reset);
+      Value sync1 = clockState(op, prefix.str() + "_request_1", sync0, clock, reset);
+      Value enabled = clockState(op, prefix.str() + "_enable", sync1, clock, reset);
+      Value known = make(op, "comb.concat", builder.getIntegerType(6),
+                         {localRelease.first, reset, request, sync0, sync1, enabled});
+      clockAssertion(op, active, reset, known, prefix.str() + " inactive-edge controls", true);
+      return enabled;
+    };
+    Value enabled0 = branch("branch0", request0, inactive0, branch0Release, active0);
+    Value enabled1 = branch("branch1", request1, inactive1, branch1Release, active1);
+    Value ack00 = clockState(op, "branch0_ack_0", enabled0, first, controllerReset);
+    Value ack01 = clockState(op, "branch0_ack_1", ack00, first, controllerReset);
+    Value ack10 = clockState(op, "branch1_ack_0", enabled1, first, controllerReset);
+    Value ack11 = clockState(op, "branch1_ack_1", ack10, first, controllerReset);
+    Value bothOff = invert(op, make(op, "comb.or", builder.getI1Type(), {ack01, ack11}));
+    Value actualOn = mux(op, selected, ack11, ack01);
+    Value changed = compare(op, "digital_ne", selected1, selected, false);
+    Value start = make(op, "comb.and", builder.getI1Type(), {waitingOff, bothOff});
+    selectedNext.setValue(mux(op, start, selected1, selected));
+    Value next = mux(op, changed, constant(op, 3, WaitOff), controller);
+    next = mux(op, running, next, controller);
+    next = mux(op, waitingOn, mux(op, actualOn, constant(op, 3, Run), controller), next);
+    next = mux(op, waitingOff, mux(op, bothOff, constant(op, 3, WaitOn), controller), next);
+    next = mux(op, initializing1, constant(op, 3, WaitOff), next);
+    next = mux(op, initializing0, constant(op, 3, Init1), next);
+    controllerNext.setValue(next);
+    Value known = make(op, "comb.concat", builder.getIntegerType(13),
+                       {controllerRelease.first, controllerReset, values.lookup(op->getOperand(2)),
+                        selected0, selected1, controller, selected, ack00, ack01, ack10, ack11});
+    clockAssertion(op, active0, controllerReset, known, "mux controller active-edge controls");
+    Value output0 = make(op, "comb.and", builder.getI1Type(), {active0, enabled0});
+    Value output1 = make(op, "comb.and", builder.getI1Type(), {active1, enabled1});
+    Value output = make(op, "comb.or", builder.getI1Type(), {output0, output1});
+    if (falling)
+      output = invert(op, output);
+    StringAttr outputName = clockNames.find(op)->second.lookup("output");
+    auto wire =
+        circt::hw::WireOp::create(builder, op->getLoc(), output, circt::StringAttrOrRef(outputName),
+                                  circt::hw::InnerSymAttr::get(outputName));
+    correlateClock(wire, op, "observable_output");
+    Value result = circt::seq::ToClockOp::create(builder, op->getLoc(), wire.getResult());
+    correlateClock(result.getDefiningOp(), op, "physical_output");
+    clockComment(op, "glitchless_mux_v1: serialized_break_before_make; selector level_coalescing; "
+                     "first parent ungated active-edge controller; two selector samples before "
+                     "first request; each branch request sync2 then actual-enable inactive-edge "
+                     "register; returned actual-enable ack2; WAIT_ON cannot cancel before on "
+                     "acknowledgement; WAIT_OFF waits for both off acknowledgements; 22 internal "
+                     "state bits, three independent two-stage local releases, no invented "
+                     "initialization; output reset_sync remains independent; pulse_integrity="
+                     "except_reset_assertion because common assertion may truncate a pulse while "
+                     "all consumers are held reset; normal operation preserves complete pulses; "
+                     "liveness requires controller and relevant branch inactive edges; physical "
+                     "control timing and common assertion duration remain environment obligations");
+    return result;
+  }
+  struct CrossingControls {
+    Value clock;
+    Value assertionClock;
+    Value reset;
+    bool asynchronous = false;
+    bool falling = false;
+  };
+  FailureOr<CrossingControls> crossingControls(Operation *domain, Operation *binding) {
+    CrossingControls result;
+    result.clock = values.lookup(binding->getOperand(0));
+    if (!result.clock)
+      return failure();
+    result.assertionClock =
+        circt::seq::FromClockOp::create(builder, binding->getLoc(), result.clock);
+    result.falling = text(domain, "edge") == "falling";
+    if (result.falling)
+      result.clock = circt::seq::ClockInverterOp::create(builder, binding->getLoc(), result.clock);
+    StringRef policy = text(domain, "reset_policy");
+    result.asynchronous = policy == "async" || policy == "async_assert_sync_release";
+    if (policy != "none") {
+      result.reset = values.lookup(binding->getOperand(1));
+      if (!result.reset)
+        return failure();
+      result.reset = resetActive(result.reset, binding);
+    }
+    return result;
+  }
+  Value crossingState(const ExecutableCrossing &crossing, unsigned index, Value input,
+                      const CrossingControls &control, StringRef role, bool resetState = true) {
+    Operation *op = crossing.operation;
+    StringAttr name = crossingNames.find(op)->second[index];
+    Value reset = resetState ? control.reset : Value();
+    Value zero = reset ? constant(op, cast<IntegerType>(input.getType()).getWidth(), 0) : Value();
+    Value next = reset && !control.asynchronous ? mux(op, reset, zero, input) : input;
+    Operation *state;
+    if (reset && control.asynchronous)
+      state = circt::seq::FirRegOp::create(builder, op->getLoc(), next, control.clock, name, reset,
+                                           zero, circt::hw::InnerSymAttr::get(name), true);
+    else
+      state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, control.clock,
+                                            circt::StringAttrOrRef(name));
+    correlate(state, op);
+    // Symbols preserve independent chains through CSE. Metadata retains the
+    // canonical source contract, every state role and the original source path.
+    state->setAttr("nodal.crossing", op->getAttr("metadata"));
+    state->setAttr("nodal.crossing_contract", op->getAttr("contract"));
+    if (Attribute stages = op->getAttr("stages"))
+      state->setAttr("nodal.crossing_stages", stages);
+    if (Attribute depth = op->getAttr("depth"))
+      state->setAttr("nodal.crossing_depth", depth);
+    state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
+    state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
+    state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(index));
+    state->setAttr("nodal.crossing_role", builder.getStringAttr(role));
+    if (Attribute obligations = op->getAttr("obligations"))
+      state->setAttr("nodal.crossing_obligations", obligations);
+    if (aggregatePayload(op->getOperand(0).getType()))
+      state->setAttr("nodal.packed_abi", packedLayout(op->getOperand(0).getType()));
+    return state->getResult(0);
+  }
+  void lowerFifo(const ExecutableCrossing &crossing, Value payload, Value sourceValid,
+                 Value destinationReady, const CrossingControls &sourceControl,
+                 const CrossingControls &destination, circt::BackedgeBuilder &backedges) {
+    Operation *op = crossing.operation;
+    unsigned pointerBits = crossing.pointerBits, addressBits = pointerBits - 1;
+    Type pointerType = builder.getIntegerType(pointerBits);
+    auto writeBinaryNext = backedges.get(pointerType, op->getLoc());
+    auto writeGrayNext = backedges.get(pointerType, op->getLoc());
+    auto readBinaryNext = backedges.get(pointerType, op->getLoc());
+    auto readGrayNext = backedges.get(pointerType, op->getLoc());
+    // All eight pointer-width controls have real local reset. In particular,
+    // registered Gray values, not combinational binary bits, cross the clocks.
+    Value writeBinary = crossingState(crossing, 0, writeBinaryNext, sourceControl, "source_binary");
+    Value writeGray = crossingState(crossing, 1, writeGrayNext, sourceControl, "source_gray");
+    auto readGraySource = backedges.get(pointerType, op->getLoc());
+    Value read0 = crossingState(crossing, 2, readGraySource, sourceControl, "source_read_gray_0");
+    Value read1 = crossingState(crossing, 3, read0, sourceControl, "source_read_gray_1");
+    Value readBinary =
+        crossingState(crossing, 4, readBinaryNext, destination, "destination_binary");
+    Value readGray = crossingState(crossing, 5, readGrayNext, destination, "destination_gray");
+    Value write0 = crossingState(crossing, 6, writeGray, destination, "destination_write_gray_0");
+    Value write1 = crossingState(crossing, 7, write0, destination, "destination_write_gray_1");
+    readGraySource.setValue(readGray);
+    Value fullReadGray = make(op, "comb.xor", pointerType,
+                              {read1, constant(op, pointerBits, uint64_t(3) << (pointerBits - 2))});
+    Value sourceReady = make(op, "comb.and", builder.getI1Type(),
+                             {invert(op, sourceControl.reset),
+                              compare(op, "digital_ne", writeGray, fullReadGray, false)});
+    Value destinationValid =
+        make(op, "comb.and", builder.getI1Type(),
+             {invert(op, destination.reset), compare(op, "digital_ne", readGray, write1, false)});
+    Value writeAccepted = make(op, "comb.and", builder.getI1Type(), {sourceValid, sourceReady});
+    Value readAccepted =
+        make(op, "comb.and", builder.getI1Type(), {destinationValid, destinationReady});
+    auto advance = [&](Value current, Value accepted) {
+      return mux(op, accepted,
+                 make(op, "comb.add", pointerType, {current, constant(op, pointerBits, 1)}),
+                 current);
+    };
+    auto gray = [&](Value binary) {
+      Value high = circt::comb::ExtractOp::create(builder, op->getLoc(), binary, 1, addressBits);
+      Value shifted = make(op, "comb.concat", pointerType, {constant(op, 1, 0), high});
+      return make(op, "comb.xor", pointerType, {binary, shifted});
+    };
+    Value nextWrite = advance(writeBinary, writeAccepted),
+          nextRead = advance(readBinary, readAccepted);
+    writeBinaryNext.setValue(nextWrite);
+    writeGrayNext.setValue(gray(nextWrite));
+    readBinaryNext.setValue(nextRead);
+    readGrayNext.setValue(gray(nextRead));
+    Value writeAddress =
+        circt::comb::ExtractOp::create(builder, op->getLoc(), writeBinary, 0, addressBits);
+    Value readAddress =
+        circt::comb::ExtractOp::create(builder, op->getLoc(), readBinary, 0, addressBits);
+    SmallVector<Value> bank;
+    for (unsigned entry = 0; entry < crossing.depth; ++entry) {
+      auto next = backedges.get(payload.getType(), op->getLoc());
+      Value state = crossingState(crossing, 8 + entry, next, sourceControl,
+                                  "bank_" + std::to_string(entry), false);
+      Value selected =
+          compare(op, "digital_eq", writeAddress, constant(op, addressBits, entry), false);
+      Value enable = make(op, "comb.and", builder.getI1Type(), {writeAccepted, selected});
+      next.setValue(mux(op, enable, payload, state));
+      bank.push_back(state);
+    }
+    // An honest source-clock register bank and balanced combinational read mux,
+    // not a pretend dual-clock memory. Whole payloads stay packed; no per-bit
+    // expansion or fabricated empty/bank initialization is introduced.
+    for (unsigned bit = 0; bank.size() > 1; ++bit) {
+      Value select = circt::comb::ExtractOp::create(builder, op->getLoc(), readAddress, bit, 1);
+      for (unsigned entry = 0; entry < bank.size() / 2; ++entry)
+        bank[entry] = mux(op, select, bank[entry * 2 + 1], bank[entry * 2]);
+      bank.resize(bank.size() / 2);
+    }
+    Value output = bank.front();
+    values[op->getResult(0)] = output;
+    values[op->getResult(1)] = destinationValid;
+    values[op->getResult(2)] = sourceReady;
+    unsigned monitorBase = 8 + crossing.depth;
+    auto monitor = [&](Value sampledPayload, Value valid, Value ready,
+                       const CrossingControls &control, unsigned index, StringRef endpoint) {
+      Value previous = crossingState(crossing, index, sampledPayload, control,
+                                     endpoint.str() + "_previous_payload", false);
+      Value stalled = make(op, "comb.and", builder.getI1Type(), {valid, invert(op, ready)});
+      Value previousStalled =
+          crossingState(crossing, index + 1, stalled, control, endpoint.str() + "_stalled");
+      Value same = compare(op, "digital_eq", sampledPayload, previous, false);
+      Value held = make(op, "comb.and", builder.getI1Type(), {valid, same});
+      Value legal = make(op, "comb.or", builder.getI1Type(), {invert(op, previousStalled), held});
+      crossingAssertion(crossing, control, invert(op, control.reset), legal,
+                        "NODAL FIFO " + endpoint.str() +
+                            " must hold payload and valid while stalled");
+      return previousStalled;
+    };
+    Value sourceStalled =
+        monitor(payload, sourceValid, sourceReady, sourceControl, monitorBase, "source");
+    Value destinationStalled = monitor(output, destinationValid, destinationReady, destination,
+                                       monitorBase + 2, "destination");
+    Value sourceKnown = make(op, "comb.concat", builder.getIntegerType(4 * pointerBits + 1),
+                             {writeBinary, writeGray, read0, read1, sourceStalled});
+    Value destinationKnown = make(op, "comb.concat", builder.getIntegerType(4 * pointerBits + 1),
+                                  {readBinary, readGray, write0, write1, destinationStalled});
+    crossingAssertion(crossing, sourceControl, invert(op, sourceControl.reset), sourceKnown,
+                      "NODAL FIFO source controls require an established common reset epoch",
+                      "(^({{2}})) !== 1'bx");
+    crossingAssertion(crossing, destination, invert(op, destination.reset), destinationKnown,
+                      "NODAL FIFO destination controls require an established common reset epoch",
+                      "(^({{2}})) !== 1'bx");
+    crossingComment(
+        crossing, "FIFO obligations: transfer=valid_and_ready; stall=hold_payload_and_valid; "
+                  "reset_epoch=common_assertion; pointer_skew=less_than_launch_period; "
+                  "bundled_data=settled_before_read_visibility. Exactly depth packed source-clock "
+                  "bank entries; binary/registered-Gray pointers and two-stage opposite-pointer "
+                  "synchronizers. No combinational cross-clock ready/valid path. Payload bank and "
+                  "empty output are unspecified. Physical pointer skew and payload settling are "
+                  "environment timing obligations, not proved by digital monitors. Hold common "
+                  "assertion long enough for both domains to observe reset; no one-sided restart. "
+                  "Known-state startup checks do not universally detect repeated one-sided "
+                  "synchronous resets. Liveness requires both clocks continuing and the receiver "
+                  "eventually accepting.");
+  }
+  std::string crossingSourceComment(const ExecutableCrossing &crossing) {
+    std::string path = sourcePath(crossing.operation).str();
+    for (char &character : path)
+      if (character == '\n' || character == '\r')
+        character = ' ';
+      else if (character == '{')
+        character = '(';
+      else if (character == '}')
+        character = ')';
+    return "// NODAL crossing " + path + ": ";
+  }
+  void crossingComment(const ExecutableCrossing &crossing, StringRef comment) {
+    auto emitted = circt::sv::VerbatimOp::create(
+        builder, crossing.operation->getLoc(),
+        builder.getStringAttr(crossingSourceComment(crossing) + comment.str()), ValueRange{},
+        builder.getArrayAttr({}));
+    correlate(emitted, crossing.operation);
+  }
+  void crossingAssertion(const ExecutableCrossing &crossing, const CrossingControls &control,
+                         Value enable, Value property, StringRef message,
+                         StringRef predicate = "({{2}}) === 1'b1") {
+    // Pinned firtool emits verif.clocked_assert as concurrent SVA, unsupported
+    // by Icarus. A clocked immediate assertion preserves the runtime contract
+    // there too. Gray skips unknown seen-sample state deterministically. Pulse,
+    // handshake and FIFO skip only a known asserted reset: an unknown release chain
+    // cannot hide startup checks. No initial block invents checker state.
+    std::string assertion =
+        crossingSourceComment(crossing) + message.str() + "\n" + "always @(" +
+        (control.falling ? "negedge" : "posedge") + " {{0}}) begin\n" +
+        (crossing.kind != CrossingKind::Gray ? "  if (({{1}}) !== 1'b0) begin\n"
+                                             : "  if (({{1}}) === 1'b1) begin\n") +
+        "    assert (" + predicate.str() +
+        ") else $fatal(1, \"NODAL-CROSSING-057: " + message.str() + "\");\n  end\nend";
+    auto emitted = circt::sv::VerbatimOp::create(
+        builder, crossing.operation->getLoc(), builder.getStringAttr(assertion),
+        ValueRange{control.assertionClock, enable, property}, builder.getArrayAttr({}));
+    correlate(emitted, crossing.operation);
+    emitted->setAttr("nodal.crossing_check", crossing.operation->getAttr("contract"));
+  }
+  LogicalResult planControlProjections() {
+    if (source.getBody().front().empty())
+      return success();
+    Operation *use = &source.getBody().front().back();
+    SmallVector<Value> selectors;
+    for (Operation &op : source.getBody().front()) {
+      if (!isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(op) ||
+          getDigitalControlBoundaryKind(op.getResult(0).getType()).empty())
+        continue;
+      auto projection = resolveStaticShapeProjection(op.getResult(0), use);
+      if (failed(projection) || !projection->exactFixedCardinality ||
+          !targetControlShapeType(projection->root.getType(), source))
+        return reject(&op,
+                      "physical control projection requires a fixed input shape of 1..4096 bits");
+      auto root = projection->root.getDefiningOp<PortValueOp>();
+      auto ref = root ? root->getAttrOfType<FlatSymbolRefAttr>("port") : FlatSymbolRefAttr();
+      Operation *port = ref ? SymbolTable::lookupSymbolIn(source, ref) : nullptr;
+      if (!port || text(port, "direction") != "input")
+        return reject(&op, "physical control projection requires an owned input port");
+      if (auto scalar = dyn_cast<ControlCapabilityType>(op.getResult(0).getType())) {
+        if (!projection->literalRootFlatOffset)
+          return reject(&op, "physical control projection requires a proved literal input offset");
+        // A dead last projection has no later use at which to establish scope.
+        // Its shape/root proof is still checked, but it needs no target value.
+        if (!op.getResult(0).use_empty()) {
+          auto control = resolvePhysicalControl(op.getResult(0), use, scalar.getKind());
+          if (failed(control) || !control->literalOffset)
+            return reject(&op,
+                          "physical control projection requires a proved literal input offset");
+          physicalControls.emplace_back(op.getResult(0), *control);
+        }
+      }
+      controlProjections.insert(&op);
+      llvm::append_range(selectors, op.getOperands().drop_front());
+    }
+    while (!selectors.empty()) {
+      Value value = selectors.pop_back_val();
+      Operation *op = value.getDefiningOp();
+      if (!op || !isa<ConstantOp, ConstLiteralOp, ConstExprOp>(op) ||
+          (!value.getType().isIndex() && !value.getType().isInteger(64)))
+        return reject(source, "physical control selectors require fixed compile-time expressions");
+      if (!controlSelectors.insert(op).second)
+        continue;
+      llvm::append_range(selectors, op->getOperands());
+    }
+    for (Operation *op : controlSelectors)
+      for (Operation *user : op->getUsers())
+        if (!controlSelectors.contains(user) && !controlProjections.contains(user))
+          return reject(op, "physical control selector escapes its compile-time projection");
+    return success();
+  }
   Value constant(Operation *at, unsigned bits, const llvm::APInt &number) {
     return circt::hw::ConstantOp::create(
         builder, at->getLoc(),
@@ -470,6 +1613,42 @@ private:
     return enumCodes.find(op->getAttr("enum_ref"))->second.byId.lookup(id);
   }
   Value lowerValue(Operation *op, ArrayRef<Value> inputs) {
+    if (isa<WaiverOp>(op)) {
+      // Escape the serialized authored record byte-for-byte into one ASCII line.
+      // No newline, Unicode separator, comment terminator or Verbatim placeholder
+      // can become target syntax. The original typed record remains attached.
+      std::string authored;
+      llvm::raw_string_ostream stream(authored);
+      stream << op->getAttrDictionary();
+      std::string escaped;
+      constexpr char hex[] = "0123456789ABCDEF";
+      for (unsigned char c : authored) {
+        if (c < 32 || c >= 127 || c == '{' || c == '}' || c == '\\' || c == '/') {
+          escaped += "\\x";
+          escaped += hex[c >> 4];
+          escaped += hex[c & 15];
+        } else
+          escaped += c;
+      }
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(),
+          builder.getStringAttr("// NODAL stateless waiver: " + escaped +
+                                "; user physical responsibility; no synchronization, delivery or "
+                                "physical certification"),
+          ValueRange{}, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.waiver", op->getAttrDictionary());
+      StringRef occurrence = sourcePath(source);
+      if (occurrence.empty())
+        occurrence = text(source, "sym_name");
+      comment->setAttr(
+          "nodal.waiver_identity",
+          builder.getDictionaryAttr(
+              {builder.getNamedAttr("occurrence", builder.getStringAttr(occurrence)),
+               builder.getNamedAttr("semantic_path", builder.getStringAttr(sourcePath(op))),
+               builder.getNamedAttr("id", op->getAttr("id"))}));
+      return inputs[0];
+    }
     unsigned bits = width(op->getResult(0).getType());
     if (isa<ConstantOp, ConstLiteralOp>(op)) {
       auto attr = op->getAttrOfType<IntegerAttr>("value");
@@ -546,7 +1725,21 @@ private:
   nodal::ModuleOp source;
   OpBuilder &builder;
   uint64_t &cost;
+  DomainModel domains;
+  SmallVector<ExecutableCrossing, 0> crossings;
+  SmallVector<ExecutableEventProcess, 0> events;
+  llvm::DenseMap<Operation *, Value> eventUpdates;
+  llvm::DenseMap<Operation *, StringAttr> eventNames;
+  SmallVector<Operation *> resets, clocks, relationships;
+  llvm::DenseMap<Operation *, llvm::StringMap<StringAttr>> clockNames;
+  llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
+  llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;
+  llvm::DenseMap<Operation *, Type> portTypes;
+  llvm::DenseMap<Type, Type> packedTypes;
+  llvm::DenseMap<Type, DictionaryAttr> packedLayouts;
+  llvm::DenseSet<Operation *> controlProjections, controlSelectors;
+  SmallVector<std::pair<Value, PhysicalControl>> physicalControls;
   llvm::DenseMap<Operation *, SmallVector<Value>> portValues;
   llvm::DenseMap<Value, Operation *> updates;
   llvm::DenseMap<Value, Value> aliases, values;
@@ -564,12 +1757,12 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SequentialToCIRCTPass)
   StringRef getArgument() const final { return "nodal-sequential-to-circt"; }
   StringRef getDescription() const final {
-    return "Transactionally lower verified finite scalar register/FSM dataflow to "
+    return "Transactionally lower verified finite scalar register/FSM/CDC dataflow to "
            "HW/Comb/Seq/Verif";
   }
   void getDependentDialects(DialectRegistry &registry) const final {
     registry.insert<circt::hw::HWDialect, circt::comb::CombDialect, circt::seq::SeqDialect,
-                    circt::verif::VerifDialect>();
+                    circt::verif::VerifDialect, circt::sv::SVDialect>();
   }
   void runOnOperation() final {
     auto input = getOperation();
@@ -582,6 +1775,13 @@ public:
       return WalkResult::advance();
     });
     if (walk.wasInterrupted() || failed(verify(input))) {
+      signalPassFailure();
+      return;
+    }
+    bool hierarchy = false;
+    input.walk([&](nodal::ModuleOp module) { hierarchy |= hasLocalHierarchyObligations(module); });
+    if (hierarchy) {
+      (void)reject(input, "hierarchy target lowering requires Foundation 58");
       signalPassFailure();
       return;
     }

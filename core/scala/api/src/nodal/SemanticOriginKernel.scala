@@ -1242,7 +1242,7 @@ private[nodal] final class SemanticOriginBuilder:
             capture.site
           ))
       if (owner.contains("cdc") || owner.contains("rdc")) &&
-        Set("sync", "gray", "pulse", "handshake", "waive").contains(operation)
+        Set("sync", "gray", "pulse", "handshake").contains(operation)
       then
         generated +=
           ((
@@ -1261,6 +1261,18 @@ private[nodal] final class SemanticOriginBuilder:
               s"crossing:${capture.module}:${capture.index}",
               s"${expressionNames(key)}_crossing",
               "crossing"
+            ),
+            module,
+            path,
+            capture.site
+          ))
+      if owner.contains("cdc") && operation == "waive" then
+        generated +=
+          ((
+            NameCandidate(
+              s"waiver:${capture.module}:${capture.index}",
+              s"${expressionNames(key)}_waiver",
+              "waiver"
             ),
             module,
             path,

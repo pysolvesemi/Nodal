@@ -1,13 +1,18 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -274,6 +279,11 @@ public:
       if (!direction || (direction.getValue() != "input" && direction.getValue() != "output"))
         return success(
             succeeded(reject("Clock/Reset ports require explicit input/output direction")));
+      auto portType = use->getAttrOfType<TypeAttr>("type");
+      auto controlKind =
+          portType ? getDigitalControlBoundaryKind(portType.getValue()) : StringRef();
+      if (!use->getAttr("domain") && direction.getValue() == "input" && controlKind == "clock")
+        return success();
       auto reference = use->getAttrOfType<FlatSymbolRefAttr>("domain");
       Operation *domain = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
       if (!llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(domain) ||
@@ -281,6 +291,16 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<RequirementClockOp, RequirementResetOp>(use))
+      return verifyRequirementProjection(use);
+    if (llvm::isa<InstanceDomainBindingOp>(use))
+      return verifyInstanceDomainBinding(use);
+    if (llvm::isa<ClockRelationshipOp>(use))
+      return verifyClockRelationship(use);
+    if (llvm::isa<ClockGateOp, ClockMuxOp>(use))
+      return verifyClockProducer(use);
+    if (llvm::isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(use))
+      return verifyResetProducer(use);
     if (llvm::isa<LocalDomainBindingOp>(use))
       return verifyLocalDomainBinding(use);
     if (llvm::isa<MemoryWriteEffectOp>(use))
@@ -554,15 +574,20 @@ bool isDigitalStorageType(Type type) {
   return succeeded(checker.check(type));
 }
 
-bool isDigitalControlBoundaryType(Type type) {
+StringRef getDigitalControlBoundaryKind(Type type) {
   unsigned depth = 0;
   while (auto shaped = llvm::dyn_cast_if_present<nodal::ShapedType>(type)) {
     if (++depth > digitalTypeMaximumDepth)
-      return false;
+      return {};
     type = shaped.getElementType();
   }
   auto control = llvm::dyn_cast_if_present<ControlCapabilityType>(type);
-  return control && (control.getKind() == "clock" || control.getKind() == "reset");
+  return control && (control.getKind() == "clock" || control.getKind() == "reset")
+             ? control.getKind()
+             : StringRef();
+}
+bool isDigitalControlBoundaryType(Type type) {
+  return !getDigitalControlBoundaryKind(type).empty();
 }
 
 FailureOr<int64_t>
@@ -727,6 +752,83 @@ FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use,
     return failure();
   return ModuleTypeVerifier(module, environment).storageMaximumBits(type, use);
 }
+FailureOr<int64_t> inferDigitalBitPatternMaximumBits(Type type, Operation *use) {
+  // Validate complete structure, nominal ownership, parameter bounds and depth
+  // with the existing type owner before applying the bit-pattern leaf policy.
+  auto bits = inferDigitalStorageMaximumBits(type, use);
+  if (failed(bits))
+    return failure();
+  SmallVector<Type> pending{type};
+  llvm::DenseSet<Type> visited;
+  unsigned work = 0;
+  while (!pending.empty()) {
+    Type current = pending.pop_back_val();
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    if (!visited.insert(current).second)
+      continue;
+    if (isa<BitsType, UIntType, SIntType, ParametricIntegerType>(current))
+      continue;
+    if (auto enumeration = dyn_cast<EnumType>(current)) {
+      auto definition = inspectCanonicalEnumDefinition(
+          use, FlatSymbolRefAttr::get(use->getContext(), enumeration.getSymbol()));
+      if (failed(definition) || definition->type != current)
+        return failure();
+      continue;
+    }
+    if (auto shaped = dyn_cast<nodal::ShapedType>(current)) {
+      pending.push_back(shaped.getElementType());
+      continue;
+    }
+    if (auto structure = dyn_cast<StructType>(current)) {
+      for (Attribute field : structure.getFields())
+        pending.push_back(cast<DictionaryAttr>(field).getAs<TypeAttr>("type").getValue());
+      continue;
+    }
+    return failure();
+  }
+  return *bits;
+}
+
+FailureOr<int64_t> inferDigitalBitPatternFixedBits(Type type, Operation *use) {
+  auto maximum = inferDigitalBitPatternMaximumBits(type, use);
+  if (failed(maximum))
+    return failure();
+  Operation *module = isa<nodal::ModuleOp>(use) ? use : use->getParentOfType<nodal::ModuleOp>();
+  SmallVector<Type> pending{type};
+  llvm::DenseSet<Type> visited;
+  unsigned work = 0;
+  while (!pending.empty()) {
+    Type current = pending.pop_back_val();
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    if (!visited.insert(current).second)
+      continue;
+    if (isa<ParametricIntegerType>(current)) {
+      auto bounds = inferDigitalWidthBounds(current, module);
+      if (failed(bounds) || bounds->lower != bounds->upper)
+        return failure();
+    } else if (auto shaped = dyn_cast<nodal::ShapedType>(current)) {
+      SmallVector<StringRef> dimensions;
+      shaped.getDimensions().split(dimensions, ',');
+      for (StringRef dimension : dimensions) {
+        if (++work > digitalTypeMaximumNodes)
+          return failure();
+        auto extent = resolveStaticShapeDimension(module, dimension);
+        if (failed(extent) || extent->bounds.lower != extent->bounds.upper)
+          return failure();
+      }
+      pending.push_back(shaped.getElementType());
+    } else if (auto structure = dyn_cast<StructType>(current)) {
+      for (Attribute field : structure.getFields())
+        pending.push_back(cast<DictionaryAttr>(field).getAs<TypeAttr>("type").getValue());
+    }
+  }
+  // All component extents are singleton facts, so the canonical worst-case
+  // footprint is the exact width. No second arithmetic/type-layout engine.
+  return *maximum;
+}
+
 } // namespace nodal
 
 // Preserve the ordinary entry-point ABI for existing non-contextual consumers.

@@ -20,6 +20,10 @@ private[nodal] object DigitalValueConstruction:
         (operation == DigitalCollectionContract.Operation ||
           operation == StructuralIfRuntime.Operation ||
           operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+          ExecutableCrossingContract.Operations(operation) ||
+          operation == ExecutableWaiverContract.Operation ||
+          OwnedClockContract.Operations(operation) ||
+          Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) ||
           FlatFsmRuntime.Operations(operation))
     )
 
@@ -32,7 +36,11 @@ private[nodal] object DigitalValueConstruction:
       regionOf: KernelExpr[?] => Option[String],
       operandPath: (KernelExpr[?], Any) => Option[String],
       argumentPaths: Set[String],
-      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot]
+      memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot],
+      crossing: KernelExpr[?] => Option[KernelExecutableCrossingSnapshot],
+      waiver: KernelExpr[?] => Option[KernelExecutableWaiverSnapshot],
+      reset: KernelExpr[?] => Option[KernelResetSnapshot],
+      clock: KernelExpr[?] => Option[KernelClockSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -95,6 +103,11 @@ private[nodal] object DigitalValueConstruction:
             (operation == DigitalCollectionContract.Operation ||
               operation == StructuralIfRuntime.Operation ||
               operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
+              ExecutableCrossingContract.Operations(operation) ||
+              operation == ExecutableWaiverContract.Operation ||
+              OwnedClockContract.Operations(operation) ||
+              (Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) &&
+                reset(expression).nonEmpty) ||
               FlatFsmRuntime.Operations(operation))
         )
       then
@@ -158,7 +171,8 @@ private[nodal] object DigitalValueConstruction:
         then
           fail("operand expression is outside the implemented typed digital profile")
         if !isEnum && metadata.nonEmpty then fail("non-enum expression carries enum metadata")
-        val operands = if expression.literal.nonEmpty || isProjection then Vector.empty
+        val operands = if reset(expression).nonEmpty then reset(expression).get.inputs
+        else if expression.literal.nonEmpty || isProjection then Vector.empty
         else
           expression.operands.filterNot(value =>
             value.isInstanceOf[EnumOperationMetadata] ||
@@ -189,7 +203,7 @@ private[nodal] object DigitalValueConstruction:
               fail("digital operand has no operation")
             )
           ,
-          operands,
+          reset(expression).map(_.inputs).getOrElse(operands),
           renderType(dataType, handle, regionOf(expression)),
           expression.literal.map(_.value),
           metadata.headOption.map(_.abi.identity),
@@ -203,6 +217,10 @@ private[nodal] object DigitalValueConstruction:
               value.name
             )
           ),
-          memory = memoryPort(expression)
+          memory = memoryPort(expression),
+          crossing = crossing(expression),
+          waiver = waiver(expression),
+          reset = reset(expression),
+          clock = clock(expression)
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

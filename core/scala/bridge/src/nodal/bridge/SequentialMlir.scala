@@ -19,42 +19,61 @@ private[nodal] object SequentialMlir:
 
   private def bindings(
       module: KernelModuleSnapshot,
-      resolveDomain: KernelDeclarationSnapshot => String,
-      accessedMemories: Set[String]
+      resetValues: Set[String],
+      controls: PhysicalControlMlir.Resolver,
+      clocks: ClockMlir.Resolver
   )
       : Vector[(KernelDomainSnapshot, Vector[String], String)] =
     val declarations = module.declarations.map(value => value.path -> value).toMap
     if declarations.size != module.declarations.size then
       fail("physical domain declarations must have unique identities", module.path)
-    val declaredStateDomains = module.declarations.filter(value =>
-      value.kind == "register" || (value.kind == "memory" && accessedMemories.contains(value.path))
-    ).flatMap(value =>
-      value.domain.toVector ++ value.attributes.collect { case ("declared_domain", path) => path }
-    ).toSet
-    val stateDomains = declaredStateDomains ++ module.domains.filter(value =>
-      declaredStateDomains.contains(value.path)
-    ).flatMap(_.binding)
+    val domains = module.domains.map(d => d.path -> d).toMap
+    def clockOwnerAllowed(
+        source: String,
+        destination: String,
+        seen: Set[String] = Set.empty
+    ): Boolean =
+      if source == destination then true
+      else if seen(destination) || seen.size > 128 then false
+      else
+        domains.get(
+          destination
+        ).filter(_.kind == "generated").flatMap(_.attributes.toMap.get("clock_parent"))
+          .exists(parent => clockOwnerAllowed(source, parent, seen + destination))
     module.domains.sortBy(_.path).flatMap: domain =>
       val fields = domain.attributes.toMap
       if fields.size != domain.attributes.size then
         fail("domain attributes must be unique", domain.path)
-      val local = Set("bound", "external").contains(domain.kind)
-      val supportedPolicy = domain.resetPolicy.exists(Set("none", "sync", "async").contains)
-      val hasState = stateDomains.contains(domain.path)
-      if local && fields.contains("clock_source") && !supportedPolicy && hasState then
-        fail("executable state requires a supported direct reset policy", domain.path)
-      // Unsupported derived/release descriptors without state remain declaration-only.
-      val physical = Option.when(local && supportedPolicy)(fields.get("clock_source")).flatten
+      val local = Set("bound", "external", "generated").contains(domain.kind)
+      val supportedPolicy = domain.resetPolicy.exists(Set(
+        "none",
+        "sync",
+        "async",
+        "async_assert_sync_release"
+      ).contains)
+      if local && !supportedPolicy then
+        fail("resolved domain requires a supported reset policy", domain.path)
+      val physical = if local && supportedPolicy then
+        Some(fields.getOrElse(
+          "clock_source",
+          fail("resolved physical domain has no clock source", domain.path)
+        ))
+      else None
       physical.toVector.flatMap: clock =>
         if domain.binding.nonEmpty ||
           !domain.edge.exists(Set("rising", "falling").contains) ||
-          !domain.resetPolicy.exists(Set("none", "sync", "async").contains)
+          !domain.resetPolicy.exists(Set(
+            "none",
+            "sync",
+            "async",
+            "async_assert_sync_release"
+          ).contains)
         then
           fail("physical local domain has an unsupported kind, edge or reset policy", domain.path)
         val reset = if domain.resetPolicy.contains("none") then Vector.empty
         else
           Vector(fields.getOrElse(
-            "reset_source",
+            "effective_reset_source",
             fail("reset-bearing domain has no actual reset", domain.path)
           ))
         val polarity = fields.getOrElse(
@@ -64,32 +83,33 @@ private[nodal] object SequentialMlir:
         if !Set("active_high", "active_low").contains(polarity) then
           fail("physical domain reset polarity is invalid", domain.path)
         val operands = Vector(clock) ++ reset
-        val exactInputs = operands.zip(Vector("Clock") ++ reset.map(_ => "Reset")).forall:
-          (path, dataType) =>
-            declarations.get(path).exists(declaration =>
-              declaration.kind == "input" && declaration.dataType.contains(dataType) &&
-                declaration.generatedScope.isEmpty && module.domains.filter(value =>
-                  value.name == resolveDomain(declaration)
-                ).exists(value =>
-                  value.path == domain.path ||
-                    (value.kind == "required" && value.binding.contains(domain.path))
-                )
-            )
-        if hasState && !exactInputs then
-          val missing = operands.find(path => !declarations.contains(path))
-          fail(
-            if missing.nonEmpty then "physical domain operand has no actual owned declaration"
-            else "physical domain operand must be an exact same-domain typed input boundary",
-            missing.getOrElse(domain.path)
-          )
-        Option.when(exactInputs)((domain, operands, polarity))
+        operands.zip(Vector("Clock") ++ reset.map(_ => "Reset")).foreach: (path, dataType) =>
+          if dataType != "Reset" || !resetValues.contains(path) then
+            if dataType == "Clock" then
+              val resolved = clocks.resolve(path, module.path)
+              if !resolved.physical.forall(_.declaration.domain.forall(clockOwnerAllowed(
+                  _,
+                  domain.path
+                )))
+              then
+                fail("physical clock must belong to this domain or its generated parent", path)
+            else
+              val _ = controls.resolve(path, module.path, dataType)
+        Vector((domain, operands, polarity))
 
   final class Plan(
       module: KernelModuleSnapshot,
-      resolveDomain: KernelDeclarationSnapshot => String,
-      accessedMemories: Set[String] = Set.empty
+      crossingDomains: Set[String] = Set.empty,
+      resetValues: Set[String] = Set.empty,
+      controls: PhysicalControlMlir.Resolver,
+      clocks: ClockMlir.Resolver
   ):
-    private val physical = bindings(module, resolveDomain, accessedMemories)
+    private val physical = bindings(module, resetValues, controls, clocks)
+    crossingDomains.foreach: domain =>
+      if !physical.exists(_._1.path == domain) &&
+        !module.domains.exists(d => d.path == domain && d.kind == "required")
+      then
+        fail("level crossing endpoint requires an actual supported physical domain binding", domain)
     def roots: Vector[String] = physical.flatMap(_._2).distinct
 
     def render(

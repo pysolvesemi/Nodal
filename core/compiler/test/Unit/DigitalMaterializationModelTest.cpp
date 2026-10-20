@@ -7,6 +7,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -297,6 +298,68 @@ int main() {
   auto mixedReport = nodal::analyzeDigitalMaterialization(owner(*mixed));
   check("unrelated-analog-provenance-is-outside-digital-identity-policy",
         succeeded(mixedReport) && mixedReport->getAs<ArrayAttr>("decisions").size() == 1);
+
+  const std::string fifoProducer =
+      "%control = \"nodal.const_literal\"() <{value = false, spelling = \"0\", metadata = "
+      "{semantic_path = \"Fixture.control\"}}> : () -> !nodal.bits<1>\n"
+      "%fifo:3 = \"nodal.async_fifo\"(%a, %control, %control) <{source_domain = @source, "
+      "destination_domain = @destination, kind = \"fifo\", contract = \"fifo_v1\", depth = 4 : "
+      "i64, obligations = {transfer = \"valid_and_ready\", stall = \"hold_payload_and_valid\", "
+      "reset_epoch = \"common_assertion\", pointer_skew = \"less_than_launch_period\", "
+      "bundled_data = \"settled_before_read_visibility\"}, metadata = {semantic_path = "
+      "\"Fixture.fifo\"}}> : (!nodal.uint<4>, !nodal.bits<1>, !nodal.bits<1>) -> "
+      "(!nodal.uint<4>, !nodal.bits<1>, !nodal.bits<1>)\n";
+  const std::string fifoConsumers =
+      expression("payload_use", "digital_not", "%fifo#0", "!nodal.uint<4>", "!nodal.uint<4>") +
+      expression("valid_use", "bool_not", "%fifo#1", "!nodal.bits<1>", "!nodal.bits<1>") +
+      expression("ready_use", "bool_not", "%fifo#2", "!nodal.bits<1>", "!nodal.bits<1>");
+  auto fifoRoot = parse(model(fifoProducer + fifoConsumers));
+  auto fifoReport = nodal::analyzeDigitalMaterialization(owner(*fifoRoot));
+  bool fifoRoles = succeeded(fifoReport);
+  for (auto [consumer, role] :
+       {std::pair{"payload_use", "destination_payload"},
+        std::pair{"valid_use", "destination_valid"}, std::pair{"ready_use", "source_ready"}}) {
+    if (!fifoRoles)
+      break;
+    auto inputs = entry(*fifoReport, consumer).getAs<ArrayAttr>("inputs");
+    const std::string expected = StringRef(role) == "destination_payload"
+                                     ? "Fixture.fifo"
+                                     : "Fixture.fifo." + std::string(role);
+    fifoRoles = inputs.size() == 1 && llvm::cast<StringAttr>(inputs[0]).getValue() == expected;
+  }
+  check("fifo-results-have-owned-distinct-canonical-role-identities", fifoRoles);
+  if (succeeded(fifoReport)) {
+    owner(*fifoRoot)->setAttr("nodal.digital.materialization", *fifoReport);
+    check("fifo-role-inventory-reverifies",
+          succeeded(nodal::verifyDigitalMaterializationReport(owner(*fifoRoot))));
+    auto fifo = *llvm::cast<nodal::ModuleOp>(owner(*fifoRoot)).getOps<nodal::AsyncFifoOp>().begin();
+    Operation *use = &owner(*fifoRoot)->getRegion(0).front().back();
+    use->setOperand(0, fifo->getResult(1));
+    check("fifo-valid-ready-same-type-substitution-invalidates-report",
+          failed(nodal::verifyDigitalMaterializationReport(owner(*fifoRoot))));
+  }
+  auto fifoCollision = parse(model(
+      fifoProducer + "%collision = \"nodal.const_literal\"() <{value = false, spelling = \"0\", "
+                     "metadata = {semantic_path = \"Fixture.fifo.destination_valid\"}}> : () -> "
+                     "!nodal.bits<1>\n"));
+  check("unused-fifo-result-role-cannot-be-stolen-by-other-producer",
+        failed(nodal::analyzeDigitalMaterialization(owner(*fifoCollision))));
+  auto malformedFifo = parse(model(fifoProducer + fifoConsumers));
+  auto malformed =
+      *llvm::cast<nodal::ModuleOp>(owner(*malformedFifo)).getOps<nodal::AsyncFifoOp>().begin();
+  malformed->setAttr("contract", builder.getStringAttr("fifo_forged"));
+  check("fifo-result-identity-requires-closed-owned-contract",
+        nodal::digitalValueSemanticPath(malformed->getResult(1)).empty() &&
+            failed(nodal::analyzeDigitalMaterialization(owner(*malformedFifo))));
+
+  auto unknownMulti = parse(model(
+      "%unsupported:2 = \"nodal.digital_expr\"(%a) <{operator_name = \"digital_not\", metadata = "
+      "{semantic_path = \"Fixture.unsupported\"}}> : (!nodal.uint<4>) -> (!nodal.uint<4>, "
+      "!nodal.uint<4>)\n" +
+      expression("unsupported_use", "digital_not", "%unsupported#0", "!nodal.uint<4>",
+                 "!nodal.uint<4>")));
+  check("unknown-multi-result-operation-does-not-invent-semantic-identities",
+        failed(nodal::analyzeDigitalMaterialization(owner(*unknownMulti))));
 
   nodal::registerNodalPasses();
   auto transaction = parse(model(product + consumed));

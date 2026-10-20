@@ -1343,18 +1343,20 @@ In particular, Increment 41 retains only the accepted module-local pure scalar R
 
 - [ ] **Increment 57 — Clock/reset domains, CDC/RDC primitives, and low-level event escape**
   - Original scope retained: Implement domain construction/application, external/default/generated binding, relationship graphs, reset policies, async-assert/sync-release, timing provenance, all semantic CDC/RDC operations, gates/muxes, waivers, and restricted low-level processes.
-  - [ ] **F-057.A — Architecture review, modularity, scalability and extensibility.** Use typed domain relationships and crossing/reset provenance; equal frequencies do not imply safe interchange.
-  - [ ] **F-057.B — Implementation and integration**
-    - [ ] **F-057.B.1** Implement public domain binding, relationships, typed crossing/reset primitives, gates/muxes and waivers.
-    - [ ] **F-057.B.2** Propagate timing/crossing/reset provenance through hierarchy and bridge/native IR; implement mandatory rejection and source mapping.
-    - [ ] **F-057.B.3** Lower supported owned crossing/reset/clock structures and quarantine the low-level event escape under the frozen capability contract.
-  - [ ] **F-057.C — Focused positive, negative and predecessor regression.** Mutate direct/multibit/pulse/reconvergent crossings, reset release, gates and low-level escapes; test legal primitive counterparts.
-  - [ ] **F-057.D — Focused local validation and applicability**
-    - [ ] **F-057.D.1** Compiler and target witnesses: Retain actual construction/IR and any generated HDL promised here, with source maps and structural checks at the implemented boundary. A future backend is not an executed tool result.
-    - [ ] **F-057.D.2** Focused tool handoff: Name representative affected 65/66 parse-and-simulation, 67 synthesis/equivalence/core-proof and 72 AMS-output cases. Limit early claims to executed local checks; no full proof campaign or later consumer parent is a prerequisite.
-  - [ ] **F-057.E — Optimization review and output quality.** Review crossing-graph traversal and generated reset/CDC structures without merging independent synchronizers. Apply the proportionate review rule above; document no new optimization required when justified.
-  - [ ] **F-057.F — Representative scale, determinism and compatibility.** Exercise many domains, nested relationships and crossing instances; keep deterministic waiver and constraint identities.
+  - [x] **F-057.A — Architecture review, modularity, scalability and extensibility.** Use typed domain relationships and crossing/reset provenance; equal frequencies do not imply safe interchange.
+  - [x] **F-057.B — Implementation and integration**
+    - [x] **F-057.B.1** Implement public domain binding, relationships, typed crossing/reset primitives, gates/muxes and waivers.
+    - [x] **F-057.B.2** Propagate timing/crossing/reset provenance through hierarchy and bridge/native IR; implement mandatory rejection and source mapping.
+    - [x] **F-057.B.3** Lower supported owned crossing/reset/clock structures and quarantine the low-level event escape under the frozen capability contract.
+  - [x] **F-057.C — Focused positive, negative and predecessor regression.** Mutate direct/multibit/pulse/reconvergent crossings, reset release, gates and low-level escapes; test legal primitive counterparts.
+  - [x] **F-057.D — Focused local validation and applicability**
+    - [x] **F-057.D.1** Compiler and target witnesses: Retain actual construction/IR and any generated HDL promised here, with source maps and structural checks at the implemented boundary. A future backend is not an executed tool result.
+    - [x] **F-057.D.2** Focused tool handoff: Name representative affected 65/66 parse-and-simulation, 67 synthesis/equivalence/core-proof and 72 AMS-output cases. Limit early claims to executed local checks; no full proof campaign or later consumer parent is a prerequisite.
+  - [x] **F-057.E — Optimization review and output quality.** Review crossing-graph traversal and generated reset/CDC structures without merging independent synchronizers. Apply the proportionate review rule above; document no new optimization required when justified.
+  - [x] **F-057.F — Representative scale, determinism and compatibility.** Exercise many domains, nested relationships and crossing instances; keep deterministic waiver and constraint identities.
   - [ ] **F-057.G — Evidence, documentation and acceptance.** Retain the applicable evidence, capability limits and reproduction/demonstration record for 57; complete architecture review and verified integration after focused local checks under the prototype delivery policy.
+
+  - Local selected-scope acceptance: [final implementation, focused evidence and actual SystemVerilog demonstration](../implementation/increment57-readiness.md#final-local-selected-scope-acceptance-and-integration-handoff). A–F and their children are complete locally after the category checkpoints and final event source/native/default-gate/HDL integration. G and the parent remain open: publication is blocked pending the requested focused test-registration approval, and no merge/integration is claimed. CI: not run under prototype policy.
 
 - [ ] **Increment 58 — Domain-aware hierarchy, reusable statecharts, and bounded recursive control**
   - [ ] **F-058.A — Architecture review, modularity, scalability and extensibility.** Compose roles, domains, symbolic hierarchy and immutable statecharts using 54-57 contracts; bound structural and runtime recursion separately.

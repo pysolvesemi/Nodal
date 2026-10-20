@@ -173,6 +173,8 @@ final class ConstructorLegacyTop(log: ArrayBuffer[String]) extends Module:
   val host: Instance[ConstructorLegacyHost] = instance(new ConstructorLegacyHost(width))
   val generic: Instance[ConstructorLegacyGeneric[String]] =
     instance(new ConstructorLegacyGeneric[String]("host-tag"))
+  val selectedWidth: Int = host(_.width)
+  val selectedTag: String = generic(_.tag)
   val afterChildren: Param[Real] = param(9.0.real)
 
 final class ConstructorLegacyUnattachedTop extends Module:
@@ -341,7 +343,8 @@ object AnalogHierarchyConstructorIntegrationTests extends TestSuite:
           domain.name == "core" && domain.binding.contains(s"${snapshot.root}.root")
         ))
         assert(module.declarations.exists(value =>
-          value.kind == "register" && value.domain.contains(s"${snapshot.root}.root")
+          value.kind == "register" && value.domain.contains(s"${module.path}.core") &&
+            value.resolvedDomain.contains(s"${snapshot.root}.root")
         ))
         assert(root(snapshot).instances.head.lexicalDomain.contains(s"${snapshot.root}.root"))
 
@@ -409,8 +412,13 @@ object AnalogHierarchyConstructorIntegrationTests extends TestSuite:
         captured = Some(top)
         top
       assert(log.toVector == Vector("host-width"))
-      assert(captured.get.host(_.width) == 12)
-      assert(captured.get.generic(_.tag) == "host-tag")
+      assert(captured.get.selectedWidth == 12)
+      assert(captured.get.selectedTag == "host-tag")
+      val detachedSelection = Try(captured.get.host(_.width)).failed.get
+      assert(detachedSelection.isInstanceOf[IllegalStateException])
+      assert(
+        detachedSelection.getMessage.contains("instance selection requires active construction")
+      )
       assert(root(snapshot).instances.size == 2)
       assert(declaration(child(snapshot, "host"), "value").dataType.contains("UInt(12)"))
       assert(declaration(child(snapshot, "generic"), "gain").attributes.toMap.get("default")

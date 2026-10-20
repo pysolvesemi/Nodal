@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
@@ -192,11 +193,26 @@ std::string digitalValueSemanticPath(Value value) {
       return text(h->operation, "induction_path").str();
     return digitalRegionSemanticPath(arg.getOwner()) + ".arg" + std::to_string(arg.getArgNumber());
   }
-  if (auto result = llvm::dyn_cast<OpResult>(value);
-      result && llvm::isa<FlatFSMOp>(result.getOwner()) &&
-      succeeded(inspectFlatFSMHeader(result.getOwner())))
-    return (path(result.getOwner()) + (result.getResultNumber() ? ".taken" : ".next")).str();
-  return path(value.getDefiningOp()).str();
+  if (auto result = llvm::dyn_cast<OpResult>(value)) {
+    Operation *definition = result.getOwner();
+    if (llvm::isa<FlatFSMOp>(definition) && succeeded(inspectFlatFSMHeader(definition)))
+      return (path(definition) + (result.getResultNumber() ? ".taken" : ".next")).str();
+    if (llvm::isa<AsyncFifoOp>(definition)) {
+      auto endpoint = inspectExecutableCrossingResult(value);
+      if (failed(endpoint))
+        return {};
+      // The payload keeps its authored source identity, also consumed by shape
+      // views/slices. Additional controls receive canonical distinct role paths.
+      return result.getResultNumber() == 0 ? path(definition).str()
+                                           : (path(definition) + "." + endpoint->role).str();
+    }
+    // A multi-result producer needs an owning semantic result contract. Its
+    // operation path alone cannot identify distinct SSA results.
+    if (definition->getNumResults() != 1)
+      return {};
+    return path(definition).str();
+  }
+  return {};
 }
 namespace detail {
 class DigitalGenerateIntegerEnvironmentAdmission {

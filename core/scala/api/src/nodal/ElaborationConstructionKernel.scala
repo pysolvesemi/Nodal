@@ -12,17 +12,24 @@ private[nodal] object ConstructionKernel:
 
   private def elaborate[M <: Module](
       top: => M,
-      options: EmitOptions
+      options: EmitOptions,
+      stimulusOnly: Boolean = false
   )(select: M => Vector[AnyRef]): KernelSelectedCapture =
     ConstructorCaptureRuntime.withSession:
       AnalogProceduralConstruction.withSession:
-        val session = new ConstructionSession(options)
+        val session = new ConstructionSession(options, stimulusOnly)
         var result: Option[KernelSelectedCapture] = None
         ScopedValue.where(Current, session).run(
           new Runnable:
             override def run(): Unit =
               val root = top
               val selected = select(root)
+              if stimulusOnly && session.operationKinds.exists(_ != "metadata") then
+                failConstructor(
+                  "SIM-DOMAIN-CAPTURE",
+                  "stimulus harness cannot contain executable source effects",
+                  "stimulus"
+                )
               val (emission, snapshot) = session.finish(root)
               result = Some(KernelSelectedCapture(
                 emission,
@@ -48,6 +55,10 @@ private[nodal] object ConstructionKernel:
       top: => M,
       options: EmitOptions = EmitOptions()
   )(select: M => Vector[AnyRef]): KernelSelectedCapture = elaborate(top, options)(select)
+
+  /** Internal descriptor-only capture; never executable reset evidence. */
+  def captureStimulus[M <: Module](top: => M)(select: M => Vector[AnyRef]): KernelSelectedCapture =
+    elaborate(top, EmitOptions(), stimulusOnly = true)(select)
 
   def failConstructor(code: String, message: String, site: String): Nothing =
     scala.util.Failure[Nothing](
@@ -163,6 +174,86 @@ private[nodal] object ConstructionKernel:
     case expression: KernelExpr[?] if expression.literal.exists(_.kind == "integer") =>
       expression.literal.flatMap(_.value.toDoubleOption)
     case _ => active.flatMap(_.waveformConstant(value))
+  def classifyPulse(value: Expr[Bool]): Unit = active.foreach(_.classifyPulse(value))
+
+  def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] = active match
+    case Some(session) => session.levelSync(bit, to, stages)
+    case None => scala.util.Failure[Nothing](new IllegalStateException(
+        "NODAL-CDC-057-001: Cdc.sync requires an active Module and lexical ClockDomain"
+      )).get
+
+  def graySync[A <: Data](value: Expr[A], to: ClockDomain, stages: Int): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.gray requires active construction"))
+      .executableCrossing(value, to, stages, "gray")
+
+  def pulseSync(value: Expr[Bool], to: ClockDomain): Expr[Bool] =
+    active.getOrElse(throw new IllegalStateException("Cdc.pulse requires active construction"))
+      .executableCrossing(value, to, 2, "pulse")
+
+  def handshakeSnapshot[A <: Data](value: Expr[A], to: ClockDomain): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.handshake requires active construction"))
+      .executableCrossing(value, to, 2, "handshake")
+
+  def waive[A <: Data](value: Expr[A], to: ClockDomain, waiver: CdcWaiver): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.waive requires active construction"))
+      .waive(value, to, waiver)
+
+  def stream[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    active.getOrElse(throw new IllegalStateException("Stream requires active construction"))
+      .stream(payload, valid)
+
+  def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
+    active.getOrElse(throw new IllegalStateException("Stream.accept requires active construction"))
+      .acceptStream(stream, ready)
+
+  def asyncFifo[A <: Data](stream: Stream[A], to: ClockDomain, depth: Int): Stream[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.fifo requires active construction"))
+      .asyncFifo(stream, to, depth)
+
+  def unsupportedStreamConsumer(name: String): Nothing =
+    val failure = new IllegalStateException(
+      s"NODAL-PIPELINE-059-UNSUPPORTED: $name has no executable elastic Stream contract"
+    )
+    poisonConstructor(failure, name)
+    throw failure
+
+  def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
+    active.getOrElse(throw new IllegalStateException("Rdc.sync requires active construction"))
+      .resetSync(reset, to, stages)
+
+  def resetCombine(resets: Vector[Expr[Reset]]): Expr[Reset] =
+    active.getOrElse(
+      throw new IllegalStateException("ResetController requires active construction")
+    )
+      .resetCombine(resets)
+
+  def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
+      : ClockDomain =
+    active.getOrElse(throw new IllegalStateException("ClockGate requires active construction"))
+      .clockGate(domain, enable, testEnable, name)
+
+  def clockMux(select: Expr[Bool], domains: Vector[ClockDomain], name: String): ClockDomain =
+    active.getOrElse(throw new IllegalStateException("ClockMux requires active construction"))
+      .clockMux(select, domains, name)
+
+  def generatedDomain(
+      name: String,
+      clock: Expr[Clock],
+      from: ClockDomain,
+      relation: ClockRelation,
+      reset: Expr[Reset]
+  ): ClockDomain =
+    active match
+      case Some(session) => session.generatedDomain(name, clock, from, relation, reset)
+      case None => new ClockDomain(
+          name,
+          reset,
+          KernelDomainKind.Generated,
+          relation = Some(relation),
+          clock = Some(clock),
+          parent = Some(from)
+        )
+
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 
@@ -425,6 +516,11 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
 
+  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceDigitalPort(value)
+
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
@@ -468,6 +564,18 @@ private[nodal] object ConstructionKernel:
   def domainBlock[A](domain: ClockDomain)(body: => A): A = active match
     case Some(session) => session.withDomain(domain)(body)
     case None => body
+
+  def digitalEvent(trigger: Expr[Bool], edge: Edge): Event = active match
+    case Some(session) => session.digitalEvent(trigger, edge)
+    case None => new Event(digitalDefinition = Some(KernelDigitalEventDefinition(trigger, edge)))
+
+  def digitalEventProcess(event: Event, body: () => Unit): Unit = active match
+    case Some(session) => session.digitalEventProcess(event, body)
+    case None =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-EVENT-057-001",
+        "digital event process requires an active construction transaction"
+      ))).get
 
   def block[A](body: => A): A = body
 

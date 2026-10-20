@@ -14,8 +14,21 @@ final class DigitalOnReviewSource extends Module:
     calls += 1
     result := false.B
 
+final class DigitalOnSeparateOutputSource extends Module:
+  val clock = in(Bool)
+  val risingResult = out(Bool)
+  val fallingResult = out(Bool)
+  var calls = 0
+  on(clock.rising):
+    calls += 1
+    risingResult := true.B
+  on(clock.falling):
+    calls += 1
+    fallingResult := false.B
+
 final class DigitalOnReviewBody(body: () => Unit) extends Module:
-  on(true.B.rising):
+  val trigger = in(Bool)
+  on(trigger.rising):
     body()
 
 final class DigitalInAnalogReviewSource extends Module:
@@ -42,24 +55,28 @@ object AnalogEventReviewTests extends TestSuite:
     scala.util.Try(ConstructionKernel.inspect(top)).failed.get.getMessage
 
   val tests: Tests = Tests:
-    test("public digital rising and falling controls retain their candidate path"):
+    test("digital on retains both edges and host bookkeeping with separate output owners"):
       val snapshot = ConstructionKernel.inspect {
-        val source = new DigitalOnReviewSource
+        val source = new DigitalOnSeparateOutputSource
         assert(source.calls == 2)
         source
       }
       assert(snapshot.analogProcedural.isEmpty, snapshot.analogRegions.isEmpty)
-      assert(Nodal.emit(new DigitalOnReviewSource).report.designKind == DesignKind.DigitalOnly)
+      assert(Nodal.emit(new DigitalOnSeparateOutputSource).report.designKind ==
+        DesignKind.DigitalOnly)
+
+    test("historical inert double writer is an explicit executable negative"):
+      assert(failure(new DigitalOnReviewSource).contains("writer"))
 
     test("legacy conditional block construction is not a digital event process"):
       val snapshot = ConstructionKernel.inspect(new LegacyConditionalReviewSource)
       assert(snapshot.analogProcedural.nonEmpty)
 
-    test("digital on keeps continuous waveform restrictions"):
+    test("digital on rejects uninspectable callbacks before hidden waveform effects"):
       assert(failure(new DigitalOnReviewBody(() => {
         analog:
           val _ = abstime
-      })).contains("NODAL-ANALOG-036-001"))
+      })).contains("NODAL-EVENT-057-CONTROL"))
 
     test("analog and digital control contexts cannot be silently interchanged"):
       assert(failure(new AnalogOnOutsideReviewSource).contains("NODAL-ANALOG-037-001"))

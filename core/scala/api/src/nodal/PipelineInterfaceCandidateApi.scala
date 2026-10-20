@@ -676,8 +676,8 @@ def pipe[A <: Data, B <: Data](
     input: Stream[A],
     policy: PipelinePolicy
 )(transform: Expr[A] => Expr[B]): Stream[B] =
-  CandidateRuntime.statement(policy)
-  Stream(transform(input.payload))
+  val _ = (input, policy, transform)
+  ConstructionKernel.unsupportedStreamConsumer("pipe")
 
 extension [A](transaction: Txn[A])
   def delay(cycles: Int): Txn[A] =
@@ -694,8 +694,8 @@ extension [A <: Data](value: Valid[A])
 
 extension [A <: Data](value: Stream[A])
   def delay(cycles: Int): Stream[A] =
-    CandidateRuntime.statement(value, cycles)
-    value
+    val _ = (value, cycles)
+    ConstructionKernel.unsupportedStreamConsumer("Stream.delay")
 
 def stage[A <: Data](value: Expr[A]): Expr[A] = CandidateRuntime.expr(value, "stage")
 
@@ -727,7 +727,9 @@ final class FixedLatencyOperator[I <: Data, O <: Data] private[nodal] (
 
   def apply(input: Valid[I]): Valid[O] = Valid(CandidateRuntime.expr(this, input))
 
-  def apply(input: Stream[I]): Stream[O] = Stream(CandidateRuntime.expr(this, input))
+  def apply(input: Stream[I]): Stream[O] =
+    val _ = input
+    ConstructionKernel.unsupportedStreamConsumer(name)
 
 object FixedLatencyOperator:
   def apply[I <: Data, O <: Data](
@@ -751,7 +753,9 @@ final class VariableLatencyOperator[I <: Data, O <: Data] private[nodal] (
     val outputType: DataType[O],
     val contract: VariableLatencyContract
 ):
-  def apply(input: Stream[I]): Stream[O] = Stream(CandidateRuntime.expr(this, input))
+  def apply(input: Stream[I]): Stream[O] =
+    val _ = input
+    ConstructionKernel.unsupportedStreamConsumer(name)
 
 object VariableLatencyOperator:
   def apply[I <: Data, O <: Data](

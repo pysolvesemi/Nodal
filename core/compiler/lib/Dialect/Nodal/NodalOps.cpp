@@ -1,3 +1,4 @@
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -13,7 +14,9 @@
 #include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
+#include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
@@ -23,18 +26,22 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 #include "nodal/Support/BackendCapabilityRegistry.h"
 
 #include "llvm/ADT/APInt.h"
@@ -2218,13 +2225,17 @@ LogicalResult nodal::PlaceholderOp::verify() {
 }
 
 LogicalResult nodal::ModuleOp::verify() {
+  if (failed(verifyHierarchyModule(getOperation())))
+    return failure();
   if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "module symbol")))
     return failure();
   if (failed(requireSingleBlock(getOperation())))
     return failure();
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
-      failed(verifyStructuralIfModel(getOperation())) ||
+      failed(verifyStructuralIfModel(getOperation())) || failed(verifyClockModel(getOperation())) ||
+      failed(DomainModel(getOperation()).verifyRelationships()) ||
+      failed(verifyCrossingModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifySequentialModel(getOperation())) || failed(verifyMemoryModel(getOperation())) ||
       failed(verifyEnumValueModel(getOperation(), false)) ||
@@ -2278,9 +2289,11 @@ LogicalResult nodal::PortOp::verify() {
   const llvm::StringRef direction = textAttr(getOperation(), "direction");
   if (!oneOf(direction, {"input", "output", "inout", "terminal"}))
     return emitOpError() << "unsupported port direction '" << direction << "'";
-  if (!getOperation()->getAttrOfType<TypeAttr>("type") ||
-      !getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain"))
-    return emitOpError("requires type and domain");
+  auto type = getOperation()->getAttrOfType<TypeAttr>("type");
+  auto controlKind = type ? nodal::getDigitalControlBoundaryKind(type.getValue()) : StringRef();
+  bool bareClock = direction == "input" && controlKind == "clock";
+  if (!type || (!getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain") && !bareClock))
+    return emitOpError("requires type and domain unless an owned input Clock");
   return success();
 }
 
@@ -2435,6 +2448,10 @@ LogicalResult nodal::ClockRelationOp::verify() {
   return verifyRelation(
       getOperation(), "clock relation",
       {"alias", "ratio", "synchronous", "mutually_exclusive", "asynchronous", "unknown"});
+}
+
+LogicalResult nodal::ClockRelationshipOp::verify() {
+  return verifyClockRelationship(getOperation());
 }
 
 LogicalResult nodal::ResetRelationOp::verify() {
@@ -4068,16 +4085,11 @@ LogicalResult nodal::BridgeOp::verify() {
   return success();
 }
 
-LogicalResult nodal::CrossingOp::verify() {
-  auto source = getOperation()->getAttrOfType<FlatSymbolRefAttr>("source_domain");
-  auto destination = getOperation()->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
-  if (!source || !destination || source == destination)
-    return emitOpError("requires distinct crossing domains");
-  const llvm::StringRef kind = textAttr(getOperation(), "kind");
-  if (!oneOf(kind, {"sync", "gray", "pulse", "handshake", "fifo", "reset", "bridge", "waived"}))
-    return emitOpError() << "unsupported crossing kind '" << kind << "'";
-  return success();
-}
+LogicalResult nodal::ClockGateOp::verify() { return verifyClockProducer(getOperation()); }
+LogicalResult nodal::ClockMuxOp::verify() { return verifyClockProducer(getOperation()); }
+LogicalResult nodal::CrossingOp::verify() { return verifyCrossingOperation(getOperation()); }
+LogicalResult nodal::WaiverOp::verify() { return verifyWaiverOperation(getOperation()); }
+LogicalResult nodal::AsyncFifoOp::verify() { return verifyCrossingOperation(getOperation()); }
 
 LogicalResult nodal::StateOwnerOp::verify() {
   if (!getOperation()->getAttrOfType<SymbolRefAttr>("state") ||
@@ -4386,4 +4398,25 @@ LogicalResult nodal::EnumSwitchOp::verify() { return verifyEnumSwitchOperation(g
 LogicalResult nodal::ResetAssertedOp::verify() { return verifyResetAsserted(getOperation()); }
 LogicalResult nodal::SequentialAssertOp::verify() {
   return verifySequentialAssertion(getOperation());
+}
+
+LogicalResult nodal::ResetBoundaryOp::verify() { return verifyResetProducer(getOperation()); }
+LogicalResult nodal::ResetSyncOp::verify() { return verifyResetProducer(getOperation()); }
+LogicalResult nodal::ResetCombineOp::verify() { return verifyResetProducer(getOperation()); }
+
+LogicalResult nodal::RequirementClockOp::verify() {
+  return verifyRequirementProjection(getOperation());
+}
+LogicalResult nodal::RequirementResetOp::verify() {
+  return verifyRequirementProjection(getOperation());
+}
+LogicalResult nodal::InstanceDomainBindingOp::verify() {
+  return verifyInstanceDomainBinding(getOperation());
+}
+LogicalResult nodal::InstancePortOp::verify() {
+  return success(succeeded(inspectInstancePort(getOperation())));
+}
+
+LogicalResult nodal::EventProcessOp::verify() {
+  return success(succeeded(inspectEventProcess(getOperation())));
 }

@@ -17,6 +17,7 @@ add_mlir_library(NodalTransforms
     CIRCTComb
     CIRCTSeq
     CIRCTVerif
+    CIRCTSV
     CIRCTSupport
     MLIRIR
     MLIRParser

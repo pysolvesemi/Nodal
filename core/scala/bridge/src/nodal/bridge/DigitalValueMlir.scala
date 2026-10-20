@@ -30,7 +30,9 @@ private[nodal] object DigitalValueMlir:
     val escaped = value.flatMap:
       case '\\' => "\\\\"
       case '"' => "\\\""
-      case character if character.isControl => f"\\${character.toInt & 0xff}%02X"
+      case character if character.isControl =>
+        character.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          .map(byte => f"\\${byte & 0xff}%02X").mkString
       case character => character.toString
     s"\"$escaped\""
 
@@ -50,12 +52,92 @@ private[nodal] object DigitalValueMlir:
     else if value >= 0 then math.max(1, value.bitLength).toLong
     else Long.MaxValue
 
-  final class Plan(snapshot: ConstructionSnapshot, enums: EnumMlir.Plan):
+  final class Plan(
+      snapshot: ConstructionSnapshot,
+      enums: EnumMlir.Plan,
+      clocks: ClockMlir.Resolver,
+      hierarchy: HierarchyMlir.Plan,
+      relationships: ClockRelationshipMlir.Plan
+  ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
       module.declarations.map(value => value.path -> (module.path, value))
     ).toMap
     private val expressions = snapshot.digitalExpressions.map(value => value.path -> value).toMap
+    private val eventProcesses = snapshot.eventProcesses.map(value => value.path -> value).toMap
+    private val assignmentsByEventProcess =
+      snapshot.digitalAssignments.filter(_.eventProcess.nonEmpty)
+        .groupBy(_.eventProcess.get)
+    private val assignmentTargetCounts =
+      snapshot.digitalAssignments.groupMapReduce(_.target)(_ => 1)(_ + _)
+    private val eventTargetSets = snapshot.eventProcesses.map(value =>
+      value.path -> value.storageTargets.toSet
+    ).toMap
+    private val eventPorts =
+      val processPorts = snapshot.eventProcesses.flatMap(value =>
+        Vector(value.trigger) ++ value.storageTargets ++ value.externalCaptures
+      ).toSet
+      // @none serializes absence of a domain, not sampling permission. Every actual finite
+      // unannotated input boundary in this verified event-bearing root keeps that absence,
+      // including unused ports and represented collection operands through pure aliases.
+      val rootInputs = if eventProcesses.nonEmpty then
+        declarations.iterator.collect:
+          case (path, (owner, declaration))
+              if owner == snapshot.root && declaration.kind == "input" &&
+                declaration.domain.isEmpty && declaration.resolvedDomain.isEmpty &&
+                declaration.generatedScope.isEmpty && declaration.dataType.exists(finiteType) &&
+                assignmentTargetCounts.getOrElse(path, 0) == 0 => path
+        .toSet
+      else Set.empty[String]
+      processPorts ++ rootInputs
+    def eventPort(path: String): Boolean = eventPorts(path)
+
+    requireValid(
+      snapshot.eventProcesses.size == eventProcesses.size && eventProcesses.size <= DigitalEventContract.MaximumNodes,
+      "event process identities must be unique and bounded",
+      snapshot.root
+    )
+    snapshot.eventProcesses.foreach: process =>
+      requireValid(
+        process.owner == snapshot.root && modules.contains(process.owner) &&
+          process.path.startsWith(process.owner + ".") &&
+          Set("rising", "falling")(process.edge) && process.storageTargets.nonEmpty &&
+          process.storageTargets.distinct == process.storageTargets &&
+          process.externalCaptures.distinct == process.externalCaptures &&
+          process.externalCaptures.size <= DigitalEventContract.MaximumCaptures,
+        "event process requires the actual root, one edge and unique bounded operand inventories",
+        process.path
+      )
+      def boundary(path: String, kind: String, bool: Boolean = false): Unit =
+        val declaration = declarations.get(path).filter(_._1 == process.owner).map(_._2)
+          .getOrElse(fail("event operand requires an actual owned boundary declaration", path))
+        requireValid(
+          declaration.kind == kind && declaration.domain.isEmpty &&
+            declaration.resolvedDomain.isEmpty && declaration.generatedScope.isEmpty &&
+            (!bool || declaration.dataType.contains("Bool")),
+          "event operand requires an unannotated exact root boundary",
+          path
+        )
+      boundary(process.trigger, "input", bool = true)
+      process.storageTargets.foreach(boundary(_, "output"))
+      process.externalCaptures.foreach(boundary(_, "input"))
+      val updates = assignmentsByEventProcess.getOrElse(process.path, Vector.empty)
+      requireValid(
+        updates.map(_.target).sorted == process.storageTargets.sorted &&
+          updates.forall(value =>
+            value.owner == process.owner && value.region.isEmpty &&
+              value.kind == "event_update"
+          ),
+        "event process storage inventory must match its exact unconditional updates",
+        process.path
+      )
+      process.storageTargets.foreach: target =>
+        requireValid(
+          assignmentTargetCounts.getOrElse(target, 0) == 1,
+          "event storage must have exactly one event writer and no continuous writer",
+          target
+        )
+
     private val byOwner = snapshot.digitalExpressions.groupBy(_.owner)
     private val collections = snapshot.digitalCollections.map(value => value.path -> value).toMap
     private val loops = snapshot.digitalLoops.map(value => value.path -> value).toMap
@@ -211,6 +293,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(iterationIndices.get(path).map(_.owner))
         .orElse(declarations.get(path).map(_._1))
         .orElse(arguments.get(path).map(_._1.owner))
+        .orElse(hierarchy.projections.get(path).map(_.owner))
 
     def valueRegion(path: String): Option[String] =
       expressions.get(path).flatMap(_.region).orElse(predicates.get(path).flatMap(_.region))
@@ -1104,8 +1187,18 @@ private[nodal] object DigitalValueMlir:
       ).map(_._2).getOrElse(
         fail("digital assignment target requires an owned declaration", assignment.path)
       )
+      requireValid(
+        (assignment.kind == "event_update") == assignment.eventProcess.nonEmpty &&
+          assignment.eventProcess.forall(eventProcesses.contains),
+        "event update requires its exact process reference and ordinary assignments cannot carry one",
+        assignment.path
+      )
       val valid = assignment.kind match
-        case "continuous" => Set("wire", "output").contains(target.kind) &&
+        case "event_update" => target.kind == "output" && assignment.region.isEmpty &&
+          assignment.target == target.path && assignment.eventProcess.exists(path =>
+            eventTargetSets(path)(target.path)
+          )
+        case "continuous" => Set("wire", "output", "instance-input").contains(target.kind) &&
           !assignment.region.exists(hasBehavioralAncestor)
         case "register_next" => target.kind == "register" &&
           (assignment.region.isEmpty && assignment.target == target.path ||
@@ -1207,12 +1300,17 @@ private[nodal] object DigitalValueMlir:
         then
           requireVisible(input, expression.owner, expression.region, expression.path)
 
+    private val resetFacts = ResetMlir.validate(snapshot, clocks)
+    clocks.validateResets(resetFacts)
+    private val resetRoots = resetFacts.domains
+
     requireValid(
       snapshot.digitalExpressions.size <= 65536 &&
         expressions.size == snapshot.digitalExpressions.size,
       "duplicate or excessive digital expression identities",
       snapshot.root
     )
+    val waiverIds = mutable.HashSet.empty[(String, String)]
     snapshot.digitalExpressions.foreach: expression =>
       DigitalMaterializationMlir.validate(expression)
       requireValid(
@@ -1232,6 +1330,147 @@ private[nodal] object DigitalValueMlir:
         "only memory reads carry one exact memory port identity",
         expression.path
       )
+      requireValid(
+        ExecutableCrossingContract.Operations(expression.operation) == expression.crossing.nonEmpty,
+        "only owned crossings carry an executable crossing contract",
+        expression.path
+      )
+      requireValid(
+        (expression.operation == ExecutableWaiverContract.Operation) == expression.waiver.nonEmpty,
+        "only owned waivers carry an executable waiver contract",
+        expression.path
+      )
+      expression.waiver.foreach: waiver =>
+        requireValid(
+          expression.region.isEmpty && expression.operands.size == 1 &&
+            expression.dataType == expressionType(expression.operands.head) &&
+            waiver.contract == ExecutableWaiverContract.Contract &&
+            waiver.obligations.size == ExecutableWaiverContract.Obligations.size &&
+            waiver.obligations.toMap == ExecutableWaiverContract.Obligations.toMap &&
+            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+            expression.caseIds.isEmpty && expression.structure.isEmpty &&
+            expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
+            expression.crossing.isEmpty && expression.reset.isEmpty && expression.clock.isEmpty &&
+            Vector(waiver.sourceDomain, waiver.destinationDomain).forall(domain =>
+              modules(expression.owner).domains.exists(_.path == domain)
+            ),
+          "waiver requires exact owned payload, closed obligations and local actual endpoint references",
+          expression.path
+        )
+        ExecutableWaiverContract.validateText(
+          waiver.id,
+          waiver.reason,
+          message => fail(message, expression.path)
+        )
+        requireValid(
+          waiverIds.add(expression.owner -> waiver.id),
+          "waiver id must be unique in its authored module",
+          expression.path
+        )
+        ClockRelationshipModel.verifyBoundaryIntentFields(
+          waiver.relation,
+          message => fail(message, expression.path)
+        )
+        if !Vector(waiver.sourceDomain, waiver.destinationDomain).exists(hierarchy.formal) then
+          relationships.verifyBoundaryIntent(
+            waiver.sourceDomain,
+            waiver.destinationDomain,
+            waiver.relation,
+            expression.path
+          )
+      expression.crossing.foreach: crossing =>
+        if crossing.kind == "fifo" then
+          requireValid(
+            expression.operation == "cdc_fifo",
+            "FIFO results require the owned FIFO operation",
+            expression.path
+          )
+        else
+          requireValid(
+            expression.region.isEmpty && expression.operands.size == 1 &&
+              expression.dataType == expressionType(expression.operands.head) &&
+              (ExecutableCrossingContract.bitPatternPayload(
+                crossing.kind
+              ) || expression.dataType == "Bool") &&
+              ExecutableCrossingContract.Kinds(crossing.kind) &&
+              expression.operation == "cdc_" + crossing.kind &&
+              crossing.contract == ExecutableCrossingContract.contract(crossing.kind) &&
+              crossing.obligations.size == ExecutableCrossingContract.obligations(
+                crossing.kind
+              ).size &&
+              crossing.obligations.toMap == ExecutableCrossingContract.obligations(
+                crossing.kind
+              ).toMap &&
+              ExecutableCrossingContract.validStages(crossing.kind, crossing.stages) &&
+              crossing.depth.isEmpty && crossing.identity.isEmpty && crossing.resultRole == "payload" &&
+              expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+              expression.caseIds.isEmpty && expression.structure.isEmpty &&
+              expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
+              crossing.sourceDomain != crossing.destinationDomain &&
+              Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
+                modules(expression.owner).domains.exists(value =>
+                  value.path == domain
+                )
+              ),
+            "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
+            expression.path
+          )
+        if crossing.kind != "fifo" && ExecutableCrossingContract.commonResetEpoch(crossing.kind) &&
+          !Vector(crossing.sourceDomain, crossing.destinationDomain).exists(hierarchy.formal)
+        then
+          val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
+          requireValid(
+            source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
+            s"${crossing.kind} requires common nonempty physical reset roots and polarities with safe release",
+            expression.path
+          )
+      requireValid(
+        Set(
+          "reset_boundary",
+          "rdc_sync",
+          "reset_combine"
+        ).contains(expression.operation) == expression.reset.nonEmpty,
+        "reset producers require one exact typed reset contract",
+        expression.path
+      )
+      requireValid(
+        OwnedClockContract.Operations(expression.operation) == expression.clock.nonEmpty,
+        "owned clock producers require one exact typed clock contract",
+        expression.path
+      )
+      expression.reset.foreach: reset =>
+        requireValid(
+          expression.region.isEmpty && expression.dataType == "Reset" &&
+            expression.literal.isEmpty && expression.crossing.isEmpty && expression.memory.isEmpty &&
+            expression.enumIdentity.isEmpty && expression.structure.isEmpty && expression.materializationIntent.isEmpty &&
+            reset.inputs == expression.operands && Set(
+              "active_high",
+              "active_low"
+            ).contains(reset.polarity),
+          "invalid owned reset producer facts",
+          expression.path
+        )
+        val expected = reset.kind match
+          case "boundary" => Vector("Reset")
+          case "sync" => Vector("Reset", "Clock")
+          case "combine" => Vector.fill(expression.operands.size)("Reset")
+          case _ => fail("unknown reset producer", expression.path)
+        requireValid(
+          expression.operands.map(expressionType) == expected && expected.nonEmpty &&
+            (reset.kind != "combine" || expected.size <= 32) &&
+            (reset.kind != "sync" || reset.stages >= 2 && reset.stages <= 32 && reset.destination.nonEmpty),
+          "reset operands, stages or destination are invalid",
+          expression.path
+        )
+        reset.destination.foreach(domain =>
+          requireValid(
+            modules(expression.owner).domains.exists(value =>
+              value.path == domain
+            ),
+            "reset destination is not an exact owned domain",
+            expression.path
+          )
+        )
       expression.memory.foreach: port =>
         requireValid(
           expression.region.isEmpty && expression.operands.size == 1 &&
@@ -1250,6 +1489,63 @@ private[nodal] object DigitalValueMlir:
         )
       expression.operands.foreach: operand =>
         requireVisible(operand, expression.owner, expression.region, expression.path)
+
+    // The source exposes three ordinary expression identities, but the native boundary is
+    // one operation. Validate the complete group once rather than treating its control
+    // results as unrelated payload crossings.
+    private val fifoResults = snapshot.digitalExpressions.filter(_.operation == "cdc_fifo")
+      .groupBy(expression =>
+        expression.crossing.flatMap(_.identity).getOrElse(
+          fail("FIFO results require one stable boundary identity", expression.path)
+        )
+      ).map: (identity, results) =>
+        requireValid(
+          results.size == 3 && results.flatMap(_.crossing.map(_.resultRole)).sorted ==
+            Vector("payload", "ready", "valid"),
+          "FIFO requires exactly one payload, valid and ready result",
+          identity
+        )
+        val ordered = Vector("payload", "valid", "ready").map(role =>
+          results.find(_.crossing.exists(_.resultRole == role)).get
+        )
+        val payload = ordered.head
+        val crossing = payload.crossing.get
+        requireValid(
+          payload.path == identity && payload.operands.size == 3 &&
+            payload.dataType == expressionType(payload.operands.head) &&
+            payload.operands.drop(1).forall(expressionType(_) == "Bool") &&
+            ordered.drop(1).forall(_.dataType == "Bool") &&
+            results.forall(result =>
+              result.owner == payload.owner && result.region.isEmpty &&
+                result.operands == payload.operands && result.literal.isEmpty &&
+                result.enumIdentity.isEmpty && result.caseIds.isEmpty &&
+                result.structure.isEmpty && result.materializationIntent.isEmpty &&
+                result.memory.isEmpty && result.reset.isEmpty &&
+                result.crossing.exists(_.copy(resultRole = "payload") == crossing)
+            ) &&
+            crossing.kind == "fifo" &&
+            crossing.contract == ExecutableCrossingContract.contract("fifo") &&
+            crossing.obligations.size == ExecutableCrossingContract.obligations("fifo").size &&
+            crossing.obligations.toMap == ExecutableCrossingContract.obligations("fifo").toMap &&
+            crossing.depth.exists(ExecutableCrossingContract.validDepth) &&
+            ExecutableCrossingContract.validStages("fifo", crossing.stages) &&
+            crossing.sourceDomain != crossing.destinationDomain &&
+            Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
+              modules(payload.owner).domains.exists(value =>
+                value.path == domain
+              )
+            ),
+          "FIFO requires coherent typed results, exact operands, closed obligations, bounded depth and actual endpoints",
+          identity
+        )
+        val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
+        requireValid(
+          (Vector(crossing.sourceDomain, crossing.destinationDomain).exists(hierarchy.formal) ||
+            source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source)),
+          "fifo requires common nonempty physical reset roots and polarities with safe release",
+          identity
+        )
+        identity -> ordered
 
     requireValid(
       snapshot.digitalCollections.size <= 65536 &&
@@ -1518,6 +1814,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(declarations.get(path).flatMap(_._2.dataType))
         .orElse(arguments.get(path).map(_._2.dataType))
         .orElse(iterationIndices.get(path).map(_ => "Integer"))
+        .orElse(hierarchy.projections.get(path).map(_.kind))
         .getOrElse(fail("digital operand requires an exact type", path))
 
     private def scalarLiteral(
@@ -1902,6 +2199,7 @@ private[nodal] object DigitalValueMlir:
             Vector[(String, String)]
         ) => Projection,
         additionalRoots: Vector[String],
+        initialValues: Map[String, (String, String)],
         domainReference: String => String,
         staticValue: (String, Option[String], mutable.ArrayBuffer[String], StaticPurpose) => (
             String,
@@ -1940,10 +2238,68 @@ private[nodal] object DigitalValueMlir:
         ) => String,
         renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
     ): Rendered =
+      var crossingStateBits = BigInt(0)
+      def bitPatternWidth(text: String, path: String, fixed: Boolean = false): BigInt =
+        var remaining = 65536
+        def visit(value: String, depth: Int): BigInt =
+          remaining -= 1
+          requireValid(
+            depth <= 128 && remaining >= 0,
+            "crossing type exceeds structural budget",
+            path
+          )
+          val result = if value == "Bool" then BigInt(1)
+          else if value.startsWith("Enum(") then BigInt(enums.bitWidth(value, path))
+          else if value.startsWith("Struct(") then
+            structType(value, path)._2.foldLeft(BigInt(0))((total, field) =>
+              total + visit(field._2, depth + 1)
+            )
+          else if value.startsWith("Vec(") then
+            val (element, dimensions) = vectorType(value, path)
+            dimensions.foldLeft(visit(element, depth + 1))((total, dimension) =>
+              val bounds = loopBoundQuery.bounds(loopBoundQuery.resolve(module.path, dimension))
+              requireValid(
+                !fixed || bounds.lower == bounds.upper,
+                "waiver requires fixed whole payload extent",
+                path
+              )
+              total * bounds.upper
+            )
+          else
+            scalarType(value, path).map(info => {
+              requireValid(
+                !fixed || info.lower == info.upper,
+                "waiver requires fixed whole payload width",
+                path
+              )
+              BigInt(info.upper)
+            }).getOrElse(
+              fail(
+                "crossing requires finite Bool, bit-vector, Enum or Vec/Struct bit patterns",
+                path
+              )
+            )
+          requireValid(
+            result > 0 && result <= Long.MaxValue,
+            "crossing type footprint is excessive",
+            path
+          )
+          result
+        visit(text, 0)
+      val eventSamples = snapshot.eventProcesses.iterator.filter(_.owner == module.path)
+        .flatMap(_.externalCaptures).toSet
+      module.declarations.iterator.filter(value => eventPort(value.path)).foreach: declaration =>
+        val fixed = declaration.kind == "output" || eventSamples(declaration.path)
+        val bits = bitPatternWidth(declaration.dataType.get, declaration.path, fixed)
+        requireValid(
+          !fixed || bits <= DigitalEventContract.MaximumPayloadBits,
+          "event sampled input/storage requires a fixed whole payload of 1 through 4096 bits",
+          declaration.path
+        )
       val lines = mutable.ArrayBuffer.empty[String]
-      val values = mutable.HashMap.empty[String, (String, String)]
-      val heights = mutable.HashMap.empty[String, Int]
-      val proofs = mutable.HashMap.empty[String, Proof]
+      val values = mutable.HashMap.from(initialValues)
+      val heights = mutable.HashMap.from(initialValues.keysIterator.map(_ -> 0))
+      val proofs = mutable.HashMap.from(initialValues.keysIterator.map(_ -> Unknown))
       val active = mutable.HashSet.empty[String]
       var ordinal = 0
       def exactUnsignedWidth(text: String, path: String, expected: Int): Boolean =
@@ -2146,10 +2502,13 @@ private[nodal] object DigitalValueMlir:
             "flat FSM actual dependency graph contains a cycle or exceeds depth limit",
             machine.path
           )
-          // Physical reset is an actual next/taken dependency even though it is owned by
-          // the local domain binding rather than the flat_fsm operand segment.
+          // The effective reset is an actual next/taken dependency even though it is owned
+          // by the local domain binding rather than the flat_fsm operand segment. Emitting
+          // only its raw input would leave a typed boundary/release producer after this use.
           module.domains.find(_.path == machine.domain).toVector.flatMap(_.attributes)
-            .collect { case (key, path) if Set("clock_source", "reset_source")(key) => path }
+            .collect {
+              case (key, path) if Set("clock_source", "effective_reset_source")(key) => path
+            }
             .foreach(path => { emit(path, depth + 1, None, output); () })
           val inputs = Vector(machine.storage) ++ machine.transitions.map(_.guard)
           val operands = (inputs ++ machine.actions.flatMap(_.captures)).map(
@@ -2495,6 +2854,61 @@ private[nodal] object DigitalValueMlir:
         output += s"${quoted("nodal.generate")}(${header.map(_._1).mkString(", ")}) <$attributes> " +
           s"({\n$block\n}) : (${header.map(_._2).mkString(", ")}) -> ()${sourceLocation(region.path)}"
 
+      def emitFifo(
+          identity: String,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        if !values.contains(identity) then
+          requireValid(
+            depth <= 128 && active.add(identity),
+            "FIFO actual dependency graph contains a cycle or exceeds depth limit",
+            identity
+          )
+          val results = fifoResults(identity)
+          val payload = results.head
+          val crossing = payload.crossing.get
+          results.foreach(result => prepareType(result.dataType, result.path, None, output))
+          val operands = payload.operands.map(emit(_, depth + 1, None, output))
+          val resultTypes = results.map(result => computedType(result.dataType, result.path))
+          requireValid(
+            operands.zip(payload.operands).forall((value, input) =>
+              value._2 == nativeType(expressionType(input), input)
+            ) &&
+              operands.map(_._2) == resultTypes &&
+              exactValueType(payload.dataType, expressionType(payload.operands.head), identity),
+            "FIFO requires the exact complete payload type and Bool control operands/results",
+            identity
+          )
+          crossingStateBits += ExecutableCrossingContract.fifoStateBits(
+            bitPatternWidth(payload.dataType, identity),
+            crossing.depth.get
+          )
+          requireValid(
+            crossingStateBits <= ExecutableCrossingContract.MaximumStateBits,
+            "crossing state exceeds its expansion budget",
+            identity
+          )
+          val result = s"%async_fifo_$ordinal"
+          ordinal += 1
+          val obligations = crossing.obligations.map((name, value) =>
+            s"$name = ${quoted(value)}"
+          ).mkString("obligations = {", ", ", "}, ")
+          val attributes =
+            s"{kind = ${quoted(crossing.kind)}, contract = ${quoted(crossing.contract)}, " +
+              s"depth = ${crossing.depth.get} : i64, source_domain = ${domainReference(crossing.sourceDomain)}, " +
+              s"destination_domain = ${domainReference(crossing.destinationDomain)}, " +
+              obligations + s"metadata = ${metadata(identity, false)}}"
+          output += s"$result:3 = ${quoted("nodal.async_fifo")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
+            s" : (${operands.map(_._2).mkString(", ")}) -> (${resultTypes.mkString(", ")})${sourceLocation(identity)}"
+          val height = payload.operands.map(heights).max + 1
+          results.zip(resultTypes).zipWithIndex.foreach: (value, index) =>
+            val (expression, dataType) = value
+            values.update(expression.path, s"$result#$index" -> dataType)
+            heights.update(expression.path, height)
+            proofs.update(expression.path, Unknown)
+          active.remove(identity)
+
       def emit(
           path: String,
           depth: Int,
@@ -2543,6 +2957,14 @@ private[nodal] object DigitalValueMlir:
         else if machineResults.contains(path) then
           emitMachine(machineResults(path), depth + 1, output)
           values.getOrElse(path, fail("flat FSM result has no actual producer", path))
+        else if expressions.get(path).exists(_.operation == "cdc_fifo") then
+          emitFifo(expressions(path).crossing.get.identity.get, depth, output)
+          requireValid(
+            depth + heights(path) <= 128,
+            "digital expression graph exceeds depth limit",
+            path
+          )
+          values.getOrElse(path, fail("FIFO result has no actual producer", path))
         else if conditionals.contains(path) then
           emitConditional(conditionals(path), depth, output).getOrElse(
             fail("statement structural if cannot be used as a value", path)
@@ -2611,7 +3033,10 @@ private[nodal] object DigitalValueMlir:
                 prepareType(value.schemaType, path, region, output)
               )
               val payloadType =
-                if expressions.get(path).exists(_.operation != "shape_reference") then
+                if expressions.get(path).exists(e =>
+                    e.operation != "shape_reference" && e.reset.isEmpty && e.clock.isEmpty
+                  )
+                then
                   computedType(sourceType, path)
                 else nativeType(sourceType, path)
               val dataType = declarations.get(path).map(value =>
@@ -2641,7 +3066,154 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == "memory_read" then
+                  if expression.clock.nonEmpty then
+                    val clock = expression.clock.get
+                    val controlDomains = clock.controlKinds.zip(clock.controlDomains).map:
+                      case ("domain", Some(domain)) => domainReference(domain)
+                      case (kind, _) => quoted(kind)
+                    val obligations = clock.obligations.map((key, value) =>
+                      s"$key = ${quoted(value)}"
+                    ).mkString(", ")
+                    val attrs = Vector(
+                      s"parent_domains = [${clock.parents.map(domainReference).mkString(", ")}]",
+                      s"domain = ${domainReference(clock.destination)}",
+                      s"edge = ${quoted(clock.edge)}",
+                      s"contract = ${quoted(clock.contract)}",
+                      s"control_domains = [${controlDomains.mkString(", ")}]",
+                      s"obligations = {$obligations}",
+                      s"metadata = ${metadata(path, false)}"
+                    )
+                    (
+                      Vector(operation(
+                        "nodal.clock_" + clock.kind,
+                        result,
+                        dataType,
+                        operands,
+                        "{" + attrs.mkString(", ") + "}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.reset.nonEmpty then
+                    val reset = expression.reset.get
+                    val attrs = Vector(
+                      s"reset_polarity = ${quoted(reset.polarity)}",
+                      s"metadata = ${metadata(path, false)}"
+                    ) ++
+                      (reset.kind match
+                        case "boundary" => Vector(
+                            s"release = ${quoted(reset.release)}"
+                          ) ++ reset.destination.toVector.map(value =>
+                            s"release_domain = ${domainReference(value)}"
+                          )
+                        case "sync" => Vector(
+                            s"destination_domain = ${domainReference(reset.destination.get)}",
+                            s"stages = ${reset.stages} : i64"
+                          )
+                        case _ => Vector.empty)
+                    (
+                      Vector(operation(
+                        "nodal.reset_" + reset.kind,
+                        result,
+                        dataType,
+                        operands,
+                        "{" + attrs.mkString(", ") + "}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == ExecutableWaiverContract.Operation then
+                    val waiver = expression.waiver.get
+                    requireValid(
+                      operands.map(_._2) == Vector(dataType) &&
+                        exactValueType(
+                          expression.dataType,
+                          expressionType(expression.operands.head),
+                          path
+                        ) &&
+                        bitPatternWidth(
+                          expression.dataType,
+                          path,
+                          fixed = true
+                        ) <= ExecutableWaiverContract.MaximumPayloadBits,
+                      "waiver requires the exact complete fixed whole input/result native type of 1 through 4096 bits",
+                      path
+                    )
+                    val relation = waiver.relation
+                    val fields = Vector("kind = " + quoted(relation.kind)) ++
+                      relation.multiply.map(value => s"multiply = $value : i32") ++
+                      relation.divide.map(value => s"divide = $value : i32") ++
+                      relation.phase.map(value => "phase = " + quoted(value)) ++
+                      relation.phaseKnown.map(value => "phase_known = " + value.toString)
+                    val obligations = waiver.obligations.map((name, value) =>
+                      s"$name = ${quoted(value)}"
+                    ).mkString("{", ", ", "}")
+                    val attributes =
+                      s"{contract = ${quoted(waiver.contract)}, source_domain = ${domainReference(waiver.sourceDomain)}, " +
+                        s"destination_domain = ${domainReference(waiver.destinationDomain)}, id = ${quoted(waiver.id)}, " +
+                        s"reason = ${quoted(waiver.reason)}, relation = {${fields.mkString(", ")}}, " +
+                        s"obligations = $obligations, metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.waiver",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      proofs.getOrElse(expression.operands.head, Unknown)
+                    )
+                  else if ExecutableCrossingContract.Operations(expression.operation) then
+                    val crossing = expression.crossing.get
+                    requireValid(
+                      operands.map(_._2) == Vector(dataType) &&
+                        exactValueType(
+                          expression.dataType,
+                          expressionType(expression.operands.head),
+                          path
+                        ),
+                      "crossing requires the exact complete input/result native type",
+                      path
+                    )
+                    val bits = if ExecutableCrossingContract.bitPatternPayload(crossing.kind) then
+                      bitPatternWidth(expression.dataType, path)
+                    else BigInt(1)
+                    crossingStateBits += ExecutableCrossingContract.stateBits(
+                      crossing.kind,
+                      bits,
+                      crossing.stages
+                    )
+                    requireValid(
+                      crossingStateBits <= ExecutableCrossingContract.MaximumStateBits,
+                      "crossing state exceeds its expansion budget",
+                      path
+                    )
+                    val obligations = if crossing.obligations.isEmpty then ""
+                    else
+                      crossing.obligations.map((name, value) => s"$name = ${quoted(value)}")
+                        .mkString("obligations = {", ", ", "}, ")
+                    val attributes =
+                      s"{kind = ${quoted(crossing.kind)}, contract = ${quoted(crossing.contract)}, " +
+                        s"stages = ${crossing.stages} : i64, source_domain = ${domainReference(crossing.sourceDomain)}, " +
+                        s"destination_domain = ${domainReference(crossing.destinationDomain)}, " +
+                        obligations + s"metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.crossing",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == "memory_read" then
                     val port = expression.memory.get
                     val declaration = memoryPort(module.path, port.memory, port.domain, path)._1
                     requireValid(
@@ -3053,7 +3625,7 @@ private[nodal] object DigitalValueMlir:
           DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
         ).sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
         additionalRoots.distinct.sorted.foreach: path =>
-          val owner = expressions.get(path).map(_.owner).orElse(declarations.get(path).map(_._1))
+          val owner = valueOwner(path)
           requireValid(
             owner.contains(module.path),
             "specialized digital root has another owner",
@@ -3068,6 +3640,22 @@ private[nodal] object DigitalValueMlir:
       if moduleChoices.isEmpty && !snapshot.flatFsms.exists(_.owner == module.path) &&
         !switchesByRegion.contains(module.path -> None)
       then emitModuleRoots()
+      // Port values are the canonical storage operands. Materialize all process headers before
+      // updates; native target lowering supplies the pre-event state cuts/backedges.
+      snapshot.eventProcesses.filter(_.owner == module.path).sortBy(_.path).foreach: process =>
+        val trigger = emit(process.trigger, 0, None, lines)
+        val targets = process.storageTargets.map(emit(_, 0, None, lines))
+        val captures = process.externalCaptures.map(emit(_, 0, None, lines))
+        val operands = Vector(trigger) ++ targets ++ captures
+        val obligations = DigitalEventContract.Obligations.map((key, value) =>
+          s"$key = ${quoted(value)}"
+        ).mkString("{", ", ", "}")
+        val attributes = s"sym_name = ${quoted(process.path)}, edge = ${quoted(process.edge)}, " +
+          s"contract = ${quoted(DigitalEventContract.Contract)}, obligations = $obligations, " +
+          s"operandSegmentSizes = array<i32: 1, ${targets.size}, ${captures.size}>, " +
+          s"metadata = ${metadata(process.path, false)}"
+        lines += s"${quoted("nodal.event_process")}(${operands.map(_._1).mkString(", ")}) <{$attributes}> : " +
+          s"(${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(process.path)}"
       def emitModuleAssignment(assignment: KernelDigitalAssignmentSnapshot): Unit =
         val target = emit(assignment.target, 0, None, lines)
         val value = emit(assignment.value, 0, None, lines)

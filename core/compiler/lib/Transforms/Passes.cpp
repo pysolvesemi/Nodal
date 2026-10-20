@@ -14,6 +14,7 @@
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/NodalTypes.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -841,10 +842,16 @@ LogicalResult verifyDomains(mlir::ModuleOp module) {
       return reference && (domains.contains(reference.getValue()) ||
                            requirements.contains(reference.getValue()));
     };
+    auto eventPorts = collectVerifiedEventDomainlessPorts(owner);
+    if (failed(eventPorts)) {
+      result = failure();
+      return;
+    }
+    llvm::DenseSet<Operation *> domainlessPorts(eventPorts->begin(), eventPorts->end());
 
     for (Operation &operation : owner->getRegion(0).front()) {
       if (isNamed(&operation, "nodal.port")) {
-        if (!resolves(flatReference(&operation, "domain")))
+        if (!resolves(flatReference(&operation, "domain")) && !domainlessPorts.contains(&operation))
           result = emitFailure(&operation, "NODAL-VERIFY-DOMAIN-003",
                                "port domain does not resolve in its module");
       } else if (isNamed(&operation, "nodal.domain_bind")) {
@@ -876,7 +883,7 @@ LogicalResult verifyDomains(mlir::ModuleOp module) {
         return;
       for (NamedAttribute binding : bindings) {
         auto actual = llvm::dyn_cast<FlatSymbolRefAttr>(binding.getValue());
-        if (!actual || !domains.contains(actual.getValue()))
+        if (!resolves(actual))
           result = emitFailure(instance.getOperation(), "NODAL-VERIFY-DOMAIN-007",
                                "instance domain binding references an unknown actual domain");
       }

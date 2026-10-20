@@ -6,6 +6,8 @@ private[nodal] enum KernelSignalKind(val label: String):
   case Parameter extends KernelSignalKind("parameter")
   case Input extends KernelSignalKind("input")
   case Output extends KernelSignalKind("output")
+  case InstanceInput extends KernelSignalKind("instance-input")
+  case InstanceOutput extends KernelSignalKind("instance-output")
   case Wire extends KernelSignalKind("wire")
   case Variable extends KernelSignalKind("variable")
   case Register extends KernelSignalKind("register")
@@ -54,7 +56,27 @@ private[nodal] final case class KernelDomainSnapshot(
     binding: Option[String],
     edge: Option[String] = None,
     resetPolicy: Option[String] = None,
-    attributes: Vector[(String, String)] = Vector.empty
+    attributes: Vector[(String, String)] = Vector.empty,
+    relationship: Option[KernelClockRelationshipSnapshot] = None,
+    clockProjection: Option[String] = None,
+    resetProjection: Option[String] = None
+)
+
+/** Closed executable relationship; descriptor attributes alone confer no permission. */
+private[nodal] final case class KernelClockRelationshipSnapshot(
+    path: String,
+    source: String,
+    destination: String,
+    sourceClock: String,
+    destinationClock: String,
+    kind: String,
+    contract: String,
+    proof: String,
+    obligations: Vector[(String, String)],
+    multiply: Option[Int] = None,
+    divide: Option[Int] = None,
+    phase: Option[String] = None,
+    phaseKnown: Option[Boolean] = None
 )
 
 private[nodal] final case class KernelDeclarationSnapshot(
@@ -65,7 +87,27 @@ private[nodal] final case class KernelDeclarationSnapshot(
     domain: Option[String],
     attributes: Vector[(String, String)],
     conservativeDimensions: Vector[String] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    resolvedDomain: Option[String] = None,
+    instancePort: Option[KernelInstancePortSnapshot] = None
+)
+
+private[nodal] final case class KernelInstancePortSnapshot(
+    instance: String,
+    port: String,
+    direction: String
+)
+
+/** Executable immediate-child binding; actual is always parent-local, unlike resolved occurrence
+  * metadata.
+  */
+private[nodal] final case class KernelInstanceDomainBindingSnapshot(
+    path: String,
+    requirement: String,
+    actual: String,
+    clock: String,
+    reset: Option[String],
+    origin: String
 )
 
 private[nodal] final case class KernelGeneratedScope(owner: String, induction: String)
@@ -76,7 +118,8 @@ private[nodal] final case class KernelInstanceSnapshot(
     lexicalDomain: Option[String],
     bindings: Vector[(String, String)],
     parameterBindings: Vector[(String, String)] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    actualBindings: Vector[KernelInstanceDomainBindingSnapshot] = Vector.empty
 )
 
 private[nodal] final case class KernelInstanceArrayRootSnapshot(
@@ -125,7 +168,57 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     region: Option[String] = None,
     materializationIntent: Option[KernelDigitalIntent] = None,
     structure: Option[KernelStructOperationSnapshot] = None,
-    memory: Option[KernelMemoryPortSnapshot] = None
+    memory: Option[KernelMemoryPortSnapshot] = None,
+    crossing: Option[KernelExecutableCrossingSnapshot] = None,
+    reset: Option[KernelResetSnapshot] = None,
+    clock: Option[KernelClockSnapshot] = None,
+    waiver: Option[KernelExecutableWaiverSnapshot] = None
+)
+
+private[nodal] final case class KernelClockSnapshot(
+    kind: String,
+    parents: Vector[String],
+    destination: String,
+    edge: String,
+    controlKinds: Vector[String],
+    controlDomains: Vector[Option[String]],
+    contract: String,
+    obligations: Vector[(String, String)]
+)
+
+private[nodal] final case class KernelResetSnapshot(
+    kind: String,
+    polarity: String,
+    release: String,
+    destination: Option[String],
+    stages: Int,
+    inputs: Vector[String]
+)
+
+/** Executable crossing contract. Actual input, source location and identity belong to the
+  * expression.
+  */
+private[nodal] final case class KernelExecutableCrossingSnapshot(
+    sourceDomain: String,
+    destinationDomain: String,
+    stages: Int,
+    kind: String,
+    contract: String,
+    obligations: Vector[(String, String)],
+    depth: Option[Int] = None,
+    identity: Option[String] = None,
+    resultRole: String = "payload"
+)
+
+/** Immutable stateless boundary contract; its expression owns the one actual payload operand. */
+private[nodal] final case class KernelExecutableWaiverSnapshot(
+    sourceDomain: String,
+    destinationDomain: String,
+    id: String,
+    reason: String,
+    relation: ClockRelationshipModel.RelationIntent,
+    contract: String,
+    obligations: Vector[(String, String)]
 )
 
 /** Exact declaration association. Address/type proofs remain attached to actual operands. */
@@ -174,7 +267,19 @@ private[nodal] final case class KernelDigitalAssignmentSnapshot(
     value: String,
     kind: String,
     region: Option[String] = None,
-    sourceOrdinal: Int = 0
+    sourceOrdinal: Int = 0,
+    eventProcess: Option[String] = None
+)
+
+private[nodal] final case class KernelDigitalEventDefinition(trigger: Expr[Bool], edge: Edge)
+
+private[nodal] final case class KernelEventProcessSnapshot(
+    path: String,
+    owner: String,
+    trigger: String,
+    edge: String,
+    storageTargets: Vector[String],
+    externalCaptures: Vector[String]
 )
 
 private[nodal] final case class KernelDigitalLoopSnapshot(
@@ -493,6 +598,7 @@ private[nodal] final case class ConstructionSnapshot(
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
     digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
+    eventProcesses: Vector[KernelEventProcessSnapshot] = Vector.empty,
     memoryWrites: Vector[KernelMemoryWriteSnapshot] = Vector.empty,
     digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
     digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
@@ -647,6 +753,8 @@ private final class InstanceRecord(
     val generatedScope: Option[GeneratedRegionRecord] = None
 ):
   var defaultBinding: Option[ClockDomain] = None
+  var defaultBindingSource: Option[SourceSpan] = None
+  val namedBindingSources: mutable.Map[ClockDomain, SourceSpan] = mutable.Map.empty
   val namedBindings: mutable.ArrayBuffer[(ClockDomain, ClockDomain)] = mutable.ArrayBuffer.empty
   val parameterOverrides: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 
@@ -670,8 +778,18 @@ private final case class Operation(
     generatedScope: Option[GeneratedRegionRecord] = None,
     source: Option[SourceSpan] = None,
     digitalRegion: Option[DigitalValueRegionRecord] = None,
-    sourceOrdinal: Int = 0
+    sourceOrdinal: Int = 0,
+    eventProcess: Option[DigitalEventProcessRecord] = None
 )
+
+private final class DigitalEventProcessRecord(
+    val owner: Long,
+    val ordinal: Int,
+    val definition: KernelDigitalEventDefinition,
+    val source: Option[SourceSpan]
+):
+  val targets: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+  var externalCaptures: Vector[DeclarationRef] = Vector.empty
 
 /** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
 private enum DigitalRegionKind:

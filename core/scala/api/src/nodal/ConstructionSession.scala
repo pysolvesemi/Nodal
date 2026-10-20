@@ -9,7 +9,7 @@ import scala.collection.mutable
 /** One mutable transaction. JVM identity is used only for transient lookup; stable paths use
   * hierarchy, explicit names, and deterministic local ordinals.
   */
-private final class ConstructionSession(val options: EmitOptions):
+private final class ConstructionSession(val options: EmitOptions, stimulusOnly: Boolean = false):
   import ConstructionExpressionFacts.{disciplineDimension, waveformContinuity, waveformStatic}
 
   def inferAnalogDimension(value: Any): AnalogDimension =
@@ -44,6 +44,1077 @@ private final class ConstructionSession(val options: EmitOptions):
       reject(value._1, "NODAL-ANALOG-040-001", s"stateful transfer operator '${value._2}'")
     noiseOperators.find(value => references.contains(value._1)).foreach: value =>
       reject(value._1, "NODAL-ANALOG-039-001", s"noise effect '${value._2}'")
+
+  // The construction session is the sole mutable event/process owner. Event storage is still
+  // an actual output declaration and uses the ordinary assignment/dependency inventories.
+  private val eventProcesses = mutable.ArrayBuffer.empty[DigitalEventProcessRecord]
+  private val eventStorage = mutable.HashMap.empty[DeclarationRef, DigitalEventProcessRecord]
+  private var activeEventProcess: Option[DigitalEventProcessRecord] = None
+  private val eventStateBits = mutable.HashMap.empty[Long, BigInt]
+
+  private def eventFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-EVENT-057-001")
+
+  private def eventProcessPath(process: DigitalEventProcessRecord): String =
+    s"${modulePath(process.owner)}.event_process_${process.ordinal}"
+
+  private def eventInput(value: Expr[?], owner: Long, bool: Boolean): DeclarationRef =
+    val reference = Option(declarationIds.get(value)).getOrElse(
+      eventFailure("event input requires an actual root input boundary, not a computed alias")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != owner || records(owner).parentAtConstruction.nonEmpty ||
+      declaration.kind != KernelSignalKind.Input || declaration.domainCandidate.nonEmpty ||
+      !declaration.dataType.exists(dataType =>
+        if bool then CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Bool")
+        else DigitalCombinationalContract.isValueTypeKind(CandidateRuntime.typeDescriptor(dataType))
+      )
+    then eventFailure("event input requires an unannotated root-owned digital input boundary")
+    if !bool then
+      val bits = shapeTypeFootprint(
+        declaration.dataType.get,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(eventFailure("event capture requires a fixed whole digital bit pattern"))
+      if bits < 1 || bits > DigitalEventContract.MaximumPayloadBits then
+        eventFailure("event external capture fixed whole payload must contain 1 through 4096 bits")
+    reference
+
+  def digitalEvent(trigger: Expr[Bool], edge: Edge): Event =
+    if activeEventProcess.nonEmpty then eventFailure("nested event construction is unsupported")
+    if edge != Edge.Rising && edge != Edge.Falling then
+      eventFailure("digital events require one rising or falling edge")
+    val _ = eventInput(trigger, currentModule.handle, bool = true)
+    new Event(digitalDefinition = Some(KernelDigitalEventDefinition(trigger, edge)))
+
+  def digitalEventProcess(event: Event, body: () => Unit): Unit =
+    DigitalEventCallback.requireChecked(body)
+    if activeEventProcess.nonEmpty || currentDomain.nonEmpty || activeValueRegion.nonEmpty ||
+      activeGeneratedRegion.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then eventFailure("event process requires direct root construction without nested scopes")
+    val module = currentModule
+    val definition = event.digitalDefinition.getOrElse(
+      eventFailure("digital event process requires an owned actual edge definition")
+    )
+    val _ = eventInput(definition.trigger, module.handle, bool = true)
+    if eventProcesses.size >= DigitalEventContract.MaximumNodes then
+      eventFailure("event process inventory exceeds 65536 nodes")
+    val process = new DigitalEventProcessRecord(
+      module.handle,
+      eventProcesses.size,
+      definition,
+      semanticOrigin.captureSemanticSource()
+    )
+    eventProcesses += process
+    activeEventProcess = Some(process)
+    try
+      ConstructionKernel.waveformForbidden(body())
+      if process.targets.isEmpty then eventFailure("event process must update a tracked output")
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "digital event process")
+        scala.util.Failure[Nothing](failure).get
+    finally activeEventProcess = None
+
+  private def captureEventAssignment(values: Vector[Any]): Unit =
+    activeEventProcess.foreach: process =>
+      if values.size != 2 then eventFailure("event update requires one target and value")
+      val target = Option(declarationIds.get(values.head.asInstanceOf[AnyRef])).getOrElse(
+        eventFailure("event update requires one whole output; projected writes are unsupported")
+      )
+      val declaration = records(target.module).declarations(target.index)
+      if target.module != process.owner || declaration.kind != KernelSignalKind.Output ||
+        declaration.domainCandidate.nonEmpty || activeValueRegion.nonEmpty ||
+        activeGeneratedRegion.nonEmpty
+      then eventFailure("event update requires one unannotated whole root output")
+      if eventStorage.contains(target) then
+        eventFailure("event output has more than one writer or update")
+      val bits = shapeTypeFootprint(
+        declaration.dataType.getOrElse(eventFailure("event output has no actual type")),
+        target.module,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(eventFailure("event output requires a fixed whole digital bit pattern"))
+      if bits < 1 || bits > DigitalEventContract.MaximumPayloadBits then
+        eventFailure("event output fixed whole payload must contain 1 through 4096 bits")
+      val total = eventStateBits.getOrElse(target.module, BigInt(0)) + bits
+      if total > DigitalEventContract.MaximumModuleStateBits then
+        eventFailure("module event state exceeds 262144 bits")
+      eventStateBits.update(target.module, total)
+      val source = values(1) match
+        case expression: Expr[?] => expression
+        case _ => eventFailure("event update requires an actual digital expression")
+      if !CandidateRuntime.expressionDataType(source).exists(dataType =>
+          DigitalEnumContract.sameType(
+            CandidateRuntime.typeDescriptor(declaration.dataType.get),
+            CandidateRuntime.typeDescriptor(dataType)
+          )
+        )
+      then eventFailure("event update requires exactly matching recursive types")
+      eventStorage.update(target, process)
+      process.targets += target
+
+  private def eventProcessSnapshots: Vector[KernelEventProcessSnapshot] =
+    eventProcesses.toVector.map: process =>
+      KernelEventProcessSnapshot(
+        eventProcessPath(process),
+        modulePath(process.owner),
+        pathOf(process.definition.trigger).getOrElse(eventFailure("event trigger lost identity")),
+        if process.definition.edge == Edge.Rising then "rising" else "falling",
+        process.targets.toVector.map(declarationPath),
+        process.externalCaptures.map(declarationPath)
+      )
+
+  private final case class ExecutableCrossing(
+      input: Expr[?],
+      destination: ClockDomain,
+      stages: Int,
+      kind: String,
+      valid: Option[Expr[Bool]] = None,
+      ready: Option[Expr[Bool]] = None,
+      depth: Option[Int] = None,
+      var results: Vector[(ExpressionRef, String)] = Vector.empty,
+      var sourceDomain: Option[String] = None,
+      var sourceEndpoint: Option[DomainRef] = None,
+      var destinationDomain: Option[String] = None
+  ):
+    def sourceInputs: Vector[Expr[?]] = Vector(input) ++ valid
+    def sampledInputs: Vector[Expr[?]] = sourceInputs ++ ready
+    def identity(reference: ExpressionRef): ExpressionRef = results.headOption.map(_._1)
+      .getOrElse(reference)
+    def role(reference: ExpressionRef): String = results.find(_._1 == reference).map(_._2)
+      .getOrElse("payload")
+  private val executableCrossings = mutable.LinkedHashMap.empty[ExpressionRef, ExecutableCrossing]
+  private var crossingStateBits = BigInt(0)
+  private val pulseValues = new IdentityHashMap[Expr[Bool], java.lang.Boolean]()
+
+  private def crossingFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-CDC-057-001")
+
+  def classifyPulse(value: Expr[Bool]): Unit =
+    if activeEventProcess.nonEmpty then
+      eventFailure("Pulse classification is unsupported in event body")
+    val _ = pulseValues.put(value, java.lang.Boolean.TRUE)
+
+  private def streamTransaction[A](label: String)(body: => A): A =
+    try
+      closeBehavioralChain()
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then crossingFailure(s"$label requires module-level construction; callbacks are unsupported")
+      body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, label)
+        scala.util.Failure[Nothing](failure).get
+
+  private def ownedStreamValue(value: Expr[?], label: String, bool: Boolean = false): Unit =
+    val reference = valueReference(value)
+    val owner = reference match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    val dataType = CandidateRuntime.expressionDataType(value).getOrElse(
+      crossingFailure(s"$label requires an actual owned digital value")
+    )
+    if owner != currentModule.handle ||
+      (bool && CandidateRuntime.typeDescriptor(dataType) != KernelTypeDescriptor("Bool"))
+    then
+      crossingFailure(
+        s"$label requires an actual owned ${if bool then "Bool" else "digital"} value"
+      )
+
+  private def newStreamReady(): Signal[Bool] =
+    val ready = new Signal(Bool, KernelSignalKind.Wire)
+    val default = false.B
+    val reference = declarationIds.get(ready)
+    val module = records(reference.module)
+    val declaration = module.declarations(reference.index)
+    module.declarations.update(
+      reference.index,
+      declaration.copy(attributes =
+        declaration.attributes :+ ("stream_ready_default" -> default)
+      )
+    )
+    ready
+
+  def stream[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    streamTransaction("Stream"):
+      ownedStreamValue(payload, "Stream payload")
+      ownedStreamValue(valid, "Stream valid", bool = true)
+      val result = new Stream(payload, valid, newStreamReady())
+      val reference = declarationIds.get(result.readyWire)
+      val module = records(reference.module)
+      val declaration = module.declarations(reference.index)
+      module.declarations.update(
+        reference.index,
+        declaration.copy(attributes =
+          declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
+        )
+      )
+      result
+
+  def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
+    streamTransaction("Stream.accept"):
+      ownedStreamValue(stream.payload, "Stream payload")
+      ownedStreamValue(stream.valid, "Stream valid", bool = true)
+      ownedStreamValue(stream.readyWire, "Stream ready", bool = true)
+      ownedStreamValue(ready, "Stream sink readiness", bool = true)
+      val reference = declarationIds.get(stream.readyWire)
+      if !records(reference.module).declarations(reference.index).attributes.exists(
+          _._1 == "stream_ready_default"
+        )
+      then crossingFailure("Stream ready requires its actual owned wire")
+      assignSignalSelection(stream.readyWire, ready)
+
+  /** Finalize forward ready references through the ordinary physical assignment owner. There is no
+    * separate connectivity graph: duplicate drivers reject and unattached sinks receive false.
+    */
+  private def finalizeStreamReady(): Unit =
+    val readyDeclarations = records.valuesIterator.flatMap(_.declarations).filter(
+      _.attributes.exists(_._1 == "stream_ready_default")
+    ).map(value => value.reference -> value).toMap
+    val counts = mutable.HashMap.empty[DeclarationRef, Int]
+    operations.iterator.filter(operation =>
+      Set("assignment", "value-connect")(operation.kind) && operation.values.size == 2
+    ).foreach: operation =>
+      operation.values.head match
+        case value: AnyRef =>
+          Option(declarationIds.get(value)).filter(readyDeclarations.contains).foreach: reference =>
+            val count = counts.getOrElse(reference, 0) + 1
+            if count > 1 then crossingFailure("Stream ready has more than one owner")
+            counts.update(reference, count)
+        case _ => ()
+    readyDeclarations.toVector.sortBy((reference, _) =>
+      (reference.module, reference.index)
+    ).foreach: (reference, declaration) =>
+      if !counts.contains(reference) then
+        val default = declaration.attributes.collectFirst:
+          case ("stream_ready_default", value: Expr[?]) => value
+        .get
+        val ordinal = nextDigitalEffectOrdinal.getOrElse(reference.module, 0)
+        nextDigitalEffectOrdinal.update(reference.module, ordinal + 1)
+        val values = Vector(declaration.value, default)
+        operations += Operation(reference.module, "assignment", values, sourceOrdinal = ordinal)
+        semanticOrigin.captureOperation(reference.module, "assignment", values)
+
+  def asyncFifo[A <: Data](input: Stream[A], to: ClockDomain, depth: Int): Stream[A] =
+    streamTransaction("Cdc.fifo"):
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure("Cdc.fifo destination and lexical domain must belong to the active Module")
+      if !ExecutableCrossingContract.validDepth(depth) then
+        crossingFailure("Cdc.fifo depth must be a power of two from 2 through 256")
+      ownedStreamValue(input.payload, "Cdc.fifo payload")
+      ownedStreamValue(input.valid, "Cdc.fifo valid", bool = true)
+      val dataType = CandidateRuntime.expressionDataType(input.payload).get
+      val bits = shapeTypeFootprint(
+        dataType,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true
+      ).getOrElse(crossingFailure("Cdc.fifo requires a finite digital bit pattern"))
+      val stateBits = ExecutableCrossingContract.fifoStateBits(bits, depth)
+      if crossingStateBits + stateBits > ExecutableCrossingContract.MaximumStateBits then
+        crossingFailure("Cdc.fifo generated state exceeds its expansion budget")
+      val ready = newStreamReady()
+      val operands = Vector(input.payload, input.valid, ready)
+      val payload = new KernelExpr[A](
+        operands,
+        resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+        operation = Some("cdc_fifo")
+      )
+      val valid = new KernelExpr[Bool](
+        operands,
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some("cdc_fifo")
+      )
+      val sourceReady = new KernelExpr[Bool](
+        operands,
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some("cdc_fifo")
+      )
+      val record = ExecutableCrossing(
+        input.payload,
+        to,
+        2,
+        "fifo",
+        Some(input.valid),
+        Some(ready),
+        Some(depth)
+      )
+      record.results = Vector(payload -> "payload", valid -> "valid", sourceReady -> "ready")
+        .map((value, role) => captureExpression(value).get -> role)
+      record.results.foreach((reference, _) => executableCrossings.update(reference, record))
+      crossingStateBits += stateBits
+      acceptStream(input, sourceReady)
+      new Stream(payload, valid, ready)
+
+  def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
+    executableCrossing(bit, to, stages, "sync")
+
+  def executableCrossing[A <: Data](
+      input: Expr[A],
+      to: ClockDomain,
+      stages: Int,
+      kind: String
+  ): Expr[A] =
+    try
+      closeBehavioralChain()
+      val label = "Cdc." + kind
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then crossingFailure(s"$label requires module-level construction; callbacks are unsupported")
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure(
+          s"$label destination and any active lexical domain must belong to the active Module"
+        )
+      if !ExecutableCrossingContract.validStages(kind, stages) then
+        crossingFailure(s"$label stages must be between 2 and 32 (pulse and handshake require 2)")
+      val reference = valueReference(input)
+      val inputOwner = reference match
+        case value: DeclarationRef => value.module
+        case value: ExpressionRef => value.module
+      val dataType = CandidateRuntime.expressionDataType(input).getOrElse(
+        crossingFailure(s"$label input requires an actual owned digital value")
+      )
+      val descriptor = CandidateRuntime.typeDescriptor(dataType)
+      if inputOwner != owner ||
+        (!ExecutableCrossingContract.bitPatternPayload(kind) && descriptor != KernelTypeDescriptor(
+          "Bool"
+        ))
+      then crossingFailure(s"$label input requires an actual owned Bool value")
+      val bits = if ExecutableCrossingContract.bitPatternPayload(kind) then
+        shapeTypeFootprint(
+          dataType,
+          owner,
+          cardinality = true,
+          storageContext = true,
+          bitPatternOnly = true
+        ).getOrElse(crossingFailure(s"$label requires a finite digital bit pattern"))
+      else BigInt(1)
+      val stateBits = ExecutableCrossingContract.stateBits(kind, bits, stages)
+      if crossingStateBits + stateBits > ExecutableCrossingContract.MaximumStateBits then
+        crossingFailure(s"$label generated state exceeds its expansion budget")
+      val result = new KernelExpr[A](
+        Vector(input),
+        resultType = Some(descriptor),
+        operation = Some("cdc_" + kind)
+      )
+      val captured = captureExpression(result).get
+      executableCrossings.update(captured, ExecutableCrossing(input, to, stages, kind))
+      crossingStateBits += stateBits
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "executable crossing")
+        scala.util.Failure[Nothing](failure).get
+
+  private def executableCrossingSnapshot(expression: KernelExpr[?])
+      : Option[KernelExecutableCrossingSnapshot] =
+    if expression.operation.exists(ExecutableCrossingContract.Operations) then
+      val record = executableCrossings.getOrElse(
+        expressionIds.get(expression),
+        crossingFailure("crossing requires its actual owned construction record")
+      )
+      val source = record.sourceEndpoint.getOrElse(
+        crossingFailure("crossing source lost its exact local endpoint identity")
+      )
+      Some(KernelExecutableCrossingSnapshot(
+        domainPath(source),
+        domainPath(domainRef(record.destination)),
+        record.stages,
+        record.kind,
+        ExecutableCrossingContract.contract(record.kind),
+        ExecutableCrossingContract.obligations(record.kind),
+        record.depth,
+        Option.when(
+          record.kind == "fifo"
+        )(expressionPath(record.identity(expressionIds.get(expression)))),
+        record.role(expressionIds.get(expression))
+      ))
+    else None
+
+  private final case class ExecutableWaiver(
+      input: Expr[?],
+      destination: ClockDomain,
+      id: String,
+      reason: String,
+      relation: ClockRelationshipModel.RelationIntent,
+      var sourceEndpoint: Option[DomainRef] = None
+  )
+  private val executableWaivers = mutable.LinkedHashMap.empty[ExpressionRef, ExecutableWaiver]
+  private val waiverIds = mutable.HashSet.empty[(Long, String)]
+
+  def waive[A <: Data](input: Expr[A], to: ClockDomain, waiver: CdcWaiver): Expr[A] =
+    streamTransaction("Cdc.waive"):
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure("Cdc.waive destination and lexical domain must belong to the active Module")
+      if waiver == null || waiver.relation == null then
+        crossingFailure("Cdc.waive requires an actual typed waiver and relation")
+      ExecutableWaiverContract.validateText(waiver.id, waiver.reason, crossingFailure)
+      val relation = ClockRelationshipModel.intent(waiver.relation)
+      ClockRelationshipModel.verifyBoundaryIntentFields(relation, crossingFailure)
+      if !waiverIds.add(owner -> waiver.id) then
+        crossingFailure("Cdc.waive id must be unique among authored waivers in one Module")
+      ownedStreamValue(input, "Cdc.waive payload")
+      val dataType = CandidateRuntime.expressionDataType(input).get
+      val bits = shapeTypeFootprint(
+        dataType,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(crossingFailure("consumer requires a fixed whole digital bit pattern"))
+      if bits > ExecutableWaiverContract.MaximumPayloadBits then
+        crossingFailure("Cdc.waive fixed whole payload must contain 1 through 4096 bits")
+      val result = new KernelExpr[A](
+        Vector(input),
+        resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+        operation = Some(ExecutableWaiverContract.Operation)
+      )
+      val captured = captureExpression(result).get
+      executableWaivers.update(
+        captured,
+        ExecutableWaiver(input, to, waiver.id, waiver.reason, relation)
+      )
+      result
+
+  private def executableWaiverSnapshot(expression: KernelExpr[?])
+      : Option[KernelExecutableWaiverSnapshot] =
+    Option.when(expression.operation.contains(ExecutableWaiverContract.Operation)):
+      val record = executableWaivers.getOrElse(
+        expressionIds.get(expression),
+        crossingFailure("waiver requires its actual owned construction record")
+      )
+      val source = record.sourceEndpoint.getOrElse(
+        crossingFailure("waiver source lost its exact local endpoint identity")
+      )
+      KernelExecutableWaiverSnapshot(
+        domainPath(source),
+        domainPath(domainRef(record.destination)),
+        record.id,
+        record.reason,
+        record.relation,
+        ExecutableWaiverContract.Contract,
+        ExecutableWaiverContract.Obligations
+      )
+
+  private final case class ClockRecord(
+      kind: String,
+      parents: Vector[ClockDomain],
+      controls: Vector[Expr[Bool]],
+      var destination: Option[ClockDomain] = None,
+      var controlKinds: Vector[String] = Vector.empty,
+      var controlDomains: Vector[Option[String]] = Vector.empty
+  )
+  private val clockRecords = mutable.LinkedHashMap.empty[ExpressionRef, ClockRecord]
+  private val rawClockResets = mutable.Map.empty[(DeclarationRef, Long), Expr[Reset]]
+  private var clockState = 0L
+  private val provedClockIdentities = mutable.HashSet.empty[ExpressionRef]
+  private var clockProofWork = 0L
+
+  private def clockFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-CLOCK-057-001")
+
+  private def clockTransaction[A](body: => A): A =
+    try
+      closeBehavioralChain()
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then clockFailure("owned clock structures require direct module-level construction")
+      body
+    catch
+      case error: Throwable =>
+        poisonConstructor(error, "owned clock construction")
+        throw error
+
+  /** A derived producer is distinct from every physical input and from every other producer. */
+  private def clockIdentity(value: Expr[Clock], owner: Long, depth: Int = 0)
+      : Either[(DeclarationRef, Long), ExpressionRef] =
+    if depth > 128 then clockFailure("clock graph exceeds depth budget")
+    if !CandidateRuntime.expressionDataType(value).exists(dataType =>
+        CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Clock")
+      )
+    then
+      clockFailure("clock proof requires exact scalar Clock capability, never a cast control")
+    val reference = assignmentReference(value)
+    reference match
+      case expression: ExpressionRef if clockRecords.contains(expression) =>
+        if expression.module != owner || expressionRegions.contains(expression) then
+          clockFailure("owned clock producer is foreign or regional")
+        if !provedClockIdentities(expression) then
+          clockProofWork += 1
+          if clockProofWork > 524288 then clockFailure("clock graph exceeds work budget")
+          val record = clockRecords(expression)
+          record.parents.foreach(parent =>
+            clockIdentity(
+              parent.clock.getOrElse(clockFailure("parent lacks actual Clock")),
+              owner,
+              depth + 1
+            )
+          )
+          provedClockIdentities += expression
+        Right(expression)
+      case _ =>
+        val physical = physicalControlIdentity(value)
+        if physical._1.module != owner then clockFailure("clock boundary belongs to another module")
+        Left(physical)
+
+  private def clockResetSafe(value: Expr[Reset], receiving: ClockDomain): Boolean =
+    val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
+    val owner = domainRef(receiving).module
+    val identity = clockIdentity(receiving.clock.get, owner)
+    val edge = inheritedClockEdge(receiving)
+    val synchronous = receiving.resetPolicy.contains(ResetPolicy.Sync) ||
+      (receiving.resetPolicy.isEmpty && hasSynchronousResetAssertion(value))
+    def sameClock(other: ClockDomain): Boolean =
+      clockIdentity(
+        other.clock.getOrElse(clockFailure("reset destination lacks Clock")),
+        owner
+      ) == identity &&
+        inheritedClockEdge(other) == edge
+    def visit(input: Expr[Reset], depth: Int): Boolean =
+      clockProofWork += 1
+      if depth > 128 || clockProofWork > 524288 then
+        clockFailure("parent reset proof exceeds budget")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).map(_.booleanValue).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "sync" => record.destination.exists(sameClock)
+          case "combine" => record.inputs.forall(visit(_, depth + 1))
+          case "boundary" =>
+            (record.release == "external" || record.release == "sync" && synchronous) &&
+            record.destination.exists(sameClock)
+          case _ => false
+        memo.put(actual, java.lang.Boolean.valueOf(result))
+        result
+    visit(value, 0)
+
+  /** Reuse raw physical assertion, never combine independently released reset chains. */
+  private def rawClockAssertion(value: Expr[Reset]): Expr[Reset] =
+    val memo = new IdentityHashMap[Expr[Reset], Expr[Reset]]()
+    var work = 0
+    def visit(input: Expr[Reset], depth: Int): Expr[Reset] =
+      work += 1
+      if depth > 128 || work > 524288 then
+        clockFailure("clock reset assertion graph exceeds budget")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "boundary" =>
+            val identity = physicalControlIdentity(record.inputs.head)
+            rawClockResets.get(identity) match
+              case Some(previous) =>
+                if resetRecord(previous).polarity != record.polarity then
+                  clockFailure("clock reset roots have contradictory polarities")
+                previous
+              case None =>
+                val raw = if record.release == "raw" then actual
+                else makeReset(record.copy(release = "raw", destination = None), "reset_boundary")
+                rawClockResets(identity) = raw
+                raw
+          case "sync" => visit(record.inputs.head, depth + 1)
+          case "combine" => resetCombine(record.inputs.map(visit(_, depth + 1)))
+          case _ => clockFailure("clock requires actual reset assertion roots")
+        memo.put(actual, result)
+        result
+    visit(value, 0)
+
+  private def ownedClock(
+      kind: String,
+      parents: Vector[ClockDomain],
+      controls: Vector[Expr[Bool]],
+      name: String
+  ): ClockDomain = clockTransaction:
+    val owner = currentModule.handle
+    if parents.size != (if kind == "gate" then 1 else 2) ||
+      parents.exists(domain => domainRef(domain).module != owner || domain.clock.isEmpty)
+    then clockFailure("owned clock requires actual local parent domains (mux exactly two)")
+    controls.foreach(ownedStreamValue(_, "clock control", bool = true))
+    val clocks = parents.map(_.clock.get)
+    val identities = clocks.map(clockIdentity(_, owner))
+    if kind == "mux" && identities.distinct.size != 2 then
+      clockFailure("glitchless mux requires two distinct actual clock parents")
+    val edges = parents.map(inheritedClockEdge(_))
+    if edges.exists(_.isEmpty) || edges.distinct.size != 1 then
+      clockFailure("owned clocks require matching actual parent edges")
+    val resets = parents.map(parent => Option(effectiveResets.get(parent)))
+    parents.zip(resets).foreach: (parent, reset) =>
+      if reset.exists(value => !clockResetSafe(value, parent)) then
+        clockFailure("owned clock parent requires safe release for its actual clock and edge")
+    if kind == "mux" && resets.exists(_.isEmpty) then
+      clockFailure("glitchless mux requires common nonempty reset roots")
+    if kind == "mux" then
+      val lineage = new ResetLineageQuery
+      val roots = resets.map(reset => lineage(reset.get).view.mapValues(_._1).toMap)
+      if roots.head.isEmpty || roots.distinct.size != 1 then
+        clockFailure("glitchless mux requires equal actual reset roots and polarities")
+    val state = if kind == "gate" then 1L else 22L
+    if clockState + resetState + state > 262144 then
+      clockFailure("owned clock generated state exceeds expansion budget")
+    clockState += state
+    val assertion = resets.head.map(rawClockAssertion)
+    val operands: Vector[Any] = clocks ++ controls ++ Option.when(kind == "mux")(assertion.get)
+    val clock = new KernelExpr[Clock](
+      operands,
+      resultType = Some(KernelTypeDescriptor("Clock")),
+      operation = Some("clock_" + kind)
+    )
+    val reference = captureExpression(clock).get
+    val record = ClockRecord(kind, parents, controls)
+    clockRecords(reference) = record
+    val release = assertion.map(resetSync(_, None, 2))
+    val result = new ClockDomain(
+      name,
+      release.getOrElse(parents.head.reset),
+      KernelDomainKind.Generated,
+      edge = edges.head,
+      resetPolicy = Option.when(release.isEmpty)(ResetPolicy.None),
+      resetPolarity = release.map(resetRecord(_).polarity).orElse(parents.head.resetPolarity),
+      relation = Some(ClockRelation.Unknown),
+      clock = Some(clock),
+      parent = Some(parents.head)
+    )
+    record.destination = Some(result)
+    result
+
+  def generatedDomain(
+      name: String,
+      clock: Expr[Clock],
+      from: ClockDomain,
+      relation: ClockRelation,
+      reset: Expr[Reset]
+  ): ClockDomain = clockTransaction:
+    if !stimulusOnly then
+      val owner = currentModule.handle
+      if domainRef(from).module != owner || from.clock.isEmpty then
+        behavioralFailure(
+          "relationship parent requires one actual owned domain",
+          ClockRelationshipModel.Code
+        )
+      val source = clockIdentity(from.clock.get, owner)
+      val destination = clockIdentity(clock, owner)
+      relation match
+        case ClockRelation.Same
+            if source != destination && (source.isRight || destination.isRight) =>
+          behavioralFailure(
+            "distinct owned gate/mux producers cannot become Same",
+            ClockRelationshipModel.Code
+          )
+        case ClockRelation.Ratio(multiply, divide, phase) =>
+          if multiply <= 0 || divide <= 0 || !java.lang.Double.isFinite(phase.degrees) then
+            behavioralFailure(
+              "ratio requires positive int32 factors and finite phase",
+              ClockRelationshipModel.Code
+            )
+        case _ => ()
+    new ClockDomain(
+      name,
+      reset,
+      KernelDomainKind.Generated,
+      relation = Some(relation),
+      clock = Some(clock),
+      parent = Some(from),
+      executableRelationship = !stimulusOnly
+    )
+
+  private def relationshipSnapshot(domain: DomainRecord): Option[KernelClockRelationshipSnapshot] =
+    Option.when(domain.domain.executableRelationship):
+      val actual = domain.domain
+      val parent = actual.parent.get
+      val owner = domain.reference.module
+      val structural =
+        clockIdentity(parent.clock.get, owner) == clockIdentity(actual.clock.get, owner)
+      val intent = ClockRelationshipModel.intent(actual.relation.get)
+      val kind = intent.kind
+      val proof = ClockRelationshipModel.proof(kind, structural)
+      KernelClockRelationshipSnapshot(
+        domainPath(domain.reference) + ".relationship",
+        domainPath(domainRef(parent)),
+        domainPath(domain.reference),
+        domainSourcePath(parent.clock.get),
+        domainSourcePath(actual.clock.get),
+        kind,
+        ClockRelationshipModel.Contract,
+        proof,
+        ClockRelationshipModel.obligations(kind, proof),
+        intent.multiply,
+        intent.divide,
+        intent.phase,
+        intent.phaseKnown
+      )
+
+  private def relationshipIndex(): ClockRelationshipModel.Index =
+    val actual = if stimulusOnly then Vector.empty
+    else
+      records.valuesIterator.flatMap(_.domains).filter(value =>
+        value.kind != KernelDomainKind.Required && value.domain.clock.nonEmpty
+      ).toVector
+    val endpoints = actual.map: record =>
+      val domain = record.domain
+      val identity = clockIdentity(domain.clock.get, record.reference.module)
+      val physical = identity match
+        case Left((reference, offset)) => "physical:" + declarationPath(reference) + ":" + offset
+        case Right(reference) => "derived:" + expressionPath(reference)
+      ClockRelationshipModel.Endpoint(
+        domainPath(record.reference),
+        modulePath(record.reference.module),
+        domainSourcePath(domain.clock.get),
+        physical,
+        identity.isLeft,
+        inheritedClockEdge(domain).map(clockEdgeName).getOrElse("unknown"),
+        domain.frequency.map(value => java.lang.Double.toString(value.hertz))
+      )
+    new ClockRelationshipModel.Index(
+      endpoints,
+      actual.flatMap(relationshipSnapshot),
+      (message, path) => fail(ClockRelationshipModel.Code, message, Some(path))
+    )
+
+  def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
+      : ClockDomain =
+    if stimulusOnly then
+      CandidateRuntime.statement(enable, testEnable)
+      new ClockDomain(name, domain.reset, KernelDomainKind.Generated, parent = Some(domain))
+    else ownedClock("gate", Vector(domain), Vector(enable, testEnable), name)
+
+  def clockMux(select: Expr[Bool], domains: Vector[ClockDomain], name: String): ClockDomain =
+    if stimulusOnly then
+      CandidateRuntime.statement(select, domains)
+      new ClockDomain(name, CandidateRuntime.expr(domains), KernelDomainKind.Generated)
+    else ownedClock("mux", domains, Vector(select), name)
+
+  private def clockSnapshot(expression: KernelExpr[?]): Option[KernelClockSnapshot] =
+    clockRecords.get(expressionIds.get(expression)).map: record =>
+      if record.controlKinds.size != record.controls.size then
+        clockFailure("clock control provenance was not validated")
+      KernelClockSnapshot(
+        record.kind,
+        record.parents.map(value => domainPath(domainRef(value))),
+        domainPath(domainRef(record.destination.get)),
+        clockEdgeName(inheritedClockEdge(record.parents.head).get),
+        record.controlKinds,
+        record.controlDomains,
+        OwnedClockContract.contract(record.kind),
+        OwnedClockContract.obligations(record.kind)
+      )
+
+  private final case class ResetRecord(
+      kind: String,
+      inputs: Vector[Expr[Reset]],
+      polarity: ResetPolarity,
+      release: String,
+      var destination: Option[ClockDomain],
+      stages: Int
+  )
+  private val resetRecords = new IdentityHashMap[Expr[Reset], ResetRecord]()
+  private val resetBoundaries = new IdentityHashMap[Expr[Reset], Expr[Reset]]()
+  private val physicalResetBoundaries = mutable.Map.empty[(DeclarationRef, Long), Expr[Reset]]
+
+  private def physicalControlIdentity(value: Expr[?]): (DeclarationRef, Long) =
+    import StructuralShapeCoordinates.{Coordinate, Projection}
+    var reference = assignmentReference(value)
+    var projections = Vector.empty[Projection]
+    var depth = 0
+    while reference.isInstanceOf[ExpressionRef] do
+      depth += 1
+      if depth > 128 then resetFailure("physical control projection exceeds depth budget")
+      val expression = reference.asInstanceOf[ExpressionRef]
+      if expressionRegions.contains(expression) then
+        resetFailure("physical control projection must be module-owned")
+      shapeIndices.get(expression) match
+        case Some(index) =>
+          if index.generatedScope.nonEmpty || index.conservative.nonEmpty then
+            resetFailure("physical control projection has invalid scope")
+          projections = Projection.Index(
+            index.indices.map(generatedBound),
+            index.resultDimensions.map(renderShapeDimension(_, expression.module))
+          ) +: projections
+          reference = index.input
+        case None =>
+          val view = shapeViews.getOrElse(
+            expression,
+            resetFailure("physical control requires an owned input or static projection")
+          )
+          if view.generatedScope.nonEmpty then
+            resetFailure("physical control projection has invalid scope")
+          projections = Projection.View(
+            view.dimensions.map(renderShapeDimension(_, expression.module)),
+            view.slice.map(slice =>
+              KernelShapeSliceSnapshot(
+                slice.axis,
+                generatedBound(slice.lower),
+                generatedBound(slice.upperExclusive)
+              )
+            )
+          ) +: projections
+          reference = view.input
+    val root = reference.asInstanceOf[DeclarationRef]
+    val declaration = records(root.module).declarations(root.index)
+    val finalType = CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor)
+    if !finalType.exists(t => Set("Clock", "Reset")(t.kind) && t.arguments.isEmpty) ||
+      records(root.module).generatedRegions.exists(_.declarations.contains(root)) ||
+      projections.size > 128
+    then resetFailure("physical control must be an unscoped scalar Clock or Reset")
+    if declaration.kind != KernelSignalKind.Input then
+      resetFailure("physical control root must be an exact owned input")
+    val descriptor = CandidateRuntime.typeDescriptor(declaration.dataType.get)
+    val dimensions = if descriptor.kind == "Vec" then
+      descriptor.arguments(1).asInstanceOf[Seq[Any]].toVector.map(renderShapeDimension(
+        _,
+        root.module
+      ))
+    else Vector.empty
+    val tokens = dimensions ++ projections.flatMap {
+      case Projection.Index(indices, result) => indices ++ result
+      case Projection.View(result, slice) =>
+        result ++ slice.toVector.flatMap(v => Vector(v.lower, v.upperExclusive))
+    }
+    if tokens.exists(_.toLongOption.isEmpty) then
+      resetFailure("physical control execution requires fixed literal shape coordinates")
+    val region = StructuralShapeCoordinates.scalarRegion(dimensions, projections)
+    (region.cardinality, region.rootOrdinal) match
+      case (Coordinate.Literal(1), Coordinate.Literal(offset))
+          if offset >= 0 && BigInt(offset) < dimensions.foldLeft(BigInt(1))((n, d) =>
+            n * BigInt(d)
+          ) => (root, offset)
+      case _ => resetFailure("physical control projection must select one exact fixed scalar")
+
+  private val effectiveResets = new IdentityHashMap[ClockDomain, Expr[Reset]]()
+  private var resetState = 0L
+  private def resetFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-RDC-057-001")
+
+  private def resetScope(): Unit =
+    closeBehavioralChain()
+    if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+      analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then resetFailure("reset structures require direct module-level construction")
+
+  private def actualReset(value: Expr[Reset]): Expr[Reset] =
+    if resetRecords.containsKey(value) then value
+    else
+      Option(
+        resetBoundaries.get(value)
+      ).orElse(physicalResetBoundaries.get(physicalControlIdentity(value))).getOrElse(value)
+
+  private def resetRecord(value: Expr[Reset]): ResetRecord =
+    resetRecords.get(actualReset(value)) match
+      case null =>
+        resetFailure("reset requires an actual owned producer or declared reset boundary")
+      case result => result
+
+  private def hasSynchronousResetAssertion(value: Expr[Reset]): Boolean =
+    val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
+    var work = 0
+    def visit(input: Expr[Reset], depth: Int): Boolean =
+      work += 1
+      if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).map(_.booleanValue).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "boundary" => record.release == "sync"
+          case "combine" => record.inputs.forall(visit(_, depth + 1))
+          case _ => false
+        memo.put(actual, java.lang.Boolean.valueOf(result))
+        result
+    visit(value, 0)
+
+  private def makeReset(record: ResetRecord, operation: String): Expr[Reset] =
+    val result = new KernelExpr[Reset](
+      record.inputs ++ Option.when(operation == "rdc_sync")(record.stages).toVector,
+      resultType = Some(KernelTypeDescriptor("Reset")),
+      operation = Some(operation)
+    )
+    val _ = captureExpression(result)
+    resetRecords.put(result, record)
+    result
+
+  def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
+    if stimulusOnly then
+      val result = new KernelExpr[Reset](
+        Vector(reset) ++ to.toVector ++ Vector(stages),
+        resultType = Some(KernelTypeDescriptor("Reset")),
+        operation = Some("rdc_sync")
+      )
+      val _ = captureExpression(result)
+      result
+    else
+      try
+        resetScope()
+        if stages < 2 || stages > 32 then
+          resetFailure("reset synchronizer stages must be 2 through 32")
+        if resetState + clockState + stages > 262144 then
+          resetFailure("reset synchronization expansion budget exceeded")
+        val input = actualReset(reset)
+        val producer = resetRecord(input)
+        val owner = valueReference(input) match
+          case value: DeclarationRef => value.module
+          case value: ExpressionRef => value.module
+        if owner != currentModule.handle || to.exists(domainRef(_).module != owner) then
+          resetFailure("reset synchronizer endpoints must belong to the active module")
+        resetState += stages
+        makeReset(
+          ResetRecord("sync", Vector(input), producer.polarity, "sync", to, stages),
+          "rdc_sync"
+        )
+      catch
+        case error: Throwable =>
+          poisonConstructor(error, "reset synchronization")
+          throw error
+
+  private final class ResetLineageQuery:
+    private val memo =
+      new IdentityHashMap[Expr[Reset], Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]]()
+    def apply(
+        value: Expr[Reset],
+        depth: Int = 0
+    ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
+      if depth > 128 then resetFailure("reset ancestry budget exceeded")
+      Option(memo.get(value)).getOrElse:
+        val result = visit(value, depth)
+        memo.put(value, result)
+        result
+    private var work = 0L
+    private def visit(
+        value: Expr[Reset],
+        depth: Int
+    ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
+      work += 1
+      if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
+      val node = resetRecord(value)
+      if node.kind == "boundary" then
+        Map(physicalControlIdentity(node.inputs.head) -> (node.polarity, value))
+      else
+        val result =
+          scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
+        node.inputs.foreach(input =>
+          apply(input, depth + 1).foreach { (root, fact) =>
+            work += 1
+            if work > 524288 then resetFailure("reset ancestry budget exceeded")
+            result.get(root).foreach(previous =>
+              if previous != fact then resetFailure("independent reset releases reconverge")
+            )
+            result(root) = fact
+          }
+        )
+        if node.kind == "sync" then
+          result.iterator.map((root, fact) => root -> (fact._1, value)).toMap
+        else result.toMap
+
+  def resetCombine(resets: Vector[Expr[Reset]]): Expr[Reset] =
+    try
+      resetScope()
+      if resets.isEmpty || resets.size > 32 then
+        resetFailure("reset composition requires 1 through 32 inputs")
+      val inputs = resets.map(actualReset)
+      inputs.foreach: value =>
+        val owner = valueReference(value) match
+          case v: DeclarationRef => v.module
+          case v: ExpressionRef => v.module
+        if owner != currentModule.handle then
+          resetFailure("composition requires owned reset producers")
+      val lineage = new ResetLineageQuery
+      val seen =
+        scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
+      inputs.foreach(input =>
+        lineage(input, 0).foreach { (root, fact) =>
+          seen.get(root).foreach(previous =>
+            if previous != fact then resetFailure("independent reset releases reconverge")
+          )
+          seen(root) = fact
+        }
+      )
+      makeReset(
+        ResetRecord("combine", inputs, ResetPolarity.ActiveHigh, "raw", None, 0),
+        "reset_combine"
+      )
+    catch
+      case error: Throwable =>
+        poisonConstructor(error, "reset composition")
+        throw error
+
+  private def installDomainReset(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    if !stimulusOnly && kind != KernelDomainKind.Required && domain.clock.nonEmpty then
+      domain.resetPolicy match
+        case Some(ResetPolicy.None) => ()
+        case Some(policy) =>
+          if !resetRecords.containsKey(domain.reset) && physicalControlIdentity(
+              domain.reset
+            )._1.module != domainRef(domain).module
+          then
+            resetFailure("physical reset root belongs to another module")
+          val polarity = domain.resetPolarity.getOrElse(resetFailure("reset polarity is required"))
+          val known = Option(resetRecords.get(domain.reset)).orElse(
+            Option(resetRecords.get(actualReset(domain.reset)))
+          )
+          known.foreach(record =>
+            if record.polarity != polarity then
+              resetFailure("physical reset has contradictory polarities")
+          )
+          val input = if known.nonEmpty then actualReset(domain.reset)
+          else
+            val release = policy match
+              case ResetPolicy.Sync => "sync"
+              case ResetPolicy.AsyncExternalRelease => "external"
+              case _ => "raw"
+            val boundary = makeReset(
+              ResetRecord(
+                "boundary",
+                Vector(domain.reset),
+                polarity,
+                release,
+                Option.when(release != "raw")(domain),
+                0
+              ),
+              "reset_boundary"
+            )
+            resetBoundaries.put(domain.reset, boundary)
+            physicalResetBoundaries(physicalControlIdentity(domain.reset)) = boundary
+            boundary
+          val result = policy match
+            case ResetPolicy.AsyncAssertSyncRelease(stages) =>
+              resetSync(input, Some(domain), stages)
+            case _ => input
+          effectiveResets.put(domain, result)
+        case None =>
+          val reset = actualReset(domain.reset)
+          def bind(value: Expr[Reset], depth: Int): Unit =
+            if depth > 128 then resetFailure("reset producer ancestry exceeds depth budget")
+            val node = resetRecord(value)
+            if node.kind == "sync" && node.destination.isEmpty then node.destination = Some(domain)
+            if node.kind != "boundary" then node.inputs.foreach(bind(_, depth + 1))
+          bind(reset, 0)
+          effectiveResets.put(domain, reset)
+
+  private def resetSnapshot(expression: KernelExpr[?]): Option[KernelResetSnapshot] =
+    Option(resetRecords.get(expression.asInstanceOf[Expr[Reset]])).map: record =>
+      val inputs = record.inputs.map(domainSourcePath)
+      val clock = if record.kind == "sync" then
+        Vector(record.destination.flatMap(_.clock).map(domainSourcePath).getOrElse(
+          resetFailure("construction-form reset synchronizer has no receiving domain")
+        ))
+      else Vector.empty
+      KernelResetSnapshot(
+        record.kind,
+        resetPolarityName(record.polarity),
+        record.release,
+        record.destination.map(value => domainPath(domainRef(value))),
+        record.stages,
+        inputs ++ clock
+      )
 
   private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
@@ -691,6 +1762,8 @@ private final class ConstructionSession(val options: EmitOptions):
     )
 
   private def requireNoCollectionEffect(role: String, assignment: Boolean = false): Unit =
+    if activeEventProcess.nonEmpty && !assignment then
+      eventFailure(s"$role is not permitted inside a digital event process")
     collectionStack.reverseIterator.find(region =>
       !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
@@ -1592,7 +2665,11 @@ private final class ConstructionSession(val options: EmitOptions):
     .toVector
 
   /** Validate actual pre-edge dependencies and update-root ownership, without evaluating guards. */
-  private def verifySequentialAssignments(resolved: Map[DomainRef, String]): Unit =
+  private def verifySequentialAssignments(
+      resolved: Map[DomainRef, String],
+      interfaces: DigitalInterfaceContract.Capture
+  ): Unit =
+    val relationships = relationshipIndex()
     val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
     val guardPairs: Vector[(ExpressionRef, Expr[?])] =
       behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
@@ -1605,60 +2682,709 @@ private final class ConstructionSession(val options: EmitOptions):
       roots.update(declarationIds.get(record.storage), Left(record.reference))
     )
     val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
+    val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
+    var fsmControlEdges = 0L
+    def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
+      fsmControlCache.getOrElseUpdate(
+        header, {
+          val values = flatFsms(header.machine).actionSampleDependencies(header)
+          fsmControlEdges += values.size
+          if fsmControlEdges > 262144 then
+            crossingFailure("FSM causal sample controls exceed their edge budget")
+          values
+        }
+      )
+    val causalControlCache = mutable.HashMap.empty[ExpressionRef, Vector[Any]]
+    var causalControlEdges = 0L
+    def causalControls(region: Option[DigitalValueRegionRecord]): Vector[Any] =
+      region.map: root =>
+        causalControlCache.getOrElseUpdate(
+          root.reference, {
+            val values = mutable.ArrayBuffer.empty[Any]
+            var current = region
+            var depth = 0
+            while current.nonEmpty do
+              depth += 1
+              if depth > 128 then crossingFailure("causal sample guards exceed their depth budget")
+              current.get.structuralArm.foreach(header =>
+                values += structuralIfs(header.conditional).predicate
+              )
+              current.get.behavioralArm.foreach(header =>
+                values += behavioralIfs(header.conditional).predicate
+              )
+              current.get.switchArm.foreach(header =>
+                values += enumSwitches(header.switch).selector
+              )
+              current.get.fsmAction.foreach(header => values ++= fsmControls(header))
+              current = current.get.parent
+            causalControlEdges += values.size
+            if causalControlEdges > 262144 then
+              crossingFailure("cached causal sample controls exceed their edge budget")
+            values.toVector
+          }
+        )
+      .getOrElse(Vector.empty)
+    val eventTriggerReferences = eventProcesses.iterator.map(process =>
+      declarationIds.get(process.definition.trigger)
+    ).toSet
+    val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
     operations.iterator.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
     ).foreach: operation =>
       val target =
         digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
-      if records(target.module).declarations(target.index).kind != KernelSignalKind.Register then
+      if operation.eventProcess.isEmpty &&
+        records(target.module).declarations(target.index).kind != KernelSignalKind.Register
+      then
+        continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
+        val declaration = records(target.module).declarations(target.index)
+        // A projected target carries its actual selectors; revisiting the root is cut by the
+        // shared sampler's identity worklist, not by an annotation or a synthetic source.
+        val selection =
+          Option.when(operation.values.head.asInstanceOf[AnyRef] ne declaration.value)(
+            operation.values.head
+          ).toVector
         continuousDrivers.update(
           target,
-          continuousDrivers.getOrElse(target, Vector.empty) :+ operation.values(1)
+          continuousDrivers.getOrElse(target, Vector.empty) ++ Vector(operation.values(1)) ++
+            selection ++ causalControls(operation.digitalRegion)
         )
+    val parentInputReferences = instanceDigitalPorts.iterator.collect {
+      case (proxy, (_, port))
+          if records(proxy.module).declarations(
+            proxy.index
+          ).kind == KernelSignalKind.InstanceInput => port -> proxy
+    }.toMap
+    instanceDigitalPorts.keysIterator.filter(reference =>
+      records(reference.module).declarations(reference.index).kind == KernelSignalKind.InstanceInput
+    ).foreach: reference =>
+      if continuousWriteCounts.getOrElse(reference, 0) != 1 then
+        fail(
+          "NODAL-HIERARCHY-057-001",
+          "child digital input requires exactly one parent driver",
+          Some(declarationPath(reference))
+        )
+    // Interface capture is the owner of resolved connectivity and member/driver rules.
+    // Feed its actual edges into this same sampler rather than constructing a CDC-only net graph.
+    val declarationsByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
+      declarationPath(value.reference) -> value.reference
+    ).toMap
+    val valuesByPath = records.valuesIterator.flatMap(_.declarations).map(value =>
+      declarationPath(value.reference) -> value.value
+    ).toMap ++
+      expressionValues.iterator.map((reference, value) => expressionPath(reference) -> value)
+    interfaces.connectivity.foreach: connection =>
+      declarationsByPath.get(connection.target).foreach: target =>
+        val dependencies = (connection.value.toVector ++ connection.enable.toVector ++
+          connection.source.toVector).map(path =>
+          valuesByPath.getOrElse(
+            path,
+            crossingFailure("Interface dependency has no actual captured value")
+          )
+        )
+        continuousDrivers.update(
+          target,
+          continuousDrivers.getOrElse(target, Vector.empty) ++ dependencies
+        )
+      if connection.kind == "inout-pass-through" then
+        connection.source.flatMap(declarationsByPath.get).foreach: source =>
+          continuousDrivers.update(
+            source,
+            continuousDrivers.getOrElse(source, Vector.empty) :+
+              valuesByPath(connection.target)
+          )
     val domainsByPath = records.valuesIterator.flatMap(_.domains).map(domain =>
       domainPath(domain.reference) -> domain
     ).toMap
     def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
       sequentialRoot(region)
-    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
-      val pending = mutable.ArrayDeque[Any](value)
-      val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
-      var count = 0
-      while pending.nonEmpty do
-        val current = pending.removeLast()
-        current match
-          case reference: AnyRef
-              if Option(visited.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
-            count += 1
-            if count > 65536 then
-              behavioralFailure("sequential dependency graph exceeds its budget")
-            Option(declarationIds.get(reference)).foreach: declarationRef =>
-              if declarationRef.module != owner then
-                behavioralFailure("sequential dependency belongs to another module")
-              val declaration = records(owner).declarations(declarationRef.index)
-              if declaration.kind != KernelSignalKind.Register then
-                pending ++= continuousDrivers.getOrElse(declarationRef, Vector.empty)
-              val sourceDomain = declarationDomain(declaration, resolved)
-              if sourceDomain.exists(_ != targetDomain) ||
-                (declaration.kind == KernelSignalKind.Register && sourceDomain.isEmpty)
-              then behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
-            Option(expressionIds.get(reference)).foreach: expressionRef =>
-              if expressionRef.module != owner then
-                behavioralFailure("sequential expression belongs to another module")
-              collectionArguments.get(expressionRef).foreach: (region, _) =>
-                region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
-                  pending.append(value._1)
+    // One actual dependency traversal serves ordinary samples and strict crossing-source inference.
+    // Verified results cut at their role-owned domain; all sampled edges remain in the record.
+    final case class SampleFacts(
+        domains: Set[String],
+        sources: Set[DeclarationRef | ExpressionRef],
+        crossings: Set[ExpressionRef],
+        pulseClassified: Boolean = false,
+        externalSources: Set[DeclarationRef] = Set.empty,
+        localEndpoints: Set[DomainRef] = Set.empty,
+        waivers: Set[ExpressionRef] = Set.empty,
+        events: Set[DigitalEventProcessRecord] = Set.empty
+    )
+    val sampleCache =
+      mutable.HashMap.empty[
+        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord]),
+        IdentityHashMap[AnyRef, SampleFacts]
+      ]
+    var cachedFacts = 0L
+    def combinedFacts(
+        values: Vector[Expr[?]],
+        owner: Long,
+        strict: Boolean,
+        inferSourceOwnership: Boolean = false
+    ): SampleFacts =
+      val facts = values.map(sampleFacts(_, owner, strict, inferSourceOwnership))
+      SampleFacts(
+        facts.iterator.flatMap(_.domains).toSet,
+        facts.iterator.flatMap(_.sources).toSet,
+        facts.iterator.flatMap(_.crossings).toSet,
+        facts.exists(_.pulseClassified),
+        localEndpoints = facts.iterator.flatMap(_.localEndpoints).toSet,
+        waivers = facts.iterator.flatMap(_.waivers).toSet,
+        events = facts.iterator.flatMap(_.events).toSet
+      )
+    def exactSourceEndpoint(facts: SampleFacts, owner: Long, actual: String): DomainRef =
+      // Physical sampling facts and authored local endpoint identity are separate. In particular,
+      // two requirements can bind one actual without becoming interchangeable source symbols.
+      val endpoints = if facts.localEndpoints.nonEmpty then facts.localEndpoints.toVector
+      else
+        records(owner).domains.filter(domain =>
+          resolved.get(domain.reference).contains(actual)
+        ).map(_.reference).toVector
+      if endpoints.size != 1 || !resolved.get(endpoints.head).contains(actual) then
+        crossingFailure("crossing source requires one exact local endpoint identity")
+      endpoints.head
+    def sourceDomain(reference: ExpressionRef, crossing: ExecutableCrossing): String =
+      crossing.sourceDomain.getOrElse:
+        // Infer through source-owned ready results in the same bounded worklist. A real payload
+        // or valid anchor can establish ownership even when valid is fed by this FIFO's ready.
+        val facts = combinedFacts(
+          crossing.sourceInputs,
+          reference.module,
+          strict = true,
+          inferSourceOwnership = true
+        )
+        if facts.domains.size != 1 then
+          crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
+        val result = facts.domains.head
+        crossing.sourceDomain = Some(result)
+        crossing.sourceEndpoint = Some(exactSourceEndpoint(facts, reference.module, result))
+        result
+    def sampleFacts(
+        value: Any,
+        owner: Long,
+        strict: Boolean,
+        inferSourceOwnership: Boolean = false,
+        allowExternalControl: Boolean = false,
+        eventSampling: Option[DigitalEventProcessRecord] = None
+    ): SampleFacts =
+      val cache = sampleCache.getOrElseUpdate(
+        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling),
+        new IdentityHashMap[AnyRef, SampleFacts]()
+      )
+      val root = value.asInstanceOf[AnyRef]
+      Option(cache.get(root)).getOrElse:
+        val pending = mutable.ArrayDeque((value, owner, true))
+        var activeOwner = owner
+        var activeDomainVisible = true
+        var edges = 0
+        def enqueue(
+            values: IterableOnce[Any],
+            context: Long = activeOwner,
+            domainVisible: Boolean = activeDomainVisible
+        ): Unit =
+          values.iterator.foreach: next =>
+            edges += 1
+            if edges > 262144 then
+              behavioralFailure("sequential dependency edges exceed their budget")
+            pending.append((next, context, domainVisible))
+        val visited =
+          mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, java.lang.Boolean]]
+        val domains = mutable.HashSet.empty[String]
+        val localEndpoints = mutable.HashSet.empty[DomainRef]
+        def retainEndpoint(initial: DomainRef): Unit =
+          var endpoint = initial
+          var depth = 0
+          while endpoint.module != owner && selectedRequirementBindings.contains(endpoint) do
+            depth += 1
+            if depth > 128 then crossingFailure("source endpoint forwarding exceeds depth budget")
+            endpoint = selectedRequirementBindings(endpoint)._1
+          if endpoint.module == owner && activeDomainVisible then localEndpoints += endpoint
+        def retainDeclarationEndpoint(declaration: DeclarationRecord): Unit =
+          localDeclarationDomain(declaration, resolved).foreach(path =>
+            retainEndpoint(domainsByPath(path).reference)
+          )
+        val externalSources = mutable.HashSet.empty[DeclarationRef]
+        val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
+        val crossings = mutable.HashSet.empty[ExpressionRef]
+        val waivers = mutable.HashSet.empty[ExpressionRef]
+        val events = mutable.HashSet.empty[DigitalEventProcessRecord]
+        var count = 0
+        var pulseClassified = false
+        while pending.nonEmpty do
+          val (current, context, domainVisible) = pending.removeLast()
+          activeOwner = context
+          activeDomainVisible = domainVisible
+          val seen =
+            visited.getOrElseUpdate(
+              (context, domainVisible),
+              new IdentityHashMap[AnyRef, java.lang.Boolean]()
+            )
+          current match
+            case reference: AnyRef
+                if Option(seen.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
+              count += 1
+              if count > 65536 then
+                behavioralFailure("sequential dependency graph exceeds its budget")
+              if strict && reference.isInstanceOf[Expr[?]] && pulseValues.containsKey(reference)
+              then
+                pulseClassified = true
+              val declarationRef = Option(declarationIds.get(reference))
+              declarationRef.foreach: declarationRef =>
+                if declarationRef.module != activeOwner then
+                  behavioralFailure("sequential dependency belongs to another module")
+                val declaration = records(activeOwner).declarations(declarationRef.index)
+                if allowExternalControl && eventTriggerReferences(declarationRef) then
+                  eventFailure("event trigger cannot control an ordinary owned clock")
+                val drivers = continuousDrivers.getOrElse(declarationRef, Vector.empty)
+                if eventSampling.nonEmpty && (declarationRef.module != owner ||
+                    declaration.domainCandidate.nonEmpty ||
+                    Set(
+                      KernelSignalKind.Register,
+                      KernelSignalKind.Memory,
+                      KernelSignalKind.InstanceInput,
+                      KernelSignalKind.InstanceOutput,
+                      KernelSignalKind.DigitalInout
+                    )(declaration.kind))
+                then
+                  eventFailure(
+                    "event capture has clocked, foreign or unsupported storage provenance"
+                  )
+                instanceDigitalPorts.get(declarationRef) match
+                  case _ if eventStorage.contains(declarationRef) =>
+                    val process = eventStorage(declarationRef)
+                    events += process
+                    if strict && !eventSampling.contains(process) then
+                      eventFailure(
+                        "event-owned state cannot be sampled by another process or ordinary domain"
+                      )
+                    sourceRoots += declarationRef
+                  case Some((_, port)) if declaration.kind == KernelSignalKind.InstanceOutput =>
+                    enqueue(
+                      Vector(records(port.module).declarations(port.index).value),
+                      port.module
+                    )
+                  case Some(_) => enqueue(drivers)
+                  case None if parentInputReferences.contains(declarationRef) =>
+                    retainDeclarationEndpoint(declaration)
+                    val proxy = parentInputReferences(declarationRef)
+                    enqueue(
+                      Vector(records(proxy.module).declarations(proxy.index).value),
+                      proxy.module
+                    )
+                  case None =>
+                    if declaration.kind == KernelSignalKind.Input &&
+                      records(declarationRef.module).parentAtConstruction.nonEmpty &&
+                      declaration.dataType.exists(value =>
+                        isClockedDigitalType(value) && !isBoundaryCapability(value)
+                      )
+                    then crossingFailure("child input dependency has no actual parent connection")
+                    if Set(
+                        KernelSignalKind.Register,
+                        KernelSignalKind.Input,
+                        KernelSignalKind.DigitalInout
+                      )(declaration.kind)
+                    then sourceRoots += declarationRef
+                    if declaration.kind != KernelSignalKind.Register then enqueue(drivers)
+                    // Output annotations never certify contents; only actual input/state roots do.
+                    val sourceDomain =
+                      if Set(KernelSignalKind.Wire, KernelSignalKind.Output)(declaration.kind) ||
+                        drivers.nonEmpty && declaration.kind != KernelSignalKind.Register
+                      then None
+                      else declarationDomain(declaration, resolved)
+                    if (strict || declaration.kind == KernelSignalKind.Output || declaration.kind == KernelSignalKind.Wire) && drivers.isEmpty && Set(
+                        KernelSignalKind.Wire,
+                        KernelSignalKind.Output,
+                        KernelSignalKind.DigitalInout
+                      )(declaration.kind)
+                    then crossingFailure("wire/output dependency has no actual driver")
+                    if activeDomainVisible then domains ++= sourceDomain
+                    if sourceDomain.nonEmpty then retainDeclarationEndpoint(declaration)
+                    val externalControl = allowExternalControl && sourceDomain.isEmpty &&
+                      declaration.kind == KernelSignalKind.Input && declaration.dataType.exists(t =>
+                        CandidateRuntime.typeDescriptor(t) == KernelTypeDescriptor("Bool")
+                      )
+                    val eventExternal = eventSampling.nonEmpty && sourceDomain.isEmpty &&
+                      declaration.kind == KernelSignalKind.Input && drivers.isEmpty
+                    if eventExternal then
+                      val _ =
+                        eventInput(declaration.value.asInstanceOf[Expr[?]], owner, bool = false)
+                    if externalControl || eventExternal then externalSources += declarationRef
+                    if sourceDomain.isEmpty && !externalControl && !eventExternal &&
+                      (declaration.kind == KernelSignalKind.Register ||
+                        (strict && drivers.isEmpty && declaration.kind != KernelSignalKind.Parameter))
+                    then crossingFailure("input dependency has unknown or unresolved source domain")
+              val expressionRef = Option(expressionIds.get(reference))
+              expressionRef.foreach: expressionRef =>
+                if expressionRef.module != activeOwner then
+                  behavioralFailure("sequential expression belongs to another module")
+                collectionArguments.get(expressionRef).foreach: (region, index) =>
+                  val captured = region.captures.valuesIterator.find(_._2 eq reference)
+                  captured match
+                    case Some(value) => enqueue(Vector(value._1))
+                    case None if region.regionKind == DigitalRegionKind.Collection =>
+                      val role = region.arguments(index)._2
+                      if DigitalReductionContract.Kinds(region.kind) then
+                        // Width formals are static metadata. A used recurrence value retains
+                        // the complete represented input/seed/capture dependency envelope.
+                        if role == "left" || role == "right" then
+                          enqueue(region.inputs ++ region.seed ++
+                            region.captures.valuesIterator.map(_._1).toVector)
+                      else if region.seed.nonEmpty && index == 0 then
+                        enqueue(region.inputs ++ region.seed ++
+                          region.captures.valuesIterator.map(_._1).toVector)
+                      else
+                        enqueue(Vector(region.inputs(if region.seed.nonEmpty then 0 else index)))
+                    case _ => ()
+                  region.fsmAction.foreach: header =>
+                    val machine = flatFsms(header.machine)
+                    if index == 0 then enqueue(Vector(machine.storage))
+                    else if index == 1 || index == 2 then
+                      enqueue(machine.futureSampleDependencies)
+                fsmResults.get(expressionRef).foreach: (machine, _) =>
+                  enqueue(machine.futureSampleDependencies)
+              if eventSampling.nonEmpty && expressionRef.exists(reference =>
+                  executableWaivers.contains(reference) || executableCrossings.contains(
+                    reference
+                  ) ||
+                    resetRecords.containsKey(expressionValues(reference)) || clockRecords.contains(
+                      reference
+                    ) ||
+                    fsmResults.contains(reference)
                 )
-            reference match
-              case expression: KernelExpr[?] => pending ++= expression.operands
-              case memory: MemoryPortCapture =>
-                val declaration = memoryDeclaration(memory.memory, owner)
-                if declarationDomain(declaration, resolved).exists(_ != targetDomain) then
-                  behavioralFailure("memory value crosses an unrelated domain", "NODAL-CDC-001")
-              case predicate: StaticPredicate => pending ++= predicate.operands
-              case _ => ()
-          case _ => ()
+              then
+                eventFailure(
+                  "event capture cannot contain clock/reset/crossing/waiver/FSM provenance"
+                )
+              expressionRef.flatMap(executableWaivers.get) match
+                case Some(waiver) =>
+                  waivers += expressionRef.get
+                  retainEndpoint(domainRef(waiver.destination))
+                  val destination = resolved.getOrElse(
+                    domainRef(waiver.destination),
+                    crossingFailure("waiver destination has no actual resolved domain")
+                  )
+                  if activeDomainVisible then domains += destination
+                  // Only permission traversal cuts here. The real input still carries every
+                  // physical crossing/source/Pulse fact and remains a combinational dependency.
+                  enqueue(Vector(waiver.input), domainVisible = false)
+                case None =>
+                  expressionRef.flatMap(executableCrossings.get) match
+                    case Some(crossing) =>
+                      if strict && crossing.kind == "pulse" then pulseClassified = true
+                      crossings += crossing.identity(expressionRef.get)
+                      sourceRoots += crossing.identity(expressionRef.get)
+                      if crossing.role(expressionRef.get) == "ready" then
+                        if inferSourceOwnership then enqueue(crossing.sourceInputs)
+                        else
+                          if activeDomainVisible then
+                            domains += sourceDomain(expressionRef.get, crossing)
+                          crossing.sourceEndpoint.foreach(retainEndpoint)
+                      else
+                        retainEndpoint(domainRef(crossing.destination))
+                        val destination = resolved.getOrElse(
+                          domainRef(crossing.destination),
+                          crossingFailure("crossing destination has no actual resolved domain")
+                        )
+                        if activeDomainVisible then domains += destination
+                    case None => reference match
+                        case expression: KernelExpr[?] =>
+                          if eventSampling.nonEmpty && (expression.operation.contains(
+                              "memory_read"
+                            ) ||
+                              !expression.resultType.exists(dataType =>
+                                DigitalCombinationalContract.isValueTypeKind(dataType) ||
+                                  dataType.kind == "Integer"
+                              ))
+                          then
+                            eventFailure("event capture has analog or unsupported value provenance")
+                          if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
+                            !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                            !expressionRef.exists(reference =>
+                              shapeIndices.contains(reference) || shapeViews.contains(reference) ||
+                                collectionArguments.contains(reference)
+                            )
+                          then crossingFailure("input dependency has unsupported source provenance")
+                          if expression.operation.contains("memory_read") then
+                            sourceRoots += expressionRef.get
+                            val ports = expression.operands.collect {
+                              case port: MemoryPortCapture =>
+                                port
+                            }
+                            // Synchronous reads cut address provenance; asynchronous reads retain it.
+                            // Every address also has its independent memory-domain sample below.
+                            if ports.exists(_.memory.readLatency == 0) then
+                              enqueue(expression.operands)
+                            else enqueue(ports)
+                          else
+                            expressionRef.flatMap(collectionRegions.get) match
+                              case Some(region) =>
+                                // Match the canonical collection graph: only the actual yielded
+                                // body and its used lane/capture arguments are runtime inputs.
+                                enqueue(Vector(region.yielded.getOrElse(
+                                  collectionFailure("sampled collection has no actual yield")
+                                )))
+                              case None => enqueue(expression.operands)
+                        case memory: MemoryPortCapture =>
+                          val declaration = memoryDeclaration(memory.memory, activeOwner)
+                          declarationDomain(declaration, resolved) match
+                            case Some(domain) =>
+                              if activeDomainVisible then domains += domain
+                              retainDeclarationEndpoint(declaration)
+                            case None =>
+                              crossingFailure("memory input has no resolved source domain")
+                        case predicate: StaticPredicate => enqueue(predicate.operands)
+                        case _: Expr[?]
+                            if strict && declarationRef.isEmpty && expressionRef.isEmpty =>
+                          crossingFailure("input dependency has no actual captured owner")
+                        case _ => ()
+            case _ => ()
+        val result = SampleFacts(
+          domains.toSet,
+          if strict then sourceRoots.toSet else Set.empty,
+          crossings.toSet,
+          pulseClassified,
+          externalSources.toSet,
+          localEndpoints.toSet,
+          waivers.toSet,
+          events.toSet
+        )
+        cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size +
+          result.localEndpoints.size + result.waivers.size + result.events.size
+        if cachedFacts > 262144 then
+          crossingFailure("cached sample facts exceed their bounded graph budget")
+        cache.put(root, result)
+        result
+    val updatesByEventProcess = operations.iterator.filter(_.eventProcess.nonEmpty).toVector
+      .groupBy(_.eventProcess.get)
+    eventProcesses.foreach: process =>
+      if records(process.owner).parentAtConstruction.nonEmpty then
+        eventFailure("event-bearing module must be the actual selected root")
+      val trigger = eventInput(process.definition.trigger, process.owner, bool = true)
+      if continuousWriteCounts.getOrElse(trigger, 0) != 0 || eventStorage.contains(trigger) then
+        eventFailure("event trigger must not have an internal driver or event owner")
+      process.targets.foreach: target =>
+        if continuousWriteCounts.getOrElse(target, 0) != 0 then
+          eventFailure("event output has both continuous and event writers")
+      val captures = mutable.HashSet.empty[DeclarationRef]
+      updatesByEventProcess.getOrElse(process, Vector.empty).foreach: update =>
+        val facts = sampleFacts(
+          update.values(1),
+          process.owner,
+          strict = true,
+          eventSampling = Some(process)
+        )
+        captures ++= facts.externalSources
+        if captures.size > DigitalEventContract.MaximumCaptures then
+          eventFailure("event external capture inventory exceeds 4096 inputs")
+      process.externalCaptures =
+        captures.toVector.sortBy(reference => (reference.module, reference.index))
+    val lineageRootCache = mutable.HashMap.empty[ExpressionRef, Set[DeclarationRef | ExpressionRef]]
+    var lineageWork = 0L
+    def lineageRoots(boundary: ExpressionRef): Set[DeclarationRef | ExpressionRef] =
+      lineageRootCache.getOrElseUpdate(
+        boundary, {
+          val roots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
+          val pending = mutable.ArrayDeque.empty[DeclarationRef | ExpressionRef]
+          def include(crossing: ExpressionRef): Unit =
+            combinedFacts(
+              executableCrossings(crossing).sampledInputs,
+              crossing.module,
+              strict = true
+            )
+              .sources.foreach(pending.append)
+          include(boundary)
+          while pending.nonEmpty do
+            val root = pending.removeLast()
+            lineageWork += 1
+            if lineageWork > 262144 then crossingFailure("crossing lineage exceeds its edge budget")
+            if roots.add(root) then
+              root match
+                case reference: ExpressionRef if executableCrossings.contains(reference) =>
+                  include(reference)
+                case _ => ()
+          roots.toSet
+        }
+      )
+    def verifyReconvergence(facts: SampleFacts): Unit =
+      if facts.crossings.size > 1 then
+        val firstBoundary = mutable.HashMap.empty[DeclarationRef | ExpressionRef, ExpressionRef]
+        var lineageEdges = 0
+        facts.crossings.toVector.sortBy(_.index).foreach: boundary =>
+          val roots = lineageRoots(boundary)
+          roots.foreach: root =>
+            lineageEdges += 1
+            if lineageEdges > 262144 then
+              crossingFailure("crossing lineage exceeds its edge budget")
+            firstBoundary.get(root).foreach: previous =>
+              if previous != boundary then
+                behavioralFailure(
+                  "independent crossings with a shared source reconverge at one sample",
+                  "NODAL-CDC-057-002"
+                )
+            firstBoundary.update(root, boundary)
+    def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
+      val facts = sampleFacts(value, owner, strict = false)
+      if facts.events.nonEmpty then
+        eventFailure("ordinary sequential sampling cannot consume event-owned state")
+      if facts.domains.exists(source => !relationships.permitsSampling(source, targetDomain)) then
+        behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
+      verifyReconvergence(facts)
+    val sampleGroups = mutable.HashMap.empty[Any, mutable.HashSet[ExpressionRef]]
+    def dependenciesWithGuards(
+        values: Vector[Any],
+        owner: Long,
+        targetDomain: String,
+        region: Option[DigitalValueRegionRecord],
+        group: Any
+    ): Unit =
+      val crossings = sampleGroups.getOrElseUpdate(group, mutable.HashSet.empty[ExpressionRef])
+      def include(value: Any): Unit =
+        dependencies(value, owner, targetDomain)
+        crossings ++= sampleFacts(value, owner, strict = false).crossings
+        if crossings.size > 65536 then
+          crossingFailure("causal sample lineage exceeds its node budget")
+      values.foreach(include)
+      causalControls(region).foreach(include)
+      verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet))
+    clockRecords.foreach: (reference, clock) =>
+      val kinds = Vector.newBuilder[String]
+      val domains = Vector.newBuilder[Option[String]]
+      clock.controls.foreach: control =>
+        val facts =
+          sampleFacts(control, reference.module, strict = true, allowExternalControl = true)
+        verifyReconvergence(facts)
+        if facts.pulseClassified then
+          clockFailure("Pulse-classified value cannot control an owned clock")
+        if facts.domains.size > 1 ||
+          (facts.domains.nonEmpty && facts.externalSources.nonEmpty)
+        then clockFailure("clock control has mixed or unresolved source provenance")
+        if facts.domains.nonEmpty then
+          val domain = facts.domains.head
+          if clock.kind == "gate" && !relationships.permitsSampling(
+              domain,
+              domainPath(domainRef(clock.parents.head))
+            )
+          then
+            clockFailure("gate control must belong to its actual parent domain")
+          kinds += "domain"
+          domains += Some(domain)
+        else if facts.sources.isEmpty then
+          kinds += "constant"
+          domains += None
+        else if facts.externalSources.size == 1 && facts.sources == facts.externalSources then
+          kinds += "external"
+          domains += None
+        else
+          clockFailure("clock control requires one owned external Bool boundary or actual domain")
+      clock.controlKinds = kinds.result()
+      clock.controlDomains = domains.result()
+    executableWaivers.foreach: (reference, waiver) =>
+      val facts = sampleFacts(waiver.input, reference.module, strict = true)
+      if facts.waivers(reference) then
+        crossingFailure("Cdc.waive participates in a combinational dependency cycle")
+      verifyReconvergence(facts)
+      if facts.domains.size != 1 then
+        crossingFailure("Cdc.waive input must have exactly one known source domain")
+      val source = facts.domains.head
+      val destination = resolved.getOrElse(
+        domainRef(waiver.destination),
+        crossingFailure("Cdc.waive destination has no actual resolved domain")
+      )
+      waiver.sourceEndpoint = Some(exactSourceEndpoint(facts, reference.module, source))
+      relationships.verifyBoundaryIntent(
+        source,
+        destination,
+        waiver.relation,
+        expressionPath(reference)
+      )
+    val commonResetLineage = new ResetLineageQuery
+    val commonResetRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
+    def resetEpochRoots(path: String, kind: String): Map[(DeclarationRef, Long), ResetPolarity] =
+      commonResetRoots.getOrElseUpdate(
+        path, {
+          val domain = domainsByPath(path).domain
+          val reset = Option(effectiveResets.get(domain)).getOrElse(
+            crossingFailure(
+              s"Cdc.$kind requires reset-bearing endpoints with common physical roots"
+            )
+          )
+          commonResetLineage(reset).view.mapValues(_._1).toMap
+        }
+      )
+    executableCrossings.iterator.filter((reference, crossing) =>
+      crossing.identity(reference) == reference
+    ).foreach: (reference, crossing) =>
+      val facts = combinedFacts(crossing.sourceInputs, reference.module, strict = true)
+      verifyReconvergence(facts)
+      if crossing.kind != "pulse" && facts.pulseClassified then
+        crossingFailure(
+          "Pulse-classified input cannot be relabeled as a level, Gray or handshake value"
+        )
+      val sources = facts.domains
+      if sources.size != 1 then
+        crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
+      val destination = resolved.getOrElse(
+        domainRef(crossing.destination),
+        crossingFailure(s"Cdc.${crossing.kind} destination has no actual resolved domain")
+      )
+      val source = sourceDomain(reference, crossing)
+      val endpoint = exactSourceEndpoint(facts, reference.module, source)
+      if !crossing.sourceEndpoint.contains(endpoint) then
+        crossingFailure("crossing source endpoint changed during dependency inference")
+      crossing.ready.foreach: ready =>
+        val readyFacts = sampleFacts(ready, reference.module, strict = true)
+        if readyFacts.domains.exists(_ != destination) then
+          crossingFailure("Cdc.fifo destination ready must belong to its actual destination domain")
+        verifyReconvergence(readyFacts)
+      if source == destination then
+        crossingFailure(s"Cdc.${crossing.kind} requires distinct source and destination domains")
+      def localEndpoint(actual: String): Boolean =
+        records(reference.module).domains.exists(domain =>
+          resolved.get(domain.reference).contains(actual)
+        )
+      if !localEndpoint(source) || !localEndpoint(destination) then
+        crossingFailure(
+          s"Cdc.${crossing.kind} endpoints require exact local domains or bound requirements"
+        )
+      if ExecutableCrossingContract.commonResetEpoch(crossing.kind) then
+        val sourceRoots = resetEpochRoots(source, crossing.kind)
+        if sourceRoots.isEmpty || sourceRoots != resetEpochRoots(destination, crossing.kind) then
+          crossingFailure(
+            s"Cdc.${crossing.kind} requires common physical reset roots and polarities"
+          )
+      crossing.sourceDomain = Some(source)
+      crossing.destinationDomain = Some(destination)
+    records.valuesIterator.flatMap(_.declarations).foreach: declaration =>
+      val values = declaration.attributes.collect:
+        case ("stream_payload" | "stream_valid", value: Expr[?]) => value
+      if values.nonEmpty then
+        val facts = combinedFacts(values, declaration.reference.module, strict = true)
+        if facts.domains.size != 1 then
+          crossingFailure("Stream payload and valid require exactly one known source domain")
+        verifyReconvergence(facts)
+        val readyFacts = sampleFacts(declaration.value, declaration.reference.module, strict = true)
+        if readyFacts.domains.exists(_ != facts.domains.head) then
+          crossingFailure("Stream ready must belong to its actual carrier domain")
+        verifyReconvergence(readyFacts)
+    // Boundary observations are actual driver cones, not samples authorized by declared domains.
+    // Each ordinary output remains independent; the Interface owner alone supplies protocol groups.
+    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+      declaration.kind == KernelSignalKind.Output &&
+        continuousWriteCounts.getOrElse(declaration.reference, 0) > 0
+    ).foreach: declaration =>
+      verifyReconvergence(sampleFacts(
+        declaration.value,
+        declaration.reference.module,
+        strict = false
+      ))
+    val ownersByPath = records.keysIterator.map(owner => modulePath(owner) -> owner).toMap
+    interfaces.observationGroups.foreach: group =>
+      val owner = ownersByPath.getOrElse(
+        group.owner,
+        crossingFailure("Interface observation lost its actual construction owner")
+      )
+      verifyReconvergence(combinedFacts(group.values, owner, strict = false))
     operations.zipWithIndex.foreach: (operation, index) =>
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
@@ -1679,7 +3405,13 @@ private final class ConstructionSession(val options: EmitOptions):
               sourceType <- CandidateRuntime.expressionDataType(source)
             yield DigitalEnumContract.sameType(
               CandidateRuntime.typeDescriptor(targetType),
-              CandidateRuntime.typeDescriptor(sourceType)
+              CandidateRuntime.typeDescriptor(sourceType),
+              Some(new StructuralBoundAnalysis(
+                operation.owner,
+                "NODAL-DIGITAL-054-001",
+                "register update type extent",
+                signed64Literals = true
+              ).sameIdentity)
             )
           if !exact.contains(true) then
             behavioralFailure("register update requires exactly matching types")
@@ -1695,7 +3427,13 @@ private final class ConstructionSession(val options: EmitOptions):
                 "FSM action target belongs to a different clock domain",
                 "NODAL-CDC-001"
               )
-          dependencies(source, operation.owner, domain)
+          dependenciesWithGuards(
+            Vector(source),
+            operation.owner,
+            domain,
+            operation.digitalRegion,
+            target
+          )
           root.left.toOption.foreach: identity =>
             if checkedGuards.add((identity, operation.owner, domain)) then
               guardsByRoot.getOrElse(identity, Vector.empty).foreach(record =>
@@ -1705,7 +3443,8 @@ private final class ConstructionSession(val options: EmitOptions):
         capture: MemoryPortCapture,
         owner: Long,
         operands: Vector[Any],
-        region: Option[DigitalValueRegionRecord]
+        region: Option[DigitalValueRegionRecord],
+        group: Any
     ): Unit =
       val declaration = memoryDeclaration(capture.memory, owner)
       val domain = declarationDomain(declaration, resolved).getOrElse(
@@ -1718,7 +3457,7 @@ private final class ConstructionSession(val options: EmitOptions):
       root.flatMap(flatFsms.get).foreach: machine =>
         if !resolved.get(domainRef(machine.domain)).contains(domain) then
           behavioralFailure("FSM memory write belongs to a different clock domain", "NODAL-CDC-001")
-      operands.foreach(dependencies(_, owner, domain))
+      dependenciesWithGuards(operands, owner, domain, region, group)
       root.foreach: identity =>
         if checkedGuards.add((identity, owner, domain)) then
           guardsByRoot.getOrElse(identity, Vector.empty).foreach(dependencies(_, owner, domain))
@@ -1727,7 +3466,8 @@ private final class ConstructionSession(val options: EmitOptions):
         operation.values.last.asInstanceOf[MemoryPortCapture],
         operation.owner,
         operation.values.slice(1, 4),
-        operation.digitalRegion
+        operation.digitalRegion,
+        operation
       )
     expressionValues.foreach: (reference, expression) =>
       if expression.operation.contains("memory_read") then
@@ -1736,14 +3476,23 @@ private final class ConstructionSession(val options: EmitOptions):
           expression.operands.last.asInstanceOf[MemoryPortCapture],
           reference.module,
           expression.operands.take(1),
-          None
+          None,
+          reference
         )
     flatFsms.valuesIterator.foreach: record =>
       val targetDomain = pathOf(record.domain).get
       guardsByRoot.getOrElse(
         record.reference,
         Vector.empty
-      ).foreach(dependencies(_, record.reference.module, targetDomain))
+      ).foreach(value =>
+        dependenciesWithGuards(
+          Vector(value),
+          record.reference.module,
+          targetDomain,
+          None,
+          declarationIds.get(record.storage)
+        )
+      )
     val usedMemories = operations.iterator.filter(_.kind == "memory-write").map(
       _.values.head.asInstanceOf[AnyRef]
     ).toSet ++ expressionValues.valuesIterator.filter(_.operation.contains("memory_read")).map(
@@ -1787,22 +3536,35 @@ private final class ConstructionSession(val options: EmitOptions):
             behavioralFailure(
               "executable clock/reset input belongs to another module or is not an input"
             )
-        capability(domain.domain.clock.get, "Clock")
+        val _ = clockIdentity(domain.domain.clock.get, domain.reference.module)
         if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
-          capability(domain.domain.reset, "Reset")
-        if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
-          behavioralFailure(
-            "generated and inherited clock execution requires its later domain profile"
+          val effective = Option(effectiveResets.get(domain.domain)).getOrElse(
+            behavioralFailure("executable reset requires an owned reset producer")
           )
+          var work = 0
+          def checkReset(value: Expr[Reset], depth: Int): Unit =
+            work += 1
+            if depth > 128 || work > 524288 then
+              behavioralFailure("reset capability graph exceeds budget")
+            val producer = resetRecord(value)
+            if producer.kind == "boundary" then capability(producer.inputs.head, "Reset")
+            else producer.inputs.foreach(checkReset(_, depth + 1))
+          checkReset(effective, 0)
+        if !Set(
+            KernelDomainKind.Bound,
+            KernelDomainKind.External,
+            KernelDomainKind.Generated
+          ).contains(domain.kind)
+        then
+          behavioralFailure("executable register requires a resolved physical domain")
         domain.domain.resetPolicy match
-          case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
-            behavioralFailure("async-assert/sync-release requires actual release synchronization")
           case Some(ResetPolicy.None) =>
             if declaration.attributes.exists:
                 case ("initial", Some(_: Expr[?])) => true
                 case _ => false
             then behavioralFailure("resetless register cannot have a reset initializer")
-          case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
+          case Some(_) => ()
+          case None if effectiveResets.containsKey(domain.domain) => ()
           case _ => behavioralFailure("executable register requires an explicit reset policy")
 
   private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
@@ -2278,6 +4040,11 @@ private final class ConstructionSession(val options: EmitOptions):
     requireLoopEffect("Module declaration")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
+    if moduleStack.size >= 129 || records.size >= 65536 then
+      fail(
+        "NODAL-HIERARCHY-057-002",
+        "concrete hierarchy exceeds its finite occurrence/depth budget"
+      )
     val handle = nextModule
     nextModule += 1
     val record = new ModuleRecord(
@@ -2367,6 +4134,7 @@ private final class ConstructionSession(val options: EmitOptions):
         module.declarations.update(source.index, declaration.copy(domainCandidate = Some(domain)))
       domain.clock.foreach(boundary(_, "Clock"))
       if !domain.resetPolicy.contains(ResetPolicy.None) then boundary(domain.reset, "Reset")
+    installDomainReset(domain, kind)
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
   private def requireGeneratedDeclarationScope(reference: DeclarationRef): Unit =
@@ -2490,8 +4258,12 @@ private final class ConstructionSession(val options: EmitOptions):
       explicitName,
       domain.orElse(
         Option.when(
-          Set(KernelSignalKind.Input, KernelSignalKind.Output).contains(kind) &&
-            resolvedType.exists(isBoundaryCapability)
+          Set(
+            KernelSignalKind.Input,
+            KernelSignalKind.Output,
+            KernelSignalKind.DigitalInout
+          ).contains(kind) &&
+            resolvedType.exists(isClockedDigitalType)
         )(currentDomain).flatten
       ),
       attributes,
@@ -2575,6 +4347,49 @@ private final class ConstructionSession(val options: EmitOptions):
         case record: DeferredNodeArrayRecord if record.reference == reference => operation -> record
       }
     ).nextOption()
+
+  /** References are parent-owned declarations in the existing value/assignment registry. */
+  private val instanceDigitalPorts =
+    mutable.LinkedHashMap.empty[DeclarationRef, (InstanceRecord, DeclarationRef)]
+  private var occurrenceDomains = Map.empty[DomainRef, String]
+  private val selectedRequirementBindings =
+    mutable.LinkedHashMap.empty[DomainRef, (DomainRef, String, Long, Int)]
+
+  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      fail("NODAL-HIERARCHY-057-001", "digital child reference requires an exact Instance selector")
+    )
+    val instance = instanceRecord(selected)
+    requireInstanceScope(instance)
+    val port = Option(declarationIds.get(value)).getOrElse(
+      fail("NODAL-HIERARCHY-057-001", "instance selector requires an actual child port")
+    )
+    val declaration = records(port.module).declarations(port.index)
+    if port.module != instance.child ||
+      !Set(KernelSignalKind.Input, KernelSignalKind.Output)(declaration.kind) ||
+      !isClockedDigitalType(value.dataType) || isBoundaryCapability(value.dataType) ||
+      activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty
+    then
+      fail(
+        "NODAL-HIERARCHY-057-001",
+        "instance selector requires its immediate child's direct digital data port"
+      )
+    instanceDigitalPorts.iterator.collectFirst:
+      case (reference, (existing, target)) if (existing eq instance) && target == port =>
+        records(reference.module).declarations(reference.index).value.asInstanceOf[Signal[A]]
+    .getOrElse:
+      val kind = if declaration.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
+      else KernelSignalKind.InstanceOutput
+      val proxy =
+        new Signal(value.dataType, kind, Some(s"instance_${instance.ordinal}_port_${port.index}"))
+      val reference = declarationIds.get(proxy)
+      val owner = records(reference.module)
+      owner.declarations.update(
+        reference.index,
+        owner.declarations(reference.index).copy(domainCandidate = None)
+      )
+      instanceDigitalPorts(reference) = instance -> port
+      proxy
 
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     requireInstanceScope(instanceRecord(instance))
@@ -3067,6 +4882,16 @@ private final class ConstructionSession(val options: EmitOptions):
       cardinality: Boolean,
       storageContext: Boolean = false
   ): Unit =
+    val _ = shapeTypeFootprint(dataType, owner, cardinality, storageContext)
+
+  private def shapeTypeFootprint(
+      dataType: DataType[?],
+      owner: Long,
+      cardinality: Boolean,
+      storageContext: Boolean,
+      bitPatternOnly: Boolean = false,
+      fixedBitPattern: Boolean = false
+  ): Option[BigInt] =
     val active = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
     var remaining = 65536
     def identifier(name: String): Unit =
@@ -3090,9 +4915,19 @@ private final class ConstructionSession(val options: EmitOptions):
       active.put(current, java.lang.Boolean.TRUE)
       try
         val descriptor = CandidateRuntime.typeDescriptor(current)
+        if bitPatternOnly && !Set("Bits", "UInt", "SInt", "Bool", "Enum", "Struct", "Vec")(
+            descriptor.kind
+          )
+        then
+          crossingFailure(
+            "crossing requires Bool, bit-vector, Enum, or finite Vec/Struct bit patterns"
+          )
         descriptor.kind match
           case "Bits" | "UInt" | "SInt" =>
-            Some(BigInt(digitalWidthBound(descriptor, owner).bounds.upper))
+            val bounds = digitalWidthBound(descriptor, owner).bounds
+            if fixedBitPattern && bounds.lower != bounds.upper then
+              crossingFailure("consumer requires a fixed whole digital bit pattern")
+            Some(BigInt(bounds.upper))
           case "Bool" => Some(BigInt(1))
           case "Integer" | "Real" => if field then Some(BigInt(64)) else None
           case "Struct" =>
@@ -3133,7 +4968,10 @@ private final class ConstructionSession(val options: EmitOptions):
               new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
             visit(element, depth + 1, field).map: bits =>
               checkedFootprint(dimensions.foldLeft(bits)((total, dimension) =>
-                total * BigInt(analysis(dimension).bounds.upper)
+                val bounds = analysis(dimension).bounds
+                if fixedBitPattern && bounds.lower != bounds.upper then
+                  crossingFailure("consumer requires a fixed whole digital bit pattern")
+                total * BigInt(bounds.upper)
               ))
           case "Enum" =>
             descriptor.arguments match
@@ -3144,6 +4982,7 @@ private final class ConstructionSession(val options: EmitOptions):
     val footprint = visit(dataType, 0, field = storageContext)
     if storageContext && footprint.isEmpty then
       fail("NODAL-DIGITAL-054-010", "digital storage requires a directionless storable value type")
+    footprint
 
   private def validateShapeDescriptor(
       descriptor: KernelTypeDescriptor,
@@ -3693,6 +5532,31 @@ private final class ConstructionSession(val options: EmitOptions):
       scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      if activeEventProcess.nonEmpty then
+        value match
+          case expression: KernelExpr[?] =>
+            val operation = expression.operation.getOrElse("")
+            val pure = expression.literal.nonEmpty ||
+              operation.startsWith(DigitalEnumContract.Prefix) ||
+              DigitalScalarContract.Operations(operation) ||
+              operation == DigitalMaterializationContract.Operation ||
+              DigitalCombinationalContract.Operations(operation) ||
+              DigitalAggregateContract.Operations(operation) ||
+              DigitalCombinationalContract.ReachableBooleanOperations(operation) ||
+              Set(
+                "shape_index",
+                "shape_view",
+                "shape_slice",
+                DigitalCollectionContract.Operation,
+                DigitalCollectionContract.Argument
+              )(operation) ||
+              (expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                IterationDomain.staticArithmetic(operation).nonEmpty)
+            if !pure || !expression.resultType.exists(dataType =>
+                DigitalCombinationalContract.isValueTypeKind(dataType) || dataType.kind == "Integer"
+              )
+            then eventFailure(s"unsupported hardware expression '$operation' in event process")
+          case _ => eventFailure("non-value hardware construction is unsupported in event process")
       val observation = value match
         case expression: KernelExpr[?] => validateFsmObservations(expression.operands)
         case _ => validateFsmObservations(structuralOperands)
@@ -3745,6 +5609,17 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.operation.contains(ExecutableWaiverContract.Operation) =>
+      crossingFailure("waivers require the owned Cdc.waive entrypoint")
+    case expression: KernelExpr[?]
+        if expression.operation.exists(Set("reset_boundary", "rdc_sync", "reset_combine")) =>
+      resetFailure("reset producers require owned reset construction entrypoints")
+    case expression: KernelExpr[?]
+        if expression.operation.exists(ExecutableCrossingContract.Operations) =>
+      crossingFailure(
+        "crossings require the owned Cdc.sync entrypoint or matching Gray/Pulse/handshake entrypoint"
+      )
     case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
       memoryFailure("memory reads require the owned Mem.read entrypoint")
     case expression: KernelExpr[?]
@@ -4184,15 +6059,31 @@ private final class ConstructionSession(val options: EmitOptions):
   def bindDefault(instance: AnyRef, domain: ClockDomain): Unit =
     val record = instanceRecord(instance)
     requireInstanceScope(record)
+    if domainRef(domain).module != currentModule.handle then
+      fail("NODAL-BINDING-020", "actual domain must belong to the owning parent Module")
+    if record.defaultBinding.exists(_ ne domain) then
+      fail("NODAL-BINDING-057-001", "conflicting repeated default domain binding")
     record.defaultBinding = Some(domain)
+    record.defaultBindingSource = semanticOrigin.captureSemanticSource()
 
   def bindNamed(instance: AnyRef, requirement: ClockDomain, domain: ClockDomain): Unit =
     val record = instanceRecord(instance)
     requireInstanceScope(record)
     val requirementReference = domainRef(requirement)
-    if requirementReference.module != record.child then
-      fail("NODAL-BINDING-019", "selector domain does not belong to the child Instance")
-    record.namedBindings += requirement -> domain
+    if requirementReference.module != record.child ||
+      records(record.child).domains(requirementReference.index).kind != KernelDomainKind.Required
+    then fail("NODAL-BINDING-019", "selector must name an exact requirement of the child Instance")
+    if domainRef(domain).module != currentModule.handle then
+      fail("NODAL-BINDING-020", "actual domain must belong to the owning parent Module")
+    record.namedBindings.find(_._1 eq requirement) match
+      case Some((_, previous)) if previous ne domain =>
+        fail("NODAL-BINDING-057-001", "conflicting repeated named domain binding")
+      case Some(_) => ()
+      case None =>
+        record.namedBindings += requirement -> domain
+        semanticOrigin.captureSemanticSource().foreach(source =>
+          record.namedBindingSources(requirement) = source
+        )
 
   def connectNodeArrays(left: NodeArray[?], right: NodeArray[?]): Unit =
     if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
@@ -4472,7 +6363,8 @@ private final class ConstructionSession(val options: EmitOptions):
     requireLoopEffect("clock-domain context")
     if !domainIds.containsKey(domain) then
       fail("NODAL-DOMAIN-018", "lexical ClockDomain is outside this transaction")
-    domainRef(domain)
+    if domainRef(domain).module != currentModule.handle then
+      fail("NODAL-DOMAIN-018", "lexical ClockDomain must belong to the exact active Module")
     domainStack += domain
     try body
     finally
@@ -5807,6 +7699,15 @@ private final class ConstructionSession(val options: EmitOptions):
           DigitalCombinationalContract.isValueTypeKind(dataType) ||
             (activeBehavioral.nonEmpty && Set("Integer", "Real")(dataType.kind))
         )
+    if activeEventProcess.nonEmpty then
+      if !digitalAssignment then
+        eventFailure(s"hardware '$kind' effect is unsupported in an event process")
+      captureEventAssignment(values)
+    else if digitalAssignment && eventStorage.nonEmpty && values.nonEmpty then
+      val target =
+        digitalAssignmentRoot(values.head, currentModule.handle, allowRootRegister = true)
+      if eventStorage.contains(target) then
+        eventFailure("event output also has a continuous writer")
     val memoryWrite = permitMemory && kind == "memory-write" && values.size == 5 &&
       values.headOption.exists(
         _.isInstanceOf[Mem[?]]
@@ -5883,7 +7784,9 @@ private final class ConstructionSession(val options: EmitOptions):
       "instance-node-array",
       "deferred-node-array"
     ).contains(kind)
-    if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty then
+    if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty &&
+      activeEventProcess.isEmpty
+    then
       requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" || kind == "analog-assignment" then
       analogSemanticContext.foreach: context =>
@@ -5919,11 +7822,13 @@ private final class ConstructionSession(val options: EmitOptions):
         kind,
         values.toVector,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
-        if memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty) then
+        if digitalAssignment || memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty)
+        then
           semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
-        sourceOrdinal
+        sourceOrdinal,
+        activeEventProcess
       )
       operations += captured
       moduleStack.lastOption.foreach(module =>
@@ -6189,60 +8094,115 @@ private final class ConstructionSession(val options: EmitOptions):
 
   private def resolveDomains(): Map[DomainRef, String] =
     val resolved = mutable.LinkedHashMap.empty[DomainRef, String]
-
-    def visible(domain: ClockDomain): String =
-      resolved.getOrElse(
-        domainRef(domain),
-        fail("NODAL-BINDING-020", "bound domain is not visible from the parent Module")
-      )
-
-    def visit(handle: Long): Unit =
+    selectedRequirementBindings.clear()
+    val roots = records.values.filter(_.parentAtConstruction.isEmpty).toVector
+    if roots.size != 1 then fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
+    val pending = mutable.ArrayDeque((roots.head.handle, 0))
+    val visited = mutable.HashSet.empty[Long]
+    var edges = 0L
+    while pending.nonEmpty do
+      val (handle, depth) = pending.removeHead()
+      if depth > 128 || visited.size >= 65536 || !visited.add(handle) then
+        fail("NODAL-HIERARCHY-057-002", "recursive or excessive concrete hierarchy")
       val module = records(handle)
-      val path = modulePath(handle)
       module.domains.filter(_.kind != KernelDomainKind.Required).foreach: domain =>
         resolved.update(domain.reference, domainPath(domain.reference))
-
       if module.parentAtConstruction.isEmpty then
         module.domains.filter(_.kind == KernelDomainKind.Required).foreach: requirement =>
           fail(
             "NODAL-ROOT-DOMAIN-016",
             s"top-level domain requirement '${requirement.name}' is unbound",
-            Some(path)
+            Some(modulePath(handle))
           )
-
       module.instances.foreach: instance =>
+        edges += 1
+        if edges > 262144 then
+          fail("NODAL-HIERARCHY-057-002", "hierarchy binding edge budget exceeded")
         val child = records(instance.child)
         val requirements = child.domains.filter(_.kind == KernelDomainKind.Required).toVector
-        val parentVisible =
-          module.domains.flatMap(domain => resolved.get(domain.reference)).distinct.toVector
         requirements.foreach: requirement =>
           val named = instance.namedBindings.collectFirst:
-            case (selected, actual) if selected eq requirement.domain => visible(actual)
+            case (selected, actual) if selected eq requirement.domain => actual -> "named"
           val binding = named
-            .orElse(if requirements.size == 1 then instance.defaultBinding.map(visible) else None)
-            .orElse(if requirements.size == 1 then instance.lexicalDomain.map(visible) else None)
-            .orElse(if requirements.size == 1 && parentVisible.size == 1 then
-              parentVisible.headOption
+            .orElse(if requirements.size == 1 then instance.defaultBinding.map(_ -> "default")
+            else None)
+            .orElse(if requirements.size == 1 then instance.lexicalDomain.map(_ -> "inherited")
+            else None)
+            .orElse(if requirements.size == 1 && module.domains.size == 1 then
+              module.domains.headOption.map(_.domain -> "inherited")
             else None)
           binding match
-            case Some(actual) => resolved.update(requirement.reference, actual)
+            case Some((actual, origin)) =>
+              val reference = domainRef(actual)
+              if reference.module != handle then
+                fail(
+                  "NODAL-BINDING-020",
+                  "actual domain must be an exact parent-owned domain or requirement"
+                )
+              val physical = resolved.getOrElse(
+                reference,
+                fail("NODAL-BINDING-020", "bound domain is not resolved in its parent occurrence")
+              )
+              selectedRequirementBindings(requirement.reference) =
+                (reference, origin, handle, instance.ordinal)
+              resolved.update(requirement.reference, physical)
             case None =>
               fail(
                 "NODAL-CHILD-DOMAIN-016",
                 s"child domain requirement '${requirement.name}' is unbound",
                 Some(modulePath(instance.child))
               )
-        visit(instance.child)
+        pending.append((instance.child, depth + 1))
+    if visited.size != records.size then
+      fail("NODAL-HIERARCHY-057-002", "construction contains an unreachable module occurrence")
+    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+      domainPath(domain.reference) -> domain
+    ).toMap
+    selectedRequirementBindings.keysIterator.map(reference => resolved(reference)).toSet.foreach:
+      path =>
+        val actual = byPath(path).domain
+        Option(effectiveResets.get(actual)).foreach: reset =>
+          if !clockResetSafe(reset, actual) then
+            fail(
+              "NODAL-RDC-057-001",
+              "instance actual reset does not release safely for its exact receiving clock",
+              Some(path)
+            )
+    occurrenceDomains = resolved.toMap
+    occurrenceDomains
 
-    val roots = records.values.filter(_.parentAtConstruction.isEmpty).toVector
-    if roots.size != 1 then fail("NODAL-ROOT-016", s"expected one root Module, found ${roots.size}")
-    visit(roots.head.handle)
-    resolved.toMap
+  /** An outer lexical domain supplies the instance binding, never a foreign child symbol. */
+  private def declarationCandidate(declaration: DeclarationRecord): Option[ClockDomain] =
+    declaration.domainCandidate.map: domain =>
+      if domainRef(domain).module == declaration.reference.module then domain
+      else
+        val requirements =
+          records(declaration.reference.module).domains.filter(_.kind == KernelDomainKind.Required)
+        if requirements.size != 1 then
+          fail(
+            "NODAL-DECL-DOMAIN-016",
+            "inherited declaration requires one exact child-local requirement",
+            Some(declarationPath(declaration.reference))
+          )
+        requirements.head.domain
+
+  private def localDeclarationDomain(
+      declaration: DeclarationRecord,
+      resolved: Map[DomainRef, String]
+  ): Option[String] =
+    declarationCandidate(declaration).map(domain => domainPath(domainRef(domain))).orElse:
+      declarationDomain(declaration, resolved).map: actual =>
+        val local = records(declaration.reference.module).domains.filter(domain =>
+          domainPath(domain.reference) == actual || resolved.get(domain.reference).contains(actual)
+        )
+        if local.size != 1 then
+          fail("NODAL-DECL-DOMAIN-016", "declaration requires one exact local domain identity")
+        domainPath(local.head.reference)
 
   private def declarationDomain(
       declaration: DeclarationRecord,
       resolved: Map[DomainRef, String]
-  ): Option[String] = declaration.domainCandidate match
+  ): Option[String] = declarationCandidate(declaration) match
     case Some(domain) =>
       resolved.get(domainRef(domain)).orElse(
         fail(
@@ -6275,7 +8235,13 @@ private final class ConstructionSession(val options: EmitOptions):
           capabilitySourceRoot(value).contains(declaration.reference)
         )
       )
-      if actual.size == 1 then resolved.get(actual.head.reference) else None
+      if actual.size == 1 then resolved.get(actual.head.reference)
+      else if declaration.dataType.exists(value =>
+          boundaryElementKind(value) == "Reset"
+        )
+      then
+        actual.headOption.flatMap(value => resolved.get(value.reference))
+      else None
     case None => None
 
   private def attribute(
@@ -6521,6 +8487,10 @@ private final class ConstructionSession(val options: EmitOptions):
       else None
     edges.sortBy((edge, _) => (edge.owner, edge.kind, edge.left, edge.right, edge.path))
 
+  private def inheritedClockEdge(domain: ClockDomain, depth: Int = 0): Option[ClockEdge] =
+    if depth > 128 then resetFailure("clock parent ancestry exceeds depth budget")
+    domain.edge.orElse(domain.parent.flatMap(inheritedClockEdge(_, depth + 1)))
+
   private def clockEdgeName(edge: ClockEdge): String = edge match
     case ClockEdge.Rising => "rising"
     case ClockEdge.Falling => "falling"
@@ -6528,7 +8498,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private def resetPolicyName(policy: ResetPolicy): String = policy match
     case ResetPolicy.None => "none"
     case ResetPolicy.Sync => "sync"
-    case ResetPolicy.Async => "async"
+    case ResetPolicy.Async | ResetPolicy.AsyncExternalRelease => "async"
     case _: ResetPolicy.AsyncAssertSyncRelease => "async_assert_sync_release"
 
   private def resetPolicyAttributes(
@@ -6569,12 +8539,26 @@ private final class ConstructionSession(val options: EmitOptions):
   )
 
   private def snapshots(resolved: Map[DomainRef, String]): Vector[KernelModuleSnapshot] =
+    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+      domainPath(domain.reference) -> domain
+    ).toMap
+    val demandedResets = mutable.HashSet.empty[DomainRef]
+    records.valuesIterator.flatMap(_.declarations).foreach: declaration =>
+      if declaration.attributes.exists {
+          case ("initial", Some(_: Expr[?])) => true
+          case _ => false
+        }
+      then declarationCandidate(declaration).foreach(domain => demandedResets += domainRef(domain))
+    selectedRequirementBindings.valuesIterator.foreach: (actual, _, _, _) =>
+      if effectiveResets.containsKey(byPath(resolved(actual)).domain) then demandedResets += actual
     records.values.toVector.sortBy(record => modulePath(record.handle)).map: module =>
       val domains = module.domains.toVector.map: domain =>
         val policyAttributes =
           domain.domain.resetPolicy.toVector.flatMap(resetPolicyAttributes)
         val metadata =
-          domain.domain.resetPolarity
+          domain.domain.resetPolarity.orElse(Option(effectiveResets.get(domain.domain)).map(value =>
+            resetRecord(value).polarity
+          ))
             .map(value => Vector("reset_polarity" -> resetPolarityName(value)))
             .getOrElse(Vector.empty) ++
             domain.domain.relation
@@ -6587,16 +8571,36 @@ private final class ConstructionSession(val options: EmitOptions):
             domain.domain.parent.toVector.map(value =>
               "clock_parent" -> domainPath(domainRef(value))
             ) ++
+            domain.domain.clock.toVector.flatMap(value =>
+              clockRecords.get(expressionIds.get(value)).toVector.flatMap(_.parents.drop(1))
+                .map(parent => "clock_parent_1" -> domainPath(domainRef(parent)))
+            ) ++
             domain.domain.clock.toVector.map(value => "clock_source" -> domainSourcePath(value)) ++
-            Vector("reset_source" -> domainSourcePath(domain.domain.reset))
+            Vector("reset_source" -> domainSourcePath(domain.domain.reset)) ++
+            Option(effectiveResets.get(domain.domain)).toVector.map(value =>
+              "effective_reset_source" -> domainSourcePath(value)
+            )
         KernelDomainSnapshot(
           domainPath(domain.reference),
           domainName(domain.reference),
           domain.kind.label,
           if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None,
-          domain.domain.edge.map(clockEdgeName),
-          domain.domain.resetPolicy.map(resetPolicyName),
-          metadata.sortBy(_._1)
+          inheritedClockEdge(domain.domain).map(clockEdgeName),
+          domain.domain.resetPolicy.map(resetPolicyName).orElse(
+            Option(effectiveResets.get(domain.domain)).map(value =>
+              if hasSynchronousResetAssertion(value) then
+                "sync"
+              else "async"
+            )
+          ),
+          if domain.kind == KernelDomainKind.Required then Vector.empty else metadata.sortBy(_._1),
+          relationshipSnapshot(domain),
+          Option.when(
+            domain.kind == KernelDomainKind.Required
+          )(domain.domain.clock.map(domainSourcePath)).flatten,
+          Option.when(domain.kind == KernelDomainKind.Required && demandedResets(domain.reference))(
+            domainSourcePath(domain.domain.reset)
+          )
         )
       val declarations = module.declarations.toVector.map: declaration =>
         val retainedAttributes = declaration.attributes ++
@@ -6604,7 +8608,7 @@ private final class ConstructionSession(val options: EmitOptions):
             KernelSignalKind.Register,
             KernelSignalKind.Memory
           ).contains(declaration.kind))(
-            declaration.domainCandidate.toVector.map(domain =>
+            declarationCandidate(declaration).toVector.map(domain =>
               "declared_domain" -> domainPath(domainRef(domain))
             )
           ).toVector.flatten
@@ -6613,7 +8617,7 @@ private final class ConstructionSession(val options: EmitOptions):
           declaration.kind.label,
           declarationName(declaration.reference),
           declaration.dataType.map(renderType(_, module.handle)),
-          declarationDomain(declaration, resolved),
+          localDeclarationDomain(declaration, resolved),
           retainedAttributes.map: (name, value) =>
             val rendered =
               if name == "initial" && declaration.kind == KernelSignalKind.Register then
@@ -6635,12 +8639,37 @@ private final class ConstructionSession(val options: EmitOptions):
             generatedScopeSnapshot(module.generatedRegions.find(
               _.declarations.contains(declaration.reference)
             ))
-          else None
+          else None,
+          declarationDomain(declaration, resolved),
+          instanceDigitalPorts.get(declaration.reference).map: (instance, port) =>
+            KernelInstancePortSnapshot(
+              instancePath(module.handle, instance.ordinal),
+              declarationPath(port),
+              if declaration.kind == KernelSignalKind.InstanceInput then "input" else "output"
+            )
         )
       val instances = module.instances.toVector.map: instance =>
         val child = records(instance.child)
-        val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: domain =>
-          resolved.get(domain.reference).map(domain.name -> _)
+        val bindings = child.domains.filter(_.kind == KernelDomainKind.Required).map: domain =>
+          domain.name -> domainPath(selectedRequirementBindings(domain.reference)._1)
+        val actualBindings =
+          child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: requirement =>
+            val (actualRef, origin, _, _) = selectedRequirementBindings(requirement.reference)
+            val actual = records(actualRef.module).domains(actualRef.index)
+            actual.domain.clock.toVector.map: clock =>
+              val physical = byPath(resolved(actualRef))
+              val reset = Option(effectiveResets.get(physical.domain)).map: value =>
+                if actual.kind == KernelDomainKind.Required then
+                  domainSourcePath(actual.domain.reset)
+                else domainSourcePath(value)
+              KernelInstanceDomainBindingSnapshot(
+                instancePath(module.handle, instance.ordinal) + "." + requirement.name,
+                domainPath(requirement.reference),
+                domainPath(actualRef),
+                domainSourcePath(clock),
+                reset,
+                origin
+              )
         val parameters = instance.parameterOverrides.toVector.map:
           case (parameter, value) =>
             val reference = parameter match
@@ -6671,7 +8700,8 @@ private final class ConstructionSession(val options: EmitOptions):
           instance.lexicalDomain.flatMap(domain => resolved.get(domainRef(domain))),
           bindings.toVector.sortBy(_._1),
           parameters.sortBy(_._1),
-          generatedScopeSnapshot(instance.generatedScope)
+          generatedScopeSnapshot(instance.generatedScope),
+          actualBindings.toVector
         )
       KernelModuleSnapshot(
         modulePath(module.handle),
@@ -6808,31 +8838,22 @@ private final class ConstructionSession(val options: EmitOptions):
         region = expressionRegions.get(view.reference).map(value => expressionPath(value.reference))
       )
 
-  private def relationName(relation: ClockRelation): String =
-    relationAttributes(relation).collectFirst:
-      case ("clock_relation", value) => value
-    .getOrElse("unknown")
-
   private def waiverSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelWaiverSnapshot] =
     val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
-    expressionValues.toVector.flatMap:
-      case (reference, expression) =>
-        expression.operands.collectFirst:
-          case waiver: CdcWaiver =>
-            val path = expressionPath(reference)
-            KernelWaiverSnapshot(
-              "cdc",
-              waiver.id,
-              waiver.reason,
-              relationName(waiver.relation),
-              path,
-              expression.operands.headOption.flatMap(pathOf),
-              expression.operands.collectFirst:
-                case domain: ClockDomain => domainPath(domainRef(domain)),
-              sourceByPath.get(path)
-            )
+    executableWaivers.toVector.map: (reference, waiver) =>
+      val path = expressionPath(reference)
+      KernelWaiverSnapshot(
+        "cdc",
+        waiver.id,
+        waiver.reason,
+        waiver.relation.kind,
+        path,
+        pathOf(waiver.input),
+        Some(domainPath(domainRef(waiver.destination))),
+        sourceByPath.get(path)
+      )
     .sortBy(waiver => (waiver.semanticPath, waiver.id))
 
   private def continuousOperatorSnapshots(
@@ -7098,7 +9119,7 @@ private final class ConstructionSession(val options: EmitOptions):
     roots.foreach(visit)
     reachable.toSet
 
-  private def isBoundaryCapability(dataType: DataType[?]): Boolean =
+  private def boundaryElementKind(dataType: DataType[?]): String =
     var current = dataType
     var depth = 0
     var descriptor = CandidateRuntime.typeDescriptor(current)
@@ -7108,7 +9129,14 @@ private final class ConstructionSession(val options: EmitOptions):
       descriptor = CandidateRuntime.typeDescriptor(current)
       depth += 1
     if depth > 128 then fail("NODAL-DIGITAL-054-018", "capability type exceeds depth bound")
-    Set("Clock", "Reset").contains(descriptor.kind)
+    descriptor.kind
+
+  private def isBoundaryCapability(dataType: DataType[?]): Boolean =
+    Set("Clock", "Reset").contains(boundaryElementKind(dataType))
+
+  private def isClockedDigitalType(dataType: DataType[?]): Boolean =
+    Set("Bool", "Bits", "UInt", "SInt", "Enum", "Struct", "Clock", "Reset")
+      .contains(boundaryElementKind(dataType))
 
   private def capabilitySourceRoot(value: AnyRef): Option[DeclarationRef] =
     var current =
@@ -7231,7 +9259,11 @@ private final class ConstructionSession(val options: EmitOptions):
     val root = current.asInstanceOf[DeclarationRef]
     val declaration = records(root.module).declarations(root.index)
     val direct = !records(root.module).generatedRegions.exists(_.declarations.contains(root))
-    val writable = Set(KernelSignalKind.Wire, KernelSignalKind.Output).contains(declaration.kind)
+    val writable = Set(
+      KernelSignalKind.Wire,
+      KernelSignalKind.Output,
+      KernelSignalKind.InstanceInput
+    ).contains(declaration.kind)
     val rootRegister = allowRootRegister && selected == root &&
       declaration.kind == KernelSignalKind.Register
     if root.module != owner || !direct || (!writable && !rootRegister) then
@@ -7243,7 +9275,8 @@ private final class ConstructionSession(val options: EmitOptions):
 
   def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
     requireNoCollectionEffect("digital selection assignment", assignment = true)
-    if activeLoop.isEmpty then requireNoGeneratedEffect("digital selection assignment")
+    if activeLoop.isEmpty && activeEventProcess.isEmpty then
+      requireNoGeneratedEffect("digital selection assignment")
     validateCollectionDependencies(Vector(left, right))
     val owner = currentModule.handle
     val _ = digitalAssignmentRoot(left, owner, allowRootRegister = false)
@@ -7273,9 +9306,9 @@ private final class ConstructionSession(val options: EmitOptions):
       )
     operation("assignment", left, right)
 
-  private def digitalAssignmentSnapshots(
+  private def digitalAssignmentRecords(
       resolved: Map[DomainRef, String]
-  ): Vector[KernelDigitalAssignmentSnapshot] =
+  ): Vector[(KernelDigitalAssignmentSnapshot, Operation)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
     operations.toVector.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind)
@@ -7316,10 +9349,13 @@ private final class ConstructionSession(val options: EmitOptions):
           "NODAL-DIGITAL-054-010",
           "digital assignment value has no captured identity"
         )),
-        if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous",
+        if operation.eventProcess.nonEmpty then "event_update"
+        else if declaration.kind == KernelSignalKind.Register then "register_next"
+        else "continuous",
         operation.digitalRegion.map(value => expressionPath(value.reference)),
-        operation.sourceOrdinal
-      )
+        operation.sourceOrdinal,
+        operation.eventProcess.map(eventProcessPath)
+      ) -> operation
 
   private def digitalOwnerOf(value: Any): Option[String] = value match
     case reference: AnyRef =>
@@ -7380,7 +9416,12 @@ private final class ConstructionSession(val options: EmitOptions):
         structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
         behavioralIfs.valuesIterator.map(_.predicate).toVector ++
         flatFsms.valuesIterator.flatMap(_.transitions.map(_.guard)).toVector ++
-        enumSwitches.valuesIterator.map(_.selector).toVector,
+        enumSwitches.valuesIterator.map(_.selector).toVector ++
+        Option.when(!stimulusOnly)(
+          records.valuesIterator.flatMap(
+            _.domains.iterator.filter(_.kind != KernelDomainKind.Required).flatMap(_.domain.clock)
+          ).toVector
+        ).toVector.flatten,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,
@@ -7402,7 +9443,11 @@ private final class ConstructionSession(val options: EmitOptions):
         collectionOperandPath(operand, expressionRegions.get(reference), reference.module)
       ,
       collectionArguments.keysIterator.map(expressionPath).toSet,
-      memoryReadSnapshot
+      memoryReadSnapshot,
+      executableCrossingSnapshot,
+      executableWaiverSnapshot,
+      resetSnapshot,
+      clockSnapshot
     )
 
   private def parameterExpressionSnapshots(
@@ -7605,6 +9650,7 @@ private final class ConstructionSession(val options: EmitOptions):
         s"captured constructor failure invalidated this transaction: ${failure.getClass.getName}",
         Some(site)
       )
+    finalizeStreamReady()
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
       fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")
@@ -7733,12 +9779,46 @@ private final class ConstructionSession(val options: EmitOptions):
                 )
           .toVector.sortBy(_.path)
         )
-    verifySequentialAssignments(resolved)
+    verifySequentialAssignments(resolved, interfaceCapture)
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
+    val assignmentRecords = digitalAssignmentRecords(resolved)
+    val assignmentSources = assignmentRecords.flatMap: (assignment, record) =>
+      val syntheticDefault =
+        Option(declarationIds.get(record.values.head.asInstanceOf[AnyRef])).exists: reference =>
+          records(reference.module).declarations(reference.index).attributes.exists:
+            case ("stream_ready_default", value: Expr[?]) =>
+              value eq record.values(1).asInstanceOf[AnyRef]
+            case _ => false
+      val source = record.source.orElse(
+        Option.when(syntheticDefault)(
+          sourceByPath.get(assignment.target).orElse(sourceByPath.get(assignment.value))
+        ).flatten
+      )
+      source.map(SourceMapEntry(assignment.path, _))
+    // A member projection is generated from its actual endpoint declaration. Preserve any
+    // more precise captured leaf span; otherwise retain that declaration, never invent a line.
+    val interfaceMemberSources = interfaceCapture.interfaces.flatMap: endpoint =>
+      sourceByPath.get(endpoint.path).toVector.flatMap: source =>
+        endpoint.members.filterNot(member => sourceByPath.contains(member.path)).map(member =>
+          SourceMapEntry(member.path, source)
+        )
+    val hierarchyBindingSources = selectedRequirementBindings.iterator.flatMap:
+      case (requirement, (_, origin, owner, ordinal)) =>
+        val instance = records(owner).instances(ordinal)
+        val requirementRecord = records(requirement.module).domains(requirement.index)
+        val source = if origin == "named" then
+          instance.namedBindingSources.get(requirementRecord.domain)
+        else if origin == "default" then instance.defaultBindingSource
+        else sourceByPath.get(instancePath(owner, ordinal))
+        source.map(span =>
+          SourceMapEntry(instancePath(owner, ordinal) + "." + requirementRecord.name, span)
+        )
+    .toVector
     val snapshot = ConstructionSnapshot(
       emitQuality = options.quality,
-      digitalAssignments = digitalAssignmentSnapshots(resolved),
+      digitalAssignments = assignmentRecords.map(_._1),
+      eventProcesses = eventProcessSnapshots,
       memoryWrites = memoryWriteRecords.map(_._1),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
@@ -7777,8 +9857,11 @@ private final class ConstructionSession(val options: EmitOptions):
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ memoryWriteRecords.flatMap((write, record) =>
-          record.source.map(SourceMapEntry(write.path, _))
+        (semantic.sourceMap ++ eventProcesses.flatMap(process =>
+          process.source.map(SourceMapEntry(eventProcessPath(process), _))
+        ) ++ hierarchyBindingSources ++ assignmentSources ++ interfaceMemberSources ++ memoryWriteRecords.flatMap(
+          (write, record) =>
+            record.source.map(SourceMapEntry(write.path, _))
         ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(
           (edge, record) =>
             edge.path.flatMap(path => record.source.map(SourceMapEntry(path, _)))

@@ -251,12 +251,15 @@ private[nodal] object DigitalStorageMlir:
       value: (String, String),
       metadata: String,
       sourceLocation: String,
-      exactType: Boolean
+      exactType: Boolean,
+      eventProcess: Option[String] = None
   ): String =
     requireValid(
-      Set("continuous", "register_next").contains(kind) && exactType,
+      Set("continuous", "register_next", "event_update").contains(kind) && exactType &&
+        (kind == "event_update") == eventProcess.nonEmpty,
       "digital assignment requires an explicit intent and exactly matching recursive types",
       path
     )
+    val process = eventProcess.map(path => s", event_process = @${quoted(path)}").getOrElse("")
     s"\"nodal.digital_assign\"(${target._1}, ${value._1}) <{" +
-      s"kind = ${quoted(kind)}, metadata = $metadata}> : (${target._2}, ${value._2}) -> ()$sourceLocation"
+      s"kind = ${quoted(kind)}$process, metadata = $metadata}> : (${target._2}, ${value._2}) -> ()$sourceLocation"

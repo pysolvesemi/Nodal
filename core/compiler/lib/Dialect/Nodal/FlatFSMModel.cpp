@@ -5,11 +5,13 @@
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
+#include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
@@ -220,6 +222,28 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
   }
   return g;
 }
+struct ActionControl {
+  StringRef phase;
+  unsigned owner; // Transition index for transition, state index otherwise.
+};
+SmallVector<ActionControl, 4> actionControls(Operation *op, const Graph &g) {
+  llvm::StringMap<unsigned> states;
+  for (unsigned i = 0; i < g.enumeration.caseIds.size(); ++i)
+    states[g.enumeration.caseIds[i].getValue()] = i;
+  llvm::DenseMap<int64_t, unsigned> transitions;
+  for (unsigned i = 0; i < g.transitions.size(); ++i)
+    transitions[g.transitions[i].ordinal] = i;
+  SmallVector<ActionControl, 4> result;
+  for (Attribute a : op->getAttrOfType<ArrayAttr>("actions")) {
+    auto action = llvm::cast<DictionaryAttr>(a);
+    StringRef phase = field(action, "phase");
+    result.push_back(
+        {phase, phase == "transition"
+                    ? transitions.lookup(action.getAs<IntegerAttr>("transition_ordinal").getInt())
+                    : states.lookup(field(action, "owner_case"))});
+  }
+  return result;
+}
 } // namespace
 FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
   if (!llvm::isa_and_nonnull<FlatFSMOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
@@ -308,6 +332,68 @@ LogicalResult flatFSMResultDependencies(Value result, SmallVectorImpl<Value> &de
     return failure();
   if (bound->getNumOperands() == 2)
     deps.push_back(bound->getOperand(1));
+  return success();
+}
+LogicalResult flatFSMActionControlDependencies(Operation *op,
+                                               SmallVectorImpl<SmallVector<Value, 4>> &dependencies,
+                                               unsigned &work, unsigned maximumWork) {
+  auto h = inspectFlatFSMHeader(op);
+  if (failed(h))
+    return failure();
+  auto g = graph(*h);
+  if (failed(g))
+    return failure();
+  Operation *bound = binding(op);
+  if (!bound || failed(verifyLocalDomainBinding(bound)))
+    return failure();
+  auto charge = [&]() {
+    if (++work > maximumWork)
+      return reject(op, "FSM action dependency roots exceed finite sampling budget");
+    return success();
+  };
+  // A selected edge depends on its source's priority prefix. For entry actions,
+  // coalesce the latest selected edge per source before expanding each prefix.
+  // This avoids quadratic prefix unions for high-fan-in actions.
+  for (auto control : actionControls(op, *g)) {
+    SmallVector<Value, 4> roots;
+    if (failed(charge()))
+      return failure();
+    roots.push_back(op->getOperand(0));
+    if (bound->getNumOperands() == 2) {
+      if (failed(charge()))
+        return failure();
+      roots.push_back(bound->getOperand(1));
+    }
+    llvm::MapVector<unsigned, unsigned> lastBySource;
+    auto selected = [&](unsigned edge) {
+      unsigned source = g->transitions[edge].source;
+      auto found = lastBySource.find(source);
+      if (found == lastBySource.end())
+        lastBySource.insert({source, edge});
+      else
+        found->second = std::max(found->second, edge);
+    };
+    if (control.phase == "transition")
+      selected(control.owner);
+    else if (control.phase != "active") {
+      auto &edges =
+          control.phase == "exit" ? g->outgoing[control.owner] : g->incoming[control.owner];
+      for (unsigned edge : edges) {
+        if (failed(charge()))
+          return failure();
+        selected(edge);
+      }
+    }
+    for (auto [source, last] : lastBySource)
+      for (unsigned edge : g->outgoing[source]) {
+        if (edge > last)
+          break;
+        if (failed(charge()))
+          return failure();
+        roots.push_back(op->getOperand(1 + edge));
+      }
+    dependencies.push_back(std::move(roots));
+  }
   return success();
 }
 LogicalResult flatFSMArgumentDependencies(BlockArgument argument, SmallVectorImpl<Value> &deps) {
@@ -546,12 +632,7 @@ public:
         return failure();
     }
     auto actions = op->getAttrOfType<ArrayAttr>("actions");
-    llvm::StringMap<unsigned> states;
-    for (unsigned i = 0; i < g.enumeration.caseIds.size(); ++i)
-      states[g.enumeration.caseIds[i].getValue()] = i;
-    llvm::DenseMap<int64_t, unsigned> transitionIds;
-    for (unsigned i = 0; i < g.transitions.size(); ++i)
-      transitionIds[g.transitions[i].ordinal] = i;
+    auto controls = actionControls(op, g);
     SmallVector<Value, 8> conditions;
     SmallVector<unsigned, 8> order;
     auto groupAny = [&](ArrayRef<unsigned> indices) {
@@ -561,19 +642,13 @@ public:
       return any(values);
     };
     for (unsigned i = 0; i < actions.size(); ++i) {
-      auto action = llvm::cast<DictionaryAttr>(actions[i]);
-      StringRef phase = field(action, "phase");
-      Value condition;
-      if (phase == "transition")
-        condition = selected[transitionIds.lookup(
-            action.getAs<IntegerAttr>("transition_ordinal").getInt())];
-      else {
-        unsigned state = states.lookup(field(action, "owner_case"));
-        condition = phase == "active"
-                        ? decoded[state]
-                        : groupAny(phase == "exit" ? ArrayRef<unsigned>(g.outgoing[state])
-                                                   : ArrayRef<unsigned>(g.incoming[state]));
-      }
+      auto control = controls[i];
+      Value condition =
+          control.phase == "transition" ? selected[control.owner]
+          : control.phase == "active"
+              ? decoded[control.owner]
+              : groupAny(control.phase == "exit" ? ArrayRef<unsigned>(g.outgoing[control.owner])
+                                                 : ArrayRef<unsigned>(g.incoming[control.owner]));
       conditions.push_back(expression("bool_and", {notReset, condition}, zero.getType()));
       order.push_back(i);
     }

@@ -61,6 +61,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var sequentialModules = Set.empty[Symbol]
   private var flatGraphRuntime = Set.empty[Symbol]
   private val flatFsm = new FlatFsmCapture
+  private val eventControl = new EventControlCapture
   private val structural = new StructuralIfCapture
   private val behavioral = new BehavioralGuardCapture(structural)
 
@@ -256,6 +257,13 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     // Default expressions are part of the trusted library method's contract too (e.g. slice axis).
     pureMethods ++= defaultGetters(pureMethods)
     initializeIterationProfiles(owner)
+    eventControl.initialize(
+      pureMethods ++ loopMethods,
+      loops ++ ranges ++ sequentialBranches ++ sequentialKernelMethods ++ structuralBranches ++
+        methods(requiredModule("nodal.CandidateApi$package"), "when", "elsewhen", "otherwise"),
+      collections,
+      pureModules ++ structuralModules ++ sequentialModules ++ loopModules ++ rangeModules
+    )
 
   private def defaultGetters(symbols: Set[Symbol])(using Context): Set[Symbol] =
     symbols.flatMap: method =>
@@ -465,6 +473,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                     templates(definition.symbol) = template
                     sourceDefinitions(definition.symbol) = ((definition, ctx))
                   case _ => ()
+              case reference: RefTree if eventControl.compilerOwned(reference.symbol) =>
+                report.error(
+                  "NODAL-EVENT-057-FORGED: source must not call compiler-owned event control certificate or dispatch methods",
+                  reference.srcPos
+                )
               case reference: RefTree
                   if sequentialMethods(reference.symbol) || sequentialBranches(reference.symbol) ||
                     sequentialFactories(reference.symbol) ||
@@ -496,6 +509,19 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         collect.traverse(unit.tpdTree)
       scanBase.run.nn.units.foreach: unit =>
         given Context = scanBase.fresh.setCompilationUnit(unit)
+        eventControl.collect(
+          unit.tpdTree,
+          definitions,
+          values,
+          templates,
+          argument =>
+            new Validation(Profile.Pure, new Budget, reportErrors = false)
+              .callback(argument, 0),
+          (symbol, tree) =>
+            new Validation(Profile.Pure, new Budget, reportErrors = false)
+              .summary(symbol, "singleton", tree),
+          symbol => enumEvidence(symbol)
+        )
         behavioral.classifyAnalog(unit.tpdTree, definitions)
         behavioral.checkChains(unit.tpdTree)
       publishEffectSummaries()
@@ -705,7 +731,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else 0
 
   override def transformApply(tree: Apply)(using Context): Tree =
-    behavioral.lowerAnalog(tree).getOrElse(transformBehavioral(tree))
+    eventControl.lower(tree).getOrElse(
+      behavioral.lowerAnalog(tree).getOrElse(transformBehavioral(tree))
+    )
 
   private def transformBehavioral(tree: Apply)(using Context): Tree =
     behavioral.guard(tree) match

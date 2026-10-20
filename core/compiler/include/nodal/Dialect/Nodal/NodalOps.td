@@ -95,7 +95,7 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
     SymbolNameAttr:$sym_name,
     TypeAttr:$type,
     StrAttr:$direction,
-    FlatSymbolRefAttr:$domain,
+    OptionalAttr<FlatSymbolRefAttr>:$domain,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -175,9 +175,20 @@ def Nodal_MemoryWriteEffectOp : Nodal_Op<"memory_write_effect", [HasParent<"Modu
   let hasVerifier = 1;
 }
 
+// F57 quarantined root-owned digital event storage. No ordinary domain is inferred.
+def Nodal_EventProcessOp : Nodal_Op<"event_process",
+    [HasParent<"ModuleOp">, Symbol, AttrSizedOperandSegments]> {
+  let summary = "Owned root Bool edge and explicit event storage/capture inventory";
+  let arguments = (ins AnyType:$trigger, Variadic<AnyType>:$storage_targets,
+    Variadic<AnyType>:$external_captures, SymbolNameAttr:$sym_name, StrAttr:$edge,
+    StrAttr:$contract, DictionaryAttr:$obligations, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
-  let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
+  let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind,
+    OptionalAttr<FlatSymbolRefAttr>:$event_process, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 
@@ -193,6 +204,23 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
     OptionalAttr<StrAttr>:$generated_induction,
     DictionaryAttr:$metadata
   );
+  let hasVerifier = 1;
+}
+
+// F57: actual immediate-child data boundaries, distinct from conservative terminals.
+def Nodal_InstancePortOp : Nodal_Op<"instance_port", [HasParent<"ModuleOp">]> {
+  let summary = "Parent-owned exact immediate-child digital port reference";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port,
+    StrAttr:$direction, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_InstanceDomainBindingOp : Nodal_Op<"instance_domain_binding",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Actual parent-owned capabilities bound to one child requirement";
+  let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
+    FlatSymbolRefAttr:$instance, FlatSymbolRefAttr:$requirement,
+    FlatSymbolRefAttr:$actual, StrAttr:$origin, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 
@@ -329,6 +357,8 @@ def Nodal_DomainOp : Nodal_Op<"domain", [HasParent<"ModuleOp">, Symbol]> {
     SymbolNameAttr:$sym_name,
     StrAttr:$edge,
     StrAttr:$reset_policy,
+    OptionalAttr<FlatSymbolRefAttr>:$parent,
+    OptionalAttr<FlatSymbolRefAttr>:$second_parent,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -338,6 +368,18 @@ def Nodal_DomainRequirementOp : Nodal_Op<"domain_requirement",
     [HasParent<"ModuleOp">, Symbol]> {
   let summary = "Typed reusable-module domain requirement";
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// These local formal values are obligations, never physical producer proofs.
+def Nodal_RequirementClockOp : Nodal_Op<"requirement_clock", [HasParent<"ModuleOp">]> {
+  let arguments = (ins FlatSymbolRefAttr:$requirement, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_RequirementResetOp : Nodal_Op<"requirement_reset", [HasParent<"ModuleOp">]> {
+  let arguments = (ins FlatSymbolRefAttr:$requirement, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -358,6 +400,28 @@ def Nodal_ClockRelationOp : Nodal_Op<"clock_relation",
     FlatSymbolRefAttr:$source,
     FlatSymbolRefAttr:$destination,
     StrAttr:$kind,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
+// Actual executable proof, deliberately distinct from the descriptor above.
+def Nodal_ClockRelationshipOp : Nodal_Op<"clock_relationship",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Owned exact clock relationship and environment obligations";
+  let arguments = (ins
+    AnyType:$source_clock,
+    AnyType:$destination_clock,
+    FlatSymbolRefAttr:$source,
+    FlatSymbolRefAttr:$destination,
+    StrAttr:$kind,
+    StrAttr:$contract,
+    StrAttr:$proof,
+    OptionalAttr<I32Attr>:$multiply,
+    OptionalAttr<I32Attr>:$divide,
+    OptionalAttr<StrAttr>:$phase,
+    OptionalAttr<BoolAttr>:$phase_known,
+    DictionaryAttr:$obligations,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -1599,6 +1663,26 @@ def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
 // Domain crossings and timing provenance
 //===----------------------------------------------------------------------===//
 
+// Owned physical clock producers retain independent capability identities.
+def Nodal_ClockGateOp : Nodal_Op<"clock_gate", [HasParent<"ModuleOp">]> {
+  let summary = "Owned inactive-phase clock gate";
+  let arguments = (ins AnyType:$parent_clock, AnyType:$enable, AnyType:$test_enable,
+    ArrayAttr:$parent_domains, FlatSymbolRefAttr:$domain, StrAttr:$edge,
+    StrAttr:$contract, ArrayAttr:$control_domains, DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ClockMuxOp : Nodal_Op<"clock_mux", [HasParent<"ModuleOp">]> {
+  let summary = "Owned serialized break-before-make physical clock mux";
+  let arguments = (ins AnyType:$first_clock, AnyType:$second_clock, AnyType:$select,
+    AnyType:$common_assertion, ArrayAttr:$parent_domains, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$contract, ArrayAttr:$control_domains,
+    DictionaryAttr:$obligations, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_CrossingOp : Nodal_Op<"crossing"> {
   let summary = "Typed explicit CDC, RDC, or mixed-domain crossing";
   let arguments = (ins
@@ -1606,9 +1690,42 @@ def Nodal_CrossingOp : Nodal_Op<"crossing"> {
     FlatSymbolRefAttr:$source_domain,
     FlatSymbolRefAttr:$destination_domain,
     StrAttr:$kind,
+    OptionalAttr<StrAttr>:$contract,
+    OptionalAttr<I64Attr>:$stages,
+    OptionalAttr<DictionaryAttr>:$obligations,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+// Explicit stateless exception, never a synchronization or state-cut operation.
+def Nodal_WaiverOp : Nodal_Op<"waiver", [HasParent<"ModuleOp">]> {
+  let summary = "Owned stateless value-boundary exception with retained obligations";
+  let arguments = (ins AnyType:$input, FlatSymbolRefAttr:$source_domain,
+    FlatSymbolRefAttr:$destination_domain, StrAttr:$contract, StrAttr:$id,
+    StrAttr:$reason, DictionaryAttr:$relation, DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
+def Nodal_AsyncFifoOp : Nodal_Op<"async_fifo"> {
+  let summary = "Owned elastic asynchronous ready/valid FIFO";
+  let arguments = (ins
+    AnyType:$source_payload,
+    AnyType:$source_valid,
+    AnyType:$destination_ready,
+    FlatSymbolRefAttr:$source_domain,
+    FlatSymbolRefAttr:$destination_domain,
+    StrAttr:$kind,
+    StrAttr:$contract,
+    I64Attr:$depth,
+    DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$destination_payload, AnyType:$destination_valid,
+                      AnyType:$source_ready);
   let hasVerifier = 1;
 }
 
@@ -1921,5 +2038,26 @@ def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleO
   let summary = "Actual clock sampled property with exact owning domain";
   let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
     StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F57: actual typed reset producers, separate from domain descriptors.
+def Nodal_ResetBoundaryOp : Nodal_Op<"reset_boundary", [HasParent<"ModuleOp">]> {
+  let arguments = (ins AnyType:$input, StrAttr:$reset_polarity, StrAttr:$release,
+    OptionalAttr<FlatSymbolRefAttr>:$release_domain, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ResetSyncOp : Nodal_Op<"reset_sync", [HasParent<"ModuleOp">]> {
+  let arguments = (ins AnyType:$input, AnyType:$clock,
+    FlatSymbolRefAttr:$destination_domain, StrAttr:$reset_polarity,
+    I64Attr:$stages, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ResetCombineOp : Nodal_Op<"reset_combine", [HasParent<"ModuleOp">]> {
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$reset_polarity,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

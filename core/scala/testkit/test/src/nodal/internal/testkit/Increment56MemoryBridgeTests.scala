@@ -52,6 +52,28 @@ object Increment56MemoryBridgeTests extends TestSuite:
       assert(canonical.contains("memory_writes"), canonical.contains("memory_read"))
       assert(canonical.contains(value.memoryWrites.head.memory))
 
+    test("FSM control materializes the actual effective reset before regional actions"):
+      val value = ConstructionKernel.inspect(new nodal_external.Increment56MemoryBridgeSource)
+      val machine = value.flatFsms.head
+      val domain = value.modules.head.domains.find(_.path == machine.domain).get
+      val fields = domain.attributes.toMap
+      val effectiveReset = fields("effective_reset_source")
+      val rawReset = fields("reset_source")
+      assert(effectiveReset != rawReset)
+      val lines = ScalaToMlirBridge.fromSnapshot(value).text.linesIterator.toVector
+      val reset = lines.indexWhere(line =>
+        line.contains("\"nodal.reset_boundary\"") &&
+          line.contains(s"semantic_path = \"$effectiveReset\"")
+      )
+      val fsm = lines.indexWhere(_.contains("\"nodal.flat_fsm\""))
+      val switch = lines.indexWhere(_.contains("\"nodal.enum_switch\""))
+      assert(reset >= 0, reset < fsm, fsm < switch)
+      val resetValue = lines(reset).trim.takeWhile(_ != ' ')
+      val binding = lines.find(_.contains("\"nodal.local_domain_binding\"")).get
+      assert(binding.contains(s", $resetValue)"))
+      assert(lines(reset).contains("release = \"sync\""))
+      assert(lines(reset).contains("release_domain = @\"root\""))
+
     test("authored declaration and read names cannot collide with owned write effects"):
       Vector(false, true).foreach: late =>
         val value =
@@ -70,7 +92,7 @@ object Increment56MemoryBridgeTests extends TestSuite:
       assert(text.contains("!nodal.capability<\"clock\">"))
       assert(!text.contains("!nodal.capability<\"reset\">"))
 
-    test("unused memory retains declaration-only unsupported reset descriptors"):
+    test("unused memory cannot turn forged reset policy into executable release proof"):
       val value = sample
       val descriptor = value.copy(
         memoryWrites = Vector.empty,
@@ -86,10 +108,11 @@ object Increment56MemoryBridgeTests extends TestSuite:
           )
         )
       )
-      val text = ScalaToMlirBridge.fromSnapshot(descriptor).text
-      assert(text.contains("\"nodal.memory\""))
-      assert(!text.contains("\"nodal.local_domain_binding\""))
-      rejected(descriptor.copy(memoryWrites = value.memoryWrites), "supported direct reset policy")
+      rejected(descriptor, "reset-bearing domain has no actual reset")
+      rejected(
+        descriptor.copy(memoryWrites = value.memoryWrites),
+        "reset-bearing domain has no actual reset"
+      )
 
     test("all whole-element kinds retain exact scalar and recursive types"):
       val value = ConstructionKernel.inspect(new nodal_external.Increment56MemoryWholeSource)

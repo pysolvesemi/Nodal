@@ -17,6 +17,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 
 using namespace mlir;
 namespace nodal {
@@ -130,7 +131,8 @@ class Model {
 public:
   explicit Model(Operation *module) : module(module) {}
   LogicalResult verify();
-  LogicalResult dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result);
+  LogicalResult dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result,
+                             SmallVectorImpl<DigitalInterfaceObservationGroup> *observations);
 
 private:
   LogicalResult definition(Operation *operation);
@@ -1053,7 +1055,8 @@ LogicalResult Model::verify() {
   }
   return success();
 }
-LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result) {
+LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result,
+                                  SmallVectorImpl<DigitalInterfaceObservationGroup> *observations) {
   SmallVector<DigitalInterfaceValueDependencies> collected;
   llvm::DenseMap<Value, unsigned> positions;
   std::map<std::pair<Operation *, std::string>, Value> members;
@@ -1143,8 +1146,43 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
     edges += entry.sources.size();
   if (collected.size() > digitalTypeMaximumNodes || edges > digitalTypeMaximumNodes)
     return reject(module, "typed dependency graph exceeds its finite represented-node limit");
+  SmallVector<DigitalInterfaceObservationGroup> groups;
+  if (observations) {
+    // Reuse the exact canonical member/component maps above. Aliases are not
+    // additional observations; distinct concrete endpoints are not one group.
+    std::map<std::tuple<Operation *, bool, std::string>, unsigned> protocolGroups;
+    for (const auto &entry : collected) {
+      if (entry.sources.empty())
+        continue;
+      auto net = netIndices.find(entry.value);
+      if (net != netIndices.end()) {
+        if (components.find(representative(net->second))->second == entry.value)
+          groups.push_back({entry.value.getDefiningOp(), entry.domain, {entry.value}});
+        continue;
+      }
+      auto access = accesses.find(entry.value);
+      if (access == accesses.end())
+        continue;
+      const Access &member = access->second;
+      auto key = std::make_pair(member.instance->operation, member.path.str());
+      if (members.find(key)->second != entry.value)
+        continue;
+      auto [prefix, suffix] = member.path.rsplit('.');
+      bool forward = (member.member->protocol == "valid" || member.member->protocol == "stream") &&
+                     (suffix == "payload" || suffix == "valid");
+      auto groupKey = std::make_tuple(member.instance->operation, forward,
+                                      (forward ? prefix : member.path).str());
+      auto [group, inserted] = protocolGroups.try_emplace(groupKey, groups.size());
+      if (inserted)
+        groups.push_back({entry.value.getDefiningOp(), entry.domain, {}});
+      groups[group->second].values.push_back(entry.value);
+    }
+  }
   result.append(std::make_move_iterator(collected.begin()),
                 std::make_move_iterator(collected.end()));
+  if (observations)
+    observations->append(std::make_move_iterator(groups.begin()),
+                         std::make_move_iterator(groups.end()));
   return success();
 }
 
@@ -1172,10 +1210,11 @@ LogicalResult verifyDigitalInterfaceOperation(Operation *operation) {
 }
 LogicalResult verifyDigitalInterfaceModel(Operation *module) { return Model(module).verify(); }
 LogicalResult collectDigitalInterfaceDependencies(
-    Operation *module, SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies) {
+    Operation *module, SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
+    SmallVectorImpl<DigitalInterfaceObservationGroup> *observations) {
   Model model(module);
   if (failed(model.verify()))
     return failure();
-  return model.dependencies(dependencies);
+  return model.dependencies(dependencies, observations);
 }
 } // namespace nodal

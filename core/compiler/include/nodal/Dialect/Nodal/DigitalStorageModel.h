@@ -7,7 +7,10 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <memory>
+
 namespace nodal {
+class HierarchyModel;
 
 /// Verify module-local storage names, ordinary assignment drivers and shared
 /// combinational dependencies, including actual typed Interface/net roots,
@@ -41,16 +44,70 @@ struct DigitalDependencyNode {
   mlir::Value value;
   mlir::Operation *use;
   llvm::SmallVector<unsigned, 2> dependencies;
-  /// Verified Interface instance/component source-domain constraint, when any.
+  /// Verified Interface source constraint, crossing result or waiver permission domain.
   mlir::FlatSymbolRefAttr sourceDomain;
+  /// Exact coherent stateful boundary identity and inventory index. Sampled
+  /// roots are provenance, NOT combinational dependencies or domainless cuts.
+  mlir::Operation *crossing = nullptr;
+  unsigned crossingIndex = 0;
+  llvm::StringRef crossingRole;
+  unsigned occurrence = 0;
+  bool hierarchyBoundary = false;
+  /// Stateless permission boundary only. Physical dependencies and lineage stay
+  /// intact; this operation is never a physical source or synchronizer identity.
+  mlir::Operation *waiver = nullptr;
+  /// Actual event storage is never an ordinary domain or permission source.
+  mlir::Operation *eventProcess = nullptr;
+  /// Actual root event trigger classification survives aliases without becoming
+  /// state or an attributed source domain. It cannot control an ordinary clock.
+  bool eventTrigger = false;
+};
+struct DigitalCrossingSample {
+  unsigned root;
+  unsigned operandIndex;
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
+};
+struct DigitalCrossingResult {
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
+};
+struct DigitalCrossingDependency {
+  mlir::Operation *operation;
+  llvm::SmallVector<DigitalCrossingSample, 3> samples;
+  llvm::SmallVector<DigitalCrossingResult, 3> results;
+  unsigned occurrence = 0;
+};
+struct DigitalWaiverDependency {
+  mlir::Operation *operation = nullptr;
+  unsigned root = 0;
+  unsigned occurrence = 0;
+};
+struct DigitalEventUpdateDependency {
+  mlir::Operation *operation = nullptr;
+  mlir::Operation *process = nullptr;
+  unsigned root = 0;
+};
+struct DigitalObservationGroup {
+  mlir::Operation *use = nullptr;
+  llvm::SmallVector<unsigned, 2> roots;
 };
 struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;
   llvm::SmallVector<unsigned> roots;
+  llvm::SmallVector<DigitalCrossingDependency> crossings;
+  llvm::SmallVector<DigitalWaiverDependency> waivers;
+  llvm::SmallVector<DigitalEventUpdateDependency> eventUpdates;
+  /// Canonical coherent observations, never a module-wide group.
+  llvm::SmallVector<DigitalObservationGroup> observations;
+  std::shared_ptr<const HierarchyModel> hierarchy;
 };
 mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(
     mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
     DigitalAssignmentProofLimits limits = {});
+
+mlir::LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                                                DigitalAssignmentProofLimits limits = {});
 
 /// Verify an owned structural wire/register declaration. The actual SSA result
 /// retains the recursive value type; register initialization and domain are

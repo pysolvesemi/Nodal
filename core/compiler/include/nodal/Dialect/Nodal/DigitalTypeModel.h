@@ -32,6 +32,8 @@ bool isDigitalStorageType(mlir::Type type);
 /// This is not a storage/scalar query; ordinary Struct/Mem/protocol payloads do
 /// not admit these capabilities. Shape proofs remain owned by ShapeModel.
 bool isDigitalControlBoundaryType(mlir::Type type);
+/// Return clock/reset through bounded structural shape layers, otherwise empty.
+llvm::StringRef getDigitalControlBoundaryKind(mlir::Type type);
 mlir::FailureOr<int64_t>
 inferDigitalControlMaximumElements(mlir::Type type, mlir::Operation *module,
                                    const ParameterIntegerEnvironment *environment = nullptr);
@@ -77,6 +79,16 @@ bool sameDigitalStorageWidthFamily(mlir::Type base, mlir::Type instance, mlir::O
 mlir::FailureOr<int64_t>
 inferDigitalStorageMaximumBits(mlir::Type type, mlir::Operation *use,
                                const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Finite bit-pattern payloads preserve the complete storage ABI but exclude
+/// host Integer/Real and capabilities recursively. Enum leaves are admitted by
+/// their canonical ABI owner, without physical lane expansion.
+mlir::FailureOr<int64_t> inferDigitalBitPatternMaximumBits(mlir::Type type, mlir::Operation *use);
+
+/// Same complete bit-pattern ABI with every scalar width and shape extent
+/// proved fixed. Bounds/defaults never substitute for exact target widths;
+/// footprint arithmetic and nominal validation remain with the shared owner.
+mlir::FailureOr<int64_t> inferDigitalBitPatternFixedBits(mlir::Type type, mlir::Operation *use);
 
 /// Verify this actual operation under an optional admitted context. Collection
 /// block arguments and bodies belong to the collection proof coordinator.

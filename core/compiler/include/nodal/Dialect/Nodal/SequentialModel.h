@@ -12,20 +12,53 @@ struct SequentialModelLimits {
   unsigned maximumNormalizedOperations = 262144;
 };
 /// Shared narrow physical sampling proof. Memory and registers use the same
-/// dependency/domain owner, including unique local requirement bindings.
+/// dependency graph and DomainModel requirement/binding proof owner.
 struct SequentialSample {
   mlir::Value value;
   mlir::Attribute domain;
   mlir::Operation *use;
+  /// Crossings require an actual attributed source and reject every unannotated
+  /// boundary. Constants may accompany a source but cannot establish one.
+  bool requireAttributedSource = false;
+  /// Values and controlling guards consumed by one actual target update share
+  /// this owner identity. Independent register/memory effects remain separate.
+  mlir::Operation *group = nullptr;
+  /// A non-pulse crossing cannot erase an actual pulse-producing boundary.
+  /// Ordinary same-domain consumers may still sample the pulse as a Bool.
+  bool rejectPulseSources = false;
+  /// Strict sampling may accept a neutral constant without weakening rejection
+  /// of unannotated/foreign physical boundaries (e.g. FIFO ready or valid).
+  bool allowDomainlessSource = false;
+  /// At least one strict sample in the same (group, domain) must establish an
+  /// actual source. FIFO payload and valid establish their source jointly.
+  bool requireAttributedGroup = false;
+  unsigned occurrence = 0;
+  bool observationOnly = false;
 };
-mlir::FailureOr<mlir::Operation *> resolveSequentialDomain(mlir::Operation *use,
-                                                           mlir::Attribute reference);
-mlir::FailureOr<mlir::Operation *> resolveSequentialBinding(mlir::Operation *use,
-                                                            mlir::Attribute reference);
+/// Closed clock-control provenance checked by the same physical dependency graph.
+struct ClockControlSample {
+  mlir::Value value;
+  mlir::Attribute source; // actual domain, or string constant/external
+  mlir::Operation *use;
+};
+mlir::LogicalResult verifyClockControlSamples(mlir::Operation *module,
+                                              llvm::ArrayRef<ClockControlSample> samples,
+                                              SequentialModelLimits limits = {});
+struct DigitalDependencyGraph;
+/// Same sampling proof against an already constructed graph. This nonrecursive
+/// entry is used by crossing source checks during assignment-graph admission.
+mlir::LogicalResult verifySequentialSampleDependencies(mlir::Operation *module,
+                                                       llvm::ArrayRef<SequentialSample> samples,
+                                                       const DigitalDependencyGraph &graph,
+                                                       llvm::ArrayRef<unsigned> roots,
+                                                       SequentialModelLimits limits = {},
+                                                       unsigned alreadyCharged = 0);
 mlir::LogicalResult verifySequentialSamples(mlir::Operation *module,
                                             llvm::ArrayRef<SequentialSample> samples,
                                             SequentialModelLimits limits = {},
                                             unsigned alreadyCharged = 0);
+mlir::FailureOr<llvm::SmallVector<SequentialSample, 8>>
+collectHierarchySequentialSamples(mlir::Operation *module, SequentialModelLimits limits = {});
 struct BehavioralIfHeader {
   mlir::Operation *operation = nullptr;
   mlir::Operation *module = nullptr;
@@ -37,7 +70,6 @@ mlir::FailureOr<BehavioralIfHeader> inspectBehavioralIfHeader(mlir::Operation *o
 mlir::FailureOr<mlir::Value> behavioralCaptureSource(mlir::BlockArgument argument);
 mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
 behavioralIntegerContextsAtUse(mlir::Operation *use);
-mlir::LogicalResult verifyLocalDomainBinding(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralPredicate(mlir::Operation *operation);
 mlir::LogicalResult verifyBehavioralIfOperation(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialBody(mlir::Block *body);

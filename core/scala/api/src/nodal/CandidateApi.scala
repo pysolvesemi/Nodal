@@ -370,6 +370,9 @@ object ResetPolicy:
   case object None extends ResetPolicy
   case object Sync extends ResetPolicy
   case object Async extends ResetPolicy
+
+  /** External provider promises assertion and release safe for the receiving clock and edge. */
+  case object AsyncExternalRelease extends ResetPolicy
   final case class AsyncAssertSyncRelease(stages: Int = 2) extends ResetPolicy
 
 sealed trait ClockRelation
@@ -397,7 +400,8 @@ final class ClockDomain private[nodal] (
     private[nodal] val relation: Option[ClockRelation] = None,
     private[nodal] val frequency: Option[Frequency] = None,
     private[nodal] val clock: Option[Expr[Clock]] = None,
-    private[nodal] val parent: Option[ClockDomain] = None
+    private[nodal] val parent: Option[ClockDomain] = None,
+    private[nodal] val executableRelationship: Boolean = false
 ):
   CandidateRuntime.registerDomain(this, kind)
 
@@ -452,7 +456,8 @@ object ClockDomain:
     new ClockDomain(
       name,
       CandidateRuntime.resetExpr("required_reset", name),
-      KernelDomainKind.Required
+      KernelDomainKind.Required,
+      clock = Some(CandidateRuntime.requirementClock(name))
     )
 
   def generated(
@@ -463,14 +468,7 @@ object ClockDomain:
       reset: Expr[Reset]
   ): ClockDomain =
     CandidateRuntime.metadata(clock, from, relation)
-    new ClockDomain(
-      name,
-      reset,
-      KernelDomainKind.Generated,
-      relation = Some(relation),
-      clock = Some(clock),
-      parent = Some(from)
-    )
+    ConstructionKernel.generatedDomain(name, clock, from, relation, reset)
 
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
@@ -480,6 +478,7 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
       val result = select(module)
       result match
         case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
+        case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
         case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
@@ -654,7 +653,7 @@ def elsewhen(condition: Boolean)(body: => Unit): Unit =
   val _ = () => body
   SequentialRuntime.missing()
 
-/** Value carrying an explicit Gray-code proof for CDC. */
+/** Gray-classified value. Runtime transitions, stability and physical skew remain obligations. */
 final class Gray[A <: Data] private[nodal] (val value: Expr[A])
 
 object Gray:
@@ -664,13 +663,29 @@ object Gray:
 final class Pulse private[nodal] (val value: Expr[Bool])
 
 object Pulse:
-  def apply(value: Expr[Bool]): Pulse = new Pulse(value)
+  def apply(value: Expr[Bool]): Pulse =
+    ConstructionKernel.classifyPulse(value)
+    new Pulse(value)
 
-/** Minimal stream carrier used only to freeze the asynchronous-FIFO crossing shape. */
-final class Stream[A <: Data] private[nodal] (val payload: Expr[A])
+/** Elastic carrier. Transfer occurs only when valid and ready are both asserted at its domain edge.
+  * Payload and valid must remain stable while stalled; reading payload is not consumption.
+  */
+final class Stream[A <: Data] private[nodal] (
+    val payload: Expr[A],
+    val valid: Expr[Bool],
+    private[nodal] val readyWire: Signal[Bool]
+):
+  def ready: Expr[Bool] = readyWire
+
+  /** Attach the unique sink. An unattached carrier is not ready. */
+  def accept(ready: Expr[Bool]): Unit = ConstructionKernel.acceptStream(this, ready)
 
 object Stream:
-  def apply[A <: Data](payload: Expr[A]): Stream[A] = new Stream(payload)
+  /** Continuously offers the payload, subject to the same stall-stability contract. */
+  def apply[A <: Data](payload: Expr[A]): Stream[A] = apply(payload, true.B)
+
+  def apply[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    ConstructionKernel.stream(payload, valid)
 
 final case class CdcWaiver(
     id: String,
@@ -680,38 +695,46 @@ final case class CdcWaiver(
 
 object Cdc:
   def sync(bit: Expr[Bool], to: ClockDomain, stages: Int = 2): Expr[Bool] =
-    CandidateRuntime.booleanExpr("cdc_sync", bit, to, stages)
+    ConstructionKernel.levelSync(bit, to, stages)
 
+  /** Uninitialized destination sampler with checked source transitions and retained physical
+    * stability/skew obligations. Not every input change is delivered.
+    */
   def gray[A <: Data](
       grayValue: Gray[A],
       to: ClockDomain,
       stages: Int = 2
-  ): Expr[A] = CandidateRuntime.expr(grayValue, to, stages)
+  ): Expr[A] = ConstructionKernel.graySync(grayValue.value, to, stages)
 
+  /** Toggle transport requiring single-cycle pulses, returned-acknowledgement spacing and a common
+    * reset epoch. There is no public ready signal or delivery guarantee outside those obligations.
+    */
   def pulse(pulse: Pulse, to: ClockDomain): Expr[Bool] =
-    CandidateRuntime.booleanExpr("cdc_pulse", pulse, to)
+    ConstructionKernel.pulseSync(pulse.value, to)
 
+  /** Automatic coherent latest-snapshot transfer, not a lossless event queue. Changes while busy
+    * may coalesce; the destination holds its last delivery, unspecified before the first. Requires
+    * a common reset epoch with safe release and physical bundled-data settling before capture.
+    */
   def handshake[A <: Data](payload: Expr[A], to: ClockDomain): Expr[A] =
-    CandidateRuntime.expr(payload, to)
+    ConstructionKernel.handshakeSnapshot(payload, to)
 
   def fifo[A <: Data](
       stream: Stream[A],
       to: ClockDomain,
       depth: Int = 4
-  ): Stream[A] =
-    CandidateRuntime.statement(to, depth)
-    stream
+  ): Stream[A] = ConstructionKernel.asyncFifo(stream, to, depth)
 
   def waive[A <: Data](
       value: Expr[A],
       to: ClockDomain,
       waiver: CdcWaiver
-  ): Expr[A] = CandidateRuntime.expr(value, to, waiver)
+  ): Expr[A] = ConstructionKernel.waive(value, to, waiver)
 
 object Rdc:
   /** Domain-construction form: the receiving generated domain supplies the destination. */
   def sync(reset: Expr[Reset], stages: Int): Expr[Reset] =
-    CandidateRuntime.resetExpr("rdc_sync", reset, stages)
+    ConstructionKernel.resetSync(reset, None, stages)
 
   /** Existing-domain transfer form: the destination is explicit. */
   def sync(
@@ -719,10 +742,10 @@ object Rdc:
       to: ClockDomain,
       stages: Int = 2
   ): Expr[Reset] =
-    CandidateRuntime.resetExpr("rdc_sync", reset, to, stages)
+    ConstructionKernel.resetSync(reset, Some(to), stages)
 
 object ResetController:
-  def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
+  def combine(resets: Expr[Reset]*): Expr[Reset] = ConstructionKernel.resetCombine(resets.toVector)
 
 object ClockGate:
   def apply(
@@ -731,8 +754,7 @@ object ClockGate:
       testEnable: Expr[Bool] = false.B,
       name: String = "gated"
   ): ClockDomain =
-    CandidateRuntime.statement(enable, testEnable)
-    new ClockDomain(name, domain.reset, KernelDomainKind.Generated, parent = Some(domain))
+    ConstructionKernel.clockGate(domain, enable, testEnable, name)
 
 object ClockMux:
   def glitchless(
@@ -740,16 +762,12 @@ object ClockMux:
       domains: Seq[ClockDomain],
       name: String = "selected"
   ): ClockDomain =
-    CandidateRuntime.statement(select, domains)
-    new ClockDomain(
-      name,
-      CandidateRuntime.expr(domains),
-      KernelDomainKind.Generated
-    )
+    ConstructionKernel.clockMux(select, domains.toVector, name)
 
 /** Typed event handle. Analog composition is distinct from Boolean short-circuit logic. */
 final class Event private[nodal] (
-    private[nodal] val analogDefinition: Option[KernelAnalogEventDefinition] = None
+    private[nodal] val analogDefinition: Option[KernelAnalogEventDefinition] = None,
+    private[nodal] val digitalDefinition: Option[KernelDigitalEventDefinition] = None
 ):
   infix def or(other: Event): Event = AnalogProceduralConstruction.composeEvents(this, other)
   def ||(other: Event): Event = this or other
@@ -1488,6 +1506,15 @@ private[nodal] object CandidateRuntime:
     ConstructionKernel.expression(expression)
     expression
 
+  def requirementClock(name: String): Expr[Clock] =
+    val expression = new KernelExpr[Clock](
+      Vector(name),
+      resultType = Some(KernelTypeDescriptor("Clock")),
+      operation = Some("required_clock")
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
   def resetExpr(operation: String, values: Any*): Expr[Reset] =
     val expression = new KernelExpr[Reset](
       values.toVector,
@@ -1957,17 +1984,36 @@ private[nodal] object CandidateRuntime:
       ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
   def digitalEventBlock(event: Event, body: => Unit): Unit =
-    AnalogProceduralConstruction.requireDigitalEventContext()
-    block(event, body)
+    checkedEventBlock(event, () => body, allowAnalog = false)
+
+  /** The typed plugin supplies only the digital control certificate. Analog on retains its owner.
+    */
+  def checkedEventBlock(event: Event, body: () => Unit, allowAnalog: Boolean): Unit =
+    if event.analogDefinition.nonEmpty then
+      if allowAnalog then AnalogProceduralConstruction.eventControl(event)(body())
+      else AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
+    else
+      AnalogProceduralConstruction.requireDigitalEventContext()
+      AnalogProceduralConstruction.requireContinuousContext("digital event process")
+      DigitalEventCallback.requireChecked(body)
+      ConstructionKernel.digitalEventProcess(event, body)
 
   def block(event: Event, body: => Unit): Unit =
-    if event.analogDefinition.nonEmpty then
-      AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
-    AnalogProceduralConstruction.requireContinuousContext("digital event process")
-    ConstructionKernel.operation("event-block", event)
-    AnalogProceduralConstruction.lexicalScope:
-      ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
+    if event.digitalDefinition.nonEmpty then digitalEventBlock(event, body)
+    else
+      if event.analogDefinition.nonEmpty then
+        AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
+      // Legacy analog conditionals use an inert condition handle, not an executable edge.
+      AnalogProceduralConstruction.requireContinuousContext("digital event process")
+      ConstructionKernel.operation("event-block", event)
+      AnalogProceduralConstruction.lexicalScope:
+        ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
-  def event(values: Any*): Event =
-    ConstructionKernel.operation("event", values*)
-    new Event()
+  def event(values: Any*): Event = values.toVector match
+    case Vector(trigger: Expr[?], edge: Edge) if edge == Edge.Rising || edge == Edge.Falling =>
+      AnalogProceduralConstruction.requireDigitalEventContext()
+      ConstructionKernel.digitalEvent(trigger.asInstanceOf[Expr[Bool]], edge)
+    case _ =>
+      // Legacy analog conditionals and candidate named events are not digital edge authority.
+      ConstructionKernel.operation("event", values*)
+      new Event()

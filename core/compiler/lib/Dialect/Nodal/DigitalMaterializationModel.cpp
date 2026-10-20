@@ -115,8 +115,7 @@ FailureOr<std::string> identity(Value value, Operation *module) {
     if (owner(definition) != module || !canonicalText(path(definition), maximumIdentityBytes))
       return failure();
     auto semantic = digitalValueSemanticPath(value);
-    if ((definition->getNumResults() != 1 && !llvm::isa<FlatFSMOp>(definition)) ||
-        !canonicalText(semantic, maximumIdentityBytes))
+    if (!canonicalText(semantic, maximumIdentityBytes))
       return failure();
     return semantic;
   }
@@ -394,15 +393,20 @@ FailureOr<DictionaryAttr> analyzeDigitalMaterialization(Operation *module) {
         (operationName == "nodal.constant" || operationName == "nodal.const_literal" ||
          operationName == "nodal.const_parameter_ref" || operationName == "nodal.const_expr" ||
          operationName == "nodal.iteration_index");
-    const bool valueProducer =
-        operation->getNumResults() == 1 &&
-        (staticIndex || finiteDigitalType(operation->getResult(0).getType(), operation));
-    if (valueProducer && !path(operation).empty()) {
-      auto [position, inserted] =
-          valueIdentities.try_emplace(path(operation), operation->getResult(0));
-      if (!inserted && position->second != operation->getResult(0)) {
-        (void)reject(operation, "distinct SSA producers cannot share a semantic identity");
-        return WalkResult::interrupt();
+    if (!path(operation).empty()) {
+      for (Value result : operation->getResults()) {
+        if (!staticIndex && !finiteDigitalType(result.getType(), operation))
+          continue;
+        auto semantic = digitalValueSemanticPath(result);
+        // Unknown multi-result operations do not acquire invented identities;
+        // any actual candidate use still rejects through rememberValue below.
+        if (semantic.empty())
+          continue;
+        auto [position, inserted] = valueIdentities.try_emplace(semantic, result);
+        if (!inserted && position->second != result) {
+          (void)reject(operation, "distinct SSA producers cannot share a semantic identity");
+          return WalkResult::interrupt();
+        }
       }
     }
     // Include noncandidate consumers such as digital-to-Real conversion, even

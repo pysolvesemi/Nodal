@@ -368,6 +368,29 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      ) ++ value.reset.toVector.map(reset =>
+        "reset" -> obj(
+          "kind" -> string(reset.kind),
+          "polarity" -> string(reset.polarity),
+          "release" -> string(reset.release),
+          "destination" -> optionalString(reset.destination),
+          "stages" -> number(reset.stages),
+          "inputs" -> array(reset.inputs.map(string))
+        )
+      ) ++ value.waiver.toVector.map(waiver =>
+        "waiver" -> obj(waiverFields(waiver)*)
+      ) ++ value.crossing.toVector.map(crossing =>
+        "crossing" -> obj(
+          "kind" -> string(crossing.kind),
+          "contract" -> string(crossing.contract),
+          "source_domain" -> string(crossing.sourceDomain),
+          "destination_domain" -> string(crossing.destinationDomain),
+          "stages" -> number(crossing.stages),
+          "depth" -> crossing.depth.map(number).getOrElse(JNull),
+          "identity" -> optionalString(crossing.identity),
+          "result_role" -> string(crossing.resultRole),
+          "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
+        )
       ) ++ value.memory.toVector.map(port =>
         "memory" -> obj("memory" -> string(port.memory), "domain" -> string(port.domain))
       ) ++ value.structure.toVector.map(evidence =>
@@ -379,7 +402,7 @@ private[nodal] object ReproducibilityContract:
       ))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
-      obj(
+      JObject(Vector(
         "path" -> string(value.path),
         "owner" -> string(value.owner),
         "target" -> string(value.target),
@@ -387,7 +410,7 @@ private[nodal] object ReproducibilityContract:
         "kind" -> string(value.kind),
         "region" -> optionalString(value.region),
         "source_ordinal" -> number(value.sourceOrdinal)
-      )
+      ) ++ value.eventProcess.map(path => "event_process" -> string(path)).toVector)
     )),
     "loops" ->
       array(snapshot.digitalLoops.sortBy(value => (value.owner, value.sourceOrdinal)).map(value =>
@@ -551,6 +574,17 @@ private[nodal] object ReproducibilityContract:
           )
         ))
       )
+    ))).toVector ++ Option.when(snapshot.eventProcesses.nonEmpty)("event_processes" ->
+    array(snapshot.eventProcesses.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "trigger" -> string(value.trigger),
+        "edge" -> string(value.edge),
+        "contract" -> string("root_event_v1"),
+        "storage_targets" -> array(value.storageTargets.map(string)),
+        "external_captures" -> array(value.externalCaptures.map(string))
+      )
     ))).toVector ++ Option.when(snapshot.enumSwitches.nonEmpty)("enum_switches" ->
     array(snapshot.enumSwitches.sortBy(_.path).map(value =>
       obj(
@@ -708,7 +742,48 @@ private[nodal] object ReproducibilityContract:
         )
     array(entries)
 
+  private def waiverFields(waiver: KernelExecutableWaiverSnapshot): Vector[(String, JsonValue)] =
+    Vector(
+      "contract" -> string(waiver.contract),
+      "id" -> string(waiver.id),
+      "reason" -> string(waiver.reason),
+      "source_domain" -> string(waiver.sourceDomain),
+      "destination_domain" -> string(waiver.destinationDomain),
+      "relation" -> obj(
+        "kind" -> string(waiver.relation.kind),
+        "multiply" -> waiver.relation.multiply.map(number).getOrElse(JNull),
+        "divide" -> waiver.relation.divide.map(number).getOrElse(JNull),
+        "phase" -> optionalString(waiver.relation.phase),
+        "phase_known" -> waiver.relation.phaseKnown.map(bool).getOrElse(JNull)
+      ),
+      "obligations" -> obj(waiver.obligations.map((name, value) => name -> string(value))*)
+    )
+
   private def crossingReport(snapshot: ConstructionSnapshot): JsonValue =
+    val executableWaivers = snapshot.digitalExpressions.filter(_.waiver.nonEmpty).sortBy(_.path)
+      .map: expression =>
+        obj((Vector(
+          "record_kind" -> string("executable_waiver"),
+          "semantic_path" -> string(expression.path),
+          "source_value" -> string(expression.operands.head)
+        ) ++ waiverFields(expression.waiver.get))*)
+    val executableEntries = snapshot.digitalExpressions.filter(_.crossing.nonEmpty).sortBy(_.path)
+      .map: expression =>
+        val crossing = expression.crossing.get
+        obj(
+          "record_kind" -> string("executable_crossing"),
+          "kind" -> string(crossing.kind),
+          "contract" -> string(crossing.contract),
+          "semantic_path" -> string(expression.path),
+          "source_value" -> string(expression.operands.head),
+          "source_domain" -> string(crossing.sourceDomain),
+          "destination_domain" -> string(crossing.destinationDomain),
+          "stages" -> number(crossing.stages),
+          "depth" -> crossing.depth.map(number).getOrElse(JNull),
+          "identity" -> optionalString(crossing.identity),
+          "result_role" -> string(crossing.resultRole),
+          "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
+        )
     val originEntries = snapshot.origins
       .filter: origin =>
         val operation = origin.operation.toLowerCase(java.util.Locale.ROOT)
@@ -741,7 +816,7 @@ private[nodal] object ReproducibilityContract:
         )
     val generatedEntries = snapshot.generatedNames
       .filter(entry =>
-        Set("crossing", "synchronizer", "reset-controller").contains(entry.category)
+        Set("crossing", "synchronizer", "reset-controller", "waiver").contains(entry.category)
       )
       .sortBy(entry => (entry.owner, entry.category, entry.name, entry.origin))
       .map: entry =>
@@ -752,7 +827,9 @@ private[nodal] object ReproducibilityContract:
           "name" -> string(entry.name),
           "origin" -> string(entry.origin)
         )
-    array(originEntries ++ waiverEntries ++ generatedEntries)
+    array(
+      executableEntries ++ executableWaivers ++ originEntries ++ waiverEntries ++ generatedEntries
+    )
 
   /** Artifact projection of the authoritative snapshot graph; these fields are provenance, never an
     * additional binding or shape proof owner.

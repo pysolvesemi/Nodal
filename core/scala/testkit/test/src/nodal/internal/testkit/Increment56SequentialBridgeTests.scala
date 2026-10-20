@@ -95,7 +95,7 @@ final class SequentialBridgeScopedPredicate extends Module:
   val core = ClockDomain.external(
     "core",
     ClockEdge.Falling,
-    ResetPolicy.Async,
+    ResetPolicy.AsyncExternalRelease,
     ResetPolarity.ActiveLow,
     100.MHz
   )
@@ -180,7 +180,7 @@ final class SequentialBridgeTwoDomains(alias: Boolean = false, execute: Boolean 
     secondClock,
     secondReset,
     ClockEdge.Falling,
-    ResetPolicy.Async,
+    ResetPolicy.AsyncExternalRelease,
     ResetPolarity.ActiveLow,
     50.MHz,
     "second"
@@ -310,29 +310,29 @@ object Increment56SequentialBridgeTests extends TestSuite:
         "actual structural topology classification"
       )
 
-    test("projected clock descriptor stays honest and cannot activate executable state"):
+    test("fixed projected clock retains physical binding and executable state"):
       val captured = ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor)
       val text = ScalaToMlirBridge.fromSnapshot(captured).text
-      assert(!text.contains("nodal.local_domain_binding"))
-      rejected(
-        ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor(true)),
-        "actual owned declaration"
+      assert(text.contains("nodal.local_domain_binding"), text.contains("nodal.shape_index"))
+      val executable = ScalaToMlirBridge.fromSnapshot(
+        ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor(true))
+      ).text
+      assert(
+        executable.contains("nodal.digital_storage"),
+        executable.contains("nodal.local_domain_binding")
       )
 
-    test("distinct physical roots resolve exact domains and aliases retain explicit ambiguity"):
+    test("distinct physical roots resolve exact domains and contradictory aliases reject"):
       val captured = ConstructionKernel.inspect(new SequentialBridgeTwoDomains)
       val text = ScalaToMlirBridge.fromSnapshot(captured).text
       assert(text.sliding("\"nodal.local_domain_binding\"".length).count(_ ==
         "\"nodal.local_domain_binding\"") == 2)
-      val descriptor =
-        ConstructionKernel.inspect(new SequentialBridgeTwoDomains(alias = true, execute = false))
-      assert(descriptor.modules.head.domains.size == 2)
-      assert(descriptor.modules.head.declarations.forall(_.kind != "register"))
-      rejected(descriptor, "port domain is ambiguous or unavailable")
-      rejected(
-        ConstructionKernel.inspect(new SequentialBridgeTwoDomains(alias = true)),
-        "port domain is ambiguous or unavailable"
-      )
+      for execute <- Vector(false, true) do
+        val invalid = scala.util.Try(ConstructionKernel.inspect(new SequentialBridgeTwoDomains(
+          alias = true,
+          execute = execute
+        )))
+        assert(invalid.failed.toOption.exists(_.getMessage.contains("contradictory polarities")))
 
     test("actual public chain and pure choice reach the same bridge owners"):
       val captured =
@@ -454,7 +454,30 @@ object Increment56SequentialBridgeTests extends TestSuite:
                 assert(normalized.contains("\"nodal.sequential_select\""))
               assert(normalized.contains("!nodal.capability<\"clock\">"))
               assert(normalized.contains("!nodal.capability<\"reset\">"))
-            else assert(!normalized.contains("\"nodal.local_domain_binding\""))
+            else
+              // Fixed shaped Clock projections are executable physical bindings even without
+              // state. Retain the actual selected element and owned reset, not a fake port.
+              val lines = normalized.linesIterator.toVector
+              def unique(operation: String): String =
+                val selected = lines.filter(_.contains("\"nodal." + operation + "\""))
+                assert(selected.size == 1)
+                selected.head
+              def result(line: String): String = line.trim.takeWhile(_ != ' ')
+              val projectedClock = unique("shape_index")
+              val actualReset = unique("reset_boundary")
+              val binding = unique("local_domain_binding")
+              assert(projectedClock.contains("SequentialBridgeProjectedDescriptor.clocks_at_0"))
+              assert(projectedClock.contains("!nodal.shaped<\"2\", !nodal.capability<\"clock\">>"))
+              assert(binding.contains(s"(${result(projectedClock)}, ${result(actualReset)})"))
+              assert(
+                binding.contains("domain = @core"),
+                binding.contains("reset_polarity = \"active_high\"")
+              )
+              assert(
+                actualReset.contains("release = \"sync\""),
+                actualReset.contains("release_domain = @core")
+              )
+              assert(!normalized.contains("\"nodal.sequential_update\""))
             if Set("public-chain", "pure-structural-rhs")(name) then
               assert(normalized.contains("\"nodal.structural_if\""))
               assert(normalized.sliding("\"nodal.structural_yield\"".length).count(_ ==
@@ -467,5 +490,7 @@ object Increment56SequentialBridgeTests extends TestSuite:
             ).mkString("\n") + "\n"
           )
           NativeCompilerClient.run(unbound, request) match
-            case failure: NativeCompilerFailure => assert(failure.standardError.contains("binding"))
+            case failure: NativeCompilerFailure =>
+              assert(failure.diagnostic.code == "NODAL-RESET-057-001")
+              assert(failure.standardError.contains("exact owned executable clock domain"))
             case _: NativeCompilerSuccess => assert(false)

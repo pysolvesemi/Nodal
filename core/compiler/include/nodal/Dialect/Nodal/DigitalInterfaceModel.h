@@ -34,9 +34,25 @@ struct DigitalInterfaceValueDependencies {
   mlir::FlatSymbolRefAttr domain;
   llvm::SmallVector<std::pair<mlir::Value, mlir::Operation *>, 2> sources;
 };
+/// A final observation of actual locally driven Interface/net values. The
+/// canonical owner groups a valid/stream endpoint's forward payload and valid;
+/// ready and unrelated members/endpoints remain separate. Aliases and resolved
+/// pass-through views retain the dependency model's one physical identity.
+/// These roots consume that same graph, including resolved data/enable edges.
+struct DigitalInterfaceObservationGroup {
+  /// Canonical first represented member/net, also the exact sample-group key.
+  mlir::Operation *use;
+  /// Observation context only, not proof of the roots' actual source domains.
+  mlir::FlatSymbolRefAttr domain;
+  llvm::SmallVector<mlir::Value, 2> values;
+};
+/// Append dependencies and optional coherent observations transactionally after
+/// one shared validation. Unaccessed or undriven external leaves do not create
+/// observations. Ordering follows canonical values in authored source order;
+/// no physical bits/lanes or transitive provenance sets are expanded.
 mlir::LogicalResult collectDigitalInterfaceDependencies(
-    mlir::Operation *module,
-    llvm::SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies);
+    mlir::Operation *module, llvm::SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
+    llvm::SmallVectorImpl<DigitalInterfaceObservationGroup> *observations = nullptr);
 } // namespace nodal
 
 #endif

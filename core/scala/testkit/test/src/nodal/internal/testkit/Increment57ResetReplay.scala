@@ -29,3 +29,4 @@ object Increment57ResetReplay:
     for mode <- Vector("single", "combine", "matrix") do
       save("shaped_" + mode, new Increment57ShapedResetSource(mode))
     save("shaped_sync", new Increment57ShapedSyncSource(false))
+    save("shaped_sync_combine", new Increment57SyncCombineSource("same"))

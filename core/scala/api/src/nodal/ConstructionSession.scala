@@ -222,6 +222,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         resetFailure("reset requires an actual owned producer or declared reset boundary")
       case result => result
 
+  private def hasSynchronousResetAssertion(value: Expr[Reset]): Boolean =
+    val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
+    var work = 0
+    def visit(input: Expr[Reset], depth: Int): Boolean =
+      work += 1
+      if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).map(_.booleanValue).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "boundary" => record.release == "sync"
+          case "combine" => record.inputs.forall(visit(_, depth + 1))
+          case _ => false
+        memo.put(actual, java.lang.Boolean.valueOf(result))
+        result
+    visit(value, 0)
+
   private def makeReset(record: ResetRecord, operation: String): Expr[Reset] =
     val result = new KernelExpr[Reset](
       record.inputs ++ Option.when(operation == "rdc_sync")(record.stages).toVector,
@@ -7197,7 +7214,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           inheritedClockEdge(domain.domain).map(clockEdgeName),
           domain.domain.resetPolicy.map(resetPolicyName).orElse(
             Option(effectiveResets.get(domain.domain)).map(value =>
-              if resetRecord(value).kind == "boundary" && resetRecord(value).release == "sync" then
+              if hasSynchronousResetAssertion(value) then
                 "sync"
               else "async"
             )

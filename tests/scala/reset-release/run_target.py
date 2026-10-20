@@ -19,7 +19,7 @@ def main() -> None:
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--include-shaped", action="store_true",
-                        help="also run four fixed shaped-control source profiles")
+                        help="also run fixed shaped-control source profiles")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated outputs must remain under ignored .work")
@@ -30,7 +30,7 @@ def main() -> None:
               ("mixed", True, False, 2)]
     if args.include_shaped:
         cases += [("shaped_" + mode, True, True, 2)
-                  for mode in ("single", "combine", "matrix", "sync")]
+                  for mode in ("single", "combine", "matrix", "sync", "sync_combine")]
     manifest = {"status": "running", "cases": []}
 
     def run(label: str, command: list[str]) -> str:
@@ -155,6 +155,30 @@ initial begin
   tickB; check(1,1); tickA; check(0,1);
   resets=2; tickA; check(1,1); tickB; check(1,0);
   resets=0; tickB; check(1,1);
+  $display("RESET_TARGET_PASS {name}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+'''
+        if name == "shaped_sync_combine":
+            bench = f'''module tb;
+reg [1:0] clocks=0, resets=0;
+wire done;
+{module} dut({connections});
+task tick; begin #2; clocks[1]=1; #1; clocks[1]=0; #1; end endtask
+task other_tick; begin #2; clocks[0]=1; #1; clocks[0]=0; #1; end endtask
+task check(input expected); begin
+  if(done !== expected) $fatal(1,"{name}: expected %b got %b",expected,done);
+end endtask
+initial begin
+  #1; check(1'bx); resets=2; #1; check(1'bx);
+  other_tick; check(1'bx); tick; check(0);
+  resets=0; tick; check(1);
+  resets=1; #1; check(1); other_tick; check(1); tick; check(0);
+  resets=2; tick; check(0);
+  resets=0; tick; check(1);
+  resets=3; #1; check(1); tick; check(0);
+  resets=0; tick; check(1);
   $display("RESET_TARGET_PASS {name}"); $finish;
 end
 initial begin #1000; $fatal(1,"timeout"); end

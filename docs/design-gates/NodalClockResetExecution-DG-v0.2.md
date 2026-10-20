@@ -130,3 +130,9 @@ must directly consume that exact reset boundary result. This supplies declaratio
 ownership without a parallel element-domain map or reset-proof recursion. Claims
 for the same physical reset element must agree on actual clock and edge; distinct
 elements may have independent clocks/edges. Scalar Sync ownership remains unchanged.
+
+A generated reset composed exclusively of Sync boundaries (including nested
+composition) retains Sync assertion policy. This inference is bounded and does
+not establish receiver safety by itself: every root still needs matching actual
+clock and edge. Mixed Sync/asynchronous assertion contracts do not become safe
+through composition; an explicit receiving `Rdc.sync` is required where legal.

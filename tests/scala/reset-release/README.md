@@ -36,7 +36,7 @@ Digital simulation is not physical metastability or silicon timing qualification
 
 For the required fixed shaped-control slice, the same replay additionally emits
 `shaped_single.mlir`, `shaped_combine.mlir`, `shaped_matrix.mlir` and
-`shaped_sync.mlir`. Pass
+`shaped_sync.mlir`, plus `shaped_sync_combine.mlir`. Pass
 `--include-shaped` to require and run these profiles too. The public
 `Increment57ShapedResetSource` uses actual Clock/Reset vector inputs, including a
 nonzero scalar index and a matrix row/index chain. Tests drive the generated
@@ -48,3 +48,7 @@ are not silently skipped when this option is requested.
 The two-domain Sync profile uses separate vector elements and opposite clock
 edges. It checks edge-only reset assertion and release, and that each reset
 element affects only its actual receiving domain.
+
+The all-Sync composition profile checks that either input asserts the composed
+reset only on its common receiving edge, without inserting asynchronous assertion
+or an unrequested release pipeline. Different-clock Sync composition must reject.

@@ -174,3 +174,17 @@ object Increment57ResetSourceTests extends TestSuite:
         )
       )
       assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(retargeted)).isFailure)
+
+    test("all-Sync composition preserves assertion policy without erasing receiving clocks"):
+      val captured = ConstructionKernel.inspect(new Increment57SyncCombineSource("same"))
+      val child = captured.modules.head.domains.find(_.name == "child").get
+      assert(child.resetPolicy.contains("sync"))
+      assert(ScalaToMlirBridge.fromSnapshot(captured).text.contains("nodal.reset_combine"))
+      val different = ConstructionKernel.inspect(new Increment57SyncCombineSource("different"))
+      assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(different)).isFailure)
+    test("mixed assertion composition requires explicit synchronization"):
+      val mixed = ConstructionKernel.inspect(new Increment57SyncCombineSource("mixed"))
+      assert(mixed.modules.head.domains.find(_.name == "child").get.resetPolicy.contains("async"))
+      assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(mixed)).isFailure)
+      val synchronized = ConstructionKernel.inspect(new Increment57SyncCombineSource("mixed_sync"))
+      assert(ScalaToMlirBridge.fromSnapshot(synchronized).text.contains("nodal.reset_sync"))

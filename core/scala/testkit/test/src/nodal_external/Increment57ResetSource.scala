@@ -194,3 +194,37 @@ final class Increment57ShapedSyncSource(sharedReset: Boolean) extends Module:
     val stateB = Reg(false.B)
     stateB := true.B
     doneB := stateB
+
+/** Composition preserves synchronous assertion only when every ancestor supplies it. */
+final class Increment57SyncCombineSource(mode: String) extends Module:
+  val clocks = in(Vec(Clock, 2))
+  val resets = in(Vec(Reset, 2))
+  val clock = clocks.at(1)
+  val resetA = resets.at(0)
+  val resetB = resets.at(1)
+  val first = ClockDomain.from(
+    clock,
+    resetA,
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "first"
+  )
+  val second = ClockDomain.from(
+    if mode == "different" then clocks.at(0) else clock,
+    resetB,
+    ClockEdge.Rising,
+    if mode.startsWith("mixed") then ResetPolicy.AsyncExternalRelease else ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "second"
+  )
+  val combined = ResetController.combine(ResetController.combine(first.reset), second.reset)
+  val release = if mode == "mixed_sync" then Rdc.sync(combined, stages = 2) else combined
+  val child = ClockDomain.generated("child", clock, first, ClockRelation.Same, release)
+  child:
+    val done = out(Bool)
+    val state = Reg(false.B)
+    state := true.B
+    done := state

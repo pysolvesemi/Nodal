@@ -559,3 +559,29 @@ Final shared-library predecessor relink/recheck also passes: 71 sequential,
 `.work/shaped-control-predecessor-{build,tests}.log` and
 `.work/shaped-control/predecessor-ctest-full.log`. This is the selected affected
 native coverage, not an unexecuted repository-wide pass.
+
+## All-Sync composition correction (2026-10-20)
+
+Generated domains now retain Sync assertion policy for recursively all-Sync
+reset composition. The session uses an identity-memoized helper bounded to
+128 depth and 524,288 work; this only derives assertion policy, leaving actual
+receiver clock/edge proof to the existing independent bridge/native verifiers.
+Nested same-clock composition succeeds, different-clock composition rejects,
+mixed Sync/external composition rejects, and an explicit receiving synchronizer
+provides the legal mixed-contract counterpart.
+
+Fresh focused source result: **30/30 pass** (19 reset and all 11 unchanged stimulus
+cases), log `.work/sync-combine-final.log`. Four source files were frozen before
+replay. **12/12 actual source-to-target waveform profiles pass**,
+`.work/sync-combine-target.log` and manifest: the added same-clock Sync composition
+witness proves either root asserts the OR only on the receiving edge, with no
+unrequested asynchronous assertion or release pipeline. All prior scalar/shaped
+waveforms remain passing. Native implementation is unchanged from the preceding
+510-case native checkpoint; those tests are not described as rerun for this
+source-only policy correction.
+
+The selected scalar/fixed-shape reset execution checkpoint is now coherent with
+its stated limits. Required remaining F57 work moves to Gray/pulse and the other
+CDC/domain/clock categories; whole-increment acceptance and all F57 checklist
+children remain open. No CI, full qualification or physical CDC guarantee is
+claimed. Formatting, Python syntax, Markdown and diff checks pass.

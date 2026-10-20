@@ -70,7 +70,7 @@ object Increment56MemoryBridgeTests extends TestSuite:
       assert(text.contains("!nodal.capability<\"clock\">"))
       assert(!text.contains("!nodal.capability<\"reset\">"))
 
-    test("unused memory retains declaration-only unsupported reset descriptors"):
+    test("unused memory cannot turn forged reset policy into executable release proof"):
       val value = sample
       val descriptor = value.copy(
         memoryWrites = Vector.empty,
@@ -86,10 +86,11 @@ object Increment56MemoryBridgeTests extends TestSuite:
           )
         )
       )
-      val text = ScalaToMlirBridge.fromSnapshot(descriptor).text
-      assert(text.contains("\"nodal.memory\""))
-      assert(!text.contains("\"nodal.local_domain_binding\""))
-      rejected(descriptor.copy(memoryWrites = value.memoryWrites), "supported direct reset policy")
+      rejected(descriptor, "reset-bearing domain has no actual reset")
+      rejected(
+        descriptor.copy(memoryWrites = value.memoryWrites),
+        "reset-bearing domain has no actual reset"
+      )
 
     test("all whole-element kinds retain exact scalar and recursive types"):
       val value = ConstructionKernel.inspect(new nodal_external.Increment56MemoryWholeSource)

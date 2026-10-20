@@ -442,3 +442,24 @@ python3 tests/scala/reset-release/run_target.py --input .work/reset-source-ir --
 Source files are scalafmt-formatted; Python syntax, Markdown and diff checks pass.
 CI is not run. This is a scalar reset source/target checkpoint; required shaped
 execution and remaining F57 features stay open.
+
+## Scalar predecessor reconciliation (2026-10-20)
+
+The next four-file source/test correction restores precise typed-input diagnostic
+attribution: a valid typed reset expression is not misreported as a missing
+physical declaration when the clock is malformed. Existing F56 positives that
+exercise asynchronous target behavior now declare the explicit external-provider
+contract instead of requesting raw unsafe Async. AASR's former unsupported case
+is now an actual binding/state positive. Forged unsupported descriptors and
+contradictory reset aliases remain negative with their specific new diagnostics.
+The F12 raw-Async/no-state negative and unchanged stimulus negatives are not
+converted to positive tests.
+
+Focused result: **44/45 pass** (`.work/reset-predecessor-repair.log`): 20/20
+Sequential capture, 13/13 Memory bridge and 11/12 Sequential bridge. The sole
+remaining failure is the unchanged projected-clock predecessor, to be resolved
+by required shaped execution rather than deleting its positive behavior. Native
+replay branches conditional on `NODAL_NODALC` were not configured in this run and
+are not counted as executed target validation; the separate seven actual source
+waveform witnesses above remain the executed target evidence. All F57 items stay
+open. This is a diagnostic/compatibility correction, not shaped completion.

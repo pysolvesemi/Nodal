@@ -95,7 +95,7 @@ final class SequentialBridgeScopedPredicate extends Module:
   val core = ClockDomain.external(
     "core",
     ClockEdge.Falling,
-    ResetPolicy.Async,
+    ResetPolicy.AsyncExternalRelease,
     ResetPolarity.ActiveLow,
     100.MHz
   )
@@ -180,7 +180,7 @@ final class SequentialBridgeTwoDomains(alias: Boolean = false, execute: Boolean 
     secondClock,
     secondReset,
     ClockEdge.Falling,
-    ResetPolicy.Async,
+    ResetPolicy.AsyncExternalRelease,
     ResetPolarity.ActiveLow,
     50.MHz,
     "second"
@@ -319,20 +319,17 @@ object Increment56SequentialBridgeTests extends TestSuite:
         "actual owned declaration"
       )
 
-    test("distinct physical roots resolve exact domains and aliases retain explicit ambiguity"):
+    test("distinct physical roots resolve exact domains and contradictory aliases reject"):
       val captured = ConstructionKernel.inspect(new SequentialBridgeTwoDomains)
       val text = ScalaToMlirBridge.fromSnapshot(captured).text
       assert(text.sliding("\"nodal.local_domain_binding\"".length).count(_ ==
         "\"nodal.local_domain_binding\"") == 2)
-      val descriptor =
-        ConstructionKernel.inspect(new SequentialBridgeTwoDomains(alias = true, execute = false))
-      assert(descriptor.modules.head.domains.size == 2)
-      assert(descriptor.modules.head.declarations.forall(_.kind != "register"))
-      rejected(descriptor, "port domain is ambiguous or unavailable")
-      rejected(
-        ConstructionKernel.inspect(new SequentialBridgeTwoDomains(alias = true)),
-        "port domain is ambiguous or unavailable"
-      )
+      for execute <- Vector(false, true) do
+        val invalid = scala.util.Try(ConstructionKernel.inspect(new SequentialBridgeTwoDomains(
+          alias = true,
+          execute = execute
+        )))
+        assert(invalid.failed.toOption.exists(_.getMessage.contains("contradictory polarities")))
 
     test("actual public chain and pure choice reach the same bridge owners"):
       val captured =

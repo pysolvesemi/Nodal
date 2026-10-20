@@ -383,9 +383,12 @@ object Increment56SequentialCaptureTests extends TestSuite:
     test("register update types and branch-local lifetimes remain exact"):
       rejected("foreign-type")
       rejected("escaped")
-    test("resetless initialized and unresolved release semantics reject"):
+    test("resetless initialization rejects while owned release synchronization is captured"):
       rejected("resetless")
-      rejected("release")
+      val released = ConstructionKernel.inspect(new SequentialCaptureSource("release"))
+      assert(released.digitalExpressions.exists(_.reset.exists(r =>
+        r.kind == "sync" && r.stages == 2
+      )))
     test("cross-domain dependencies reject"):
       val value = scala.util.Try(ConstructionKernel.inspect(new SequentialCrossDomainCapture))
       assert(value.isFailure, value.failed.get.getMessage.contains("NODAL-CDC-001"))

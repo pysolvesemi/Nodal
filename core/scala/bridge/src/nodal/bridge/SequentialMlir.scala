@@ -91,7 +91,8 @@ private[nodal] object SequentialMlir:
                     declaration.domain.forall(clockOwnerAllowed(_, domain.path)))
               )
         if !exactInputs then
-          val missing = operands.find(path => !declarations.contains(path))
+          val missing =
+            operands.find(path => !declarations.contains(path) && !resetValues.contains(path))
           fail(
             if missing.nonEmpty then "physical domain operand has no actual owned declaration"
             else "physical domain operand must be an exact same-domain typed input boundary",

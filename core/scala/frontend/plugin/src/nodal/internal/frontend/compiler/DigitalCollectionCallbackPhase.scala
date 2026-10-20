@@ -22,7 +22,7 @@ import scala.collection.mutable
   */
 private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase:
   val phaseName = "nodalDigitalCollectionCallbacks"
-  override val runsAfter = Set("nodalConstructorCapture")
+  override val runsAfter = Set("nodalAreaCapture")
   override val runsBefore = Set("pickler")
 
   private val definitions = mutable.HashMap.empty[Symbol, DefDef]
@@ -36,6 +36,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var scanned = false
   private var collections = Set.empty[Symbol]
   private var pureMethods = Set.empty[Symbol]
+  private var areaMemberMethods = Set.empty[Symbol]
   private var pureModules = Set.empty[Symbol]
   private var factories = Set.empty[Symbol]
   private var iterationFactories = Set.empty[Symbol]
@@ -86,6 +87,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     methods(module, names*)
 
   private def initializeProfile()(using Context): Unit =
+    areaMemberMethods = methods(requiredClass("nodal.Area"), "selectDynamic")
     val owner = requiredModule("nodal.CoreSemanticsCandidateApi$package")
     collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce", "reduceBalancedTree")
     pureModules += owner
@@ -178,6 +180,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         moduleMethods("nodal.UInt") ++
         moduleMethods("nodal.DigitalCombinationalApi$package", "select") ++
         moduleMethods("nodal.DigitalAggregateApi$package", "field", "value", "member") ++
+        areaMemberMethods ++
         methods(requiredClass("nodal.StructMember"), "bind") ++
         methods(
           owner,
@@ -1265,6 +1268,19 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             valid
           case None => importedSummary(cls, "constructor", tree)
 
+    /** Scala inserts this cast for structural val selection. Admit only the exact refined
+      * member type, never an authored capability-changing or arbitrary Any cast.
+      */
+    private def areaMemberProjection(tree: Tree, result: Type): Boolean = tree match
+      case Apply(selection: Select, List(Literal(constant)))
+          if areaMemberMethods(selection.symbol) &&
+            constant.value.isInstanceOf[String] =>
+        val receiver = selection.qualifier.tpe.widen.dealias
+        val member = receiver.member(termName(constant.value.asInstanceOf[String]))
+        receiver.derivesFrom(requiredClass("nodal.Area")) && member.exists &&
+        (member.info.finalResultType.widen.dealias =:= result.widen.dealias)
+      case _ => false
+
     private def applied(tree: Tree, depth: Int): Boolean =
       if !budget(tree, depth) then false
       else
@@ -1320,6 +1336,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 then
                   callback(argument, depth + 1)
                 else check(argument, depth + 1)
+          case TypeApply(cast: Select, result :: Nil)
+              if cast.symbol == defn.Any_typeCast &&
+                areaMemberProjection(cast.qualifier, result.tpe) =>
+            applied(cast.qualifier, depth + 1)
           case TypeApply(function, _) => applied(function, depth + 1)
           case selection: Select
               if selection.qualifier.isInstanceOf[New] && selection.symbol.isConstructor =>

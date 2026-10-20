@@ -1715,6 +1715,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     mutable.LinkedHashMap[StructuralShapeCoordinates.Region, ExpressionRef]
   ]
   private val instanceSelectionStack = mutable.ArrayBuffer.empty[Instance[?]]
+  private val areas = mutable.ArrayBuffer.empty[AreaRecord]
+  private val areaStack = mutable.ArrayBuffer.empty[AreaRecord]
+  private val areaRecords = new java.util.IdentityHashMap[Area, AreaRecord]()
   private var constructorFailure: Option[(Throwable, String)] = None
 
   private def fail(code: String, message: String, path: Option[String] = None): Nothing =
@@ -4035,6 +4038,143 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       fail("NODAL-DOMAIN-020", "ClockDomain is outside this construction transaction")
     )
 
+  private def activeArea: Option[AreaRecord] =
+    moduleStack.lastOption.flatMap(module => areaStack.lastOption.filter(_.owner == module.handle))
+
+  def allocateArea[A <: Area](source: SourceSpan)(body: () => A): A =
+    requireNoGeneratedEffect("Area declaration")
+    if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
+      fail("NODAL-AREA-058-CONTEXT", "Area requires ordinary Module construction")
+    if areaStack.size >= 128 || areas.size >= 65536 then
+      fail("NODAL-AREA-058-LIMIT", "Area nesting or count exceeds its finite construction budget")
+    val module = currentModule
+    val record = new AreaRecord(module.handle, source, activeArea, currentDomain)
+    areas += record
+    areaStack += record
+    try
+      val result = body()
+      if !record.value.exists(_ eq result) || currentModule.handle != record.owner then
+        fail("NODAL-AREA-058-LIFECYCLE", "Area allocation did not close its exact owned object")
+      result
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, source.path)
+        scala.util.Failure[Nothing](failure).get
+    finally
+      val removed = areaStack.remove(areaStack.size - 1)
+      if removed ne record then
+        fail("NODAL-AREA-058-LIFECYCLE", "Area lexical construction stack is corrupt")
+
+  def beginArea(value: Area): Unit =
+    val record = activeArea.filter(_.value.isEmpty).getOrElse(
+      fail(
+        "NODAL-AREA-058-MISSING",
+        "Area allocation requires the matching Nodal compiler capture plugin"
+      )
+    )
+    val schema = Option(value.getClass.getDeclaredAnnotation(classOf[AreaCaptureSchema]))
+    if !schema.exists(_.version() == 1) || areaRecords.containsKey(value) then
+      fail("NODAL-AREA-058-MISSING", "Area class lacks the exact compiler-owned capture version")
+    record.value = Some(value)
+    areaRecords.put(value, record)
+
+  private def areaRecord(value: Area): AreaRecord =
+    val record = Option(areaRecords.get(value)).getOrElse(
+      fail("NODAL-AREA-058-OWNER", "Area belongs to another construction transaction")
+    )
+    if currentModule.handle != record.owner then
+      fail("NODAL-AREA-058-OWNER", "Area belongs to another Module")
+    record
+
+  private def areaName(name: String): String =
+    if !name.matches("[A-Za-z_][A-Za-z0-9_]*") then
+      fail("NODAL-AREA-058-NAME", "Area/member names require an unambiguous Scala identifier")
+    name
+
+  def bindArea(name: String, priority: Int, value: Area): Unit =
+    val record = areaRecord(value)
+    val selected = areaName(name)
+    if priority < 0 || priority > 2 then
+      fail("NODAL-AREA-058-NAME", "Area binder has an invalid lexical priority")
+    if record.name.isEmpty || priority > record.namePriority then
+      record.name.foreach(previous => record.aliases += previous)
+      record.name = Some(selected)
+      record.namePriority = priority
+    else if !record.name.contains(selected) && !record.aliases.contains(selected) then
+      record.aliases += selected
+
+  def areaMember(owner: Area, name: String, value: Any): Unit =
+    val record = areaRecord(owner)
+    if !activeArea.contains(record) then
+      fail("NODAL-AREA-058-LIFECYCLE", "Area members must be captured during their construction")
+    val selected = areaName(name)
+    if record.members.size >= 65536 then
+      fail("NODAL-AREA-058-LIMIT", "Area member count exceeds its finite construction budget")
+    if record.members.contains(selected) then
+      fail("NODAL-AREA-058-MEMBER", "Area member identity was assigned twice")
+    record.members.update(selected, value)
+
+  def areaMemberValue(owner: Area, name: String): Any =
+    areaRecord(owner).members.getOrElse(
+      areaName(name),
+      fail("NODAL-AREA-058-MEMBER", "Area member has no compiler-captured eager value")
+    )
+
+  private def areaComponents(record: AreaRecord): Vector[String] =
+    val local = record.name.getOrElse(
+      "area_" + java.lang.Integer.toUnsignedString(
+        (record.source.path + ":" + record.source.line + ":" + record.source.column).hashCode,
+        16
+      )
+    )
+    record.parent.map(areaComponents).getOrElse(Vector.empty) :+ local
+
+  private def prepareAreaNames(): Unit =
+    val paths = mutable.HashSet.empty[(Long, Vector[String])]
+    areas.foreach: record =>
+      val components = areaComponents(record)
+      if !paths.add(record.owner -> components) then
+        fail("NODAL-AREA-058-NAME", "Area lexical names collide in the same Module")
+      val ownedDeclarations = record.declarations.toSet
+      val ownedInstances = record.instances.toSet
+      record.members.foreach: (name, value) =>
+        val ownedDeclaration = Option(declarationIds.get(value)).exists(ownedDeclarations.contains)
+        val ownedInstance =
+          Option(instanceObjects.get(value)).flatMap(value => Option(instanceIds.get(value)))
+            .orElse(Option(instanceIds.get(value))).exists(ownedInstances.contains)
+        if ownedDeclaration || ownedInstance then
+          value match
+            case reference: AnyRef =>
+              semanticOrigin.captureLexicalName(reference, components :+ name)
+            case _ => ()
+
+  private def areaSnapshots(resolved: Map[DomainRef, String]): Vector[KernelAreaSnapshot] =
+    def path(record: AreaRecord): String =
+      (Vector(modulePath(record.owner)) ++ areaComponents(record)).mkString(".")
+    def localDomain(record: AreaRecord): Option[String] =
+      localDomainCandidate(record.owner, record.domain, path(record))
+        .map(domain => domainPath(domainRef(domain))).orElse:
+          val members = record.declarations.iterator.flatMap(reference =>
+            localDeclarationDomain(records(reference.module).declarations(reference.index), resolved)
+          ).toSet
+          Option.when(members.size == 1)(members.head)
+    areas.toVector.map: record =>
+      KernelAreaSnapshot(
+        path(record),
+        modulePath(record.owner),
+        record.parent.map(path),
+        record.source,
+        localDomain(record),
+        record.declarations.toVector.map(declarationPath),
+        record.members.toVector.flatMap: (name, value) =>
+          val target = value match
+            case area: Area => Option(areaRecords.get(area)).map(path)
+            case instance: Instance[?] =>
+              Option(instanceIds.get(instance)).map(record => modulePath(record.child))
+            case _ => pathOf(value)
+          target.map(value => KernelAreaMemberSnapshot(name, path(record) + "." + name, value))
+      )
+
   def beginModule(module: Module): Unit =
     requireNoCollectionEffect("Module declaration")
     requireLoopEffect("Module declaration")
@@ -4270,6 +4410,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       conservativeDimensions
     )
     declarationIds.put(value, reference)
+    activeArea.foreach(_.declarations += reference)
     semanticOrigin.captureDeclaration(
       module.handle,
       reference.index,
@@ -4354,6 +4495,82 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private var occurrenceDomains = Map.empty[DomainRef, String]
   private val selectedRequirementBindings =
     mutable.LinkedHashMap.empty[DomainRef, (DomainRef, String, Long, Int)]
+
+  private val instanceInterfacePorts =
+    mutable.LinkedHashMap.empty[DeclarationRef, (InstanceRecord, DeclarationRef)]
+
+  def instanceInterfacePort[I <: Interface, R <: RoleKind](
+      value: InterfacePort[I, R]
+  ): InterfacePort[I, R] =
+    val selected = instanceSelectionStack.lastOption.getOrElse(
+      fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires an exact Instance selector")
+    )
+    val instance = instanceRecord(selected)
+    requireInstanceScope(instance)
+    val port = Option(declarationIds.get(value)).getOrElse(
+      fail("NODAL-HIERARCHY-058-INTERFACE", "selector requires an actual declared child Interface")
+    )
+    val declaration = records(port.module).declarations(port.index)
+    if port.module != instance.child || declaration.kind != KernelSignalKind.InterfacePort ||
+      value.origin.nonEmpty || value.boundary || activeValueRegion.nonEmpty ||
+      activeGeneratedRegion.nonEmpty
+    then
+      fail(
+        "NODAL-HIERARCHY-058-INTERFACE",
+        "selector requires its immediate child's direct Interface"
+      )
+    val leaves = ConstructionInterfaceLayout.leaves(value.definition, value.role)
+    if leaves.exists(leaf =>
+        leaf.mode.nonEmpty || leaf.analogType.nonEmpty ||
+          leaf.dataType.exists(isBoundaryCapability)
+      )
+    then
+      fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires concrete digital data leaves")
+    instanceInterfacePorts.iterator.collectFirst:
+      case (reference, (existing, target)) if (existing eq instance) && target == port =>
+        records(reference.module).declarations(reference.index).value.asInstanceOf[InterfacePort[
+          I,
+          R
+        ]]
+    .getOrElse:
+      val name = s"instance_${instance.ordinal}_interface_${port.index}"
+      val proxy = new InterfacePort(
+        value.definition,
+        value.role,
+        name,
+        value.domain,
+        exported = false,
+        boundary = true
+      )
+      registerDeclaration(
+        proxy,
+        KernelSignalKind.InterfacePort,
+        None,
+        Some(name),
+        None,
+        Vector("interface" -> value.definition.name, "role" -> value.role.name)
+      )
+      val reference = declarationIds.get(proxy)
+      val owner = records(reference.module)
+      owner.declarations.update(
+        reference.index,
+        owner.declarations(reference.index).copy(domainCandidate = None)
+      )
+      instanceInterfacePorts(reference) = instance -> port
+      proxy
+
+  private def instanceInterfaceDomain(reference: DeclarationRef): Option[DomainRef] =
+    instanceInterfacePorts.get(reference).map: (_, port) =>
+      val child = records(port.module).declarations(port.index)
+      val required = declarationCandidate(child).map(domainRef).getOrElse(
+        fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface has no declared domain requirement")
+      )
+      selectedRequirementBindings.get(required).map(_._1).getOrElse(
+        fail(
+          "NODAL-HIERARCHY-058-INTERFACE",
+          "child Interface needs an actual instance domain binding"
+        )
+      )
 
   def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
     val selected = instanceSelectionStack.lastOption.getOrElse(
@@ -6011,6 +6228,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     child.attached = true
     instanceIds.put(instance, record)
     instanceObjects.put(childModule, instance)
+    activeArea.foreach(_.instances += record)
     semanticOrigin.captureInstance(
       parent.handle,
       record.ordinal,
@@ -8172,19 +8390,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     occurrenceDomains
 
   /** An outer lexical domain supplies the instance binding, never a foreign child symbol. */
-  private def declarationCandidate(declaration: DeclarationRecord): Option[ClockDomain] =
-    declaration.domainCandidate.map: domain =>
-      if domainRef(domain).module == declaration.reference.module then domain
+  private def localDomainCandidate(
+      owner: Long,
+      candidate: Option[ClockDomain],
+      path: => String
+  ): Option[ClockDomain] =
+    candidate.map: domain =>
+      if domainRef(domain).module == owner then domain
       else
-        val requirements =
-          records(declaration.reference.module).domains.filter(_.kind == KernelDomainKind.Required)
+        val requirements = records(owner).domains.filter(_.kind == KernelDomainKind.Required)
         if requirements.size != 1 then
           fail(
             "NODAL-DECL-DOMAIN-016",
             "inherited declaration requires one exact child-local requirement",
-            Some(declarationPath(declaration.reference))
+            Some(path)
           )
         requirements.head.domain
+
+  private def declarationCandidate(declaration: DeclarationRecord): Option[ClockDomain] =
+    localDomainCandidate(
+      declaration.reference.module,
+      instanceInterfaceDomain(declaration.reference).map(reference =>
+        records(reference.module).domains(reference.index).domain
+      ).orElse(declaration.domainCandidate),
+      declarationPath(declaration.reference)
+    )
 
   private def localDeclarationDomain(
       declaration: DeclarationRecord,
@@ -8646,6 +8876,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               instancePath(module.handle, instance.ordinal),
               declarationPath(port),
               if declaration.kind == KernelSignalKind.InstanceInput then "input" else "output"
+            ),
+          instanceInterfacePorts.get(declaration.reference).map: (instance, port) =>
+            KernelInterfaceBoundarySnapshot(
+              instancePath(module.handle, instance.ordinal),
+              declarationPath(port)
             )
         )
       val instances = module.instances.toVector.map: instance =>
@@ -9651,6 +9886,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(site)
       )
     finalizeStreamReady()
+    if areaStack.nonEmpty then
+      fail("NODAL-AREA-058-LIFECYCLE", "construction closed with an active Area")
+    prepareAreaNames()
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
       fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")
@@ -9713,7 +9951,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             declaration.value,
             declarationPath(declaration.reference),
             modulePath(module.handle),
-            declarationDomain(declaration, resolved),
+            localDeclarationDomain(declaration, resolved),
             declaration.value match
               case array: InterfaceArray[?, ?] =>
                 Vector(renderShapeDimension(array.count, module.handle))
@@ -9739,6 +9977,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 CandidateRuntime.typeDescriptor(left),
                 CandidateRuntime.typeDescriptor(right),
                 Some(analysis.sameIdentity)
+              )
+            ,
+            instanceInterfacePorts.get(declaration.reference).map: (instance, port) =>
+              KernelInterfaceBoundarySnapshot(
+                instancePath(module.handle, instance.ordinal),
+                declarationPath(port)
               )
           )
         )
@@ -9883,6 +10127,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ),
       waivers = waiverSnapshots(semantic.sourceMap),
       generatedRegions = generatedSnapshots(),
+      areas = areaSnapshots(resolved),
       shapeIndices = shapeIndexSnapshots(),
       shapeViews = shapeViewSnapshots(),
       conservativeArrayBindings = arrayBindings.map(_._1),

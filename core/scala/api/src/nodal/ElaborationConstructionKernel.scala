@@ -123,6 +123,28 @@ private[nodal] object ConstructionKernel:
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
 
+  private def areaSession: ConstructionSession = active.getOrElse(
+    failConstructor(
+      "NODAL-AREA-058-OWNER",
+      "Area requires an active enclosing Module construction",
+      "Area"
+    )
+  )
+
+  def allocateArea[A <: Area](source: SourceSpan)(body: () => A): A =
+    areaSession.allocateArea(source)(body)
+
+  def beginArea(value: Area): Unit = areaSession.beginArea(value)
+
+  def bindArea(name: String, priority: Int, value: Area): Unit =
+    areaSession.bindArea(name, priority, value)
+
+  def areaMember(owner: Area, name: String, value: Any): Unit =
+    areaSession.areaMember(owner, name, value)
+
+  def areaMemberValue(owner: Area, name: String): Any =
+    areaSession.areaMemberValue(owner, name)
+
   def currentModulePath: String = active
     .map(_.currentModulePath)
     .getOrElse(
@@ -515,6 +537,13 @@ private[nodal] object ConstructionKernel:
   def waveformForbidden[A](body: => A): A = active match
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
+
+  def instanceInterfacePort[I <: Interface, R <: RoleKind](
+      value: InterfacePort[I, R]
+  ): InterfacePort[I, R] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfacePort(value)
 
   def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
     active.getOrElse(

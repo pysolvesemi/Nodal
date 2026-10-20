@@ -164,7 +164,8 @@ private[compiler] final class StructuralIfCapture:
     var owner = ctx.owner
     var found = false
     while owner.exists && !found do
-      found = owner.isClass && owner.derivesFrom(requiredClass("nodal.Module"))
+      found = owner.isClass && (owner.derivesFrom(requiredClass("nodal.Module")) ||
+        owner.derivesFrom(requiredClass("nodal.Area")))
       owner = owner.owner
     found
 

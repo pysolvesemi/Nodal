@@ -233,7 +233,8 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     val name: String,
     val domain: ClockDomain,
     private[nodal] val exported: Boolean,
-    private[nodal] val origin: Option[InterfacePort[I, ?]] = None
+    private[nodal] val origin: Option[InterfacePort[I, ?]] = None,
+    private[nodal] val boundary: Boolean = false
 ):
   if exported then
     CandidateRuntime.declare(
@@ -309,6 +310,13 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
   def connectExact[OtherRole <: RoleKind](
       other: InterfacePort[I, OtherRole]
   )(using RoleConnection[R, OtherRole]): Unit =
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
+  /** Forward an exported endpoint through one exact child boundary without changing its role. */
+  def forwardExact(other: InterfacePort[I, R]): Unit =
+    if DigitalInterfaceContract.root(endpoint).boundary ==
+        DigitalInterfaceContract.root(other).boundary
+    then DigitalInterfaceContract.fail(3, "forwardExact requires one local and one child endpoint")
     ConstructionKernel.operation("interface-connect", endpoint, other)
 
   def driveMember[A <: Data](member: String, value: Expr[A])(using RoleCanDrive[R]): Unit =

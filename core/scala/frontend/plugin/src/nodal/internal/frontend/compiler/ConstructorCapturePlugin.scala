@@ -22,7 +22,7 @@ final class ConstructorCapturePlugin extends StandardPlugin:
 
   override def initialize(options: List[String])(using Context): List[PluginPhase] =
     if options.nonEmpty then report.error("NODAL-CONSTRUCTOR-OPTIONS: no options are supported")
-    List(new ConstructorCapturePhase, new DigitalCollectionCallbackPhase)
+    List(new ConstructorCapturePhase, new AreaCapturePhase, new DigitalCollectionCallbackPhase)
 
 private final case class Parameter(name: String, default: Double)
 private final case class Schema(parameters: List[Parameter]):

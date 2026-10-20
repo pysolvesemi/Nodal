@@ -22,6 +22,8 @@ private[nodal] final case class KernelInterfaceRoleSnapshot(
     members: Vector[KernelInterfaceMemberSnapshot]
 )
 
+private[nodal] final case class KernelInterfaceBoundarySnapshot(instance: String, endpoint: String)
+
 private[nodal] final case class KernelInterfaceSnapshot(
     path: String,
     owner: String,
@@ -30,7 +32,8 @@ private[nodal] final case class KernelInterfaceSnapshot(
     domain: String,
     dimensions: Vector[String],
     members: Vector[KernelInterfaceMemberSnapshot],
-    roles: Vector[KernelInterfaceRoleSnapshot] = Vector.empty
+    roles: Vector[KernelInterfaceRoleSnapshot] = Vector.empty,
+    boundary: Option[KernelInterfaceBoundarySnapshot] = None
 )
 
 /** Reference fields are semantic edges, never rendered source expressions or operation labels. */
@@ -83,7 +86,8 @@ private[nodal] object DigitalInterfaceContract:
       renderType: DataType[?] => String,
       validateProtocolPayload: DataType[?] => Unit,
       validateBoundarySource: Expr[?] => Unit,
-      samePayloadTypes: (DataType[?], DataType[?]) => Boolean
+      samePayloadTypes: (DataType[?], DataType[?]) => Boolean,
+      boundary: Option[KernelInterfaceBoundarySnapshot] = None
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
 
@@ -345,7 +349,8 @@ private[nodal] object DigitalInterfaceContract:
           domain,
           declaration.dimensions,
           snapshotLeaves(leaves),
-          roleMaps
+          roleMaps,
+          declaration.boundary
         )
     def declaration(value: AnyRef, owner: String): Declaration =
       val canonical = value match
@@ -384,6 +389,8 @@ private[nodal] object DigitalInterfaceContract:
       else
         Option(viewLayouts.get(endpoint)).getOrElse:
           val original = endpointLeaves(endpoint.origin.get, depth + 1)
+          if root(endpoint).boundary then
+            fail(3, "child Interface views cannot invert the declared role")
           if endpoint.role.name != "monitor" && original.exists(value =>
               value.mode.nonEmpty || value.analogType.nonEmpty ||
                 !Set("in", "out").contains(value.access)
@@ -500,16 +507,22 @@ private[nodal] object DigitalInterfaceContract:
                 first.nestedInterfaces != second.nestedInterfaces ||
                 first.rendered(a.renderType) != second.rendered(b.renderType)
               then fail(5, "exact interface connection changed a member ABI")
-              val complementary = Set("in" -> "out", "out" -> "in").contains(first.access ->
-                second.access) ||
+              val sink = ConstructionInterfaceLayout.connectionSink(
+                first.access,
+                a.boundary.nonEmpty,
+                second.access,
+                b.boundary.nonEmpty
+              )
+              val complementary = sink.nonEmpty ||
                 (first.protocol == "resolved" && first.access == "connect" &&
                   second.access == "connect")
               if first.analogType.nonEmpty || !complementary then
                 fail(3, "exact digital interface connection requires complementary digital access")
               if first.protocol != "resolved" then
-                val sink = if first.access == "in" then s"${a.path}.${first.name}"
+                val sinkPath = if sink.contains(true) then s"${a.path}.${first.name}"
                 else s"${b.path}.${second.name}"
-                if !driven.add(sink) then fail(10, "ordinary interface member has multiple drivers")
+                if !driven.add(sinkPath) then
+                  fail(10, "ordinary interface member has multiple drivers")
               effect(
                 operation,
                 s"${a.path}.${first.name}",
@@ -534,8 +547,9 @@ private[nodal] object DigitalInterfaceContract:
                 "driveMember requires an exact digital leaf name, including protocol payload/valid/ready"
               )
             )
-            if leaf.analogType.nonEmpty || !Set("out", "drive").contains(leaf.access) ||
-              endpoint.role.name == "monitor"
+            val writable = if context.boundary.nonEmpty then leaf.access == "in"
+            else Set("out", "drive").contains(leaf.access)
+            if leaf.analogType.nonEmpty || !writable || endpoint.role.name == "monitor"
             then
               fail(3, "role does not permit driving this digital member")
             if leaf.mode.exists(_ != "push-pull") then
@@ -712,6 +726,7 @@ private[nodal] object DigitalInterfaceContract:
     val direct = mutable.HashMap.empty[String, mutable.ArrayBuffer[Expr[?]]]
     val sources = mutable.HashMap.empty[String, String]
     var dependencyEdges = 0
+    val boundaries = interfaces.filter(_.boundary.nonEmpty).flatMap(_.members.map(_.path)).toSet
     connectivity.foreach: edge =>
       val target = canonical(edge.target)
       val values = (edge.value.toVector ++ edge.enable.toVector).map(path =>
@@ -722,7 +737,13 @@ private[nodal] object DigitalInterfaceContract:
       if values.nonEmpty then direct.getOrElseUpdate(target, mutable.ArrayBuffer.empty) ++= values
       if edge.kind == "interface-connect" && !resolved.contains(edge.target) then
         val other = canonical(edge.source.get)
-        val (sink, source) = if edge.access.contains("in") then (target, other) else (other, target)
+        val leftSink = ConstructionInterfaceLayout.connectionSink(
+          edge.access.get,
+          boundaries(edge.target),
+          edge.sourceAccess.get,
+          boundaries(edge.source.get)
+        ).getOrElse(fail(3, "connection lost its exact boundary-facing direction"))
+        val (sink, source) = if leftSink then (target, other) else (other, target)
         sources.update(sink, source)
     val cache = mutable.HashMap.empty[String, Vector[Expr[?]]]
     def dependencies(path: String): Vector[Expr[?]] =

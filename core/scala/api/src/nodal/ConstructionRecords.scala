@@ -89,7 +89,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     conservativeDimensions: Vector[String] = Vector.empty,
     generatedScope: Option[KernelGeneratedScope] = None,
     resolvedDomain: Option[String] = None,
-    instancePort: Option[KernelInstancePortSnapshot] = None
+    instancePort: Option[KernelInstancePortSnapshot] = None,
+    interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None
 )
 
 private[nodal] final case class KernelInstancePortSnapshot(
@@ -589,6 +590,7 @@ private[nodal] final case class ConstructionSnapshot(
     analogProcedural: Vector[AnalogProceduralRuntime.Snapshot] = Vector.empty,
     waivers: Vector[KernelWaiverSnapshot] = Vector.empty,
     generatedRegions: Vector[KernelGeneratedRegionSnapshot] = Vector.empty,
+    areas: Vector[KernelAreaSnapshot] = Vector.empty,
     shapeIndices: Vector[KernelShapeIndexSnapshot] = Vector.empty,
     shapeViews: Vector[KernelShapeViewSnapshot] = Vector.empty,
     conservativeArrayBindings: Vector[KernelConservativeArrayBindingSnapshot] = Vector.empty,

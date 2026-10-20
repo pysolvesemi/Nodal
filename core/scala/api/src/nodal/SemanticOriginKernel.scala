@@ -139,6 +139,12 @@ private[nodal] final class SemanticOriginBuilder:
   private val instances: mutable.ArrayBuffer[OriginInstanceCapture] = mutable.ArrayBuffer.empty
   private val operations: mutable.ArrayBuffer[OriginOperationCapture] =
     mutable.ArrayBuffer.empty
+  private val lexicalNames = new IdentityHashMap[AnyRef, String]()
+
+  /** Exact compiler-captured lexical binders outrank reflection and nearby-source heuristics. */
+  def captureLexicalName(value: AnyRef, components: Vector[String]): Unit =
+    if !lexicalNames.containsKey(value) then
+      lexicalNames.put(value, components.map(cleanIdentifier(_, "member")).mkString("_"))
 
   private val internalSourceFiles = Set(
     "ElaborationConstructionKernel.scala",
@@ -152,6 +158,7 @@ private[nodal] final class SemanticOriginBuilder:
     "SequentialRuntime.scala",
     "FlatFsmRuntime.scala",
     "FsmDefinitionRuntime.scala",
+    "Area.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
@@ -707,7 +714,8 @@ private[nodal] final class SemanticOriginBuilder:
       members: IdentityHashMap[AnyRef, String],
       value: AnyRef
   ): Option[String] =
-    Option(members.get(value)).map(cleanIdentifier(_, "value"))
+    Option(lexicalNames.get(value)).orElse(Option(members.get(value)))
+      .map(cleanIdentifier(_, "value"))
 
   private def allocate(
       candidates: Vector[NameCandidate],

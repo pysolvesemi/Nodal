@@ -19,6 +19,15 @@ private[nodal] object ConstructionInterfaceLayout:
         DigitalInterfaceContract.fail(1, "interface leaf has no exact type")
       )
 
+  /** True selects the left sink. Declared roles never change across a boundary. */
+  def connectionSink(left: String, leftBoundary: Boolean, right: String, rightBoundary: Boolean)
+      : Option[Boolean] =
+    if leftBoundary != rightBoundary then
+      Option.when(left == right && Set("in", "out").contains(left))(
+        if leftBoundary then left == "in" else left == "out"
+      )
+    else Option.when(Set("in" -> "out", "out" -> "in").contains(left -> right))(left == "in")
+
   def memberName(member: InterfaceMember): String = member match
     case value: InterfaceMember.Value[?] => value.name
     case valid: InterfaceMember.ValidChannel[?] => valid.name

@@ -222,3 +222,48 @@ Symbolic parameters/shapes, generated hierarchy families, complete boundary
 layout adapters, Interface arrays/resolved/conservative topology and actual
 Interface target emission remain required F58 work. No checklist child closes
 from this finite concrete digital checkpoint.
+
+## Checkpoint 3: lexical Areas and typed Interface source projection
+
+The [Area contract](../design-gates/NodalAreasHierarchy-DG-v0.1.md) implements
+compiler-owned anonymous, reusable, inherited, helper-created and nested lexical
+groups inside the existing construction transaction. Areas add neither module
+boundaries nor state. Exact captured members retain canonical hardware identity,
+ownership, local formal-domain provenance and deterministic lexical names.
+Compiler-inserted structural-member casts admit only the exact statically
+refined member type; arbitrary capability-changing casts remain forbidden.
+Construction failures, including constructor-argument failures, poison the
+transaction even if authored code catches the exception.
+
+The [Interface contract](../design-gates/NodalInterfaceHierarchy-DG-v0.1.md)
+adds typed parent-owned projections of an actual child endpoint and same-role
+`forwardExact` connections. Role declaration and boundary direction remain
+separate. The source and bridge check complete typed ABI, selected/nested roles,
+exact actual bindings and real data lineage; a projected output never becomes
+writable and a projection never creates a second endpoint or net.
+
+With Scala 3.8.4/JDK 25.0.2 and frozen checkpoint-2 native compiler `2125c01f`,
+the combined focused run passed 52 tests: Area 6, Interface hierarchy 7,
+F54 Interface source 9 and bridge 14, F57 hierarchy 9 and Interface observations
+7. The configured native checks executed rather than skipping.
+The clean standalone Area harness also passed seven negative fixtures, actual
+callback writes, constructor failure/evaluation-order/depth tests, repeated
+helper naming, separate producer/factory JAR inheritance and nested projection,
+missing-metadata and missing-plugin checks.
+
+Fresh actual Scala Area replays passed the explicit default native gate for
+lexical and external-write cases; the duplicate-driver case was rejected by
+the existing driver owner. External-write also passed target lowering and
+SystemVerilog export, retaining one `group_target` wire and direct output
+assignment, with no Area module or extra latency. This is an export/structure
+witness, not a claimed Area waveform test. Actual Interface forwarding/input
+drive replays pass native admission; Interface target lowering still refuses
+transactionally with no output, rather than claiming nonexistent emission.
+
+Maintained reproductions are in `tests/scala/areas/` and the source test classes.
+Receipts remain under `.work/f58-source-checkpoint-tests.log`,
+`.work/f58-areas/`, `.work/f58-area-source-checkpoint/` and
+`.work/f58-area-native-checkpoint/`. Per-Area membership sets and deferred naming
+avoid repeated declaration scans; existing depth/transaction limits remain.
+Generated Area collections, symbolic boundary selection, Interface arrays,
+resolved/conservative propagation and target adapters remain required open work.

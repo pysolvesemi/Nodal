@@ -282,6 +282,7 @@ private[nodal] object InterfaceMlir:
         module.path == endpoint.owner && modules.contains(endpoint.owner) &&
           Set("interface-port", "interface-array").contains(declaration.kind) &&
           declaration.generatedScope.isEmpty &&
+          declaration.interfaceBoundary == endpoint.boundary &&
           attributes.get("interface").contains(endpoint.identity) &&
           attributes.get("role").contains(endpoint.role) &&
           declaration.domain.contains(endpoint.domain) && endpoint.identity.nonEmpty &&
@@ -292,6 +293,37 @@ private[nodal] object InterfaceMlir:
         "interface declaration and complete typed contract disagree",
         endpoint.path
       )
+      endpoint.boundary.foreach: boundary =>
+        val instance = module.instances.find(_.path == boundary.instance).getOrElse(
+          fail("Interface projection lost its exact immediate child instance", endpoint.path)
+        )
+        val child = endpoints.getOrElse(
+          boundary.endpoint,
+          fail("Interface projection lost its actual child endpoint", endpoint.path)
+        )
+        val childDeclaration = declarations(child.path)._2
+        val binding = instance.actualBindings.filter(_.requirement == child.domain)
+        def canonical(values: Vector[KernelInterfaceRoleSnapshot]) = values.map(role =>
+          role.name -> role.copy(members = role.members.map(value => value.copy(path = value.name)))
+        ).toMap
+        val endpointRoles = canonical(endpoint.roles)
+        val childRoles = canonical(child.roles)
+        requireValid(
+          child.owner == instance.childModule && child.boundary.isEmpty &&
+            childDeclaration.kind == "interface-port" && childDeclaration.generatedScope.isEmpty &&
+            instance.generatedScope.isEmpty && child.dimensions.isEmpty &&
+            endpoint.identity == child.identity && endpoint.role == child.role &&
+            endpointRoles.get(endpoint.role) == childRoles.get(child.role) &&
+            endpointRoles.forall((name, role) =>
+              childRoles.get(name).forall(_ == role)
+            ) &&
+            binding.size == 1 && binding.head.actual == endpoint.domain &&
+            endpoint.members.forall(value =>
+              Set("plain", "valid", "stream").contains(value.protocol)
+            ),
+          "Interface projection changes exact child, selected roles, ABI or actual domain binding",
+          endpoint.path
+        )
       endpoint.roles.foreach(validateRole(endpoint, _))
       requireValid(
         endpoint.roles.find(_.name == endpoint.role).exists(_.members == endpoint.members),
@@ -405,6 +437,11 @@ private[nodal] object InterfaceMlir:
     ): (KernelInterfaceSnapshot, KernelInterfaceMemberSnapshot) =
       val (endpoint, base) = sourceMember(path, owner)
       val role = selectedRole.getOrElse(fail("member access has no selected endpoint role", path))
+      requireValid(
+        endpoint.boundary.isEmpty || role == endpoint.role,
+        "child Interface access cannot change its declared selected role",
+        path
+      )
       val selected = endpoint.roles.find(_.name == role).getOrElse(fail(
         "member access selects an absent role map",
         path
@@ -463,7 +500,12 @@ private[nodal] object InterfaceMlir:
                 effect.sourceRole.contains(source.role) &&
                 effect.sourceAccess.contains(source.access) &&
                 effect.sourceNestedRoles == source.nestedRoles && effect.value.isEmpty &&
-                (Set("in" -> "out", "out" -> "in").contains(target.access -> source.access) ||
+                (ConstructionInterfaceLayout.connectionSink(
+                  target.access,
+                  endpoint.boundary.nonEmpty,
+                  source.access,
+                  other.boundary.nonEmpty
+                ).nonEmpty ||
                   (target.protocol == "resolved" && target.access == "connect" &&
                     source.access == "connect")),
               "exact connection changes identity, shape, domain, protocol or complementary access",
@@ -472,7 +514,9 @@ private[nodal] object InterfaceMlir:
           case "interface-drive" =>
             requireValid(
               effect.source.isEmpty && effect.value.nonEmpty &&
-                Set("out", "drive").contains(target.access) && target.mode.forall(_ == "push-pull"),
+                (if endpoint.boundary.nonEmpty then target.access == "in"
+                 else Set("out", "drive").contains(target.access)) &&
+                target.mode.forall(_ == "push-pull"),
               "member drive violates actual role or mode",
               effect.path
             )
@@ -557,7 +601,15 @@ private[nodal] object InterfaceMlir:
         case "interface-drive" if members(effect.target)._2.protocol != "resolved" =>
           Vector(effect.target)
         case "interface-connect" if members(effect.target)._2.protocol != "resolved" =>
-          Vector(if effect.access.contains("in") then effect.target else effect.source.get)
+          val target = members(effect.target)._1
+          val source = members(effect.source.get)._1
+          val leftSink = ConstructionInterfaceLayout.connectionSink(
+            effect.access.get,
+            target.boundary.nonEmpty,
+            effect.sourceAccess.get,
+            source.boundary.nonEmpty
+          ).get
+          Vector(if leftSink then effect.target else effect.source.get)
         case _ => Vector.empty
     .groupBy(identity).foreach: (path, drivers) =>
       requireValid(drivers.size == 1, "interface leaf has multiple ordinary drivers", path)
@@ -703,7 +755,16 @@ private[nodal] object InterfaceMlir:
         sourceLocation: String => String
     ): Vector[String] =
       val result = mutable.ArrayBuffer.empty[String]
-      definitions.filter(_.owner == module.path).foreach: definition =>
+      val localDefinitions = snapshot.interfaceContracts.filter(endpoint =>
+        endpoint.owner == module.path && endpoint.boundary.isEmpty
+      ).flatMap(endpoint =>
+        Vector(endpoint.identity) ++
+          endpoint.roles.flatMap(_.members.flatMap(_.nestedInterfaces.map(_._2)))
+      ).toSet
+      definitions.filter(value =>
+        value.owner == module.path &&
+          localDefinitions(value.identity)
+      ).foreach: definition =>
         val selected = definition.roles.head.members
         val roles = definition.roles.map: role =>
           operation(
@@ -745,42 +806,56 @@ private[nodal] object InterfaceMlir:
         )
         if endpoint.dimensions.nonEmpty then
           val _ = nativeType(s"Vec(Bool;${endpoint.dimensions.mkString("x")})", endpoint.path)
-        val instance = "@" + quoted(symbol("interface_instance", declaration.name))
-        result += operation(
-          "nodal.interface_instance",
-          Vector.empty,
-          Vector.empty,
-          sourceLocation(endpoint.path),
-          "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
-          "definition" -> ("@" + quoted(symbol("interface", endpoint.identity))),
-          "role" -> quoted(endpoint.role),
-          "metadata" -> metadata(
-            sourceMetadata(endpoint.path),
-            "domain" -> ("@" + quoted(symbol("domain", domains.head.name))),
-            "dimensions" -> array(endpoint.dimensions.map(quoted))
-          )
-        )
-        val abi = endpoint.members.map(member =>
-          dictionary(
-            "path" -> quoted(member.name),
-            "type" -> memberType(member, nativeType),
-            "role" -> quoted(member.role),
-            "access" -> quoted(member.access),
-            "nested_roles" -> nestedRoles(member.nestedRoles),
-            "nested_interfaces" -> nestedInterfaces(member.nestedInterfaces),
-            "analog" -> analog(member)
-          )
-        )
-        result += operation(
-          "nodal.interface_abi",
-          Vector.empty,
-          Vector.empty,
-          sourceLocation(endpoint.path),
-          "logical_path" -> quoted(endpoint.path),
-          "members" -> array(abi),
-          "layout_policy" -> quoted("structural"),
-          "metadata" -> metadata(sourceMetadata(endpoint.path), "instance" -> instance)
-        )
+        endpoint.boundary match
+          case Some(boundary) =>
+            val target = declarations(boundary.endpoint)._2
+            result += operation(
+              "nodal.interface_boundary",
+              Vector.empty,
+              Vector.empty,
+              sourceLocation(endpoint.path),
+              "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
+              "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
+              "endpoint" -> quoted(symbol("interface_instance", target.name)),
+              "metadata" -> metadata(sourceMetadata(endpoint.path))
+            )
+          case None =>
+            val instance = "@" + quoted(symbol("interface_instance", declaration.name))
+            result += operation(
+              "nodal.interface_instance",
+              Vector.empty,
+              Vector.empty,
+              sourceLocation(endpoint.path),
+              "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
+              "definition" -> ("@" + quoted(symbol("interface", endpoint.identity))),
+              "role" -> quoted(endpoint.role),
+              "metadata" -> metadata(
+                sourceMetadata(endpoint.path),
+                "domain" -> ("@" + quoted(symbol("domain", domains.head.name))),
+                "dimensions" -> array(endpoint.dimensions.map(quoted))
+              )
+            )
+            val abi = endpoint.members.map(member =>
+              dictionary(
+                "path" -> quoted(member.name),
+                "type" -> memberType(member, nativeType),
+                "role" -> quoted(member.role),
+                "access" -> quoted(member.access),
+                "nested_roles" -> nestedRoles(member.nestedRoles),
+                "nested_interfaces" -> nestedInterfaces(member.nestedInterfaces),
+                "analog" -> analog(member)
+              )
+            )
+            result += operation(
+              "nodal.interface_abi",
+              Vector.empty,
+              Vector.empty,
+              sourceLocation(endpoint.path),
+              "logical_path" -> quoted(endpoint.path),
+              "members" -> array(abi),
+              "layout_policy" -> quoted("structural"),
+              "metadata" -> metadata(sourceMetadata(endpoint.path), "instance" -> instance)
+            )
       result.toVector
 
     def renderEffects(

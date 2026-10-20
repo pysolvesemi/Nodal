@@ -597,3 +597,34 @@ an exact public fixture argument error and a new companion effect-summary gap;
 focused source execution is still pending at this native checkpoint. The current
 slice does not itself establish a generated Verilog-* demonstration. No F58 child
 or parent is closed by these bounded native results.
+
+
+## Checkpoint 11 — explicit named-field parameterized hierarchy target
+
+The existing sequential target now accepts the explicit uniform option
+`boundary-abi=named-fields`. Legacy packed output remains the default; field-use
+presence never selects the ABI. Logical Port/Struct leaves share the canonical
+hierarchy parameter/shape proof and one inverse leaf map per module port. Instance
+pins reference that map without copying it; field lookup is cached per admitted
+logical shape. Nested sibling dimensions remain separate and metadata cost is
+bounded by represented fields/dimensions, not physical bit count.
+
+The final frozen adapter passed **190/190** focused target cases: symbolic
+hierarchy 19, sequential target 149 and hierarchy target 22. The matched compiler
+is `.work/f58-named-boundary/second/nodalc`, SHA256
+`6fb378a41d7100712d6a29b4bf00f365d637fdbb82a4072f679b71a5a3a299e2`.
+Its before/after production and test manifests match. Actual maintained Scala
+aggregate early/late override exports passed the full default gate, named-field
+lowering, firtool export, Slang lint and Icarus compilation. The maintained
+`tests/scala/domain-hierarchy/run_target.py` additionally passed both actual DUT
+waveform profiles, each at width/count overrides (7,3) and (2,4), preserving two
+module bodies and real instances. Checks exercise distinct fields/lane patterns,
+independent ready/signed observations, negative signed representation, parameter
+widths and inverse-map dimension annotations. Whole nested sample pass-through
+is not an independent nested-lane extraction proof. Commands, tool/input/output
+hashes and results are under `.work/f58-aggregate-waveforms`.
+
+This is a bounded digital Port/Struct SystemVerilog target profile, not portable
+Verilog qualification, complete Interface target support, generated-family loops
+or complete fixed-Struct CDC adaptation. The default ABI and those remaining
+consumers retain their explicit limitations. No F58 completion box is closed.

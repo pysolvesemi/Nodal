@@ -199,6 +199,33 @@ assignments. Conservative connectivity continues through its own topology and
 discipline/unit owner. Unsupported capabilities reject transactionally until
 their actual target consumer exists.
 
+### Explicit named-field target profile
+
+The bounded CIRCT pass option `boundary-abi=named-fields` selects one uniform
+external named-field-vector ABI for every selected module definition. Its default
+is `legacy`, retaining existing fixed packed Struct CDC predecessors. Symbolic
+Struct boundaries require `named-fields`; the pass must not choose a pin ABI
+from the presence of a field read or another internal operation. The emitted
+module records the selected profile in `nodal.boundary_abi`, and reproduction
+commands retain the option. Source types and logical serialization do not change.
+
+In the named profile, the target-only carrier is a HW Struct of complete logical
+scalar-leaf vectors. Exact `digital_struct_get`/`digital_struct_make` adapters
+select or reconstruct those leaves by the already verified nominal field path.
+Physical module pins split/rejoin that same carrier. The inverse record retains
+full nominal paths, scalar kind, element width, and ordered dimension groups at
+their original field depths; it does not conflate sibling-private dimensions or
+reinterpret a Vec-of-Struct logical serialization as field-major data. This
+bounded stage does not expose the carrier itself as a logical packed bitstream.
+Any later packed-stream consumer needs its actual interleaving inverse adapter.
+
+The initial admitted operations are whole-value connections, aliases, wires and
+exact Struct field construction/projection. Fixed Struct CDC in `named-fields`
+remains a required adapter gap until its packed/leaf-vector inverse map is
+implemented and tested. Keeping it rejected in this profile does not delete the
+required work or alter its supported `legacy` behavior. Resolved/analog Interface
+and generated-family target support remain separately open.
+
 ## Generated occurrence families
 
 Existing `GeneratedRegionRecord` and
@@ -271,4 +298,8 @@ dimensions and generated families, not physical bit/lane count. Include a large
 represented shape/family with bounded metadata and verify no expansion before
 claiming the relevant profile.
 
-This contract records no executed acceptance for these next-stage features.
+The named-field Port/Struct slice has focused acceptance recorded in
+[increment 58 readiness](../implementation/increment58-readiness.md), checkpoint
+11. Interface adapters, generated target loops and complete fixed-Struct CDC
+inverse adaptation remain open; primitive backend probes are not acceptance of
+those production paths.

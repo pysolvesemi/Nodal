@@ -122,6 +122,34 @@ std::string replaceAll(std::string input, StringRef from, StringRef to) {
   }
   return input;
 }
+std::string structure(StringRef width, StringRef count) {
+  unsigned literal = 0;
+  bool fixed = !width.getAsInteger(10, literal);
+  std::string unsignedType =
+      fixed ? "!nodal.uint<" + std::to_string(literal) + ">" : digital(width);
+  std::string signedType =
+      fixed ? "!nodal.sint<" + std::to_string(literal) + ">" : digital(width, "sint");
+  auto inner = "!nodal.struct<\"Inner\", [{name = \"tag\", type = !nodal.bits<3>}, "
+               "{name = \"samples\", type = " +
+               shape(count, unsignedType) + "}]>";
+  return "!nodal.struct<\"Payload\", [{name = \"ready\", type = !nodal.bits<1>}, "
+         "{name = \"nested\", type = " +
+         shape("2", inner) + "}, {name = \"signed\", type = " + signedType + "}]>";
+}
+std::string aggregateFixture(bool nested = false) {
+  auto input = fixture(true, nested);
+  input = replaceAll(input, shape("N,2", digital("W")), structure("W", "N"));
+  input = replaceAll(input, shape("P,2", digital("Q")), structure("Q", "P"));
+  return replaceAll(input, shape("3,2", "!nodal.uint<8>"), structure("8", "3"));
+}
+std::string fieldGet(StringRef result, StringRef input, StringRef schema, StringRef field,
+                     unsigned ordinal, StringRef type) {
+  return "%" + result.str() + " = \"nodal.digital_expr\"(%" + input.str() +
+         ") <{operator_name = \"digital_struct_get\", struct_schema = " + schema.str() +
+         ", field_ordinal = " + std::to_string(ordinal) + " : i64, field_name = \"" + field.str() +
+         "\", metadata = {semantic_path = \"Child." + result.str() + "\"}}> : (" + schema.str() +
+         ") -> " + type.str() + "\n";
+}
 } // namespace
 int main() {
   DialectRegistry registry;
@@ -286,6 +314,107 @@ int main() {
   check("near-lower-bound-intermediate-round-trips", negativeIntermediate(-2147483600), true);
   check("below-lower-bound-intermediate-not-truncated", negativeIntermediate(-2147483648), false, 2,
         2, "static Integer expression bounds must fit signed 32-bit arithmetic");
+  std::string namedBaselinePins;
+  auto checkNamed = [&](StringRef name, std::string input, bool expected, unsigned modules = 2,
+                        bool fieldAdapters = false,
+                        StringRef diagnostic = "NODAL-HIERARCHY-057-001") {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    if (!parsed) {
+      report(name, false);
+      return;
+    }
+    std::string before = print(parsed->getOperation());
+    PassManager pm(&context);
+    auto lowering = nodal::createSequentialToCIRCTPass();
+    if (failed(lowering->initializeOptions("boundary-abi=named-fields", [&](const Twine &error) {
+          diagnostics += error.str();
+          return failure();
+        }))) {
+      report(name, false);
+      return;
+    }
+    pm.addPass(std::move(lowering));
+    bool actual = succeeded(pm.run(*parsed));
+    bool good = actual == expected;
+    if (!actual)
+      good &= print(parsed->getOperation()) == before &&
+              diagnostics.find(diagnostic.str()) != std::string::npos;
+    else {
+      unsigned bodies = 0, creates = 0, extracts = 0;
+      parsed->walk([&](circt::hw::HWModuleOp module) {
+        ++bodies;
+        auto map = module->getAttrOfType<ArrayAttr>("nodal.boundary_map");
+        good &= map && !map.empty();
+        for (const auto &port : module.getPortList())
+          if (port.attrs && port.attrs.get("nodal.logical_leaf"))
+            good &= !port.attrs.get("nodal.packed_abi");
+      });
+      parsed->walk([&](circt::hw::StructCreateOp) { ++creates; });
+      parsed->walk([&](circt::hw::StructExtractOp) { ++extracts; });
+      good &= bodies == modules && creates >= 4 && extracts >= 16 && succeeded(verify(*parsed));
+      auto parent =
+          dyn_cast_or_null<circt::hw::HWModuleOp>(SymbolTable::lookupSymbolIn(*parsed, "Parent"));
+      good &= parent && parent.getBodyBlock()->getNumArguments() == 8 &&
+              parent.getBodyBlock()->back().getNumOperands() == 8;
+      auto output = print(parsed->getOperation());
+      good &= output.find("a__f_5_ready") != std::string::npos &&
+              output.find("a__f_6_nested_7_samples") != std::string::npos &&
+              output.find("field_depth = 1") != std::string::npos &&
+              output.find("field_depth = 2") != std::string::npos &&
+              output.find("named-leaf-vectors") != std::string::npos &&
+              output.find("dimension_groups") != std::string::npos;
+      std::string pinSignature;
+      llvm::raw_string_ostream pins(pinSignature);
+      parsed->walk([&](circt::hw::HWModuleOp module) {
+        pins << module.getName() << ":";
+        for (const auto &port : module.getPortList())
+          pins << port.name << ":" << port.type << ":" << unsigned(port.dir) << ";";
+      });
+      if (namedBaselinePins.empty())
+        namedBaselinePins = pinSignature;
+      if (fieldAdapters)
+        good &= output.find("Child.observed_ready") != std::string::npos &&
+                output.find("Child.rebuilt") != std::string::npos &&
+                pinSignature == namedBaselinePins;
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(output, ParserConfig(&context, false));
+      good &= roundtrip && succeeded(verify(*roundtrip));
+    }
+    report(name, good);
+  };
+  checkNamed("named-nested-vec-struct-mixed-symbolic-literal-overrides", aggregateFixture(), true);
+  checkNamed("named-nested-forwarding-reuses-one-body", aggregateFixture(true), true, 3);
+  auto typed = structure("W", "N");
+  auto nestedType = shape("2", "!nodal.struct<\"Inner\", [{name = \"tag\", type = !nodal.bits<3>}, "
+                               "{name = \"samples\", type = " +
+                                   shape("N", digital("W")) + "}]>");
+  auto adapters = fieldGet("observed_ready", "input", typed, "ready", 0, "!nodal.bits<1>") +
+                  fieldGet("observed_nested", "input", typed, "nested", 1, nestedType) +
+                  fieldGet("observed_signed", "input", typed, "signed", 2, digital("W", "sint")) +
+                  "%rebuilt = \"nodal.digital_expr\"(%observed_ready, %observed_nested, "
+                  "%observed_signed) <{operator_name = \"digital_struct_make\", struct_schema = " +
+                  typed +
+                  ", metadata = {semantic_path = \"Child.rebuilt\"}}> : "
+                  "(!nodal.bits<1>, " +
+                  nestedType + ", " + digital("W", "sint") + ") -> " + typed + "\n" +
+                  assign("output", "rebuilt", typed);
+  checkNamed("exact-field-get-make-inverse-preserves-identical-pins",
+             replace(aggregateFixture(), assign("output", "input", typed), adapters), true, 2,
+             true);
+  checkNamed("unobserved-child-named-output-keeps-following-result-offsets",
+             replace(replace(aggregateFixture(), port("output", "output", typed),
+                             port("unobserved", "output", typed) + port("output", "output", typed)),
+                     assign("output", "input", typed),
+                     adapters + assign("unobserved", "rebuilt", typed)),
+             true);
+  check("symbolic-struct-requires-explicit-named-profile", aggregateFixture(), false, 2, 2,
+        "symbolic Struct boundaries require boundary-abi=named-fields");
+  checkNamed("same-size-renamed-field-does-not-launder-abi",
+             replaceAll(aggregateFixture(), structure("Q", "P"),
+                        replace(structure("Q", "P"), "name = \"tag\"", "name = \"bad\"")),
+             false);
+  checkNamed("sibling-private-dimension-owner-does-not-launder-abi",
+             replaceAll(aggregateFixture(), structure("Q", "P"), structure("P", "Q")), false);
   llvm::outs() << "SYMBOLIC_HIERARCHY_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;
 }

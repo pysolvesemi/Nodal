@@ -15,10 +15,73 @@ import subprocess
 
 
 PROFILES = ("shared", "nested", "material", "resetless", "inherited-release")
+AGGREGATE_PROFILES = ("aggregate-early", "aggregate-late")
 SYMBOLIC_PROFILES = ("scalar-early", "scalar-late", "vector-early", "vector-late")
 
 
+def aggregate_bench(profile: str, top: str) -> str:
+    # Distinct fields and lane patterns exercise the actual named-leaf ABI.
+    instances = []
+    for name, width, count in (("wide", 7, 3), ("narrow", 2, 4)):
+        bits = width + 1
+        lanes = 2 * count
+        instances.append(f"""
+reg {name}_ready = 0;
+reg [5:0] {name}_tag = 0;
+reg [{lanes * bits - 1}:0] {name}_samples = 0;
+reg signed [{bits - 1}:0] {name}_signed = 0;
+wire {name}_ready_out, {name}_ready_value;
+wire [5:0] {name}_tag_out;
+wire [{lanes * bits - 1}:0] {name}_samples_out;
+wire signed [{bits - 1}:0] {name}_signed_out, {name}_signed_value;
+{top} #(.width({width}), .count({count})) {name}(
+ .core_clock(1'b0),
+ .inputData__f_5_ready({name}_ready),
+ .inputData__f_6_nested_3_tag({name}_tag),
+ .inputData__f_6_nested_7_samples({name}_samples),
+ .inputData__f_6_signed({name}_signed),
+ .outputData__f_5_ready({name}_ready_out),
+ .outputData__f_6_nested_3_tag({name}_tag_out),
+ .outputData__f_6_nested_7_samples({name}_samples_out),
+ .outputData__f_6_signed({name}_signed_out),
+ .readyValue({name}_ready_value), .signedValue({name}_signed_value));
+task check_{name}; begin
+ #1;
+ if ({{{name}_ready_out, {name}_tag_out, {name}_samples_out, {name}_signed_out}}
+     !== {{{name}_ready, {name}_tag, {name}_samples, {name}_signed}} ||
+     {name}_ready_value !== {name}_ready || {name}_signed_value !== {name}_signed)
+   $fatal(1, "{profile}: {name} named field mismatch");
+end endtask
+integer {name}_i;
+initial begin
+ if ($bits({name}.inputData__f_6_nested_7_samples) != {lanes * bits} ||
+     $bits({name}.inputData__f_6_signed) != {bits})
+   $fatal(1, "{profile}: generic aggregate width collapsed");
+ check_{name};
+ {name}_ready=1; check_{name};
+ {name}_tag=6'b101011; check_{name};
+ for ({name}_i=0; {name}_i<{lanes}; {name}_i={name}_i+1) begin
+   {name}_samples[{name}_i*{bits} +: {bits}]={name}_i+1; check_{name};
+ end
+ {name}_signed=-2; check_{name};
+ if ($signed({name}_signed_value) != -2)
+   $fatal(1, "{profile}: signed field representation lost");
+ {name}_ready=0; check_{name};
+ {name}_tag=6'b010100; check_{name};
+ {name}_samples=~{name}_samples; check_{name};
+ {name}_signed=1; check_{name};
+end
+""")
+    return "module tb;\n" + "\n".join(instances) + f"""
+initial begin #100; $display("HIERARCHY_TARGET_PASS {profile}"); $finish; end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
 def bench(profile: str, top: str) -> str:
+    if profile in AGGREGATE_PROFILES:
+        return aggregate_bench(profile, top)
     if profile in SYMBOLIC_PROFILES:
         vector = profile.startswith("vector")
         first_bits, second_bits = (21, 6) if vector else (7, 3)
@@ -131,12 +194,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=PROFILES + SYMBOLIC_PROFILES, action="append")
+    parser.add_argument("--case", choices=PROFILES + SYMBOLIC_PROFILES + AGGREGATE_PROFILES, action="append")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated artifacts must remain under ignored .work")
     args.out.mkdir(parents=True, exist_ok=True)
-    manifest: dict = {"status": "running", "cases": []}
+    tool_paths = {name: getattr(args, name).resolve()
+                  for name in ("nodalc", "firtool", "iverilog", "vvp")}
+    for name, path in tool_paths.items():
+        if not path.is_file():
+            parser.error(f"missing {name} executable: {path}")
+    manifest: dict = {
+        "status": "running",
+        "tools": {name: {"path": str(path),
+                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                  for name, path in tool_paths.items()},
+        "cases": [],
+    }
     manifest_path = args.out / "manifest.json"
 
     def save() -> None:
@@ -168,22 +242,29 @@ def main() -> None:
         sv = args.out / f"{profile}.sv"
         run(profile + "-gate", [str(args.nodalc), str(source), "--nodal-gate-default",
                                "--mlir-print-debuginfo", "-o", str(gated)])
-        run(profile + "-lower", [str(args.nodalc), str(gated), "--nodal-sequential-to-circt",
+        lowering = ("--nodal-sequential-to-circt=boundary-abi=named-fields"
+                    if profile in AGGREGATE_PROFILES else "--nodal-sequential-to-circt")
+        run(profile + "-lower", [str(args.nodalc), str(gated), lowering,
                                 "--mlir-print-debuginfo", "-o", str(circt)])
         run(profile + "-export", [str(args.firtool), str(circt), "--format=mlir", "--verilog",
                                  "--verify-each", "--disable-all-randomization", "-o", str(sv)])
         design = sv.read_text()
         modules = re.findall(r"^module[ \t]+([A-Za-z_]\w*)\b", design, re.MULTILINE)
-        expected_count = 2 if profile == "shared" or profile in SYMBOLIC_PROFILES else 3
+        expected_count = 2 if profile == "shared" or profile in SYMBOLIC_PROFILES + AGGREGATE_PROFILES else 3
         if top not in modules or len(modules) != expected_count:
             raise RuntimeError(f"{profile}: expected {expected_count} real reusable modules, "
                                f"including {top}; got {modules}")
         if not re.search(r"\bhw\.instance\b", circt.read_text()):
             raise RuntimeError(f"{profile}: no real hierarchical target instances")
-        if profile not in SYMBOLIC_PROFILES and "__nodal_required_clock" not in design:
+        if profile not in SYMBOLIC_PROFILES + AGGREGATE_PROFILES and "__nodal_required_clock" not in design:
             raise RuntimeError(f"{profile}: inferred child requirement clock port missing")
-        if profile in SYMBOLIC_PROFILES and not re.search(r"\bparameter\b", design):
+        if profile in SYMBOLIC_PROFILES + AGGREGATE_PROFILES and not re.search(r"\bparameter\b", design):
             raise RuntimeError(f"{profile}: generic target parameters missing")
+        if profile in AGGREGATE_PROFILES:
+            for marker in ('named-leaf-vectors', 'row-major-zero-element-lsb',
+                           'field_depth = 1', 'field_depth = 2'):
+                if marker not in design:
+                    raise RuntimeError(f"{profile}: missing inverse ABI map {marker}")
         tb = args.out / f"{profile}.tb.sv"
         tb.write_text(bench(profile, top))
         executable = args.out / f"{profile}.vvp"
@@ -194,10 +275,14 @@ def main() -> None:
             raise RuntimeError(f"{profile}: simulation did not reach its success assertion")
         manifest["cases"].append({
             "name": profile,
+            "boundary_abi": "named-fields" if profile in AGGREGATE_PROFILES else "legacy-packed",
             "top": top,
             "modules": modules,
             "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "gated_sha256": hashlib.sha256(gated.read_bytes()).hexdigest(),
+            "circt_sha256": hashlib.sha256(circt.read_bytes()).hexdigest(),
             "target_sha256": hashlib.sha256(sv.read_bytes()).hexdigest(),
+            "testbench_sha256": hashlib.sha256(tb.read_bytes()).hexdigest(),
         })
         save()
         print(f"PASS {profile}", flush=True)

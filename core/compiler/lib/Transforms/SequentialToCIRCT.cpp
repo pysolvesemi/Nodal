@@ -140,6 +140,7 @@ struct ModuleVariantPlan {
   std::string signature, name;
   SmallVector<DomainPortPlan> domains;
   llvm::DenseMap<Operation *, unsigned> children;
+  llvm::DenseMap<Operation *, unsigned> portLeafCounts;
   circt::hw::HWModuleOp target;
 };
 struct HierarchyTargetPlan {
@@ -301,9 +302,10 @@ struct HierarchyTargetPlan {
 class ModuleLowering {
 public:
   ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost,
-                 HierarchyTargetPlan *hierarchy = nullptr, ModuleVariantPlan *variant = nullptr)
+                 HierarchyTargetPlan *hierarchy = nullptr, ModuleVariantPlan *variant = nullptr,
+                 bool namedBoundaryABI = false)
       : source(source), builder(builder), cost(cost), domains(source), hierarchy(hierarchy),
-        variant(variant) {}
+        variant(variant), namedBoundaryABI(namedBoundaryABI) {}
 
   LogicalResult preflight() {
     if (failed(domains.verifyRelationships()) || failed(planControlProjections()) ||
@@ -323,8 +325,11 @@ public:
         if (aggregate &&
             !isa<PortValueOp, InstancePortOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp,
                  EventProcessOp>(op) &&
-            !(isa<DigitalExprOp>(op) && (text(&op, "operator_name") == "digital_alias" ||
-                                         text(&op, "operator_name") == "digital_select")))
+            !(isa<DigitalExprOp>(op) &&
+              (text(&op, "operator_name") == "digital_alias" ||
+               text(&op, "operator_name") == "digital_select" ||
+               (namedBoundaryABI && (text(&op, "operator_name") == "digital_struct_get" ||
+                                     text(&op, "operator_name") == "digital_struct_make")))))
           return reject(
               &op,
               "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
@@ -343,14 +348,19 @@ public:
       bool symbolic =
           llvm::any_of(op.getOperandTypes(),
                        [&](Type type) {
-                         return isa_and_nonnull<circt::hw::IntType>(targetValueType(type));
+                         return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
+                             targetValueType(type));
                        }) ||
           llvm::any_of(op.getResultTypes(), [&](Type type) {
-            return isa_and_nonnull<circt::hw::IntType>(targetValueType(type));
+            return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
+                targetValueType(type));
           });
       if (symbolic && !isa<PortValueOp, InstancePortOp, DigitalAssignOp>(op) &&
           !(isa<DigitalStorageOp>(op) && text(&op, "kind") == "wire") &&
-          !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
+          !(isa<DigitalExprOp>(op) &&
+            llvm::is_contained(
+                ArrayRef<StringRef>{"digital_alias", "digital_struct_get", "digital_struct_make"},
+                text(&op, "operator_name"))))
         return reject(&op, "symbolic boundary target currently admits whole-value connections, "
                            "wires and aliases only");
       uint64_t expansion = 1;
@@ -362,6 +372,13 @@ public:
         Type lowered = type ? targetValueType(type.getValue()) : Type();
         if (type && !lowered)
           lowered = targetControlShapeType(type.getValue(), source);
+        if (type && !lowered && !namedBoundaryABI) {
+          auto view = boundaryViews.find(type.getValue());
+          if (view != boundaryViews.end() &&
+              llvm::any_of(view->second.leaves,
+                           [](const auto &leaf) { return !leaf.path.empty(); }))
+            return reject(&op, "symbolic Struct boundaries require boundary-abi=named-fields");
+        }
         if (!type || !lowered ||
             (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
           return reject(&op, "only supported scalar/packed input/output and fixed Clock/Reset "
@@ -382,6 +399,8 @@ public:
         if (!hierarchy || failed(boundary))
           return reject(&op, "digital instance boundary requires its checked hierarchy plan");
         instancePortValues[{boundary->instance, boundary->port}].push_back(op.getResult(0));
+        if (auto type = dyn_cast<circt::hw::StructType>(targetValueType(op.getResult(0).getType())))
+          expansion += 2 * type.getElements().size();
         if (text(&op, "direction") == "input")
           seeds.emplace_back(op.getResult(0), &op);
       } else if (isa<InstanceOp>(op)) {
@@ -478,7 +497,9 @@ public:
       } else if (name == "nodal.sequential_assert") {
         expansion = 2;
       } else if (isa<DigitalExprOp>(op)) {
-        if (!scalarOpcode(text(&op, "operator_name")))
+        if (!scalarOpcode(text(&op, "operator_name")) &&
+            !llvm::is_contained(ArrayRef<StringRef>{"digital_struct_get", "digital_struct_make"},
+                                text(&op, "operator_name")))
           return reject(&op,
                         "unsupported fixed-scalar operation '" + text(&op, "operator_name") + "'");
         if (text(&op, "operator_name") == "digital_alias" &&
@@ -486,6 +507,14 @@ public:
           return reject(&op, "authored alias/materialization intent requires explicit "
                              "nodal.digital.quality for the canonical analyzer");
         expansion = 12;
+        StringRef code = text(&op, "operator_name");
+        if (code == "digital_struct_get" || code == "digital_struct_make") {
+          Type aggregate =
+              code == "digital_struct_get" ? op.getOperand(0).getType() : op.getResult(0).getType();
+          if (!isa_and_nonnull<circt::hw::StructType>(targetValueType(aggregate)))
+            return reject(&op, "logical field adapters require the checked named boundary ABI");
+          expansion = 2 * boundaryViews.find(aggregate)->second.leaves.size() + 2;
+        }
       } else if (isa<EnumExprOp>(op)) {
         StringRef code = text(&op, "operator_name");
         if (code != "enum_literal" && code != "enum_eq" && code != "enum_as_bits" &&
@@ -602,6 +631,26 @@ public:
               "authored exact target name collides with another port/storage/materialization name");
         materializations.try_emplace(text(decision, "path"), decision);
       }
+    }
+    for (Operation *port : ports) {
+      SmallVector<StringAttr> names;
+      if (auto type = dyn_cast<circt::hw::StructType>(portTypes.lookup(port))) {
+        if (type.getElements().size() > (maximumGeneratedOperations - cost) / 4)
+          return reject(port, "named boundary adapters exceed finite target expansion budget");
+        cost += 4 * type.getElements().size();
+        for (const auto &field : type.getElements()) {
+          std::string base = text(port, "sym_name").str() + "__" + field.name.getValue().str();
+          std::string name = base;
+          unsigned collision = 0;
+          while (!targetNames.insert(name).second)
+            name = base + "_" + std::to_string(++collision);
+          names.push_back(builder.getStringAttr(name));
+        }
+      } else
+        names.push_back(port->getAttrOfType<StringAttr>("sym_name"));
+      if (variant)
+        variant->portLeafCounts.try_emplace(port, names.size());
+      physicalPortNames.try_emplace(port, std::move(names));
     }
     // Reserve generated names after every authored exact name is known.
     // Symbols keep even identical-source chains distinct through target CSE.
@@ -727,21 +776,34 @@ public:
     SmallVector<circt::hw::PortInfo> targetPorts;
     unsigned inputIndex = 0, outputIndex = 0;
     for (Operation *port : ports) {
-      circt::hw::PortInfo info;
-      info.name = port->getAttrOfType<StringAttr>("sym_name");
-      info.type = portTypes.lookup(port);
-      bool input = text(port, "direction") == "input";
-      info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
-      info.argNum = input ? inputIndex++ : outputIndex++;
-      info.loc = port->getLoc();
-      NamedAttrList attributes;
-      if (!sourcePath(port).empty())
-        attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port)));
-      Type originalType = port->getAttrOfType<TypeAttr>("type").getValue();
-      if (aggregatePayload(originalType))
-        attributes.set("nodal.packed_abi", packedLayout(originalType));
-      info.attrs = builder.getDictionaryAttr(attributes);
-      targetPorts.push_back(info);
+      Type logicalType = portTypes.lookup(port);
+      SmallVector<Type> types;
+      if (auto structure = dyn_cast<circt::hw::StructType>(logicalType))
+        for (const auto &field : structure.getElements())
+          types.push_back(field.type);
+      else
+        types.push_back(logicalType);
+      for (auto [index, type] : llvm::enumerate(types)) {
+        circt::hw::PortInfo info;
+        info.name = physicalPortNames.find(port)->second[index];
+        info.type = type;
+        bool input = text(port, "direction") == "input";
+        info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
+        info.argNum = input ? inputIndex++ : outputIndex++;
+        info.loc = port->getLoc();
+        NamedAttrList attributes;
+        if (!sourcePath(port).empty())
+          attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port)));
+        Type originalType = port->getAttrOfType<TypeAttr>("type").getValue();
+        if (aggregatePayload(originalType) && !isa<circt::hw::StructType>(logicalType))
+          attributes.set("nodal.packed_abi", packedLayout(originalType));
+        if (isa<circt::hw::StructType>(logicalType)) {
+          attributes.set("nodal.logical_port", port->getAttr("sym_name"));
+          attributes.set("nodal.logical_leaf", builder.getI32IntegerAttr(index));
+        }
+        info.attrs = builder.getDictionaryAttr(attributes);
+        targetPorts.push_back(info);
+      }
     }
     if (variant)
       for (const auto &port : variant->domains) {
@@ -775,6 +837,21 @@ public:
       target->setAttr("nodal.definition", source->getAttr("sym_name"));
       target->setAttr("nodal.domain_variant", builder.getStringAttr(variant->signature));
     }
+    SmallVector<Attribute> boundaryMap;
+    for (Operation *port : ports)
+      if (isa<circt::hw::StructType>(portTypes.lookup(port))) {
+        SmallVector<Attribute> pins;
+        for (StringAttr pin : physicalPortNames.find(port)->second)
+          pins.push_back(pin);
+        boundaryMap.push_back(builder.getDictionaryAttr(
+            {builder.getNamedAttr("logical_port", port->getAttr("sym_name")),
+             builder.getNamedAttr("direction", port->getAttr("direction")),
+             builder.getNamedAttr("physical_pins", builder.getArrayAttr(pins)),
+             builder.getNamedAttr(
+                 "layout", packedLayout(port->getAttrOfType<TypeAttr>("type").getValue()))}));
+      }
+    if (!boundaryMap.empty())
+      target->setAttr("nodal.boundary_map", builder.getArrayAttr(boundaryMap));
     correlate(target, source);
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
@@ -796,9 +873,12 @@ public:
     for (Operation *port : ports) {
       if (text(port, "direction") != "input")
         continue;
+      SmallVector<Value> leaves;
+      for (unsigned index = 0; index < physicalPortNames.find(port)->second.size(); ++index)
+        leaves.push_back(body->getArgument(inputIndex++));
+      Value joined = joinBoundary(port, portTypes.lookup(port), leaves);
       for (Value value : portValues[port])
-        values[value] = body->getArgument(inputIndex);
-      ++inputIndex;
+        values[value] = joined;
     }
     if (variant)
       for (const auto &port : variant->domains) {
@@ -883,7 +963,8 @@ public:
       for (Operation &port : child.source->getRegion(0).front())
         if (isa<PortOp>(port) && text(&port, "direction") == "input") {
           auto &references = instancePortValues.find({instance, &port})->second;
-          inputs.push_back(values.lookup(references.front()));
+          auto leaves = splitBoundary(instance, values.lookup(references.front()));
+          llvm::append_range(inputs, leaves);
         }
       for (const auto &port : child.domains) {
         Operation *binding = instanceBindings.lookup({instance, port.requirement});
@@ -905,10 +986,20 @@ public:
       for (Operation &port : child.source->getRegion(0).front())
         if (isa<PortOp>(port) && text(&port, "direction") == "output") {
           auto references = instancePortValues.find({instance, &port});
-          if (references != instancePortValues.end())
-            for (Value reference : references->second)
-              values[reference] = targetInstance.getResult(result);
-          ++result;
+          if (references == instancePortValues.end()) {
+            result += child.portLeafCounts.lookup(&port);
+            continue; // A real output may be intentionally unobserved.
+          }
+          Type actualType = targetValueType(references->second.front().getType());
+          unsigned count = isa<circt::hw::StructType>(actualType)
+                               ? cast<circt::hw::StructType>(actualType).getElements().size()
+                               : 1;
+          SmallVector<Value> leaves;
+          for (unsigned index = 0; index < count; ++index)
+            leaves.push_back(targetInstance.getResult(result++));
+          Value joined = joinBoundary(instance, actualType, leaves);
+          for (Value reference : references->second)
+            values[reference] = joined;
         }
     }
     SmallVector<std::pair<Value, circt::Backedge>> eventEdges;
@@ -1338,8 +1429,10 @@ public:
     }
     SmallVector<Value> outputs;
     for (Operation *port : ports)
-      if (text(port, "direction") == "output")
-        outputs.push_back(values.lookup(portValues[port].front()));
+      if (text(port, "direction") == "output") {
+        auto leaves = splitBoundary(port, values.lookup(portValues[port].front()));
+        llvm::append_range(outputs, leaves);
+      }
     body->getTerminator()->setOperands(outputs);
     if (failed(backedges.clearOrEmitError()))
       return failure();
@@ -1493,6 +1586,40 @@ private:
   static bool aggregatePayload(Type type) {
     return isa<nodal::ShapedType, StructType>(type) && getDigitalControlBoundaryKind(type).empty();
   }
+  std::string leafName(const HierarchyBoundaryLeaf &leaf, unsigned skip = 0) {
+    std::string result = "f";
+    for (const auto &field : ArrayRef(leaf.path).drop_front(skip))
+      result +=
+          "_" + std::to_string(field.name.getValue().size()) + "_" + field.name.getValue().str();
+    return result;
+  }
+  Type leafVectorType(const HierarchyBoundaryLeaf &leaf) {
+    TypedAttr packed = parameterExpression(leaf.width);
+    for (const auto &group : leaf.dimensions)
+      for (const auto &extent : group.extents) {
+        TypedAttr factor = parameterExpression(extent);
+        if (!packed || !factor || cost >= maximumGeneratedOperations)
+          return {};
+        ++cost;
+        packed = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, packed, factor);
+      }
+    return packed ? circt::hw::IntType::get(packed) : Type();
+  }
+  SmallVector<Value> splitBoundary(Operation *at, Value value) {
+    SmallVector<Value> result;
+    if (auto type = dyn_cast<circt::hw::StructType>(value.getType())) {
+      for (auto [index, field] : llvm::enumerate(type.getElements()))
+        result.push_back(
+            make(at, "hw.struct_extract", field.type, {value},
+                 {builder.getNamedAttr("fieldIndex", builder.getI32IntegerAttr(index))}));
+    } else
+      result.push_back(value);
+    return result;
+  }
+  Value joinBoundary(Operation *at, Type type, ValueRange leaves) {
+    return isa<circt::hw::StructType>(type) ? make(at, "hw.struct_create", type, leaves)
+                                            : leaves.front();
+  }
   Type targetValueType(Type type) {
     if (Type scalar = targetType(type))
       return scalar;
@@ -1502,28 +1629,25 @@ private:
     if (inserted) {
       auto view = inspectHierarchyBoundaryType(type, source);
       auto maximum = inferDigitalBitPatternMaximumBits(type, source);
-      if (succeeded(view) && succeeded(maximum) && *maximum <= maximumWidth &&
-          view->leaves.size() == 1 && view->leaves[0].path.empty()) {
-        // Preserve actual parameter atoms even for singleton legal envelopes.
-        // Only a literal expression may become a fixed target width.
-        const auto &leaf = view->leaves[0];
-        TypedAttr packed = parameterExpression(leaf.width);
-        for (const auto &group : leaf.dimensions)
-          for (const auto &extent : group.extents) {
-            TypedAttr factor = parameterExpression(extent);
-            if (!packed || !factor || cost >= maximumGeneratedOperations)
+      if (succeeded(view) && succeeded(maximum) && *maximum <= maximumWidth) {
+        boundaryViews.try_emplace(type, *view);
+        auto fixed = inferDigitalBitPatternFixedBits(type, source);
+        if (view->leaves.size() == 1 && view->leaves[0].path.empty())
+          entry->second = leafVectorType(view->leaves.front());
+        else if (!namedBoundaryABI) {
+          if (succeeded(fixed))
+            entry->second = builder.getIntegerType(*fixed); // Established packed CDC ABI.
+        } else {
+          SmallVector<circt::hw::StructType::FieldInfo> fields;
+          for (const auto &leaf : view->leaves) {
+            Type vector = leafVectorType(leaf);
+            if (!vector || cost >= maximumGeneratedOperations)
               return {};
             ++cost;
-            packed = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, packed, factor);
+            fields.push_back({builder.getStringAttr(leafName(leaf)), vector});
           }
-        if (packed)
-          entry->second = circt::hw::IntType::get(packed);
-      } else {
-        // Keep the established fixed recursive Struct profile. General symbolic
-        // named-field vectors require the subsequent explicit adapter plan.
-        auto bits = inferDigitalBitPatternFixedBits(type, source);
-        if (succeeded(bits) && *bits > 0 && *bits <= maximumWidth)
-          entry->second = builder.getIntegerType(*bits);
+          entry->second = circt::hw::StructType::get(builder.getContext(), fields);
+        }
       }
     }
     return entry->second;
@@ -1532,6 +1656,43 @@ private:
     auto found = packedLayouts.find(type);
     if (found != packedLayouts.end())
       return found->second;
+    if (isa_and_nonnull<circt::hw::StructType>(packedTypes.lookup(type))) {
+      const auto &view = boundaryViews.find(type)->second;
+      SmallVector<Attribute> leaves;
+      for (const auto &leaf : view.leaves) {
+        SmallVector<Attribute> path, groups;
+        for (const auto &field : leaf.path)
+          path.push_back(
+              builder.getDictionaryAttr({builder.getNamedAttr("structure", field.structure),
+                                         builder.getNamedAttr("field", field.name)}));
+        for (const auto &group : leaf.dimensions) {
+          SmallVector<Attribute> extents;
+          for (const auto &extent : group.extents)
+            extents.push_back(parameterExpression(extent));
+          groups.push_back(builder.getDictionaryAttr(
+              {builder.getNamedAttr("field_depth", builder.getI32IntegerAttr(group.fieldDepth)),
+               builder.getNamedAttr("extents", builder.getArrayAttr(extents))}));
+        }
+        std::string elementType;
+        llvm::raw_string_ostream elementStream(elementType);
+        leaf.type.print(elementStream);
+        leaves.push_back(builder.getDictionaryAttr(
+            {builder.getNamedAttr("field", builder.getStringAttr(leafName(leaf))),
+             builder.getNamedAttr("logical_path", builder.getArrayAttr(path)),
+             builder.getNamedAttr("dimension_groups", builder.getArrayAttr(groups)),
+             builder.getNamedAttr("element_type", builder.getStringAttr(elementType)),
+             builder.getNamedAttr("element_width", parameterExpression(leaf.width))}));
+      }
+      auto result = builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("named-leaf-vectors")),
+           builder.getNamedAttr("logical_order",
+                                builder.getStringAttr("recursive-row-major-fields-lsb-first")),
+           builder.getNamedAttr("element_order",
+                                builder.getStringAttr("row-major-zero-element-lsb")),
+           builder.getNamedAttr("leaves", builder.getArrayAttr(leaves))});
+      packedLayouts.try_emplace(type, result);
+      return result;
+    }
     // This is target representation metadata, not a second type validator.
     // Exact width/shape facts were established by the canonical owners above.
     // Record structural strides rather than expanding physical vector lanes.
@@ -2236,6 +2397,60 @@ private:
                builder.getNamedAttr("id", op->getAttr("id"))}));
       return inputs[0];
     }
+    StringRef operationCode = text(op, "operator_name");
+    if (operationCode == "digital_struct_get" || operationCode == "digital_struct_make") {
+      Type resultType = targetValueType(op->getResult(0).getType());
+      Type aggregateType = operationCode == "digital_struct_get" ? op->getOperand(0).getType()
+                                                                 : op->getResult(0).getType();
+      auto view = boundaryViews.find(aggregateType);
+      if (view == boundaryViews.end())
+        return {};
+      SmallVector<Value> leaves;
+      auto extract = [&](Value value, StringRef name) -> Value {
+        auto type = dyn_cast<circt::hw::StructType>(value.getType());
+        if (!type)
+          return {};
+        auto [found, inserted] = targetFieldIndices.try_emplace(type);
+        if (inserted)
+          for (auto [index, field] : llvm::enumerate(type.getElements()))
+            found->second.try_emplace(field.name.getValue(), index);
+        auto field = found->second.find(name);
+        if (field == found->second.end())
+          return {};
+        unsigned index = field->second;
+        return make(op, "hw.struct_extract", type.getElements()[index].type, {value},
+                    {builder.getNamedAttr("fieldIndex", builder.getI32IntegerAttr(index))});
+      };
+      if (operationCode == "digital_struct_get") {
+        StringRef field = text(op, "field_name");
+        for (const auto &leaf : view->second.leaves)
+          if (!leaf.path.empty() && leaf.path.front().name.getValue() == field) {
+            Value value = extract(inputs.front(), leafName(leaf));
+            if (!value)
+              return {};
+            leaves.push_back(value);
+          }
+      } else {
+        auto structure = cast<StructType>(aggregateType);
+        llvm::DenseMap<StringAttr, unsigned> operands;
+        for (auto [index, raw] : llvm::enumerate(structure.getFields()))
+          operands.try_emplace(cast<DictionaryAttr>(raw).getAs<StringAttr>("name"), index);
+        for (const auto &leaf : view->second.leaves) {
+          auto field = operands.find(leaf.path.front().name);
+          if (field == operands.end())
+            return {};
+          Value value = inputs[field->second];
+          if (leaf.path.size() > 1)
+            value = extract(value, leafName(leaf, 1));
+          if (!value)
+            return {};
+          leaves.push_back(value);
+        }
+      }
+      if (leaves.empty() || (!isa<circt::hw::StructType>(resultType) && leaves.size() != 1))
+        return {};
+      return joinBoundary(op, resultType, leaves);
+    }
     unsigned bits = width(op->getResult(0).getType());
     if (isa<ConstantOp, ConstLiteralOp>(op)) {
       auto attr = op->getAttrOfType<IntegerAttr>("value");
@@ -2332,6 +2547,7 @@ private:
   HierarchyTargetPlan *hierarchy = nullptr;
   ModuleVariantPlan *variant = nullptr;
   ArrayAttr targetParameters;
+  bool namedBoundaryABI = false;
   llvm::DenseSet<Operation *> staticOperations;
   llvm::DenseSet<Operation *> symbolicParameters;
   llvm::DenseMap<const InstantiatedIntegerNode *, TypedAttr> parameterExpressions;
@@ -2352,6 +2568,9 @@ private:
   SmallVector<Operation *> ports, registers;
   llvm::DenseMap<Operation *, Type> portTypes;
   llvm::DenseMap<Type, Type> packedTypes;
+  llvm::DenseMap<Type, HierarchyBoundaryType> boundaryViews;
+  llvm::DenseMap<Type, llvm::StringMap<unsigned>> targetFieldIndices;
+  llvm::DenseMap<Operation *, SmallVector<StringAttr>> physicalPortNames;
   llvm::DenseMap<Type, DictionaryAttr> packedLayouts;
   llvm::DenseSet<Operation *> controlProjections, controlSelectors;
   SmallVector<std::pair<Value, PhysicalControl>> physicalControls;
@@ -2370,6 +2589,11 @@ class SequentialToCIRCTPass final
     : public PassWrapper<SequentialToCIRCTPass, OperationPass<mlir::ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SequentialToCIRCTPass)
+  SequentialToCIRCTPass() = default;
+  SequentialToCIRCTPass(const SequentialToCIRCTPass &other) : PassWrapper(other) {}
+  Option<std::string> boundaryABI{
+      *this, "boundary-abi", llvm::cl::desc("External data boundary ABI: legacy or named-fields"),
+      llvm::cl::init("legacy")};
   StringRef getArgument() const final { return "nodal-sequential-to-circt"; }
   StringRef getDescription() const final {
     return "Transactionally lower verified finite scalar register/FSM/CDC dataflow to "
@@ -2381,6 +2605,11 @@ public:
   }
   void runOnOperation() final {
     auto input = getOperation();
+    if (boundaryABI != "legacy" && boundaryABI != "named-fields") {
+      (void)reject(input, "boundary-abi must be legacy or named-fields");
+      signalPassFailure();
+      return;
+    }
     unsigned count = 0;
     auto walk = input.walk([&](Operation *op) {
       if (++count > maximumAuthoredOperations) {
@@ -2440,8 +2669,9 @@ public:
     }
     uint64_t cost = 2 * (hierarchyPlan ? hierarchyPlan->variants.size() : owners.size());
     auto preflight = [&](nodal::ModuleOp owner, ModuleVariantPlan *variant) {
-      auto lowering = std::make_unique<ModuleLowering>(
-          owner, builder, cost, hierarchyPlan ? &*hierarchyPlan : nullptr, variant);
+      auto lowering = std::make_unique<ModuleLowering>(owner, builder, cost,
+                                                       hierarchyPlan ? &*hierarchyPlan : nullptr,
+                                                       variant, boundaryABI == "named-fields");
       if (failed(lowering->preflight())) {
         return failure();
       }
@@ -2506,6 +2736,7 @@ public:
       signalPassFailure();
       return;
     }
+    candidate->getOperation()->setAttr("nodal.boundary_abi", builder.getStringAttr(boundaryABI));
     input->setAttrs(candidate->getOperation()->getAttrs());
     input.getBodyRegion().takeBody(candidate->getBodyRegion());
   }

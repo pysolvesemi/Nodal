@@ -1193,3 +1193,36 @@ certification. Known Same, exact physical/reset identity, protocol endpoint
 ownership and typed category limitations remain those of DG v0.7. Required
 hierarchy, output/Interface reconvergence, waivers, events, scale and final F57
 integration remain open. No CI or broad qualification ran.
+
+### Concrete hierarchy source and bridge checkpoint
+
+The source instance boundary now carries parent-owned typed digital port proxies,
+exact local requirement identities, actual parent capability bindings and explicit
+binding origins. Default/inherited/named selection uses bounded iterative
+resolution without replacing the child's local requirement with a parent path.
+Existing assignment ownership handles single-driver inputs and readonly outputs;
+raw foreign child handles remain invalid. Shared source dependency proof follows
+actual input/output drivers and retains separate crossing occurrences.
+
+The bridge emits child-local formal Clock/Reset projections, exact executable
+instance-domain bindings and typed digital instance ports under DG v0.8. It does
+not copy parent SSA into child scope or claim that descriptor dictionaries alone
+certify clock/reset ownership. Reused definitions retain generic requirement
+state, not the first occurrence's guessed edge/reset policy. Existing conservative
+terminal operations remain separate.
+
+Focused source/bridge checks pass **17/17**: eight source and nine bridge groups,
+including required endpoint annotations, ownership/driver negatives, inherited
+and named bindings and cross-instance crossing provenance. Log:
+`.work/hierarchy-source-tests4.log`. Eight actual source IR witnesses are retained
+under `.work/hierarchy-source-replay`, generated successfully by the maintained
+Increment57HierarchyReplay entry point; its log is
+`.work/hierarchy-source-replay.log`. Exact twelve-file hashes are recorded in
+`.work/hierarchy-source-checkpoint.sha256`.
+
+This bounded source/bridge checkpoint does not claim completed native contextual
+admission, predecessor acceptance or hierarchy HDL. The active native owner must
+independently discharge every reachable occurrence, and unsupported hierarchy
+target export must reject transactionally rather than silently flatten or omit
+behavior. Those checks and directly affected source predecessors remain pending.
+All coarse F57 items remain open; no CI or broad qualification ran.

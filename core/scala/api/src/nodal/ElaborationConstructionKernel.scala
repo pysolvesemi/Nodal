@@ -512,6 +512,11 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withWaveformForbidden(body)
     case None => body
 
+  def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceDigitalPort(value)
+
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")

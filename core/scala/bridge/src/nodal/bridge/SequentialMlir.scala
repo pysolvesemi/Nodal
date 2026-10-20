@@ -106,7 +106,9 @@ private[nodal] object SequentialMlir:
   ):
     private val physical = bindings(module, resetValues, controls, clocks)
     crossingDomains.foreach: domain =>
-      if !physical.exists(_._1.path == domain) then
+      if !physical.exists(_._1.path == domain) &&
+        !module.domains.exists(d => d.path == domain && d.kind == "required")
+      then
         fail("level crossing endpoint requires an actual supported physical domain binding", domain)
     def roots: Vector[String] = physical.flatMap(_._2).distinct
 

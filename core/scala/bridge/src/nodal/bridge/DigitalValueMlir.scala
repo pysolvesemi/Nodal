@@ -53,7 +53,8 @@ private[nodal] object DigitalValueMlir:
   final class Plan(
       snapshot: ConstructionSnapshot,
       enums: EnumMlir.Plan,
-      clocks: ClockMlir.Resolver
+      clocks: ClockMlir.Resolver,
+      hierarchy: HierarchyMlir.Plan
   ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
@@ -215,6 +216,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(iterationIndices.get(path).map(_.owner))
         .orElse(declarations.get(path).map(_._1))
         .orElse(arguments.get(path).map(_._1.owner))
+        .orElse(hierarchy.projections.get(path).map(_.owner))
 
     def valueRegion(path: String): Option[String] =
       expressions.get(path).flatMap(_.region).orElse(predicates.get(path).flatMap(_.region))
@@ -1109,7 +1111,7 @@ private[nodal] object DigitalValueMlir:
         fail("digital assignment target requires an owned declaration", assignment.path)
       )
       val valid = assignment.kind match
-        case "continuous" => Set("wire", "output").contains(target.kind) &&
+        case "continuous" => Set("wire", "output", "instance-input").contains(target.kind) &&
           !assignment.region.exists(hasBehavioralAncestor)
         case "register_next" => target.kind == "register" &&
           (assignment.region.isEmpty && assignment.target == target.path ||
@@ -1276,13 +1278,14 @@ private[nodal] object DigitalValueMlir:
               crossing.sourceDomain != crossing.destinationDomain &&
               Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
                 modules(expression.owner).domains.exists(value =>
-                  value.path == domain && value.kind != "required"
+                  value.path == domain
                 )
               ),
             "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
             expression.path
           )
-        if crossing.kind != "fifo" && ExecutableCrossingContract.commonResetEpoch(crossing.kind)
+        if crossing.kind != "fifo" && ExecutableCrossingContract.commonResetEpoch(crossing.kind) &&
+          !Vector(crossing.sourceDomain, crossing.destinationDomain).exists(hierarchy.formal)
         then
           val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
           requireValid(
@@ -1331,7 +1334,7 @@ private[nodal] object DigitalValueMlir:
         reset.destination.foreach(domain =>
           requireValid(
             modules(expression.owner).domains.exists(value =>
-              value.path == domain && value.kind != "required"
+              value.path == domain
             ),
             "reset destination is not an exact owned domain",
             expression.path
@@ -1398,7 +1401,7 @@ private[nodal] object DigitalValueMlir:
             crossing.sourceDomain != crossing.destinationDomain &&
             Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
               modules(payload.owner).domains.exists(value =>
-                value.path == domain && value.kind != "required"
+                value.path == domain
               )
             ),
           "FIFO requires coherent typed results, exact operands, closed obligations, bounded depth and actual endpoints",
@@ -1406,7 +1409,8 @@ private[nodal] object DigitalValueMlir:
         )
         val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
         requireValid(
-          source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
+          (Vector(crossing.sourceDomain, crossing.destinationDomain).exists(hierarchy.formal) ||
+            source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source)),
           "fifo requires common nonempty physical reset roots and polarities with safe release",
           identity
         )
@@ -1679,6 +1683,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(declarations.get(path).flatMap(_._2.dataType))
         .orElse(arguments.get(path).map(_._2.dataType))
         .orElse(iterationIndices.get(path).map(_ => "Integer"))
+        .orElse(hierarchy.projections.get(path).map(_.kind))
         .getOrElse(fail("digital operand requires an exact type", path))
 
     private def scalarLiteral(
@@ -2063,6 +2068,7 @@ private[nodal] object DigitalValueMlir:
             Vector[(String, String)]
         ) => Projection,
         additionalRoots: Vector[String],
+        initialValues: Map[String, (String, String)],
         domainReference: String => String,
         staticValue: (String, Option[String], mutable.ArrayBuffer[String], StaticPurpose) => (
             String,
@@ -2137,9 +2143,9 @@ private[nodal] object DigitalValueMlir:
           result
         visit(text, 0)
       val lines = mutable.ArrayBuffer.empty[String]
-      val values = mutable.HashMap.empty[String, (String, String)]
-      val heights = mutable.HashMap.empty[String, Int]
-      val proofs = mutable.HashMap.empty[String, Proof]
+      val values = mutable.HashMap.from(initialValues)
+      val heights = mutable.HashMap.from(initialValues.keysIterator.map(_ -> 0))
+      val proofs = mutable.HashMap.from(initialValues.keysIterator.map(_ -> Unknown))
       val active = mutable.HashSet.empty[String]
       var ordinal = 0
       def exactUnsignedWidth(text: String, path: String, expected: Int): Boolean =
@@ -3422,7 +3428,7 @@ private[nodal] object DigitalValueMlir:
           DigitalCombinationalContract.ReachableBooleanOperations.contains(value.operation)
         ).sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
         additionalRoots.distinct.sorted.foreach: path =>
-          val owner = expressions.get(path).map(_.owner).orElse(declarations.get(path).map(_._1))
+          val owner = valueOwner(path)
           requireValid(
             owner.contains(module.path),
             "specialized digital root has another owner",

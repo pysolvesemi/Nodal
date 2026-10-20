@@ -145,13 +145,15 @@ private[nodal] object ScalaToMlirBridge:
       snapshot.root,
       digitalMaterialization.metadata
     )
+    private val hierarchy = new HierarchyMlir.Plan(snapshot)
     private val physicalControls = new PhysicalControlMlir.Resolver(snapshot)
     private val clockControls = new ClockMlir.Resolver(snapshot, physicalControls)
     private val clockRelationships = new ClockRelationshipMlir.Plan(snapshot, clockControls)
     clockControls.validateRelationships(clockRelationships.permitsSampling)
     private val ownedClockModules =
       snapshot.digitalExpressions.filter(_.clock.nonEmpty).map(_.owner).toSet
-    private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues, clockControls)
+    private val digitalValues =
+      new DigitalValueMlir.Plan(snapshot, enumValues, clockControls, hierarchy)
     private val interfaceValues = new InterfaceMlir.Plan(snapshot)
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
@@ -159,6 +161,9 @@ private[nodal] object ScalaToMlirBridge:
     ).map(member => member.path -> member).toMap
     private val modules = snapshot.modules.sortBy(_.path)
     private val modulesByPath = modules.map(module => module.path -> module).toMap
+    private val declarationOwners = modules.flatMap(module =>
+      module.declarations.map(declaration => declaration.path -> module.path)
+    ).toMap
     private val storageDeclarationPaths = modules.flatMap(_.declarations)
       .filter(value => Set("wire", "register", "memory").contains(value.kind)).map(_.path).toSet
     private val parameterExpressionsByOwner = snapshot.parameterExpressions
@@ -847,6 +852,8 @@ ${indent(body, 2)}
       val digitalKinds = Set(
         "input",
         "output",
+        "instance-input",
+        "instance-output",
         "state",
         "wire",
         "register",
@@ -1844,7 +1851,7 @@ ${indent(body, 2)}
           domain.path,
           Vector(
             "kind" -> quoted(domain.kind),
-            "binding" -> optionalString(domain.binding)
+            "binding" -> optionalString(if definitionComparison then None else domain.binding)
           ) ++ domain.attributes.map((key, value) =>
             normalizeKey(key) -> quoted(value)
           )
@@ -1912,10 +1919,28 @@ ${indent(body, 2)}
             semanticPath = domain.path
           )
 
+      hierarchy.moduleProjections(module.path).zipWithIndex.foreach: (entry, index) =>
+        val (path, projection) = entry
+        val domain = module.domains.find(_.path == projection.requirement).get
+        val result = s"%requirement_capability_$index"
+        val dataType = parseType(projection.kind, path)
+        body += operation(
+          if projection.kind == "Clock" then "nodal.requirement_clock"
+          else "nodal.requirement_reset",
+          results = Vector(result),
+          resultTypes = Vector(dataType),
+          attributes = Vector(
+            "requirement" -> symbolReference(localDomains(domain.name)),
+            "metadata" -> bridgeMetadata(path, Vector.empty)
+          ),
+          semanticPath = path
+        )
+        values.update(path, result -> dataType)
+
       module.declarations.sortBy(_.path).foreach: declaration =>
         declaration.kind match
           case "input" | "output" =>
-            body += renderPort(module, declaration, localDomains)
+            body += renderPort(module, declaration, localDomains, definitionComparison)
           case "parameter" =>
             body ++= renderParameter(declaration, definitionComparison)
           case _ => ()
@@ -2673,7 +2698,10 @@ ${indent(body, 2)}
             bridgeMetadata(expression.path, Vector.empty),
             location(expression.path)
           ),
-        interfaceValues.roots(module) ++ sequential.roots ++ clockRelationships.roots(module.path),
+        interfaceValues.roots(module) ++ sequential.roots ++ clockRelationships.roots(
+          module.path
+        ) ++ hierarchy.roots(module),
+        values.iterator.filter((path, _) => hierarchy.projections.contains(path)).toMap,
         path =>
           "@" + quoted(stableLocalSymbol(
             "domain",
@@ -2851,8 +2879,17 @@ ${indent(body, 2)}
           declarationsByPath,
           expressionsByPath,
           shapeStaticValues,
-          () => allocateShapeStaticValue()
+          () => allocateShapeStaticValue(),
+          definitionComparison = definitionComparison
         )
+
+      body ++= hierarchy.renderBindings(
+        module,
+        values.toMap,
+        stableLocalSymbol,
+        path => bridgeMetadata(path, Vector.empty),
+        location
+      )
 
       interfaceEntries(module).filter(_ => !interfaceContractOwners.contains(module.path)).foreach:
         entry =>
@@ -3142,7 +3179,8 @@ ${indent(body, 2)}
                   expressionsByPath,
                   shapeStaticValues,
                   () => allocateShapeStaticValue(),
-                  Some(body)
+                  Some(body),
+                  definitionComparison = definitionComparison
                 )
               renderTopology(scope, scopeBody, scopeValues)
           )
@@ -3804,7 +3842,8 @@ ${indent(body, 2)}
     private def renderPort(
         module: KernelModuleSnapshot,
         declaration: KernelDeclarationSnapshot,
-        localDomains: Map[String, String]
+        localDomains: Map[String, String],
+        definitionComparison: Boolean
     ): String =
       val dataType = declaration.dataType
         .map(parseType(_, declaration.path))
@@ -3841,7 +3880,8 @@ ${indent(body, 2)}
           "metadata" -> bridgeMetadata(
             declaration.path,
             Vector(
-              "resolved_domain" -> optionalString(declaration.domain)
+              "resolved_domain" -> optionalString(if definitionComparison then None
+              else declaration.resolvedDomain)
             )
           )
         ) ++ domainAttribute,
@@ -3854,10 +3894,7 @@ ${indent(body, 2)}
     ): String =
       declaration.domain
         .flatMap: resolved =>
-          module.domains.find(_.binding.contains(resolved)).map(_.name)
-            .orElse(
-              module.domains.find(_.path == resolved).map(_.name)
-            )
+          module.domains.find(_.path == resolved).map(_.name)
         .orElse:
           module.domains match
             case Vector(single) => Some(single.name)
@@ -4710,7 +4747,8 @@ ${indent(body, 2)}
         expressionsByPath: Map[String, KernelParameterExpressionSnapshot],
         staticValues: mutable.LinkedHashMap[String, (String, String)],
         allocateStaticValue: () => String,
-        staticBody: Option[mutable.ArrayBuffer[String]] = None
+        staticBody: Option[mutable.ArrayBuffer[String]] = None,
+        definitionComparison: Boolean
     ): Vector[String] =
       val moduleSymbol = moduleSymbols.getOrElse(
         instance.childModule,
@@ -4783,7 +4821,8 @@ ${indent(body, 2)}
               instance.path,
               Vector(
                 "child_path" -> quoted(instance.childModule),
-                "lexical_domain" -> optionalString(instance.lexicalDomain)
+                "lexical_domain" -> optionalString(if definitionComparison then None
+                else instance.lexicalDomain)
               )
             )
           ) ++ scopeAttributes(instance.generatedScope),
@@ -5256,7 +5295,8 @@ ${indent(body, 2)}
               "semantic path has no owning Module",
               Some(path)
             )
-      snapshot.shapeIndices.find(_.path == path).map(_.owner)
+      declarationOwners.get(path)
+        .orElse(snapshot.shapeIndices.find(_.path == path).map(_.owner))
         .orElse(snapshot.shapeViews.find(_.path == path).map(_.owner))
         .orElse(snapshot.instanceArrayRoots.find(_.path == path).map(_.owner))
         .getOrElse(resolve(path))
@@ -5268,6 +5308,28 @@ ${indent(body, 2)}
         initial: Option[(String, String)]
     ): Vector[String] =
       declaration.kind match
+        case "instance-input" | "instance-output" =>
+          val proxy = declaration.instancePort.get
+          validateInstancePortType(declaration.dataType.get, declaration.path)
+          val module = modulesByPath(declarationOwners(declaration.path))
+          val instance = module.instances.find(_.path == proxy.instance).get
+          val child = modulesByPath(instance.childModule)
+          val port = child.declarations.find(_.path == proxy.port).get
+          Vector(operation(
+            "nodal.instance_port",
+            results = Vector(result),
+            resultTypes = Vector(dataType),
+            attributes = Vector(
+              "instance" -> symbolReference(stableLocalSymbol(
+                "instance",
+                lastSegment(instance.path)
+              )),
+              "port" -> quoted(stableLocalSymbol("port", port.name)),
+              "direction" -> quoted(proxy.direction),
+              "metadata" -> bridgeMetadata(declaration.path, Vector.empty)
+            ),
+            semanticPath = declaration.path
+          ))
         case "digital-inout" => interfaceValues.renderDeclaration(
             declaration,
             result,
@@ -5318,6 +5380,40 @@ ${indent(body, 2)}
             ),
             semanticPath = declaration.path
           ))
+
+    private def validateInstancePortType(text: String, path: String): Unit =
+      var remaining = 65536
+      def visit(value: String, depth: Int): Unit =
+        remaining -= 1
+        if depth > 128 || remaining < 0 then
+          fail(
+            "NODAL-BRIDGE-057-HIERARCHY",
+            "instance port type exceeds its structural budget",
+            Some(path)
+          )
+        value match
+          case "Bool" => ()
+          case WidthType(_, width) if width.toLongOption.exists(_ > 0) => ()
+          case enumType if enumType.startsWith("Enum(") =>
+            val _ = parseType(enumType, path)
+          case vector if vector.startsWith("Vec(") =>
+            val (element, dimensions) = vecTypeParts(vector, path)
+            if !dimensions.forall(_.toLongOption.exists(_ > 0)) then
+              fail(
+                "NODAL-BRIDGE-057-HIERARCHY",
+                "instance port shape must be finite and fixed",
+                Some(path)
+              )
+            visit(element, depth + 1)
+          case structure if structure.startsWith("Struct(") =>
+            digitalStructParts(structure, path)._2.foreach(field => visit(field._2, depth + 1))
+          case _ =>
+            fail(
+              "NODAL-BRIDGE-057-HIERARCHY",
+              "instance port supports only fixed ordinary digital data",
+              Some(path)
+            )
+      visit(text, 0)
 
     private def digitalScalarType(text: String, path: String): Option[DigitalValueMlir.ScalarType] =
       text match
@@ -6274,6 +6370,7 @@ ${indent(body, 2)}
                 "name" -> quoted(declaration.name),
                 "data_type" -> optionalString(declaration.dataType),
                 "domain" -> optionalString(declaration.domain),
+                "resolved_domain" -> optionalString(declaration.resolvedDomain),
                 "attributes" -> dictionary(
                   declaration.attributes.map((key, value) =>
                     normalizeKey(key) -> quoted(value)

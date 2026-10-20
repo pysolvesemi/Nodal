@@ -456,7 +456,8 @@ object ClockDomain:
     new ClockDomain(
       name,
       CandidateRuntime.resetExpr("required_reset", name),
-      KernelDomainKind.Required
+      KernelDomainKind.Required,
+      clock = Some(CandidateRuntime.requirementClock(name))
     )
 
   def generated(
@@ -477,6 +478,7 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
       val result = select(module)
       result match
         case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
+        case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
         case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
@@ -1500,6 +1502,15 @@ private[nodal] object CandidateRuntime:
 
   def expr[A <: Data](values: Any*): Expr[A] =
     val expression = new KernelExpr[A](values.toVector)
+    ConstructionKernel.expression(expression)
+    expression
+
+  def requirementClock(name: String): Expr[Clock] =
+    val expression = new KernelExpr[Clock](
+      Vector(name),
+      resultType = Some(KernelTypeDescriptor("Clock")),
+      operation = Some("required_clock")
+    )
     ConstructionKernel.expression(expression)
     expression
 

@@ -6,6 +6,8 @@ private[nodal] enum KernelSignalKind(val label: String):
   case Parameter extends KernelSignalKind("parameter")
   case Input extends KernelSignalKind("input")
   case Output extends KernelSignalKind("output")
+  case InstanceInput extends KernelSignalKind("instance-input")
+  case InstanceOutput extends KernelSignalKind("instance-output")
   case Wire extends KernelSignalKind("wire")
   case Variable extends KernelSignalKind("variable")
   case Register extends KernelSignalKind("register")
@@ -55,7 +57,9 @@ private[nodal] final case class KernelDomainSnapshot(
     edge: Option[String] = None,
     resetPolicy: Option[String] = None,
     attributes: Vector[(String, String)] = Vector.empty,
-    relationship: Option[KernelClockRelationshipSnapshot] = None
+    relationship: Option[KernelClockRelationshipSnapshot] = None,
+    clockProjection: Option[String] = None,
+    resetProjection: Option[String] = None
 )
 
 /** Closed executable relationship; descriptor attributes alone confer no permission. */
@@ -83,7 +87,27 @@ private[nodal] final case class KernelDeclarationSnapshot(
     domain: Option[String],
     attributes: Vector[(String, String)],
     conservativeDimensions: Vector[String] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    resolvedDomain: Option[String] = None,
+    instancePort: Option[KernelInstancePortSnapshot] = None
+)
+
+private[nodal] final case class KernelInstancePortSnapshot(
+    instance: String,
+    port: String,
+    direction: String
+)
+
+/** Executable immediate-child binding; actual is always parent-local, unlike resolved occurrence
+  * metadata.
+  */
+private[nodal] final case class KernelInstanceDomainBindingSnapshot(
+    path: String,
+    requirement: String,
+    actual: String,
+    clock: String,
+    reset: Option[String],
+    origin: String
 )
 
 private[nodal] final case class KernelGeneratedScope(owner: String, induction: String)
@@ -94,7 +118,8 @@ private[nodal] final case class KernelInstanceSnapshot(
     lexicalDomain: Option[String],
     bindings: Vector[(String, String)],
     parameterBindings: Vector[(String, String)] = Vector.empty,
-    generatedScope: Option[KernelGeneratedScope] = None
+    generatedScope: Option[KernelGeneratedScope] = None,
+    actualBindings: Vector[KernelInstanceDomainBindingSnapshot] = Vector.empty
 )
 
 private[nodal] final case class KernelInstanceArrayRootSnapshot(
@@ -703,6 +728,8 @@ private final class InstanceRecord(
     val generatedScope: Option[GeneratedRegionRecord] = None
 ):
   var defaultBinding: Option[ClockDomain] = None
+  var defaultBindingSource: Option[SourceSpan] = None
+  val namedBindingSources: mutable.Map[ClockDomain, SourceSpan] = mutable.Map.empty
   val namedBindings: mutable.ArrayBuffer[(ClockDomain, ClockDomain)] = mutable.ArrayBuffer.empty
   val parameterOverrides: mutable.ArrayBuffer[(Any, Any)] = mutable.ArrayBuffer.empty
 

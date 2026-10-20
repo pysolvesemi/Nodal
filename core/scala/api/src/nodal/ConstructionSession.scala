@@ -9773,30 +9773,39 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .getOrElse(default)
 
   private def resolvedNets(): Vector[KernelResolvedNetSnapshot] =
-    val nets = records.values.toVector.flatMap: module =>
-      module.declarations.collect:
-        case declaration if declaration.kind == KernelSignalKind.DigitalInout =>
-          val related = operations.iterator
-            .filter: operation =>
-              operation.values.exists:
-                case reference: AnyRef => reference eq declaration.value
-                case _ => false
-            .map(_.kind)
-            .toVector
-          KernelResolvedNetSnapshot(
-            declarationPath(declaration.reference),
-            declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
-            attribute(declaration, "mode", module.handle, "unknown"),
-            attribute(declaration, "placement", module.handle, "unknown"),
-            attribute(declaration, "profile", module.handle, "unknown"),
-            related,
-            instanceDigitalInouts.get(declaration.reference).map: (instance, port) =>
-              KernelInterfaceBoundarySnapshot(
-                instancePath(module.handle, instance.ordinal),
-                declarationPath(port)
-              )
+    val declarations = records.valuesIterator.flatMap(module =>
+      module.declarations.iterator.filter(_.kind == KernelSignalKind.DigitalInout)
+        .map(module -> _)
+    ).toVector
+    // A per-snapshot reporting index, not another physical-net registry.
+    val related = new IdentityHashMap[AnyRef, mutable.ArrayBuffer[String]]()
+    declarations.foreach: (_, declaration) =>
+      if related.put(declaration.value, mutable.ArrayBuffer.empty[String]) != null then
+        fail("NODAL-INTERFACE-054-007", "resolved declaration identity is duplicated")
+    val lastOperation = new IdentityHashMap[AnyRef, java.lang.Integer]()
+    operations.iterator.zipWithIndex.foreach: (operation, ordinal) =>
+      operation.values.foreach:
+        case reference: AnyRef =>
+          val kinds = related.get(reference)
+          if kinds != null && !Option(lastOperation.get(reference)).contains(ordinal) then
+            kinds += operation.kind
+            lastOperation.put(reference, ordinal)
+        case _ => ()
+    declarations.map: (module, declaration) =>
+      KernelResolvedNetSnapshot(
+        declarationPath(declaration.reference),
+        declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
+        attribute(declaration, "mode", module.handle, "unknown"),
+        attribute(declaration, "placement", module.handle, "unknown"),
+        attribute(declaration, "profile", module.handle, "unknown"),
+        related.get(declaration.value).toVector,
+        instanceDigitalInouts.get(declaration.reference).map: (instance, port) =>
+          KernelInterfaceBoundarySnapshot(
+            instancePath(module.handle, instance.ordinal),
+            declarationPath(port)
           )
-    nets.sortBy(_.path)
+      )
+    .sortBy(_.path)
 
   private def conservativeArrayBindingRecords
       : Vector[(KernelConservativeArrayBindingSnapshot, ConservativeArrayBindingRecord)] =

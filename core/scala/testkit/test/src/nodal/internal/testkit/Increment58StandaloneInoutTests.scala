@@ -2,7 +2,8 @@ package nodal.internal.testkit
 
 import nodal.*
 import nodal.internal.bridge.*
-import nodal_external.Increment58StandaloneInoutSource
+import nodal_external.*
+import scala.compiletime.testing.typeCheckErrors
 import utest.*
 
 object Increment58StandaloneInoutTests extends TestSuite:
@@ -109,10 +110,81 @@ object Increment58StandaloneInoutTests extends TestSuite:
       assert(ReproducibilityContract.canonicalSnapshot(changed) != original)
       assert(ReproducibilityContract.canonicalSnapshot(capture()) == original)
 
+    test("standalone mode evidence forbids read-only and open-drain arbitrary drivers"):
+      val readonly = typeCheckErrors("""import nodal.*
+        def drive(endpoint: DigitalInout[Bits, DriveMode.ReadOnly], enable: Expr[Bool]): Unit =
+          endpoint.drive(endpoint.read, enable)
+      """)
+      val drain = typeCheckErrors("""import nodal.*
+        def drive(endpoint: DigitalInout[Bits, DriveMode.OpenDrain], enable: Expr[Bool]): Unit =
+          endpoint.drive(endpoint.read, enable)
+      """)
+      val release = typeCheckErrors("""import nodal.*
+        def release(endpoint: DigitalInout[Bits, DriveMode.ReadOnly]): Unit = endpoint.highZ()
+      """)
+      assert(readonly.exists(_.message.contains("ArbitraryDrive")))
+      assert(drain.exists(_.message.contains("ArbitraryDrive")))
+      assert(release.exists(_.message.contains("ReleasableDrive")))
+    test("literal constrained-mode projections retain original capability and driver kinds"):
+      val snapshot = ConstructionKernel.inspect(new Increment58StandaloneCapabilitiesSource)
+      val selected = snapshot.resolvedNets.filter(_.boundary.nonEmpty)
+      assert(selected.size == 3, snapshot.resolvedNets.size == 6)
+      assert(selected.map(_.mode).toSet == Set("open-drain", "open-source", "read-only"))
+      assert(selected.forall(_.dataType == "Bits(4)"))
+      assert(selected.find(_.mode == "open-drain").get.operations ==
+        Vector("inout-drive-low", "inout-high-z"))
+      assert(selected.find(_.mode == "open-source").get.operations ==
+        Vector("inout-drive-high", "inout-high-z"))
+      assert(selected.find(_.mode == "read-only").get.operations.isEmpty)
+      val document = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(document.sliding("\"nodal.net_boundary\"".length)
+        .count(_ == "\"nodal.net_boundary\"") == 3)
+    test("standalone projection rejects local sibling and wrapped foreign capabilities"):
+      Vector("local", "sibling", "wrapped").foreach: mode =>
+        val failure = scala.util.Try(ConstructionKernel.inspect(
+          new Increment58StandaloneOwnershipSource(mode)
+        )).failed.get
+        assert(failure.isInstanceOf[ConstructionException])
+        val diagnostic = failure.asInstanceOf[ConstructionException].diagnostic
+        if mode == "wrapped" then
+          assert(diagnostic.code == "NODAL-SEQUENTIAL-056-001")
+          assert(diagnostic.message == "sequential dependency belongs to another module")
+        else
+          assert(diagnostic.code == "NODAL-HIERARCHY-058-INOUT")
+          assert(diagnostic.message.contains("immediate child's direct resolved net"))
+      val descendant = scala.util.Try(ConstructionKernel.inspect(
+        new Increment58StandaloneDescendantSource
+      )).failed.get
+      assert(descendant.isInstanceOf[ConstructionException])
+      assert(descendant.asInstanceOf[ConstructionException].diagnostic.code ==
+        "NODAL-HIERARCHY-044")
+      assert(descendant.getMessage.contains("exact lexical Module/Generate scope"))
+    test("resolved snapshot reporting preserves ordered effects across a representative inventory"):
+      val snapshot = ConstructionKernel.inspect(new Increment58ResolvedSnapshotScaleSource(128))
+      assert(snapshot.resolvedNets.size == 128)
+      assert(snapshot.resolvedNets.map(_.path) == snapshot.resolvedNets.map(_.path).sorted)
+      snapshot.resolvedNets.foreach: net =>
+        val name = net.path.split('.').last
+        val connections = if name == "pad_0" || name == "pad_127" then 1 else 2
+        assert(net.operations == Vector("inout-high-z", "inout-drive", "inout-high-z") ++
+          Vector.fill(connections)("inout-pass-through"))
+      assert(ReproducibilityContract.canonicalSnapshot(snapshot) ==
+        ReproducibilityContract.canonicalSnapshot(ConstructionKernel.inspect(
+          new Increment58ResolvedSnapshotScaleSource(128)
+        )))
+
 object Increment58StandaloneInoutNativeTests extends TestSuite:
   val tests = Tests:
     test("actual source standalone aliases and conditional drivers pass the default semantic gate"):
-      Vector("read", "copy", "bitwise", "drive", "pass-through", "feedback").foreach: mode =>
+      Vector(
+        "read",
+        "copy",
+        "bitwise",
+        "drive",
+        "pass-through",
+        "feedback",
+        "cross-feedback"
+      ).foreach: mode =>
         val document = ScalaToMlirBridge.fromSnapshot(
           ConstructionKernel.inspect(new Increment58StandaloneInoutSource(mode))
         )
@@ -137,12 +209,44 @@ object Increment58StandaloneInoutNativeTests extends TestSuite:
           directory.resolve("diagnostics.txt"),
           result.standardError
         )
-        if mode == "feedback" then
+        if mode == "feedback" || mode == "cross-feedback" then
           assert(result.isInstanceOf[NativeCompilerFailure])
-          assert(result.standardError.contains("combinational value cycle"))
+          if mode == "feedback" then
+            assert(result.standardError.contains("combinational value cycle"))
+          else assert(result.standardError.contains("causal combinational dependency cycle"))
         else
           result match
             case success: NativeCompilerSuccess =>
               assert(success.normalizedMlir.contains("nodal.net_boundary"))
             case failure: NativeCompilerFailure =>
               throw new java.lang.AssertionError(s"${failure.diagnostic}\n${failure.standardError}")
+
+    test("literal open-drain open-source and read-only boundary uses pass the default gate"):
+      val document = ScalaToMlirBridge.fromSnapshot(
+        ConstructionKernel.inspect(new Increment58StandaloneCapabilitiesSource)
+      )
+      val directory = java.nio.file.Path.of(
+        sys.env("NODAL_ROOT"),
+        ".work",
+        "f58-standalone-source",
+        "capabilities"
+      ).toAbsolutePath
+      java.nio.file.Files.createDirectories(directory)
+      val _ = java.nio.file.Files.writeString(directory.resolve("input.mlir"), document.text)
+      val result = NativeCompilerClient.run(
+        document,
+        NativeCompilerRequest(
+          java.nio.file.Path.of(sys.env("NODAL_NODALC")).toAbsolutePath,
+          Vector("--nodal-gate-default"),
+          directory,
+          timeout = java.time.Duration.ofSeconds(90)
+        )
+      )
+      val _ =
+        java.nio.file.Files.writeString(directory.resolve("diagnostics.txt"), result.standardError)
+      result match
+        case success: NativeCompilerSuccess =>
+          assert(success.normalizedMlir.contains("nodal.net_drive_level"))
+          assert(success.normalizedMlir.contains("nodal.net_boundary"))
+        case failure: NativeCompilerFailure =>
+          throw new java.lang.AssertionError(s"${failure.diagnostic}\n${failure.standardError}")

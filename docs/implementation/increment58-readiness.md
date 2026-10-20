@@ -1017,3 +1017,33 @@ native before/after manifest and is copied at
 This is native semantic acceptance. The public guarded-family source path and
 its corresponding guarded-existence query are being integrated separately;
 no source or target execution is claimed from these native cases alone.
+
+## Checkpoint 22 — resolved reporting and occurrence-only feedback regression
+
+Resolved-net snapshot reporting now builds a query-local identity index, visits
+operation operands once, preserves authored effect order and sorts the same
+canonical paths. This removes the repeated all-operation scan for every net
+without adding a persistent topology registry or changing physical identity.
+A 128-net fixture checks ordered reports and deterministic artifacts; no measured
+speedup or exhaustive scale claim is made. Repeated selector lookup retains the
+existing canonical registry pattern rather than adding a net-specific second
+mutable index.
+
+Focused acceptance is **25 unique passing groups**: standalone source 9, actual
+native standalone 2, F54 Interface source 9 and artifacts 5. The first run passed
+24; a new wrapped-foreign negative expected the later Interface diagnostic but
+correctly failed earlier at exact sequential dependency ownership. Its exact
+code/message assertion was repaired, and the complete nine-group rerun also
+executed the descendant lexical-scope negative. Production manifests match;
+no rejection was weakened or converted into an accepted path.
+
+The new actual public-source cross-feedback case routes a boundary read into the
+real child's payload input, so the cycle appears only after hierarchy composition.
+It rejects with `NODAL-DIGITAL-055-010: hierarchy connection contains a causal
+combinational dependency cycle`. Read-only, literal open-drain and open-source
+boundary modes also pass the native gate on frozen compiler
+`3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
+Local, sibling, wrapped foreign and descendant capabilities retain their exact
+owner checks. Logs, manifests and actual inputs are under
+`.work/f58-standalone-followup`. Typed resolved Interface member carriers and
+resolved/inout target emission remain separate required work.

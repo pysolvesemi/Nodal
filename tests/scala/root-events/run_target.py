@@ -133,7 +133,16 @@ def main() -> None:
         if name == "aggregate" and "NODAL packed ABI" not in design:
             raise RuntimeError("aggregate: existing finite packed ABI was not retained")
         expected_edge = "posedge" if name in ("frozen", "rising") else "negedge"
-        if not re.search(r"\b" + expected_edge + r"\s+trigger\b", design):
+        selected_edge = bool(re.search(r"\b" + expected_edge + r"\s+trigger\b", design))
+        if expected_edge == "negedge":
+            # seq.clock_inv may export as a private inverter followed by a
+            # positive-edge register. Check its actual connection, not a
+            # presumed spelling; simulation still proves both edge/hold cases.
+            inverted = re.findall(
+                r"\bwire\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*~trigger\s*;", design)
+            selected_edge |= any(re.search(r"\bposedge\s+" + re.escape(clock) + r"\b", design)
+                                 for clock in inverted)
+        if not selected_edge:
             raise RuntimeError(f"{name}: selected {expected_edge} trigger was not generated")
         payload_port = ""
         if name == "aggregate":

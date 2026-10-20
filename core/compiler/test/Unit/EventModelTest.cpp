@@ -165,6 +165,30 @@ int main() {
         ordinary + base + waiver_test::expression("aliased", "output", "output") +
             waiver_test::sample("aliased"),
         false, "event-owned state");
+  auto gate = [&](std::string enable) {
+    const std::string clock = "!nodal.capability<\"clock\">";
+    return "\"nodal.domain\"() <{sym_name = \"g\", edge = \"rising\", reset_policy = \"none\", "
+           "parent = @a, metadata = {}}> : () -> ()\n" +
+           literal("zero", 0) + "%gated = \"nodal.clock_gate\"(%aClock, %" + enable +
+           ", %zero) <{parent_domains = [@a], "
+           "domain = @g, edge = \"rising\", contract = \"gate_v1\", control_domains = "
+           "[\"external\", \"constant\"], "
+           "obligations = {control_timing = \"inactive_phase_aperture\", startup = "
+           "\"known_after_inactive_phase\"}, "
+           "metadata = {semantic_path = \"Fixture.gated\"}}> : (" +
+           clock + ", " + bit + ", " + bit + ") -> " + clock + "\n" +
+           "\"nodal.local_domain_binding\"(%gated) <{domain = @g, reset_polarity = "
+           "\"active_high\", metadata = {}}> : (" +
+           clock + ") -> ()\n";
+  };
+  check("event-state-cannot-control-clock", ordinary + base + gate("output"), false,
+        "event state or trigger");
+  check("event-trigger-cannot-control-clock", ordinary + base + gate("trigger"), false,
+        "event state or trigger");
+  check("event-trigger-alias-cannot-control-clock",
+        ordinary + base + waiver_test::expression("aliased", "trigger", "trigger") +
+            gate("aliased"),
+        false, "event state or trigger");
   const std::string reg =
       "%old = \"nodal.digital_storage\"() <{name = \"old\", kind = \"register\", "
       "domain = @a, metadata = {}}> : () -> " +
@@ -197,6 +221,72 @@ int main() {
           "module attributes {nodal.root.module = @Fixture} {" + waiver_test::module(base) +
               waiver_test::module(inst, "Unused") + "}",
           false, "cannot be instantiated");
+  const std::string clock = "!nodal.capability<\"clock\">";
+  const std::string consumer =
+      "\"nodal.domain_requirement\"() <{sym_name = \"req\", metadata = {}}> : () -> ()\n"
+      "%reqClock = \"nodal.requirement_clock\"() <{requirement = @req, metadata = {}}> : () -> " +
+      clock + "\n" + port("input", "input", bit, "req") + waiver_test::sample("input", "req");
+  const std::string consumeEvent =
+      "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, parameter_bindings = {}, "
+      "domain_bindings = {req = @a}, metadata = {}}> : () -> ()\n"
+      "\"nodal.instance_domain_binding\"(%aClock) <{instance = @child, requirement = @req, actual "
+      "= @a, "
+      "origin = \"named\", metadata = {}}> : (" +
+      clock + ") -> ()\n" +
+      "%childIn = \"nodal.instance_port\"() <{instance = @child, port = \"input\", direction = "
+      "\"input\", metadata = {}}> : () -> " +
+      bit + "\n" + waiver_test::assign("childIn", "output");
+  checkIR("event-provenance-survives-child-input",
+          "module attributes {nodal.root.module = @Fixture} {" +
+              waiver_test::module(ordinary + base + consumeEvent) +
+              waiver_test::module(consumer, "Child") + "}",
+          false, "event-owned state");
+  const std::string vector = "!nodal.shaped<\"4\", !nodal.bits<1>>";
+  auto map = [&](std::string source, bool capture = false) {
+    return "%mapped = \"nodal.collection\"(%" + source + (capture ? ", %old" : "") +
+           ") <{kind = \"map\", region_id = \"Fixture.map\", operandSegmentSizes = array<i32: 1, "
+           "0, " +
+           (capture ? "1" : "0") + ">, metadata = {semantic_path = \"Fixture.map\"}}> ({\n" +
+           "^bb0(%element: " + bit + (capture ? ", %captured: " + bit : "") + "):\n" +
+           (capture ? "%value = \"nodal.digital_expr\"(%element, %captured) <{operator_name = "
+                      "\"bool_and\", metadata = {}}> : (" +
+                          bit + ", " + bit + ") -> " + bit + "\n"
+                    : "%value = \"nodal.digital_expr\"(%element) <{operator_name = \"bool_not\", "
+                      "metadata = {}}> : (" +
+                          bit + ") -> " + bit + "\n") +
+           "\"nodal.collection_yield\"(%value) <{metadata = {}}> : (" + bit + ") -> ()\n" +
+           "}) : (" + vector + (capture ? ", " + bit : "") + ") -> " + vector + "\n";
+  };
+  auto mapHeader = setup(vector) + port("data", "input", vector) +
+                   process("event", "rising", "%output", "%data", 1, 1, vector, vector);
+  check("pure-map-retains-actual-input-capture",
+        mapHeader + map("data") + update("mapped", "output", "event", vector), true);
+  const std::string constantMap = replace(map("data"),
+                                          "%value = \"nodal.digital_expr\"(%element) "
+                                          "<{operator_name = \"bool_not\", metadata = {}}> : (" +
+                                              bit + ") -> " + bit + "\n",
+                                          literal("value"));
+  check("pure-constant-map-has-no-input-observation",
+        setup(vector) + port("data", "input", vector) +
+            process("event", "rising", "%output", "", 1, 0, vector) + constantMap +
+            update("mapped", "output", "event", vector),
+        true);
+  check("pure-constant-map-cannot-overclaim-captures",
+        mapHeader + constantMap + update("mapped", "output", "event", vector), false,
+        "exactly match actual RHS");
+  check("pure-map-old-event-state",
+        setup(vector) + process("event", "rising", "%output", "", 1, 0, vector) + map("output") +
+            update("mapped", "output", "event", vector),
+        true);
+  check("pure-map-hidden-clocked-capture",
+        ordinary + reg + mapHeader + map("data", true) +
+            update("mapped", "output", "event", vector),
+        false, "ordinary domain-owned state");
+  check("pure-map-capture-inventory-cannot-be-omitted",
+        setup(vector) + port("data", "input", vector) +
+            process("event", "rising", "%output", "", 1, 0, vector) + map("data") +
+            update("mapped", "output", "event", vector),
+        false, "exactly match actual RHS");
   check("over-width-event-storage",
         setup("!nodal.bits<4097>") +
             process("event", "rising", "%output", "", 1, 0, "!nodal.bits<4097>") +

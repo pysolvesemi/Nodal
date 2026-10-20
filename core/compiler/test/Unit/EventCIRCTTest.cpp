@@ -168,6 +168,20 @@ int main() {
            "NODAL-EVENT");
   negative("duplicate-event-writer-rejects-transactionally", wrap(fixture() + update()),
            "overlapping");
+  negative("native-pure-map-target-boundary-preserves-original",
+           wrap(setup(vector) + port("input", "input", vector) +
+                process("event", "rising", "%output", "%input", 1, 1, vector, vector) +
+                "%mapped = \"nodal.collection\"(%input) <{kind = \"map\", region_id = "
+                "\"Fixture.map\", operandSegmentSizes = array<i32: 1, 0, 0>, metadata = "
+                "{semantic_path = \"Fixture.map\"}}> ({\n"
+                "^bb0(%element: " +
+                bit +
+                "):\n%value = \"nodal.digital_expr\"(%element) <{operator_name = \"bool_not\", "
+                "metadata = {}}> : (" +
+                bit + ") -> " + bit + "\n\"nodal.collection_yield\"(%value) <{metadata = {}}> : (" +
+                bit + ") -> ()\n}) : (" + vector + ") -> " + vector + "\n" +
+                update("mapped", "output", "event", vector)),
+           "flat normalized scalar operations");
   // Native admission allows bounded pure projections, but this target's finite
   // whole-value ABI deliberately has no payload-index lowering.
   negative("unsupported-payload-projection-preserves-original",

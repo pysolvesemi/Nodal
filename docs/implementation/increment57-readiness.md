@@ -1637,3 +1637,31 @@ used lane/yield roots. Native exact-capture equality correctly rejects that
 extra header input. This checkpoint preserves tested source progress only and
 does not claim root-event acceptance. The focused shared collection sampler
 repair and constant-map regression remain required before acceptance.
+
+### Event native collection and trigger-isolation repair
+
+Event capture proof now follows already-verified collection arguments and yielded
+roots through the canonical AssignmentQuery graph. Constant maps retain no
+invented payload capture; actual lane/capture dependencies remain checked, and
+hidden ordinary register captures reject. Event trigger identity is retained in
+that same graph so direct or aliased triggers cannot become ordinary clock
+controls. Actual child requirement/binding propagation also preserves event-state
+quarantine. No duplicate collection compiler or provenance engine was added.
+
+The frozen five-file native repair passes **65/65 event model** cases. Directly
+affected collection 76, clock 51, sequential 71 and waiver 67 also pass. Event
+CIRCT now passes **20/20**, including valid pure-map native admission followed by
+transactional refusal at the existing flat target boundary. Exact hashes and
+commands are in `.work/event-native-parity-checkpoint/`.
+
+That target limit predates this increment's events: F55's accepted public
+collection witness explicitly retained collection regions as source/normalized IR
+only, and the pre-event SequentialToCIRCT preflight already rejected region-bearing
+operations. F57 retains pure-map source/native semantics rather than inventing
+an event-specific lowering. The four required supported flat Scala event profiles
+have passed actual SystemVerilog/Icarus execution on the intermediate map-aware
+compiler. The harness now recognizes pinned CIRCT's equivalent private inverted
+trigger followed by a positive-edge register for falling events; waveform
+assertions remain unchanged. Final replay against the trigger-isolation repair
+and regenerated source inputs is still pending, as is the source constant-map
+sampling correction. No final event/F57 acceptance is claimed by this checkpoint.

@@ -1,11 +1,12 @@
 # Tracked root-event target witnesses
 
-`nodal.internal.testkit.Increment57EventSourceExport` emits four actual public Scala
-fixtures through the production construction/snapshot/bridge path. The frozen
-`contracts.clockreset.positive.LowLevelEventFixture` remains unchanged.
-`run_target.py` consumes these files, invokes the current Nodal compiler and
-pinned CIRCT exporter, then simulates the actual generated SystemVerilog with
-Icarus. Handwritten code is limited to the testbench, never a replacement DUT.
+`nodal.internal.testkit.Increment57EventSourceExport` emits actual public Scala
+event fixtures through the production construction/snapshot/bridge path.
+The frozen `contracts.clockreset.positive.LowLevelEventFixture` remains unchanged.
+`run_target.py` consumes the four supported flat witnesses, invokes the current
+Nodal compiler and pinned CIRCT exporter, then simulates the actual generated
+SystemVerilog with Icarus. Handwritten code is limited to the testbench, never a
+replacement DUT.
 
 The focused cases check:
 
@@ -43,3 +44,9 @@ whole Vec/Struct selects, retained obligations, textual round-trip, and
 transactional preservation when verification or the narrower target profile
 rejects an input. Native event ownership, capture and isolation rejection tests
 live in `EventModelTest.cpp`, rather than duplicating the semantic owner here.
+
+Bounded pure collection maps remain valid in the source/native event graph.
+The existing flat finite CIRCT profile has no collection-region lowering, so
+such a target request rejects transactionally with its existing flat-operation
+diagnostic. This is not a generated-HDL claim for map callbacks. There is no
+event-specific collection compiler or replacement handwritten RTL.

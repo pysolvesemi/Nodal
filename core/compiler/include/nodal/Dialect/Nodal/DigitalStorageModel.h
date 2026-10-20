@@ -58,6 +58,9 @@ struct DigitalDependencyNode {
   mlir::Operation *waiver = nullptr;
   /// Actual event storage is never an ordinary domain or permission source.
   mlir::Operation *eventProcess = nullptr;
+  /// Actual root event trigger classification survives aliases without becoming
+  /// state or an attributed source domain. It cannot control an ordinary clock.
+  bool eventTrigger = false;
 };
 struct DigitalCrossingSample {
   unsigned root;

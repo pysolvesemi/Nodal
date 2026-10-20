@@ -20,6 +20,7 @@
 #include "nodal/Dialect/Nodal/WaiverModel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <algorithm>
@@ -60,6 +61,7 @@ struct Node {
   unsigned guard = 0;
   Operation *assignment = nullptr;
   Operation *eventProcess = nullptr;
+  bool eventTrigger = false;
 };
 
 /// One graph for actual SSA dependencies and implicit reads through ordinary
@@ -102,7 +104,8 @@ public:
         boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
-                              crossing, index, endpoint.role, 0, boundary, waiver, node.eventProcess});
+                              crossing, index, endpoint.role, 0, boundary, waiver,
+                              node.eventProcess, node.eventTrigger});
     }
     result.eventUpdates = std::move(eventUpdates);
     result.crossings = std::move(crossings);
@@ -119,6 +122,7 @@ public:
 
 private:
   llvm::DenseMap<Operation *, Operation *> eventOwners;
+  llvm::DenseSet<Operation *> eventTriggers;
   SmallVector<ExecutableEventProcess, 2> events;
   SmallVector<DigitalEventUpdateDependency, 2> eventUpdates;
   llvm::DenseMap<Operation *, unsigned> crossingIndexes;
@@ -473,6 +477,7 @@ LogicalResult AssignmentQuery::read(unsigned node, const StaticShapeProjection &
     return reject(use, "ordinary assignment read has no verified storage owner");
   if (llvm::isa<DigitalStorageOp>(*owner) && text(*owner, "kind") == "register")
     return success();
+  nodes[node].eventTrigger = eventTriggers.contains(*owner);
   if (auto event = eventOwners.find(*owner); event != eventOwners.end()) {
     nodes[node].eventProcess = event->second;
     return success(); // Pre-event storage cuts, never a combinational write edge.
@@ -891,6 +896,8 @@ LogicalResult AssignmentQuery::verify() {
     auto event = inspectEventProcess(&operation);
     if (failed(event))
       return failure();
+    auto trigger = event->trigger.getDefiningOp()->getAttrOfType<FlatSymbolRefAttr>("port");
+    eventTriggers.insert(SymbolTable::lookupSymbolIn(module, trigger));
     eventStateBits += event->stateBits;
     if (eventStateBits > 262144)
       return reject(&operation, "module event storage exceeds finite 262144-bit budget");

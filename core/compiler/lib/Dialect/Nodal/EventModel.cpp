@@ -209,6 +209,18 @@ LogicalResult verifyEventSourceDependencies(Operation *module,
         auto access = resolveStaticShapeProjection(node.value, node.use);
         auto *source =
             succeeded(access) ? access->root.getDefiningOp() : node.value.getDefiningOp();
+        if (!source) {
+          auto argument = dyn_cast<BlockArgument>(node.value);
+          if (!argument || !isa_and_nonnull<CollectionOp>(argument.getOwner()->getParentOp()))
+            return reject(entry.first,
+                          "event expression arguments require a verified pure collection");
+          // AssignmentQuery already checked the collection owner and retained
+          // actual lane/input dependencies. Captured storage references are
+          // classified below via their resolved root, not treated as neutral
+          // arguments: an ordinary register capture must not erase its state.
+          pending.append(node.dependencies.begin(), node.dependencies.end());
+          continue;
+        }
         if (isa_and_nonnull<PortValueOp>(source)) {
           auto *port = portOf(source->getResult(0), module);
           if (!port)
@@ -226,7 +238,7 @@ LogicalResult verifyEventSourceDependencies(Operation *module,
             return reject(entry.first, "event body cannot capture ordinary domain-owned state");
         } else if (!isa_and_nonnull<DigitalExprOp, EnumExprOp, ConstantOp, ConstLiteralOp,
                                     ConstExprOp, ConstParameterRefOp, ShapeIndexOp, ShapeSliceOp,
-                                    ShapeViewOp>(source)) {
+                                    ShapeViewOp, CollectionOp>(source)) {
           return reject(entry.first, "event body requires bounded pure digital expressions");
         }
       }

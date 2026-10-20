@@ -186,8 +186,15 @@ final class FsmDef[S] private[nodal] (
     private[nodal] val evidence: HwEnum[S],
     private[nodal] val children: Vector[FsmChild[S, ?]],
     private[nodal] val compositionCost: FsmCompositionCost,
-    private[nodal] val semanticHash: String
+    private[nodal] val semanticHash: String,
+    val transferSlots: Vector[FsmTransfer[S]]
 ):
+  /** Direct immutable slots in authored first-use order. Transfer guards stay carrier-typed. */
+  val guardSlots: Vector[FsmGuard[S]] =
+    val transferGuards = transferSlots.iterator.map(_.guard).toSet
+    guards.filterNot(transferGuards)
+  def actionSlots: Vector[FsmAction[S]] = actions
+  def childSlots: Vector[FsmChild[S, ?]] = children
   def instantiate(
       bindings: FsmBindings[S],
       encoding: FsmEncoding = FsmEncoding.Compact,
@@ -258,3 +265,13 @@ object FsmDef:
       evidence: HwEnum[S]
   ): FsmDef[S] =
     FsmDefinitionRuntime.definition(definition, initial, fragments, evidence)
+
+  /** Iterative elaboration of bounded immutable graphs, never runtime stack recursion. */
+  @scala.annotation.compileTimeOnly(
+    "NODAL-FSM-058-UNROLL-MISSING: immutable graph unroll requires the Nodal compiler plugin"
+  )
+  def unroll[S](levels: Int, base: FsmDef[S])(
+      step: (Int, FsmDef[S]) => FsmDef[S]
+  ): FsmDef[S] =
+    val _ = (levels, base, step)
+    FlatFsmRuntime.unchecked(() => ())

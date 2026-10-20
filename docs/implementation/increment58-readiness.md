@@ -951,3 +951,39 @@ Five actual concrete-hierarchy Icarus predecessor waveforms also pass on this
 same compiler. Receipts are under `.work/f58-generated-target/third` and `fifth`;
 the maintained reproduction contract is [Generated Area target witness](../../tests/scala/areas/TARGET.md).
 No broader target or F58 completion is implied.
+
+## Checkpoint 20 — bounded immutable graph unroll
+
+The additive [SequentialState v0.9 contract](../design-gates/NodalSequentialState-DG-v0.9.md)
+uses the existing checked callback owner and immutable graph admission for
+`FsmDef.unroll`. Exactly 0..127 elaboration steps retain the same enum evidence;
+existing occurrence, depth and record budgets are checked before another step.
+No callback survives into the graph or hardware. Direct guard/action/child and
+typed transfer inventories expose existing immutable authored identities, not
+name-based binding or a new graph registry. The distinct immutable-FSM callback
+profile rejects runtime hardware, binding capture, mutation, unknown effects,
+recursive helpers and nested unroll; imported helpers retain exact summaries.
+
+Focused acceptance is **34 passing groups**: unroll 4, reusable 11, timed 9 and
+composed 10. One reusable predecessor initially expected the older foreign-slot
+diagnostic; canonical HEAD already included child slots in that message. The
+exact assertion was corrected and its 11-group rerun passes, with the rejected
+behavior unchanged. All production source hashes match across the batch; the
+only changed test hash is that documented assertion. The maintained frontend
+harness passes **13 checks**, including separate compilation, missing-plugin
+rejection and finite/budget/effect boundaries.
+
+Actual public unrolled source passes the full native gate, CIRCT lowering,
+SystemVerilog export and Icarus waveform checks for three independent machines,
+registered child completion, pause, cancel/restart and reset. The typed-transfer
+unrolled source separately passes the native gate. These use frozen compiler
+`3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`;
+receipts are under `.work/f58-unroll-shared` and
+`.work/f58-statecharts/unroll/promotion`. Finite elaboration is not runtime
+recursion: explicit bounded call/return stacks and their overflow/underflow,
+reset, report and target semantics remain required and in progress.
+
+For precision, checkpoint18's accepted feedback negative is a parent-local
+read-to-driver cycle on a child-boundary alias. A cycle arising only after
+hierarchy occurrence union is a separate next regression, not implied by that
+accepted result.

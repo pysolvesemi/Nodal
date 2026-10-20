@@ -51,3 +51,19 @@ private[nodal] object DigitalCollectionCallback:
         "NODAL-COLLECTION-CALLBACK-MISSING",
         "collection callback requires typed effect validation by the Nodal compiler plugin"
       ))).get
+
+  // Immutable graph construction is strictly narrower than ordinary expression purity.
+  private final class CheckedFsmGraph2[S](function: (Int, FsmDef[S]) => FsmDef[S])
+      extends ((Int, FsmDef[S]) => FsmDef[S]):
+    def apply(level: Int, previous: FsmDef[S]): FsmDef[S] = function(level, previous)
+
+  def checkedFsmGraph2[S](function: (Int, FsmDef[S]) => FsmDef[S])
+      : (Int, FsmDef[S]) => FsmDef[S] = new CheckedFsmGraph2(function)
+
+  def requireImmutableFsmChecked(function: AnyRef): Unit = function match
+    case _: CheckedFsmGraph2[?] => ()
+    case _ =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-FSM-058-UNROLL-MISSING",
+        "immutable graph unroll requires typed effect validation by the Nodal compiler plugin"
+      ))).get

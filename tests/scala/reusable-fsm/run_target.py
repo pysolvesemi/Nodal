@@ -342,12 +342,36 @@ endmodule
 """
 
 
+def unrolled_bench(top: str) -> str:
+    return f"""module tb;
+reg clock=0,reset=1,restart=0,cancel=0,enable=1;
+wire[1:0] status;wire complete;
+{top} dut(.clock(clock),.reset(reset),.restart(restart),.cancel(cancel),.enable(enable),.status(status),.complete(complete));
+task tick;begin #2;clock=1;#1;clock=0;#1;end endtask
+task check(input[1:0] s);begin if(status !== s || complete !== (s==2)) $fatal(1,"unroll status=%d complete=%d expected=%d",status,complete,s);end endtask
+initial begin
+ tick;check(0);reset=0;tick;check(0);
+ restart=1;enable=0;tick;check(1);restart=0;repeat(2)begin tick;check(1);end
+ enable=1;tick;check(1);tick;check(1);
+ enable=0;repeat(3)begin tick;check(1);end
+ enable=1;tick;check(1);tick;check(2);tick;check(2);
+ restart=1;tick;check(1);cancel=1;tick;check(3);
+ cancel=0;tick;check(1);restart=0;
+ tick;check(1);tick;check(1);tick;check(1);tick;check(2);
+ reset=1;#1;check(2);tick;check(0);
+ $display("REUSABLE_FSM_TARGET_PASS unrolled independent3 registered-join pause cancel restart reset");$finish;
+end
+initial begin #1000;$fatal(1,"timeout");end
+endmodule
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--profile", choices=(
-        "legacy", "controlled", "terminal", "timed", "timed-one", "timed-transfer",
+        "legacy", "controlled", "terminal", "unrolled", "timed", "timed-one", "timed-transfer",
         "required", "required-material", "required-forwarded", "required-timed",
         "composed-all", "composed-any", "composed-priority", "composed-nested", "composed-timed",
     ), default="legacy")
@@ -365,6 +389,8 @@ def main() -> None:
     required = args.profile.startswith("required")
     composed = args.profile.startswith("composed-")
     expected_machines = (4 if args.profile == "composed-nested" else 3) if composed else (1 if args.profile == "terminal" or required else 2)
+    if args.profile == "unrolled":
+        expected_machines = 3
     if source.count('"nodal.flat_fsm"') != expected_machines:
         raise RuntimeError(f"expected {expected_machines} actual Scala machine definitions")
     if source.count('illegal_policy = "recover_to_initial"') != expected_machines:
@@ -426,7 +452,9 @@ def main() -> None:
         top = modules[0]
     manifest["top"] = top
     manifest["modules"] = modules
-    if args.profile.startswith("timed"):
+    if args.profile == "unrolled":
+        bench = unrolled_bench(top)
+    elif args.profile.startswith("timed"):
         bench = timed_bench(top, args.profile)
     elif args.profile == "composed-timed":
         bench = composed_timed_bench(top)

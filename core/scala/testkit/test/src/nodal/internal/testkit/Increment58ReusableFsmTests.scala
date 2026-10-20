@@ -127,7 +127,7 @@ object Increment58ReusableFsmTests extends TestSuite:
           FsmState(ReusableMode.Run).on(ReusableTransfer.finish)(ReusableMode.Done),
           FsmState(ReusableMode.Done).terminal()
         ),
-        "foreign guard or action"
+        "foreign guard, action or child slot"
       )
       reject(
         graph(

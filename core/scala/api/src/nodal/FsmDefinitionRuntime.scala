@@ -35,6 +35,27 @@ private[nodal] final case class FsmDefinitionTransfer[S](
 private[nodal] object FsmDefinitionRuntime:
   def fail(message: String): Nothing = FlatFsmRuntime.fail(message, "NODAL-FSM-058-001")
 
+  def unroll[S](levels: Int, base: FsmDef[S], step: (Int, FsmDef[S]) => FsmDef[S]): FsmDef[S] =
+    if levels < 0 || levels > 127 || base == null || step == null then
+      fail("immutable graph unroll requires 0 through 127 levels and an actual base/callback")
+    DigitalCollectionCallback.requireImmutableFsmChecked(step)
+    def admit(value: FsmDef[S]): Unit =
+      if value == null || (value.evidence ne base.evidence) then
+        fail("immutable graph unroll step must preserve the exact enum evidence")
+      val cost = value.compositionCost
+      if cost.occurrences < 1 || cost.occurrences > 4096 || cost.depth < 1 || cost.depth > 128 ||
+        cost.records < 1 || cost.records > FlatFsmRuntime.MaximumRecords
+      then fail("immutable graph unroll exceeds the shared finite graph budget")
+    admit(base)
+    var result = base
+    var level = 1
+    while level <= levels do
+      val next = step(level, result)
+      admit(next)
+      result = next
+      level += 1
+    result
+
   private def name(value: String): Unit =
     if value == null || value.isEmpty || value.length > 4096 || value != value.trim then
       fail("definition, fragment and slot names must be nonempty bounded canonical names")
@@ -127,6 +148,7 @@ private[nodal] object FsmDefinitionRuntime:
     val initialId = caseId(initial)
     val guards = mutable.LinkedHashSet.empty[FsmGuard[S]]
     val actions = mutable.LinkedHashSet.empty[FsmAction[S]]
+    val transfers = mutable.LinkedHashSet.empty[FsmTransfer[S]]
     val states = frozen.flatMap(_.states)
     // Inspect vector sizes before traversing or copying any commands. A legal individual
     // state does not authorize 4096 copies of its maximum-size declaration inventory.
@@ -152,6 +174,7 @@ private[nodal] object FsmDefinitionRuntime:
         case transfer: FsmDefinitionTransfer[S] =>
           records += 1
           guards += transfer.slot.guard
+          transfers += transfer.slot
           edges += ((source, caseId(transfer.destination), transfer.mode))
         case join: FsmDefinitionJoin[S] =>
           records += 1
@@ -189,7 +212,8 @@ private[nodal] object FsmDefinitionRuntime:
       evidence,
       children,
       cost,
-      FsmCompositionRuntime.definitionHash(owner, initialId, frozen, evidence)
+      FsmCompositionRuntime.definitionHash(owner, initialId, frozen, evidence),
+      transfers.toVector
     )
 
   def control(restart: Expr[Bool], cancel: Expr[Bool], enable: Expr[Bool]): FsmControl =

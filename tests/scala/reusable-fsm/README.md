@@ -107,3 +107,40 @@ profile checks independent two/three-cycle completion, pause after the first
 child completes, the registered join, cancellation/restart and reset. It retains
 three machine executors and eight actual private registers, not a Cartesian
 product state encoding.
+
+## Checked finite graph unrolling (F58)
+
+`FsmDef.unroll(levels, base)(step)` executes 0..127 checked immutable elaboration
+steps, never runtime recursion. Direct, named and separately compiled helpers use
+one strict callback profile. Read-only `guardSlots`, `actionSlots`, `transferSlots`
+and `childSlots` retain exact authored identities for explicit runtime bindings;
+transfer implementation guards are not ordinary guard slots.
+
+Run the focused maintained frontend/runtime harness with the existing pinned
+artifacts (the same argument meanings as `run.py`):
+
+```sh
+python tests/scala/reusable-fsm/run_unroll.py \
+  --java "$JAVA_HOME/bin/java" --compiler-classpath "$COMPILER_CP" \
+  --api-classpath "$API_CP" --plugin-jar "$PLUGIN_JAR" \
+  --out-parent .work/f58-unroll-frontend
+```
+
+The maintained source is
+`core/scala/testkit/test/src/nodal_external/Increment58UnrolledFsmSource.scala`.
+`nodal.internal.testkit.Increment58UnrolledFsmReplay` exports `unrolled.mlir` and
+`unrolled-transfer.mlir` to its single output-directory argument under `.work`.
+Run `run_target.py --profile unrolled` with the exported `unrolled.mlir` and the
+usual pinned target-tool arguments. The simulation checks three actual independent
+machine stores, registered joins, pause, cancellation, restart and reset.
+
+Focused production acceptance passed 34 groups (unroll 4, reusable 11, timers 9,
+composition 10), 13 frontend/runtime checks including separate producer JARs and
+missing-plugin rejection, actual unrolled native gate/CIRCT/SystemVerilog/Icarus
+replay, and native gating of typed-transfer source. The compiler SHA-256 was
+`3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
+The reusable negative expected-diagnostic text was corrected to match the already
+existing foreign guard/action/child rejection; the rejection remains tested.
+Receipts are under `.work/f58-statecharts/unroll/promotion/` and
+`.work/f58-unroll-shared/`. This is focused prototype evidence, not exhaustive
+qualification. Runtime bounded call stacks remain a separate required F58 slice.

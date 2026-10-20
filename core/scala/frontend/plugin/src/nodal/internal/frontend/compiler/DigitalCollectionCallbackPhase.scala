@@ -36,6 +36,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var scanned = false
   private var collections = Set.empty[Symbol]
   private var pureMethods = Set.empty[Symbol]
+  private var immutableFsmMethods = Set.empty[Symbol]
+  private var immutableFsmModules = Set.empty[Symbol]
+  private var immutableFsmSource = Set.empty[Symbol]
+  private var immutableFsmRuntime = Set.empty[Symbol]
   private var areaMemberMethods = Set.empty[Symbol]
   private var pureModules = Set.empty[Symbol]
   private var factories = Set.empty[Symbol]
@@ -68,7 +72,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private val behavioral = new BehavioralGuardCapture(structural)
 
   private enum Profile:
-    case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential, GeneratedArea
+    case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential, GeneratedArea,
+      ImmutableFsm
 
   private final class Budget:
     var visitedNodes = 0
@@ -324,6 +329,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     // Default expressions are part of the trusted library method's contract too (e.g. slice axis).
     pureMethods ++= defaultGetters(pureMethods)
+    initializeImmutableFsmProfile()
     initializeIterationProfiles(owner)
     eventControl.initialize(
       pureMethods ++ loopMethods,
@@ -332,6 +338,68 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       collections,
       pureModules ++ structuralModules ++ sequentialModules ++ loopModules ++ rangeModules
     )
+
+  private def initializeImmutableFsmProfile()(using Context): Unit =
+    def immutableModule(name: String, names: String*): Set[Symbol] =
+      val module = requiredModule(name)
+      immutableFsmModules += module
+      methods(module, names*)
+    List(
+      "nodal.FsmDefinition",
+      "nodal.FsmGuard",
+      "nodal.FsmAction",
+      "nodal.FsmState",
+      "nodal.FsmFragment",
+      "nodal.FsmDef",
+      "nodal.FsmChild",
+      "nodal.FsmTransfer"
+    ).foreach: name =>
+      immutableFsmMethods ++= immutableModule(name, "apply")
+    immutableFsmModules += requiredModule("nodal.TransitionMode")
+    immutableFsmMethods ++= methods(
+      requiredClass("nodal.FsmState"),
+      "on",
+      "onWithAction",
+      "after",
+      "awaitTransfer",
+      "entry",
+      "active",
+      "exit",
+      "terminal",
+      "children",
+      "onAllComplete",
+      "onAnyComplete",
+      "onChildComplete"
+    )
+    immutableFsmMethods ++= methods(requiredClass("nodal.FsmDef"), "definition", "initial")
+    immutableFsmMethods ++= immutableModule("scala.Predef", "summon")
+    immutableFsmMethods ++= immutableModule("scala.<:<", "refl")
+    List("scala.Int", "scala.Long", "scala.Boolean").foreach: name =>
+      immutableFsmMethods ++= methods(
+        requiredClass(name),
+        "+",
+        "-",
+        "*",
+        "unary_-",
+        "&",
+        "|",
+        "^",
+        "unary_~",
+        "<<",
+        ">>",
+        ">>>",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "unary_!",
+        "toInt",
+        "toLong"
+      )
+    immutableFsmMethods ++= defaultGetters(immutableFsmMethods)
+    immutableFsmSource = methods(requiredModule("nodal.FsmDef"), "unroll")
+    immutableFsmRuntime = methods(requiredModule("nodal.FsmDefinitionRuntime"), "unroll") ++
+      methods(requiredModule("nodal.DigitalCollectionCallback"), "checkedFsmGraph2")
 
   private def defaultGetters(symbols: Set[Symbol])(using Context): Set[Symbol] =
     symbols.flatMap: method =>
@@ -555,6 +623,11 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                     templates(definition.symbol) = template
                     sourceDefinitions(definition.symbol) = ((definition, ctx))
                   case _ => ()
+              case reference: RefTree if immutableFsmRuntime(reference.symbol) =>
+                report.error(
+                  "NODAL-FSM-058-UNROLL-FORGED: source must not call compiler-owned immutable graph attestation methods",
+                  reference.srcPos
+                )
               case reference: RefTree if eventControl.compilerOwned(reference.symbol) =>
                 report.error(
                   "NODAL-EVENT-057-FORGED: source must not call compiler-owned event control certificate or dispatch methods",
@@ -679,6 +752,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.FsmDef")) ||
           symbol.info.finalResultType.typeSymbol.is(Enum) ||
           symbol.info.finalResultType =:= defn.UnitType
       )
@@ -725,7 +799,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     val fields = encoded.split("\t", -1).toList
     fields match
       case kind :: locator :: member :: signature :: profile :: Nil
-          if Set("1", "3", "4", "8", "16", "32")(profile) =>
+          if Set("1", "3", "4", "8", "16", "32", "64")(profile) =>
         val owner = if locator.startsWith("module:") then
           val name = locator.stripPrefix("module:")
           val direct = getModuleIfDefined(name)
@@ -759,9 +833,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       effectKind(symbol).foreach: kind =>
         effectSignature(symbol, kind).foreach: signature =>
           val profiles = if kind == "helper" then
-            List(Profile.Pure, Profile.StructuralIf, Profile.Sequential)
+            List(Profile.ImmutableFsm, Profile.Pure, Profile.StructuralIf, Profile.Sequential)
           else if kind == "singleton" then
             List(
+              Profile.ImmutableFsm,
               Profile.Pure,
               Profile.StructuralIf,
               Profile.Sequential,
@@ -787,6 +862,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 Literal(Constant(kind)),
                 Literal(Constant(signature)),
                 Literal(Constant(profile match
+                  case Profile.ImmutableFsm => 64
                   case Profile.Pure => 4
                   case Profile.StructuralIf => 8
                   case Profile.Sequential => 16
@@ -824,9 +900,24 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else 0
 
   override def transformApply(tree: Apply)(using Context): Tree =
-    eventControl.lower(tree).getOrElse(
+    transformImmutableFsm(tree).getOrElse(eventControl.lower(tree).getOrElse(
       behavioral.lowerAnalog(tree).getOrElse(transformBehavioral(tree))
-    )
+    ))
+
+  private def transformImmutableFsm(tree: Apply)(using Context): Option[Tree] = tree match
+    case Apply(Apply(TypeApply(function, List(enumType)), List(levels, base)), List(step))
+        if immutableFsmSource(function.symbol) =>
+      if new Validation(Profile.ImmutableFsm, new Budget).callback(step, 0) then
+        val checked = ref(requiredMethod("nodal.DigitalCollectionCallback.checkedFsmGraph2"))
+          .appliedToType(enumType.tpe).appliedTo(step)
+        Some(ref(requiredMethod("nodal.FsmDefinitionRuntime.unroll"))
+          .appliedToType(enumType.tpe).appliedToArgs(List(
+            levels,
+            base,
+            checked
+          )).withSpan(tree.span))
+      else Some(tree)
+    case _ => None
 
   private def transformBehavioral(tree: Apply)(using Context): Tree =
     behavioral.guard(tree) match
@@ -902,7 +993,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       symbol.info.finalResultType.widen.dealias.typeSymbol == runtime
 
     private def sanctioned(symbol: Symbol)
-        : Boolean = pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
+        : Boolean = if profile == Profile.ImmutableFsm then immutableFsmMethods(symbol)
+    else
+      pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
       sequentialMethods(symbol) ||
       ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf) &&
         (sequentialBranches(symbol) || sequentialFactories(symbol) || sequentialWrites(symbol))) ||
@@ -910,11 +1003,17 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       (permitsWrites && loopMethods(symbol)) ||
       (permitsStructure && rangeMethods(symbol)) ||
       (profile == Profile.Selection && selectionMethods(symbol))
-    private def trustedModule(symbol: Symbol): Boolean = pureModules(symbol) ||
-      structuralModules(symbol) || sequentialModules(symbol) ||
-      (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
+    private def trustedModule(symbol: Symbol): Boolean =
+      if profile == Profile.ImmutableFsm then immutableFsmModules(symbol)
+      else
+        pureModules(symbol) ||
+        structuralModules(symbol) || sequentialModules(symbol) ||
+        (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
     private def fail(code: String, message: String, tree: Tree): Boolean =
       if !reportErrors then false
+      else if profile == Profile.ImmutableFsm then
+        report.error(s"NODAL-FSM-058-UNROLL-$code: $message", tree.srcPos)
+        false
       else if profile == Profile.Sequential || sequentialDiagnostic then
         report.error(s"NODAL-SEQUENTIAL-056-$code: $message", tree.srcPos)
         false
@@ -1111,6 +1210,21 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     private def reference(tree: RefTree, depth: Int): Boolean =
       val symbol = tree.symbol
       if !symbol.exists then fail("UNKNOWN", "callback contains an unresolved reference", tree)
+      else if profile == Profile.ImmutableFsm && !symbol.is(Module) &&
+        List(
+          "nodal.Expr",
+          "nodal.Module",
+          "nodal.Area",
+          "nodal.FsmBindings",
+          "nodal.FsmControl",
+          "nodal.FsmGuardBinding",
+          "nodal.FsmActionBinding",
+          "nodal.FsmChildBinding",
+          "nodal.Stream"
+        )
+          .exists(name => tree.tpe.widen.dealias.finalResultType.derivesFrom(requiredClass(name)))
+      then
+        fail("EFFECT", "immutable graph callback cannot capture runtime hardware or bindings", tree)
       else if memoryReads(symbol) then
         fail(
           "MEMORY-READ",
@@ -1271,14 +1385,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             // The original allocation profiles (1, 3) never attest a structural branch.
             // Profile 4 is read-only; 8 permits the bounded digital branch/write effects.
             val helperKind = kind == "helper" || kind == "singleton"
-            val compatible =
+            val compatible = if profile == Profile.ImmutableFsm then
+              helperKind && effects.contains(64)
+            else
               (helperKind &&
-                (effects.contains(4) ||
+                (effects.contains(64) || effects.contains(4) ||
                   (effects.contains(8) && permitsWrites) ||
                   (effects.contains(16) && profile == Profile.Sequential))) ||
-                (effects.contains(32) && profile == Profile.GeneratedArea) ||
-                (kind != "helper" && permitsStructure &&
-                  (effects.contains(1) || (effects.contains(3) && permitsWrites)))
+              (effects.contains(32) && profile == Profile.GeneratedArea) ||
+              (kind != "helper" && permitsStructure &&
+                (effects.contains(1) || (effects.contains(3) && permitsWrites)))
             val expected = expectedProfile.forall(profile => effects.contains(profile))
             if annotation.arguments.size != 5 || !version.contains(1) ||
               !effectKind(symbol).contains(kind) || !declaredKind.contains(kind) ||
@@ -1288,7 +1404,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             then
               fail("SUMMARY", "stale, malformed or incompatible constructor effect summary", tree)
             else
-              val profile = List(1, 3, 4, 8, 16, 32).find(effects.contains).get
+              val profile = List(1, 3, 4, 8, 16, 32, 64).find(effects.contains).get
               val records = if dependencyText.get.isEmpty then Nil
               else dependencyText.get.split("\n", -1).toList
               activeSummaries += symbol
@@ -1372,7 +1488,19 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         tree match
           case application: Apply =>
             val symbol = application.fun.symbol
-            if profile == Profile.Sequential && structuralBranches(symbol) &&
+            if profile == Profile.ImmutableFsm &&
+              (immutableFsmSource(symbol) || immutableFsmRuntime(symbol) || collections(symbol) ||
+                structuralBranches(symbol) || structuralFactories(symbol) || sequentialBranches(
+                  symbol
+                ) ||
+                sequentialFactories(symbol))
+            then
+              fail(
+                "EFFECT",
+                "nested callbacks and unroll are outside immutable graph construction",
+                application
+              )
+            else if profile == Profile.Sequential && structuralBranches(symbol) &&
               symbol.name.toString == "statement"
             then
               fail(

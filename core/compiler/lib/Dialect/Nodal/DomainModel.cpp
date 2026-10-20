@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/DomainModel.h"
 
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/PhysicalControlModel.h"
@@ -30,6 +31,8 @@ bool capability(Type type, StringRef kind) {
 LogicalResult checkPhysical(Value value, Operation *binding, StringRef kind) {
   Operation *producer = value.getDefiningOp();
   Operation *module = binding->getParentOp();
+  if (kind == "clock" && llvm::isa_and_nonnull<ClockGateOp, ClockMuxOp>(producer))
+    return success(succeeded(resolveClock(value, binding)));
   if (!capability(value.getType(), kind) ||
       !llvm::isa_and_nonnull<PortValueOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(producer) ||
       producer->getParentOp() != module || failed(verifyDigitalValueScope(value, binding)))
@@ -139,6 +142,11 @@ Operation *DomainModel::findLocalBinding(Attribute reference) const {
   return found == physicalBindings.end() ? nullptr : found->second.first;
 }
 
+Operation *DomainModel::findUniqueLocalBinding(Attribute reference) const {
+  auto found = physicalBindings.find(reference);
+  return found == physicalBindings.end() || found->second.duplicate ? nullptr : found->second.first;
+}
+
 LogicalResult verifyLocalDomainClock(Operation *op) {
   if (!llvm::isa_and_nonnull<LocalDomainBindingOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
       op->getNumResults() || op->getNumRegions() || op->getNumSuccessors() ||
@@ -164,20 +172,36 @@ LogicalResult verifyLocalDomainClock(Operation *op) {
     return failure();
   // Validate ancestry even for resetless/no-state consumers. Equal frequency or
   // a self-only test is insufficient to establish a valid derived-domain DAG.
-  llvm::DenseSet<Operation *> seen;
-  Operation *current = domain;
-  unsigned count = 0;
-  while (current) {
-    if (++count > 128 || !seen.insert(current).second)
+  struct Frame {
+    Operation *domain;
+    unsigned child;
+    unsigned depth;
+  };
+  llvm::DenseMap<Operation *, unsigned> colors;
+  SmallVector<Frame> pending{{domain, 0, 0}};
+  unsigned work = 0;
+  while (!pending.empty()) {
+    auto &frame = pending.back();
+    if (++work > 65536 || frame.depth > 128)
       return reject(op, "generated domain parent cycle or depth bound exceeded");
-    auto parent = current->getAttrOfType<FlatSymbolRefAttr>("parent");
+    colors[frame.domain] = 1;
+    if (frame.child == 2) {
+      colors[frame.domain] = 2;
+      pending.pop_back();
+      continue;
+    }
+    auto parent =
+        frame.domain->getAttrOfType<FlatSymbolRefAttr>(frame.child++ ? "second_parent" : "parent");
     if (!parent)
-      break;
+      continue;
     Operation *next = SymbolTable::lookupSymbolIn(op->getParentOp(), parent);
     if (!isa_and_nonnull<DomainOp>(next) || next->getParentOp() != op->getParentOp() ||
-        text(next, "edge") != text(current, "edge"))
+        text(next, "edge") != text(frame.domain, "edge"))
       return reject(op, "generated domain requires an exact owned parent and inherited edge");
-    current = next;
+    if (colors.lookup(next) == 1)
+      return reject(op, "generated domain parent cycle or depth bound exceeded");
+    if (colors.lookup(next) != 2)
+      pending.push_back({next, 0, frame.depth + 1});
   }
   return success();
 }
@@ -187,6 +211,8 @@ LogicalResult verifyLocalDomainBinding(Operation *op) {
   auto reference = op->getAttrOfType<FlatSymbolRefAttr>("domain");
   auto *domain = SymbolTable::lookupSymbolIn(op->getParentOp(), reference);
   DomainModel domains(op);
-  return verifyResetForBinding(op, domain, domains);
+  if (failed(verifyResetForBinding(op, domain, domains)))
+    return failure();
+  return verifyClockBindingReset(op, domain, domains);
 }
 } // namespace nodal

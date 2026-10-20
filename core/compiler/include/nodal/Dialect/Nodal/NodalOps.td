@@ -330,6 +330,7 @@ def Nodal_DomainOp : Nodal_Op<"domain", [HasParent<"ModuleOp">, Symbol]> {
     StrAttr:$edge,
     StrAttr:$reset_policy,
     OptionalAttr<FlatSymbolRefAttr>:$parent,
+    OptionalAttr<FlatSymbolRefAttr>:$second_parent,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -1599,6 +1600,26 @@ def Nodal_ContributeOp : Nodal_Op<"contribute", [HasParent<"AnalogOp">]> {
 //===----------------------------------------------------------------------===//
 // Domain crossings and timing provenance
 //===----------------------------------------------------------------------===//
+
+// Owned physical clock producers retain independent capability identities.
+def Nodal_ClockGateOp : Nodal_Op<"clock_gate", [HasParent<"ModuleOp">]> {
+  let summary = "Owned inactive-phase clock gate";
+  let arguments = (ins AnyType:$parent_clock, AnyType:$enable, AnyType:$test_enable,
+    ArrayAttr:$parent_domains, FlatSymbolRefAttr:$domain, StrAttr:$edge,
+    StrAttr:$contract, ArrayAttr:$control_domains, DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ClockMuxOp : Nodal_Op<"clock_mux", [HasParent<"ModuleOp">]> {
+  let summary = "Owned serialized break-before-make physical clock mux";
+  let arguments = (ins AnyType:$first_clock, AnyType:$second_clock, AnyType:$select,
+    AnyType:$common_assertion, ArrayAttr:$parent_domains, FlatSymbolRefAttr:$domain,
+    StrAttr:$edge, StrAttr:$contract, ArrayAttr:$control_domains,
+    DictionaryAttr:$obligations, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
 
 def Nodal_CrossingOp : Nodal_Op<"crossing"> {
   let summary = "Typed explicit CDC, RDC, or mixed-domain crossing";

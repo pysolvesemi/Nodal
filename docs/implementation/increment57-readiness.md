@@ -969,3 +969,30 @@ inspection found CIRCT's default clock-gate external cell requires a production
 implementation; a handwritten test substitute will not count. No gate/mux
 closure, CI or broad qualification is claimed here. All coarse F57 items remain
 open while the selected clock implementation and remaining required slices run.
+
+### Owned clock native proof checkpoint
+
+ClockModel now proves either a physical input/element or an exact owned derived
+producer, without merging independent clock structures. Domain and reset proof
+consume that identity while physical reset-root/element identity remains owned
+by the existing physical-control model. Closed gate/mux producers retain actual
+parents, controls, reset assertion, receiving domain and obligations. Alternate
+mux-clock bindings cannot lose their common assertion/reset-release protection.
+Existing sampling/source classification checks control domains, external @none
+boundaries and Pulse misuse; reset-asserted Bool results retain actual domain
+provenance rather than masquerading as constants.
+
+The native model checkpoint passes **637/637** focused tests: new ClockModel 51,
+domain 32, reset 65, sequential 71, crossing 273 and existing CIRCT 145. Exact
+model files, formatting and diff checks are frozen separately from target
+lowering. Logs are `.work/owned-clock-final-*-model.log` and
+`.work/owned-clock-final-sequential-circt.log` (the exact filenames are listed in
+the checkpoint log inventory). Target structure and waveform checks are separate
+pending acceptance; this checkpoint alone does not claim target execution.
+
+Architecture review: clock parent/binding traversal is bounded and memoized per
+query; root-set comparison is O(R log R); the existing dependency graph owns
+control evidence. No copied transitive provenance sets or whole-pipeline
+linearity claim is introduced. Per-operation verifiers may still rebuild local
+domain/dependency views. Model/state limits and causal checks do not close the
+remaining F57 representative-scale requirement. No CI or broad qualification ran.

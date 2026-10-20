@@ -12,7 +12,7 @@ namespace nodal {
 /// Existing IR symbols remain authoritative. Rebuild this view after changing
 /// domain declarations or bindings; no facts are persisted into IR or a registry.
 /// This local F56 profile follows at most one unique requirement-to-domain bind.
-/// It does not infer relationships, accept derived producers, or prove crossings.
+/// It does not infer relationships or prove crossings; ClockModel owns producer identity.
 class DomainModel {
 public:
   explicit DomainModel(mlir::Operation *use);
@@ -31,6 +31,8 @@ public:
   /// Retains the first authored record so the module verifier can diagnose a
   /// duplicate at its original location. Use resolveBinding for a verified query.
   mlir::Operation *findLocalBinding(mlir::Attribute actualReference) const;
+  /// Unique raw record for nonrecursive clock-graph proof, not a safety proof.
+  mlir::Operation *findUniqueLocalBinding(mlir::Attribute actualReference) const;
 
 private:
   struct Binding {

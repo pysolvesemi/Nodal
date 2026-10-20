@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/ResetModel.h"
 
 #include "mlir/IR/SymbolTable.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -31,7 +32,7 @@ bool closed(Operation *op, ArrayRef<StringRef> names) {
 }
 class Inspector {
   struct SyncOwner {
-    PhysicalControl clock;
+    ClockIdentity clock;
     StringAttr edge;
   };
 
@@ -126,8 +127,8 @@ public:
           auto owner = domains.resolveDomain(port->port->getAttr("domain"));
           auto ownerBinding = domains.resolveClockBinding(port->port->getAttr("domain"));
           if (failed(owner) || failed(ownerBinding) || text(*owner, "reset_policy") != "sync" ||
-              !samePhysicalControl((*ownerBinding)->getOperand(0), *ownerBinding,
-                                   (*binding)->getOperand(0), *binding, "clock") ||
+              !sameClock((*ownerBinding)->getOperand(0), *ownerBinding, (*binding)->getOperand(0),
+                         *binding) ||
               (*owner)->getAttr("edge") != (*domain)->getAttr("edge")) {
             (void)reject(op, "synchronous assertion requires its owning Sync clock and edge");
             return failure();
@@ -154,8 +155,7 @@ public:
       auto binding = domains.resolveClockBinding(op->getAttr("destination_domain"));
       auto domain = domains.resolveDomain(op->getAttr("destination_domain"));
       if (failed(binding) || failed(domain) ||
-          !samePhysicalControl((*binding)->getOperand(0), *binding, op->getOperand(1), op,
-                               "clock") ||
+          !sameClock((*binding)->getOperand(0), *binding, op->getOperand(1), op) ||
           !capability(op->getOperand(1).getType(), "clock")) {
         (void)reject(op, "reset synchronizer clock must be the exact destination binding");
         return failure();
@@ -222,7 +222,7 @@ private:
       (void)reject(op, "projected synchronous assertion requires its actual owning Sync binding");
       return failure();
     }
-    auto clock = resolvePhysicalControl((*binding)->getOperand(0), *binding, "clock");
+    auto clock = resolveClock((*binding)->getOperand(0), *binding);
     if (failed(clock))
       return failure();
     return SyncOwner{*clock, (*domain)->getAttrOfType<StringAttr>("edge")};
@@ -272,8 +272,7 @@ LogicalResult verifyResetForBinding(Operation *binding, Operation *domain,
         text(root.release, "release") == "sync")
       return reject(binding,
                     "synchronous assertion contract cannot satisfy asynchronous reset policy");
-    if (!root.release ||
-        !samePhysicalControl(root.clock, root.clockUse, binding->getOperand(0), binding, "clock") ||
+    if (!root.release || !sameClock(root.clock, root.clockUse, binding->getOperand(0), binding) ||
         root.edge != domain->getAttr("edge"))
       return reject(binding, "reset release lacks proof for the exact destination clock and edge");
   }

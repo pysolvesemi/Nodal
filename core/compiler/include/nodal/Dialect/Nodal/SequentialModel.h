@@ -33,6 +33,15 @@ struct SequentialSample {
   /// actual source. FIFO payload and valid establish their source jointly.
   bool requireAttributedGroup = false;
 };
+/// Closed clock-control provenance checked by the same physical dependency graph.
+struct ClockControlSample {
+  mlir::Value value;
+  mlir::Attribute source; // actual domain, or string constant/external
+  mlir::Operation *use;
+};
+mlir::LogicalResult verifyClockControlSamples(mlir::Operation *module,
+                                              llvm::ArrayRef<ClockControlSample> samples,
+                                              SequentialModelLimits limits = {});
 struct DigitalDependencyGraph;
 /// Same sampling proof against an already constructed graph. This nonrecursive
 /// entry is used by crossing source checks during assignment-graph admission.

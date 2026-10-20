@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
@@ -289,6 +290,8 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<ClockGateOp, ClockMuxOp>(use))
+      return verifyClockProducer(use);
     if (llvm::isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(use))
       return verifyResetProducer(use);
     if (llvm::isa<LocalDomainBindingOp>(use))

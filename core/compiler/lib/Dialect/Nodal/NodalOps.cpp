@@ -13,6 +13,7 @@
 #include "nodal/Dialect/Nodal/AnalogStorageModel.h"
 #include "nodal/Dialect/Nodal/AnalogTransfer.h"
 #include "nodal/Dialect/Nodal/AnalogUserFunctions.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
@@ -2227,7 +2228,7 @@ LogicalResult nodal::ModuleOp::verify() {
     return failure();
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
-      failed(verifyStructuralIfModel(getOperation())) ||
+      failed(verifyStructuralIfModel(getOperation())) || failed(verifyClockModel(getOperation())) ||
       failed(verifyCrossingModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifySequentialModel(getOperation())) || failed(verifyMemoryModel(getOperation())) ||
@@ -4074,6 +4075,8 @@ LogicalResult nodal::BridgeOp::verify() {
   return success();
 }
 
+LogicalResult nodal::ClockGateOp::verify() { return verifyClockProducer(getOperation()); }
+LogicalResult nodal::ClockMuxOp::verify() { return verifyClockProducer(getOperation()); }
 LogicalResult nodal::CrossingOp::verify() { return verifyCrossingOperation(getOperation()); }
 LogicalResult nodal::AsyncFifoOp::verify() { return verifyCrossingOperation(getOperation()); }
 

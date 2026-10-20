@@ -341,6 +341,8 @@ SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) 
     return {node.sourceDomain, true, node.value ? node.value.getDefiningOp() : nullptr};
   if (!node.value)
     return {};
+  if (auto *reset = node.value.getDefiningOp(); llvm::isa_and_nonnull<ResetAssertedOp>(reset))
+    return {reset->getAttr("domain"), true, reset};
   auto access = resolveStaticShapeProjection(node.value, node.use);
   Operation *source = succeeded(access) ? access->root.getDefiningOp() : nullptr;
   if ((llvm::isa_and_nonnull<DigitalStorageOp>(source) && text(source, "kind") == "register") ||
@@ -430,6 +432,66 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
   return success();
 }
 } // namespace
+LogicalResult verifyClockControlSamples(Operation *module, ArrayRef<ClockControlSample> samples,
+                                        SequentialModelLimits limits) {
+  SmallVector<std::pair<Value, Operation *>, 2> seeds;
+  for (auto sample : samples)
+    seeds.emplace_back(sample.value, sample.use);
+  DigitalAssignmentProofLimits graphLimits;
+  graphLimits.maximumNodes = limits.maximumOperations;
+  auto graph = analyzeDigitalAssignmentDependencies(module, seeds, graphLimits);
+  if (failed(graph))
+    return failure();
+  DomainModel domains(module);
+  unsigned work = 0;
+  for (unsigned i = 0; i != samples.size(); ++i) {
+    auto sample = samples[i];
+    auto kind = dyn_cast<StringAttr>(sample.source);
+    bool constant = kind && kind.getValue() == "constant";
+    bool external = kind && kind.getValue() == "external";
+    bool attributed = false;
+    llvm::DenseSet<Operation *> externalSources;
+    llvm::DenseSet<unsigned> visited;
+    SmallVector<unsigned> pending{graph->roots[i]};
+    while (!pending.empty()) {
+      unsigned id = pending.pop_back_val();
+      if (!visited.insert(id).second)
+        continue;
+      if (++work > limits.maximumOperations)
+        return reject(sample.use, "clock control sampling exceeds finite graph budget");
+      const auto &node = graph->nodes[id];
+      if (node.crossing && text(node.crossing, "kind") == "pulse")
+        return sample.use->emitOpError(
+            "NODAL-CDC-003: Pulse crossing cannot masquerade as clock control");
+      auto source = sampleSource(module, node);
+      if (source.boundary) {
+        auto ref = dyn_cast_if_present<FlatSymbolRefAttr>(source.domain);
+        bool unannotated =
+            source.permitsUnannotated &&
+            (!ref || (ref.getValue() == "none" && !SymbolTable::lookupSymbolIn(module, ref)));
+        if (constant || (external && (!unannotated || !isa_and_nonnull<PortOp>(source.identity))) ||
+            (!external &&
+             (unannotated || !domains.matchesActualDomain(source.domain, sample.source))))
+          return sample.use->emitOpError(
+              "NODAL-CDC-001: clock control has mixed, foreign or forged provenance");
+        if (external) {
+          auto type = source.identity->getAttrOfType<TypeAttr>("type");
+          if (!type || !boolean(type.getValue()) || text(source.identity, "direction") != "input")
+            return sample.use->emitOpError(
+                "NODAL-CDC-001: external clock control requires an owned Bool input boundary");
+          externalSources.insert(source.identity);
+        } else {
+          attributed = true;
+        }
+      }
+      pending.append(node.dependencies.begin(), node.dependencies.end());
+    }
+    if ((external && externalSources.size() != 1) || (!external && !constant && !attributed))
+      return sample.use->emitOpError(
+          "NODAL-CDC-001: clock control contract lacks actual source evidence");
+  }
+  return success();
+}
 LogicalResult
 verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample> samples,
                                    const DigitalDependencyGraph &graph, ArrayRef<unsigned> roots,

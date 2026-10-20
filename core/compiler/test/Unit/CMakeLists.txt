@@ -697,6 +697,13 @@ target_link_libraries(nodal-crossing-model-unit-tests PRIVATE
 add_test(NAME nodal.native.crossing-model-unit COMMAND nodal-crossing-model-unit-tests)
 set_tests_properties(nodal.native.crossing-model-unit PROPERTIES TIMEOUT 60)
 
+add_executable(nodal-clock-model-unit-tests ClockModelTest.cpp)
+llvm_update_compile_flags(nodal-clock-model-unit-tests)
+target_link_libraries(nodal-clock-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.clock-model-unit COMMAND nodal-clock-model-unit-tests)
+set_tests_properties(nodal.native.clock-model-unit PROPERTIES TIMEOUT 60)
+
 add_executable(nodal-reset-model-unit-tests ResetModelTest.cpp)
 llvm_update_compile_flags(nodal-reset-model-unit-tests)
 target_link_libraries(nodal-reset-model-unit-tests PRIVATE

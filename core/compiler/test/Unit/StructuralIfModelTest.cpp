@@ -501,6 +501,36 @@ int main() {
             failed(nodal::verifyDigitalMaterializationReport(module)));
     }
   }
+  {
+    auto ir = parse(base());
+    nodal::StructuralIfOp owner;
+    if (ir)
+      ir->walk([&](nodal::StructuralIfOp operation) { owner = operation; });
+    Operation *left = owner ? &owner->getRegion(0).front().back() : nullptr;
+    Operation *right = owner ? &owner->getRegion(1).front().back() : nullptr;
+    check("actual-opposite-arm-exclusivity",
+          left && right && nodal::areOppositeStructuralArms(left, right));
+    check("same-arm-not-exclusive", left && !nodal::areOppositeStructuralArms(left, left));
+    std::string second = choice();
+    for (size_t at = 0; (at = second.find("choice", at)) != std::string::npos; at += 7)
+      second.replace(at, 6, "choice2");
+    second = replace(second, "%joined", "%joined2");
+    auto sameModule = parse(base() + second);
+    SmallVector<nodal::StructuralIfOp, 2> choices;
+    if (sameModule)
+      sameModule->walk([&](nodal::StructuralIfOp operation) { choices.push_back(operation); });
+    check("equal-predicate-distinct-choice-not-exclusive",
+          choices.size() == 2 &&
+              !nodal::areOppositeStructuralArms(&choices[0]->getRegion(0).front().back(),
+                                                &choices[1]->getRegion(1).front().back()));
+    auto independent = parse(base());
+    nodal::StructuralIfOp other;
+    if (independent)
+      independent->walk([&](nodal::StructuralIfOp operation) { other = operation; });
+    check("equal-predicate-foreign-owner-not-exclusive",
+          left && other &&
+              !nodal::areOppositeStructuralArms(left, &other->getRegion(1).front().back()));
+  }
   llvm::outs() << "STRUCTURAL_IF_CASES " << cases << " FAILURES " << failures << '\n';
   return failures ? 1 : 0;
 }

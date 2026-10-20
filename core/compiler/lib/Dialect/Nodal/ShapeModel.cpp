@@ -456,6 +456,33 @@ LogicalResult verifyInstanceShapeDimension(Operation *instance, const StaticShap
   return success();
 }
 
+FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *family, Value ordinal,
+                                                                 Operation *use) {
+  if (!family || !ordinal || !use)
+    return failure();
+  auto domain = resolveGeneratedDomain(family);
+  if (failed(domain) || !ordinal.getType().isSignlessInteger(64) ||
+      family->getParentOfType<ModuleOp>() != use->getParentOfType<ModuleOp>() ||
+      failed(verifyDigitalValueScope(ordinal, use)))
+    return failure();
+  // Selecting a family member is a structural/topology use, not a width or
+  // array-extent effect. Preserve the actual static DAG and bounded ownership.
+  auto structural = resolveStructuralIntegerExpression(ordinal, use);
+  if (failed(structural) || !structural->expression)
+    return failure();
+  auto index = resolveOwnedIntegerExpression(domain->module, ordinal,
+                                             ParameterIntegerMode::MathematicalSigned64);
+  if (failed(index) || index->bounds.lower < 0)
+    return failure();
+  auto displacement = composeIntegerExpression("mul", {*index, domain->step});
+  auto coordinate = succeeded(displacement)
+                        ? composeIntegerExpression("add", {domain->lower, *displacement})
+                        : FailureOr<InstantiatedIntegerExpression>(failure());
+  if (failed(coordinate) || !proveIntegerExpressionLess(*coordinate, domain->upperExclusive))
+    return failure();
+  return *coordinate;
+}
+
 FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, Operation *use) {
   if (!reference || !use)
     return failure();
@@ -1515,6 +1542,17 @@ ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjectio
                                                       const StaticShapeProjection &right,
                                                       Operation *use,
                                                       ShapeRegionProofLimits limits) {
+  // Direct template storage is intrinsically local to one actual occurrence.
+  // This proof does not apply to module storage or selected external aliases.
+  Operation *root = left.root ? left.root.getDefiningOp() : nullptr;
+  auto family = root ? llvm::dyn_cast<GenerateOp>(root->getParentOp()) : GenerateOp();
+  if (root && left.root == right.root && llvm::isa<DigitalStorageOp>(root) && family &&
+      family->getNumResults() == 1 &&
+      llvm::isa<GeneratedFamilyType>(family->getResult(0).getType()) &&
+      succeeded(resolveGeneratedDomain(family)) && family->isProperAncestor(use) &&
+      left.projections.empty() && right.projections.empty() &&
+      succeeded(resolveStaticShapeProjection(left.root, use)))
+    return ShapeRegionProofStatus::Proved;
   RegionQuery query(use, limits);
   StaticShapeRegion a, b;
   auto first = deriveRegion(left, query, a, true, std::nullopt, true);

@@ -3183,10 +3183,18 @@ LogicalResult nodal::GenerateOp::verify() {
     if (failed(resolveGeneratedDomain(getOperation())))
       return failure();
   }
-  if (failed(verifyDigitalGenerateBody(getOperation())) ||
+  if (failed(verifyGeneratedFamilyOperation(getOperation())) ||
+      failed(verifyDigitalGenerateBody(getOperation())) ||
       failed(verifyNodeArraySelections(getOperation())))
     return failure();
   return success(succeeded(resolveConservativeStructuralScope(getOperation())));
+}
+
+LogicalResult nodal::GeneratedExportOp::verify() {
+  return verifyGeneratedExportOperation(getOperation());
+}
+LogicalResult nodal::GeneratedMemberOp::verify() {
+  return success(succeeded(inspectGeneratedMember(getOperation())));
 }
 
 LogicalResult nodal::HardwareLoopOp::verify() {

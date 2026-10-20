@@ -20,6 +20,11 @@ def Nodal_StaticPredicateType : Nodal_Type<"StaticPredicate", "static_predicate"
   let assemblyFormat = "";
 }
 
+def Nodal_GeneratedFamilyType : Nodal_Type<"GeneratedFamily", "generated_family"> {
+  let summary = "Exact generated declaration family capability, never a data value";
+  let assemblyFormat = "";
+}
+
 def Nodal_BitsType : Nodal_Type<"Bits", "bits"> {
   let summary = "Signless finite-width bit container";
   let parameters = (ins "int64_t":$width);

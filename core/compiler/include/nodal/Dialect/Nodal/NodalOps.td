@@ -135,7 +135,8 @@ def Nodal_ParameterOp : Nodal_Op<"parameter",
 
 // Exact F54 declaration/connection carriers. Clocked update execution, memory
 // access operations and target layout remain with their later semantic owners.
-def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage", [HasParent<"ModuleOp">]> {
+def Nodal_DigitalStorageOp : Nodal_Op<"digital_storage",
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Owned typed structural wire or domain-owned register";
   let arguments = (ins Variadic<AnyType>:$initial, StrAttr:$name,
     StrAttr:$kind, OptionalAttr<FlatSymbolRefAttr>:$domain,
@@ -647,7 +648,23 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
     OptionalAttr<StrAttr>:$induction_path,
     DictionaryAttr:$metadata
   );
+  let results = (outs Optional<Nodal_GeneratedFamilyType>:$family);
   let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+}
+
+def Nodal_GeneratedExportOp : Nodal_Op<"generated_export", [HasParent<"GenerateOp">]> {
+  let summary = "Exact existing storage export from one generated family template";
+  let arguments = (ins AnyType:$value, StrAttr:$member, StrAttr:$access,
+    DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+def Nodal_GeneratedMemberOp : Nodal_Op<"generated_member"> {
+  let summary = "Checked static ordinal and member projection from an exact family";
+  let arguments = (ins Nodal_GeneratedFamilyType:$family, I64:$ordinal,
+    StrAttr:$member, StrAttr:$access, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
@@ -1999,14 +2016,16 @@ def Nodal_BehavioralIfOp : Nodal_Op<"behavioral_if",
   let regions = (region SizedRegion<1>:$true_body, SizedRegion<1>:$false_body);
   let hasVerifier = 1;
 }
-def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select", [HasParent<"ModuleOp">]> {
+def Nodal_SequentialSelectOp : Nodal_Op<"sequential_select",
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Exact typed priority selection with explicit hold alternatives";
   let arguments = (ins AnyType:$predicate, AnyType:$true_value, AnyType:$false_value,
     DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
-def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleOp">]> {
+def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update",
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Normalized clocked next state; reset dominates next-state enable";
   let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
     Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,

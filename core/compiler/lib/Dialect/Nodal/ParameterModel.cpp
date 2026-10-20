@@ -3890,6 +3890,10 @@ private:
       if (failed(h))
         return failure();
       if (h->kind == DigitalRegionKind::Generate) {
+        // Capturing an induction preserves its actual Shape/predicate identity,
+        // but never turns it (or arithmetic containing it) into a type binding.
+        if (captureProbe)
+          return failure();
         auto domain = resolveGeneratedDomain(h->operation);
         if (failed(domain) || domain->induction != arg)
           return failure();

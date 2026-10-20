@@ -379,7 +379,8 @@ LogicalResult AssignmentQuery::depend(unsigned node, Value value, Operation *use
 FailureOr<Operation *> AssignmentQuery::storageOwner(const StaticShapeProjection &access,
                                                      Operation *use) {
   Operation *root = access.root.getDefiningOp();
-  if (!root || root->getParentOp() != module)
+  if (!root || root->getParentOfType<ModuleOp>() != module ||
+      (root->getParentOp() != module && !llvm::isa<DigitalStorageOp>(root)))
     return failure();
   if (llvm::isa<DigitalStorageOp>(root)) {
     if (failed(verifyDigitalStorageOperation(root)))
@@ -426,6 +427,11 @@ FailureOr<bool> AssignmentQuery::disjoint(const StaticShapeProjection &a,
   // the possible overlap. This is conservative, never independent fake storage.
   bool independent = false;
   if (a.root == b.root) {
+    Operation *root = a.root.getDefiningOp();
+    if (root && llvm::isa<DigitalStorageOp>(root) &&
+        llvm::isa_and_nonnull<GenerateOp>(root->getParentOp()) && a.projections.empty() &&
+        b.projections.empty())
+      use = &root->getBlock()->back();
     auto relation =
         compareStaticShapeProjections(a, b, use, {limits.maximumShapeWork, limits.maximumNodes});
     if (relation.status == ShapeRegionProofStatus::Invalid ||
@@ -641,7 +647,10 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
       }
     }
     driven |= !*separate;
-    wholeWriter |= write.target.wholeRoot && !write.loop;
+    const bool localFamilyRoot =
+        llvm::isa_and_nonnull<GenerateOp>(write.loop) && (*owner)->getParentOp() == write.loop &&
+        llvm::isa<DigitalStorageOp>(*owner) && write.loop->isProperAncestor(use);
+    wholeWriter |= write.target.wholeRoot && (!write.loop || localFamilyRoot);
     bool attainedForEverySetting = true;
     if (write.loop) {
       auto domain = iterationDomain(write.loop);
@@ -657,7 +666,8 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
     }
     if (write.target.root == access.root && attainedForEverySetting)
       coverage.push_back(write.target);
-    if (coverageUse->isBeforeInBlock(writeAnchor))
+    if (coverageUse->getBlock() == writeAnchor->getBlock() &&
+        coverageUse->isBeforeInBlock(writeAnchor))
       coverageUse = writeAnchor;
   }
   if (!driven && needsDriver)
@@ -727,6 +737,14 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     return use->emitOpError("NODAL-DIGITAL-055-010: dependency value must retain exact module and "
                             "lexical ownership: ")
            << value;
+  if (named(definition, "nodal.generated_member")) {
+    auto member = inspectGeneratedMember(definition);
+    if (failed(member))
+      return failure();
+    // The selected reference retains its real storage dependency and sampling
+    // provenance. The family handle itself is not a hardware data dependency.
+    return depend(node, member->storage, member->exportOperation);
+  }
   const bool projected = projection(definition);
   if (llvm::isa<DigitalStorageOp, PortValueOp, InstancePortOp>(definition) || projected) {
     auto access = resolveStaticShapeProjection(value, use);
@@ -863,9 +881,15 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
     auto status = resolveStaticShapeIterationImage(*target, operation, image,
                                                    {limits.maximumShapeWork, limits.maximumNodes});
     auto domain = iterationDomain(loop);
-    if (failed(domain) ||
-        (domain->maximumTripCount > 1 && (status != ShapeRegionProofStatus::Proved ||
-                                          !image.iteration || image.iteration->loop != loop)))
+    // A declaration in this exact family is fresh storage in each occurrence,
+    // unlike a module root whose varying index must establish injectivity.
+    bool localFamilyRoot = llvm::isa_and_nonnull<GenerateOp>(loop) &&
+                           target->root.getDefiningOp()->getParentOp() == loop &&
+                           llvm::isa<DigitalStorageOp>(target->root.getDefiningOp()) &&
+                           loop->getNumResults() == 1;
+    if (failed(domain) || (!localFamilyRoot && domain->maximumTripCount > 1 &&
+                           (status != ShapeRegionProofStatus::Proved || !image.iteration ||
+                            image.iteration->loop != loop)))
       return reject(operation, "iteration target must prove an injective physical write family");
     active &= domain->maximumTripCount != 0;
   }

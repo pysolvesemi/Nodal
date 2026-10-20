@@ -409,6 +409,65 @@ std::string hierarchyPayloadFixture(StringRef actual = "P", bool access = true,
   }
   return top + child;
 }
+std::string repeatedPayloadFixture(StringRef siblingBinding = "P", bool forgedLast = false) {
+  std::string source = hierarchyPayloadFixture("P", false, siblingBinding);
+  auto replaceAll = [&](StringRef from, StringRef to) {
+    size_t position = 0;
+    while ((position = source.find(from.str(), position)) != std::string::npos) {
+      source.replace(position, from.size(), to.str());
+      position += to.size();
+    }
+  };
+  auto repeat = [](StringRef fragment, StringRef separator) {
+    std::string result;
+    for (unsigned index = 0; index < 16; ++index) {
+      if (index)
+        result += separator.str();
+      result += replace(fragment.str(), "\"data\"", "\"data" + std::to_string(index) + "\"");
+    }
+    return result;
+  };
+  auto payload = [](StringRef width) {
+    std::string fields;
+    for (unsigned index = 0; index < 16; ++index) {
+      if (index)
+        fields += ", ";
+      fields += "{name = \"field" + std::to_string(index) +
+                "\", type = !nodal.shaped<\"2\", !nodal.digital<\"uint\", \"" + width.str() +
+                "\">>}";
+    }
+    return "!nodal.struct<\"Repeated\", [" + fields + "]>";
+  };
+  for (auto role :
+       {std::pair{"source", "out"}, std::pair{"sink", "in"}, std::pair{"monitor", "observe"}}) {
+    auto original = entry("data", role.second, role.first);
+    replaceAll("access = [" + original + "]", "access = [" + repeat(original, ", ") + "]");
+  }
+  for (StringRef width : {StringRef("P"), StringRef("Q"), StringRef("N")}) {
+    std::string type = "!nodal.digital<\"uint\", \"" + width.str() + "\">";
+    std::string declaration =
+        "\"nodal.interface_member\"() <{sym_name = \"data\", type = " + type +
+        ", protocol = \"plain\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag +
+        "}}> : () -> ()";
+    replaceAll(declaration, repeat(declaration, "\n"));
+    std::string abi = "{path = \"data\", type = " + type +
+                      ", role = \"sink\", access = \"in\", nested_roles = [], nested_interfaces "
+                      "= []}";
+    replaceAll("members = [" + abi + "]", "members = [" + repeat(abi, ", ") + "]");
+    std::string actual = "{path = \"data\", type = " + type + "}";
+    replaceAll("actual_types = [" + actual + "]", "actual_types = [" + repeat(actual, ", ") + "]");
+    replaceAll(type, payload(width));
+  }
+  if (forgedLast) {
+    std::string actual = "{path = \"data\", type = " + payload("P") + "}";
+    std::string inventory = repeat(actual, ", ");
+    std::string changed = replace(inventory, "{path = \"data15\", type = " + payload("P") + "}",
+                                  "{path = \"data15\", type = " + payload("Q") + "}");
+    source =
+        replace(source, "actual_types = [" + inventory + "]", "actual_types = [" + changed + "]");
+  }
+  return source;
+}
 std::string hiddenDefinition(StringRef hiddenType = boolean, bool changedRole = false) {
   std::string result = definition(boolean);
   for (auto pair :
@@ -1107,6 +1166,9 @@ int main() {
             hierarchyPayloadFixture("P", false, "P"), true);
   hierarchy("symbolic-payload-same-definition-sibling-context-mismatch",
             hierarchyPayloadFixture("P", false, "Q"), false);
+  hierarchy("repeated-payload-types-preserve-exact-contexts", repeatedPayloadFixture(), true);
+  hierarchy("repeated-payload-types-distinct-sibling-binding", repeatedPayloadFixture("Q"), false);
+  hierarchy("repeated-payload-types-forged-last-actual", repeatedPayloadFixture("P", true), false);
   auto endpointQuery = [&](StringRef name, const std::string &source, bool expected, auto inspect) {
     ++cases;
     diagnosticText.clear();

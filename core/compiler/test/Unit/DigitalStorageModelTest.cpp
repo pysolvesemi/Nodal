@@ -117,6 +117,15 @@ int main() {
     }
     std::string before = print(parsed->getOperation());
     bool valid = succeeded(verify(parsed->getOperation()));
+    if (!valid && expected) {
+      ScopedDiagnosticHandler diagnostic(&context, [&](Diagnostic &value) {
+        llvm::errs() << name << ": ";
+        value.print(llvm::errs());
+        llvm::errs() << '\n';
+        return success();
+      });
+      (void)verify(parsed->getOperation());
+    }
     bool passed = valid == expected && before == print(parsed->getOperation());
     if (passed && expected) {
       auto roundtrip = parseSourceString<mlir::ModuleOp>(before, ParserConfig(&context, false));
@@ -139,10 +148,20 @@ int main() {
         true);
   check("register-uninitialized", domain() + storage(record, "state", "register", "", "", "clock"),
         true);
-  check("register-required-local-domain",
-        "\"nodal.domain_requirement\"() <{sym_name = \"required\", metadata = {}}> : () -> ()\n" +
-            storage(uint, "state", "register", "", "", "required"),
-        true);
+  const std::string requiredStorage =
+      "\"nodal.domain_requirement\"() <{sym_name = \"required\", metadata = {}}> : () -> ()\n" +
+      storage(uint, "state", "register", "", "", "required");
+  {
+    auto abstract =
+        parseSourceString<mlir::ModuleOp>(model(requiredStorage), ParserConfig(&context, false));
+    bool valid = false;
+    if (abstract)
+      abstract->walk([&](nodal::DigitalStorageOp operation) {
+        valid = succeeded(nodal::verifyDigitalStorageOperation(operation));
+      });
+    report("register-required-local-domain", valid);
+  }
+  check("register-unbound-required-executable-rejected", requiredStorage, false);
   check("register-missing-domain", storage(uint, "state", "register"), false);
   check("register-nonexistent-domain", storage(uint, "state", "register", "", "", "missing"),
         false);
@@ -634,6 +653,121 @@ int main() {
            rejected && messages.find("NODAL-DIGITAL-054-010: digital assignment operands must "
                                      "belong to the same module") != std::string::npos);
   }
+  check("generated-family-cannot-be-manufactured", literal("!nodal.generated_family"), false);
+  check("generated-family-cannot-be-stored", storage("!nodal.generated_family"), false);
+  check("generated-family-cannot-be-embedded",
+        storage("!nodal.shaped<\"2\", !nodal.generated_family>"), false);
+  const std::string generatedDomain =
+      domain() +
+      replace(port("!nodal.capability<\"clock\">", "physical_clock"), "domain = @none",
+              "domain = @clock") +
+      replace(port("!nodal.capability<\"reset\">", "physical_reset"), "domain = @none",
+              "domain = @clock") +
+      "\"nodal.local_domain_binding\"(%physical_clock, %physical_reset) <{domain = @clock, "
+      "reset_polarity = \"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">, "
+      "!nodal.capability<\"reset\">) -> ()\n";
+  // One retained family template, including empty capture and all-legal ordinal bounds.
+  auto family = [&](StringRef lower, StringRef upper, StringRef step, StringRef access = "register",
+                    StringRef key = "stored") {
+    int64_t lo = std::stoll(lower.str()), hi = std::stoll(upper.str()),
+            stride = std::stoll(step.str());
+    int64_t count = hi <= lo ? 0 : (hi - lo + stride - 1) / stride;
+    return literal("i64", lower, "family_lo") + literal("i64", upper, "family_hi") +
+           literal("i64", step, "family_step") +
+           "%family = \"nodal.generate\"(%family_lo, %family_hi, %family_step) "
+           "<{induction = \"i\", region_id = \"Fixture.family\", "
+           "induction_path = \"Fixture.family.i\", metadata = {maximum_trip_count = " +
+           std::to_string(count) + " : i64}}> ({^bb0(%i: i64):\n" +
+           storage(sint, "stored", "register", "", "", "clock") +
+           "\"nodal.generated_export\"(%stored) <{member = \"" + key.str() + "\", access = \"" +
+           access.str() + "\", metadata = {}}> : (" + sint + ") -> ()\n" +
+           "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  auto selected = [&](StringRef ordinal, StringRef access = "read", StringRef key = "stored",
+                      StringRef type = "!nodal.sint<8>") {
+    return literal("i64", ordinal, "ordinal") +
+           "%selected = \"nodal.generated_member\"(%family, %ordinal) <{member = \"" + key.str() +
+           "\", access = \"" + access.str() +
+           "\", metadata = {}}> : (!nodal.generated_family, i64) -> " + type.str() + "\n";
+  };
+  check("generated-family-one-template", generatedDomain + family("0", "1000000", "1"), true);
+  check("generated-empty-capture", generatedDomain + family("3", "3", "1"), true);
+  check("generated-nonzero-step-first-ordinal",
+        generatedDomain + family("5", "11", "2") + selected("0"), true);
+  check("generated-last-ordinal", generatedDomain + family("5", "11", "2") + selected("2"), true);
+  check("generated-negative-ordinal", generatedDomain + family("5", "11", "2") + selected("-1"),
+        false);
+  check("generated-upper-ordinal", generatedDomain + family("5", "11", "2") + selected("3"), false);
+  check("generated-empty-member", generatedDomain + family("3", "3", "1") + selected("0"), false);
+  check("generated-member-missing",
+        generatedDomain + family("0", "3", "1") + selected("0", "read", "hidden"), false);
+  check("generated-member-type-forgery",
+        generatedDomain + family("0", "3", "1") + selected("0", "read", "stored", uint), false);
+  check("generated-readonly-escalation",
+        generatedDomain + family("0", "3", "1", "read") + selected("0", "register"), false);
+  check("generated-wire-register-forgery", generatedDomain + family("0", "3", "1", "wire"), false);
+  check("generated-selected-storage-dependency",
+        generatedDomain + family("0", "3", "1") + selected("0") + storage(sint) +
+            assign(sint, sint, "wire", "selected"),
+        true);
+  check("generated-duplicate-export",
+        generatedDomain +
+            replace(family("0", "3", "1"), "}) : (i64, i64, i64)",
+                    "\"nodal.generated_export\"(%stored) <{member = \"stored\", access = \"read\", "
+                    "metadata = {}}> : (!nodal.sint<8>) -> ()\n}) : (i64, i64, i64)"),
+        false);
+  check("generated-forged-coordinate",
+        generatedDomain + family("0", "3", "1") +
+            replace(selected("0"), "> : (!nodal.generated_family",
+                    "> {coordinate = 0 : i64} : (!nodal.generated_family"),
+        false);
+  check("generated-runtime-ordinal",
+        generatedDomain + family("0", "3", "1") + port("!nodal.sint<8>", "runtime") +
+            replace(selected("0"), "%family, %ordinal", "%family, %runtime"),
+        false);
+  check("generated-foreign-export",
+        generatedDomain + storage(sint, "outside", "register", "", "", "clock") +
+            replace(family("0", "3", "1"), "\"nodal.generated_export\"(%stored)",
+                    "\"nodal.generated_export\"(%outside)"),
+        false);
+  auto reorderedExport =
+      replace(family("0", "3", "1"), storage(sint, "stored", "register", "", "", "clock"), "");
+  reorderedExport =
+      replace(reorderedExport, "}) : (i64, i64, i64)",
+              storage(sint, "stored", "register", "", "", "clock") + "}) : (i64, i64, i64)");
+  check("generated-reordered-export", generatedDomain + reorderedExport, false);
+  auto symbolicFamily =
+      parameter() + replace(family("0", "4", "1"), "(%family_lo, %family_hi, %family_step)",
+                            "(%family_lo, %N, %family_step)");
+  check("generated-symbolic-all-legal-first", generatedDomain + symbolicFamily + selected("0"),
+        true);
+  check("generated-symbolic-default-only-rejected",
+        generatedDomain + symbolicFamily + selected("1"), false);
+  check("generated-topology-parameter-ordinal",
+        generatedDomain + parameter(true, "\"topology\"") + family("0", "5", "1") +
+            replace(selected("0"), "%family, %ordinal", "%family, %N"),
+        true);
+  check("generated-topology-ordinal-upper-envelope-rejected",
+        generatedDomain + parameter(true, "\"topology\"") + family("0", "4", "1") +
+            replace(selected("0"), "%family, %ordinal", "%family, %N"),
+        false);
+  auto wireFamily =
+      replace(family("0", "3", "1", "wire"), storage(sint, "stored", "register", "", "", "clock"),
+              storage(sint, "stored") + literal(sint, "7", "seven") +
+                  assign(sint, sint, "stored", "seven"));
+  check("generated-local-wire-driver",
+        generatedDomain + wireFamily + selected("1") + storage(sint) +
+            assign(sint, sint, "wire", "selected"),
+        true);
+  check("generated-local-wire-driver-overlap",
+        generatedDomain +
+            replace(wireFamily, "\"nodal.generated_export\"(%stored)",
+                    assign(sint, sint, "stored", "seven") + "\"nodal.generated_export\"(%stored)"),
+        false);
+  check("generated-selected-write-not-admitted",
+        generatedDomain + family("0", "3", "1") + selected("0", "register") +
+            literal(sint, "0", "zero") + assign(sint, sint, "selected", "zero", "register_next"),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

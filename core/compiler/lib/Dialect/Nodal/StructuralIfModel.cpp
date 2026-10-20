@@ -9,10 +9,12 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <functional>
@@ -100,6 +102,35 @@ FailureOr<StructuralIfHeader> inspectStructuralIfHeader(Operation *op) {
   }
   return h;
 }
+bool areOppositeStructuralArms(Operation *left, Operation *right) {
+  if (!left || !right || left == right ||
+      left->getParentOfType<ModuleOp>() != right->getParentOfType<ModuleOp>())
+    return false;
+  llvm::DenseMap<Operation *, unsigned> arms;
+  unsigned depth = 0;
+  for (Operation *at = left; at && !llvm::isa<ModuleOp>(at); at = at->getParentOp()) {
+    if (++depth > 128)
+      return false;
+    Operation *parent = at->getParentOp();
+    if (!llvm::isa_and_nonnull<StructuralIfOp>(parent))
+      continue;
+    auto header = inspectStructuralIfHeader(parent);
+    if (failed(header))
+      return false;
+    arms.try_emplace(parent, at->getParentRegion()->getRegionNumber());
+  }
+  depth = 0;
+  for (Operation *at = right; at && !llvm::isa<ModuleOp>(at); at = at->getParentOp()) {
+    if (++depth > 128)
+      return false;
+    Operation *parent = at->getParentOp();
+    auto found = arms.find(parent);
+    if (found != arms.end() && found->second != at->getParentRegion()->getRegionNumber())
+      return true;
+  }
+  return false;
+}
+
 FailureOr<Value> structuralIfCaptureSource(BlockArgument arg) {
   auto h = inspectStructuralIfHeader(arg.getOwner()->getParentOp());
   if (failed(h))
@@ -210,6 +241,22 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   for (Value operand : op->getOperands())
     if (failed(verifyDigitalValueScope(operand, op)))
       return reject(op, "body operands require actual local SSA or explicit captures");
+  auto family = op->getParentOfType<GenerateOp>();
+  const bool generatedStorage = family && family->getNumResults() == 1;
+  if (!pure && !op->getParentOfType<HardwareLoopOp>()) {
+    if (llvm::isa<BehavioralIfOp>(op))
+      return verifyBehavioralIfOperation(op);
+    if (llvm::isa<SequentialUpdateOp>(op))
+      return verifySequentialUpdate(op);
+    if (llvm::isa<SequentialSelectOp>(op))
+      return verifySequentialSelect(op);
+  }
+  if (!pure && generatedStorage && op->getParentOp() == family) {
+    if (llvm::isa<DigitalStorageOp>(op))
+      return verifyDigitalStorageOperation(op);
+    if (op->getName().getStringRef() == "nodal.generated_export")
+      return verifyGeneratedExportOperation(op);
+  }
   if (llvm::isa<StructuralIfOp>(op)) {
     if (pure && op->getNumResults() != 1)
       return reject(op, "pure callbacks require value-only structural choices");
@@ -222,7 +269,8 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   if (llvm::isa<StaticCompareOp, StaticLogicOp>(op))
     return verifyStaticPredicateOperation(op);
   if (llvm::isa<DigitalAssignOp>(op)) {
-    if (pure || text(op, "kind") != "continuous")
+    if (pure || (text(op, "kind") != "continuous" &&
+                 !(!op->getParentOfType<HardwareLoopOp>() && text(op, "kind") == "register_next")))
       return reject(op, "this body admits no state or procedural effects");
     return verifyDigitalAssignmentOperation(op);
   }
@@ -271,6 +319,72 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   }
   return reject(op, "unsupported effect or value producer in structural body");
 }
+// One authored-use inventory for admission and private-candidate rewriting.
+// Type-only dependencies are real captures, in the same order as SSA uses.
+FailureOr<SmallVector<BlockArgument, 8>> captureUseOrder(Block *body, unsigned &work,
+                                                         unsigned maximumWork) {
+  SmallVector<BlockArgument, 8> result;
+  llvm::DenseSet<Value> seen;
+  llvm::StringMap<BlockArgument> tokens;
+  for (BlockArgument argument : body->getArguments()) {
+    std::string identity = digitalValueSemanticPath(argument);
+    if (!identity.empty())
+      tokens.try_emplace(identity, argument);
+  }
+  bool valid = true;
+  auto mark = [&](Value value) {
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (argument && argument.getOwner() == body && seen.insert(argument).second)
+      result.push_back(argument);
+  };
+  auto token = [&](StringRef identity) {
+    auto found = tokens.find(identity);
+    if (found != tokens.end())
+      mark(found->second);
+  };
+  std::function<void(Type, unsigned)> visitType;
+  std::function<void(Attribute, unsigned)> visitAttribute;
+  visitType = [&](Type type, unsigned depth) {
+    if (depth >= 128 || ++work > maximumWork) {
+      valid = false;
+      return;
+    }
+    if (auto scalar = dyn_cast<ParametricIntegerType>(type))
+      token(scalar.getWidth());
+    if (auto shaped = dyn_cast<ShapedType>(type)) {
+      SmallVector<StringRef, 4> dimensions;
+      shaped.getDimensions().split(dimensions, ',');
+      for (StringRef dimension : dimensions)
+        token(dimension);
+    }
+    type.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, depth + 1); },
+                                  [&](Type t) { visitType(t, depth + 1); });
+  };
+  visitAttribute = [&](Attribute attribute, unsigned depth) {
+    if (depth >= 128 || ++work > maximumWork) {
+      valid = false;
+      return;
+    }
+    attribute.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, depth + 1); },
+                                       [&](Type t) { visitType(t, depth + 1); });
+  };
+  for (Operation &child : *body) {
+    for (Value operand : child.getOperands()) {
+      if (++work > maximumWork)
+        return failure();
+      mark(operand);
+    }
+    for (NamedAttribute attribute : child.getAttrs())
+      visitAttribute(attribute.getValue(), 0);
+    for (Type type : child.getOperandTypes())
+      visitType(type, 0);
+    for (Type type : child.getResultTypes())
+      visitType(type, 0);
+    if (!valid)
+      return failure();
+  }
+  return result;
+}
 LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, Budget &budget,
                        unsigned depth) {
   if (depth >= 128 || ++budget.work > 65536)
@@ -304,6 +418,9 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
       } else if (llvm::isa<StaticPredicateType>(arg.getType())) {
         if (source.getType() != arg.getType() || failed(analyzeStaticPredicate(source, op, outer)))
           return reject(op, "predicate capture must retain its verified actual DAG");
+      } else if (!pure && isDigitalControlBoundaryType(arg.getType())) {
+        if (source.getType() != arg.getType())
+          return reject(op, "control capture must preserve its exact Clock/Reset capability");
       } else if (!isDigitalCombinationalValueType(source.getType(), h->module, outer) ||
                  !isDigitalCombinationalValueType(arg.getType(), h->module, &*context) ||
                  !equivalentDigitalStorageTypesAcross(source.getType(), outer, arg.getType(),
@@ -313,61 +430,14 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
         if (!body->getParent()->isAncestor(user->getParentRegion()))
           return reject(op, "arm arguments cannot escape their actual branch");
     }
-    llvm::DenseSet<Value> used;
-    unsigned expected = 0;
+    unsigned captureWork = 0;
+    auto order = captureUseOrder(body, captureWork, 65536);
+    if (failed(order))
+      return reject(op, "arm type captures exceed finite first-use inventory budget");
+    for (auto [index, argument] : llvm::enumerate(*order))
+      if (argument.getArgNumber() != index)
+        return reject(op, "arm captures must retain deterministic first actual use order");
     for (Operation &child : *body) {
-      auto mark = [&](Value value) {
-        auto arg = llvm::dyn_cast<BlockArgument>(value);
-        return !arg || arg.getOwner() != body || !used.insert(arg).second ||
-               arg.getArgNumber() == expected++;
-      };
-      for (Value operand : child.getOperands())
-        if (!mark(operand))
-          return reject(&child, "arm captures must retain deterministic first actual use order");
-      // Type-token dependencies are real uses too. Match the canonical transport
-      // order: operands, attributes, operand/result signature. Type validity and
-      // exact substitution remain with DigitalTypeModel, not this use inventory.
-      bool ordered = true;
-      unsigned typeWork = 0;
-      std::function<void(Type, unsigned)> visitType;
-      std::function<void(Attribute, unsigned)> visitAttribute;
-      auto token = [&](StringRef id) {
-        for (BlockArgument arg : body->getArguments())
-          if (digitalValueSemanticPath(arg) == id && !mark(arg))
-            ordered = false;
-      };
-      visitType = [&](Type type, unsigned level) {
-        if (level >= 128 || ++typeWork > 65536) {
-          ordered = false;
-          return;
-        }
-        if (auto scalar = llvm::dyn_cast<ParametricIntegerType>(type))
-          token(scalar.getWidth());
-        if (auto shaped = llvm::dyn_cast<ShapedType>(type)) {
-          SmallVector<StringRef, 4> dimensions;
-          shaped.getDimensions().split(dimensions, ',');
-          for (StringRef dimension : dimensions)
-            token(dimension);
-        }
-        type.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, level + 1); },
-                                      [&](Type t) { visitType(t, level + 1); });
-      };
-      visitAttribute = [&](Attribute attribute, unsigned level) {
-        if (level >= 128 || ++typeWork > 65536) {
-          ordered = false;
-          return;
-        }
-        attribute.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, level + 1); },
-                                           [&](Type t) { visitType(t, level + 1); });
-      };
-      for (NamedAttribute attribute : child.getAttrs())
-        visitAttribute(attribute.getValue(), 0);
-      for (Type type : child.getOperandTypes())
-        visitType(type, 0);
-      for (Type type : child.getResultTypes())
-        visitType(type, 0);
-      if (!ordered)
-        return reject(&child, "arm type captures exceed budget or violate first-use order");
       if (failed(verifyBody(&child, *context, pure, budget, depth + 1)))
         return failure();
       for (Value value : child.getResults())
@@ -375,7 +445,7 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
           if (!body->getParent()->isAncestor(user->getParentRegion()))
             return reject(&child, "branch-local values cannot escape or cross alternatives");
     }
-    if (expected != h->captureCounts[arm])
+    if (order->size() != h->captureCounts[arm])
       return reject(op, "unused or forged arm capture");
     if (op->getNumResults() &&
         !equivalentDigitalStorageTypesAcross(body->back().getOperand(0).getType(), &*context,
@@ -385,6 +455,43 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
   return success();
 }
 } // namespace
+LogicalResult canonicalizeStructuralIfCaptures(Operation *op, unsigned &work,
+                                               unsigned maximumWork) {
+  auto header = inspectStructuralIfHeader(op);
+  if (failed(header))
+    return failure();
+  SmallVector<BlockArgument, 8> orders[2];
+  SmallVector<Value, 8> operands{op->getOperand(0)};
+  bool changed = false;
+  for (unsigned arm = 0; arm != 2; ++arm) {
+    auto order = captureUseOrder(header->bodies[arm], work, maximumWork);
+    if (failed(order))
+      return reject(op, "normalized capture inventory exceeds finite work budget");
+    orders[arm] = std::move(*order);
+    changed |= orders[arm].size() != header->captureCounts[arm];
+    for (auto [index, argument] : llvm::enumerate(orders[arm])) {
+      changed |= argument.getArgNumber() != index;
+      operands.push_back(op->getOperand(header->captureOffsets[arm] + argument.getArgNumber()));
+    }
+  }
+  if (!changed)
+    return success();
+  // All facts are collected before changing either arm. The caller retains the
+  // encompassing private transaction and re-verifies before publication.
+  for (unsigned arm = 0; arm != 2; ++arm) {
+    Block *body = header->bodies[arm];
+    for (BlockArgument old : orders[arm]) {
+      BlockArgument replacement = body->addArgument(old.getType(), old.getLoc());
+      old.replaceAllUsesWith(replacement);
+    }
+    body->eraseArguments(0, header->captureCounts[arm]);
+  }
+  op->setOperands(operands);
+  op->setAttr("operandSegmentSizes",
+              DenseI32ArrayAttr::get(op->getContext(), {1, static_cast<int32_t>(orders[0].size()),
+                                                        static_cast<int32_t>(orders[1].size())}));
+  return success();
+}
 LogicalResult verifyStructuralIfOperation(Operation *op, const ParameterIntegerEnvironment *outer) {
   if (!outer && op && isDigitalRegionOwner(op->getParentOp())) {
     auto contexts = digitalIntegerContextsAtUse(op);
@@ -433,7 +540,7 @@ LogicalResult verifyDigitalGenerateBody(Operation *op) {
   // Only the real SSA-domain form participates in this new digital admission.
   if (!isDigitalRegionOwner(op))
     return success();
-  bool digital = false;
+  bool digital = op->getNumResults() == 1;
   for (Operation &child : op->getRegion(0).front())
     digital |= llvm::isa<StructuralIfOp, StaticCompareOp, StaticLogicOp, DigitalAssignOp,
                          DigitalExprOp, CollectionOp>(child);

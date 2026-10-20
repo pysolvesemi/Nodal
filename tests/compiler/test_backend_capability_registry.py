@@ -107,6 +107,7 @@ F57_DIGITAL_OPERATIONS = {
     """.split()
 }
 F58_INTERFACE_OPERATIONS = {"nodal.interface_boundary"}
+F58_GENERATED_OPERATIONS = {"nodal.generated_export", "nodal.generated_member"}
 
 class BackendCapabilityRegistryTests(unittest.TestCase):
     @classmethod
@@ -137,7 +138,7 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
         historical = copy.deepcopy(self.inventory)
         historical["operations"] = [entry for entry in historical["operations"]
                                     if entry["operation"] not in (F54_DIGITAL_OPERATIONS | F55_F56_DIGITAL_OPERATIONS |
-                                        F57_DIGITAL_OPERATIONS | F58_INTERFACE_OPERATIONS)]
+                                        F57_DIGITAL_OPERATIONS | F58_INTERFACE_OPERATIONS | F58_GENERATED_OPERATIONS)]
         serialized = json.dumps(historical, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(serialized).hexdigest(),
                          "aeb2b8c8246dbe6e06432de8ff543d2024e565cbe97824eec4a05260250048ca")
@@ -152,6 +153,12 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
         self.assertEqual(self.operations["nodal.interface_boundary"], {
             "operation": "nodal.interface_boundary", "feature": "unlowered-shared-forms",
             "domain": "neutral", "admission": "unsupported"})
+
+    def test_generated_family_forms_do_not_claim_target_lowering(self) -> None:
+        for operation in F58_GENERATED_OPERATIONS:
+            self.assertEqual(self.operations[operation], {
+                "operation": operation, "feature": "unlowered-shared-forms",
+                "domain": "neutral", "admission": "unsupported"})
 
     def test_f54_typed_operations_do_not_claim_analog_target_support(self) -> None:
         for operation in F54_DIGITAL_OPERATIONS:

@@ -61,6 +61,31 @@ FailureOr<Value> stateRoot(Value value, Operation *use) {
     return failure();
   return projection->root;
 }
+// Follow only the neutral region owner's exact capture relation. A projection
+// or arbitrary alias is not a declaration/control identity.
+Value capturedIdentity(Value value) {
+  if (!value)
+    return {};
+  for (unsigned depth = 0; depth != 128; ++depth) {
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (!argument)
+      return value;
+    auto source = digitalRegionCaptureSource(argument);
+    if (failed(source) || !*source)
+      return {};
+    value = *source;
+  }
+  return {};
+}
+bool sequentialScope(Operation *op) {
+  Operation *parent = op ? op->getParentOp() : nullptr;
+  if (isa_and_nonnull<ModuleOp>(parent))
+    return true;
+  if (isa_and_nonnull<StructuralIfOp>(parent))
+    return succeeded(inspectStructuralIfHeader(parent)) && !parent->getNumResults();
+  return isa_and_nonnull<GenerateOp>(parent) && parent->getNumResults() == 1 &&
+         succeeded(verifyGeneratedFamilyOperation(parent));
+}
 LogicalResult checkPredicate(Value value, Operation *use) {
   if (!predicate(value.getType()) || failed(verifyDigitalValueScope(value, use)))
     return reject(use, "behavioral guard requires an owned Bool or checked static predicate");
@@ -140,6 +165,7 @@ FailureOr<SequentialDomainControls> inspectSequentialDomainControls(Operation *u
   return result;
 }
 bool matchesSequentialDomainClock(Value clock, const SequentialDomainControls &controls) {
+  clock = capturedIdentity(clock);
   if (!controls.contextual())
     return clock && clock == controls.clock;
   Operation *projection = clock ? clock.getDefiningOp() : nullptr;
@@ -177,7 +203,9 @@ FailureOr<BehavioralIfHeader> inspectBehavioralIfHeader(Operation *op) {
       !closed(op, {"operandSegmentSizes", "contract_version", "region_id", "metadata"}))
     return failure();
   Operation *m = op->getParentOfType<nodal::ModuleOp>();
-  if (!m || !llvm::isa<ModuleOp, BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(op->getParentOp()))
+  if (!m ||
+      !llvm::isa<ModuleOp, GenerateOp, StructuralIfOp, BehavioralIfOp, FlatFSMOp, EnumSwitchOp>(
+          op->getParentOp()))
     return failure();
   StringRef modulePath = path(m).empty() ? text(m, "sym_name") : path(m);
   if (!text(op, "region_id").starts_with((modulePath + ".").str()))
@@ -362,7 +390,7 @@ LogicalResult verifySequentialAssertion(Operation *op) {
 LogicalResult verifySequentialSelect(Operation *op) {
   if (!llvm::isa_and_nonnull<SequentialSelectOp>(op) || op->getNumOperands() != 3 ||
       op->getNumResults() != 1 || op->getNumRegions() || op->getNumSuccessors() ||
-      !llvm::isa<ModuleOp>(op->getParentOp()) || !closed(op, {"metadata"}))
+      !sequentialScope(op) || !closed(op, {"metadata"}))
     return reject(op, "normalized priority select requires exact owned SSA operands");
   if (failed(checkPredicate(op->getOperand(0), op)))
     return failure();
@@ -370,7 +398,7 @@ LogicalResult verifySequentialSelect(Operation *op) {
   if (failed(inferDigitalStorageMaximumBits(type, op)))
     return failure();
   for (Value value : op->getOperands().drop_front())
-    if (!equivalentDigitalStorageTypes(value.getType(), type, op->getParentOp()) ||
+    if (!equivalentDigitalStorageTypes(value.getType(), type, op->getParentOfType<ModuleOp>()) ||
         failed(verifyDigitalValueScope(value, op)))
       return reject(op, "priority alternatives require exact owned recursive state type");
   return success();
@@ -379,15 +407,16 @@ LogicalResult verifySequentialUpdate(Operation *op) {
   if (!llvm::isa_and_nonnull<SequentialUpdateOp>(op) || op->getNumResults() ||
       op->getNumRegions() || op->getNumSuccessors() ||
       (op->getNumOperands() != 3 && op->getNumOperands() != 4 && op->getNumOperands() != 5) ||
-      !llvm::isa<ModuleOp>(op->getParentOp()) || !canonical(text(op, "root_id")) ||
+      !sequentialScope(op) || !canonical(text(op, "root_id")) ||
       !closed(op, {"domain", "edge", "reset_policy", "reset_polarity", "initializer_policy",
                    "root_id", "metadata"}))
     return reject(op,
                   "clocked update requires explicit typed clock/reset and stable root identity");
   auto root = stateRoot(op->getOperand(0), op);
-  if (failed(root) || *root != op->getOperand(0))
+  if (failed(root) || *root != capturedIdentity(op->getOperand(0)))
     return reject(op, "clocked update requires its exact local state declaration");
-  const DomainModel domains(op);
+  Operation *module = op->getParentOfType<ModuleOp>();
+  const DomainModel domains(module);
   Operation *reg = root->getDefiningOp();
   Operation *binding = domains.findLocalBinding(reg->getAttr("domain"));
   bool initialized = reg->getNumOperands() == 1;
@@ -397,7 +426,8 @@ LogicalResult verifySequentialUpdate(Operation *op) {
       op->getNumOperands() != (conditional   ? 4u
                                : initialized ? 5u
                                              : 3u) ||
-      (initialized && op->getOperand(conditional ? 3 : 4) != reg->getOperand(0)))
+      (initialized && capturedIdentity(op->getOperand(conditional ? 3 : 4)) !=
+                          capturedIdentity(reg->getOperand(0))))
     return reject(
         op, "clock/reset/reset-value fields must exactly match their owned domain and register");
   if (binding) {
@@ -409,33 +439,32 @@ LogicalResult verifySequentialUpdate(Operation *op) {
         text(op, "reset_polarity") != text(binding, "reset_polarity") ||
         text(op, "reset_policy") !=
             (initialized ? text(domain, "reset_policy") : StringRef("none")) ||
-        op->getOperand(2) != binding->getOperand(0) ||
-        (initialized && op->getOperand(3) != binding->getOperand(1)))
+        capturedIdentity(op->getOperand(2)) != binding->getOperand(0) ||
+        (initialized && capturedIdentity(op->getOperand(3)) != binding->getOperand(1)))
       return reject(
           op, "clock/reset/reset-value fields must exactly match their owned domain and register");
   } else {
     // A reusable definition retains local formal operands. Material semantics
     // are deliberately absent and must be discharged for every root occurrence.
     if (!domains.unresolvedRequirement(reg->getAttr("domain")) ||
-        !hasLocalHierarchyObligations(op->getParentOp()) || op->hasAttr("edge") ||
+        !hasLocalHierarchyObligations(module) || op->hasAttr("edge") ||
         op->hasAttr("reset_policy") || op->hasAttr("reset_polarity") ||
         failed(verifyDigitalStorageOperation(reg)))
       return reject(op, "formal clocked update requires an unresolved local requirement and no "
                         "guessed material clock/reset fields");
     auto projection = [&](Value value, bool reset) {
-      Operation *producer = value.getDefiningOp();
+      Value actual = capturedIdentity(value);
+      Operation *producer = actual ? actual.getDefiningOp() : nullptr;
       return producer &&
              (reset ? isa<RequirementResetOp>(producer) : isa<RequirementClockOp>(producer)) &&
              producer->getAttr("requirement") == reg->getAttr("domain") &&
-             producer->getParentOp() == op->getParentOp() &&
-             succeeded(verifyRequirementProjection(producer));
+             producer->getParentOp() == module && succeeded(verifyRequirementProjection(producer));
     };
     if (!projection(op->getOperand(2), false) ||
         (initialized && !conditional && !projection(op->getOperand(3), true)))
       return reject(op, "formal clocked update must use its exact local requirement projections");
   }
-  if (!equivalentDigitalStorageTypes(root->getType(), op->getOperand(1).getType(),
-                                     op->getParentOp()))
+  if (!equivalentDigitalStorageTypes(root->getType(), op->getOperand(1).getType(), module))
     return reject(op, "clocked next state must retain the exact recursive state type");
   for (Value operand : op->getOperands())
     if (failed(verifyDigitalValueScope(operand, op)))
@@ -805,6 +834,7 @@ struct Model {
   SequentialModelLimits limits;
   const DomainModel domains;
   llvm::DenseMap<Value, Operation *> roots;
+  llvm::DenseMap<Value, SmallVector<Operation *, 2>> allRoots;
   SmallVector<Operation *, 8> registers;
   unsigned work = 0;
   SmallVector<SequentialSample, 8> samples;
@@ -849,23 +879,34 @@ struct Model {
           return reject(&op, "one physical local binding is allowed per domain");
       }
     }
-    for (Operation &op : module->getRegion(0).front())
-      if (llvm::isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
-        if (Operation *binding = domains.findLocalBinding(op.getAttr("domain"))) {
-          if (failed(checkRegister(&op, *domains.resolveDomain(binding->getAttr("domain")))))
+    SmallVector<Block *, 8> declarationScopes{&module->getRegion(0).front()};
+    for (unsigned scope = 0; scope < declarationScopes.size(); ++scope)
+      for (Operation &op : *declarationScopes[scope]) {
+        if (isa<GenerateOp>(op) && op.getNumResults() == 1) {
+          if (failed(verifyGeneratedFamilyOperation(&op)))
             return failure();
-          if (op.getNumOperands() &&
-              failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
-            return failure();
-          registers.push_back(&op);
-        } else if (domains.unresolvedRequirement(op.getAttr("domain")) &&
-                   hasLocalHierarchyObligations(module)) {
-          if (failed(verifyDigitalStorageOperation(&op)))
-            return failure();
-          if (op.getNumOperands() &&
-              failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
-            return failure();
-          registers.push_back(&op);
+          declarationScopes.push_back(&op.getRegion(0).front());
+        }
+        if (llvm::isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
+          if (Operation *binding = domains.findLocalBinding(op.getAttr("domain"))) {
+            if (failed(checkRegister(&op, *domains.resolveDomain(binding->getAttr("domain")))))
+              return failure();
+            if (op.getNumOperands() &&
+                failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
+              return failure();
+            registers.push_back(&op);
+          } else if (domains.unresolvedRequirement(op.getAttr("domain")) &&
+                     hasLocalHierarchyObligations(module)) {
+            if (failed(verifyDigitalStorageOperation(&op)))
+              return failure();
+            if (op.getNumOperands() &&
+                failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
+              return failure();
+            registers.push_back(&op);
+          } else if (isa<GenerateOp>(op.getParentOp())) {
+            return reject(
+                &op, "generated state requires an executable local binding or exact requirement");
+          }
         }
       }
     struct Scope {
@@ -880,7 +921,18 @@ struct Model {
       for (Operation &op : *scope.body) {
         if (++work > limits.maximumOperations)
           return reject(&op, "sequential model operation budget exceeded");
-        if (llvm::isa<FlatFSMOp>(op)) {
+        if (isa<GenerateOp>(op) && op.getNumResults() == 1) {
+          if (scope.depth >= limits.maximumDepth || failed(verifyGeneratedFamilyOperation(&op)))
+            return failure();
+          scopes.push_back({&op.getRegion(0).front(), nullptr, scope.depth + 1});
+        } else if (isa<StructuralIfOp>(op)) {
+          auto header = inspectStructuralIfHeader(&op);
+          if (failed(header) || failed(verifyStructuralIfOperation(&op)) ||
+              scope.depth >= limits.maximumDepth)
+            return failure();
+          for (Block *body : header->bodies)
+            scopes.push_back({body, scope.root, scope.depth + 1});
+        } else if (llvm::isa<FlatFSMOp>(op)) {
           auto h = inspectFlatFSMHeader(&op);
           if (failed(h) || failed(verifyFlatFSMOperation(&op)) ||
               scope.depth >= limits.maximumDepth)
@@ -989,9 +1041,20 @@ struct Model {
           if (failed(sampledControls(&op, reg->getAttr("domain"), reg)))
             return failure();
           Operation *root = scope.root ? scope.root : &op;
+          auto &prior = allRoots[*target];
+          for (Operation *other : prior) {
+            if (++work > limits.maximumOperations)
+              return reject(&op, "sequential update-root proof exceeds finite budget");
+            if (other != root && !areOppositeStructuralArms(other, root))
+              return op.emitOpError("NODAL-STATE-001: one state value has unrelated update roots");
+          }
+          if (!llvm::is_contained(prior, root))
+            prior.push_back(root);
           auto inserted = roots.try_emplace(*target, root);
-          if (!inserted.second && inserted.first->second != root)
-            return op.emitOpError("NODAL-STATE-001: one state value has unrelated update roots");
+          if (!inserted.second && isa<FlatFSMOp>(inserted.first->second) &&
+              inserted.first->second != root)
+            return op.emitOpError(
+                "NODAL-STATE-001: private FSM state has an unrelated update root");
         }
       }
     }
@@ -1003,47 +1066,16 @@ class Normalizer {
 public:
   Normalizer(Model &model) : model(model), builder(model.module->getContext()) {}
   LogicalResult run() {
-    SmallVector<Operation *, 8> roots;
-    llvm::DenseSet<Operation *> seen;
-    // Authored block order, never DenseMap iteration, determines emitted order.
-    for (Operation &op : model.module->getRegion(0).front())
-      if (llvm::isa<BehavioralIfOp, MemoryWriteOp>(op) ||
-          (llvm::isa<DigitalAssignOp>(op) && text(&op, "kind") == "register_next" &&
-           (model.domains.findLocalBinding(op.getOperand(0).getDefiningOp()->getAttr("domain")) ||
-            model.domains.unresolvedRequirement(
-                op.getOperand(0).getDefiningOp()->getAttr("domain")))))
-        roots.push_back(&op);
-    llvm::DenseSet<Value> emitted;
-    struct Pending {
-      Value state;
-      Value next;
-      Operation *root;
-    };
-    SmallVector<Pending, 8> updates;
-    for (Operation *root : roots) {
-      builder.setInsertionPoint(root);
-      IRMapping mapping;
-      StateMap next;
-      if (failed(operation(root, mapping, next, 0, Value(), root)))
-        return failure();
-      for (auto [state, value] : next) {
-        updates.push_back({state, value, root});
-        emitted.insert(state);
-      }
-    }
-    builder.setInsertionPointToEnd(&model.module->getRegion(0).front());
-    for (const auto &pending : updates)
-      if (failed(update(pending.state, pending.next, pending.root)))
-        return failure();
-    for (Operation *root : roots)
-      root->erase();
+    llvm::SetVector<Value> emitted;
+    if (failed(normalizeBlock(&model.module->getRegion(0).front(), emitted, 0)))
+      return failure();
     for (Operation *reg : model.registers) {
       Value state = reg->getResult(0);
-      auto found = model.roots.find(state);
-      if (!emitted.contains(state) &&
-          (found == model.roots.end() || !llvm::isa<SequentialUpdateOp>(found->second)))
+      if (!emitted.contains(state)) {
+        setEnd(reg->getBlock());
         if (failed(update(state, state, nullptr)))
           return failure();
+      }
     }
     // A binding may materialize its actual clock after an authored write root.
     // Commit owned memory effects only after all value producers and register
@@ -1076,6 +1108,121 @@ private:
                                : DictionaryAttr());
     attrs.set("semantic_path", builder.getStringAttr(identity));
     return attrs.getDictionary(builder.getContext());
+  }
+  void setEnd(Block *body) {
+    if (!body->empty() && isa<StructuralYieldOp>(body->back()))
+      builder.setInsertionPoint(&body->back());
+    else
+      builder.setInsertionPointToEnd(body);
+  }
+  FailureOr<Value> inBlock(Value value, Block *body, unsigned depth = 0) {
+    if (!value || !body || depth >= model.limits.maximumDepth)
+      return failure();
+    if (value.getParentBlock() == body)
+      return value;
+    Operation *owner = body->getParentOp();
+    if (isa<ModuleOp>(owner))
+      return failure();
+    auto outer = inBlock(value, owner->getBlock(), depth + 1);
+    if (failed(outer))
+      return failure();
+    if (isa<GenerateOp>(owner))
+      return *outer; // Non-isolated, actual dominating lexical value.
+    auto header = inspectStructuralIfHeader(owner);
+    if (failed(header))
+      return failure();
+    unsigned arm = body == header->bodies[0] ? 0 : 1;
+    if (body != header->bodies[arm])
+      return failure();
+    for (unsigned i = 0; i < header->captureCounts[arm]; ++i)
+      if (owner->getOperand(header->captureOffsets[arm] + i) == *outer)
+        return body->getArgument(i);
+    if (owner->getNumOperands() >= 8193 ||
+        header->captureCounts[arm] >= model.limits.maximumCaptures || failed(charge(owner)))
+      return failure();
+    owner->insertOperands(header->captureOffsets[arm] + header->captureCounts[arm], {*outer});
+    auto sizes = owner->getAttrOfType<DenseI32ArrayAttr>("operandSegmentSizes");
+    SmallVector<int32_t, 3> counts(sizes.asArrayRef());
+    ++counts[arm + 1];
+    owner->setAttr("operandSegmentSizes", builder.getDenseI32ArrayAttr(counts));
+    return body->addArgument(value.getType(), owner->getLoc());
+  }
+  LogicalResult normalizeBlock(Block *body, llvm::SetVector<Value> &emitted, unsigned depth) {
+    if (depth >= model.limits.maximumDepth)
+      return reject(body->getParentOp(), "normalization lexical depth budget exceeded");
+    SmallVector<Operation *, 8> authored;
+    for (Operation &op : *body)
+      authored.push_back(&op);
+    struct Pending {
+      Value state;
+      Value next;
+      Operation *root;
+    };
+    SmallVector<Pending, 8> pending;
+    SmallVector<Operation *, 8> erase;
+    for (Operation *op : authored) {
+      if (isa<GenerateOp>(op) && op->getNumResults() == 1) {
+        if (failed(normalizeBlock(&op->getRegion(0).front(), emitted, depth + 1)))
+          return failure();
+      } else if (isa<StructuralIfOp>(op) && !op->getNumResults()) {
+        auto header = inspectStructuralIfHeader(op);
+        if (failed(header))
+          return failure();
+        llvm::SetVector<Value> arms[2];
+        for (unsigned arm = 0; arm != 2; ++arm)
+          if (failed(normalizeBlock(header->bodies[arm], arms[arm], depth + 1)))
+            return failure();
+        llvm::SetVector<Value> states;
+        for (auto &arm : arms)
+          for (Value state : arm)
+            states.insert(state);
+        for (Value state : states) {
+          for (unsigned arm = 0; arm != 2; ++arm)
+            if (!arms[arm].contains(state)) {
+              setEnd(header->bodies[arm]);
+              if (failed(update(state, state, nullptr)))
+                return failure();
+            }
+          emitted.insert(state);
+        }
+        if (failed(canonicalizeStructuralIfCaptures(op, generated,
+                                                    model.limits.maximumNormalizedOperations)))
+          return failure();
+      } else if (isa<SequentialUpdateOp>(op)) {
+        auto state = stateRoot(op->getOperand(0), op);
+        if (failed(state))
+          return failure();
+        emitted.insert(*state);
+      } else if (isa<BehavioralIfOp, MemoryWriteOp>(op) ||
+                 (isa<DigitalAssignOp>(op) && text(op, "kind") == "register_next")) {
+        if (isa<DigitalAssignOp>(op)) {
+          auto state = stateRoot(op->getOperand(0), op);
+          if (failed(state))
+            return failure();
+          Attribute domain = state->getDefiningOp()->getAttr("domain");
+          if (!model.domains.findLocalBinding(domain) &&
+              !model.domains.unresolvedRequirement(domain))
+            continue; // Retained non-executable declaration intent.
+        }
+        builder.setInsertionPoint(op);
+        IRMapping mapping;
+        StateMap next;
+        if (failed(operation(op, mapping, next, 0, Value(), op)))
+          return failure();
+        for (auto [state, value] : next) {
+          pending.push_back({state, value, op});
+          emitted.insert(state);
+        }
+        erase.push_back(op);
+      }
+    }
+    setEnd(body);
+    for (const Pending &entry : pending)
+      if (failed(update(entry.state, entry.next, entry.root)))
+        return failure();
+    for (Operation *op : erase)
+      op->erase();
+    return success();
   }
   LogicalResult update(Value state, Value next, Operation *root) {
     Operation *reg = state.getDefiningOp();
@@ -1116,6 +1263,20 @@ private:
         "metadata",
         metadata(reg,
                  (text(model.module, "sym_name") + "." + text(reg, "name") + ".clocked").str()));
+    for (Value &operand : op.operands) {
+      auto visible = inBlock(operand, builder.getInsertionBlock());
+      if (failed(visible))
+        return reject(reg, "normalized state controls require exact lexical captures");
+      operand = *visible;
+    }
+    if (builder.getInsertionBlock() != &model.module->getRegion(0).front()) {
+      std::string scope = digitalRegionSemanticPath(builder.getInsertionBlock());
+      op.attributes.set("metadata",
+                        metadata(reg, scope + "." + text(reg, "name").str() + ".clocked"));
+      if (!root)
+        op.attributes.set("root_id",
+                          builder.getStringAttr(scope + "." + text(reg, "name").str() + ".hold"));
+    }
     builder.create(op);
     return success();
   }
@@ -1267,7 +1428,10 @@ private:
       for (auto entry : choice)
         states.insert(entry.first);
     for (Value state : states) {
-      Value previous = next.count(state) ? next[state] : state;
+      auto visibleState = inBlock(state, builder.getInsertionBlock());
+      if (failed(visibleState))
+        return reject(op, "priority hold requires the exact captured state declaration");
+      Value previous = next.count(state) ? next[state] : *visibleState;
       Value a = choices[0].count(state) ? choices[0][state] : previous;
       Value b = choices[1].count(state) ? choices[1][state] : previous;
       if (a == b) {

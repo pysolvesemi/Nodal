@@ -79,6 +79,11 @@ verifyShapeIndexInExtent(mlir::Value value, const StaticShapeDimension &extent,
                          mlir::Operation *use,
                          const ParameterIntegerEnvironment *environment = nullptr);
 
+/// Resolve a zero-based family ordinal to its canonical induction coordinate.
+/// Existence is proved for every legal bound setting, without lane enumeration.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinal(mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use);
+
 /// Element-neutral facts derived from an actual acyclic SSA projection chain.
 /// These establish shape/ordinal mapping, never storage or conservative rights.
 struct StaticShapeProjection {

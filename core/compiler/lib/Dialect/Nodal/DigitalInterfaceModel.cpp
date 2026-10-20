@@ -159,6 +159,8 @@ private:
   void unite(unsigned a, unsigned b);
   llvm::DenseMap<unsigned, Value> resolvedComponentValues();
   LogicalResult addOrdinaryDriver(const Access &access, Operation *operation);
+  bool equivalentBoundaryTypes(Type left, Operation *leftInstance, Type right,
+                               Operation *rightInstance);
 
   Operation *module;
   unsigned work = 0;
@@ -170,6 +172,8 @@ private:
   std::map<Operation *, std::unique_ptr<Model>> childDefinitions;
   std::set<std::pair<Operation *, Operation *>> boundaryIdentities;
   std::set<std::pair<Operation *, Operation *>> comparedDefinitions;
+  using ContextualType = std::pair<Type, Operation *>;
+  llvm::DenseMap<std::pair<ContextualType, ContextualType>, bool> boundaryTypeEqualities;
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
   SmallVector<Net> nets;
@@ -197,6 +201,22 @@ LogicalResult Model::localValue(Value value, Operation *use) {
   if (!producer || producer->getParentOp() != module || producer == use)
     return reject(use, "connectivity operands must be actual SSA values owned by the same module");
   return success();
+}
+bool Model::equivalentBoundaryTypes(Type left, Operation *leftInstance, Type right,
+                                    Operation *rightInstance) {
+  // This immutable-model query owns one parent context. Both exact occurrence
+  // contexts remain part of the key even when the raw types are identical.
+  // Callers charge every represented member to the existing structural budget,
+  // so the memo cannot grow beyond that bounded traversal.
+  const auto key =
+      std::make_pair(ContextualType{left, leftInstance}, ContextualType{right, rightInstance});
+  auto found = boundaryTypeEqualities.find(key);
+  if (found != boundaryTypeEqualities.end())
+    return found->second;
+  bool equal = equivalentDigitalStorageTypesAcrossInstances(module, left, leftInstance, right,
+                                                            rightInstance);
+  boundaryTypeEqualities.try_emplace(key, equal);
+  return equal;
 }
 LogicalResult Model::validateEntry(Operation *operation, Entry &entry, StringRef path,
                                    const Member &member) {
@@ -599,8 +619,8 @@ LogicalResult Model::boundary(Operation *operation) {
             ((analog(member.second.protocol) || member.second.protocol == "resolved" ||
               isDigitalControlBoundaryType(member.second.type))
                  ? known->second.type != member.second.type
-                 : !equivalentDigitalStorageTypesAcrossInstances(
-                       module, known->second.type,
+                 : !equivalentBoundaryTypes(
+                       known->second.type,
                        semanticDefinitionInstances.lookup(imported->semanticIdentity),
                        member.second.type, boundary->instance)) ||
             known->second.protocol != member.second.protocol ||
@@ -687,7 +707,7 @@ LogicalResult Model::boundary(Operation *operation) {
       return reject(operation, "symbolic Interface boundary requires explicit actual member types");
     }
     ++memberIndex;
-    if (!equivalentInstanceDigitalStorageTypes(boundary->instance, member.type, actual))
+    if (!equivalentBoundaryTypes(member.type, boundary->instance, actual, nullptr))
       return reject(operation,
                     "Interface actual member type differs from exact finalized child binding");
     Type shaped =

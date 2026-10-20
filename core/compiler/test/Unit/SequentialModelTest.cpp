@@ -7,6 +7,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -109,6 +110,25 @@ std::string branch(std::string id, std::string cond, std::vector<Capture> a, std
          std::to_string(b.size()) + ">, metadata = {semantic_path = \"Fixture." + id + "\"}}> (" +
          thenBody + ", " + elseBody + ") : (" + types + ") -> ()\n";
 }
+std::string structural(std::string id, std::string cond, std::vector<Capture> a, std::string left,
+                       std::vector<Capture> b = {}, std::string right = "") {
+  auto yield = [&](StringRef arm) {
+    return "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Fixture." + id + "." +
+           arm.str() + ".yield\"}}> : () -> ()\n";
+  };
+  std::string result = branch(id, cond, a, left + yield("then"), b, right + yield("else"),
+                              "!nodal.static_predicate");
+  result = replace(result, "nodal.behavioral_if", "nodal.structural_if");
+  return replace(result, "behavioral-if-v1", "structural-if-v1");
+}
+std::string family(std::string body) {
+  return literal("familyLo", 0, "i64") + literal("familyHi", 4, "i64") +
+         literal("familyStep", 1, "i64") +
+         "%family = \"nodal.generate\"(%familyLo, %familyHi, %familyStep) <{induction = \"i\", "
+         "region_id = \"Fixture.family\", induction_path = \"Fixture.family.i\", "
+         "metadata = {maximum_trip_count = 4 : i64}}> ({^bb0(%i: i64):\n" +
+         body + "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+}
 std::string setup(std::string policy = "sync", bool initialized = true, std::string edge = "rising",
                   std::string polarity = "active_high") {
   return domain(policy, edge) + binding(policy, "core", polarity) + literal("zero", 0) +
@@ -176,6 +196,10 @@ std::string interfaceInput(std::string type, std::string sourceDomain, bool reso
   return result;
 }
 int evaluate(Value value, const std::map<std::string, int> &values) {
+  if (auto argument = dyn_cast<BlockArgument>(value)) {
+    auto source = nodal::digitalRegionCaptureSource(argument);
+    return succeeded(source) && *source ? evaluate(*source, values) : -999;
+  }
   Operation *op = value.getDefiningOp();
   if (!op)
     return -999;
@@ -235,7 +259,9 @@ int main(int argc, char **argv) {
                       name == "foreign-guard-via-wire"))
       causal = diagnostics.find("NODAL-CDC-001") != std::string::npos;
     if (!expected && (name == "unrelated-roots" || name == "unconditional-plus-chain" ||
-                      name == "unconditional-independent-writes"))
+                      name == "unconditional-independent-writes" ||
+                      name == "structural-third-overlapping-root" ||
+                      name == "structural-independent-choices-not-exclusive"))
       causal = diagnostics.find("NODAL-STATE-001") != std::string::npos;
     report(name, ok == expected && causal);
     return m;
@@ -567,6 +593,109 @@ int main(int argc, char **argv) {
     }
     report("two-module-pass-failure-transactional", ok);
   }
+  const std::string staticSetup =
+      setup() + parameter(true) +
+      "\"nodal.parameter_envelope\"() <{parameter = @MODE, effects = [\"topology\"], "
+      "policy = \"static_generate\", metadata = {}}> : () -> ()\n";
+  const std::vector<Capture> staticCaptures{{"enable", "e", bit}, {"state", "s"}, {"input", "v"}};
+  auto arm = [&](const std::string &name) {
+    return branch(name, "e", {{"s", "ss"}, {"v", "vv"}}, assign("ss", "vv"));
+  };
+  const std::string twoArms =
+      structural("staticBoth", "static", staticCaptures, arm("staticBoth.then.when"),
+                 staticCaptures, arm("staticBoth.else.when"));
+  auto both = normalize("structural-opposite-behavioral-roots", staticSetup + twoArms);
+  if (both) {
+    unsigned updates = 0, statics = 0, behaviorals = 0;
+    bool correct = true;
+    both->walk([&](nodal::StructuralIfOp) { ++statics; });
+    both->walk([&](nodal::BehavioralIfOp) { ++behaviorals; });
+    both->walk([&](nodal::SequentialUpdateOp update) {
+      ++updates;
+      correct &= isa<nodal::StructuralIfOp>(update->getParentOp()) && update->getNumOperands() == 5;
+      for (int enabled : {0, 1})
+        correct &=
+            evaluate(update->getOperand(1), {{"enable", enabled}, {"state", 17}, {"input", 93}}) ==
+            (enabled ? 93 : 17);
+    });
+    report("structural-retained-regions-and-captured-reset-truth",
+           correct && updates == 2 && statics == 1 && !behaviorals);
+  }
+  auto missing = normalize(
+      "structural-missing-arm-reset-hold",
+      staticSetup + structural("staticOne", "static", staticCaptures, arm("staticOne.then.when")));
+  if (missing) {
+    unsigned count = 0, holds = 0;
+    missing->walk([&](nodal::SequentialUpdateOp update) {
+      ++count;
+      if (update->getOperand(0) == update->getOperand(1) && update->getNumOperands() == 5)
+        ++holds;
+    });
+    report("missing-static-arm-retains-real-reset-update", count == 2 && holds == 1);
+  }
+  check("structural-third-overlapping-root",
+        staticSetup + structural("staticThree", "static", staticCaptures,
+                                 arm("staticThree.then.first") + arm("staticThree.then.second"),
+                                 staticCaptures, arm("staticThree.else.when")),
+        false);
+  check("structural-independent-choices-not-exclusive",
+        staticSetup + twoArms +
+            structural("staticOther", "static", staticCaptures, arm("staticOther.then.when")),
+        false);
+  normalize("structural-direct-register-writes",
+            staticSetup + structural("staticDirect", "static", {{"state", "s"}, {"input", "v"}},
+                                     assign("s", "v")));
+  const std::string generatedSetup = replace(setup(), state(), "");
+  const std::string exportState = "\"nodal.generated_export\"(%state) <{member = \"state\", access "
+                                  "= \"register\", metadata = {}}> : (" +
+                                  u8 + ") -> ()\n";
+  auto generated =
+      normalize("generated-state-behavioral-template",
+                generatedSetup + family(state() + enabled("family.when") + exportState));
+  if (generated) {
+    unsigned declarations = 0, updates = 0;
+    bool owned = true;
+    generated->walk([&](nodal::DigitalStorageOp reg) {
+      ++declarations;
+      owned &= isa<nodal::GenerateOp>(reg->getParentOp());
+    });
+    generated->walk([&](nodal::SequentialUpdateOp update) {
+      ++updates;
+      owned &= isa<nodal::GenerateOp>(update->getParentOp());
+    });
+    report("generated-state-not-enumerated-or-escaped", owned && declarations == 1 && updates == 1);
+  }
+  normalize("generated-static-opposite-arm-template",
+            generatedSetup + parameter(true) +
+                "\"nodal.parameter_envelope\"() <{parameter = @MODE, effects = [\"topology\"], "
+                "policy = \"static_generate\", metadata = {}}> : () -> ()\n" +
+                family(state() + twoArms + exportState));
+  std::string inductionBody =
+      "%inductionPred = \"nodal.static_compare\"(%j, %k) <{comparison = \"eq\", metadata = "
+      "{semantic_path = \"Fixture.family.inductionPred\"}}> : (i64, i64) -> "
+      "!nodal.static_predicate\n" +
+      branch("family.when.induction", "inductionPred", {{"s", "ss"}, {"v", "vv"}},
+             assign("ss", "vv"), {}, "", "!nodal.static_predicate");
+  auto induction = normalize(
+      "generated-induction-capture-not-type-binding",
+      generatedSetup + literal("integerZero", 0, "i64") +
+          family(
+              state() +
+              branch(
+                  "family.when", "enable",
+                  {{"i", "j", "i64"}, {"integerZero", "k", "i64"}, {"state", "s"}, {"input", "v"}},
+                  inductionBody) +
+              exportState));
+  if (induction) {
+    bool exact = false;
+    induction->walk([&](nodal::StaticCompareOp comparison) {
+      auto argument = dyn_cast<BlockArgument>(comparison->getOperand(0));
+      exact |= argument && isa<nodal::GenerateOp>(argument.getOwner()->getParentOp());
+    });
+    report("normalized-induction-keeps-actual-template-argument", exact);
+  }
+  normalize("generated-declaration-only-reset-hold",
+            generatedSetup + family(state() + exportState));
   auto bounded = parse(setup() + enabled());
   if (bounded) {
     auto m = *bounded->getOps<nodal::ModuleOp>().begin();

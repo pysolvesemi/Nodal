@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -11,6 +12,18 @@
 
 namespace nodal {
 class HierarchyModel;
+
+/// A query over the actual Generate/export SSA graph, never a second family registry.
+struct GeneratedMember {
+  mlir::Operation *family = nullptr;
+  mlir::Operation *exportOperation = nullptr;
+  mlir::Value storage;
+  InstantiatedIntegerExpression coordinate;
+  enum class Access { Read, Wire, Register } access = Access::Read;
+};
+mlir::LogicalResult verifyGeneratedFamilyOperation(mlir::Operation *operation);
+mlir::LogicalResult verifyGeneratedExportOperation(mlir::Operation *operation);
+mlir::FailureOr<GeneratedMember> inspectGeneratedMember(mlir::Operation *operation);
 
 /// Verify module-local storage names, ordinary assignment drivers and shared
 /// combinational dependencies, including actual typed Interface/net roots,

@@ -1040,6 +1040,18 @@
         "admission": "direct"
       },
       {
+        "operation": "nodal.generated_export",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.generated_member",
+        "feature": "unlowered-shared-forms",
+        "domain": "neutral",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.hardware_loop",
         "feature": "digital-behavior",
         "domain": "digital",

@@ -504,3 +504,45 @@ The serializer traverses canonical bounded inventories and preserves meaningful
 member/export order; it neither expands symbolic lane counts nor introduces a
 new hierarchy engine. The current slice does not affect generated Verilog-*.
 All remaining F58 implementation and checklist obligations stay open.
+
+## Checkpoint 9 — direct generated-family native semantics
+
+On canonical checkpoint `e33e2dcb`, the existing native storage, shape, assignment,
+structural-if and sequential owners now verify direct typed generated families,
+closed export inventories and exact member access. Ordinal selection proves
+`lower + ordinal * positiveStep < upper` over all legal bindings, not a sampled
+value. Export/member access is monotonic, references preserve actual storage,
+and template-local driver/overlap proof retains generated occurrence identity.
+Structural-if capture canonicalization reuses one SSA/type-use visitor; retained
+state and opposite-arm updates normalize through the existing sequential owner.
+
+The shared parameter capture probe no longer mistakes a generated induction for
+a fixed type-environment binding. Actual shape/predicate resolution still retains
+its generated facts; no zero/default substitute is introduced. Repeated Interface
+type comparisons use the existing model's bounded query-local exact-context memo,
+with forged sibling/last-member regressions. There is no global permission cache
+or measured universal speedup claim.
+
+A serialized, source-matched build and focused execution passed **781/781 cases**
+across seven suites: Storage 147, AssignmentGuard 34, StructuralIf 73,
+ShapeIteration 130, Sequential 84, DigitalType 114 and Interface 199. The Parameter
+executable also passed its 23 named symbolic cases and earlier assertion sections;
+those uncounted sections are not folded into the 781 total. Four exact actual
+public-source default-gate inputs pass: lane, ordinary, selected and guarded.
+Verification remains enabled. Full native before/after manifests match, with
+manifest digest `8b7c6389b872a47e345b40d34ff4e97f83acf35b8da89cb0dbf3990d9c7f6a99`.
+The frozen compiler is `.work/f58-generated-native/third/nodalc`, SHA256
+`01059e71197a1ef88b7e673a76d4479b5631a309cf6b813d1788c7c952425f8b`.
+Exact build/test commands, inputs, hashes and logs remain in that directory.
+The synchronized backend registry generator checks and focused catalog tests
+pass (50 tests); unsupported new raw generated forms remain explicitly declared,
+not silently admitted as target output.
+
+This checkpoint is native semantic admission, not completion of nested generated
+families, generated module/interface carriers, target loops or waveforms. The
+million-lane case retains one bounded template and metadata; it does not claim a
+million-lane target result. The updated generated-Area gate records successful
+pinned primitive probes and the reusable-helper target plan as implementation in
+progress, including actual consumer limitations, rather than Nodal acceptance.
+Source bridge changes producing the four new inputs are a separate pending
+checkpoint. All required F58 child and parent obligations remain open.

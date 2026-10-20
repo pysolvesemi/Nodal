@@ -331,6 +331,8 @@ public:
       return verifyMemoryPort(use);
     if (llvm::isa<SequentialUpdateOp>(use))
       return verifySequentialUpdate(use);
+    if (llvm::isa<StructuralIfOp>(use))
+      return verifyStructuralIfOperation(use);
     if (llvm::isa<ResetAssertedOp>(use))
       return verifyResetAsserted(use);
     if (llvm::isa<SequentialAssertOp>(use))
@@ -459,6 +461,10 @@ private:
                     BehavioralIfOp, SequentialSelectOp>(currentUse)))
       return reject(
           "static predicate tokens cannot be stored or manufactured by runtime operations");
+    if (llvm::isa<GeneratedFamilyType>(type) &&
+        (depth != 1 || storageContext || !llvm::isa<GenerateOp, GeneratedMemberOp>(currentUse)))
+      return reject("generated family capabilities support only their exact declaration and "
+                    "checked member projection, never payload storage");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));
     auto found = facts.find(key);
     if (found != facts.end()) {
@@ -469,7 +475,7 @@ private:
     if (++work > digitalTypeMaximumNodes || !active.insert(key).second)
       return reject("recursive type graph exceeds the finite metadata limit or contains a cycle");
     TypeFacts result;
-    if (llvm::isa<StaticPredicateType>(type)) {
+    if (llvm::isa<StaticPredicateType, GeneratedFamilyType>(type)) {
       active.erase(key);
       facts.try_emplace(key, result);
       return result;
@@ -807,8 +813,21 @@ FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use,
       environment = &*context;
     }
   }
-  if (!environment && use != module && use->getParentOp() != module)
-    return failure();
+  if (!environment && use != module && use->getParentOp() != module) {
+    // Scoped type proofs belong to the neutral region owner. In particular,
+    // a generated induction is not silently promoted into a width parameter.
+    auto contexts = digitalIntegerContextsAtUse(use);
+    if (failed(contexts) || contexts->empty())
+      return failure();
+    int64_t maximum = 0;
+    for (const auto &scoped : *contexts) {
+      auto bits = inferDigitalStorageMaximumBits(type, use, &scoped);
+      if (failed(bits))
+        return failure();
+      maximum = std::max(maximum, *bits);
+    }
+    return maximum;
+  }
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module))
     return failure();
   return ModuleTypeVerifier(module, environment).storageMaximumBits(type, use);

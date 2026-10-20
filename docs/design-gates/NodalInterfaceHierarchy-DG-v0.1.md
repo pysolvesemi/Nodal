@@ -191,6 +191,14 @@ instance, while its existing accumulated role owner still checks sibling-only
 roles. Equal names, defaults or range bounds cannot establish contextual type
 identity. Missing, duplicated, reordered or changed actual members reject.
 
+The canonical construction artifact records the explicit declaration boundary,
+complete formal member and role inventories, ordered actual member types and
+typed connectivity references. It does not reconstruct those facts from the
+flattened ABI names or substitute the emitted MLIR digest for construction
+identity. These inventories are conditional, so unrelated historical artifacts
+do not acquire empty fields. Actual source locations remain in the existing
+source-map owner.
+
 Repeated recursive type comparisons use a query-local memo in that same model,
 keyed by both exact types and both exact instance contexts. A null instance means
 the model's actual parent owner, not an unknown context. Each represented member
@@ -211,6 +219,12 @@ publication status belong to the readiness record, not this contract section.
 ## Resolved topology continuation contract
 
 Resolved hierarchy support is not enabled by the ordinary payload projection.
+The first bounded resolved implementation stage selects scalar read, drive and
+pass-through. It must explicitly reject a newly boundary-joined component with
+split views, without changing strict local split verification. This temporary
+capability boundary does not waive full cross-boundary split or standalone inout
+support; both remain required continuation.
+
 The existing Interface model must retain local components, aliases, actual
 conditional drivers and split obligations. The existing hierarchy dependency
 owner qualifies those facts by occurrence and joins only explicit immediate-child

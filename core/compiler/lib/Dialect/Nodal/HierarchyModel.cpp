@@ -155,10 +155,11 @@ bool hasLocalHierarchyObligations(Operation *module) {
   if (!isa_and_nonnull<ModuleOp>(module) || module->getNumRegions() != 1 ||
       !module->getRegion(0).hasOneBlock())
     return false;
-  for (Operation &op : module->getRegion(0).front())
-    if (hierarchyOperation(&op) || contextualSequentialOperation(&op))
-      return true;
-  return false;
+  bool obligation = false;
+  module->walk([&](Operation *op) {
+    obligation |= hierarchyOperation(op) || contextualSequentialOperation(op);
+  });
+  return obligation;
 }
 struct HierarchyModel::Impl {
   HierarchyModelLimits limits;
@@ -425,71 +426,81 @@ bool HierarchyModel::allowsDirectSampling(ContextualDomain source,
 LogicalResult HierarchyModel::verifyBindings() const {
   for (unsigned index = 0; index < impl->occurrences.size(); ++index) {
     const auto &context = impl->occurrences[index];
-    for (Operation &op : context.module->getRegion(0).front()) {
-      if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
-        if (failed(inspectReset({index, op.getResult(0), &op}, *this)))
-          return failure();
-      } else if (isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) {
-        if (failed(inspectExecutableCrossing(&op, *this, index)))
-          return failure();
-      } else if (isa<WaiverOp>(op)) {
-        if (failed(inspectExecutableWaiver(&op, *this, index)))
-          return failure();
-      } else if (isa<LocalDomainBindingOp>(op)) {
-        auto actual = resolveBinding(index, op.getAttr("domain"));
-        if (failed(actual) || failed(verifyContextualResetForBinding(*actual, *this)))
-          return failure();
-      } else if (isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
-        auto actual = resolveBinding(index, op.getAttr("domain"));
-        if (failed(actual))
-          return reject(&op, "reachable state requires its actual occurrence domain binding");
-        if (failed(verifyDigitalStorageOperation(&op)))
-          return failure();
-        if (op.getNumOperands() && text(&op, "initializer_policy") != "if_reset" && !actual->reset)
-          return reject(&op, "initialized child state requires a valid actual reset binding");
-        if (failed(verifyContextualResetForBinding(*actual, *this)))
-          return failure();
-      } else if (isa<DomainRequirementOp>(op)) {
-        auto ref = FlatSymbolRefAttr::get(op.getContext(), text(&op, "sym_name"));
-        if (context.instance && !impl->bindings.count({context.instance, ref}))
-          return reject(&op, "reachable requirement lacks a unique concrete instance binding at " +
-                                 context.path);
-        if (context.instance && impl->bindings.count({context.instance, ref}) &&
-            succeeded(DomainModel(context.module).resolveDomain(ref)))
-          return reject(&op, "requirement cannot have both local and instance binding authorities");
-        auto actual = resolveBinding(index, ref);
-        if (failed(actual))
-          return reject(&op,
-                        "reachable requirement lacks a unique concrete clock/reset binding at " +
-                            context.path);
-        if (failed(verifyContextualResetForBinding(*actual, *this)))
-          return failure();
-      } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
-        if (failed(resolveCapability({index, op.getResult(0), &op})))
-          return reject(&op,
-                        "required capability is absent from concrete occurrence " + context.path);
-      } else if (isa<InstanceDomainBindingOp>(op)) {
-        auto actual = resolveBinding(index, op.getAttr("actual"));
-        if (failed(actual))
-          return reject(&op, "instance actual domain lacks an executable physical binding");
-        // Clock equality is physical/occurrence identity, never Same permission.
-        if (!sameClock(ContextualValue{index, op.getOperand(0), &op}, actual->clock, *this))
-          return reject(&op,
-                        "actual instance Clock operand disagrees with its concrete domain binding");
-        if ((op.getNumOperands() == 2) != actual->reset.has_value())
-          return reject(
-              &op, "actual instance Reset presence disagrees with its concrete domain binding");
-        if (actual->reset) {
-          auto supplied = resolveCapability({index, op.getOperand(1), &op});
-          auto expected = resolveCapability(*actual->reset);
-          if (failed(supplied) || failed(expected) ||
-              supplied->occurrence != expected->occurrence || supplied->value != expected->value)
+    SmallVector<Block *, 4> scopes{&context.module->getRegion(0).front()};
+    for (unsigned scope = 0; scope < scopes.size(); ++scope)
+      for (Operation &op : *scopes[scope]) {
+        if (isa<GenerateOp>(op) && op.getNumResults() == 1) {
+          if (failed(verifyGeneratedFamilyOperation(&op)))
+            return failure();
+          scopes.push_back(&op.getRegion(0).front());
+        }
+        if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
+          if (failed(inspectReset({index, op.getResult(0), &op}, *this)))
+            return failure();
+        } else if (isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) {
+          if (failed(inspectExecutableCrossing(&op, *this, index)))
+            return failure();
+        } else if (isa<WaiverOp>(op)) {
+          if (failed(inspectExecutableWaiver(&op, *this, index)))
+            return failure();
+        } else if (isa<LocalDomainBindingOp>(op)) {
+          auto actual = resolveBinding(index, op.getAttr("domain"));
+          if (failed(actual) || failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
+          auto actual = resolveBinding(index, op.getAttr("domain"));
+          if (failed(actual))
+            return reject(&op, "reachable state requires its actual occurrence domain binding");
+          if (failed(verifyDigitalStorageOperation(&op)))
+            return failure();
+          if (op.getNumOperands() && text(&op, "initializer_policy") != "if_reset" &&
+              !actual->reset)
+            return reject(&op, "initialized child state requires a valid actual reset binding");
+          if (failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<DomainRequirementOp>(op)) {
+          auto ref = FlatSymbolRefAttr::get(op.getContext(), text(&op, "sym_name"));
+          if (context.instance && !impl->bindings.count({context.instance, ref}))
+            return reject(&op,
+                          "reachable requirement lacks a unique concrete instance binding at " +
+                              context.path);
+          if (context.instance && impl->bindings.count({context.instance, ref}) &&
+              succeeded(DomainModel(context.module).resolveDomain(ref)))
+            return reject(&op,
+                          "requirement cannot have both local and instance binding authorities");
+          auto actual = resolveBinding(index, ref);
+          if (failed(actual))
+            return reject(&op,
+                          "reachable requirement lacks a unique concrete clock/reset binding at " +
+                              context.path);
+          if (failed(verifyContextualResetForBinding(*actual, *this)))
+            return failure();
+        } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
+          if (failed(resolveCapability({index, op.getResult(0), &op})))
+            return reject(&op,
+                          "required capability is absent from concrete occurrence " + context.path);
+        } else if (isa<InstanceDomainBindingOp>(op)) {
+          auto actual = resolveBinding(index, op.getAttr("actual"));
+          if (failed(actual))
+            return reject(&op, "instance actual domain lacks an executable physical binding");
+          // Clock equality is physical/occurrence identity, never Same permission.
+          if (!sameClock(ContextualValue{index, op.getOperand(0), &op}, actual->clock, *this))
             return reject(
-                &op,
-                "actual instance Reset operand disagrees with its exact bound reset capability");
+                &op, "actual instance Clock operand disagrees with its concrete domain binding");
+          if ((op.getNumOperands() == 2) != actual->reset.has_value())
+            return reject(
+                &op, "actual instance Reset presence disagrees with its concrete domain binding");
+          if (actual->reset) {
+            auto supplied = resolveCapability({index, op.getOperand(1), &op});
+            auto expected = resolveCapability(*actual->reset);
+            if (failed(supplied) || failed(expected) ||
+                supplied->occurrence != expected->occurrence || supplied->value != expected->value)
+              return reject(
+                  &op,
+                  "actual instance Reset operand disagrees with its exact bound reset capability");
+          }
         }
       }
-    }
   }
   return success();
 }

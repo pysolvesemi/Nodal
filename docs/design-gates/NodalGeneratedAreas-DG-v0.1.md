@@ -103,6 +103,46 @@ ordinal-aware external writes remain required follow-on F58 work. The first sour
 slice rejects unsupported external writes through selected members rather than
 bypassing the canonical driver owner. No required work is transferred to F159.
 
+## Pinned target execution contract (implementation in progress)
+
+The installed CIRCT firtool 1.154.0 probe admits `sv.generate` containing an
+actual `sv.generate.for` and `hw.instance`. It emits one parameterized HDL loop,
+not instances cloned for legal values. Installed CIRCT-Slang accepts that output.
+Icarus 12 rejects the legal named outer generate end-label, so this profile uses
+Slang for legal-output admission until a compatible simulator is selected; output
+must not be rewritten to satisfy a consumer. This is a pinned-consumer limitation,
+not a claim of source or target completion.
+
+A second probe establishes that nesting a fresh `sv.generate`/`sv.generate.case`
+inside the loop emits illegal nested generate regions, rejected by Slang. The
+bounded target plan therefore uses one reusable helper module per represented
+family template and material domain profile, with static choices at helper-module
+scope. The enclosing real loop instantiates that helper. This is a target adapter,
+not a new source Module, hierarchy occurrence registry or body per lane. Existing
+hierarchy/parameter authorities supply the exact template and finalized context;
+represented-template budgets and target physical-footprint limits remain separate.
+
+Helper inputs explicitly transport the actual outer SSA captures and physical
+clock/reset capabilities. A static coordinate parameter transports the canonical
+`lower + ordinal * step` coordinate. The pinned HW instance verifier cannot use a
+`ParamDeclRefAttr` for a generate induction, because it is not a module parameter.
+The successful probe uses a typed `ParamVerbatimAttr` containing only the generated,
+collision-checked target induction identifier associated with the exact loop block
+argument. Authored names, arbitrary expressions and metadata do not enter this
+text carrier. Other arithmetic remains the existing checked parameter DAG with
+signed-i32 target transport admission.
+
+Exports and selected-member reads must share one physical family storage/wire
+mapping and its canonical ordinal/coordinate proof. No selected member creates
+state, an instance or a new resolved net. Helper/module/port adapters retain the
+original family, declaration and source paths as provenance while target names
+remain implementation detail. Domains and reset policies are resolved from the
+actual occurrence, never a representative lane or sampled parameter default.
+The probes establish primitive feasibility only; Nodal family lowering, inverse
+member mapping, waveform behavior and nested/generated-instance occurrence support
+remain open. Probe commands, pinned hashes and results are retained under
+`.work/f58-generate-target-probe/`.
+
 ## Focused validation and architecture review
 
 Focused source probes cover one-template capture, required if/when lane updates,

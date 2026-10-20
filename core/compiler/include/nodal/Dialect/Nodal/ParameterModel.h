@@ -260,9 +260,10 @@ mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir:
                                                                            mlir::Operation *use);
 mlir::FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(mlir::Value value,
                                                                            mlir::Operation *use);
-/// Non-diagnostic capture classification. A runtime Integer is not a static
-/// binding. Actual static uses still call the resolving API above and retain its
-/// normal diagnostics; no runtime value is represented as unreachable or zero.
+/// Non-diagnostic type-binding capture classification. A runtime Integer or
+/// generated induction is not a type binding. Actual static uses still call the
+/// resolving API above and retain their normal proof and diagnostics; no such
+/// value is represented as unreachable or zero.
 mlir::FailureOr<StructuralIntegerFacts> probeBehavioralIntegerCapture(mlir::Value value,
                                                                       mlir::Operation *use);
 mlir::LogicalResult verifyStructuralIntegerOperation(mlir::Operation *operation);

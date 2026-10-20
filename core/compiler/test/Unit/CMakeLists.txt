@@ -598,6 +598,13 @@ target_link_libraries(nodal-digital-interface-model-unit-tests PRIVATE
 add_test(NAME nodal.native.digital-interface-model-unit COMMAND nodal-digital-interface-model-unit-tests)
 set_tests_properties(nodal.native.digital-interface-model-unit PROPERTIES TIMEOUT 30)
 
+add_executable(nodal-digital-interface-observation-unit-tests DigitalInterfaceObservationTest.cpp)
+llvm_update_compile_flags(nodal-digital-interface-observation-unit-tests)
+target_link_libraries(nodal-digital-interface-observation-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.digital-interface-observation-unit COMMAND nodal-digital-interface-observation-unit-tests)
+set_tests_properties(nodal.native.digital-interface-observation-unit PROPERTIES TIMEOUT 30)
+
 add_executable(nodal-digital-collection-model-unit-tests DigitalCollectionModelTest.cpp)
 llvm_update_compile_flags(nodal-digital-collection-model-unit-tests)
 target_link_libraries(nodal-digital-collection-model-unit-tests PRIVATE

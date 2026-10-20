@@ -626,8 +626,6 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
 }
 LogicalResult verifySequentialSamples(Operation *module, ArrayRef<SequentialSample> samples,
                                       SequentialModelLimits limits, unsigned alreadyCharged) {
-  if (samples.empty())
-    return success();
   SmallVector<std::pair<Value, Operation *>, 8> seeds;
   for (auto sample : samples)
     seeds.push_back({sample.value, sample.use});
@@ -636,7 +634,18 @@ LogicalResult verifySequentialSamples(Operation *module, ArrayRef<SequentialSamp
   auto graph = analyzeDigitalAssignmentDependencies(module, seeds, graphLimits);
   if (failed(graph))
     return failure();
-  return verifySequentialSampleDependencies(module, samples, *graph, graph->roots, limits,
+  SmallVector<SequentialSample, 8> allSamples(samples.begin(), samples.end());
+  SmallVector<unsigned> roots(graph->roots.begin(), graph->roots.end());
+  for (const auto &observation : graph->observations)
+    for (unsigned root : observation.roots) {
+      SequentialSample sample;
+      sample.use = observation.use;
+      sample.group = observation.use;
+      sample.observationOnly = true;
+      allSamples.push_back(sample);
+      roots.push_back(root);
+    }
+  return verifySequentialSampleDependencies(module, allSamples, *graph, roots, limits,
                                             alreadyCharged);
 }
 

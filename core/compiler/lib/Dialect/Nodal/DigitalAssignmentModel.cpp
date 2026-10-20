@@ -108,7 +108,7 @@ public:
 private:
   llvm::DenseMap<Operation *, unsigned> crossingIndexes;
   SmallVector<DigitalCrossingDependency> crossings;
-  SmallVector<unsigned> observations;
+  SmallVector<DigitalObservationGroup> observations;
   llvm::DenseMap<std::pair<Operation *, Operation *>, Operation *> instancePortOwners;
   FailureOr<unsigned> valueNode(Value value, Operation *use, Operation *family = nullptr,
                                 unsigned guard = 0);
@@ -953,10 +953,11 @@ LogicalResult AssignmentQuery::verify() {
     auto node = valueNode(first.target.root, at);
     if (failed(node))
       return failure();
-    observations.push_back(*node);
+    observations.push_back({entry.first, {*node}});
   }
   SmallVector<DigitalInterfaceValueDependencies> interface;
-  if (failed(collectDigitalInterfaceDependencies(module, interface)))
+  SmallVector<DigitalInterfaceObservationGroup> interfaceObservations;
+  if (failed(collectDigitalInterfaceDependencies(module, interface, &interfaceObservations)))
     return failure();
   for (auto &entry : interface) {
     interfaceDependencies.try_emplace(entry.value, std::move(entry.sources));
@@ -968,6 +969,18 @@ LogicalResult AssignmentQuery::verify() {
     // implicit edge uses; empty boundary roots retain its definedness policy.
     if (failed(valueNode(entry.value, entry.value.getDefiningOp())))
       return failure();
+  }
+  for (const auto &observation : interfaceObservations) {
+    DigitalObservationGroup group;
+    group.use = observation.use;
+    for (Value value : observation.values) {
+      auto node = valueNode(value, observation.use);
+      if (failed(node))
+        return failure();
+      group.roots.push_back(*node);
+    }
+    if (!group.roots.empty())
+      observations.push_back(std::move(group));
   }
   for (unsigned cursor = 0; cursor < nodes.size(); ++cursor)
     if (failed(expand(cursor)))
@@ -1099,19 +1112,20 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
         sample.root += offset;
       graph.crossings.push_back(std::move(crossing));
     }
-    for (unsigned root : local.graph.observations) {
-      graph.observations.push_back(root + offset);
-      samples.push_back({{},
-                         {},
-                         graph.nodes[root + offset].use,
-                         false,
-                         nullptr,
-                         false,
-                         false,
-                         false,
-                         occurrence,
-                         true});
-      sampleRoots.push_back(root + offset);
+    for (const auto &observation : local.graph.observations) {
+      DigitalObservationGroup group;
+      group.use = observation.use;
+      for (unsigned root : observation.roots) {
+        group.roots.push_back(root + offset);
+        SequentialSample sample;
+        sample.use = observation.use;
+        sample.group = observation.use;
+        sample.occurrence = occurrence;
+        sample.observationOnly = true;
+        samples.push_back(sample);
+        sampleRoots.push_back(root + offset);
+      }
+      graph.observations.push_back(std::move(group));
     }
     for (unsigned i = 0; i < local.samples.size(); ++i) {
       auto sample = local.samples[i];

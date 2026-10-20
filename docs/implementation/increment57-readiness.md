@@ -1304,3 +1304,32 @@ reset-bearing actual instance binding directly; absence is not a reset-proof
 bypass. The isolated suite passes **3/3**, with all three positive native replays
 under `.work/hierarchy-default-reset/replay` and adjacent `tests1.log`/`replay.log`.
 Assignment source-location and observation follow-ons remain open.
+
+### Native observed-output and Interface reconvergence
+
+The canonical Interface dependency owner now supplies coherent observation groups:
+one payload/valid forward group per protocol member, separate ready and unrelated
+member/endpoint groups, and canonical resolved components retaining every actual
+data/enable dependency. Aliases do not invent chains, undriven boundaries do not
+invent observations, and no Interface domain annotation authorizes sampling.
+The assignment graph preserves group identity and occurrence while reusing the
+existing sampler. Both flat and hierarchical production admission observe actual
+written ordinary outputs, even without registers or other explicit samples.
+Unrelated outputs remain separate; selectors and actual driver cones stay causal.
+
+The frozen seven-file native slice passes **25/25** new owner/production admission
+cases, plus Interface **151/151**, crossing **273/273**, hierarchy **47 distinct
+plus 16 repeat runs**, contextual controls **27/27**, sequential **71/71**,
+assignment guard **34/34**, and storage **119/119** predecessors. New cases include
+otherwise-unused combined outputs, reused-chain aliases, separate outputs,
+selector/data reconvergence, protocol groups and resolved data/enable causality.
+No duplicate CDC checker or physical-bit expansion was added; bounded canonical
+grouping reuses the existing Interface maps and shared dependency engine.
+
+Exact source hashes are `.work/interface-observations-checkpoint/native7.sha256`;
+logs are under `.work/interface-observations-held`. The immutable compiler is
+`.work/interface-observations-checkpoint/nodalc`, SHA256
+`7564e190ee98259db207d8b2139c29a4f1db2476906e455cd97fb5b4df58012e`.
+Source admission, actual Scala replay and assignment-location repair remain
+pending in their separate checkpoint. Waivers, events and final F57 integration
+remain required; no CI, broad qualification or coarse checklist closure occurred.

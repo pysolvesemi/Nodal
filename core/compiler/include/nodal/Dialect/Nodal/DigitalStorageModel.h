@@ -70,12 +70,16 @@ struct DigitalCrossingDependency {
   llvm::SmallVector<DigitalCrossingResult, 3> results;
   unsigned occurrence = 0;
 };
+struct DigitalObservationGroup {
+  mlir::Operation *use = nullptr;
+  llvm::SmallVector<unsigned, 2> roots;
+};
 struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;
   llvm::SmallVector<unsigned> roots;
   llvm::SmallVector<DigitalCrossingDependency> crossings;
-  /// One final-value observation per written output, never a module-wide group.
-  llvm::SmallVector<unsigned> observations;
+  /// Canonical coherent observations, never a module-wide group.
+  llvm::SmallVector<DigitalObservationGroup> observations;
   std::shared_ptr<const HierarchyModel> hierarchy;
 };
 mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(

@@ -8,7 +8,19 @@ class DomainModel;
 struct DigitalDependencyGraph;
 /// Independently inspected executable header. This is not source-sampling proof;
 /// verifyCrossingModel/the completed assignment graph owns that proof.
-enum class CrossingKind { Level, Gray, Pulse, Handshake };
+enum class CrossingKind { Level, Gray, Pulse, Handshake, Fifo };
+/// Canonical endpoint roles are derived from the closed operation contract, never
+/// accepted as independently mutable metadata. Domain references retain aliases.
+struct CrossingOperand {
+  unsigned index;
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
+};
+struct CrossingResult {
+  unsigned index;
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
+};
 struct ExecutableCrossing {
   mlir::Operation *operation = nullptr;
   mlir::Operation *sourceDomain = nullptr;
@@ -20,6 +32,10 @@ struct ExecutableCrossing {
   CrossingKind kind = CrossingKind::Level;
   uint64_t payloadMaximumBits = 1;
   uint64_t stateBits = 0;
+  unsigned depth = 0;
+  unsigned pointerBits = 0;
+  llvm::SmallVector<CrossingOperand, 3> operands;
+  llvm::SmallVector<CrossingResult, 3> results;
 };
 mlir::FailureOr<ExecutableCrossing> inspectExecutableCrossing(mlir::Operation *operation,
                                                               const DomainModel &domains);

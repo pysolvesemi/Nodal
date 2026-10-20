@@ -4075,6 +4075,7 @@ LogicalResult nodal::BridgeOp::verify() {
 }
 
 LogicalResult nodal::CrossingOp::verify() { return verifyCrossingOperation(getOperation()); }
+LogicalResult nodal::AsyncFifoOp::verify() { return verifyCrossingOperation(getOperation()); }
 
 LogicalResult nodal::StateOwnerOp::verify() {
   if (!getOperation()->getAttrOfType<SymbolRefAttr>("state") ||

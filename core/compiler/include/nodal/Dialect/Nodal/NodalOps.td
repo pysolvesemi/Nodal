@@ -1616,6 +1616,25 @@ def Nodal_CrossingOp : Nodal_Op<"crossing"> {
   let hasVerifier = 1;
 }
 
+def Nodal_AsyncFifoOp : Nodal_Op<"async_fifo"> {
+  let summary = "Owned elastic asynchronous ready/valid FIFO";
+  let arguments = (ins
+    AnyType:$source_payload,
+    AnyType:$source_valid,
+    AnyType:$destination_ready,
+    FlatSymbolRefAttr:$source_domain,
+    FlatSymbolRefAttr:$destination_domain,
+    StrAttr:$kind,
+    StrAttr:$contract,
+    I64Attr:$depth,
+    DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata
+  );
+  let results = (outs AnyType:$destination_payload, AnyType:$destination_valid,
+                      AnyType:$source_ready);
+  let hasVerifier = 1;
+}
+
 def Nodal_StateOwnerOp : Nodal_Op<"state_owner",
     [HasParent<"ModuleOp">]> {
   let summary = "Explicit state ownership by one clock/reset domain";

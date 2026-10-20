@@ -37,13 +37,19 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     (void)reject(op, reason);
     return failure();
   };
-  if (!llvm::isa_and_nonnull<CrossingOp>(op) || op->getNumOperands() != 1 ||
-      op->getNumResults() != 1 || op->getNumRegions() || op->getNumSuccessors() ||
+  const bool fifo = llvm::isa_and_nonnull<AsyncFifoOp>(op);
+  if (!llvm::isa_and_nonnull<CrossingOp, AsyncFifoOp>(op) ||
+      op->getNumOperands() != (fifo ? 3u : 1u) || op->getNumResults() != (fifo ? 3u : 1u) ||
+      op->getNumRegions() || op->getNumSuccessors() ||
       !llvm::isa_and_nonnull<ModuleOp>(op->getParentOp()))
-    return fail("executable crossing requires one actual module-owned input and result");
+    return fail("executable crossing requires its exact actual module-owned operands and results");
   StringRef contract = text(op, "contract");
   CrossingKind kind;
-  if (contract == "level_v1" && text(op, "kind") == "sync")
+  if (fifo && contract == "fifo_v1" && text(op, "kind") == "fifo")
+    kind = CrossingKind::Fifo;
+  else if (fifo)
+    return fail("unsupported or malformed executable FIFO contract");
+  else if (contract == "level_v1" && text(op, "kind") == "sync")
     kind = CrossingKind::Level;
   else if (contract == "gray_v1" && text(op, "kind") == "gray")
     kind = CrossingKind::Gray;
@@ -55,31 +61,48 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     return fail("unsupported or malformed executable crossing contract");
   if (!llvm::all_of(op->getAttrs(), [](NamedAttribute a) {
         return llvm::is_contained(ArrayRef<StringRef>{"source_domain", "destination_domain", "kind",
-                                                      "contract", "stages", "obligations",
+                                                      "contract", "stages", "depth", "obligations",
                                                       "metadata"},
                                   a.getName().getValue());
       }))
     return fail("unsupported or malformed executable crossing fields");
-  if (failed(verifyDigitalValueScope(op->getOperand(0), op)))
-    return fail("crossing requires its actual owned source input");
+  if ((fifo && op->hasAttr("stages")) || (!fifo && op->hasAttr("depth")))
+    return fail("crossing fields must match the exact closed operation contract");
+  for (Value operand : op->getOperands())
+    if (failed(verifyDigitalValueScope(operand, op)))
+      return fail("crossing requires its actual owned sampled operands");
+  if (fifo && (!boolean(op->getOperand(1).getType()) || !boolean(op->getOperand(2).getType()) ||
+               !boolean(op->getResult(1).getType()) || !boolean(op->getResult(2).getType())))
+    return fail("FIFO valid and ready operands/results require exact owned Bool types");
   uint64_t payloadBits = 1;
-  if (kind == CrossingKind::Gray || kind == CrossingKind::Handshake) {
+  if (kind == CrossingKind::Gray || kind == CrossingKind::Handshake || fifo) {
     auto footprint = inferDigitalBitPatternMaximumBits(op->getOperand(0).getType(), op);
     if (failed(footprint) ||
         !equivalentDigitalStorageTypes(op->getOperand(0).getType(), op->getResult(0).getType(),
                                        op->getParentOp()))
       return fail(
-          "Gray/handshake crossing requires an exact complete finite bit-pattern payload ABI");
+          "Gray/handshake/FIFO crossing requires an exact complete finite bit-pattern payload ABI");
     payloadBits = *footprint;
   } else if (!boolean(op->getOperand(0).getType()) ||
              op->getOperand(0).getType() != op->getResult(0).getType())
     return fail("level/pulse synchronizer requires exact owned Bool input/result");
   auto stages = op->getAttrOfType<IntegerAttr>("stages");
-  if (!stages || !stages.getType().isSignlessInteger(64) || stages.getInt() < 2 ||
-      stages.getInt() > 32 ||
-      ((kind == CrossingKind::Pulse || kind == CrossingKind::Handshake) && stages.getInt() != 2))
+  if (!fifo &&
+      (!stages || !stages.getType().isSignlessInteger(64) || stages.getInt() < 2 ||
+       stages.getInt() > 32 ||
+       ((kind == CrossingKind::Pulse || kind == CrossingKind::Handshake) && stages.getInt() != 2)))
     return fail(
         "crossing stages must be i64 in 2 through 32; Pulse/handshake have exactly two stages");
+  unsigned depth = 0, pointerBits = 0;
+  if (fifo) {
+    auto count = op->getAttrOfType<IntegerAttr>("depth");
+    if (!count || !count.getType().isSignlessInteger(64) || count.getInt() < 2 ||
+        count.getInt() > 256 || (count.getInt() & (count.getInt() - 1)))
+      return fail("FIFO depth must be an exact i64 power of two from 2 through 256");
+    depth = count.getInt();
+    for (unsigned remaining = depth; remaining; remaining >>= 1)
+      ++pointerBits;
+  }
   auto obligations = op->getAttrOfType<DictionaryAttr>("obligations");
   auto field = [&](StringRef key, StringRef expected) {
     auto value = obligations ? obligations.getAs<StringAttr>(key) : StringAttr();
@@ -97,10 +120,15 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
        (!obligations || obligations.size() != 3 ||
         !field("delivery", "latest_snapshot_coalescing") ||
         !field("bundled_data", "settled_before_request_capture") ||
-        !field("reset_epoch", "common_assertion"))))
+        !field("reset_epoch", "common_assertion"))) ||
+      (fifo &&
+       (!obligations || obligations.size() != 5 || !field("transfer", "valid_and_ready") ||
+        !field("stall", "hold_payload_and_valid") || !field("reset_epoch", "common_assertion") ||
+        !field("pointer_skew", "less_than_launch_period") ||
+        !field("bundled_data", "settled_before_read_visibility"))))
     return fail("executable crossing requires its exact typed temporal/environment obligations");
   const uint64_t budget = SequentialModelLimits().maximumNormalizedOperations;
-  uint64_t stateBits = kind == CrossingKind::Pulse ? 7 : stages.getInt();
+  uint64_t stateBits = kind == CrossingKind::Pulse ? 7 : (fifo ? 0 : stages.getInt());
   if (kind == CrossingKind::Gray) {
     const uint64_t copies = stages.getInt() + 1;
     if (payloadBits > (budget - 1) / copies)
@@ -110,6 +138,12 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     if (payloadBits > (budget - 6) / 2)
       return fail("crossing state expansion exceeds finite sequential budget");
     stateBits = payloadBits * 2 + 6;
+  } else if (fifo) {
+    const uint64_t controls = 8 * pointerBits + 2;
+    const uint64_t copies = depth + 2;
+    if (payloadBits > (budget - controls) / copies)
+      return fail("crossing state expansion exceeds finite sequential budget");
+    stateBits = copies * payloadBits + controls;
   }
   auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
   StringRef identity = path(op);
@@ -121,7 +155,7 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     return fail("crossing requires its canonical owned semantic_path identity");
   // Existing source-map fields remain intact and non-authoritative. Reserved
   // executable fields cannot be smuggled through the descriptive dictionary.
-  for (StringRef key : {"contract", "contract_version", "stages", "kind", "source_domain",
+  for (StringRef key : {"contract", "contract_version", "stages", "depth", "kind", "source_domain",
                         "destination_domain", "obligations", "verified", "safe", "category"})
     if (metadata.get(key))
       return fail("executable crossing facts belong in typed fields, not metadata");
@@ -129,12 +163,27 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
   auto destinationRef = op->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
   if (!sourceRef || !destinationRef || sourceRef == destinationRef)
     return fail("crossing requires distinct typed endpoint references");
-  return ExecutableCrossing{
-      op,       nullptr, nullptr,     nullptr,  nullptr, static_cast<unsigned>(stages.getInt()),
-      identity, kind,    payloadBits, stateBits};
+  ExecutableCrossing result;
+  result.operation = op;
+  result.stages = fifo ? 2 : static_cast<unsigned>(stages.getInt());
+  result.identity = identity;
+  result.kind = kind;
+  result.payloadMaximumBits = payloadBits;
+  result.stateBits = stateBits;
+  result.depth = depth;
+  result.pointerBits = pointerBits;
+  result.operands.push_back({0, sourceRef, "source_payload"});
+  result.results.push_back({0, destinationRef, "destination_payload"});
+  if (fifo) {
+    result.operands.push_back({1, sourceRef, "source_valid"});
+    result.operands.push_back({2, destinationRef, "destination_ready"});
+    result.results.push_back({1, destinationRef, "destination_valid"});
+    result.results.push_back({2, sourceRef, "source_ready"});
+  }
+  return result;
 }
 // DomainModel has independently verified each effective binding/release. Keep
-// the common epoch proof shared by Pulse and snapshot handshake, while ResetModel
+// the common epoch proof shared by Pulse, snapshot handshake and FIFO, while ResetModel
 // remains the sole owner of bounded reset producer/lineage inspection.
 LogicalResult verifyCommonResetEpoch(Operation *op, Operation *sourceBinding,
                                      Operation *destinationBinding, const DomainModel &domains) {
@@ -178,7 +227,8 @@ FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const Dom
   auto destinationBinding = domains.resolveBinding(destinationRef);
   if (failed(sourceBinding) || failed(destinationBinding))
     return fail("crossing endpoints require independently verified physical domain bindings");
-  if ((header->kind == CrossingKind::Pulse || header->kind == CrossingKind::Handshake) &&
+  if ((header->kind == CrossingKind::Pulse || header->kind == CrossingKind::Handshake ||
+       header->kind == CrossingKind::Fifo) &&
       failed(verifyCommonResetEpoch(op, *sourceBinding, *destinationBinding, domains)))
     return failure();
   header->sourceDomain = *source;
@@ -191,9 +241,10 @@ FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op) {
   return inspectExecutableCrossing(op, DomainModel(op));
 }
 LogicalResult verifyCrossingOperation(Operation *op) {
-  if (!llvm::isa_and_nonnull<CrossingOp>(op))
+  if (!llvm::isa_and_nonnull<CrossingOp, AsyncFifoOp>(op))
     return failure();
-  if (op->hasAttr("contract") || op->hasAttr("stages") || op->hasAttr("obligations"))
+  if (llvm::isa<AsyncFifoOp>(op) || op->hasAttr("contract") || op->hasAttr("stages") ||
+      op->hasAttr("obligations"))
     return succeeded(inspectHeader(op)) ? success() : failure();
   auto source = op->getAttrOfType<FlatSymbolRefAttr>("source_domain");
   auto destination = op->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
@@ -211,14 +262,19 @@ LogicalResult verifyCrossingSourceDependencies(Operation *module,
   SmallVector<SequentialSample, 8> samples;
   SmallVector<unsigned, 8> roots;
   const DomainModel domains(module);
-  for (auto crossing : graph.crossings) {
-    auto source = domains.resolveDomain(crossing.operation->getAttr("source_domain"));
-    if (failed(source))
-      return reject(crossing.operation, "source domain lost its owned resolution");
-    auto actual = FlatSymbolRefAttr::get(module->getContext(), text(*source, "sym_name"));
-    samples.push_back({crossing.operation->getOperand(0), actual, crossing.operation, true, nullptr,
-                       text(crossing.operation, "kind") != "pulse"});
-    roots.push_back(crossing.sourceRoot);
+  for (const auto &crossing : graph.crossings) {
+    const bool fifo = llvm::isa<AsyncFifoOp>(crossing.operation);
+    for (const auto &sample : crossing.samples) {
+      auto owner = domains.resolveDomain(sample.domain);
+      if (failed(owner))
+        return reject(crossing.operation, "sample domain lost its owned resolution");
+      auto actual = FlatSymbolRefAttr::get(module->getContext(), text(*owner, "sym_name"));
+      samples.push_back({crossing.operation->getOperand(sample.operandIndex), actual,
+                         crossing.operation, true, crossing.operation,
+                         text(crossing.operation, "kind") != "pulse", fifo,
+                         fifo && sample.operandIndex < 2});
+      roots.push_back(sample.root);
+    }
   }
   return verifySequentialSampleDependencies(module, samples, graph, roots, limits);
 }
@@ -236,8 +292,9 @@ LogicalResult verifyCrossingModel(Operation *module, SequentialModelLimits limit
       (void)reject(module, "crossing inventory exceeds finite operation budget");
       return WalkResult::interrupt();
     }
-    if (llvm::isa<CrossingOp>(op) &&
-        (op->hasAttr("contract") || op->hasAttr("stages") || op->hasAttr("obligations"))) {
+    if (llvm::isa<AsyncFifoOp>(op) ||
+        (llvm::isa<CrossingOp>(op) &&
+         (op->hasAttr("contract") || op->hasAttr("stages") || op->hasAttr("obligations")))) {
       executable = true;
       auto header = inspectHeader(op);
       if (failed(header))

@@ -41,16 +41,28 @@ struct DigitalDependencyNode {
   mlir::Value value;
   mlir::Operation *use;
   llvm::SmallVector<unsigned, 2> dependencies;
-  /// Verified Interface instance/component source-domain constraint, when any.
+  /// Verified Interface source constraint or exact crossing-result domain, when any.
   mlir::FlatSymbolRefAttr sourceDomain;
-  /// Exact stateful crossing identity and retained input-root index. This edge
-  /// is provenance, NOT a combinational dependency or domainless graph cut.
+  /// Exact coherent stateful boundary identity and inventory index. Sampled
+  /// roots are provenance, NOT combinational dependencies or domainless cuts.
   mlir::Operation *crossing = nullptr;
-  unsigned crossingSource = 0;
+  unsigned crossingIndex = 0;
+  llvm::StringRef crossingRole;
+};
+struct DigitalCrossingSample {
+  unsigned root;
+  unsigned operandIndex;
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
+};
+struct DigitalCrossingResult {
+  mlir::FlatSymbolRefAttr domain;
+  llvm::StringRef role;
 };
 struct DigitalCrossingDependency {
   mlir::Operation *operation;
-  unsigned sourceRoot;
+  llvm::SmallVector<DigitalCrossingSample, 3> samples;
+  llvm::SmallVector<DigitalCrossingResult, 3> results;
 };
 struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;

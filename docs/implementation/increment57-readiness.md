@@ -788,3 +788,19 @@ payload width, and existing stable symbols protect independent instances.
 The asynchronous FIFO with genuine ready/valid ownership is next. Remaining
 clock structures, relationships/hierarchy, waivers and low-level events keep
 F57 open; this checkpoint does not close any parent checklist prematurely.
+
+### Elastic FIFO native model checkpoint
+
+The v0.5 gate now has a closed native `async_fifo` schema and model with three
+sampled inputs and three coherent result roles. Exact power-of-two depth, finite
+payload ABI, common reset roots, pointer and bundled-data obligations, and the
+checked `D*W+8P+2(W+1)` state budget are verified before allocation. The existing
+sampling graph carries per-result domain roles and all sampled roots, including
+forward-ready chains; independent FIFO identities remain distinct. Domainless
+constants are neutral, but unannotated input ports are not clock evidence.
+
+Current focused native evidence: CrossingModel **266/266**, including 68 new FIFO
+cases and 198 predecessors (`.work/fifo-crossing-tests.log`). The model and graph
+checkpoint is independently tested; source API, target lowering and actual FIFO
+waveforms remain separate pending checkpoints. No CI or broad qualification was
+run, and no coarse F57 checklist is closed by this partial checkpoint.

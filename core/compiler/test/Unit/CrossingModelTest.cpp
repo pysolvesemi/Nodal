@@ -90,6 +90,21 @@ std::string handshakeCrossing(std::string type = "!nodal.uint<8>", std::string n
          "reset_epoch = \"common_assertion\"}, metadata = {semantic_path = \"Fixture." +
          name + "\"}}> : (" + type + ") -> " + type + "\n";
 }
+std::string fifoCrossing(std::string type = bit, unsigned depth = 4, std::string name = "fifo",
+                         std::string input = "input", std::string valid = "valid",
+                         std::string ready = "ready", std::string from = "a",
+                         std::string to = "b") {
+  return "%" + name + ":3 = \"nodal.async_fifo\"(%" + input + ", %" + valid + ", %" + ready +
+         ") <{source_domain = @" + from + ", destination_domain = @" + to +
+         ", kind = \"fifo\", contract = \"fifo_v1\", depth = " + std::to_string(depth) +
+         " : i64, obligations = {transfer = \"valid_and_ready\", "
+         "stall = \"hold_payload_and_valid\", reset_epoch = \"common_assertion\", "
+         "pointer_skew = \"less_than_launch_period\", "
+         "bundled_data = \"settled_before_read_visibility\"}, "
+         "metadata = {semantic_path = \"Fixture." +
+         name + "\"}}> : (" + type + ", " + bit + ", " + bit + ") -> (" + type + ", " + bit + ", " +
+         bit + ")\n";
+}
 std::string noZeroEnum() {
   return "\"nodal.enum\"() <{sym_name = \"NoZero\", underlying_type = !nodal.uint<2>, "
          "encoding = \"custom\", metadata = {abi_version = 1 : i64, semantic_type = "
@@ -611,8 +626,10 @@ int main(int argc, char **argv) {
     if (valid) {
       const auto &node = graph->nodes[graph->roots[0]];
       valid = node.crossing == first && node.dependencies.empty() && node.sourceDomain &&
-              node.sourceDomain.getValue() == "b" && node.crossingSource < graph->nodes.size() &&
-              graph->nodes[node.crossingSource].value == first->getOperand(0) &&
+              node.sourceDomain.getValue() == "b" && node.crossingIndex < graph->crossings.size() &&
+              graph->crossings[node.crossingIndex].samples.size() == 1 &&
+              graph->nodes[graph->crossings[node.crossingIndex].samples[0].root].value ==
+                  first->getOperand(0) &&
               graph->crossings[0].operation != graph->crossings[1].operation;
     }
     report("graph-retains-boundary-input-and-destination", valid);
@@ -934,6 +951,160 @@ int main(int argc, char **argv) {
     limits.maximumNormalizedOperations = 22;
     report("handshake-custom-exact-bit-budget",
            succeeded(nodal::verifyCrossingModel(module, limits)));
+  }
+  auto fifoSetup = [&](std::string type = bit, bool common = true) {
+    return replace(pulseSetup(common), port("input", "a"), port("input", "a", type)) +
+           port("valid", "a") + port("ready", "b");
+  };
+  auto fifoBody = [&](std::string type = bit, unsigned depth = 4) {
+    return fifoSetup(type) + fifoCrossing(type, depth);
+  };
+  const std::string fifo = fifoBody();
+  for (unsigned depth : {2u, 4u, 256u})
+    check("fifo-exact-depth-" + std::to_string(depth), fifoBody(bit, depth), true);
+  for (unsigned depth : {0u, 1u, 3u, 255u, 257u, 512u})
+    check("fifo-invalid-depth-" + std::to_string(depth), fifoBody(bit, depth), false);
+  check("fifo-depth-i64-required", replace(fifo, "depth = 4 : i64", "depth = 4 : i32"), false);
+  check("fifo-depth-not-negative", replace(fifo, "depth = 4 : i64", "depth = -4 : i64"), false);
+  check("fifo-depth-no-arithmetic-overflow",
+        replace(fifo, "depth = 4 : i64", "depth = 9223372036854775807 : i64"), false);
+  check("fifo-closed-kind", replace(fifo, "kind = \"fifo\"", "kind = \"handshake\""), false);
+  check("fifo-closed-contract", replace(fifo, "fifo_v1", "fifo_v2"), false);
+  check("fifo-no-stages-field",
+        fifoSetup() + replace(fifoCrossing(), "}> : (", "}> {stages = 2 : i64} : ("), false);
+  check("fifo-no-forged-result-roles",
+        fifoSetup() +
+            replace(fifoCrossing(), "}> : (", "}> {result_roles = [\"source_ready\"]} : ("),
+        false);
+  for (auto field : {"valid_and_ready", "hold_payload_and_valid", "common_assertion",
+                     "less_than_launch_period", "settled_before_read_visibility"})
+    check("fifo-obligation-" + std::string(field), replace(fifo, field, "invalid"), false);
+  check("fifo-unknown-obligation",
+        replace(fifo, "transfer = \"valid_and_ready\"",
+                "extra = true, transfer = \"valid_and_ready\""),
+        false);
+  check("fifo-missing-obligation", replace(fifo, "transfer = \"valid_and_ready\", ", ""), false);
+  for (const std::string type : {"!nodal.uint<8>", "!nodal.sint<8>", "!nodal.bits<8>",
+                                 "!nodal.shaped<\"2\", !nodal.uint<8>>",
+                                 "!nodal.struct<\"Pair\", [{name = \"tag\", type = "
+                                 "!nodal.bits<1>}, {name = \"data\", type = !nodal.uint<8>}]>"})
+    check("fifo-finite-payload-" + type, fifoBody(type), true);
+  check("fifo-enum-no-zero-invented",
+        replace(wrap(fifoBody("!nodal.enum<\"NoZero\", 2>")), "module { ",
+                "module { " + noZeroEnum()),
+        true);
+  for (const std::string type :
+       {"i64", "f64", "!nodal.capability<\"clock\">", "!nodal.capability<\"reset\">"})
+    check("fifo-rejected-payload-" + type, fifoBody(type), false);
+  check("fifo-exact-payload-abi",
+        replace(fifoBody("!nodal.uint<8>"), "-> (!nodal.uint<8>,", "-> (!nodal.sint<8>,"), false);
+  check("fifo-source-valid-bool",
+        replace(fifoSetup(), port("valid", "a"), port("valid", "a", "!nodal.uint<1>")) +
+            replace(fifoCrossing(), ": (!nodal.bits<1>, !nodal.bits<1>,",
+                    ": (!nodal.bits<1>, !nodal.uint<1>,"),
+        false);
+  check("fifo-ready-result-bool",
+        replace(fifo, "-> (!nodal.bits<1>, !nodal.bits<1>, !nodal.bits<1>)",
+                "-> (!nodal.bits<1>, !nodal.bits<1>, !nodal.uint<1>)"),
+        false);
+  check("fifo-common-reset-required", fifoSetup(bit, false) + fifoCrossing(), false,
+        "equal nonempty");
+  check("fifo-resetless-rejected",
+        setup() + port("valid", "a") + port("ready", "b") + fifoCrossing(), false);
+  check("fifo-unsafe-reset-release", replace(fifo, "release = \"external\"", "release = \"raw\""),
+        false);
+  check("fifo-source-valid-wrong-domain", replace(fifo, port("valid", "a"), port("valid", "b")),
+        false, "NODAL-CDC-001");
+  check("fifo-source-payload-wrong-domain", replace(fifo, port("input", "a"), port("input", "b")),
+        false, "NODAL-CDC-001");
+  check("fifo-ready-wrong-domain", replace(fifo, port("ready", "b"), port("ready", "a")), false,
+        "NODAL-CDC-001");
+  check("fifo-ready-unannotated", replace(fifo, port("ready", "b"), port("ready", "none")), false,
+        "unannotated");
+  check("fifo-valid-unannotated", replace(fifo, port("valid", "a"), port("valid", "none")), false,
+        "unannotated");
+  const std::string neutral = "%neutral = \"nodal.const_literal\"() <{value = 0 : i64, spelling = "
+                              "\"0\", metadata = {}}> : () -> " +
+                              bit + "\n";
+  check("fifo-constant-ready-neutral",
+        fifoSetup() + neutral + fifoCrossing(bit, 4, "fifo", "input", "valid", "neutral"), true);
+  check("fifo-constant-valid-neutral",
+        fifoSetup() + neutral + fifoCrossing(bit, 4, "fifo", "input", "neutral"), true);
+  check("fifo-constant-payload-valid-source",
+        fifoSetup() + neutral + fifoCrossing(bit, 4, "fifo", "neutral"), true);
+  check("fifo-both-source-inputs-neutral-not-proof",
+        fifoSetup() + neutral + fifoCrossing(bit, 4, "fifo", "neutral", "neutral"), false,
+        "attributed dependency");
+  check("fifo-ready-source-owned", fifo + sample("fifo#2", "a"), true);
+  check("fifo-ready-not-destination-owned", fifo + sample("fifo#2", "b"), false, "NODAL-CDC-001");
+  check("fifo-valid-destination-owned", fifo + sample("fifo#1", "b"), true);
+  check("fifo-payload-destination-owned", fifo + sample("fifo#0", "b"), true);
+  check("fifo-valid-not-source-owned", fifo + sample("fifo#1", "a"), false, "NODAL-CDC-001");
+  check("fifo-coherent-payload-valid",
+        fifo + expression("joined", "fifo#0", "fifo#1") + sample("joined"), true);
+  check("fifo-independent-identities", fifo + fifoCrossing(bit, 4, "other"), true);
+  check("fifo-duplicate-identities",
+        fifo + replace(fifoCrossing(bit, 4, "other"), "Fixture.other", "Fixture.fifo"), false);
+  check("fifo-independent-reconvergence",
+        fifo + fifoCrossing(bit, 4, "other") + expression("joined", "fifo#0", "other#1") +
+            sample("joined"),
+        false, "NODAL-CDC-057-002");
+  check("fifo-valid-root-reconvergence-retained",
+        fifoSetup() + port("otherInput", "a") + fifoCrossing() +
+            fifoCrossing(bit, 4, "other", "otherInput") +
+            expression("joined", "fifo#0", "other#0") + sample("joined"),
+        false, "NODAL-CDC-057-002");
+  check("fifo-ready-root-reconvergence-retained",
+        fifoSetup() + port("otherInput", "a") + port("otherValid", "a") + fifoCrossing() +
+            fifoCrossing(bit, 4, "other", "otherInput", "otherValid") +
+            expression("joined", "fifo#0", "other#0") + sample("joined"),
+        false, "NODAL-CDC-057-002");
+  const std::string readyWire =
+      "%readyWire = \"nodal.digital_storage\"() <{name = \"readyWire\", kind = \"wire\", metadata "
+      "= {semantic_path = \"Fixture.readyWire\"}}> : () -> " +
+      bit + "\n";
+  const std::string chainedFifo =
+      fifoSetup() + neutral + readyWire +
+      fifoCrossing(bit, 4, "fifo", "input", "valid", "readyWire") +
+      fifoCrossing(bit, 4, "next", "fifo#0", "fifo#1", "neutral", "b", "a") +
+      "\"nodal.digital_assign\"(%readyWire, %next#2) <{kind = \"continuous\", metadata = {}}> : (" +
+      bit + ", " + bit + ") -> ()\n";
+  check("fifo-chain-forward-ready-no-false-cycle", chainedFifo, true);
+  check("fifo-maximum-budget", fifoBody("!nodal.bits<65531>", 2), true);
+  check("fifo-budget-overflow", fifoBody("!nodal.bits<65532>", 2), false, "state expansion");
+  check("fifo-budget-arithmetic-overflow", fifoBody("!nodal.bits<9223372036854775807>", 256), false,
+        "state expansion");
+  auto fifoHeader =
+      check("fifo-header-fixture", fifoBody("!nodal.uint<8>") + sample("fifo#1"), true);
+  if (fifoHeader) {
+    auto module = *fifoHeader->getOps<nodal::ModuleOp>().begin();
+    auto op = *module.getOps<nodal::AsyncFifoOp>().begin();
+    auto header = nodal::inspectExecutableCrossing(op);
+    report("fifo-exact-bank-control-monitor-budget",
+           succeeded(header) && header->kind == nodal::CrossingKind::Fifo && header->depth == 4 &&
+               header->pointerBits == 3 && header->payloadMaximumBits == 8 &&
+               header->stateBits == 74);
+    SmallVector<std::pair<Value, Operation *>> seeds;
+    for (Value result : op->getResults())
+      seeds.push_back({result, &module.getBody().front().back()});
+    auto graph = nodal::analyzeDigitalAssignmentDependencies(module, seeds);
+    bool roles = succeeded(graph) && graph->crossings.size() == 1 &&
+                 graph->crossings[0].samples.size() == 3 && graph->roots.size() == 3;
+    if (roles) {
+      const auto &payload = graph->nodes[graph->roots[0]];
+      const auto &valid = graph->nodes[graph->roots[1]];
+      const auto &ready = graph->nodes[graph->roots[2]];
+      roles = payload.sourceDomain.getValue() == "b" && valid.sourceDomain.getValue() == "b" &&
+              ready.sourceDomain.getValue() == "a" && payload.crossing == valid.crossing &&
+              payload.crossing == ready.crossing && payload.crossingRole == "destination_payload" &&
+              valid.crossingRole == "destination_valid" && ready.crossingRole == "source_ready";
+    }
+    report("fifo-graph-canonical-result-roles-sampling-roots", roles);
+    nodal::SequentialModelLimits limits;
+    limits.maximumNormalizedOperations = 73;
+    report("fifo-custom-total-budget", failed(nodal::verifyCrossingModel(module, limits)));
+    limits.maximumNormalizedOperations = 74;
+    report("fifo-custom-exact-budget", succeeded(nodal::verifyCrossingModel(module, limits)));
   }
   std::string many = setup();
   for (unsigned i = 0; i < 128; ++i)

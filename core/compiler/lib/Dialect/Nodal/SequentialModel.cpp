@@ -394,7 +394,7 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
         return reject(group.use, "crossing reconvergence proof exceeds finite budget");
       const auto &node = graph.nodes[id];
       if (node.crossing)
-        boundaries.try_emplace(node.crossing, node.crossingSource);
+        boundaries.try_emplace(node.crossing, node.crossingIndex);
       else
         pending.append(node.dependencies.begin(), node.dependencies.end());
     }
@@ -404,9 +404,10 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
     // a coincidence of constants or equal clock frequencies. Store one owner
     // per actual leaf; never copy transitive provenance sets into value nodes.
     llvm::DenseMap<Operation *, Operation *> owners;
-    for (auto [crossing, root] : boundaries) {
+    for (auto [crossing, index] : boundaries) {
       visited.clear();
-      pending.push_back(root);
+      for (const auto &sample : graph.crossings[index].samples)
+        pending.push_back(sample.root);
       while (!pending.empty()) {
         unsigned id = pending.pop_back_val();
         if (!visited.insert(id).second)
@@ -439,11 +440,13 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
   const DomainModel domains(module);
   llvm::DenseSet<std::pair<unsigned, Attribute>> visited;
   llvm::DenseSet<std::pair<unsigned, Attribute>> strictChecked[2];
+  llvm::DenseMap<std::pair<Operation *, Attribute>, bool> attributedGroups;
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
     if (roots[i] >= graph.nodes.size())
       return reject(sample.use, "sampling root is outside the physical dependency graph");
-    if (sample.requireAttributedSource &&
+    if (sample.requireAttributedSource && !sample.allowDomainlessSource &&
+        !sample.requireAttributedGroup &&
         !strictChecked[sample.rejectPulseSources].insert({roots[i], sample.domain}).second)
       continue;
     llvm::DenseSet<unsigned> strictVisited;
@@ -480,7 +483,7 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
           if (llvm::isa_and_nonnull<DigitalStorageOp, MemoryReadOp>(source.identity))
             return sample.use->emitOpError(
                 "NODAL-CDC-001: foreign-domain state is sampled without an explicit crossing");
-          if (node.sourceDomain && !llvm::isa_and_nonnull<CrossingOp>(source.identity))
+          if (node.sourceDomain && !llvm::isa_and_nonnull<CrossingOp, AsyncFifoOp>(source.identity))
             return sample.use->emitOpError(
                 "NODAL-CDC-001: foreign or unresolved Interface domain is "
                 "sampled without an explicit crossing");
@@ -491,10 +494,19 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
       }
       pending.append(node.dependencies.begin(), node.dependencies.end());
     }
-    if (sample.requireAttributedSource && !attributed)
+    if (sample.requireAttributedGroup) {
+      if (!sample.group || !sample.requireAttributedSource)
+        return reject(sample.use, "attributed sample group requires an actual strict owner");
+      attributedGroups[{sample.group, sample.domain}] |= attributed;
+    }
+    if (sample.requireAttributedSource && !sample.allowDomainlessSource && !attributed)
       return sample.use->emitOpError(
           "NODAL-CDC-001: crossing source requires actual attributed dependency evidence");
   }
+  for (auto entry : attributedGroups)
+    if (!entry.second)
+      return entry.first.first->emitOpError(
+          "NODAL-CDC-001: crossing source group requires actual attributed dependency evidence");
   return verifyDirectCrossingReconvergence(module, graph, samples, roots, work,
                                            limits.maximumOperations);
 }

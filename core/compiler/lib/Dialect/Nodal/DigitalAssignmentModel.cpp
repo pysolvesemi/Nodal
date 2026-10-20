@@ -79,12 +79,14 @@ public:
       return failure();
     for (Node &node : nodes) {
       Operation *crossing = node.value ? node.value.getDefiningOp() : nullptr;
-      if (!crossingSourceRoots.count(crossing))
+      if (!crossingIndexes.count(crossing))
         crossing = nullptr;
-      auto domain = crossing ? crossing->getAttrOfType<FlatSymbolRefAttr>("destination_domain")
-                             : interfaceDomains.lookup(node.value);
-      result.nodes.push_back({node.value, node.use, std::move(node.dependencies), domain, crossing,
-                              crossing ? crossingSourceRoots.lookup(crossing) : 0});
+      unsigned index = crossing ? crossingIndexes.lookup(crossing) : 0;
+      auto endpoint =
+          crossing ? crossings[index].results[llvm::cast<OpResult>(node.value).getResultNumber()]
+                   : DigitalCrossingResult{interfaceDomains.lookup(node.value), {}};
+      result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
+                              crossing, index, endpoint.role});
     }
     result.crossings = std::move(crossings);
     SequentialModelLimits sampleLimits;
@@ -95,7 +97,7 @@ public:
   }
 
 private:
-  llvm::DenseMap<Operation *, unsigned> crossingSourceRoots;
+  llvm::DenseMap<Operation *, unsigned> crossingIndexes;
   SmallVector<DigitalCrossingDependency> crossings;
   FailureOr<unsigned> valueNode(Value value, Operation *use, Operation *family = nullptr,
                                 unsigned guard = 0);
@@ -677,8 +679,8 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     // A synchronization chain is an actual state cut, not a domainless alias.
     return success();
   }
-  if (llvm::isa<CrossingOp>(definition)) {
-    if (!crossingSourceRoots.count(definition))
+  if (llvm::isa<CrossingOp, AsyncFifoOp>(definition)) {
+    if (!crossingIndexes.count(definition))
       return reject(definition, "descriptor crossing cannot authorize an executable graph cut");
     // Header and input root were checked while inventorying this actual module.
     // Full source proof runs once against the completed graph, never recursively.
@@ -836,9 +838,10 @@ LogicalResult AssignmentQuery::verify() {
     for (Operation &operation : *scope.body) {
       if (failed(guardWork(&operation)))
         return failure();
-      if (llvm::isa<CrossingOp>(operation) &&
-          (operation.hasAttr("contract") || operation.hasAttr("stages") ||
-           operation.hasAttr("obligations"))) {
+      if (llvm::isa<AsyncFifoOp>(operation) ||
+          (llvm::isa<CrossingOp>(operation) &&
+           (operation.hasAttr("contract") || operation.hasAttr("stages") ||
+            operation.hasAttr("obligations")))) {
         auto header = inspectExecutableCrossing(&operation, domains);
         if (failed(header))
           return failure();
@@ -847,11 +850,17 @@ LogicalResult AssignmentQuery::verify() {
         crossingStateBits += header->stateBits;
         if (crossingStateBits > SequentialModelLimits().maximumNormalizedOperations)
           return reject(&operation, "crossing state expansion exceeds finite sequential budget");
-        auto root = valueNode(operation.getOperand(0), &operation);
-        if (failed(root))
-          return failure();
-        crossingSourceRoots.try_emplace(&operation, *root);
-        crossings.push_back({&operation, *root});
+        DigitalCrossingDependency crossing{&operation, {}, {}};
+        for (const auto &operand : header->operands) {
+          auto root = valueNode(operation.getOperand(operand.index), &operation);
+          if (failed(root))
+            return failure();
+          crossing.samples.push_back({*root, operand.index, operand.domain, operand.role});
+        }
+        for (const auto &result : header->results)
+          crossing.results.push_back({result.domain, result.role});
+        crossingIndexes.try_emplace(&operation, crossings.size());
+        crossings.push_back(std::move(crossing));
       } else if (llvm::isa<DigitalAssignOp>(operation)) {
         if (failed(collect(&operation, scope.iteration, ordinal++)))
           return failure();

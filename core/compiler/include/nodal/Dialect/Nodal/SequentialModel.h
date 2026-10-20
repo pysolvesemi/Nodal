@@ -26,6 +26,12 @@ struct SequentialSample {
   /// A non-pulse crossing cannot erase an actual pulse-producing boundary.
   /// Ordinary same-domain consumers may still sample the pulse as a Bool.
   bool rejectPulseSources = false;
+  /// Strict sampling may accept a neutral constant without weakening rejection
+  /// of unannotated/foreign physical boundaries (e.g. FIFO ready or valid).
+  bool allowDomainlessSource = false;
+  /// At least one strict sample in the same (group, domain) must establish an
+  /// actual source. FIFO payload and valid establish their source jointly.
+  bool requireAttributedGroup = false;
 };
 struct DigitalDependencyGraph;
 /// Same sampling proof against an already constructed graph. This nonrecursive

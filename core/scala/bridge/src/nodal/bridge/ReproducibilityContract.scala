@@ -805,7 +805,7 @@ private[nodal] object ReproducibilityContract:
         )
     val generatedEntries = snapshot.generatedNames
       .filter(entry =>
-        Set("crossing", "synchronizer", "reset-controller").contains(entry.category)
+        Set("crossing", "synchronizer", "reset-controller", "waiver").contains(entry.category)
       )
       .sortBy(entry => (entry.owner, entry.category, entry.name, entry.origin))
       .map: entry =>

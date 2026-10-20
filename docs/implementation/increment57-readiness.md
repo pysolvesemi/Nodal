@@ -1454,3 +1454,15 @@ and assignment source 4 (`.work/owned-waiver-source-predecessors.log`). Actual S
 target replay and truthful stateless source naming are being finalized separately.
 The known global opposite-edge frequency consistency repair remains required,
 along with events/final integration. No CI or broad qualification ran.
+
+### Stateless waiver report-name correction
+
+Generated source identity now uses a distinct waiver category rather than claiming
+crossing/synchronizer hardware for a stateless exception. Real physical crossings
+retain both existing categories; the deterministic manifest includes the waiver
+identity. The three-file focused correction passes **21/21** checks: waiver source
+8, reproducibility 4 and level crossings 9. Exact hashes are
+`.work/owned-waiver-name-repair.sha256`; log:
+`.work/owned-waiver-names-tests.log`. This corrects reporting, not the actual
+hardware/provenance contract. Fresh combined acceptance and source-to-target
+replay remain pending alongside the separate global frequency repair and events.

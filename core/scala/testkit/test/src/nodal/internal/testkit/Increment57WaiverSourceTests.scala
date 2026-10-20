@@ -274,6 +274,18 @@ object Increment57WaiverSourceTests extends TestSuite:
         assert(ReproducibilityContract.canonicalSnapshot(snapshot).contains("stateless_waiver_v1"))
       assert(capture() == capture())
       assert(capture().digitalExpressions.count(_.waiver.nonEmpty) == 1)
+    test("stateless waiver report names never invent a physical synchronizer identity"):
+      val snapshot = ConstructionKernel.inspect(new OwnedWaiverLineage("aliases"))
+      snapshot.digitalExpressions.foreach: expression =>
+        val categories = snapshot.generatedNames.filter(_.origin == expression.path).map(_.category)
+        if expression.waiver.nonEmpty then
+          assert(categories.contains("waiver"))
+          assert(!categories.contains("synchronizer"), !categories.contains("crossing"))
+        if expression.crossing.nonEmpty then
+          assert(categories.contains("synchronizer"), categories.contains("crossing"))
+      assert(ReproducibilityContract.describe(
+        snapshot
+      ).manifest.text.contains("\"category\": \"waiver\""))
     test("all six exact relation variants retain typed fields without authorizing ordinary input"):
       Vector(
         ClockRelation.Same,

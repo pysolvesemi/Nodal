@@ -417,6 +417,40 @@ int main(int argc, char **argv) {
     bool good = m && succeeded(lower(*m));
     report(name, good && check(*m));
   };
+  for (unsigned stages : {2u, 32u}) {
+    std::string producers =
+        "%raw = \"nodal.reset_boundary\"(%reset) <{reset_polarity = \"active_high\", "
+        "release = \"raw\", metadata = {}}> : (!nodal.capability<\"reset\">) -> "
+        "!nodal.capability<\"reset\">\n";
+    for (auto name : {"safe", "independent"})
+      producers += "%" + std::string(name) +
+                   " = \"nodal.reset_sync\"(%raw, %clock) <{destination_domain = @core, "
+                   "reset_polarity = \"active_high\", stages = " +
+                   std::to_string(stages) +
+                   " : i64, metadata = {}}> : (!nodal.capability<\"reset\">, "
+                   "!nodal.capability<\"clock\">) -> !nodal.capability<\"reset\">\n";
+    auto body = setup("async_assert_sync_release");
+    body = replace(body, "\"nodal.local_domain_binding\"(%clock, %reset)",
+                   producers + "\"nodal.local_domain_binding\"(%clock, %safe)");
+    test("reset-independent-cse-" + std::to_string(stages),
+         body + assign("state", "input", true) + assign("result", "state"), [&](mlir::ModuleOp m) {
+           PassManager pm(&context);
+           pm.addPass(createCSEPass());
+           pm.addPass(createCanonicalizerPass());
+           if (failed(pm.run(m)))
+             return false;
+           unsigned count = 0;
+           bool valid = true;
+           llvm::StringSet<> symbols;
+           m.walk([&](circt::seq::FirRegOp r) {
+             ++count;
+             valid &= r.getIsAsync() && !r.getPreset();
+             if (r.getInnerSymAttr())
+               valid &= symbols.insert(r.getInnerSymAttr().getSymName().getValue()).second;
+           });
+           return valid && count == 2 * stages + 1 && symbols.size() >= 2 * stages;
+         });
+  }
   test("falling-active-low",
        setup("sync", true, "falling", "active_low") + enabled() + assign("result", "state"),
        [&](mlir::ModuleOp m) {
@@ -452,18 +486,18 @@ int main(int argc, char **argv) {
          return evaluate(state(m).getInput(), {{"reset", 0}, {"input", 29}}, 17) == 29;
        });
   auto negative = [&](StringRef name, std::string input, StringRef expected) {
-    auto m = parseSourceString<mlir::ModuleOp>(input, &context);
+    auto m = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
     std::string before = m ? print(*m) : "";
     bool good =
         m && failed(lower(*m)) && print(*m) == before && StringRef(diagnostics).contains(expected);
     report(name, good);
   };
   negative("async-native-distinct-target-rejected",
-           wrap(setup("async") + assign("result", "state")), "synchronous or resetless");
+           wrap(setup("async") + assign("result", "state")), "NODAL-RESET-057-001");
   negative("unsupported-sibling-is-atomic",
            "module {" + owner(setup() + enabled() + assign("result", "state")) +
                owner(setup("async") + assign("result", "state"), "Other") + "}",
-           "synchronous or resetless");
+           "NODAL-RESET-057-001");
   negative("symbolic-parameter-is-not-specialized",
            wrap(setup() +
                 "\"nodal.parameter\"() <{sym_name = \"P\", type = i64, default_value = 4 : i64, "
@@ -524,13 +558,13 @@ int main(int argc, char **argv) {
          return good;
        });
   negative("level-async-target-rejection-is-atomic", wrap(levelBody(2, false, "async")),
-           "synchronous or resetless");
+           "NODAL-RESET-057-001");
   negative(
       "level-unsupported-sibling-is-atomic",
       "module {" + owner(levelBody()) +
           owner(replace(levelBody(2, false, "async"), "Fixture.sample", "Other.sample"), "Other") +
           "}",
-      "synchronous or resetless");
+      "NODAL-RESET-057-001");
   {
     auto changed = parseSourceString<mlir::ModuleOp>(wrap(levelBody()), &context);
     if (changed)

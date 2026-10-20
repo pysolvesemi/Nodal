@@ -59,9 +59,14 @@ std::string binding(std::string policy = "sync", std::string name = "core",
   std::string s = port(name + "Clock", "!nodal.capability<\"clock\">", name);
   if (policy != "none")
     s += port(name + "Reset", "!nodal.capability<\"reset\">", name);
+  if (policy == "async")
+    s += "%" + name + "ResetSafe = \"nodal.reset_boundary\"(%" + name +
+         "Reset) <{reset_polarity = \"" + polarity +
+         "\", release = \"external\", release_domain = @" + name +
+         ", metadata = {}}> : (!nodal.capability<\"reset\">) -> !nodal.capability<\"reset\">\n";
   return s + "\"nodal.local_domain_binding\"(%" + name + "Clock" +
-         (policy == "none" ? "" : ", %" + name + "Reset") + ") <{domain = @" + name +
-         ", reset_polarity = \"" + polarity +
+         (policy == "none" ? "" : ", %" + name + "Reset" + (policy == "async" ? "Safe" : "")) +
+         ") <{domain = @" + name + ", reset_polarity = \"" + polarity +
          "\", metadata = {}}> : (!nodal.capability<\"clock\">" +
          (policy == "none" ? "" : ", !nodal.capability<\"reset\">") + ") -> ()\n";
 }

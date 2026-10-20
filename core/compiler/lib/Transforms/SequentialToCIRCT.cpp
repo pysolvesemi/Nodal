@@ -2,6 +2,8 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/SV/SVDialect.h"
+#include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
@@ -16,6 +18,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Transforms/Passes.h"
 
@@ -130,11 +133,16 @@ public:
         if (text(port, "direction") == "output")
           seeds.emplace_back(op.getResult(0), &op);
       } else if (isa<DomainOp>(op)) {
-        if (text(&op, "reset_policy") != "sync" && text(&op, "reset_policy") != "none")
-          return reject(&op, "CIRCT profile supports synchronous or resetless domains; native "
-                             "asynchronous semantics remain distinct");
+        // Unused descriptors remain descriptors. Executable bindings and every
+        // stateful consumer are independently verified before this transaction.
       } else if (isa<DomainRequirementOp, DomainBindOp, LocalDomainBindingOp>(op)) {
         // Verified provenance only; actual values already carry the connection.
+      } else if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
+        if (failed(verifyResetProducer(&op)))
+          return failure();
+        resets.push_back(&op);
+        expansion = isa<ResetSyncOp>(op) ? 3 * op.getAttrOfType<IntegerAttr>("stages").getInt() + 5
+                                         : 2 * op.getNumOperands() + 2;
       } else if (isa<CrossingOp>(op)) {
         auto crossing = inspectLevelCrossing(&op, domains);
         if (failed(crossing))
@@ -152,8 +160,6 @@ public:
           return reject(&op, "unknown scalar storage kind");
         expansion = 4;
       } else if (isa<SequentialUpdateOp>(op)) {
-        if (text(&op, "reset_policy") != "none" && text(&op, "reset_policy") != "sync")
-          return reject(&op, "asynchronous and AASR updates are outside this CIRCT profile");
         if (!updates.try_emplace(op.getOperand(0), &op).second)
           return reject(&op, "register requires exactly one normalized clocked update");
         expansion = 5;
@@ -270,6 +276,22 @@ public:
       }
       crossingNames.try_emplace(crossing.operation, std::move(names));
     }
+    for (Operation *reset : resets) {
+      if (!isa<ResetSyncOp>(reset))
+        continue;
+      SmallVector<StringAttr> names;
+      unsigned stages = reset->getAttrOfType<IntegerAttr>("stages").getInt();
+      for (unsigned i = 0; i < stages; ++i) {
+        std::string base =
+            "__nodal_reset_" + std::to_string(resetNames.size()) + "_" + std::to_string(i);
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.push_back(builder.getStringAttr(name));
+      }
+      resetNames.try_emplace(reset, std::move(names));
+    }
     return success();
   }
 
@@ -305,6 +327,56 @@ public:
         values[value] = body->getArgument(inputIndex);
       ++inputIndex;
     }
+    // Reset producers precede consumers in the authored SSA graph. Lower them
+    // before state allocation so no derived release is replaced by the raw pin.
+    for (Operation *op : resets) {
+      if (isa<ResetBoundaryOp>(op)) {
+        Value raw = values.lookup(op->getOperand(0));
+        if (!raw)
+          return reject(op, "physical reset boundary did not map");
+        values[op->getResult(0)] = raw;
+        if (text(op, "release") == "external") {
+          auto binding = domains.resolveClockBinding(op->getAttr("release_domain"));
+          auto domain = domains.resolveDomain(op->getAttr("release_domain"));
+          Value clock = circt::seq::FromClockOp::create(builder, op->getLoc(),
+                                                        values.lookup((*binding)->getOperand(0)));
+          std::string comment =
+              "// NODAL external reset release assumption: " + text(*domain, "sym_name").str() +
+              " " + text(*domain, "edge").str() + " physical clock {{0}}; " + sourcePath(op).str();
+          circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(comment),
+                                        ValueRange{clock}, builder.getArrayAttr({}));
+        }
+      } else if (isa<ResetCombineOp>(op)) {
+        SmallVector<Value> asserted;
+        for (Value input : op->getOperands()) {
+          Value raw = values.lookup(input);
+          if (!raw)
+            return reject(op, "reset composition input did not map");
+          asserted.push_back(resetActive(raw, input.getDefiningOp()));
+        }
+        Value joined = asserted.size() == 1 ? asserted.front()
+                                            : make(op, "comb.or", builder.getI1Type(), asserted);
+        values[op->getResult(0)] = resetActive(joined, op);
+      } else {
+        Value raw = values.lookup(op->getOperand(0));
+        Value clock = values.lookup(op->getOperand(1));
+        if (!raw || !clock)
+          return reject(op, "reset synchronizer input/clock did not map");
+        auto domain = domains.resolveDomain(op->getAttr("destination_domain"));
+        if (text(*domain, "edge") == "falling")
+          clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
+        Value asserted = resetActive(raw, op->getOperand(0).getDefiningOp());
+        Value one = constant(op, 1, 1), previous = constant(op, 1, 0);
+        for (StringAttr name : resetNames.find(op)->second) {
+          auto state =
+              circt::seq::FirRegOp::create(builder, op->getLoc(), previous, clock, name, asserted,
+                                           one, circt::hw::InnerSymAttr::get(name), true);
+          correlate(state, op);
+          previous = state.getResult();
+        }
+        values[op->getResult(0)] = resetActive(previous, op);
+      }
+    }
     SmallVector<std::pair<Value, circt::Backedge>> connectionEdges;
     // Install graph cuts first. No combinational value can accidentally become
     // state: all these references are resolved before the candidate verifies.
@@ -318,7 +390,7 @@ public:
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
     }
-    SmallVector<std::pair<Operation *, circt::Backedge>> stateEdges;
+    SmallVector<std::pair<Operation *, circt::Backedge>> stateEdges, resetValueEdges;
     for (Operation *reg : registers) {
       Operation *update = updates.lookup(reg->getResult(0));
       Value clock = values.lookup(update->getOperand(2));
@@ -329,10 +401,23 @@ public:
       if (text(update, "edge") == "falling")
         clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
       auto edge = backedges.get(targetType(reg->getResult(0).getType()), reg->getLoc());
-      auto state = circt::seq::CompRegOp::create(builder, reg->getLoc(), Value(edge), clock);
-      state->setAttr("name", reg->getAttr("name"));
+      Operation *state;
+      StringRef policy = text(update, "reset_policy");
+      if (policy == "async" || policy == "async_assert_sync_release") {
+        Value rawReset = values.lookup(update->getOperand(3));
+        if (!rawReset)
+          return reject(update, "effective reset did not map before consumer");
+        auto initial = backedges.get(targetType(reg->getResult(0).getType()), reg->getLoc());
+        state = circt::seq::FirRegOp::create(
+            builder, reg->getLoc(), Value(edge), clock, reg->getAttrOfType<StringAttr>("name"),
+            resetActive(rawReset, update), Value(initial), circt::hw::InnerSymAttr(), true);
+        resetValueEdges.emplace_back(update, initial);
+      } else {
+        state = circt::seq::CompRegOp::create(builder, reg->getLoc(), Value(edge), clock);
+        state->setAttr("name", reg->getAttr("name"));
+      }
       correlate(state, reg);
-      values[reg->getResult(0)] = state.getResult();
+      values[reg->getResult(0)] = state->getResult(0);
       stateEdges.emplace_back(update, edge);
     }
     SmallVector<std::pair<Operation *, circt::Backedge>> crossingEdges;
@@ -346,7 +431,7 @@ public:
       if (text(crossing.destinationDomain, "edge") == "falling")
         clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
       Value reset, zero;
-      if (text(crossing.destinationDomain, "reset_policy") == "sync") {
+      if (text(crossing.destinationDomain, "reset_policy") != "none") {
         reset = values.lookup(crossing.destinationBinding->getOperand(1));
         if (!reset) {
           backedges.abandon();
@@ -359,9 +444,18 @@ public:
       Value previous = input;
       const auto &names = crossingNames.find(op)->second;
       for (unsigned stage = 0; stage < crossing.stages; ++stage) {
-        Value next = reset ? mux(op, reset, zero, previous) : previous;
-        auto state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, clock,
-                                                   circt::StringAttrOrRef(names[stage]));
+        bool async =
+            text(crossing.destinationDomain, "reset_policy") == "async" ||
+            text(crossing.destinationDomain, "reset_policy") == "async_assert_sync_release";
+        Value next = reset && !async ? mux(op, reset, zero, previous) : previous;
+        Operation *state;
+        if (async)
+          state =
+              circt::seq::FirRegOp::create(builder, op->getLoc(), next, clock, names[stage], reset,
+                                           zero, circt::hw::InnerSymAttr::get(names[stage]), true);
+        else
+          state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, clock,
+                                                circt::StringAttrOrRef(names[stage]));
         correlate(state, op);
         // Keep the complete canonical source mapping and stage identity. The
         // symbol, rather than an advisory metadata marker, prevents CSE merging.
@@ -371,13 +465,14 @@ public:
         state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
         state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
         state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(stage));
-        previous = state.getResult();
+        previous = state->getResult(0);
       }
       values[op->getResult(0)] = previous;
       crossingEdges.emplace_back(op, input);
     }
     for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp, CrossingOp>(op))
+      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp, CrossingOp, ResetBoundaryOp,
+                                     ResetSyncOp, ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -453,6 +548,8 @@ public:
       }
       edge.setValue(input);
     }
+    for (auto &[update, edge] : resetValueEdges)
+      edge.setValue(values.lookup(update->getOperand(4)));
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
       if (text(update, "reset_policy") == "sync") {
@@ -624,6 +721,8 @@ private:
   uint64_t &cost;
   DomainModel domains;
   SmallVector<LevelCrossing> crossings;
+  SmallVector<Operation *> resets;
+  llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;
   llvm::DenseMap<Operation *, SmallVector<Value>> portValues;
@@ -648,7 +747,7 @@ public:
   }
   void getDependentDialects(DialectRegistry &registry) const final {
     registry.insert<circt::hw::HWDialect, circt::comb::CombDialect, circt::seq::SeqDialect,
-                    circt::verif::VerifDialect>();
+                    circt::verif::VerifDialect, circt::sv::SVDialect>();
   }
   void runOnOperation() final {
     auto input = getOperation();

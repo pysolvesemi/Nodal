@@ -331,3 +331,39 @@ git diff --check
 Build and focused output are retained under `.work/reset-model-build.log`,
 `.work/reset-model-test.log` and `.work/reset-domain-test.log`. Markdown and diff
 checks pass. These results do not claim the pending source or target slices pass.
+
+## Reset target lowering checkpoint (2026-10-20)
+
+The native typed reset graph now lowers through the existing transactional
+sequential-to-CIRCT owner. Boundary operands remain actual physical ports;
+composition normalizes polarity and ORs asserted inputs; each synchronizer
+allocates independently symbolized asynchronous-assert release state on its
+receiving edge. No initial value is invented. Explicit provider release
+assumptions retain actual domain, edge and physical clock in generated output.
+
+Fresh focused native results: **77 CIRCT, 71 sequential, 114 memory, 59 FlatFSM
+and 90 crossing cases pass**, in addition to the native model's 31 reset and
+25 domain cases. The current selected native total is 467, not a historical
+reset-run count. The CIRCT cases include actual CSE/canonicalization with two
+independent release chains at both two and 32 stages, preserving distinct
+symbols, asynchronous reset and absence of startup presets. The four target/test
+files were frozen against manifest SHA256
+`b8dfea0a8958c23416f7b320852393d01a300f6854d1fb3ff4f0d96c526230b5`.
+
+```sh
+source .work/tools/env.sh
+cmake --build .work/native-build --target nodalc nodal-translate nodal-sequential-circt-unit-tests nodal-sequential-model-unit-tests nodal-memory-model-unit-tests nodal-flat-fsm-model-unit-tests nodal-crossing-model-unit-tests -j3
+ctest --test-dir .work/native-build -R '^nodal.native.(sequential-circt|sequential-model|memory-model|flat-fsm-model|crossing-model)-unit$' --output-on-failure
+python3 scripts/check_markdown.py
+git diff --check
+```
+
+Focused logs are `.work/reset-circt-tests.log` and
+`.work/reset-{sequential,memory,flat-fsm,crossing}-tests.log`; build logs are
+`.work/reset-lowering-build.log` and `.work/reset-circt-rebuild.log`. Target
+lowering is buildable independently over the preceding native model checkpoint.
+The separately pending Scala source slice is not accepted by this checkpoint:
+its selected predecessor run has seven unresolved failures, including required
+shaped-clock work and a repeated-child definition-identity regression. Its
+initial seven end-to-end waveform witnesses pass but are not a substitute for
+closing those source failures. All F57 checklist children remain open.

@@ -115,8 +115,47 @@ def main() -> None:
     uncaptured, _ = compile_sources("no-plugin", [fixtures / "no-plugin/UncapturedArea.scala"],
                                     plugin=False)
     runtime("no-plugin-runtime", "nodal.UncapturedArea", [uncaptured], "AREA_NO_PLUGIN_REJECTED")
-    print(f"PASS lexical Area source/construction, {len(expected)} negatives, separate JAR "
-          f"inheritance/helper/member access, missing/no-plugin fail-closed; logs: {out}")
+    generated = fixtures / "generated"
+    generated_producer, _ = compile_sources(
+        "generated-producer", [generated / "producer/GeneratedProducer.scala"])
+    generated_producer_jar = out / "generated-producer.jar"
+    run("generated-producer-jar", [str(Path(args.java).with_name("jar")), "cf",
+                                   str(generated_producer_jar), "-C", str(generated_producer), "."])
+    generated_factory, _ = compile_sources(
+        "generated-factory", [generated / "factory/GeneratedFactory.scala"],
+        dependencies=[generated_producer_jar])
+    generated_factory_jar = out / "generated-factory.jar"
+    run("generated-factory-jar", [str(Path(args.java).with_name("jar")), "cf",
+                                  str(generated_factory_jar), "-C", str(generated_factory), "."])
+    generated_consumer, _ = compile_sources(
+        "generated-consumer", [generated / "consumer/GeneratedConsumer.scala"],
+        dependencies=[generated_producer_jar, generated_factory_jar])
+    runtime("generated-separate-runtime", "nodal.GeneratedReuseProbe",
+            [generated_producer_jar, generated_factory_jar, generated_consumer],
+            "GENERATED_AREA_SEPARATE_JAR_PASS")
+    generated_negatives = {
+        "MemberTypes": "NODAL-AREA-058-MEMBER",
+        "CapabilityCast": "NODAL-SEQUENTIAL-056-UNAVAILABLE",
+        "HostMutation": "NODAL-ITERATION-CALLBACK-MUTABLE",
+        "MixedWhen": "NODAL-COLLECTION-CALLBACK-EFFECT",
+    }
+    for name, diagnostic in generated_negatives.items():
+        source = generated / "negative" / (name + ".scala")
+        _, output = compile_sources("generated-negative-" + name, [source], negative=True,
+                                    dependencies=[generated_producer_jar])
+        if f"/{source.name}:" not in output or diagnostic not in output:
+            raise RuntimeError(f"{name}: missing source-located diagnostic {diagnostic}\n{output}")
+        if name == "CapabilityCast" and output.count(diagnostic) != 2:
+            raise RuntimeError("both generated readonly and datatype casts must reject")
+        if name == "MemberTypes" and "9 errors found" not in output:
+            raise RuntimeError("all nine generated member type/capability negatives must reject")
+        if name == "MixedWhen" and (
+                "NODAL-ITERATION-CALLBACK-EFFECT" not in output or "2 errors found" not in output):
+            raise RuntimeError("both pure collection and procedural loop guards must reject")
+    print(f"PASS lexical and generated Area source/construction, {len(expected)} lexical "
+          f"and {len(generated_negatives)} generated negative fixtures, "
+          f"separate producer/factory/consumer JARs, "
+          f"missing/no-plugin fail-closed; logs: {out}")
 
 
 if __name__ == "__main__":

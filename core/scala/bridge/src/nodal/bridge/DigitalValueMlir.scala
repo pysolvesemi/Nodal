@@ -913,6 +913,14 @@ private[nodal] object DigitalValueMlir:
       "duplicate or excessive FSM, result, action or switch identities",
       snapshot.root
     )
+    declarations.valuesIterator.foreach: (owner, declaration) =>
+      if declaration.attributes.exists(_._1 == "initializer_policy") then
+        requireValid(
+          privateMachineStorage(declaration.path),
+          "source conditional initialization belongs to actual private FSM storage",
+          declaration.path
+        )
+        val _ = DigitalStorageMlir.initializerPolicy(modules(owner), declaration)
     private var sequentialDependencyWork = 0
     snapshot.flatFsms.foreach: machine =>
       val path = machine.path
@@ -923,6 +931,11 @@ private[nodal] object DigitalValueMlir:
       val caseSet = cases.toSet
       val domain =
         modules.get(machine.owner).toVector.flatMap(_.domains).find(_.path == machine.domain)
+      val contextual = domain.exists(value =>
+        value.kind == "required" && !value.binding.exists(binding =>
+          modules(machine.owner).domains.exists(_.path == binding)
+        )
+      )
       requireValid(
         modules.contains(machine.owner) && path.startsWith(machine.owner + ".") &&
           machine.parentRegion.isEmpty && machine.sourceOrdinal >= 0 && machine.localWidth > 0 &&
@@ -930,16 +943,25 @@ private[nodal] object DigitalValueMlir:
           machine.transitions.size.toLong + machine.actions.size <= 65536 &&
           machine.actions.map(_.captures.size.toLong).sum <= 8192 &&
           Set("error", "recover_to_initial")(machine.illegalState) &&
-          domain.exists(value =>
+          (contextual || domain.exists(value =>
             Set("bound", "external")(value.kind) &&
               value.resetPolicy.exists(Set("none", "sync", "async")) &&
               value.attributes.exists(_._1 == "clock_source")
-          ) &&
+          )) &&
           !expressions.contains(path) && !declarations.contains(path) && !regions.contains(path) &&
           !conditionals.contains(path) && !switches.contains(path),
-        "flat FSM requires one bounded owned direct physical-domain machine",
+        "flat FSM requires one bounded owned direct physical-domain or unresolved local requirement",
         path
       )
+      def validateInitializerPolicy(storage: String): Unit =
+        requireValid(
+          DigitalStorageMlir.initializerPolicy(
+            modules(machine.owner),
+            declarations(storage)._2
+          ) == Option.when(contextual)("if_reset"),
+          "FSM initialization must retain its exact physical or contextual reset policy",
+          path
+        )
       requireVisible(machine.storage, machine.owner, None, path)
       requireValid(
         declarations.get(machine.storage).exists((owner, value) =>
@@ -952,6 +974,7 @@ private[nodal] object DigitalValueMlir:
         "flat FSM storage must be an actual whole local Bits register in its exact domain",
         path
       )
+      validateInitializerPolicy(machine.storage)
       requireValid(
         machine.nextLocal == path + ".next" && machine.transitionTaken == path + ".taken",
         "flat FSM results must retain canonical next and taken identities",
@@ -973,6 +996,7 @@ private[nodal] object DigitalValueMlir:
           "controlled FSM status must be a distinct actual local two-bit register",
           path
         )
+        validateInitializerPolicy(control.storage)
         Vector(control.restart, control.cancel, control.enable).foreach: input =>
           requireVisible(input, machine.owner, None, path)
           requireValid(

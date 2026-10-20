@@ -69,7 +69,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
                 else
                   cls.addAnnotation(Annotation(
                     schemaClass,
-                    List(number(1)),
+                    List(number(2)),
                     definition.span
                   ))
               case reference: RefTree
@@ -90,7 +90,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
       cls.info.baseClasses.filter(value => value != areaClass && value.derivesFrom(areaClass))
     bases.forall: base =>
       val valid = base.getAnnotation(schemaClass).exists: annotation =>
-        annotation.argumentConstant(0).exists(_.value == 1)
+        annotation.argumentConstant(0).exists(value => Set(1, 2)(value.value))
       if !valid then
         fail(
           "MISSING",
@@ -187,6 +187,18 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
               number(bindingPriority(owner)),
               tree.rhs
             ))
+        else if tree.tpt.tpe.widen.dealias.derivesFrom(requiredClass("nodal.GeneratedAreas")) then
+          val element =
+            tree.tpt.tpe.widen.dealias.baseType(requiredClass("nodal.GeneratedAreas")) match
+              case AppliedType(_, value :: Nil) => value
+              case _ => defn.NothingType
+          ref(requiredMethod("nodal.GeneratedAreaRuntime.bind"))
+            .appliedToType(element)
+            .appliedToArgs(List(
+              string(tree.name.toString),
+              number(bindingPriority(owner)),
+              tree.rhs
+            ))
         else tree.rhs
         cpy.ValDef(tree)(rhs = bound)
 
@@ -201,10 +213,20 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
       val body = tree.body.flatMap:
         case field: ValDef
             if !field.rhs.isEmpty && !field.symbol.isOneOf(Synthetic | Mutable | Lazy) =>
-          val captured = runtime("member").appliedToType(field.tpt.tpe).appliedToArgs(List(
+          val valueType = field.tpt.tpe.widen.dealias
+          val access =
+            if field.symbol.isOneOf(Private | Protected) then "hidden"
+            else if valueType.derivesFrom(requiredClass("nodal.Signal")) ||
+              valueType.derivesFrom(requiredClass("nodal.Register"))
+            then "read_write"
+            else if valueType.derivesFrom(requiredClass("nodal.Expr")) then "read_only"
+            else if valueType.derivesFrom(areaClass) then "area"
+            else if hardware(valueType) then "symbol" else "host"
+          val captured = runtime("capturedMember").appliedToType(field.tpt.tpe).appliedToArgs(List(
             This(cls.asClass),
             string(field.name.toString),
-            ref(field.symbol)
+            ref(field.symbol),
+            string(access)
           ))
           List(field, captured)
         case other => List(other)

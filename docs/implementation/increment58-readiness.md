@@ -403,3 +403,75 @@ proofs are a known local optimization opportunity, not a new semantic owner or
 a claimed performance improvement. Generated semantics/target loops, aggregate
 field adapters, resolved and conservative topology, hierarchical/parallel FSMs,
 timed protocols and bounded call/return remain open as previously recorded.
+
+## Checkpoint 7: generated source references and contextual public APIs
+
+The [generated Area contract](../design-gates/NodalGeneratedAreas-DG-v0.1.md)
+adds typed saved/nested member references and one-template range capture through
+existing lexical, generated-region and structural-bound owners. Hidden and
+host-only members do not become exports; a public readonly alias retains its
+actual storage identity without gaining write authority. Ordinals are checked
+against every legal parameter value, not defaults. Ordinary Module/Area
+structural-if-to-when composition uses the same ancestry and exclusive-driver
+proof as generated lanes; pure collection/procedural contexts remain restricted.
+Legacy two-, three- and four-argument range callbacks retain both source syntax
+and their compiled entry points/default getter. New range values use an
+extension callback adapter to avoid ambiguous overloads.
+
+Generated family bridge/native transport and real target loops remain separate
+work. Until their canonical schema is consumed, the bridge explicitly rejects
+family/export/member facts rather than dropping them. A million-lane source
+metadata envelope still contains one template, not a million elaborated Areas;
+this does not claim million-lane target admission or emitted output.
+
+Symbolic Interface payloads retain one formal role graph plus complete ordered
+parent-owned actual types, using the same batched descriptor transform and
+instance integer query as digital ports. Public external-package fixtures cover
+Struct/Vec protocol payloads, whole arrays, early/late overrides and unaccessed
+ABI mutations. Equal bounds/defaults are not identity. A public wrapper cannot
+turn a raw child endpoint into a boundary; direct access to the private instance
+module separately fails with the expected compiler access diagnostic. Native
+admission runs on the matched checkpoint-6 compiler, not a future target.
+
+Required-domain FSMs now share one source definition across reset-bearing,
+resetless and forwarded occurrences. Only actual private FSM storage carries
+conditional initialization; ordinary initialized registers still require reset.
+Declaration collision keys are local to their already module-local allocation
+scope, preserving distinct actual paths while giving identical definitions
+identical local names. Neither bridge comparison nor runtime semantics was
+weakened to obtain definition reuse. Independent typed field observations were
+also added to the nested aggregate source witness, beyond whole pass-through.
+
+The coordinated focused run executed 73 source/native-facing groups: required
+FSM 6 and actual native 1, controlled FSM 7, hierarchy source 4, F56 capture 24
+and bridge 12, aggregate hierarchy 2, Interface payload 5 and actual native 1,
+and generated Areas 11. Its sole failure was an obsolete diagnostic phrase in
+the F56 predecessor; the compatible phrase was restored without changing the
+assertion or rejection. The focused bridge rerun passed all 12 groups with unchanged assertions. Two
+additional exact semantic naming predecessors passed with explicit execution
+counts.
+Earlier shared structural query and symbolic boundary checks remain separate
+receipts, not extra groups added to this count.
+
+All three corrected actual-source required-FSM target profiles pass the complete
+gate, CIRCT lowering, firtool export and Icarus waveform pipeline on compiler
+`3a8ddf17`: mixed reset presence, material edge/polarity and forwarded domains.
+The source has one canonical FSM definition; target variants differ only where
+material domain controls require it. Resetless private state is not asserted
+initialized before accepted restart. Receipts are under
+`.work/f58-statecharts/required/target-{mixed,material,forwarded}/`.
+
+The focused Area harness also passes lexical/generated separate-JAR capture,
+negative member/capability/host-mutation checks and plugin requirements. A JAR
+compiled against the preceding API runs all original callback arities against
+the new runtime. Maintained demonstrations are in `tests/scala/areas/`,
+`tests/scala/interface-hierarchy/` and `tests/scala/reusable-fsm/`; outputs remain
+under `.work/f58-generated-areas/` and `.work/f58-interface-payload/`.
+These are bounded local results, not completion of generated native execution,
+Interface target adapters, resolved/conservative closure, statechart composition,
+timed protocols, recursion or any F58 parent checklist.
+
+Complete formal Interface/boundary/actual-type inventory in the canonical
+construction JSON artifact remains an identified serialization follow-up; the
+actual MLIR and independent native checks above retain those facts. This slice
+does not claim that unfinished artifact coverage.

@@ -72,6 +72,15 @@ private[nodal] object ScalaToMlirBridge:
       backend: Backend = Backend.Auto,
       sourceProvenance: Boolean = false
   ): NodalMlirDocument =
+    if snapshot.generatedRegions.exists(region =>
+        region.yieldedArea.nonEmpty || region.exports.nonEmpty
+      ) ||
+      snapshot.digitalExpressions.exists(_.generatedMember.nonEmpty)
+    then
+      throw new BridgeException(BridgeDiagnostic(
+        "NODAL-BRIDGE-058",
+        "generated Area family transport requires its verified native family schema"
+      ))
     val renderer = new Renderer(snapshot, backend, sourceProvenance)
     val text = renderer.render()
     NodalMlirDocument(Schema, Version, text, digest(text), renderer.scalarElectricalInterface)
@@ -154,7 +163,20 @@ private[nodal] object ScalaToMlirBridge:
       snapshot.digitalExpressions.filter(_.clock.nonEmpty).map(_.owner).toSet
     private val digitalValues =
       new DigitalValueMlir.Plan(snapshot, enumValues, clockControls, hierarchy, clockRelationships)
-    private val interfaceValues = new InterfaceMlir.Plan(snapshot)
+    // Interface admission calls the shared type proof after all renderer indices exist.
+    private lazy val interfaceValues = new InterfaceMlir.Plan(
+      snapshot,
+      (left, right, path) =>
+        compareDigitalValueType(left, right, path, widthFamily = false, storageContext = false),
+      (actual, formal, path, instance, formalPath) =>
+        compareDigitalValueType(
+          actual,
+          formal,
+          path,
+          widthFamily = false,
+          instanceContext = Some((resolveOwningModule(path), instance, formalPath))
+        )
+    )
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
       value.members ++ value.roles.flatMap(_.members)
@@ -1995,8 +2017,9 @@ ${indent(body, 2)}
           .map(value => value.path -> value.dataType) ++
         snapshot.digitalLoops.filter(_.owner == module.path).flatMap(_.arguments)
           .map(value => value.path -> value.dataType) ++
-        snapshot.interfaceContracts.filter(_.owner == module.path).flatMap(_.members)
-          .map(value => value.path -> value.dataType)
+        snapshot.interfaceContracts.filter(_.owner == module.path).flatMap: endpoint =>
+          val actual = endpoint.actualMemberTypes.toMap
+          endpoint.members.map(value => value.path -> actual.getOrElse(value.name, value.dataType))
       val digitalStaticRoots = digitalTypeRoots.filter((path, _) =>
         digitalValues.valueRegion(path).isEmpty
       ).flatMap: (path, dataType) =>

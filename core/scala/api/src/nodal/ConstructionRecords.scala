@@ -173,7 +173,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     crossing: Option[KernelExecutableCrossingSnapshot] = None,
     reset: Option[KernelResetSnapshot] = None,
     clock: Option[KernelClockSnapshot] = None,
-    waiver: Option[KernelExecutableWaiverSnapshot] = None
+    waiver: Option[KernelExecutableWaiverSnapshot] = None,
+    generatedMember: Option[KernelGeneratedMemberSnapshot] = None
 )
 
 private[nodal] final case class KernelClockSnapshot(
@@ -424,7 +425,9 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     maximum: Option[Int],
     maximumTripCount: Int,
     declarations: Vector[String],
-    digitalBody: Option[KernelDigitalGeneratedBody] = None
+    digitalBody: Option[KernelDigitalGeneratedBody] = None,
+    yieldedArea: Option[String] = None,
+    exports: Vector[KernelGeneratedAreaExport] = Vector.empty
 )
 
 private[nodal] final case class KernelShapeIndexSnapshot(
@@ -675,9 +678,13 @@ private final class GeneratedRegionRecord(
     val upperExclusive: Any,
     val step: Any,
     val maximum: Option[Int],
-    val maximumTripCount: Int
+    val domain: IterationDomain.Structural,
+    val areaFamily: Boolean = false
 ):
+  def maximumTripCount: Int = domain.maximumTripCount
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+  var yieldedArea: Option[AreaRecord] = None
+  var familyHandle: Option[GeneratedAreas[?]] = None
 
 private final case class ConservativeArrayBindingRecord(
     left: DeclarationRef | ExpressionRef,

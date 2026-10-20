@@ -57,3 +57,27 @@ These profiles check actual SystemVerilog dormant behavior, pause, explicit
 restart, cancel/restart/reset priority, lifecycle events versus ordinary taken
 edges, independent state, latched completion, and initially-terminal startup.
 They do not claim nested/parallel/timed/recursive statechart completion.
+
+## Reusable required-domain lifecycle
+
+`Increment58RequiredFsmTests` checks one immutable definition in independent
+reset-bearing and resetless child occurrences, retained conditional private
+initialization, forwarded requirements, material edge/polarity differences,
+ordinary-register reset requirements and forged bridge policy rejection.
+`Increment58RequiredFsmNativeTests` requires a configured native compiler with
+the formal conditional-initialization schema and exports the actual public
+source as `mixed.source.mlir`, `material.source.mlir` and
+`forwarded.source.mlir` under `.work/f58-statecharts/required/source-native/`.
+The full default gate and standalone normalization are separate requests on
+that same source, not normalization after attaching a materialization report.
+
+Use the same target command with `--profile required`,
+`--profile required-material`, or `--profile required-forwarded`, respectively.
+These profiles require real reusable target modules and instances, not a
+flattened or manually specialized fixture. The handwritten testbench checks
+independent clocks, action storage, paused restart, cancel/restart priority,
+terminal hold, synchronous reset, and resetless establishment with restart
+asserted and cancel clear. The material profile also uses an actual falling
+edge and active-low reset on the second occurrence. No value is asserted for
+resetless private state before its accepted restart, and ordinary uninitialized
+action storage is not expected to acquire an implicit reset.

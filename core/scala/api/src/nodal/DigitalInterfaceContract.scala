@@ -33,7 +33,8 @@ private[nodal] final case class KernelInterfaceSnapshot(
     dimensions: Vector[String],
     members: Vector[KernelInterfaceMemberSnapshot],
     roles: Vector[KernelInterfaceRoleSnapshot] = Vector.empty,
-    boundary: Option[KernelInterfaceBoundarySnapshot] = None
+    boundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    actualMemberTypes: Vector[(String, String)] = Vector.empty
 )
 
 /** Reference fields are semantic edges, never rendered source expressions or operation labels. */
@@ -88,7 +89,9 @@ private[nodal] object DigitalInterfaceContract:
       validateBoundarySource: Expr[?] => Unit,
       samePayloadTypes: (DataType[?], DataType[?]) => Boolean,
       boundary: Option[KernelInterfaceBoundarySnapshot] = None,
-      memberValueType: DataType[?] => DataType[?] = identity
+      memberValueType: DataType[?] => DataType[?] = identity,
+      actualMemberType: DataType[?] => DataType[?] = identity,
+      renderFormalType: Option[DataType[?] => String] = None
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
 
@@ -284,14 +287,20 @@ private[nodal] object DigitalInterfaceContract:
       )
     val layouts = new IdentityHashMap[AnyRef, Vector[ConstructionInterfaceLayout.Leaf]]()
     val declarationTypes = mutable.ArrayBuffer.empty[DataType[?]]
-    val identities = mutable.LinkedHashMap.empty[String, Vector[(
-        String,
-        String,
-        String,
-        Option[String],
-        Vector[(String, String)],
-        Vector[(String, String)]
-    )]]
+    val identities =
+      mutable.LinkedHashMap.empty[String, (Declaration, Vector[ConstructionInterfaceLayout.Leaf])]
+    def sameLeafType(
+        left: ConstructionInterfaceLayout.Leaf,
+        a: Declaration,
+        right: ConstructionInterfaceLayout.Leaf,
+        b: Declaration
+    ): Boolean =
+      (left.dataType, right.dataType) match
+        case (Some(x), Some(y)) => a.samePayloadTypes(a.actualMemberType(x), b.actualMemberType(y))
+        case (None, None) => left.analogType == right.analogType
+        case _ => false
+    def actualType(leaf: ConstructionInterfaceLayout.Leaf, context: Declaration): String =
+      leaf.rendered(value => context.renderType(context.actualMemberType(value)))
     val interfaces = declarations.flatMap: declaration =>
       val endpoint = declaration.value match
         case value: InterfacePort[?, ?] => Some((value.definition, value.role, value.name))
@@ -300,23 +309,20 @@ private[nodal] object DigitalInterfaceContract:
       endpoint.map: (definition, role, _) =>
         val leaves = ConstructionInterfaceLayout.leaves(definition, role, resolve)
         leaves.filter(leaf => Set("valid", "stream").contains(leaf.protocol))
-          .flatMap(_.dataType).foreach(declaration.validateProtocolPayload)
+          .flatMap(
+            _.dataType
+          ).map(declaration.actualMemberType).foreach(declaration.validateProtocolPayload)
         layouts.put(declaration.value, leaves)
         declarationTypes ++= leaves.flatMap(_.dataType)
-        val shape = leaves.map(value =>
-          (
-            value.name,
-            value.rendered(declaration.renderType),
-            value.protocol,
-            value.mode,
-            value.nestedInterfaces,
-            value.analogAttributes
-          )
-        )
-        identities.get(definition.name).foreach: previous =>
-          if previous != shape then
-            fail(5, s"Interface '${definition.name}' has conflicting exact member ABIs")
-        identities.update(definition.name, shape)
+        declarationTypes ++= leaves.flatMap(_.dataType).map(declaration.actualMemberType)
+        identities.get(definition.name).foreach: (previousContext, previous) =>
+          if previous.size != leaves.size || previous.zip(leaves).exists: (before, after) =>
+              before.name != after.name || before.protocol != after.protocol ||
+                before.mode != after.mode || before.nestedInterfaces != after.nestedInterfaces ||
+                before.analogAttributes != after.analogAttributes ||
+                !sameLeafType(before, previousContext, after, declaration)
+          then fail(5, s"Interface '${definition.name}' has conflicting exact member ABIs")
+        identities.update(definition.name, declaration -> leaves)
         val domain =
           declaration.domain.getOrElse(fail(6, "interface endpoint has no resolved domain"))
         def snapshotLeaves(values: Vector[ConstructionInterfaceLayout.Leaf])
@@ -327,7 +333,7 @@ private[nodal] object DigitalInterfaceContract:
               value.name,
               value.role,
               value.access,
-              value.rendered(declaration.renderType),
+              value.rendered(declaration.renderFormalType.getOrElse(declaration.renderType)),
               value.protocol,
               value.mode,
               value.nestedRoles,
@@ -351,7 +357,10 @@ private[nodal] object DigitalInterfaceContract:
           declaration.dimensions,
           snapshotLeaves(leaves),
           roleMaps,
-          declaration.boundary
+          declaration.boundary,
+          if declaration.boundary.nonEmpty then
+            leaves.map(value => value.name -> actualType(value, declaration))
+          else Vector.empty
         )
     def declaration(value: AnyRef, owner: String): Declaration =
       val canonical = value match
@@ -418,7 +427,10 @@ private[nodal] object DigitalInterfaceContract:
         case array: InterfaceArray[?, ?] =>
           val leaves = layouts.get(array)
           if leaves.exists(_.mode.nonEmpty) then
-            fail(9, "resolved Interface array effects require an explicit physical component projection")
+            fail(
+              9,
+              "resolved Interface array effects require an explicit physical component projection"
+            )
           leaves
     operations.filter(_.kind == "interface-invert").foreach: operation =>
       operation.values match
@@ -515,7 +527,7 @@ private[nodal] object DigitalInterfaceContract:
               if first.name != second.name || first.protocol != second.protocol ||
                 first.mode != second.mode ||
                 first.nestedInterfaces != second.nestedInterfaces ||
-                first.rendered(a.renderType) != second.rendered(b.renderType)
+                !sameLeafType(first, a, second, b)
               then fail(5, "exact interface connection changed a member ABI")
               val sink = ConstructionInterfaceLayout.connectionSink(
                 first.access,
@@ -537,7 +549,7 @@ private[nodal] object DigitalInterfaceContract:
                 operation,
                 s"${a.path}.${first.name}",
                 source = Some(s"${b.path}.${second.name}"),
-                dataType = Some(first.rendered(a.renderType)),
+                dataType = Some(actualType(first, a)),
                 member = Some(first.name),
                 role = Some(first.role),
                 sourceRole = Some(second.role),
@@ -567,7 +579,7 @@ private[nodal] object DigitalInterfaceContract:
                 9,
                 "interface resolved drive requires push-pull mode; constrained modes require explicit inout operations"
               )
-            val expected = leaf.rendered(context.renderType)
+            val expected = actualType(leaf, context)
             val target = s"${context.path}.${leaf.name}"
             if leaf.mode.isEmpty && !driven.add(target) then
               fail(10, "ordinary interface member has multiple drivers")
@@ -598,7 +610,7 @@ private[nodal] object DigitalInterfaceContract:
               effect(
                 operation,
                 s"${context.path}.${leaf.name}",
-                dataType = Some(leaf.rendered(context.renderType)),
+                dataType = Some(actualType(leaf, context)),
                 member = Some(leaf.name),
                 role = Some(leaf.role),
                 access = Some(leaf.access),
@@ -663,13 +675,14 @@ private[nodal] object DigitalInterfaceContract:
         case _ => fail(11, "interface declaration lost its endpoint")
       val suffix =
         if endpoint.dimensions.isEmpty then "" else endpoint.dimensions.mkString("[", ",", "]")
+      val actualTypes = endpoint.actualMemberTypes.toMap
       endpoint.members.map(member =>
         InterfaceAbiEntry(
           s"${endpoint.path}$suffix.${member.name}",
           s"${name}_${member.name.replace('.', '_')}",
           member.role,
           member.access,
-          member.dataType,
+          actualTypes.getOrElse(member.name, member.dataType),
           endpoint.domain
         )
       )

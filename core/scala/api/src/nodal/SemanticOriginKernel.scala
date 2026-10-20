@@ -169,7 +169,8 @@ private[nodal] final class SemanticOriginBuilder:
     "CoreSemanticsCandidateApi.scala",
     "PipelineInterfaceCandidateApi.scala",
     "CompilerApi.scala",
-    "FsmDefinitionApi.scala"
+    "FsmDefinitionApi.scala",
+    "GeneratedAreaApi.scala"
   )
   private val ignoredSourceSegments = Set(
     ".git",
@@ -972,7 +973,7 @@ private[nodal] final class SemanticOriginBuilder:
               s"${generatedStem(capture.kind)}_${sourceSuffix(capture.site)}" -> "source-digest"
             )
           NameCandidate(
-            s"${capture.module}:${capture.index}",
+            capture.index.toString,
             selected._1,
             selected._2
           )
@@ -981,7 +982,9 @@ private[nodal] final class SemanticOriginBuilder:
       )
       captures.foreach: capture =>
         val key = capture.module -> capture.index
-        val resolved = allocated(s"${capture.module}:${capture.index}")
+        // This allocator is already scoped to one module. Collision suffixes
+        // must not encode its session-wide occurrence handle.
+        val resolved = allocated(capture.index.toString)
         val path = s"${modulePaths(capture.module)}.${resolved.name}"
         declarationNames.update(key, resolved.name)
         declarationPaths.update(key, path)

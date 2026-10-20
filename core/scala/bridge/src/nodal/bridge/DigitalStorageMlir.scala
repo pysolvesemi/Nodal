@@ -32,6 +32,13 @@ private[nodal] object DigitalStorageMlir:
 
   def initializer(declaration: KernelDeclarationSnapshot): Option[String] =
     val fields = attributes(declaration)
+    requireValid(
+      !fields.contains("initializer_policy") ||
+        (declaration.kind == "register" && fields("initializer_policy") == "if_reset" &&
+          fields.get("initial").exists(value => value.nonEmpty && value != "none")),
+      "conditional initializer requires an initialized register and the closed if_reset policy",
+      declaration.path
+    )
     declaration.kind match
       case "wire" =>
         requireValid(
@@ -84,6 +91,23 @@ private[nodal] object DigitalStorageMlir:
       declaration.path
     )
     selected.head
+
+  /** Declared contextual initialization is distinct from a mandatory Reset projection. */
+  def initializerPolicy(
+      module: KernelModuleSnapshot,
+      declaration: KernelDeclarationSnapshot
+  ): Option[String] =
+    val policy = attributes(declaration).get("initializer_policy")
+    policy.foreach: _ =>
+      val initial = initializer(declaration)
+      val declared = declaredDomain(module, declaration)
+      requireValid(
+        initial.nonEmpty && declared.kind == "required" &&
+          !declared.binding.exists(binding => module.domains.exists(_.path == binding)),
+        "conditional initializer requires an exact unresolved local domain requirement",
+        declaration.path
+      )
+    policy
 
   private def domain(
       module: KernelModuleSnapshot,
@@ -192,9 +216,11 @@ private[nodal] object DigitalStorageMlir:
       case "register" => s", domain = ${domain(module, declaration, symbol)}"
       case _ => fail("value storage must be wire or register", declaration.path)
     val operands = initial.toVector
+    val policy = initializerPolicy(module, declaration)
+      .map(value => s", initializer_policy = ${quoted(value)}").getOrElse("")
     s"$result = \"nodal.digital_storage\"(${operands.map(_._1).mkString(", ")}) <{" +
       s"name = ${quoted(symbol("storage", declaration.name))}, " +
-      s"kind = ${quoted(declaration.kind)}$domainAttribute, metadata = $metadata}> : " +
+      s"kind = ${quoted(declaration.kind)}$domainAttribute$policy, metadata = $metadata}> : " +
       s"(${operands.map(_._2).mkString(", ")}) -> $nativeType$sourceLocation"
 
   def depth(declaration: KernelDeclarationSnapshot): String =

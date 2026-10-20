@@ -197,6 +197,17 @@ private[nodal] object IterationDomain:
         positiveTripCount(if identicalBounds then BigInt(0) else distance, step.lower, maximum)
           .map(count => Structural(lower, upperExclusive, step, maximum, count))
 
+  /** A selected family ordinal must exist for every legal setting, never only the default. */
+  def verifyOrdinal(domain: Structural, ordinal: Bounds): Either[Problem, Unit] =
+    val distance = BigInt(domain.upperExclusive.lower) - BigInt(domain.lower.upper)
+    positiveTripCount(distance, domain.step.upper, None).flatMap: minimum =>
+      if ordinal.lower < 0L || ordinal.upper >= minimum.toLong then
+        Left(Problem(
+          ProblemKind.OrdinalOutOfBounds,
+          "generated ordinal does not exist for every legal parameter setting"
+        ))
+      else Right(())
+
   /** Conservative attained values for a validated positive domain. Empty domains have no value.
     * Exact fixed endpoints retain the last strided value instead of filling the excluded tail.
     */

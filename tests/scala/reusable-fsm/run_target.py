@@ -81,11 +81,88 @@ endmodule
 """
 
 
+def required_bench(top: str, profile: str) -> str:
+    material = profile == "required-material"
+    clock_b = 1 if material else 0
+    active_b, inactive_b = (0, 1) if material else (1, 0)
+    reset_b_check = "checkB(0,0,29);" if material else "checkB(2,2,29);"
+    return f"""module tb;
+reg clockA=0,resetA=1,clockB={clock_b},resetB=0;
+reg restartA=0,cancelA=0,enableA=0,startA=0,finishA=0;
+reg restartB=0,cancelB=0,enableB=0,startB=0,finishB=0;
+reg [7:0] inputA=0,inputB=0;
+wire [1:0] statusA,statusB,stateA,stateB;
+wire doneA,doneB;
+wire [7:0] valueA,valueB;
+{top} dut(.clockA(clockA),.resetA(resetA),.clockB(clockB),.resetB(resetB),
+ .restartA(restartA),.cancelA(cancelA),.enableA(enableA),.startA(startA),.finishA(finishA),
+ .restartB(restartB),.cancelB(cancelB),.enableB(enableB),.startB(startB),.finishB(finishB),
+ .inputA(inputA),.inputB(inputB),.statusA(statusA),.statusB(statusB),
+ .stateA(stateA),.stateB(stateB),.doneA(doneA),.doneB(doneB),.valueA(valueA),.valueB(valueB));
+task tickA; reg [12:0] saved; begin
+ #2; clockA=1; #1; saved={{stateA,statusA,doneA,valueA}}; clockA=0; #1;
+ if({{stateA,statusA,doneA,valueA}} !== saved) $fatal(1,"A sampled the wrong clock edge");
+end endtask
+task tickB; reg [12:0] saved; begin
+ #2; clockB={active_b}; #1; saved={{stateB,statusB,doneB,valueB}}; clockB={inactive_b}; #1;
+ if({{stateB,statusB,doneB,valueB}} !== saved) $fatal(1,"B sampled the wrong clock edge");
+end endtask
+task lifecycleA(input [1:0] state,status); begin
+ if(stateA !== state || statusA !== status || doneA !== (status==2))
+  $fatal(1,"required A lifecycle mismatch: %d %d %d",stateA,statusA,doneA);
+end endtask
+task lifecycleB(input [1:0] state,status); begin
+ if(stateB !== state || statusB !== status || doneB !== (status==2))
+  $fatal(1,"required B lifecycle mismatch: %d %d %d",stateB,statusB,doneB);
+end endtask
+task checkA(input [1:0] state,status,input [7:0] value); begin
+ lifecycleA(state,status);
+ if(valueA !== value) $fatal(1,"required A action value mismatch: %d",valueA);
+end endtask
+task checkB(input [1:0] state,status,input [7:0] value); begin
+ lifecycleB(state,status);
+ if(valueB !== value) $fatal(1,"required B action value mismatch: %d",valueB);
+end endtask
+initial begin
+ // Conditional private state resets, but ordinary uninitialized user storage does not.
+ tickA; lifecycleA(0,0); tickB;
+ {"lifecycleB(0,0);" if material else "// Resetless B deliberately has no pre-restart value assertion."}
+ resetA=0; resetB=1;
+ // Explicit restart with cancel low establishes resetless state even while paused.
+ restartB=1; tickB; checkB(0,1,7); lifecycleA(0,0);
+ restartB=0; restartA=1; tickA; checkA(0,1,7); checkB(0,1,7);
+ restartA=0; enableA=1; enableB=1; startA=1;
+ tickA; checkA(1,1,7); checkB(0,1,7);
+ startA=0; startB=1; tickB; checkA(1,1,7); checkB(1,1,7);
+ startB=0; inputA=17; tickA; checkA(1,1,17); checkB(1,1,7);
+ inputB=29; tickB; checkA(1,1,17); checkB(1,1,29);
+ enableA=0; inputA=99; finishA=1; tickA; checkA(1,1,17);
+ finishB=1; tickB; checkA(1,1,17); checkB(2,2,29);
+ inputB=44; tickB; checkB(2,2,29);
+ cancelA=1; restartA=1; tickA; checkA(1,3,17); checkB(2,2,29);
+ cancelA=0; tickA; checkA(0,1,7);
+ restartA=0; enableA=1; startA=1; tickA; checkA(1,1,7);
+ startA=0; inputA=55; tickA; checkA(2,2,55);
+ // Reset and clocks are occurrence-specific, not copied from the first binding.
+ resetA=1; #1; checkA(2,2,55); tickB; checkA(2,2,55); checkB(2,2,29);
+ tickA; checkA(0,0,55); checkB(2,2,29);
+ resetB=0; #1; checkB(2,2,29); tickB; {reset_b_check} checkA(0,0,55);
+ resetB=1; restartB=1; enableB=0; tickB; checkB(0,1,7); checkA(0,0,55);
+ $display("REUSABLE_FSM_TARGET_PASS {profile}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--profile", choices=("legacy", "controlled", "terminal"), default="legacy")
+    parser.add_argument("--profile", choices=(
+        "legacy", "controlled", "terminal",
+        "required", "required-material", "required-forwarded",
+    ), default="legacy")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated outputs must stay under .work")
@@ -97,9 +174,10 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     args.out = args.out.resolve()
     source = args.input.read_text()
-    expected_machines = 1 if args.profile == "terminal" else 2
+    required = args.profile.startswith("required")
+    expected_machines = 1 if args.profile == "terminal" or required else 2
     if source.count('"nodal.flat_fsm"') != expected_machines:
-        raise RuntimeError("expected the actual two-instance Scala witness")
+        raise RuntimeError(f"expected {expected_machines} actual Scala machine definitions")
     if source.count('illegal_policy = "recover_to_initial"') != expected_machines:
         raise RuntimeError("Icarus replay requires the explicit recovery-policy Scala witness; "
                            "Error-policy assertions must not be disabled")
@@ -139,14 +217,31 @@ def main() -> None:
                    "--lowering-options=disallowLocalVariables", "-o", str(sv)])
     design = sv.read_text()
     modules = re.findall(r"\bmodule\s+([A-Za-z_]\w*)\s*\(", design)
-    if len(modules) != 1:
+    if required:
+        root = re.search(r'nodal\.root\.module\s*=\s*@(?:"([^"]+)"|([A-Za-z_]\w*))', source)
+        if root is None:
+            raise RuntimeError("expected an actual rooted required-domain Scala hierarchy")
+        top = root.group(1) or root.group(2)
+        expected_modules = 4 if args.profile == "required-forwarded" else 3
+        if top not in modules or len(modules) != expected_modules:
+            raise RuntimeError(f"expected {expected_modules} real reusable modules including "
+                               f"{top}, got {modules}")
+        if not re.search(r"\bhw\.instance\b", circt.read_text()):
+            raise RuntimeError("required-domain replay must retain real hierarchical instances")
+        if "__nodal_required_clock" not in design:
+            raise RuntimeError("required-domain replay has no inferred child clock ports")
+        bench = required_bench(top, args.profile)
+    elif len(modules) != 1:
         raise RuntimeError(f"expected one generated module, got {modules}")
-    top = modules[0]
+    else:
+        top = modules[0]
+    manifest["top"] = top
+    manifest["modules"] = modules
     if args.profile == "controlled":
         bench = controlled_bench(top)
     elif args.profile == "terminal":
         bench = terminal_bench(top)
-    else:
+    elif not required:
         state_registers = re.findall(r"\breg\s+\[1:0\]\s+(register_\w+)\s*;", design)
         if len(state_registers) != 1:
             raise RuntimeError("expected exactly one compact private state register")
@@ -194,6 +289,7 @@ def main() -> None:
         save()
         raise RuntimeError("generated target did not satisfy the runtime checks\n" + output)
     manifest["status"] = "passed"
+    manifest["target_sha256"] = hashlib.sha256(sv.read_bytes()).hexdigest()
     save()
     print(f"REUSABLE_FSM_TARGET_PASS {args.out}")
 

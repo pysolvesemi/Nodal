@@ -169,3 +169,67 @@ The shared hierarchy boundary plan will consume this query once per source
 definition and derive physical names/layout and inverse paths in the target
 owner. The collector itself is not Interface target execution. Until that actual
 consumer and emission exist, arrays and endpoint inspection do not close B.1.
+
+## Contextual symbolic payload contract
+
+Symbolic payload instantiation reuses the digital port descriptor materializer,
+`StructuralParameterBinding.InstanceQueries` and its existing Integer proof.
+One batch of complete formal leaf descriptors is transformed per exact selected
+endpoint, with one reachable expression export and a shared structural budget.
+The construction snapshot retains the original child-owned members and every
+formal role map. A separate, complete ordered `actualMemberTypes` inventory
+records parent-owned payload types. Outer InterfaceArray dimensions remain a
+separate shape layer; multiplying them into a payload width is not an ABI proof.
+
+The bridge independently checks every actual type through the existing digital
+type comparator and exact instance context, even when no member is accessed.
+Native `actual_types` metadata carries the same explicit complete inventory.
+`DigitalTypeModel` proves each formal-to-actual type and compares full imported
+Interface definitions using two exact instance contexts in one parent. The
+Interface model's imported comparison cache is keyed by both definition and
+instance, while its existing accumulated role owner still checks sibling-only
+roles. Equal names, defaults or range bounds cannot establish contextual type
+identity. Missing, duplicated, reordered or changed actual members reject.
+
+Repeated recursive type comparisons use a query-local memo in that same model,
+keyed by both exact types and both exact instance contexts. A null instance means
+the model's actual parent owner, not an unknown context. Each represented member
+still consumes the existing structural budget, and the memo lives only as long
+as the immutable model query. It delegates every new pair to `DigitalTypeModel`;
+it does not persist proof results across IR mutation or replace type validation.
+
+The logical endpoint collector still reports original formal types together
+with the actual declaration owner and exact instance; it never presents parent
+substitution tokens as child-owned facts. Ordinary member SSA uses the verified
+actual payload type. No new Interface definition, protocol expansion engine or
+parameter registry is introduced. Actual target adapters must consume this
+collector through the shared hierarchy boundary owner before emission can be
+claimed. Resolved, analog/conservative, standalone inout, generated and indexed
+endpoint capabilities remain required separate work. Focused validation and
+publication status belong to the readiness record, not this contract section.
+
+## Resolved topology continuation contract
+
+Resolved hierarchy support is not enabled by the ordinary payload projection.
+The existing Interface model must retain local components, aliases, actual
+conditional drivers and split obligations. The existing hierarchy dependency
+owner qualifies those facts by occurrence and joins only explicit immediate-child
+endpoint relations. Driver identity is the occurrence plus authored driver, not
+the shared definition's operation alone. A pass-through relation adds neither
+a driver nor a pair of causal dependency edges. After union, aliases point to
+one deterministic component representative; actual read-to-own-driver feedback
+must still be detected.
+
+An unaccessed child resolved leaf may have no represented SSA value. Its exact
+declaration and member path remain a logical endpoint identity, not permission
+to allocate a replacement net. Domain constraints survive standalone net aliases
+and must resolve to the same contextual domain through `HierarchyModel`.
+
+A split requires exactly one actual conditional driver after boundary union.
+Local verification cannot silently accept a missing driver, nor can a child
+with one local driver conceal another parent driver. Any deferred external
+obligation must have an explicit closed-root consumer and must not weaken
+independent verification of a local component. Source capture must extend its
+existing path-based union and split owner with the same exact boundary relation.
+These obligations, their causal tests and supported-profile target emission
+remain required before resolved hierarchy acceptance.

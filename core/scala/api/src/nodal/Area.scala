@@ -16,7 +16,8 @@ abstract class Area extends Selectable:
   protected final def connect[A <: Data](left: Signal[A], right: Signal[A]): Unit =
     CandidateRuntime.connectValues(left, right)
 
-/** Compiler-owned lifecycle and member capture. The construction session owns every mutable fact. */
+/** Compiler-owned lifecycle and member capture. The construction session owns every mutable fact.
+  */
 private[nodal] object AreaCaptureRuntime:
   def guard[A](site: String, body: () => A): A =
     ConstructorCaptureRuntime.guard(site, body)
@@ -38,5 +39,9 @@ private[nodal] object AreaCaptureRuntime:
     value
 
   def member[A](owner: Area, name: String, value: A): A =
-    ConstructionKernel.areaMember(owner, name, value)
+    ConstructionKernel.areaMember(owner, name, value, "legacy")
+    value
+
+  def capturedMember[A](owner: Area, name: String, value: A, access: String): A =
+    ConstructionKernel.areaMember(owner, name, value, access)
     value

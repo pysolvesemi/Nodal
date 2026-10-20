@@ -16,7 +16,31 @@ private[nodal] final case class KernelAreaSnapshot(
     source: SourceSpan,
     domain: Option[String],
     declarations: Vector[String],
-    members: Vector[KernelAreaMemberSnapshot]
+    members: Vector[KernelAreaMemberSnapshot],
+    generatedScope: Option[KernelGeneratedScope] = None
+)
+
+private[nodal] final case class AreaMemberRecord(value: Any, access: String)
+
+private[nodal] final case class KernelGeneratedAreaExport(
+    member: String,
+    target: String,
+    access: String
+)
+
+private[nodal] final case class KernelGeneratedMemberSnapshot(
+    family: String,
+    ordinal: String,
+    member: String,
+    access: String
+)
+
+private[nodal] final case class GeneratedAreaMemberRecord(
+    family: GeneratedRegionRecord,
+    ordinal: Int | Expr[Integer],
+    members: Vector[String],
+    target: DeclarationRef,
+    access: String
 )
 
 /** Owned solely by ConstructionSession, alongside its declaration and instance records. */
@@ -24,12 +48,13 @@ private[nodal] final class AreaRecord(
     val owner: Long,
     val source: SourceSpan,
     val parent: Option[AreaRecord],
-    val domain: Option[ClockDomain]
+    val domain: Option[ClockDomain],
+    val generatedScope: Option[GeneratedRegionRecord] = None
 ):
   var value: Option[Area] = None
   var name: Option[String] = None
   var namePriority: Int = -1
   val aliases: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
-  val members: mutable.LinkedHashMap[String, Any] = mutable.LinkedHashMap.empty
+  val members: mutable.LinkedHashMap[String, AreaMemberRecord] = mutable.LinkedHashMap.empty
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty

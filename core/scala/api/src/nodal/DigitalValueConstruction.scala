@@ -24,7 +24,7 @@ private[nodal] object DigitalValueConstruction:
           operation == ExecutableWaiverContract.Operation ||
           OwnedClockContract.Operations(operation) ||
           Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) ||
-          FlatFsmRuntime.Operations(operation))
+          FlatFsmRuntime.Operations(operation) || operation == GeneratedAreaRuntime.MemberOperation)
     )
 
   def snapshot(
@@ -40,7 +40,8 @@ private[nodal] object DigitalValueConstruction:
       crossing: KernelExpr[?] => Option[KernelExecutableCrossingSnapshot],
       waiver: KernelExpr[?] => Option[KernelExecutableWaiverSnapshot],
       reset: KernelExpr[?] => Option[KernelResetSnapshot],
-      clock: KernelExpr[?] => Option[KernelClockSnapshot]
+      clock: KernelExpr[?] => Option[KernelClockSnapshot],
+      generatedMember: KernelExpr[?] => Option[KernelGeneratedMemberSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
     val definitions = mutable.LinkedHashMap.empty[String, ResolvedEnumAbi]
@@ -108,7 +109,8 @@ private[nodal] object DigitalValueConstruction:
               OwnedClockContract.Operations(operation) ||
               (Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) &&
                 reset(expression).nonEmpty) ||
-              FlatFsmRuntime.Operations(operation))
+              FlatFsmRuntime.Operations(operation) ||
+              operation == GeneratedAreaRuntime.MemberOperation)
         )
       then
         pending.append((expression, 0))
@@ -155,6 +157,7 @@ private[nodal] object DigitalValueConstruction:
         then fail("Struct operation requires one final schema evidence record")
         val isEnum = expression.operation.exists(_.startsWith(DigitalEnumContract.Prefix)) ||
           completion.nonEmpty
+        val familyMember = generatedMember(expression)
         val isProjection = projectionPaths.contains(path)
         if expression.operation.contains(DigitalMaterializationContract.Operation) !=
             expression.materializationIntent.nonEmpty
@@ -172,7 +175,8 @@ private[nodal] object DigitalValueConstruction:
           fail("operand expression is outside the implemented typed digital profile")
         if !isEnum && metadata.nonEmpty then fail("non-enum expression carries enum metadata")
         val operands = if reset(expression).nonEmpty then reset(expression).get.inputs
-        else if expression.literal.nonEmpty || isProjection then Vector.empty
+        else if expression.literal.nonEmpty || isProjection || familyMember.nonEmpty then
+          Vector.empty
         else
           expression.operands.filterNot(value =>
             value.isInstanceOf[EnumOperationMetadata] ||
@@ -221,6 +225,7 @@ private[nodal] object DigitalValueConstruction:
           crossing = crossing(expression),
           waiver = waiver(expression),
           reset = reset(expression),
-          clock = clock(expression)
+          clock = clock(expression),
+          generatedMember = familyMember
         )
     (definitions.values.toVector.sortBy(_.identity), snapshots)

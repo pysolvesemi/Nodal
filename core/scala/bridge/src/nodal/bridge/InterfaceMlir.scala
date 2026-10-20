@@ -103,7 +103,11 @@ private[nodal] object InterfaceMlir:
       roles: Vector[KernelInterfaceRoleSnapshot]
   )
 
-  final class Plan(snapshot: ConstructionSnapshot):
+  final class Plan(
+      snapshot: ConstructionSnapshot,
+      sameType: (String, String, String) => Boolean,
+      instanceType: (String, String, String, KernelInstanceSnapshot, String) => Boolean
+  ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
       module.declarations.map(value => value.path -> (module, value))
@@ -145,30 +149,36 @@ private[nodal] object InterfaceMlir:
       snapshot.root
     )
 
+    private val actualTypes = snapshot.interfaceContracts.map(endpoint =>
+      endpoint.path -> endpoint.actualMemberTypes.toMap
+    ).toMap
+    private def actualType(
+        endpoint: KernelInterfaceSnapshot,
+        member: KernelInterfaceMemberSnapshot
+    ): String =
+      actualTypes(endpoint.path).getOrElse(member.name, member.dataType)
+    private def actualMember(
+        endpoint: KernelInterfaceSnapshot,
+        member: KernelInterfaceMemberSnapshot
+    ): KernelInterfaceMemberSnapshot =
+      member.copy(dataType = actualType(endpoint, member))
     private def sameShape(
         left: Vector[KernelInterfaceMemberSnapshot],
         right: Vector[KernelInterfaceMemberSnapshot]
     ): Boolean =
-      left.map(value =>
-        (
-          value.name,
-          value.dataType,
-          value.protocol,
-          value.mode,
-          value.nestedInterfaces,
-          value.analogAttributes
-        )
-      ) ==
-        right.map(value =>
-          (
-            value.name,
-            value.dataType,
-            value.protocol,
-            value.mode,
-            value.nestedInterfaces,
-            value.analogAttributes
-          )
-        )
+      left.size == right.size && left.zip(right).forall: (a, b) =>
+        a.name == b.name && a.protocol == b.protocol && a.mode == b.mode &&
+          a.nestedInterfaces == b.nestedInterfaces && a.analogAttributes == b.analogAttributes &&
+          (a.dataType == b.dataType ||
+            (!Set("conservative", "signal-flow").contains(a.protocol) &&
+              sameType(a.dataType, b.dataType, a.path)))
+
+    private def sameRole(
+        left: Vector[KernelInterfaceMemberSnapshot],
+        right: Vector[KernelInterfaceMemberSnapshot]
+    ): Boolean =
+      sameShape(left, right) && left.zip(right).forall: (a, b) =>
+        a.copy(path = a.name, dataType = "") == b.copy(path = b.name, dataType = "")
 
     private def analog(member: KernelInterfaceMemberSnapshot): String =
       dictionary(member.analogAttributes.map((name, value) => name -> quoted(value))*)
@@ -310,6 +320,16 @@ private[nodal] object InterfaceMlir:
         "interface declaration and complete typed contract disagree",
         endpoint.path
       )
+      requireValid(
+        if endpoint.boundary.isEmpty then endpoint.actualMemberTypes.isEmpty
+        else
+          endpoint.actualMemberTypes.map(_._1) == endpoint.members.map(_.name) &&
+          endpoint.actualMemberTypes.size <= 65536 &&
+          endpoint.actualMemberTypes.forall(_._2.nonEmpty)
+        ,
+        "Interface actual type inventory must preserve every ordered formal member exactly once",
+        endpoint.path
+      )
       endpoint.boundary.foreach: boundary =>
         val instance = module.instances.find(_.path == boundary.instance).getOrElse(
           fail("Interface projection lost its exact immediate child instance", endpoint.path)
@@ -341,6 +361,20 @@ private[nodal] object InterfaceMlir:
           "Interface projection changes exact child, selected roles, ABI or actual domain binding",
           endpoint.path
         )
+        val childMembers = child.members.map(value => value.name -> value).toMap
+        endpoint.members.foreach: member =>
+          val formal = childMembers(member.name)
+          requireValid(
+            instanceType(
+              actualType(endpoint, member),
+              formal.dataType,
+              member.path,
+              instance,
+              formal.path
+            ),
+            "Interface actual payload differs from its exact finalized child type",
+            member.path
+          )
         if declaration.kind == "interface-array" then
           try
             instanceQueries.validateInterfaceDimensions(
@@ -390,7 +424,7 @@ private[nodal] object InterfaceMlir:
           role: String,
           values: Vector[KernelInterfaceMemberSnapshot]
       ): Unit =
-        val normalized = values.map(value => value.copy(path = value.name))
+        val normalized = values
         val known = entries.getOrElseUpdate(owner -> identity, mutable.LinkedHashMap.empty)
         known.headOption.foreach((_, previous) =>
           requireValid(
@@ -401,7 +435,7 @@ private[nodal] object InterfaceMlir:
         )
         known.get(role).foreach(previous =>
           requireValid(
-            previous.map(value => value.copy(path = value.name)) == normalized,
+            sameRole(previous, normalized),
             "interface role identity has conflicting maps",
             identity
           )
@@ -416,10 +450,11 @@ private[nodal] object InterfaceMlir:
           known.update(role, values)
       snapshot.interfaceContracts.sortBy(_.path).foreach: endpoint =>
         endpoint.roles.foreach: role =>
-          add(endpoint.owner, endpoint.identity, role.name, role.members)
-          val applications = role.members.flatMap(_.nestedInterfaces).distinct
+          val actualMembers = role.members.map(actualMember(endpoint, _))
+          add(endpoint.owner, endpoint.identity, role.name, actualMembers)
+          val applications = actualMembers.flatMap(_.nestedInterfaces).distinct
           applications.foreach: (prefix, identity) =>
-            val selected = role.members.filter(_.name.startsWith(prefix + "."))
+            val selected = actualMembers.filter(_.name.startsWith(prefix + "."))
             val names = selected.flatMap(_.nestedRoles.find(_._1 == prefix).map(_._2)).distinct
             requireValid(
               names.size == 1,
@@ -503,7 +538,8 @@ private[nodal] object InterfaceMlir:
             effect.path
           )
         requireValid(
-          effect.member.contains(target.name) && effect.dataType.contains(target.dataType) &&
+          effect.member.contains(target.name) &&
+            effect.dataType.contains(actualType(endpoint, target)) &&
             effect.role.contains(target.role) && effect.access.contains(target.access) &&
             effect.nestedRoles == target.nestedRoles &&
             !Set("conservative", "signal-flow").contains(target.protocol) && effect.enable.isEmpty,
@@ -520,7 +556,8 @@ private[nodal] object InterfaceMlir:
             requireValid(
               endpoint.identity == other.identity && endpoint.domain == other.domain &&
                 sameDimensions(endpoint, other) &&
-                target.name == source.name && target.dataType == source.dataType &&
+                target.name == source.name &&
+                sameType(actualType(endpoint, target), actualType(other, source), target.path) &&
                 target.protocol == source.protocol && target.mode == source.mode &&
                 target.nestedInterfaces == source.nestedInterfaces &&
                 effect.sourceRole.contains(source.role) &&
@@ -845,7 +882,13 @@ private[nodal] object InterfaceMlir:
               "endpoint" -> quoted(symbol("interface_instance", target.name)),
               "metadata" -> metadata(
                 sourceMetadata(endpoint.path),
-                "dimensions" -> array(endpoint.dimensions.map(quoted))
+                "dimensions" -> array(endpoint.dimensions.map(quoted)),
+                "actual_types" -> array(endpoint.members.map(member =>
+                  dictionary(
+                    "path" -> quoted(member.name),
+                    "type" -> memberType(actualMember(endpoint, member), nativeType)
+                  )
+                ))
               )
             )
           case None =>
@@ -905,7 +948,7 @@ private[nodal] object InterfaceMlir:
         accessed.getOrElseUpdate(
           path -> roleName, {
             val result = "%interface_member_" + hash(path + "\u0000" + roleName)
-            val leafType = memberType(selected, nativeType)
+            val leafType = memberType(actualMember(endpoint, selected), nativeType)
             val resultType = if endpoint.dimensions.isEmpty then leafType
             else s"!nodal.shaped<${quoted(endpoint.dimensions.mkString(","))}, $leafType>"
             output += operation(

@@ -145,9 +145,20 @@ private[nodal] final case class ConstructorCapturedParameter(
 final class Signal[A <: Data] private[nodal] (
     val dataType: DataType[A],
     kind: KernelSignalKind,
-    explicitName: Option[String] = None
+    explicitName: Option[String] = None,
+    projection: Option[Expr[A]] = None
 ) extends Expr[A]:
-  CandidateRuntime.declare(this, kind, dataType = Some(dataType), explicitName = explicitName)
+  projection match
+    case Some(value) => ConstructionKernel.bindGeneratedMemberAlias(this, value)
+    case None =>
+      CandidateRuntime.declare(this, kind, dataType = Some(dataType), explicitName = explicitName)
+
+  private[nodal] def this(
+      dataType: DataType[A],
+      kind: KernelSignalKind,
+      explicitName: Option[String]
+  ) =
+    this(dataType, kind, explicitName, None)
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
@@ -612,18 +623,25 @@ abstract class Module:
 /** Domain-owned state captured at its lexical construction point. */
 final class Register[A <: Data] private[nodal] (
     val initialValue: Option[Expr[A]],
-    declaredType: Option[DataType[A]]
+    declaredType: Option[DataType[A]],
+    projection: Option[Expr[A]] = None
 ) extends Expr[A]:
   val dataType: Option[DataType[A]] = declaredType.orElse(
     initialValue.flatMap(CandidateRuntime.expressionDataType).map(_.asInstanceOf[DataType[A]])
   )
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.Register,
-    dataType = dataType,
-    domain = CandidateRuntime.currentDomain,
-    attributes = Vector("initial" -> initialValue)
-  )
+  projection match
+    case Some(value) => ConstructionKernel.bindGeneratedMemberAlias(this, value)
+    case None =>
+      CandidateRuntime.declare(
+        this,
+        KernelSignalKind.Register,
+        dataType = dataType,
+        domain = CandidateRuntime.currentDomain,
+        attributes = Vector("initial" -> initialValue)
+      )
+
+  private[nodal] def this(initialValue: Option[Expr[A]], declaredType: Option[DataType[A]]) =
+    this(initialValue, declaredType, None)
 
   infix def :=(value: Expr[A]): Unit = CandidateRuntime.assign(this, value)
 
@@ -802,6 +820,25 @@ def hdlRange(
     step: Int | Expr[Integer] = 1
 )(body: Expr[Integer] => Unit): Unit =
   CandidateRuntime.hdlRange(lower, upperExclusive, step, None)(body)
+
+/** Typed structural range selection. No new default getters alter the existing callback ABI. */
+def hdlRange(lower: Int | Expr[Integer], upperExclusive: Int | Expr[Integer]): HdlRange =
+  new HdlRange(lower, upperExclusive, 1, None)
+
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer]
+): HdlRange =
+  new HdlRange(lower, upperExclusive, step, None)
+
+def hdlRange(
+    lower: Int | Expr[Integer],
+    upperExclusive: Int | Expr[Integer],
+    step: Int | Expr[Integer],
+    maximum: Int
+): HdlRange =
+  new HdlRange(lower, upperExclusive, step, Some(maximum))
 
 /** Structural generation with an explicit materialization-count envelope. */
 def hdlRange(

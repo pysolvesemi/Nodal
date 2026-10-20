@@ -139,8 +139,37 @@ private[nodal] object ConstructionKernel:
   def bindArea(name: String, priority: Int, value: Area): Unit =
     areaSession.bindArea(name, priority, value)
 
-  def areaMember(owner: Area, name: String, value: Any): Unit =
-    areaSession.areaMember(owner, name, value)
+  def areaMember(owner: Area, name: String, value: Any, access: String): Unit =
+    areaSession.areaMember(owner, name, value, access)
+
+  def generatedAreas[A <: Area](
+      lower: Int | Expr[Integer],
+      upper: Int | Expr[Integer],
+      step: Int | Expr[Integer],
+      maximum: Option[Int]
+  )(body: Expr[Integer] => A): GeneratedAreas[A] =
+    areaSession.generatedAreas(lower, upper, step, maximum)(body)
+
+  def generatedAreaReference[A <: Area](
+      family: GeneratedAreas[A],
+      ordinal: Int | Expr[Integer]
+  ): GeneratedAreaRef[A] =
+    areaSession.generatedAreaReference(family, ordinal)
+
+  def generatedAreaNested[A <: Area](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): GeneratedAreaRef[A] =
+    areaSession.generatedAreaNested(value, name)
+
+  def generatedAreaMember(value: GeneratedAreaRef[?], name: String, kind: String): Any =
+    areaSession.generatedAreaMember(value, name, kind)
+
+  def bindGeneratedAreas(name: String, priority: Int, value: GeneratedAreas[?]): Unit =
+    areaSession.bindGeneratedAreas(name, priority, value)
+
+  def bindGeneratedMemberAlias(value: AnyRef, expression: Expr[?]): Unit =
+    areaSession.bindGeneratedMemberAlias(value, expression)
 
   def areaMemberValue(owner: Area, name: String): Any =
     areaSession.areaMemberValue(owner, name)

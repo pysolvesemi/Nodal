@@ -2283,9 +2283,8 @@ LogicalResult nodal::PortOp::verify() {
   if (!oneOf(direction, {"input", "output", "inout", "terminal"}))
     return emitOpError() << "unsupported port direction '" << direction << "'";
   auto type = getOperation()->getAttrOfType<TypeAttr>("type");
-  auto control = type ? dyn_cast<nodal::ControlCapabilityType>(type.getValue())
-                      : nodal::ControlCapabilityType();
-  bool bareClock = direction == "input" && control && control.getKind() == "clock";
+  auto controlKind = type ? nodal::getDigitalControlBoundaryKind(type.getValue()) : StringRef();
+  bool bareClock = direction == "input" && controlKind == "clock";
   if (!type || (!getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain") && !bareClock))
     return emitOpError("requires type and domain unless an owned input Clock");
   return success();

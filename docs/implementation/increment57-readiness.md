@@ -463,3 +463,37 @@ replay branches conditional on `NODAL_NODALC` were not configured in this run an
 are not counted as executed target validation; the separate seven actual source
 waveform witnesses above remain the executed target evidence. All F57 items stay
 open. This is a diagnostic/compatibility correction, not shaped completion.
+
+## Fixed shaped-control native checkpoint (2026-10-20)
+
+`PhysicalControlModel` reuses ShapeModel's authoritative static projection proof
+to identify an actual local input port plus its scalar element. Domain clock
+comparison and reset polarity/release lineage consume this shared identity.
+Equivalent reshape/view/slice/index paths alias correctly; distinct elements of
+one array do not alias. The existing digital type owner supplies a shared
+control-kind query for scalar and shaped input-clock admission, retaining reset
+ownership and unrelated foreign-domain rejection.
+
+The transactional target planner admits fixed shaped control inputs through a
+bounded packed port ABI and actual scalar extraction; Clock elements alone gain
+`seq.to_clock`. General target types remain scalar-only. Unsupported control
+outputs, dynamic/unproved projections and non-control shaped computations are
+not admitted by this extension.
+
+Fresh selected checks: **53 reset-model, 32 DomainModel and 84 CIRCT cases pass**
+(169 total). The 13 native files were frozen against manifest digest
+`fb5b83226ccddc579955f0a7aeaa3711e2e844d829616af0967bcfd02b455240`.
+Logs are `.work/shaped-control-{reset-model,domain-model,sequential-circt}.log`;
+compiled tools and build log are under `.work/native-build` and
+`.work/shaped-control-native-build.log`. Reproduce by building/running those
+three native test targets as in the scalar checkpoint. Clang-format, Markdown
+and diff checks pass. A new test signedness warning remains for the next repair;
+no warning-free build is claimed.
+
+This is an intermediate native checkpoint, not shaped reset acceptance. Two
+known required corrections remain: per-element Sync declaration ownership must
+use the actual owning boundary/domain/binding rather than an aggregate port's
+single domain label, and an unused last scalar projection needs valid scope
+anchoring rather than rejection. The source integration and three actual shaped
+waveform profiles are pending a frozen-source replay. All F57 checklist children
+remain open; no CI/full qualification is run.

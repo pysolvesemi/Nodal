@@ -2,12 +2,13 @@
 #define NODAL_DIALECT_NODAL_RESETMODEL_H
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/PhysicalControlModel.h"
 
 #include "llvm/ADT/SmallVector.h"
 namespace nodal {
 class DomainModel;
 struct ResetRoot {
-  mlir::Operation *port = nullptr;
+  PhysicalControl physical;
   mlir::StringAttr polarity;
   mlir::Operation *release = nullptr;
   mlir::Value clock;

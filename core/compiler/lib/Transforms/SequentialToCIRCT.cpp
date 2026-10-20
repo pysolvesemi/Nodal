@@ -16,10 +16,13 @@
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/PhysicalControlModel.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -77,6 +80,26 @@ Type targetType(Type type) {
   unsigned bits = width(type);
   return bits && bits <= maximumWidth ? IntegerType::get(type.getContext(), bits) : Type();
 }
+/// Fixed physical control arrays use one bit per row-major scalar element.
+/// ShapeModel remains the owner of extent proof; defaults never size an ABI.
+Type targetControlShapeType(Type type, Operation *module) {
+  if (!isa<nodal::ShapedType>(type) || getDigitalControlBoundaryKind(type).empty())
+    return {};
+  unsigned bits = 1;
+  while (auto shape = dyn_cast<nodal::ShapedType>(type)) {
+    SmallVector<StringRef> dimensions;
+    shape.getDimensions().split(dimensions, ',');
+    for (StringRef dimension : dimensions) {
+      auto extent = resolveStaticShapeDimension(module, dimension);
+      if (failed(extent) || extent->bounds.lower != extent->bounds.upper ||
+          extent->bounds.lower <= 0 || extent->bounds.lower > maximumWidth / bits)
+        return {};
+      bits *= extent->bounds.lower;
+    }
+    type = shape.getElementType();
+  }
+  return IntegerType::get(type.getContext(), bits);
+}
 bool scalarOpcode(StringRef op) {
   return llvm::StringSwitch<bool>(op)
       .Cases({"digital_alias", "digital_select", "bool_and", "bool_or", "bool_not"}, true)
@@ -105,27 +128,43 @@ public:
       : source(source), builder(builder), cost(cost), domains(source) {}
 
   LogicalResult preflight() {
+    if (failed(planControlProjections()))
+      return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
       StringRef name = op.getName().getStringRef();
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
-      for (Type type : op.getOperandTypes())
-        if (!targetType(type))
-          return reject(&op, "operand requires fixed scalar width 1..4096 or a direct clock/reset");
-      for (Type type : op.getResultTypes())
-        if (!targetType(type))
-          return reject(&op, "result requires fixed scalar width 1..4096 or a direct clock/reset");
+      bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op);
+      if (!structural) {
+        for (Type type : op.getOperandTypes())
+          if (!targetType(type))
+            return reject(&op,
+                          "operand requires fixed scalar width 1..4096 or a direct clock/reset");
+        for (Type type : op.getResultTypes())
+          if (!targetType(type) && !(isa<PortValueOp>(op) && targetControlShapeType(type, source)))
+            return reject(&op,
+                          "result requires fixed scalar width 1..4096 or a fixed control input");
+      }
       uint64_t expansion = 1;
-      if (isa<PortOp>(op)) {
+      if (structural) {
+        // Shape/index expressions are compile-time proof, not hardware values.
+        expansion = controlProjections.contains(&op) ? 2 : 0;
+      } else if (isa<PortOp>(op)) {
         auto type = op.getAttrOfType<TypeAttr>("type");
-        if (!type || !targetType(type.getValue()) ||
+        Type lowered = type ? targetType(type.getValue()) : Type();
+        if (type && !lowered)
+          lowered = targetControlShapeType(type.getValue(), source);
+        if (!type || !lowered ||
             (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
           return reject(
-              &op, "only fixed scalar input/output and direct Clock/Reset ports are supported");
-        if (text(&op, "direction") == "output" && isa<ControlCapabilityType>(type.getValue()))
+              &op,
+              "only fixed scalar input/output and fixed Clock/Reset input ports are supported");
+        if (text(&op, "direction") == "output" &&
+            !getDigitalControlBoundaryKind(type.getValue()).empty())
           return reject(&op, "clock/reset output capabilities require a later boundary profile");
         ports.push_back(&op);
+        portTypes.try_emplace(&op, lowered);
       } else if (isa<PortValueOp>(op)) {
         auto ref = op.getAttrOfType<FlatSymbolRefAttr>("port");
         auto *port = SymbolTable::lookupSymbolIn(source, ref);
@@ -301,7 +340,7 @@ public:
     for (Operation *port : ports) {
       circt::hw::PortInfo info;
       info.name = port->getAttrOfType<StringAttr>("sym_name");
-      info.type = targetType(port->getAttrOfType<TypeAttr>("type").getValue());
+      info.type = portTypes.lookup(port);
       bool input = text(port, "direction") == "input";
       info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
       info.argNum = input ? inputIndex++ : outputIndex++;
@@ -326,6 +365,22 @@ public:
       for (Value value : portValues[port])
         values[value] = body->getArgument(inputIndex);
       ++inputIndex;
+    }
+    // A projection is a statically proved reference into its actual input pin,
+    // not a runtime array operation. Install scalar mappings before any reset
+    // producers, synchronizer stages, assertions or registers consume them.
+    for (const auto &[original, control] : physicalControls) {
+      Value input = values.lookup(control.root);
+      if (!input)
+        return reject(original.getDefiningOp(), "physical control root did not map");
+      Value bit = circt::comb::ExtractOp::create(builder, original.getLoc(), input,
+                                                 *control.literalOffset, 1);
+      correlate(bit.getDefiningOp(), original.getDefiningOp());
+      if (cast<ControlCapabilityType>(original.getType()).getKind() == "clock") {
+        bit = circt::seq::ToClockOp::create(builder, original.getLoc(), bit);
+        correlate(bit.getDefiningOp(), original.getDefiningOp());
+      }
+      values[original] = bit;
     }
     // Reset producers precede consumers in the authored SSA graph. Lower them
     // before state allocation so no derived release is replaced by the raw pin.
@@ -471,8 +526,10 @@ public:
       crossingEdges.emplace_back(op, input);
     }
     for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults() || isa<DigitalStorageOp, PortValueOp, CrossingOp, ResetBoundaryOp,
-                                     ResetSyncOp, ResetCombineOp>(op))
+      if (!op.getNumResults() || controlProjections.contains(&op) ||
+          controlSelectors.contains(&op) ||
+          isa<DigitalStorageOp, PortValueOp, CrossingOp, ResetBoundaryOp, ResetSyncOp,
+              ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -582,6 +639,50 @@ public:
   }
 
 private:
+  LogicalResult planControlProjections() {
+    if (source.getBody().front().empty())
+      return success();
+    Operation *use = &source.getBody().front().back();
+    SmallVector<Value> selectors;
+    for (Operation &op : source.getBody().front()) {
+      if (!isa<ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(op) ||
+          getDigitalControlBoundaryKind(op.getResult(0).getType()).empty())
+        continue;
+      auto projection = resolveStaticShapeProjection(op.getResult(0), use);
+      if (failed(projection) || !projection->exactFixedCardinality ||
+          !targetControlShapeType(projection->root.getType(), source))
+        return reject(&op,
+                      "physical control projection requires a fixed input shape of 1..4096 bits");
+      auto root = projection->root.getDefiningOp<PortValueOp>();
+      auto ref = root ? root->getAttrOfType<FlatSymbolRefAttr>("port") : FlatSymbolRefAttr();
+      Operation *port = ref ? SymbolTable::lookupSymbolIn(source, ref) : nullptr;
+      if (!port || text(port, "direction") != "input")
+        return reject(&op, "physical control projection requires an owned input port");
+      if (auto scalar = dyn_cast<ControlCapabilityType>(op.getResult(0).getType())) {
+        auto control = resolvePhysicalControl(op.getResult(0), use, scalar.getKind());
+        if (failed(control) || !control->literalOffset)
+          return reject(&op, "physical control projection requires a proved literal input offset");
+        physicalControls.emplace_back(op.getResult(0), *control);
+      }
+      controlProjections.insert(&op);
+      llvm::append_range(selectors, op.getOperands().drop_front());
+    }
+    while (!selectors.empty()) {
+      Value value = selectors.pop_back_val();
+      Operation *op = value.getDefiningOp();
+      if (!op || !isa<ConstantOp, ConstLiteralOp, ConstExprOp>(op) ||
+          (!value.getType().isIndex() && !value.getType().isInteger(64)))
+        return reject(source, "physical control selectors require fixed compile-time expressions");
+      if (!controlSelectors.insert(op).second)
+        continue;
+      llvm::append_range(selectors, op->getOperands());
+    }
+    for (Operation *op : controlSelectors)
+      for (Operation *user : op->getUsers())
+        if (!controlSelectors.contains(user) && !controlProjections.contains(user))
+          return reject(op, "physical control selector escapes its compile-time projection");
+    return success();
+  }
   Value constant(Operation *at, unsigned bits, const llvm::APInt &number) {
     return circt::hw::ConstantOp::create(
         builder, at->getLoc(),
@@ -725,6 +826,9 @@ private:
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;
+  llvm::DenseMap<Operation *, Type> portTypes;
+  llvm::DenseSet<Operation *> controlProjections, controlSelectors;
+  SmallVector<std::pair<Value, PhysicalControl>> physicalControls;
   llvm::DenseMap<Operation *, SmallVector<Value>> portValues;
   llvm::DenseMap<Value, Operation *> updates;
   llvm::DenseMap<Value, Value> aliases, values;

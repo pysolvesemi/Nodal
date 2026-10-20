@@ -7,6 +7,8 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+
+#include <map>
 using namespace mlir;
 namespace nodal {
 namespace {
@@ -26,19 +28,6 @@ bool closed(Operation *op, ArrayRef<StringRef> names) {
   return llvm::all_of(op->getAttrs(), [&](NamedAttribute a) {
     return llvm::is_contained(names, a.getName().getValue());
   });
-}
-FailureOr<Operation *> physicalReset(Value v, Operation *use) {
-  auto *producer = v.getDefiningOp();
-  if (!capability(v.getType(), "reset") || !isa_and_nonnull<PortValueOp>(producer) ||
-      producer->getParentOp() != use->getParentOp() || failed(verifyDigitalValueScope(v, use)))
-    return failure();
-  auto ref = producer->getAttrOfType<FlatSymbolRefAttr>("port");
-  auto *port = ref ? SymbolTable::lookupSymbolIn(use->getParentOp(), ref) : nullptr;
-  auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
-  if (!isa_and_nonnull<PortOp>(port) || text(port, "direction") != "input" || !type ||
-      type.getValue() != v.getType())
-    return failure();
-  return port;
 }
 class Inspector {
 public:
@@ -76,7 +65,7 @@ public:
         (void)reject(op, "reset boundary has invalid operands or attributes");
         return failure();
       }
-      auto port = physicalReset(op->getOperand(0), op);
+      auto port = resolvePhysicalControl(op->getOperand(0), op, "reset");
       if (failed(port)) {
         (void)reject(op, "reset boundary must retain its exact physical input port");
         return failure();
@@ -88,7 +77,7 @@ public:
           return failure();
         if (!isa<ResetBoundaryOp>(other) || other.getNumOperands() != 1)
           continue;
-        auto otherPort = physicalReset(other.getOperand(0), &other);
+        auto otherPort = resolvePhysicalControl(other.getOperand(0), &other, "reset");
         if (succeeded(otherPort) && *otherPort == *port &&
             text(&other, "reset_polarity") != text(op, "reset_polarity")) {
           (void)reject(op, "one physical reset root cannot have contradictory polarities");
@@ -110,10 +99,11 @@ public:
           return failure();
         }
         if (release == "sync") {
-          auto owner = domains.resolveDomain((*port)->getAttr("domain"));
-          auto ownerBinding = domains.resolveClockBinding((*port)->getAttr("domain"));
+          auto owner = domains.resolveDomain(port->port->getAttr("domain"));
+          auto ownerBinding = domains.resolveClockBinding(port->port->getAttr("domain"));
           if (failed(owner) || failed(ownerBinding) || text(*owner, "reset_policy") != "sync" ||
-              (*ownerBinding)->getOperand(0) != (*binding)->getOperand(0) ||
+              !samePhysicalControl((*ownerBinding)->getOperand(0), (*binding)->getOperand(0), op,
+                                   "clock") ||
               (*owner)->getAttr("edge") != (*domain)->getAttr("edge")) {
             (void)reject(op, "synchronous assertion requires its owning Sync clock and edge");
             return failure();
@@ -138,7 +128,8 @@ public:
       }
       auto binding = domains.resolveClockBinding(op->getAttr("destination_domain"));
       auto domain = domains.resolveDomain(op->getAttr("destination_domain"));
-      if (failed(binding) || failed(domain) || (*binding)->getOperand(0) != op->getOperand(1) ||
+      if (failed(binding) || failed(domain) ||
+          !samePhysicalControl((*binding)->getOperand(0), op->getOperand(1), op, "clock") ||
           !capability(op->getOperand(1).getType(), "clock")) {
         (void)reject(op, "reset synchronizer clock must be the exact destination binding");
         return failure();
@@ -162,13 +153,14 @@ public:
         (void)reject(op, "reset composition requires 1..32 actual reset operands");
         return failure();
       }
-      llvm::DenseMap<Operation *, unsigned> roots;
+      std::map<std::pair<Operation *, std::string>, unsigned> roots;
       for (Value operand : op->getOperands()) {
         auto input = inspect(operand, op, depth + 1);
         if (failed(input) || failed(charge(op, input->roots.size())))
           return failure();
         for (const auto &root : input->roots) {
-          auto [at, inserted] = roots.try_emplace(root.port, info.roots.size());
+          auto [at, inserted] = roots.try_emplace(
+              std::make_pair(root.physical.port, root.physical.scalarKey), info.roots.size());
           if (inserted)
             info.roots.push_back(root);
           else {
@@ -219,9 +211,10 @@ LogicalResult verifyResetForBinding(Operation *binding, Operation *domain,
   if (policy == "none")
     return success();
   Value reset = binding->getOperand(1);
-  if (policy == "sync" && isa_and_nonnull<PortValueOp>(reset.getDefiningOp())) {
-    auto root = physicalReset(reset, binding);
-    if (succeeded(root) && (*root)->getAttr("domain") == binding->getAttr("domain"))
+  if (policy == "sync" && isa_and_nonnull<PortValueOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(
+                              reset.getDefiningOp())) {
+    auto root = resolvePhysicalControl(reset, binding, "reset");
+    if (succeeded(root) && root->port->getAttr("domain") == binding->getAttr("domain"))
       return success();
     return reject(binding, "raw synchronous reset must belong to its actual sampling domain");
   }
@@ -235,7 +228,8 @@ LogicalResult verifyResetForBinding(Operation *binding, Operation *domain,
         text(root.release, "release") == "sync")
       return reject(binding,
                     "synchronous assertion contract cannot satisfy asynchronous reset policy");
-    if (!root.release || root.clock != binding->getOperand(0) ||
+    if (!root.release ||
+        !samePhysicalControl(root.clock, binding->getOperand(0), binding, "clock") ||
         root.edge != domain->getAttr("edge"))
       return reject(binding, "reset release lacks proof for the exact destination clock and edge");
   }

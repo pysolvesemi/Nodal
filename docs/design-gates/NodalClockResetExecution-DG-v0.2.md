@@ -100,3 +100,26 @@ Original F12 raw-Async and stimulus-reference negatives remain required. Target
 claims need actual source-to-native-to-SystemVerilog simulation, not only textual
 shape checks. No physical metastability qualification, CI or exhaustive matrix is
 claimed. Ancestry traversals and retained lineage copies are charged or bounded.
+
+## Required shaped physical control extension
+
+The next reset slice extends actual owned physical boundaries to statically
+proved scalar projections of finite Clock/Reset shapes. It reuses the existing
+shape snapshot and native ShapeModel projection proof, not a reset-specific
+projection representation. A shared physical-control resolver owns boundary
+identity: actual local input port, scalar element identity/offset, capability
+kind and scope. Domain clock proof and reset lineage consume that same identity.
+Two different elements of one reset array are distinct roots; equivalent static
+projection chains to one element remain the same root. Existing attributed-domain
+constraints and clock-edge proof remain applicable.
+
+The target uses a bounded fixed packed input for a finite control shape, extracts
+the proved scalar element and converts only Clock elements to target clock type.
+It does not reinterpret arbitrary bits as trusted control or guess an index.
+Malformed, dynamic, foreign, non-scalar or target-unresolved projections reject.
+Source and native ingress independently validate authoritative shape facts.
+Parameter-shaped controls must follow actual shape proof and target materialization
+constraints; this bounded fixed-shape slice does not silently close wider required
+relationship, propagation or shaped support. The existing projected-clock
+predecessor is upgraded to actual binding/state execution, not changed to a
+rejection merely to make the scalar implementation pass.

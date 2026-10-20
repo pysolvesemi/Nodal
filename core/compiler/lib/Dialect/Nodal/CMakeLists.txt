@@ -14,6 +14,7 @@ add_mlir_dialect_library(NodalDialect
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
   DomainModel.cpp
+  PhysicalControlModel.cpp
   ResetModel.cpp
   CrossingModel.cpp
   MemoryModel.cpp

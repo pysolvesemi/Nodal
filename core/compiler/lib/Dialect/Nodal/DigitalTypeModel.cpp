@@ -277,10 +277,9 @@ public:
         return success(
             succeeded(reject("Clock/Reset ports require explicit input/output direction")));
       auto portType = use->getAttrOfType<TypeAttr>("type");
-      auto controlType =
-          portType ? dyn_cast<ControlCapabilityType>(portType.getValue()) : ControlCapabilityType();
-      if (!use->getAttr("domain") && direction.getValue() == "input" && controlType &&
-          controlType.getKind() == "clock")
+      auto controlKind =
+          portType ? getDigitalControlBoundaryKind(portType.getValue()) : StringRef();
+      if (!use->getAttr("domain") && direction.getValue() == "input" && controlKind == "clock")
         return success();
       auto reference = use->getAttrOfType<FlatSymbolRefAttr>("domain");
       Operation *domain = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
@@ -564,15 +563,20 @@ bool isDigitalStorageType(Type type) {
   return succeeded(checker.check(type));
 }
 
-bool isDigitalControlBoundaryType(Type type) {
+StringRef getDigitalControlBoundaryKind(Type type) {
   unsigned depth = 0;
   while (auto shaped = llvm::dyn_cast_if_present<nodal::ShapedType>(type)) {
     if (++depth > digitalTypeMaximumDepth)
-      return false;
+      return {};
     type = shaped.getElementType();
   }
   auto control = llvm::dyn_cast_if_present<ControlCapabilityType>(type);
-  return control && (control.getKind() == "clock" || control.getKind() == "reset");
+  return control && (control.getKind() == "clock" || control.getKind() == "reset")
+             ? control.getKind()
+             : StringRef();
+}
+bool isDigitalControlBoundaryType(Type type) {
+  return !getDigitalControlBoundaryKind(type).empty();
 }
 
 FailureOr<int64_t>

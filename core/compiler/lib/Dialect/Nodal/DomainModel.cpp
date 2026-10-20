@@ -3,6 +3,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/PhysicalControlModel.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -29,12 +30,12 @@ bool capability(Type type, StringRef kind) {
 LogicalResult checkPhysical(Value value, Operation *binding, StringRef kind) {
   Operation *producer = value.getDefiningOp();
   Operation *module = binding->getParentOp();
-  if (!capability(value.getType(), kind) || !llvm::isa_and_nonnull<PortValueOp>(producer) ||
+  if (!capability(value.getType(), kind) ||
+      !llvm::isa_and_nonnull<PortValueOp, ShapeIndexOp, ShapeViewOp, ShapeSliceOp>(producer) ||
       producer->getParentOp() != module || failed(verifyDigitalValueScope(value, binding)))
     return reject(binding, "local binding requires actual owned typed input boundary signals");
-  auto ref = producer->getAttrOfType<FlatSymbolRefAttr>("port");
-  Operation *port = ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
-  auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+  auto physical = resolvePhysicalControl(value, binding, kind);
+  Operation *port = succeeded(physical) ? physical->port : nullptr;
   bool ownedDomain = port && (port->getAttr("domain") == binding->getAttr("domain") ||
                               (kind == "clock" && !port->getAttr("domain")));
   if (!ownedDomain && kind == "clock" && port) {
@@ -52,8 +53,7 @@ LogicalResult checkPhysical(Value value, Operation *binding, StringRef kind) {
       current = SymbolTable::lookupSymbolIn(module, parent);
     }
   }
-  if (!llvm::isa_and_nonnull<PortOp>(port) || text(port, "direction") != "input" || !type ||
-      type.getValue() != value.getType() || !ownedDomain)
+  if (failed(physical) || !ownedDomain)
     return reject(binding, "clock/reset producer must match an actual local input port and domain");
   return success();
 }

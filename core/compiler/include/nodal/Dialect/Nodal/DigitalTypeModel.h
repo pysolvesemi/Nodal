@@ -32,6 +32,8 @@ bool isDigitalStorageType(mlir::Type type);
 /// This is not a storage/scalar query; ordinary Struct/Mem/protocol payloads do
 /// not admit these capabilities. Shape proofs remain owned by ShapeModel.
 bool isDigitalControlBoundaryType(mlir::Type type);
+/// Return clock/reset through bounded structural shape layers, otherwise empty.
+llvm::StringRef getDigitalControlBoundaryKind(mlir::Type type);
 mlir::FailureOr<int64_t>
 inferDigitalControlMaximumElements(mlir::Type type, mlir::Operation *module,
                                    const ParameterIntegerEnvironment *environment = nullptr);

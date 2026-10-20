@@ -218,6 +218,44 @@ int main() {
                binding->setAttr("actual", before);
                return ok && succeeded(nodal::DomainModel(module).resolveDomain(req));
              });
+  const std::string projected =
+      domain() +
+      "\"nodal.port\"() <{sym_name = \"clocks\", type = "
+      "!nodal.shaped<\"2\", !nodal.capability<\"clock\">>, direction = \"input\", "
+      "domain = @core, metadata = {}}> : () -> ()\n"
+      "%clocks = \"nodal.port_value\"() <{port = @clocks, metadata = {}}> : () -> "
+      "!nodal.shaped<\"2\", !nodal.capability<\"clock\">>\n"
+      "%zero = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
+      "%clock = \"nodal.shape_index\"(%clocks, %zero) <{metadata = {}}> : "
+      "(!nodal.shaped<\"2\", !nodal.capability<\"clock\">>, index) -> "
+      "!nodal.capability<\"clock\">\n" +
+      secondBinding;
+  auto validPhysical = [&](Operation *, const nodal::DomainModel &model) {
+    return succeeded(model.resolveBinding(core));
+  };
+  test.check("fixed-projected-clock-is-an-executable-binding", projected, validPhysical);
+  test.check("fixed-projected-unattributed-clock", replace(projected, "domain = @core, ", ""),
+             validPhysical);
+  test.check("projected-foreign-domain-remains-rejected",
+             domain("foreign") +
+                 replace(projected, "domain = @core, metadata", "domain = @foreign, metadata"),
+             invalidPhysical, "actual local input port and domain");
+  test.check("projected-out-of-bounds-independently-rejected",
+             replace(projected, "value = 0 : index", "value = 2 : index"), invalidPhysical,
+             "NODAL-SHAPE");
+  test.check("projected-dynamic-selector-independently-rejected",
+             replace(projected, "\"nodal.constant\"() <{value = 0 : index, metadata = {}}>",
+                     "\"builtin.unrealized_conversion_cast\"()"),
+             invalidPhysical, "NODAL-SHAPE");
+  test.check("projected-output-independently-rejected",
+             replace(projected, "direction = \"input\"", "direction = \"output\""), invalidPhysical,
+             "actual local input port and domain");
+  test.check("projected-result-kind-independently-rejected",
+             replace(replace(projected, ") -> !nodal.capability<\"clock\">",
+                             ") -> !nodal.capability<\"reset\">"),
+                     ": (!nodal.capability<\"clock\">) -> ()",
+                     ": (!nodal.capability<\"reset\">) -> ()"),
+             invalidPhysical, "actual owned typed input boundary signals");
   const nodal::DomainModel detached(nullptr);
   test.report("null-owner-fails-closed",
               failed(detached.resolveDomain(core)) && failed(detached.resolveBinding(core)) &&

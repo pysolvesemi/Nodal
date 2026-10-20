@@ -232,6 +232,74 @@ std::string replace(std::string value, const std::string &from, const std::strin
   return value;
 }
 
+std::string controlShape(std::string dimensions, std::string element) {
+  return "!nodal.shaped<\"" + dimensions + "\", " + element + ">";
+}
+std::string controlProjection(std::string name, std::string mode) {
+  const std::string capability = "!nodal.capability<\"" + name + "\">";
+  const std::string matrix = controlShape("2,3", capability), flat = controlShape("6", capability),
+                    row = controlShape("3", capability), nested = controlShape("2", row),
+                    slice = controlShape("4", capability);
+  std::string body = port(name + "Pins", mode == "nested" ? nested : matrix);
+  auto index = [&](std::string result, std::string input, std::string type, std::string indices,
+                   unsigned count, std::string output) {
+    std::string types = type;
+    for (unsigned i = 0; i < count; ++i)
+      types += mode == "direct" ? ", index" : ", i64";
+    return "%" + result + " = \"nodal.shape_index\"(%" + input + ", " + indices + ") <{" +
+           metadata(result) + "}> : (" + types + ") -> " + output + "\n";
+  };
+  unsigned first = mode == "direct" && name == "reset" ? 0 : 1;
+  for (unsigned number : {first, first + 1}) {
+    std::string id = name + std::to_string(number);
+    if (mode == "direct")
+      body += "%" + id + " = \"nodal.constant\"() <{value = " + std::to_string(number) +
+              " : index, metadata = {}}> : () -> index\n";
+    else
+      body += literal(id, number, "i64");
+  }
+  if (mode == "direct")
+    return body +
+           index(name, name + "Pins", matrix,
+                 "%" + name + std::to_string(first) + ", %" + name + std::to_string(first + 1), 2,
+                 capability);
+  if (mode == "nested") {
+    body += index(name + "Row", name + "Pins", nested, "%" + name + "1", 1, row);
+    return body + index(name, name + "Row", row, "%" + name + "2", 1, capability);
+  }
+  body += "%" + name + "View = \"nodal.shape_view\"(%" + name +
+          "Pins) <{dimensions = \"6\", origin = \"Fixture." + name +
+          "Pins\", materialization = \"view\", observability = \"source_mapped\", "
+          "metadata = {semantic_path = \"Fixture." +
+          name + "View\", storage = \"structural\"}}> : (" + matrix + ") -> " + flat + "\n";
+  body += literal(name + "4", 4, "i64") + literal(name + "5", 5, "i64");
+  body += "%" + name + "Slice = \"nodal.shape_slice\"(%" + name + "View, %" + name + "1, %" + name +
+          "5, %" + name + "4) <{axis = 0 : i64, dimensions = \"4\", origin = \"Fixture." + name +
+          "View\", observability = \"source_mapped\", metadata = {semantic_path = \"Fixture." +
+          name + "Slice\", input_path = \"Fixture." + name +
+          "View\", storage = \"structural\", access = \"read_only\"}}> : (" + flat +
+          ", i64, i64, i64) -> " + slice + "\n";
+  return body + index(name, name + "Slice", slice, "%" + name + "2", 1, capability);
+}
+std::string projectedSetup(std::string mode, std::string policy = "sync") {
+  std::string body = setup(policy);
+  for (auto name : {"clock", "reset"})
+    body = replace(body, port(name, "!nodal.capability<\"" + std::string(name) + "\">"),
+                   controlProjection(name, mode));
+  return body;
+}
+bool packedClock(Value clock, uint64_t offset) {
+  auto converted = clock.getDefiningOp<circt::seq::ToClockOp>();
+  if (!converted)
+    return false;
+  Value input = converted->getOperand(0);
+  auto extract = input.getDefiningOp<circt::comb::ExtractOp>();
+  return extract && extract->getAttrOfType<IntegerAttr>("lowBit").getInt() == offset &&
+         extract->getOperand(0).getType().isInteger(6) &&
+         evaluate(input, {{"clockPins", uint64_t(1) << offset}}, 0) == 1 &&
+         evaluate(input, {{"clockPins", ~(uint64_t(1) << offset)}}, 0) == 0;
+}
+
 std::string levelSetup(std::string policy = "none", std::string edge = "rising",
                        std::string polarity = "active_high") {
   std::string body = "\"nodal.domain\"() <{sym_name = \"source\", edge = \"rising\", "
@@ -417,6 +485,51 @@ int main(int argc, char **argv) {
     bool good = m && succeeded(lower(*m));
     report(name, good && check(*m));
   };
+  for (std::string mode : {"direct", "nested", "view-slice"})
+    test("shaped-control-state-" + mode,
+         projectedSetup(mode) + enabled() + assign("result", "state"), [&](mlir::ModuleOp m) {
+           auto reg = state(m);
+           unsigned clockOffset = mode == "view-slice" ? 3 : 5;
+           unsigned resetOffset = mode == "direct" ? 1 : clockOffset;
+           uint64_t resetMask = uint64_t(1) << resetOffset;
+           return reg && packedClock(reg.getClk(), clockOffset) &&
+                  evaluate(reg.getInput(), {{"resetPins", resetMask}, {"enable", 1}, {"input", 71}},
+                           19) == 0 &&
+                  evaluate(reg.getInput(),
+                           {{"resetPins", 63 ^ resetMask}, {"enable", 1}, {"input", 71}},
+                           19) == 71 &&
+                  evaluate(reg.getInput(), {{"resetPins", 0}, {"enable", 0}, {"input", 71}}, 19) ==
+                      19;
+         });
+  {
+    auto body = projectedSetup("view-slice", "async_assert_sync_release");
+    body = replace(body, "\"nodal.local_domain_binding\"(%clock, %reset)",
+                   "%raw = \"nodal.reset_boundary\"(%reset) <{reset_polarity = \"active_high\", "
+                   "release = \"raw\", metadata = {}}> : (!nodal.capability<\"reset\">) -> "
+                   "!nodal.capability<\"reset\">\n"
+                   "%safe = \"nodal.reset_sync\"(%raw, %clock) <{destination_domain = @core, "
+                   "reset_polarity = \"active_high\", stages = 2 : i64, metadata = {}}> : "
+                   "(!nodal.capability<\"reset\">, !nodal.capability<\"clock\">) -> "
+                   "!nodal.capability<\"reset\">\n"
+                   "\"nodal.local_domain_binding\"(%clock, %safe)");
+    test("shaped-control-reset-producers-before-state",
+         body + assign("state", "input", true) + assign("result", "state"), [&](mlir::ModuleOp m) {
+           unsigned stages = 0, consumers = 0;
+           bool valid = true;
+           m.walk([&](circt::seq::FirRegOp reg) {
+             valid &= packedClock(reg.getClk(), 3) && reg.getIsAsync();
+             if (reg.getNameAttr().getValue() == "state") {
+               ++consumers;
+               valid &= isa<circt::seq::FirRegOp>(reg.getReset().getDefiningOp());
+             } else {
+               ++stages;
+               valid &= evaluate(reg.getReset(), {{"resetPins", 8}}, 0) == 1 &&
+                        evaluate(reg.getReset(), {{"resetPins", 55}}, 0) == 0;
+             }
+           });
+           return valid && stages == 2 && consumers == 1;
+         });
+  }
   for (unsigned stages : {2u, 32u}) {
     std::string producers =
         "%raw = \"nodal.reset_boundary\"(%reset) <{reset_polarity = \"active_high\", "
@@ -514,6 +627,24 @@ int main(int argc, char **argv) {
            wrap(setup() + port("aggregate", "!nodal.shaped<\"2\", !nodal.uint<8>>") +
                 assign("result", "state")),
            "only fixed scalar");
+  negative("shaped-control-width-cap-is-atomic",
+           wrap(setup() + port("tooWide", controlShape("4097", "!nodal.capability<\"reset\">")) +
+                assign("result", "state")),
+           "only fixed scalar");
+  negative("shaped-control-output-is-atomic",
+           wrap(setup() +
+                port("clocksOut", controlShape("2", "!nodal.capability<\"clock\">"), "output") +
+                assign("result", "state")),
+           "clock/reset output capabilities");
+  negative(
+      "unproved-control-flatten-is-atomic",
+      wrap(
+          setup() + port("resetPins", controlShape("2", "!nodal.capability<\"reset\">")) +
+          "%unproved = \"nodal.shape_flatten\"(%resetPins) <{layout = \"reverse\", metadata = {}}> "
+          ": "
+          "(!nodal.shaped<\"2\", !nodal.capability<\"reset\">>) -> !nodal.capability<\"reset\">\n" +
+          assign("result", "state")),
+      "operand requires fixed scalar");
   negative("memory-target-profile-rejected",
            wrap(setup() +
                 "\"nodal.memory\"() <{sym_name = \"memory\", element_type = !nodal.uint<8>, depth "

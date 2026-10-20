@@ -124,7 +124,7 @@ private[nodal] object EnumMlir:
       val value = definition(identity, path)
       "@" + quoted(symbolByIdentity(value.identity))
 
-    def parseType(text: String, path: String): String =
+    private def exactDefinition(text: String, path: String): ResolvedEnumAbi =
       requireValid(text.startsWith("Enum(") && text.endsWith(")"), "malformed enum type", path)
       val fields = text.drop(5).dropRight(1).split(",", -1).toVector
       requireValid(fields.size == 3, "enum type requires identity, width and ABI hash", path)
@@ -134,6 +134,12 @@ private[nodal] object EnumMlir:
         "enum type differs from its exact definition ABI",
         path
       )
+      value
+
+    def bitWidth(text: String, path: String): Int = exactDefinition(text, path).width
+
+    def parseType(text: String, path: String): String =
+      val value = exactDefinition(text, path)
       s"!nodal.enum<${quoted(symbolByIdentity(value.identity))}, ${value.width}>"
 
     private def metadata(value: ResolvedEnumAbi, path: Option[String]): String = dictionary(

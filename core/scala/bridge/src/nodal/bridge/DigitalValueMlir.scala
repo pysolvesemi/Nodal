@@ -1207,7 +1207,7 @@ private[nodal] object DigitalValueMlir:
         then
           requireVisible(input, expression.owner, expression.region, expression.path)
 
-    ResetMlir.validate(snapshot)
+    private val resetRoots = ResetMlir.validate(snapshot)
 
     requireValid(
       snapshot.digitalExpressions.size <= 65536 &&
@@ -1235,14 +1235,25 @@ private[nodal] object DigitalValueMlir:
         expression.path
       )
       requireValid(
-        (expression.operation == "cdc_sync") == expression.crossing.nonEmpty,
-        "only owned level crossings carry an executable crossing contract",
+        ExecutableCrossingContract.Operations(expression.operation) == expression.crossing.nonEmpty,
+        "only owned crossings carry an executable crossing contract",
         expression.path
       )
       expression.crossing.foreach: crossing =>
         requireValid(
           expression.region.isEmpty && expression.operands.size == 1 &&
-            expression.dataType == "Bool" && expressionType(expression.operands.head) == "Bool" &&
+            expression.dataType == expressionType(expression.operands.head) &&
+            (crossing.kind == "gray" || expression.dataType == "Bool") &&
+            Set("sync", "gray", "pulse")(crossing.kind) &&
+            expression.operation == "cdc_" + crossing.kind &&
+            crossing.contract == ExecutableCrossingContract.contract(crossing.kind) &&
+            crossing.obligations.size == ExecutableCrossingContract.obligations(
+              crossing.kind
+            ).size &&
+            crossing.obligations.toMap == ExecutableCrossingContract.obligations(
+              crossing.kind
+            ).toMap &&
+            (crossing.kind != "pulse" || crossing.stages == 2) &&
             expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
             expression.caseIds.isEmpty && expression.structure.isEmpty &&
             expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
@@ -1253,9 +1264,16 @@ private[nodal] object DigitalValueMlir:
                 value.path == domain && value.kind != "required"
               )
             ),
-          "level crossing requires one module-owned Bool input, distinct actual endpoints and 2..32 stages",
+          "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
           expression.path
         )
+        if crossing.kind == "pulse" then
+          val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
+          requireValid(
+            source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
+            "pulse requires common nonempty physical reset roots and polarities with safe release",
+            expression.path
+          )
       requireValid(
         Set(
           "reset_boundary",
@@ -2006,6 +2024,34 @@ private[nodal] object DigitalValueMlir:
         ) => String,
         renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
     ): Rendered =
+      var crossingStateBits = BigInt(0)
+      def bitPatternWidth(text: String, path: String): BigInt =
+        var remaining = 65536
+        def visit(value: String, depth: Int): BigInt =
+          remaining -= 1
+          requireValid(depth <= 128 && remaining >= 0, "Gray type exceeds structural budget", path)
+          val result = if value == "Bool" then BigInt(1)
+          else if value.startsWith("Enum(") then BigInt(enums.bitWidth(value, path))
+          else if value.startsWith("Struct(") then
+            structType(value, path)._2.foldLeft(BigInt(0))((total, field) =>
+              total + visit(field._2, depth + 1)
+            )
+          else if value.startsWith("Vec(") then
+            val (element, dimensions) = vectorType(value, path)
+            dimensions.foldLeft(visit(element, depth + 1))((total, dimension) =>
+              total * loopBoundQuery.bounds(loopBoundQuery.resolve(module.path, dimension)).upper
+            )
+          else
+            scalarType(value, path).map(info => BigInt(info.upper)).getOrElse(
+              fail("Gray requires finite Bool, bit-vector, Enum or Vec/Struct bit patterns", path)
+            )
+          requireValid(
+            result > 0 && result <= Long.MaxValue,
+            "Gray type footprint is excessive",
+            path
+          )
+          result
+        visit(text, 0)
       val lines = mutable.ArrayBuffer.empty[String]
       val values = mutable.HashMap.empty[String, (String, String)]
       val heights = mutable.HashMap.empty[String, Int]
@@ -2739,17 +2785,40 @@ private[nodal] object DigitalValueMlir:
                       height,
                       Unknown
                     )
-                  else if expression.operation == "cdc_sync" then
+                  else if ExecutableCrossingContract.Operations(expression.operation) then
                     val crossing = expression.crossing.get
                     requireValid(
-                      dataType == "!nodal.bits<1>" && operands.map(_._2) == Vector(dataType),
-                      "level crossing requires the exact Bool native type",
+                      operands.map(_._2) == Vector(dataType) &&
+                        exactValueType(
+                          expression.dataType,
+                          expressionType(expression.operands.head),
+                          path
+                        ),
+                      "crossing requires the exact complete input/result native type",
                       path
                     )
+                    val bits = if crossing.kind == "gray" then
+                      bitPatternWidth(expression.dataType, path)
+                    else BigInt(1)
+                    crossingStateBits += ExecutableCrossingContract.stateBits(
+                      crossing.kind,
+                      bits,
+                      crossing.stages
+                    )
+                    requireValid(
+                      crossingStateBits <= ExecutableCrossingContract.MaximumStateBits,
+                      "crossing state exceeds its expansion budget",
+                      path
+                    )
+                    val obligations = if crossing.obligations.isEmpty then ""
+                    else
+                      crossing.obligations.map((name, value) => s"$name = ${quoted(value)}")
+                        .mkString("obligations = {", ", ", "}, ")
                     val attributes =
-                      s"{kind = ${quoted("sync")}, contract = ${quoted("level_v1")}, " +
+                      s"{kind = ${quoted(crossing.kind)}, contract = ${quoted(crossing.contract)}, " +
                         s"stages = ${crossing.stages} : i64, source_domain = ${domainReference(crossing.sourceDomain)}, " +
-                        s"destination_domain = ${domainReference(crossing.destinationDomain)}, metadata = ${metadata(path, false)}}"
+                        s"destination_domain = ${domainReference(crossing.destinationDomain)}, " +
+                        obligations + s"metadata = ${metadata(path, false)}}"
                     (
                       Vector(operation(
                         "nodal.crossing",

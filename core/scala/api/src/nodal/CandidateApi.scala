@@ -657,7 +657,7 @@ def elsewhen(condition: Boolean)(body: => Unit): Unit =
   val _ = () => body
   SequentialRuntime.missing()
 
-/** Value carrying an explicit Gray-code proof for CDC. */
+/** Gray-classified value. Runtime transitions, stability and physical skew remain obligations. */
 final class Gray[A <: Data] private[nodal] (val value: Expr[A])
 
 object Gray:
@@ -687,14 +687,20 @@ object Cdc:
   def sync(bit: Expr[Bool], to: ClockDomain, stages: Int = 2): Expr[Bool] =
     ConstructionKernel.levelSync(bit, to, stages)
 
+  /** Uninitialized destination sampler with checked source transitions and retained physical
+    * stability/skew obligations. Not every input change is delivered.
+    */
   def gray[A <: Data](
       grayValue: Gray[A],
       to: ClockDomain,
       stages: Int = 2
-  ): Expr[A] = CandidateRuntime.expr(grayValue, to, stages)
+  ): Expr[A] = ConstructionKernel.graySync(grayValue.value, to, stages)
 
+  /** Toggle transport requiring single-cycle pulses, returned-acknowledgement spacing and a common
+    * reset epoch. There is no public ready signal or delivery guarantee outside those obligations.
+    */
   def pulse(pulse: Pulse, to: ClockDomain): Expr[Bool] =
-    CandidateRuntime.booleanExpr("cdc_pulse", pulse, to)
+    ConstructionKernel.pulseSync(pulse.value, to)
 
   def handshake[A <: Data](payload: Expr[A], to: ClockDomain): Expr[A] =
     CandidateRuntime.expr(payload, to)

@@ -126,7 +126,7 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     materializationIntent: Option[KernelDigitalIntent] = None,
     structure: Option[KernelStructOperationSnapshot] = None,
     memory: Option[KernelMemoryPortSnapshot] = None,
-    crossing: Option[KernelLevelCrossingSnapshot] = None,
+    crossing: Option[KernelExecutableCrossingSnapshot] = None,
     reset: Option[KernelResetSnapshot] = None
 )
 
@@ -139,11 +139,16 @@ private[nodal] final case class KernelResetSnapshot(
     inputs: Vector[String]
 )
 
-/** Executable level contract. Identity and actual input edge belong to the enclosing expression. */
-private[nodal] final case class KernelLevelCrossingSnapshot(
+/** Executable crossing contract. Actual input, source location and identity belong to the
+  * expression.
+  */
+private[nodal] final case class KernelExecutableCrossingSnapshot(
     sourceDomain: String,
     destinationDomain: String,
-    stages: Int
+    stages: Int,
+    kind: String,
+    contract: String,
+    obligations: Vector[(String, String)]
 )
 
 /** Exact declaration association. Address/type proofs remain attached to actual operands. */

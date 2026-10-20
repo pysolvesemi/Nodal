@@ -45,15 +45,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     noiseOperators.find(value => references.contains(value._1)).foreach: value =>
       reject(value._1, "NODAL-ANALOG-039-001", s"noise effect '${value._2}'")
 
-  private final case class LevelCrossing(
-      input: Expr[Bool],
+  private final case class ExecutableCrossing(
+      input: Expr[?],
       destination: ClockDomain,
       stages: Int,
+      kind: String,
       var sourceDomain: Option[String] = None,
       var destinationDomain: Option[String] = None
   )
-  private val levelCrossings = mutable.LinkedHashMap.empty[ExpressionRef, LevelCrossing]
-  private var crossingStageCount = 0L
+  private val executableCrossings = mutable.LinkedHashMap.empty[ExpressionRef, ExecutableCrossing]
+  private var crossingStateBits = BigInt(0)
   private val pulseValues = new IdentityHashMap[Expr[Bool], java.lang.Boolean]()
 
   private def crossingFailure(message: String): Nothing =
@@ -63,57 +64,78 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val _ = pulseValues.put(value, java.lang.Boolean.TRUE)
 
   def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
+    executableCrossing(bit, to, stages, "sync")
+
+  def executableCrossing[A <: Data](
+      input: Expr[A],
+      to: ClockDomain,
+      stages: Int,
+      kind: String
+  ): Expr[A] =
     try
       closeBehavioralChain()
+      val label = "Cdc." + kind
       if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
         analogStack.nonEmpty || analogSemanticContext.nonEmpty
-      then
-        crossingFailure(
-          "Cdc.sync requires module-level construction; callbacks are unsupported"
-        )
+      then crossingFailure(s"$label requires module-level construction; callbacks are unsupported")
       val owner = currentModule.handle
       if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
         crossingFailure(
-          "Cdc.sync destination and any active lexical domain must belong to the active Module"
+          s"$label destination and any active lexical domain must belong to the active Module"
         )
-      if stages < 2 || stages > 32 then crossingFailure("Cdc.sync stages must be between 2 and 32")
-      if crossingStageCount + stages > 262144 then
-        crossingFailure("Cdc.sync generated state exceeds its expansion budget")
-      val reference = valueReference(bit)
+      if stages < 2 || stages > 32 || (kind == "pulse" && stages != 2) then
+        crossingFailure(s"$label stages must be between 2 and 32 (pulse requires 2)")
+      val reference = valueReference(input)
       val inputOwner = reference match
         case value: DeclarationRef => value.module
         case value: ExpressionRef => value.module
+      val dataType = CandidateRuntime.expressionDataType(input).getOrElse(
+        crossingFailure(s"$label input requires an actual owned digital value")
+      )
+      val descriptor = CandidateRuntime.typeDescriptor(dataType)
       if inputOwner != owner ||
-        CandidateRuntime.expressionDataType(bit).map(CandidateRuntime.typeDescriptor) !=
-          Some(KernelTypeDescriptor("Bool"))
-      then crossingFailure("Cdc.sync input requires an actual owned Bool value")
-      val result = new KernelExpr[Bool](
-        Vector(bit),
-        resultType = Some(KernelTypeDescriptor("Bool")),
-        operation = Some("cdc_sync")
+        (kind != "gray" && descriptor != KernelTypeDescriptor("Bool"))
+      then crossingFailure(s"$label input requires an actual owned Bool value")
+      val bits = if kind == "gray" then
+        shapeTypeFootprint(
+          dataType,
+          owner,
+          cardinality = true,
+          storageContext = true,
+          bitPatternOnly = true
+        ).getOrElse(crossingFailure("Gray requires a finite digital bit pattern"))
+      else BigInt(1)
+      val stateBits = ExecutableCrossingContract.stateBits(kind, bits, stages)
+      if crossingStateBits + stateBits > ExecutableCrossingContract.MaximumStateBits then
+        crossingFailure(s"$label generated state exceeds its expansion budget")
+      val result = new KernelExpr[A](
+        Vector(input),
+        resultType = Some(descriptor),
+        operation = Some("cdc_" + kind)
       )
       val captured = captureExpression(result).get
-      levelCrossings.update(captured, LevelCrossing(bit, to, stages))
-      crossingStageCount += stages
+      executableCrossings.update(captured, ExecutableCrossing(input, to, stages, kind))
+      crossingStateBits += stateBits
       result
     catch
       case failure: Throwable =>
-        poisonConstructor(failure, "level crossing")
+        poisonConstructor(failure, "executable crossing")
         scala.util.Failure[Nothing](failure).get
 
-  private def levelCrossingSnapshot(expression: KernelExpr[?])
-      : Option[KernelLevelCrossingSnapshot] =
-    if expression.operation.contains("cdc_sync") then
-      val record = levelCrossings.getOrElse(
+  private def executableCrossingSnapshot(expression: KernelExpr[?])
+      : Option[KernelExecutableCrossingSnapshot] =
+    if expression.operation.exists(ExecutableCrossingContract.Operations) then
+      val record = executableCrossings.getOrElse(
         expressionIds.get(expression),
-        crossingFailure("level crossing requires its actual owned construction record")
+        crossingFailure("crossing requires its actual owned construction record")
       )
-      Some(KernelLevelCrossingSnapshot(
-        record.sourceDomain.getOrElse(crossingFailure("level crossing source is unresolved")),
-        record.destinationDomain.getOrElse(
-          crossingFailure("level crossing destination is unresolved")
-        ),
-        record.stages
+      Some(KernelExecutableCrossingSnapshot(
+        record.sourceDomain.getOrElse(crossingFailure("crossing source is unresolved")),
+        record.destinationDomain.getOrElse(crossingFailure("crossing destination is unresolved")),
+        record.stages,
+        record.kind,
+        ExecutableCrossingContract.contract(record.kind),
+        ExecutableCrossingContract.obligations(record.kind)
       ))
     else None
 
@@ -282,6 +304,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           poisonConstructor(error, "reset synchronization")
           throw error
 
+  private final class ResetLineageQuery:
+    private val memo =
+      new IdentityHashMap[Expr[Reset], Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]]()
+    def apply(
+        value: Expr[Reset],
+        depth: Int = 0
+    ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
+      if depth > 128 then resetFailure("reset ancestry budget exceeded")
+      Option(memo.get(value)).getOrElse:
+        val result = visit(value, depth)
+        memo.put(value, result)
+        result
+    private var work = 0L
+    private def visit(
+        value: Expr[Reset],
+        depth: Int
+    ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
+      work += 1
+      if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
+      val node = resetRecord(value)
+      if node.kind == "boundary" then
+        Map(physicalControlIdentity(node.inputs.head) -> (node.polarity, value))
+      else
+        val result =
+          scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
+        node.inputs.foreach(input =>
+          apply(input, depth + 1).foreach { (root, fact) =>
+            work += 1
+            if work > 524288 then resetFailure("reset ancestry budget exceeded")
+            result.get(root).foreach(previous =>
+              if previous != fact then resetFailure("independent reset releases reconverge")
+            )
+            result(root) = fact
+          }
+        )
+        if node.kind == "sync" then
+          result.iterator.map((root, fact) => root -> (fact._1, value)).toMap
+        else result.toMap
+
   def resetCombine(resets: Vector[Expr[Reset]]): Expr[Reset] =
     try
       resetScope()
@@ -294,32 +355,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case v: ExpressionRef => v.module
         if owner != currentModule.handle then
           resetFailure("composition requires owned reset producers")
-      var work = 0L
-      def lineage(
-          value: Expr[Reset],
-          depth: Int
-      ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
-        work += 1
-        if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
-        val node = resetRecord(value)
-        if node.kind == "boundary" then
-          Map(physicalControlIdentity(node.inputs.head) -> (node.polarity, value))
-        else
-          val result =
-            scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
-          node.inputs.foreach(input =>
-            lineage(input, depth + 1).foreach { (root, fact) =>
-              work += 1
-              if work > 524288 then resetFailure("reset ancestry budget exceeded")
-              result.get(root).foreach(previous =>
-                if previous != fact then resetFailure("independent reset releases reconverge")
-              )
-              result(root) = fact
-            }
-          )
-          if node.kind == "sync" then
-            result.iterator.map((root, fact) => root -> (fact._1, value)).toMap
-          else result.toMap
+      val lineage = new ResetLineageQuery
       val seen =
         scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
       inputs.foreach(input =>
@@ -2022,7 +2058,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     final case class SampleFacts(
         domains: Set[String],
         sources: Set[DeclarationRef | ExpressionRef],
-        crossings: Set[ExpressionRef]
+        crossings: Set[ExpressionRef],
+        pulseClassified: Boolean = false
     )
     val sampleCache = mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
     val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
@@ -2055,6 +2092,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
         val crossings = mutable.HashSet.empty[ExpressionRef]
         var count = 0
+        var pulseClassified = false
         while pending.nonEmpty do
           val current = pending.removeLast()
           current match
@@ -2065,7 +2103,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 behavioralFailure("sequential dependency graph exceeds its budget")
               if strict && reference.isInstanceOf[Expr[?]] && pulseValues.containsKey(reference)
               then
-                crossingFailure("Pulse-classified input cannot be relabeled as a level")
+                pulseClassified = true
               val declarationRef = Option(declarationIds.get(reference))
               declarationRef.foreach: declarationRef =>
                 if declarationRef.module != owner then
@@ -2108,8 +2146,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       enqueue(machine.futureSampleDependencies)
                 fsmResults.get(expressionRef).foreach: (machine, _) =>
                   enqueue(machine.futureSampleDependencies)
-              expressionRef.flatMap(levelCrossings.get) match
+              expressionRef.flatMap(executableCrossings.get) match
                 case Some(crossing) =>
+                  if strict && crossing.kind == "pulse" then pulseClassified = true
                   crossings += expressionRef.get
                   sourceRoots += expressionRef.get
                   domains += resolved.getOrElse(
@@ -2147,7 +2186,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val result = SampleFacts(
           domains.toSet,
           if strict then sourceRoots.toSet else Set.empty,
-          crossings.toSet
+          crossings.toSet,
+          pulseClassified
         )
         cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size
         if cachedFacts > 262144 then
@@ -2159,7 +2199,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val firstBoundary = mutable.HashMap.empty[DeclarationRef | ExpressionRef, ExpressionRef]
         var lineageEdges = 0
         facts.crossings.toVector.sortBy(_.index).foreach: boundary =>
-          val roots = sampleFacts(levelCrossings(boundary).input, owner, strict = true).sources
+          val roots = sampleFacts(executableCrossings(boundary).input, owner, strict = true).sources
           roots.foreach: root =>
             lineageEdges += 1
             if lineageEdges > 262144 then
@@ -2167,7 +2207,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             firstBoundary.get(root).foreach: previous =>
               if previous != boundary then
                 behavioralFailure(
-                  "independent level synchronizers with a shared source reconverge at one sample",
+                  "independent crossings with a shared source reconverge at one sample",
                   "NODAL-CDC-057-002"
                 )
             firstBoundary.update(root, boundary)
@@ -2203,22 +2243,43 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         current.get.fsmAction.foreach(header => fsmControls(header).foreach(include))
         current = current.get.parent
       verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet), owner)
-    levelCrossings.foreach: (reference, crossing) =>
+    val pulseLineage = new ResetLineageQuery
+    val pulseRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
+    def pulseResetRoots(path: String): Map[(DeclarationRef, Long), ResetPolarity] =
+      pulseRoots.getOrElseUpdate(
+        path, {
+          val domain = domainsByPath(path).domain
+          val reset = Option(effectiveResets.get(domain)).getOrElse(
+            crossingFailure("Cdc.pulse requires reset-bearing endpoints with common physical roots")
+          )
+          pulseLineage(reset).view.mapValues(_._1).toMap
+        }
+      )
+    executableCrossings.foreach: (reference, crossing) =>
       val facts = sampleFacts(crossing.input, reference.module, strict = true)
       verifyReconvergence(facts, reference.module)
+      if crossing.kind != "pulse" && facts.pulseClassified then
+        crossingFailure("Pulse-classified input cannot be relabeled as a level or Gray value")
       val sources = facts.domains
       if sources.size != 1 then
-        crossingFailure("Cdc.sync input must have exactly one known source domain")
+        crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
       val destination = resolved.getOrElse(
         domainRef(crossing.destination),
-        crossingFailure("Cdc.sync destination has no actual resolved domain")
+        crossingFailure(s"Cdc.${crossing.kind} destination has no actual resolved domain")
       )
       val source = sources.head
       if source == destination then
-        crossingFailure("Cdc.sync requires distinct source and destination domains")
+        crossingFailure(s"Cdc.${crossing.kind} requires distinct source and destination domains")
       if !domainsByPath.get(source).exists(_.reference.module == reference.module) ||
         !domainsByPath.get(destination).exists(_.reference.module == reference.module)
-      then crossingFailure("Cdc.sync endpoints must resolve to actual domains in the same Module")
+      then
+        crossingFailure(
+          s"Cdc.${crossing.kind} endpoints must resolve to actual domains in the same Module"
+        )
+      if crossing.kind == "pulse" then
+        val sourceRoots = pulseResetRoots(source)
+        if sourceRoots.isEmpty || sourceRoots != pulseResetRoots(destination) then
+          crossingFailure("Cdc.pulse requires common physical reset roots and polarities")
       crossing.sourceDomain = Some(source)
       crossing.destinationDomain = Some(destination)
     operations.zipWithIndex.foreach: (operation, index) =>
@@ -3664,6 +3725,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       cardinality: Boolean,
       storageContext: Boolean = false
   ): Unit =
+    val _ = shapeTypeFootprint(dataType, owner, cardinality, storageContext)
+
+  private def shapeTypeFootprint(
+      dataType: DataType[?],
+      owner: Long,
+      cardinality: Boolean,
+      storageContext: Boolean,
+      bitPatternOnly: Boolean = false
+  ): Option[BigInt] =
     val active = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
     var remaining = 65536
     def identifier(name: String): Unit =
@@ -3687,6 +3757,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       active.put(current, java.lang.Boolean.TRUE)
       try
         val descriptor = CandidateRuntime.typeDescriptor(current)
+        if bitPatternOnly && !Set("Bits", "UInt", "SInt", "Bool", "Enum", "Struct", "Vec")(
+            descriptor.kind
+          )
+        then
+          crossingFailure("Gray requires Bool, bit-vector, Enum, or finite Vec/Struct bit patterns")
         descriptor.kind match
           case "Bits" | "UInt" | "SInt" =>
             Some(BigInt(digitalWidthBound(descriptor, owner).bounds.upper))
@@ -3741,6 +3816,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val footprint = visit(dataType, 0, field = storageContext)
     if storageContext && footprint.isEmpty then
       fail("NODAL-DIGITAL-054-010", "digital storage requires a directionless storable value type")
+    footprint
 
   private def validateShapeDescriptor(
       descriptor: KernelTypeDescriptor,
@@ -4345,8 +4421,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     case expression: KernelExpr[?]
         if expression.operation.exists(Set("reset_boundary", "rdc_sync", "reset_combine")) =>
       resetFailure("reset producers require owned reset construction entrypoints")
-    case expression: KernelExpr[?] if expression.operation.contains("cdc_sync") =>
-      crossingFailure("level crossings require the owned Cdc.sync entrypoint")
+    case expression: KernelExpr[?]
+        if expression.operation.exists(ExecutableCrossingContract.Operations) =>
+      crossingFailure(
+        "crossings require the owned Cdc.sync entrypoint or matching Gray/Pulse entrypoint"
+      )
     case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
       memoryFailure("memory reads require the owned Mem.read entrypoint")
     case expression: KernelExpr[?]
@@ -8036,7 +8115,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ,
       collectionArguments.keysIterator.map(expressionPath).toSet,
       memoryReadSnapshot,
-      levelCrossingSnapshot,
+      executableCrossingSnapshot,
       resetSnapshot
     )
 

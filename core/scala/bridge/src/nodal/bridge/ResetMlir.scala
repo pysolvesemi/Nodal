@@ -5,7 +5,8 @@ import scala.collection.mutable
 
 /** Independent bounded verification of the actual reset producer graph at snapshot ingress. */
 private[nodal] object ResetMlir:
-  def validate(snapshot: ConstructionSnapshot): Unit =
+  def validate(snapshot: ConstructionSnapshot)
+      : Map[String, Map[PhysicalControlMlir.Identity, String]] =
     def fail(message: String, path: String): Nothing = throw new BridgeException(
       BridgeDiagnostic("NODAL-RDC-001", message, Some(path))
     )
@@ -23,6 +24,8 @@ private[nodal] object ResetMlir:
         clock: Option[(PhysicalControlMlir.Identity, String)] = None,
         producer: Option[String] = None
     )
+    val lineageMemo =
+      mutable.Map.empty[(String, String), Map[PhysicalControlMlir.Identity, (String, Release)]]
     var work = 0L
     def clock(domain: String): (PhysicalControlMlir.Identity, String) =
       val d = domains.getOrElse(domain, fail("reset destination is not an owned domain", domain))
@@ -46,6 +49,13 @@ private[nodal] object ResetMlir:
       work += 1
       if depth > 128 || work > 524288 || chain(path) then
         fail("reset graph is cyclic or excessive", path)
+      lineageMemo.getOrElseUpdate((path, owner), compute(path, owner, chain, depth))
+    def compute(
+        path: String,
+        owner: String,
+        chain: Set[String],
+        depth: Int
+    ): Map[PhysicalControlMlir.Identity, (String, Release)] =
       val e = values.getOrElse(path, fail("reset has no actual typed producer", path))
       val r = e.reset.get
       if !Set("boundary", "sync", "combine")(r.kind) ||
@@ -161,6 +171,7 @@ private[nodal] object ResetMlir:
         case "boundary" => r.release != "raw" && (!asynchronous || r.release == "external") &&
           r.destination.exists(d => clock(d) == clock(destination))
         case _ => false
+    val domainRoots = mutable.Map.empty[String, Map[PhysicalControlMlir.Identity, String]]
     snapshot.modules.foreach: module =>
       values.valuesIterator.filter(_.owner == module.path).foreach(e =>
         visit(e.path, module.path, Set.empty, 0)
@@ -174,3 +185,6 @@ private[nodal] object ResetMlir:
                 "asynchronous reset release requires matching owned synchronization or external provider proof",
                 domain.path
               )
+            domainRoots(domain.path) =
+              visit(reset, module.path, Set.empty, 0).view.mapValues(_._1).toMap
+    domainRoots.toMap

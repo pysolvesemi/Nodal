@@ -182,6 +182,14 @@ private[nodal] object ConstructionKernel:
         "NODAL-CDC-057-001: Cdc.sync requires an active Module and lexical ClockDomain"
       )).get
 
+  def graySync[A <: Data](value: Expr[A], to: ClockDomain, stages: Int): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.gray requires active construction"))
+      .executableCrossing(value, to, stages, "gray")
+
+  def pulseSync(value: Expr[Bool], to: ClockDomain): Expr[Bool] =
+    active.getOrElse(throw new IllegalStateException("Cdc.pulse requires active construction"))
+      .executableCrossing(value, to, 2, "pulse")
+
   def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
     active.getOrElse(throw new IllegalStateException("Rdc.sync requires active construction"))
       .resetSync(reset, to, stages)

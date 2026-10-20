@@ -630,9 +630,10 @@ Focused current checks:
   `.work/gray-pulse-scalar-final.log`, `.work/gray-pulse-scalar-final/manifest.json`,
   `.work/gray-pulse-model-final.log`,
   `.work/gray-pulse-native-source-admission.log` and `.work/f57-target/`.
-- Python syntax, Markdown and diff-whitespace checks pass. Additional directly
-  affected memory/FSM predecessor reruns are pending, not claimed here. No CI or
-  broad qualification was run.
+- Python syntax, Markdown and diff-whitespace checks pass. The subsequent directly
+  affected memory **114/114** and flat-FSM **59/59** reruns also pass, giving
+  **486/486** selected native checks across the five suites above. No CI or broad
+  qualification was run.
 
 Architecture review: the narrow existing type, crossing, sampling, reset and
 target owners remain authoritative. Checked state allocation is proportional to
@@ -640,3 +641,32 @@ bounded width and stages; stable physical symbols prevent independent chains
 from merging. No new optimization framework is needed. Fixed Vec/Struct target
 support is the next required Gray slice; handshake/FIFO, clock structures,
 relationship/hierarchy, waivers and restricted low-level events remain open.
+
+### Gray/pulse source and report checkpoint
+
+The frozen public Gray/Pulse signatures now capture actual executable crossings
+through construction records, the bridge and deterministic reports. Source finite
+storage bounds, sampling/reconvergence and reset-lineage queries reuse the existing
+owners. Bridge ingress independently validates closed obligations, actual endpoint
+ownership, exact payload ABI and Pulse common physical reset roots. Aliased Pulse
+results cannot be reclassified as level or Gray; corresponding same-domain state
+consumers retain their existing semantics. Canonical shaped reset elements are
+compared rather than textual paths. ResetMlir returns its memoized verified root
+facts for the epoch check, without a second lineage engine.
+
+Current source checks pass **61/61** across the final runs: Gray/Pulse 13, level 9,
+FSM crossings 5, reset 19, stimulus 11 and reproducibility report 4. The report
+inventory's old descriptor fixture was repaired to use legal owned input/output
+domains and reset producers; placeholder waiver inventory remains descriptor-only,
+not executable proof. The environment-gated external report replay was not run
+by that source suite and is not claimed as separate target evidence.
+
+Final public source replay emits **17/17** designs and is byte-identical to the
+replay used for the **41/41** actual scalar target checks above. Reproduction uses
+`core.scala.testkit.test.runMain nodal.internal.testkit.Increment57GrayPulseReplay`
+with an ignored output directory. Current logs are
+`.work/gray-pulse-focused-final.log`, `.work/gray-pulse-report-final.log` and
+`.work/gray-pulse-replay-final.log`; final IR is under
+`.work/gray-pulse-source-final/`. Source formatting, Markdown and whitespace checks
+pass. Aggregate target work and remaining F57 categories stay open; no checklist
+parent or child is closed by this source checkpoint.

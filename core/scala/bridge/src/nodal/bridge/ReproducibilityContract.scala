@@ -379,10 +379,12 @@ private[nodal] object ReproducibilityContract:
         )
       ) ++ value.crossing.toVector.map(crossing =>
         "crossing" -> obj(
-          "contract" -> string("level_v1"),
+          "kind" -> string(crossing.kind),
+          "contract" -> string(crossing.contract),
           "source_domain" -> string(crossing.sourceDomain),
           "destination_domain" -> string(crossing.destinationDomain),
-          "stages" -> number(crossing.stages)
+          "stages" -> number(crossing.stages),
+          "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
         )
       ) ++ value.memory.toVector.map(port =>
         "memory" -> obj("memory" -> string(port.memory), "domain" -> string(port.domain))
@@ -730,13 +732,14 @@ private[nodal] object ReproducibilityContract:
         val crossing = expression.crossing.get
         obj(
           "record_kind" -> string("executable_crossing"),
-          "kind" -> string("sync"),
-          "contract" -> string("level_v1"),
+          "kind" -> string(crossing.kind),
+          "contract" -> string(crossing.contract),
           "semantic_path" -> string(expression.path),
           "source_value" -> string(expression.operands.head),
           "source_domain" -> string(crossing.sourceDomain),
           "destination_domain" -> string(crossing.destinationDomain),
-          "stages" -> number(crossing.stages)
+          "stages" -> number(crossing.stages),
+          "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
         )
     val originEntries = snapshot.origins
       .filter: origin =>

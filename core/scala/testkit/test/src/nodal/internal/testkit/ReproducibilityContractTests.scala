@@ -17,12 +17,20 @@ final class ReproducibilityDomainFixture extends Module:
     resetPolarity = ResetPolarity.ActiveLow,
     frequency = 100.MHz
   )
-  val bit: Signal[Bool] = in(Bool)
-  val resetInput: Signal[Reset] = in(Reset)
-  val output: Signal[Bool] = out(Bool)
-
+  val source: ClockDomain = ClockDomain.external(
+    "source",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    20.MHz
+  )
+  var bit = Option.empty[Expr[Bool]]
+  source:
+    val input = in(Bool)
+    bit = Some(input)
   core:
-    val synchronized = Cdc.sync(bit, core)
+    val output: Signal[Bool] = out(Bool)
+    val synchronized = Cdc.sync(bit.get, core)
     val waived = Cdc.waive(
       synchronized,
       core,
@@ -32,9 +40,10 @@ final class ReproducibilityDomainFixture extends Module:
         relation = ClockRelation.Asynchronous
       )
     )
-    val resetSynchronized = Rdc.sync(resetInput, core)
-    output := waived
-    CandidateRuntime.statement(resetSynchronized)
+    val resetSynchronized = Rdc.sync(core.reset, core)
+    output := synchronized
+    // Waivers retain descriptor inventory here; this does not claim executable waiver support.
+    CandidateRuntime.statement(waived, resetSynchronized)
 
 object ReproducibilityContractTests extends TestSuite:
   private def repositoryRoot(): Path =

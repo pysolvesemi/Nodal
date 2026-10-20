@@ -20,7 +20,7 @@ private[nodal] object DigitalValueConstruction:
         (operation == DigitalCollectionContract.Operation ||
           operation == StructuralIfRuntime.Operation ||
           operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
-          operation == "cdc_sync" ||
+          ExecutableCrossingContract.Operations(operation) ||
           Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) ||
           FlatFsmRuntime.Operations(operation))
     )
@@ -35,7 +35,7 @@ private[nodal] object DigitalValueConstruction:
       operandPath: (KernelExpr[?], Any) => Option[String],
       argumentPaths: Set[String],
       memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot],
-      crossing: KernelExpr[?] => Option[KernelLevelCrossingSnapshot],
+      crossing: KernelExpr[?] => Option[KernelExecutableCrossingSnapshot],
       reset: KernelExpr[?] => Option[KernelResetSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     def fail(message: String): Nothing = DigitalEnumContract.fail(20, message)
@@ -99,7 +99,7 @@ private[nodal] object DigitalValueConstruction:
             (operation == DigitalCollectionContract.Operation ||
               operation == StructuralIfRuntime.Operation ||
               operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
-              operation == "cdc_sync" ||
+              ExecutableCrossingContract.Operations(operation) ||
               (Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) &&
                 reset(expression).nonEmpty) ||
               FlatFsmRuntime.Operations(operation))

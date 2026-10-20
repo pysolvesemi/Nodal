@@ -1070,6 +1070,35 @@ int main(int argc, char **argv) {
       "\"nodal.digital_assign\"(%readyWire, %next#2) <{kind = \"continuous\", metadata = {}}> : (" +
       bit + ", " + bit + ") -> ()\n";
   check("fifo-chain-forward-ready-no-false-cycle", chainedFifo, true);
+  check("fifo-chain-wrong-downstream-ready-domain",
+        replace(chainedFifo, "\"nodal.async_fifo\"(%fifo#0, %fifo#1, %neutral)",
+                "\"nodal.async_fifo\"(%fifo#0, %fifo#1, %ready)"),
+        false, "NODAL-CDC-001");
+  const std::string feedbackWrite =
+      "\"nodal.digital_assign\"(%readyWire, %fifo#2) <{kind = \"continuous\", metadata = {}}> : (" +
+      bit + ", " + bit + ") -> ()\n";
+  check("fifo-chain-duplicate-physical-ready-driver", chainedFifo + feedbackWrite, false);
+  const std::string feedback = fifoSetup() + neutral + readyWire +
+                               fifoCrossing(bit, 4, "fifo", "input", "readyWire", "ready") +
+                               feedbackWrite;
+  check("fifo-own-ready-feedback-anchored", feedback, true);
+  check("fifo-own-ready-feedback-unanchored",
+        replace(feedback, "\"nodal.async_fifo\"(%input,", "\"nodal.async_fifo\"(%neutral,"), false,
+        "attributed dependency");
+  check("fifo-own-ready-feedback-conflicting-anchor",
+        replace(feedback, port("input", "a"), port("input", "b")), false, "NODAL-CDC-001");
+  const std::string secondReadyWire = replaceAll(readyWire, "readyWire", "secondReadyWire");
+  const std::string mutual = fifoSetup() + neutral + readyWire + secondReadyWire +
+                             fifoCrossing(bit, 4, "fifo", "neutral", "readyWire", "ready") +
+                             fifoCrossing(bit, 4, "other", "neutral", "secondReadyWire", "ready") +
+                             replace(feedbackWrite, "%fifo#2", "%other#2") +
+                             replace(feedbackWrite, "%readyWire", "%secondReadyWire");
+  check("fifo-mutual-ready-feedback-unanchored", mutual, false, "attributed dependency");
+  check("fifo-mutual-ready-feedback-one-anchor",
+        replace(mutual, "\"nodal.async_fifo\"(%neutral, %readyWire",
+                "\"nodal.async_fifo\"(%input, %readyWire"),
+        true);
+
   check("fifo-maximum-budget", fifoBody("!nodal.bits<65531>", 2), true);
   check("fifo-budget-overflow", fifoBody("!nodal.bits<65532>", 2), false, "state expansion");
   check("fifo-budget-arithmetic-overflow", fifoBody("!nodal.bits<9223372036854775807>", 256), false,

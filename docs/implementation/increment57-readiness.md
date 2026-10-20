@@ -882,3 +882,26 @@ already tested; this source checkpoint does not claim FIFO closure while the
 known malformed-native acceptance remains. Evidence is retained in
 `.work/fifo-source-tests.log`, `.work/fifo-feedback-replay` and the frozen source
 manifest. No CI or broad qualification was run.
+
+### FIFO independent source-attribution repair
+
+Native strict sampling now traverses a source-ready result's retained payload
+and valid roots to establish independent source evidence, while retaining that
+result's actual source-domain ownership cut. The bounded visited set terminates
+own and mutual feedback; ready-domain metadata cannot certify its own ancestry.
+Anchored feedback and one-anchor mutual feedback remain legal, unanchored cycles
+and conflicting sources reject. This repairs the preceding malformed-native
+acceptance without weakening role domains or reconvergence.
+
+Focused native checks pass **737/737**: crossing 273, CIRCT 145, sequential 71,
+reset 65, domain 32 and Interface 151. All **15 actual Scala admissions** pass;
+the actual unanchored mutation now rejects with NODAL-CDC-001. The seven new
+cases cover own/mutual feedback and source evidence. Logs are
+`.work/fifo-feedback-*-tests.log`, `.work/fifo-feedback-source-admission.log` and
+`.work/fifo-feedback-unanchored-rejection.log`.
+
+One separate integration issue remains active: target materialization assumes
+single-result operands except FSM and rejects a Boolean expression combining
+FIFO payload/valid results. Native admission is correct; the shared role-aware
+value identity/materialization repair is pending. No FIFO final closure, CI or
+broad qualification is claimed by this source-proof checkpoint.

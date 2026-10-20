@@ -490,7 +490,19 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
           return sample.use->emitOpError("NODAL-CDC-001: foreign or unresolved source domain is "
                                          "sampled without an explicit crossing");
         }
-        attributed |= !unannotated;
+        if (sample.requireAttributedSource && node.crossing &&
+            node.crossingRole == "source_ready") {
+          // Ready is owned by this FIFO's source domain, but that declaration
+          // cannot independently establish its own sampled source. Reuse the
+          // retained payload/valid roots for attribution only: ordinary reads
+          // still terminate at the stateful boundary, and strictVisited stops
+          // self/mutual ready feedback without manufacturing an anchor.
+          for (const auto &input : graph.crossings[node.crossingIndex].samples)
+            if (input.role == "source_payload" || input.role == "source_valid")
+              pending.push_back(input.root);
+        } else {
+          attributed |= !unannotated;
+        }
       }
       pending.append(node.dependencies.begin(), node.dependencies.end());
     }

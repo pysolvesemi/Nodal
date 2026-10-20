@@ -43,6 +43,9 @@ mlir::FailureOr<ExecutableCrossing> inspectExecutableCrossing(mlir::Operation *o
 /// Preserves F19 descriptors. Only explicit closed executable contracts authorize stateful graph
 /// cuts.
 mlir::LogicalResult verifyCrossingOperation(mlir::Operation *operation);
+/// Checked canonical result role for semantic identity consumers. This inspects
+/// only the closed operation header; it is not sampling/reset-domain proof.
+mlir::FailureOr<CrossingResult> inspectExecutableCrossingResult(mlir::Value value);
 mlir::LogicalResult verifyCrossingModel(mlir::Operation *module, SequentialModelLimits limits = {});
 /// Called only after the one physical dependency graph has been constructed.
 /// Never recursively invokes graph construction or a full operation verifier.

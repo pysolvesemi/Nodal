@@ -905,3 +905,40 @@ single-result operands except FSM and rejects a Boolean expression combining
 FIFO payload/valid results. Native admission is correct; the shared role-aware
 value identity/materialization repair is pending. No FIFO final closure, CI or
 broad qualification is claimed by this source-proof checkpoint.
+
+### Scoped elastic FIFO acceptance and result-identity repair
+
+The shared value-identity owner now derives FIFO result identities from the
+verified canonical CrossingModel roles. Payload retains its authored identity
+for existing shape origins; destination-valid and source-ready have distinct
+role-qualified identities. Materialization reserves every supported finite
+result identity and no longer treats FSM as the sole multi-result owner.
+Malformed contracts, stale role substitution and identity collisions reject.
+This resolves the preceding FIFO Boolean-composition lowering failure.
+
+Current final FIFO native evidence is **783/783**: materialization 46 plus the
+737 checks above. All **15 actual Scala admissions** pass. Actual anchored
+ready-feedback IR now lowers and exports through firtool with all four fatal
+checks retained. On that frozen repaired compiler, the maintained full focused
+FIFO waveform matrix again passes **84/84** across all 14 profiles. Source/API
+focused evidence remains **58/58** from its frozen checkpoint. Earlier source-
+attribution and result-materialization issues are resolved by these checkpoints.
+
+Reproduction evidence: `.work/fifo-materialization-*-tests.log`,
+`.work/fifo-materialization-source-admission.log`,
+`.work/fifo-feedback-target/fifo_feedback.sv`, and
+`.work/fifo-final-target/manifest.json` with `.work/fifo-final-target.log`.
+The retained compiler `.work/fifo-materialization-checkpoint/nodalc` has SHA-256
+`ca33f8f0a37b4d4ea158649f8b143c9c2421b1d5ce2133214189ba5559d6683c`; this isolates
+FIFO evidence from subsequent in-flight clock implementation. No later clock
+execution is implied by that executable.
+
+Architecture review: finite result-role identity belongs to the existing shared
+value/materialization owner, not a target-only exception; ready ownership uses
+ordinary assignments; source inference and native sampling reuse bounded graph
+traversals. Exact capacity and state cost are charged before expansion. The
+selected FIFO execution scope is accepted after focused source/native/target
+checks. Physical pointer skew, data settling, reset duration and protocol
+assumptions remain explicit. Gates/muxes and the remaining F57 relationship,
+hierarchy, reconvergence, waiver and event work keep all coarse F57 items open.
+No CI or broad qualification was run.

@@ -256,6 +256,15 @@ LogicalResult verifyCrossingOperation(Operation *op) {
     return reject(op, "unsupported crossing kind");
   return success();
 }
+FailureOr<CrossingResult> inspectExecutableCrossingResult(Value value) {
+  auto result = llvm::dyn_cast<OpResult>(value);
+  if (!result)
+    return failure();
+  auto header = inspectHeader(result.getOwner());
+  if (failed(header) || result.getResultNumber() >= header->results.size())
+    return failure();
+  return header->results[result.getResultNumber()];
+}
 LogicalResult verifyCrossingSourceDependencies(Operation *module,
                                                const DigitalDependencyGraph &graph,
                                                SequentialModelLimits limits) {

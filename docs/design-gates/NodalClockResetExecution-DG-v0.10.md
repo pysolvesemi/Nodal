@@ -63,6 +63,15 @@ setup/hold responsibility. Ordinary domain-owned state, another process's state,
 analog values, foreign captures and hidden CDC/RDC dependencies reject. A source
 annotation cannot turn these into an external input observation.
 
+Boundary declaration and runtime capture are distinct. An independently verified
+event-bearing application root may retain unannotated finite digital input ports
+that a pure expression represents but does not sample, including unused lane,
+seed or capture operands. Their absent domain serializes as @none; it is not a
+ClockDomain or sampling permission. The actual used-leaf inventory remains exact.
+Only tracked event storage outputs receive this event boundary treatment; ordinary
+outputs, other modules and clock/reset capabilities do not acquire an exemption.
+Existing ownership, driver and domain-sampling verifiers remain mandatory.
+
 Event-owned outputs remain event-classified through combinational aliases and
 hierarchical provenance. Sampling them into an ordinary domain requires a
 separately implemented explicit supported boundary or rejects; no currently

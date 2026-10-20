@@ -7,7 +7,10 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <memory>
+
 namespace nodal {
+class HierarchyModel;
 
 /// Verify module-local storage names, ordinary assignment drivers and shared
 /// combinational dependencies, including actual typed Interface/net roots,
@@ -48,6 +51,8 @@ struct DigitalDependencyNode {
   mlir::Operation *crossing = nullptr;
   unsigned crossingIndex = 0;
   llvm::StringRef crossingRole;
+  unsigned occurrence = 0;
+  bool hierarchyBoundary = false;
 };
 struct DigitalCrossingSample {
   unsigned root;
@@ -63,15 +68,22 @@ struct DigitalCrossingDependency {
   mlir::Operation *operation;
   llvm::SmallVector<DigitalCrossingSample, 3> samples;
   llvm::SmallVector<DigitalCrossingResult, 3> results;
+  unsigned occurrence = 0;
 };
 struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;
   llvm::SmallVector<unsigned> roots;
   llvm::SmallVector<DigitalCrossingDependency> crossings;
+  /// One final-value observation per written output, never a module-wide group.
+  llvm::SmallVector<unsigned> observations;
+  std::shared_ptr<const HierarchyModel> hierarchy;
 };
 mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(
     mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
     DigitalAssignmentProofLimits limits = {});
+
+mlir::LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                                                DigitalAssignmentProofLimits limits = {});
 
 /// Verify an owned structural wire/register declaration. The actual SSA result
 /// retains the recursive value type; register initialization and domain are

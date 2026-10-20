@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
@@ -206,6 +207,11 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
       return reject(operation,
                     "projected register updates are unsupported; use the owned root state update");
     requiredKind = text(root, "kind") == "register" ? "register_next" : "continuous";
+  } else if (llvm::isa<InstancePortOp>(root)) {
+    auto boundary = inspectInstancePort(root);
+    if (failed(boundary) || text(root, "direction") != "input")
+      return reject(operation, "instance input is writable; child output is read-only");
+    requiredKind = "continuous";
   } else if (llvm::isa<PortValueOp>(root)) {
     auto reference = root->getAttrOfType<FlatSymbolRefAttr>("port");
     Operation *port = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;

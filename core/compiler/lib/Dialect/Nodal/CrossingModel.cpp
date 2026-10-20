@@ -4,6 +4,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
 
@@ -221,6 +222,24 @@ FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const Dom
   auto destinationRef = op->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
   auto source = domains.resolveDomain(sourceRef);
   auto destination = domains.resolveDomain(destinationRef);
+  Operation *sourceFormal = domains.unresolvedRequirement(sourceRef);
+  Operation *destinationFormal = domains.unresolvedRequirement(destinationRef);
+  if (sourceFormal || destinationFormal) {
+    if (sourceRef == destinationRef)
+      return fail("crossing endpoints require distinct local domain references");
+    // Only the exact formal endpoint is deferred. A concrete endpoint still
+    // needs its ordinary physical/reset proof even in an unused template.
+    if ((!sourceFormal && failed(domains.resolveBinding(sourceRef))) ||
+        (!destinationFormal && failed(domains.resolveBinding(destinationRef))))
+      return fail("concrete crossing endpoint requires its verified physical domain binding");
+    if ((failed(source) && !sourceFormal) || (failed(destination) && !destinationFormal))
+      return fail(
+          "crossing endpoint must be an exact local domain or unresolved formal requirement");
+    header->sourceDomain = sourceFormal ? sourceFormal : *source;
+    header->destinationDomain = destinationFormal ? destinationFormal : *destination;
+    header->unresolvedRequirements = true;
+    return *header;
+  }
   if (failed(source) || failed(destination) || *source == *destination)
     return fail("crossing endpoints must resolve to distinct actual owned domains");
   auto sourceBinding = domains.resolveBinding(sourceRef);
@@ -235,6 +254,49 @@ FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const Dom
   header->destinationDomain = *destination;
   header->sourceBinding = *sourceBinding;
   header->destinationBinding = *destinationBinding;
+  return *header;
+}
+FailureOr<ExecutableCrossing>
+inspectExecutableCrossing(Operation *op, const HierarchyModel &hierarchy, unsigned occurrence) {
+  auto header = inspectHeader(op);
+  if (failed(header))
+    return failure();
+  auto source = hierarchy.resolveBinding(occurrence, op->getAttr("source_domain"));
+  auto destination = hierarchy.resolveBinding(occurrence, op->getAttr("destination_domain"));
+  if (failed(source) || failed(destination) || source->domain == destination->domain) {
+    (void)reject(op, "crossing endpoints must resolve to distinct concrete bound domains");
+    return failure();
+  }
+  if (failed(verifyContextualResetForBinding(*source, hierarchy)) ||
+      failed(verifyContextualResetForBinding(*destination, hierarchy)))
+    return failure();
+  if (header->kind == CrossingKind::Pulse || header->kind == CrossingKind::Handshake ||
+      header->kind == CrossingKind::Fifo) {
+    if (!source->reset || !destination->reset) {
+      (void)reject(op, "crossing requires reset-bearing endpoints and a coordinated reset epoch");
+      return failure();
+    }
+    auto first = inspectReset(*source->reset, hierarchy);
+    auto second = inspectReset(*destination->reset, hierarchy);
+    if (failed(first) || failed(second) || first->roots.empty() || second->roots.empty())
+      return failure();
+    using Key = std::tuple<unsigned, Operation *, std::string>;
+    std::map<Key, StringAttr> left, right;
+    for (const auto &root : first->roots)
+      left.emplace(Key{root.physicalOccurrence, root.physical.port, root.physical.scalarKey},
+                   root.polarity);
+    for (const auto &root : second->roots)
+      right.emplace(Key{root.physicalOccurrence, root.physical.port, root.physical.scalarKey},
+                    root.polarity);
+    if (left != right) {
+      (void)reject(op, "crossing requires equal actual occurrence-qualified reset assertion roots");
+      return failure();
+    }
+  }
+  header->sourceDomain = source->domain.declaration;
+  header->destinationDomain = destination->domain.declaration;
+  header->sourceBinding = source->record;
+  header->destinationBinding = destination->record;
   return *header;
 }
 FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op) {
@@ -275,13 +337,16 @@ LogicalResult verifyCrossingSourceDependencies(Operation *module,
     const bool fifo = llvm::isa<AsyncFifoOp>(crossing.operation);
     for (const auto &sample : crossing.samples) {
       auto owner = domains.resolveDomain(sample.domain);
-      if (failed(owner))
+      bool formal = domains.unresolvedRequirement(sample.domain) != nullptr;
+      if (!graph.hierarchy && failed(owner) && !formal)
         return reject(crossing.operation, "sample domain lost its owned resolution");
-      auto actual = FlatSymbolRefAttr::get(module->getContext(), text(*owner, "sym_name"));
+      auto actual = graph.hierarchy || formal
+                        ? sample.domain
+                        : FlatSymbolRefAttr::get(module->getContext(), text(*owner, "sym_name"));
       samples.push_back({crossing.operation->getOperand(sample.operandIndex), actual,
                          crossing.operation, true, crossing.operation,
                          text(crossing.operation, "kind") != "pulse", fifo,
-                         fifo && sample.operandIndex < 2});
+                         fifo && sample.operandIndex < 2, crossing.occurrence});
       roots.push_back(sample.root);
     }
   }

@@ -196,6 +196,23 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
   let hasVerifier = 1;
 }
 
+// F57: actual immediate-child data boundaries, distinct from conservative terminals.
+def Nodal_InstancePortOp : Nodal_Op<"instance_port", [HasParent<"ModuleOp">]> {
+  let summary = "Parent-owned exact immediate-child digital port reference";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port,
+    StrAttr:$direction, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_InstanceDomainBindingOp : Nodal_Op<"instance_domain_binding",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Actual parent-owned capabilities bound to one child requirement";
+  let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
+    FlatSymbolRefAttr:$instance, FlatSymbolRefAttr:$requirement,
+    FlatSymbolRefAttr:$actual, StrAttr:$origin, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_InstanceTerminalOp : Nodal_Op<"instance_terminal",
     [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Typed immediate-child conservative terminal reference";
@@ -340,6 +357,18 @@ def Nodal_DomainRequirementOp : Nodal_Op<"domain_requirement",
     [HasParent<"ModuleOp">, Symbol]> {
   let summary = "Typed reusable-module domain requirement";
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// These local formal values are obligations, never physical producer proofs.
+def Nodal_RequirementClockOp : Nodal_Op<"requirement_clock", [HasParent<"ModuleOp">]> {
+  let arguments = (ins FlatSymbolRefAttr:$requirement, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_RequirementResetOp : Nodal_Op<"requirement_reset", [HasParent<"ModuleOp">]> {
+  let arguments = (ins FlatSymbolRefAttr:$requirement, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 

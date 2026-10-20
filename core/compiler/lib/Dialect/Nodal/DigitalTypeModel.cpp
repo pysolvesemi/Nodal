@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
@@ -290,6 +291,10 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<RequirementClockOp, RequirementResetOp>(use))
+      return verifyRequirementProjection(use);
+    if (llvm::isa<InstanceDomainBindingOp>(use))
+      return verifyInstanceDomainBinding(use);
     if (llvm::isa<ClockRelationshipOp>(use))
       return verifyClockRelationship(use);
     if (llvm::isa<ClockGateOp, ClockMuxOp>(use))

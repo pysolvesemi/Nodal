@@ -3,6 +3,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
 
@@ -237,6 +238,21 @@ LogicalResult checkOutputReset(Operation *op, const OwnedClock &h, const ResetIn
 } // namespace
 FailureOr<ClockIdentity> resolveClock(Value value, Operation *use) {
   return ClockResolver(use).resolve(value, use);
+}
+FailureOr<ClockIdentity> resolveClock(ContextualValue value, const HierarchyModel &hierarchy) {
+  auto actual = hierarchy.resolveCapability(value);
+  if (failed(actual))
+    return failure();
+  auto identity = resolveClock(actual->value, actual->use);
+  if (failed(identity))
+    return failure();
+  identity->occurrence = actual->occurrence;
+  return *identity;
+}
+bool sameClock(ContextualValue left, ContextualValue right, const HierarchyModel &hierarchy) {
+  auto a = resolveClock(left, hierarchy);
+  auto b = resolveClock(right, hierarchy);
+  return succeeded(a) && succeeded(b) && *a == *b;
 }
 bool sameClock(Value left, Operation *leftUse, Value right, Operation *rightUse) {
   ClockResolver resolver(leftUse);

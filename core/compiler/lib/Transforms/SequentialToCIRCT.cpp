@@ -19,6 +19,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/PhysicalControlModel.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
@@ -1636,6 +1637,13 @@ public:
       return WalkResult::advance();
     });
     if (walk.wasInterrupted() || failed(verify(input))) {
+      signalPassFailure();
+      return;
+    }
+    bool hierarchy = false;
+    input.walk([&](nodal::ModuleOp module) { hierarchy |= hasLocalHierarchyObligations(module); });
+    if (hierarchy) {
+      (void)reject(input, "hierarchy target lowering requires Foundation 58");
       signalPassFailure();
       return;
     }

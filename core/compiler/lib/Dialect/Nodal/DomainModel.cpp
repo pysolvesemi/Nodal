@@ -84,6 +84,15 @@ DomainModel::DomainModel(Operation *use) {
     }
   }
 }
+Operation *DomainModel::unresolvedRequirement(Attribute reference) const {
+  auto symbol = dyn_cast_if_present<FlatSymbolRefAttr>(reference);
+  Operation *declaration = module && symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;
+  return isa_and_nonnull<DomainRequirementOp>(declaration) &&
+                 declaration->getParentOp() == module &&
+                 requirements.find(reference) == requirements.end()
+             ? declaration
+             : nullptr;
+}
 FailureOr<Operation *> DomainModel::resolveDomain(Attribute reference) const {
   auto symbol = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(reference);
   Operation *domain = module && symbol ? SymbolTable::lookupSymbolIn(module, symbol) : nullptr;

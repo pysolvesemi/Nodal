@@ -1253,3 +1253,42 @@ these are bounded examples, not a general performance claim. The ninth actual
 alias witness and final native contextual checkpoint remain pending. Independent
 unused-output/Interface observation coverage is a separate required follow-on;
 this source checkpoint does not claim it. No CI or broad qualification ran.
+
+### Mandatory native concrete hierarchy checkpoint
+
+DG v0.8 contextual admission now follows exact typed instance bindings, immediate
+child digital ports and formal capability projections. The immutable occurrence
+model references original IR, resolves forwarded physical/reset identities and
+instantiates the existing dependency/sampling proof without cloning IR or
+manufacturing local binding operations. Reused definitions retain distinct state
+and crossing occurrences. Structural ownership, instance-target cycles and finite
+bounds cover every definition; actual execution obligations cover the explicitly
+selected root. Unused well-formed templates are not claimed executed. Legacy flat
+descriptor units remain supported, while missing/conflicting contextual binding
+authority rejects. Mandatory module admission does not depend on an optional pass
+or a serialized verification marker.
+
+The frozen 24-file native slice passes **47 distinct hierarchy-data cases plus
+16 repeat-context runs**, **27 contextual clock/reset cases**, and **1115 direct
+predecessor cases across 12 suites**. The semantic-pipeline executable also
+passes. Exact suite inventory and logs are in
+`.work/hierarchy-native/frozen-test-summary.log` and adjacent `frozen-*.log`.
+The immutable compiler is `.work/hierarchy-native-checkpoint/nodalc`, SHA256
+`6ee7b15f58124eb0957632112d4b46b9f0ba33c09b39a6c0e8dae293a99c0d8d`;
+its exact source hashes are in that directory's `manifest.json`.
+
+Actual Scala-to-native replay passes **25/25** checks: nine default semantic-gate
+admissions, nine explicit unsupported hierarchy target rejections, and seven
+causal mutations covering actual capability operands, binding authority, forged
+drivers and cross-instance reconvergence. In-memory tests verify both target
+lowering and sequential normalization leave rejected IR unchanged. Results are
+in `.work/hierarchy-native/source-final/results.json`. No substitute hierarchy
+HDL, implicit flattening or F58 completion is claimed.
+
+Binding-mutation diagnostics retain Scala source locations. Two data-flow mutation
+diagnostics currently originate from bridge assignments with unknown locations;
+source transport repair remains open rather than claiming complete source-mapped
+causal diagnostics. A default-initialized child projection check, standalone
+output/Interface observation integration, waivers, events and final F57 integration
+also remain open. These are focused prototype checks, not exhaustive qualification;
+no CI ran and no coarse F57 checklist closes from this checkpoint.

@@ -5,9 +5,11 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
@@ -85,10 +87,17 @@ public:
       auto endpoint =
           crossing ? crossings[index].results[llvm::cast<OpResult>(node.value).getResultNumber()]
                    : DigitalCrossingResult{interfaceDomains.lookup(node.value), {}};
+      bool boundary = false;
+      if (node.value) {
+        auto access = resolveStaticShapeProjection(node.value, node.use);
+        Operation *root = succeeded(access) ? access->root.getDefiningOp() : nullptr;
+        boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
+      }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
-                              crossing, index, endpoint.role});
+                              crossing, index, endpoint.role, 0, boundary});
     }
     result.crossings = std::move(crossings);
+    result.observations = std::move(observations);
     SequentialModelLimits sampleLimits;
     sampleLimits.maximumOperations = limits.maximumNodes;
     if (failed(verifyCrossingSourceDependencies(module, result, sampleLimits)))
@@ -99,6 +108,8 @@ public:
 private:
   llvm::DenseMap<Operation *, unsigned> crossingIndexes;
   SmallVector<DigitalCrossingDependency> crossings;
+  SmallVector<unsigned> observations;
+  llvm::DenseMap<std::pair<Operation *, Operation *>, Operation *> instancePortOwners;
   FailureOr<unsigned> valueNode(Value value, Operation *use, Operation *family = nullptr,
                                 unsigned guard = 0);
   FailureOr<unsigned> assignmentNode(Operation *operation, Operation *loop, unsigned guard);
@@ -347,6 +358,14 @@ FailureOr<Operation *> AssignmentQuery::storageOwner(const StaticShapeProjection
       return failure();
     return root;
   }
+  if (llvm::isa<InstancePortOp>(root)) {
+    auto boundary = inspectInstancePort(root);
+    if (failed(boundary))
+      return failure();
+    auto entry =
+        instancePortOwners.try_emplace(std::make_pair(boundary->instance, boundary->port), root);
+    return entry.first->second;
+  }
   if (!llvm::isa<PortValueOp>(root))
     return static_cast<Operation *>(nullptr);
   auto reference = root->getAttrOfType<FlatSymbolRefAttr>("port");
@@ -524,7 +543,9 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
   if (llvm::isa<DigitalStorageOp>(*owner) && text(*owner, "kind") == "register")
     return success();
   const bool needsDriver =
-      llvm::isa<DigitalStorageOp>(*owner) || text(*owner, "direction") == "output";
+      llvm::isa<DigitalStorageOp>(*owner) ||
+      (llvm::isa<InstancePortOp>(*owner) ? text(*owner, "direction") == "input"
+                                         : text(*owner, "direction") == "output");
   auto found = writers.find(*owner);
   if (found == writers.end()) {
     if (needsDriver)
@@ -661,12 +682,12 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
                             "lexical ownership: ")
            << value;
   const bool projected = projection(definition);
-  if (llvm::isa<DigitalStorageOp, PortValueOp>(definition) || projected) {
+  if (llvm::isa<DigitalStorageOp, PortValueOp, InstancePortOp>(definition) || projected) {
     auto access = resolveStaticShapeProjection(value, use);
     if (failed(access))
       return reject(use, "dependency projection has no verified actual root");
     Operation *root = access->root.getDefiningOp();
-    if (llvm::isa<DigitalStorageOp, PortValueOp>(root)) {
+    if (llvm::isa<DigitalStorageOp, PortValueOp, InstancePortOp>(root)) {
       for (Operation *step : access->projections)
         for (Value selector : step->getOperands().drop_front())
           if (failed(depend(node, selector, step)))
@@ -929,10 +950,10 @@ LogicalResult AssignmentQuery::verify() {
     auto output = resolveStaticShapeProjection(first.target.root, at);
     if (failed(output) || nodes.size() >= limits.maximumNodes)
       return reject(at, "written output final-read obligation has no bounded physical root");
-    unsigned node = nodes.size();
-    nodes.push_back({{}, at, {}});
-    if (failed(read(node, *output, at)))
+    auto node = valueNode(first.target.root, at);
+    if (failed(node))
       return failure();
+    observations.push_back(*node);
   }
   SmallVector<DigitalInterfaceValueDependencies> interface;
   if (failed(collectDigitalInterfaceDependencies(module, interface)))
@@ -993,5 +1014,176 @@ analyzeDigitalAssignmentDependencies(Operation *module,
 }
 LogicalResult verifyDigitalAssignmentModel(Operation *module, DigitalAssignmentProofLimits limits) {
   return succeeded(AssignmentQuery(module, limits).graph({})) ? success() : failure();
+}
+
+LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                                          DigitalAssignmentProofLimits limits) {
+  struct LocalGraph {
+    DigitalDependencyGraph graph;
+    SmallVector<SequentialSample, 8> samples;
+    DenseMap<Value, unsigned> values;
+    DenseMap<Operation *, unsigned> ports;
+    DenseMap<std::pair<Operation *, Operation *>, unsigned> instancePorts;
+  };
+  DenseMap<Operation *, unsigned> indexes;
+  SmallVector<LocalGraph, 0> definitions;
+  DigitalDependencyGraph graph;
+  graph.hierarchy = hierarchy;
+  SmallVector<unsigned> offsets;
+  SmallVector<SequentialSample, 8> samples;
+  SmallVector<unsigned> sampleRoots;
+  unsigned edges = 0;
+  for (const auto &context : hierarchy->occurrences()) {
+    if (indexes.count(context.module))
+      continue;
+    auto localSamples = collectHierarchySequentialSamples(context.module);
+    if (failed(localSamples))
+      return failure();
+    SmallVector<std::pair<Value, Operation *>> seeds;
+    for (const auto &sample : *localSamples)
+      seeds.emplace_back(sample.value, sample.use);
+    for (Operation &op : context.module->getRegion(0).front()) {
+      if (!isa<PortValueOp, InstancePortOp>(op) || op.getNumResults() != 1 ||
+          isDigitalControlBoundaryType(op.getResult(0).getType()) || op.getResult(0).use_empty())
+        continue;
+      seeds.emplace_back(op.getResult(0), *op.getResult(0).getUsers().begin());
+    }
+    auto localGraph = analyzeDigitalAssignmentDependencies(context.module, seeds, limits);
+    if (failed(localGraph))
+      return failure();
+    LocalGraph local;
+    local.graph = std::move(*localGraph);
+    local.samples = std::move(*localSamples);
+    for (unsigned i = 0; i < seeds.size(); ++i)
+      local.values.try_emplace(seeds[i].first, local.graph.roots[i]);
+    for (auto [value, node] : local.values) {
+      Operation *op = value.getDefiningOp();
+      if (isa_and_nonnull<PortValueOp>(op)) {
+        auto ref = op->getAttrOfType<FlatSymbolRefAttr>("port");
+        Operation *port = ref ? SymbolTable::lookupSymbolIn(context.module, ref) : nullptr;
+        if (!port)
+          return reject(op, "hierarchy port reference lost its exact local declaration");
+        local.ports.try_emplace(port, node);
+      } else if (isa_and_nonnull<InstancePortOp>(op)) {
+        auto boundary = inspectInstancePort(op);
+        if (failed(boundary))
+          return failure();
+        local.instancePorts.try_emplace(std::make_pair(boundary->instance, boundary->port), node);
+      }
+    }
+    indexes.try_emplace(context.module, definitions.size());
+    definitions.push_back(std::move(local));
+  }
+  unsigned occurrence = 0;
+  for (const auto &context : hierarchy->occurrences()) {
+    const auto &local = definitions[indexes.lookup(context.module)];
+    if (local.graph.nodes.size() > limits.maximumNodes - graph.nodes.size())
+      return reject(context.module,
+                    "concrete hierarchy dependency graph exceeds finite node budget");
+    const unsigned offset = graph.nodes.size(), crossingOffset = graph.crossings.size();
+    offsets.push_back(offset);
+    for (auto node : local.graph.nodes) {
+      node.occurrence = occurrence;
+      for (unsigned &dependency : node.dependencies)
+        dependency += offset;
+      if (node.dependencies.size() > limits.maximumEdges - edges)
+        return reject(node.use, "concrete hierarchy dependency graph exceeds finite edge budget");
+      edges += node.dependencies.size();
+      if (node.crossing)
+        node.crossingIndex += crossingOffset;
+      graph.nodes.push_back(std::move(node));
+    }
+    for (auto crossing : local.graph.crossings) {
+      crossing.occurrence = occurrence;
+      for (auto &sample : crossing.samples)
+        sample.root += offset;
+      graph.crossings.push_back(std::move(crossing));
+    }
+    for (unsigned root : local.graph.observations) {
+      graph.observations.push_back(root + offset);
+      samples.push_back({{},
+                         {},
+                         graph.nodes[root + offset].use,
+                         false,
+                         nullptr,
+                         false,
+                         false,
+                         false,
+                         occurrence,
+                         true});
+      sampleRoots.push_back(root + offset);
+    }
+    for (unsigned i = 0; i < local.samples.size(); ++i) {
+      auto sample = local.samples[i];
+      sample.occurrence = occurrence;
+      samples.push_back(sample);
+      sampleRoots.push_back(local.graph.roots[i] + offset);
+    }
+    ++occurrence;
+  }
+  // Wire only explicit immediate-child boundaries. Node identity is now the
+  // occurrence plus original local graph node, so repeated definitions never
+  // share state, synchronizers, physical inputs or cached dependency facts.
+  for (unsigned id = 0; id < graph.nodes.size(); ++id) {
+    auto &node = graph.nodes[id];
+    if (!node.value)
+      continue;
+    auto access = resolveStaticShapeProjection(node.value, node.use);
+    Operation *op = succeeded(access) ? access->root.getDefiningOp() : nullptr;
+    if (!isa_and_nonnull<PortValueOp, InstancePortOp>(op))
+      continue;
+    const auto &context = hierarchy->occurrences()[node.occurrence];
+    std::optional<unsigned> target;
+    if (isa<InstancePortOp>(op) && text(op, "direction") == "output") {
+      auto boundary = inspectInstancePort(op);
+      if (failed(boundary))
+        return failure();
+      auto child = hierarchy->childOccurrence(node.occurrence, boundary->instance);
+      if (failed(child))
+        return reject(op, "child output lacks an actual concrete occurrence");
+      const auto &childGraph = definitions[indexes.lookup(boundary->module)];
+      auto found = childGraph.ports.find(boundary->port);
+      if (found == childGraph.ports.end())
+        return reject(op, "child output must retain its actual driver, not a domain annotation");
+      target = offsets[*child] + found->second;
+    } else if (isa<PortValueOp>(op) && context.instance) {
+      auto ref = op->getAttrOfType<FlatSymbolRefAttr>("port");
+      Operation *port = ref ? SymbolTable::lookupSymbolIn(context.module, ref) : nullptr;
+      if (!port || text(port, "direction") != "input")
+        continue;
+      const auto &parent = hierarchy->occurrences()[context.parent];
+      const auto &parentGraph = definitions[indexes.lookup(parent.module)];
+      auto found = parentGraph.instancePorts.find({context.instance, port});
+      if (found == parentGraph.instancePorts.end())
+        return reject(op, "used child input requires an actual parent-owned typed connection");
+      target = offsets[context.parent] + found->second;
+    }
+    if (target) {
+      if (++edges > limits.maximumEdges)
+        return reject(op, "concrete hierarchy dependency graph exceeds finite edge budget");
+      node.dependencies.push_back(*target);
+      node.hierarchyBoundary = true;
+    }
+  }
+  SmallVector<unsigned> incoming(graph.nodes.size(), 0), pending;
+  for (const auto &node : graph.nodes)
+    for (unsigned target : node.dependencies)
+      ++incoming[target];
+  for (unsigned i = 0; i < incoming.size(); ++i)
+    if (!incoming[i])
+      pending.push_back(i);
+  for (unsigned cursor = 0; cursor < pending.size(); ++cursor)
+    for (unsigned target : graph.nodes[pending[cursor]].dependencies)
+      if (!--incoming[target])
+        pending.push_back(target);
+  if (pending.size() != graph.nodes.size())
+    return reject(hierarchy->occurrences().front().module,
+                  "hierarchy connection contains a causal combinational dependency cycle");
+  SequentialModelLimits sampleLimits;
+  sampleLimits.maximumOperations = limits.maximumNodes;
+  Operation *root = hierarchy->occurrences().front().module;
+  if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)))
+    return failure();
+  return verifySequentialSampleDependencies(root, samples, graph, sampleRoots, sampleLimits);
 }
 } // namespace nodal

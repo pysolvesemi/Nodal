@@ -725,3 +725,17 @@ target_link_libraries(nodal-clock-relationship-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.clock-relationship-model-unit COMMAND nodal-clock-relationship-model-unit-tests)
 set_tests_properties(nodal.native.clock-relationship-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-hierarchy-control-model-unit-tests HierarchyControlModelTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-control-model-unit-tests)
+target_link_libraries(nodal-hierarchy-control-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-control-model-unit COMMAND nodal-hierarchy-control-model-unit-tests)
+set_tests_properties(nodal.native.hierarchy-control-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-hierarchy-model-unit-tests HierarchyModelTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-model-unit-tests)
+target_link_libraries(nodal-hierarchy-model-unit-tests PRIVATE
+  NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-model-unit COMMAND nodal-hierarchy-model-unit-tests)
+set_tests_properties(nodal.native.hierarchy-model-unit PROPERTIES TIMEOUT 60)

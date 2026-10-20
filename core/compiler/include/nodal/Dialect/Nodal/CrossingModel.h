@@ -5,6 +5,7 @@
 
 namespace nodal {
 class DomainModel;
+class HierarchyModel;
 struct DigitalDependencyGraph;
 /// Independently inspected executable header. This is not source-sampling proof;
 /// verifyCrossingModel/the completed assignment graph owns that proof.
@@ -34,12 +35,16 @@ struct ExecutableCrossing {
   uint64_t stateBits = 0;
   unsigned depth = 0;
   unsigned pointerBits = 0;
+  bool unresolvedRequirements = false;
   llvm::SmallVector<CrossingOperand, 3> operands;
   llvm::SmallVector<CrossingResult, 3> results;
 };
 mlir::FailureOr<ExecutableCrossing> inspectExecutableCrossing(mlir::Operation *operation,
                                                               const DomainModel &domains);
 mlir::FailureOr<ExecutableCrossing> inspectExecutableCrossing(mlir::Operation *operation);
+mlir::FailureOr<ExecutableCrossing> inspectExecutableCrossing(mlir::Operation *operation,
+                                                              const HierarchyModel &hierarchy,
+                                                              unsigned occurrence);
 /// Preserves F19 descriptors. Only explicit closed executable contracts authorize stateful graph
 /// cuts.
 mlir::LogicalResult verifyCrossingOperation(mlir::Operation *operation);

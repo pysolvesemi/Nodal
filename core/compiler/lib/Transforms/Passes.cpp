@@ -876,7 +876,7 @@ LogicalResult verifyDomains(mlir::ModuleOp module) {
         return;
       for (NamedAttribute binding : bindings) {
         auto actual = llvm::dyn_cast<FlatSymbolRefAttr>(binding.getValue());
-        if (!actual || !domains.contains(actual.getValue()))
+        if (!resolves(actual))
           result = emitFailure(instance.getOperation(), "NODAL-VERIFY-DOMAIN-007",
                                "instance domain binding references an unknown actual domain");
       }

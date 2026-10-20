@@ -20,6 +20,8 @@ struct DomainRelationshipIndex;
 class DomainModel {
 public:
   explicit DomainModel(mlir::Operation *use);
+  /// Exact unbound local formal only; malformed/duplicate local binds never defer.
+  mlir::Operation *unresolvedRequirement(mlir::Attribute reference) const;
 
   /// Resolve an actual local DomainOp, or a uniquely bound local requirement.
   /// A descriptor domain can resolve without any executable physical binding.

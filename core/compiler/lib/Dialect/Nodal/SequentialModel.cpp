@@ -12,6 +12,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -337,6 +338,8 @@ struct SampleSource {
 /// One source classification for sampling and direct reconvergence. The physical
 /// graph already owns dependency edges, captures, projections and actual writers.
 SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) {
+  if (node.hierarchyBoundary)
+    return {};
   if (node.sourceDomain)
     return {node.sourceDomain, true, node.value ? node.value.getDefiningOp() : nullptr};
   if (!node.value)
@@ -350,7 +353,11 @@ SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) 
     return {source->getAttr("domain"), true, source};
   if (llvm::isa_and_nonnull<PortValueOp>(source)) {
     auto ref = source->getAttrOfType<FlatSymbolRefAttr>("port");
-    Operation *port = ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
+    Operation *owner = source->getParentOfType<ModuleOp>();
+    Operation *port = ref ? SymbolTable::lookupSymbolIn(owner, ref) : nullptr;
+    // Outputs are observations of actual writers, never independent attributed roots.
+    if (port && text(port, "direction") == "output")
+      return {};
     return {port ? port->getAttr("domain") : Attribute(), true, port, true};
   }
   // A source-less Interface boundary is not attributed merely by having a type.
@@ -371,12 +378,13 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
     SmallVector<unsigned, 4> roots;
   };
   SmallVector<Group, 8> groups;
-  llvm::DenseMap<std::pair<Operation *, Attribute>, unsigned> ownersByDomain;
+  llvm::DenseMap<std::pair<std::pair<unsigned, Operation *>, Attribute>, unsigned> ownersByDomain;
   llvm::DenseSet<std::pair<unsigned, Attribute>> standaloneRoots;
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
     if (sample.group) {
-      auto entry = ownersByDomain.try_emplace({sample.group, sample.domain}, groups.size());
+      auto entry = ownersByDomain.try_emplace({{sample.occurrence, sample.group}, sample.domain},
+                                              groups.size());
       if (entry.second)
         groups.push_back({sample.use, {}});
       groups[entry.first->second].roots.push_back(roots[i]);
@@ -386,7 +394,7 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
   }
   for (const Group &group : groups) {
     llvm::DenseSet<unsigned> visited;
-    llvm::DenseMap<Operation *, unsigned> boundaries;
+    llvm::DenseSet<unsigned> boundaries;
     SmallVector<unsigned, 8> pending(group.roots.begin(), group.roots.end());
     while (!pending.empty()) {
       unsigned id = pending.pop_back_val();
@@ -396,7 +404,7 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
         return reject(group.use, "crossing reconvergence proof exceeds finite budget");
       const auto &node = graph.nodes[id];
       if (node.crossing)
-        boundaries.try_emplace(node.crossing, node.crossingIndex);
+        boundaries.insert(node.crossingIndex);
       else
         pending.append(node.dependencies.begin(), node.dependencies.end());
     }
@@ -405,8 +413,8 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
     // An intersection of attributed input cones is a causal reconvergence, not
     // a coincidence of constants or equal clock frequencies. Store one owner
     // per actual leaf; never copy transitive provenance sets into value nodes.
-    llvm::DenseMap<Operation *, Operation *> owners;
-    for (auto [crossing, index] : boundaries) {
+    llvm::DenseMap<std::pair<unsigned, Operation *>, unsigned> owners;
+    for (unsigned index : boundaries) {
       visited.clear();
       for (const auto &sample : graph.crossings[index].samples)
         pending.push_back(sample.root);
@@ -419,8 +427,9 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
         const auto &node = graph.nodes[id];
         auto source = sampleSource(module, node);
         if (source.boundary && source.domain && source.identity) {
-          auto inserted = owners.try_emplace(source.identity, crossing);
-          if (!inserted.second && inserted.first->second != crossing)
+          auto inserted =
+              owners.try_emplace(std::make_pair(node.occurrence, source.identity), index);
+          if (!inserted.second && inserted.first->second != index)
             return group.use->emitOpError(
                 "NODAL-CDC-057-002: independent synchronizers of a shared actual source "
                 "reconverge in one sample");
@@ -500,26 +509,30 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
     return reject(module, "sampling roots must exactly match their physical dependency graph");
   unsigned work = alreadyCharged;
   const DomainModel domains(module);
-  llvm::DenseSet<std::pair<unsigned, Attribute>> visited;
-  llvm::DenseSet<std::pair<unsigned, Attribute>> strictChecked[2];
-  llvm::DenseMap<std::pair<Operation *, Attribute>, bool> attributedGroups;
+  using SampleKey = std::pair<unsigned, std::pair<unsigned, Attribute>>;
+  llvm::DenseSet<SampleKey> visited;
+  llvm::DenseSet<SampleKey> strictChecked[2];
+  llvm::DenseMap<std::pair<std::pair<unsigned, Operation *>, Attribute>, bool> attributedGroups;
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
     if (roots[i] >= graph.nodes.size())
       return reject(sample.use, "sampling root is outside the physical dependency graph");
     if (sample.requireAttributedSource && !sample.allowDomainlessSource &&
         !sample.requireAttributedGroup &&
-        !strictChecked[sample.rejectPulseSources].insert({roots[i], sample.domain}).second)
+        !strictChecked[sample.rejectPulseSources]
+             .insert({roots[i], {sample.occurrence, sample.domain}})
+             .second)
       continue;
     llvm::DenseSet<unsigned> strictVisited;
-    bool attributed = false;
+    bool attributed = false, unresolved = false;
     SmallVector<unsigned, 8> pending{roots[i]};
     while (!pending.empty()) {
       unsigned id = pending.pop_back_val();
       if (id >= graph.nodes.size())
         return reject(sample.use, "sampling dependency is outside its physical graph");
-      if (sample.requireAttributedSource ? !strictVisited.insert(id).second
-                                         : !visited.insert({id, sample.domain}).second)
+      if (sample.requireAttributedSource
+              ? !strictVisited.insert(id).second
+              : !visited.insert({id, {sample.occurrence, sample.domain}}).second)
         continue;
       if (++work > limits.maximumOperations)
         return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
@@ -527,18 +540,41 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
       if (sample.rejectPulseSources && node.crossing && text(node.crossing, "kind") == "pulse")
         return sample.use->emitOpError("NODAL-CDC-003: Pulse-classified crossing result cannot be "
                                        "relabeled as a non-pulse crossing");
+      if (!graph.hierarchy && node.hierarchyBoundary) {
+        unresolved = true;
+        continue; // Exact instance output is an explicit closed-root obligation.
+      }
       auto source = sampleSource(module, node);
       if (source.boundary) {
         auto reference = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(source.domain);
-        bool unannotated = source.permitsUnannotated &&
-                           (!reference || (reference.getValue() == "none" &&
-                                           !SymbolTable::lookupSymbolIn(module, reference)));
+        bool unannotated =
+            source.permitsUnannotated &&
+            (!reference ||
+             (reference.getValue() == "none" &&
+              !SymbolTable::lookupSymbolIn(
+                  graph.hierarchy ? graph.hierarchy->occurrences()[node.occurrence].module : module,
+                  reference)));
         if (sample.requireAttributedSource && unannotated)
           return sample.use->emitOpError(
               "NODAL-CDC-001: crossing input contains an unannotated source boundary");
-        if (!unannotated && !(sample.requireAttributedSource
-                                  ? domains.matchesActualDomain(source.domain, sample.domain)
-                                  : domains.allowsDirectSampling(source.domain, sample.domain))) {
+        bool permitted = false;
+        bool formal = !graph.hierarchy && hasLocalHierarchyObligations(module) &&
+                      (domains.unresolvedRequirement(source.domain) ||
+                       domains.unresolvedRequirement(sample.domain));
+        unresolved |= formal;
+        if (graph.hierarchy) {
+          auto origin = graph.hierarchy->resolveDomain(node.occurrence, source.domain);
+          auto receiver = graph.hierarchy->resolveDomain(sample.occurrence, sample.domain);
+          permitted = succeeded(origin) && succeeded(receiver) &&
+                      (sample.requireAttributedSource
+                           ? *origin == *receiver
+                           : graph.hierarchy->allowsDirectSampling(*origin, *receiver));
+        } else {
+          permitted = sample.requireAttributedSource
+                          ? domains.matchesActualDomain(source.domain, sample.domain)
+                          : domains.allowsDirectSampling(source.domain, sample.domain);
+        }
+        if (!sample.observationOnly && !formal && !unannotated && !permitted) {
           // Keep established diagnostic distinctions while sharing the same
           // actual-source classification and domain proof for every consumer.
           if (llvm::isa_and_nonnull<PortOp>(source.identity))
@@ -573,15 +609,17 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
     if (sample.requireAttributedGroup) {
       if (!sample.group || !sample.requireAttributedSource)
         return reject(sample.use, "attributed sample group requires an actual strict owner");
-      attributedGroups[{sample.group, sample.domain}] |= attributed;
+      attributedGroups[{{sample.occurrence, sample.group}, sample.domain}] |=
+          attributed || unresolved;
     }
-    if (sample.requireAttributedSource && !sample.allowDomainlessSource && !attributed)
+    if (sample.requireAttributedSource && !sample.allowDomainlessSource && !attributed &&
+        !unresolved)
       return sample.use->emitOpError(
           "NODAL-CDC-001: crossing source requires actual attributed dependency evidence");
   }
   for (auto entry : attributedGroups)
     if (!entry.second)
-      return entry.first.first->emitOpError(
+      return entry.first.first.second->emitOpError(
           "NODAL-CDC-001: crossing source group requires actual attributed dependency evidence");
   return verifyDirectCrossingReconvergence(module, graph, samples, roots, work,
                                            limits.maximumOperations);
@@ -658,6 +696,14 @@ struct Model {
       if (llvm::isa<DigitalStorageOp>(op) && text(&op, "kind") == "register") {
         if (Operation *binding = domains.findLocalBinding(op.getAttr("domain"))) {
           if (failed(checkRegister(&op, *domains.resolveDomain(binding->getAttr("domain")))))
+            return failure();
+          if (op.getNumOperands() &&
+              failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
+            return failure();
+          registers.push_back(&op);
+        } else if (domains.unresolvedRequirement(op.getAttr("domain")) &&
+                   hasLocalHierarchyObligations(module)) {
+          if (failed(verifyDigitalStorageOperation(&op)))
             return failure();
           if (op.getNumOperands() &&
               failed(sampled(op.getOperand(0), op.getAttr("domain"), &op, &op)))
@@ -761,7 +807,10 @@ struct Model {
           if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
               reg->getAttr("domain") != scope.root->getAttr("domain"))
             return reject(&op, "FSM actions must update registers in their actual owning domain");
-          if (!domains.findLocalBinding(reg->getAttr("domain"))) {
+          if (!domains.findLocalBinding(reg->getAttr("domain")) &&
+              !(hasLocalHierarchyObligations(module) &&
+                domains.unresolvedRequirement(reg->getAttr("domain")) &&
+                !llvm::isa<SequentialUpdateOp>(op))) {
             if (scope.root || llvm::isa<SequentialUpdateOp>(op))
               return reject(
                   &op, "behavioral register update requires an actual local clock/reset binding");
@@ -1037,7 +1086,18 @@ private:
 LogicalResult verifySequentialModel(Operation *module, SequentialModelLimits limits) {
   return Model{module, limits}.verify();
 }
+FailureOr<SmallVector<SequentialSample, 8>>
+collectHierarchySequentialSamples(Operation *module, SequentialModelLimits limits) {
+  Model model{module, limits};
+  if (failed(model.verify()))
+    return failure();
+  return std::move(model.samples);
+}
 LogicalResult normalizeSequentialModel(Operation *module, SequentialModelLimits limits) {
+  // Contextual proof does not specialize a shared definition. Keep generic intent
+  // until Foundation 58 can lower each occurrence without choosing one binding.
+  if (hasLocalHierarchyObligations(module))
+    return reject(module, "hierarchy sequential normalization requires Foundation 58");
   if (failed(verifySequentialModel(module, limits)))
     return failure();
   MemoryModelLimits memoryLimits;

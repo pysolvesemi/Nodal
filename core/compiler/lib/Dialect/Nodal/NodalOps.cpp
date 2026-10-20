@@ -29,6 +29,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
@@ -2222,6 +2223,8 @@ LogicalResult nodal::PlaceholderOp::verify() {
 }
 
 LogicalResult nodal::ModuleOp::verify() {
+  if (failed(verifyHierarchyModule(getOperation())))
+    return failure();
   if (failed(requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "module symbol")))
     return failure();
   if (failed(requireSingleBlock(getOperation())))
@@ -4397,3 +4400,16 @@ LogicalResult nodal::SequentialAssertOp::verify() {
 LogicalResult nodal::ResetBoundaryOp::verify() { return verifyResetProducer(getOperation()); }
 LogicalResult nodal::ResetSyncOp::verify() { return verifyResetProducer(getOperation()); }
 LogicalResult nodal::ResetCombineOp::verify() { return verifyResetProducer(getOperation()); }
+
+LogicalResult nodal::RequirementClockOp::verify() {
+  return verifyRequirementProjection(getOperation());
+}
+LogicalResult nodal::RequirementResetOp::verify() {
+  return verifyRequirementProjection(getOperation());
+}
+LogicalResult nodal::InstanceDomainBindingOp::verify() {
+  return verifyInstanceDomainBinding(getOperation());
+}
+LogicalResult nodal::InstancePortOp::verify() {
+  return success(succeeded(inspectInstancePort(getOperation())));
+}

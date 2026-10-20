@@ -5,13 +5,18 @@
 
 namespace nodal {
 class DomainModel;
+class HierarchyModel;
+struct ContextualValue;
 /// Physical input-element identity or the exact owned producer. Derived clocks
 /// never alias their parents, even when a gate is always enabled.
 struct ClockIdentity {
   std::optional<PhysicalControl> physical;
   mlir::Operation *producer = nullptr;
+  /// Zero preserves legacy-flat identity; contextual queries qualify every root/producer.
+  unsigned occurrence = 0;
   bool operator==(const ClockIdentity &other) const {
-    return producer == other.producer && physical == other.physical;
+    return occurrence == other.occurrence && producer == other.producer &&
+           physical == other.physical;
   }
 };
 struct OwnedClock {
@@ -25,6 +30,9 @@ struct OwnedClock {
 /// Bounded clock-only proof. Does not inspect resets or controls and therefore
 /// can be consumed by reset proof without mutually recursive verification.
 mlir::FailureOr<ClockIdentity> resolveClock(mlir::Value value, mlir::Operation *use);
+/// Concrete identity after formal substitution; Same is sampling permission, not identity.
+mlir::FailureOr<ClockIdentity> resolveClock(ContextualValue value, const HierarchyModel &hierarchy);
+bool sameClock(ContextualValue left, ContextualValue right, const HierarchyModel &hierarchy);
 bool sameClock(mlir::Value left, mlir::Operation *leftUse, mlir::Value right,
                mlir::Operation *rightUse);
 mlir::FailureOr<OwnedClock> inspectOwnedClock(mlir::Operation *op, const DomainModel &domains);

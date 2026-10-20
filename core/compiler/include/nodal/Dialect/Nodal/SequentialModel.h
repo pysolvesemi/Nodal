@@ -32,6 +32,8 @@ struct SequentialSample {
   /// At least one strict sample in the same (group, domain) must establish an
   /// actual source. FIFO payload and valid establish their source jointly.
   bool requireAttributedGroup = false;
+  unsigned occurrence = 0;
+  bool observationOnly = false;
 };
 /// Closed clock-control provenance checked by the same physical dependency graph.
 struct ClockControlSample {
@@ -55,6 +57,8 @@ mlir::LogicalResult verifySequentialSamples(mlir::Operation *module,
                                             llvm::ArrayRef<SequentialSample> samples,
                                             SequentialModelLimits limits = {},
                                             unsigned alreadyCharged = 0);
+mlir::FailureOr<llvm::SmallVector<SequentialSample, 8>>
+collectHierarchySequentialSamples(mlir::Operation *module, SequentialModelLimits limits = {});
 struct BehavioralIfHeader {
   mlir::Operation *operation = nullptr;
   mlir::Operation *module = nullptr;

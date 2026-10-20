@@ -218,6 +218,10 @@ object Increment57FifoTests extends TestSuite:
       reject(capture(UInt(8), mode = "different-reset"), "common physical reset roots")
       reject(bridge(capture(UInt(8), mode = "unsafe")), "release")
       assert(bridge(capture(UInt(8), mode = "sync")).contains("fifo_v1"))
+      reject(
+        capture(UInt(8), mode = "sync-bad-frequency"),
+        "physical clock aliases have inconsistent frequencies"
+      )
     test("continuous Stream keeps valid true without silently claiming consumption"):
       val snapshot = capture(UInt(8), mode = "continuous")
       val fifo = snapshot.digitalExpressions.find(_.crossing.exists(_.resultRole == "payload")).get

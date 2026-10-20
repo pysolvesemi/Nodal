@@ -16,7 +16,7 @@ final class Increment57HandshakeSource[A <: Data](
   val policy = mode match
     case "resetless" => ResetPolicy.None
     case "unsafe" => ResetPolicy.Async
-    case "sync" => ResetPolicy.Sync
+    case "sync" | "sync-bad-frequency" => ResetPolicy.Sync
     case _ => ResetPolicy.AsyncAssertSyncRelease(2)
   val source = ClockDomain.from(
     srcClock,
@@ -28,12 +28,12 @@ final class Increment57HandshakeSource[A <: Data](
     name = "source"
   )
   val destination = ClockDomain.from(
-    if mode == "sync" then srcClock else dstClock,
+    if mode == "sync" || mode == "sync-bad-frequency" then srcClock else dstClock,
     differentReset.getOrElse(reset),
     edge,
     policy,
     polarity,
-    20.MHz,
+    if mode == "sync" then 100.MHz else 20.MHz,
     name = "destination"
   )
   var sampled = Option.empty[Expr[A]]

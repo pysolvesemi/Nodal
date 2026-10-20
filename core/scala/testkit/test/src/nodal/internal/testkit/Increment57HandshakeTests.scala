@@ -76,6 +76,10 @@ object Increment57HandshakeTests extends TestSuite:
       reject(capture(UInt(4), "different-reset"), "common physical reset roots")
       reject(bridge(capture(UInt(4), "unsafe")), "release")
       assert(bridge(capture(UInt(4), "sync")).contains("handshake_snapshot_v1"))
+      reject(
+        capture(UInt(4), mode = "sync-bad-frequency"),
+        "physical clock aliases have inconsistent frequencies"
+      )
     test("canonical shaped reset element aliases agree but distinct elements reject"):
       assert(bridge(ConstructionKernel.inspect(new ShapedPulseCapture(
         true,

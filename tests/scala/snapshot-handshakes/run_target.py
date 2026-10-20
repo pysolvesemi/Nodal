@@ -69,6 +69,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--profile", action="append",
+                        help="Run only this named actual replay profile (repeatable).")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated outputs must remain under ignored .work")
@@ -80,7 +82,14 @@ def main() -> None:
                  ("handshake_struct", True, True, 4),
                  ("handshake_enum", True, True, 3),
                  ("handshake_sync", True, True, 4)]
-    manifest: dict = {"status": "running", "cases": []}
+    if args.profile:
+        unknown = set(args.profile) - {fixture[0] for fixture in fixtures}
+        if unknown:
+            parser.error(f"unknown profiles: {sorted(unknown)}")
+        fixtures = [fixture for fixture in fixtures if fixture[0] in args.profile]
+        if not fixtures:
+            parser.error("profile selection must not be empty")
+    manifest: dict = {"status": "running", "profiles": [fixture[0] for fixture in fixtures], "cases": []}
 
     def run(label: str, command: list[str], expected_failure: bool = False) -> str:
         (args.out / (label + ".command.json")).write_text(json.dumps(command) + "\n")

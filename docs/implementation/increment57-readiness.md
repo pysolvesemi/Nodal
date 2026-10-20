@@ -1108,9 +1108,9 @@ Source-located target comments retain assumptions and both actual clocks, not a
 runtime claim that external electrical streams were certified. Relationships
 invent no clock generator or state.
 
-Focused native checks pass **789/789**: relationship107, domain32, clock51, reset65,
-crossing273, sequential71, sequential-CIRCT145 and clock-CIRCT45. The latter has
-26 owned-clock predecessors and19 relationship target checks. Logs are
+Focused native checks pass **789/789**: relationship 107, domain 32, clock 51, reset 65,
+crossing 273, sequential 71, sequential-CIRCT 145 and clock-CIRCT 45. The latter has
+26 owned-clock predecessors and 19 relationship target checks. Logs are
 `.work/relationship-final-<suite>.log`; exact source hashes are in
 `.work/relationship-native-checkpoint/source.sha256`. The immutable target compiler
 is `.work/relationship-native-checkpoint/nodalc`, SHA-256
@@ -1136,10 +1136,10 @@ proof classification and obligations; the bridge independently resolves those
 operands. The shared clock identity owner also rejects Reset/Bool values forged
 as Clock before bridge emission.
 
-Focused source checks pass **75/75**: relationship32, owned-clock13, reset19 and
-DomainStimulus11. Log: `.work/relationship-source-tests3.log`. The exact11-file
+Focused source checks pass **75/75**: relationship 32, owned-clock 13, reset 19 and
+DomainStimulus 11. Log: `.work/relationship-source-tests3.log`. The exact 11-file
 source manifest is `.work/relationship-source-checkpoint.sha256`; final replay
-success is `.work/relationship-source-replay4.log` with12 actual source IR profiles
+success is `.work/relationship-source-replay4.log` with 12 actual source IR profiles
 under `.work/relationship-source-replay`.
 
 Maintained `tests/scala/clock-relationships/run_target.py` passes all **7 legal
@@ -1147,9 +1147,9 @@ Same waveform profiles** and **5 category target/comment checks**, using the
 immutable relationship compiler recorded above. Both edges/reset polarities,
 structural identity, distinct external inputs, transitive Same and shaped inputs
 retain independent clock/reset/state owners. Matching active edges coexist with
-different inactive duty phases. Each waveform observes31 active edges,22 operating
-samples and2 reset assertions; nonshaped mixed/nested expressions produce11 high
-and11 low samples rather than a vacuous constant conjunction.
+different inactive duty phases. Each waveform observes 31 active edges,22 operating
+samples and 2 reset assertions; nonshaped mixed/nested expressions produce 11 high
+and 11 low samples rather than a vacuous constant conjunction.
 
 Actual generated SystemVerilog, VCDs, command logs, source/tool/target hashes and
 manifest are under `.work/relationship-target`. No emitted HDL was rewritten and
@@ -1161,9 +1161,35 @@ Direct target predecessors pass separately on the same immutable compiler:
 owned clocks **36/36** and scalar/shaped reset release **12/12**, with logs and
 manifests under `.work/relationship-{owned-clock,reset}-predecessor`. Repeated
 relationship replay is byte-identical. Source predecessor checks found two stale
-Sync-mode handshake/FIFO fixtures claiming100MHz and20MHz for the same physical
+Sync-mode handshake/FIFO fixtures claiming 100 MHz and 20 MHz for the same physical
 clock; exact alias consistency correctly rejects those contradictory claims.
 Their fixture repair and rerun remain pending, without weakening the verifier.
 Hierarchy, observed-output reconvergence, waivers, low-level events, representative
 scale and final integration remain required F57 work. No coarse checklist closes
 from this checkpoint, and no CI or broad qualification ran.
+
+### Scoped relationship acceptance
+
+The two stale Sync-mode handshake/FIFO fixtures now declare 100 MHz consistently
+for their shared physical clock. Both retain an explicit contradictory-frequency
+negative, and no production validator was weakened. The repaired affected source
+selection passes **156/156**, giving **231/231 distinct source groups** with the
+previous 75. Log: `.work/relationship-source-predecessors2.log`; the four-file
+repair manifest is `.work/relationship-predecessor-checkpoint.sha256`.
+
+The final twelve relationship replays are byte-identical on regeneration. The
+corrected actual handshake Sync profile passes **3/3** legal/epoch/unknown-reset
+cases, and FIFO Sync passes **1/1**, on the immutable relationship compiler.
+Manifests and command logs are under `.work/relationship-handshake-sync-target`
+and `.work/relationship-fifo-sync-target`. Existing maintained runners gain only
+an optional repeated profile selector, retaining default matrices, stimuli and
+assertions while allowing these bounded predecessor runs.
+
+Selected relationship execution is accepted with **789 native**, **231 source**,
+**7 actual Same waveforms plus 5 target category checks**, and the separately
+reported **36 clock / 12 reset / 3 handshake Sync / 1 FIFO Sync** target predecessors.
+This is scoped prototype evidence, not physical timing or external-contract
+certification. Known Same, exact physical/reset identity, protocol endpoint
+ownership and typed category limitations remain those of DG v0.7. Required
+hierarchy, output/Interface reconvergence, waivers, events, scale and final F57
+integration remain open. No CI or broad qualification ran.

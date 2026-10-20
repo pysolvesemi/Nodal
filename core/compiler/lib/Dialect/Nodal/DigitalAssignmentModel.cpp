@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/FsmCompositionModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -118,6 +119,7 @@ public:
     result.crossings = std::move(crossings);
     result.waivers = std::move(waivers);
     result.observations = std::move(observations);
+    result.resolved = std::move(resolved);
     SequentialModelLimits sampleLimits;
     sampleLimits.maximumOperations = limits.maximumNodes;
     if (failed(verifyEventSourceDependencies(module, result)) ||
@@ -214,6 +216,7 @@ private:
   llvm::DenseMap<Operation *, SmallVector<unsigned, 2>> writers;
   llvm::DenseMap<Value, SmallVector<std::pair<Value, Operation *>, 2>> interfaceDependencies;
   llvm::DenseMap<Value, FlatSymbolRefAttr> interfaceDomains;
+  DigitalResolvedTopology resolved;
   llvm::DenseMap<std::pair<Value, Value>, bool> relations;
 };
 
@@ -785,6 +788,15 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     // by the same sampling owner; async response keeps its address edge here.
     return port->latency ? success() : depend(node, definition->getOperand(0), definition);
   }
+  if (llvm::isa<FsmJoinOp, FsmActivationOp>(definition)) {
+    SmallVector<Value, 8> dependencies;
+    if (failed(fsmCompositionResultDependencies(value, dependencies)))
+      return reject(definition, "FSM composition result lacks checked semantic dependencies");
+    for (Value input : dependencies)
+      if (failed(depend(node, input, definition)))
+        return failure();
+    return success();
+  }
   if (llvm::isa<FlatFSMOp>(definition)) {
     SmallVector<Value, 8> dependencies;
     if (failed(flatFSMResultDependencies(value, dependencies)))
@@ -1094,7 +1106,8 @@ LogicalResult AssignmentQuery::verify() {
   }
   SmallVector<DigitalInterfaceValueDependencies> interface;
   SmallVector<DigitalInterfaceObservationGroup> interfaceObservations;
-  if (failed(collectDigitalInterfaceDependencies(module, interface, &interfaceObservations)))
+  if (failed(collectDigitalInterfaceDependencies(module, interface, &interfaceObservations,
+                                                 &resolved)))
     return failure();
   for (auto &entry : interface) {
     interfaceDependencies.try_emplace(entry.value, std::move(entry.sources));
@@ -1254,6 +1267,8 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
     }
     for (unsigned i = 0; i < local.graph.nodes.size(); ++i) {
       Value value = local.graph.nodes[i].value;
+      if (value)
+        local.values.try_emplace(value, i);
       Operation *op = value ? value.getDefiningOp() : nullptr;
       if (!isa_and_nonnull<MemberAccessOp>(op) || !hasDigitalInterfaceContract(op))
         continue;
@@ -1427,6 +1442,163 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
         return reject(op, "concrete hierarchy dependency graph exceeds finite edge budget");
       node.dependencies.push_back(*target);
       node.hierarchyBoundary = true;
+    }
+  }
+  // Physical resolution is an equivalence relation, not a pair of causal
+  // edges. Qualify the existing local Interface facts by the canonical hierarchy
+  // occurrence, then join only exact immediate-child endpoint slots. Slots for
+  // unaccessed leaves remain logical identities and never allocate SSA nets.
+  struct ResolvedSlot {
+    unsigned parent, rank = 0;
+    std::optional<ContextualDomain> domain;
+    Operation *split = nullptr;
+    bool boundary = false;
+  };
+  SmallVector<ResolvedSlot> resolvedSlots;
+  DenseMap<unsigned, unsigned> resolvedNodes;
+  SmallVector<std::pair<unsigned, unsigned>> resolvedValues;
+  using EndpointKey = std::tuple<unsigned, Operation *, std::string>;
+  std::map<EndpointKey, unsigned> resolvedEndpoints;
+  auto rootSlot = [&](unsigned index) {
+    unsigned root = index;
+    while (resolvedSlots[root].parent != root)
+      root = resolvedSlots[root].parent;
+    while (resolvedSlots[index].parent != index) {
+      unsigned next = resolvedSlots[index].parent;
+      resolvedSlots[index].parent = root;
+      index = next;
+    }
+    return root;
+  };
+  auto newSlot = [&](unsigned occurrence, Attribute domain, Operation *use) -> FailureOr<unsigned> {
+    if (resolvedSlots.size() >= limits.maximumNodes) {
+      (void)reject(use, "resolved hierarchy slots exceed their finite represented-node budget");
+      return failure();
+    }
+    std::optional<ContextualDomain> actual;
+    if (domain) {
+      auto resolved = hierarchy->resolveDomain(occurrence, domain);
+      if (failed(resolved))
+        return failure();
+      actual = *resolved;
+    }
+    unsigned index = resolvedSlots.size();
+    resolvedSlots.push_back({index, 0, actual, nullptr, false});
+    return index;
+  };
+  auto joinSlots = [&](unsigned left, unsigned right, bool boundary,
+                       Operation *use) -> LogicalResult {
+    left = rootSlot(left);
+    right = rootSlot(right);
+    if (left == right) {
+      resolvedSlots[left].boundary |= boundary;
+      return success();
+    }
+    if (resolvedSlots[left].domain && resolvedSlots[right].domain &&
+        !(*resolvedSlots[left].domain == *resolvedSlots[right].domain))
+      return reject(use, "resolved hierarchy component crosses exact actual Interface domains");
+    if (resolvedSlots[left].rank < resolvedSlots[right].rank)
+      std::swap(left, right);
+    auto &root = resolvedSlots[left];
+    auto &child = resolvedSlots[right];
+    child.parent = left;
+    if (root.rank == child.rank)
+      ++root.rank;
+    if (!root.domain)
+      root.domain = child.domain;
+    if (!root.split)
+      root.split = child.split;
+    root.boundary |= child.boundary || boundary;
+    return success();
+  };
+  for (auto [occurrence, context] : llvm::enumerate(hierarchy->occurrences())) {
+    const auto &local = definitions[indexes.lookup(context.module)];
+    for (const auto &component : local.graph.resolved.components) {
+      auto found = local.values.find(component.value);
+      if (found == local.values.end())
+        return reject(context.module, "resolved component lost its actual local dependency root");
+      auto slot = newSlot(occurrence, component.domain, component.value.getDefiningOp());
+      if (failed(slot))
+        return failure();
+      if (!component.splits.empty())
+        resolvedSlots[*slot].split = component.splits.front();
+      resolvedNodes.try_emplace(offsets[occurrence] + found->second, *slot);
+      for (Value value : component.values) {
+        auto alias = local.values.find(value);
+        if (alias == local.values.end())
+          return reject(value.getDefiningOp(), "resolved read lost its actual dependency identity");
+        resolvedValues.emplace_back(offsets[occurrence] + alias->second, *slot);
+      }
+    }
+    for (const auto &endpoint : local.graph.resolved.endpoints) {
+      auto slot = newSlot(occurrence, endpoint.domain, endpoint.operation);
+      if (failed(slot))
+        return failure();
+      resolvedEndpoints.emplace(
+          EndpointKey{occurrence, endpoint.operation, endpoint.path.getValue().str()}, *slot);
+      if (endpoint.component) {
+        auto found = local.values.find(endpoint.component);
+        if (found == local.values.end())
+          return reject(endpoint.operation, "resolved endpoint lost its actual component identity");
+        auto component = resolvedNodes.find(offsets[occurrence] + found->second);
+        if (component == resolvedNodes.end() ||
+            failed(joinSlots(*slot, component->second, false, endpoint.operation)))
+          return failure();
+      }
+    }
+  }
+  for (auto [occurrence, context] : llvm::enumerate(hierarchy->occurrences())) {
+    const auto &local = definitions[indexes.lookup(context.module)];
+    for (const auto &endpoint : local.graph.resolved.endpoints) {
+      if (!endpoint.instance)
+        continue;
+      auto child = hierarchy->childOccurrence(occurrence, endpoint.instance);
+      if (failed(child))
+        return reject(endpoint.operation, "resolved boundary lacks its actual child occurrence");
+      auto parent =
+          resolvedEndpoints.find({occurrence, endpoint.operation, endpoint.path.getValue().str()});
+      auto target =
+          resolvedEndpoints.find({*child, endpoint.declaration, endpoint.path.getValue().str()});
+      if (parent == resolvedEndpoints.end() || target == resolvedEndpoints.end())
+        return reject(endpoint.operation, "resolved boundary lost its exact complete child leaf");
+      if (failed(joinSlots(parent->second, target->second, true, endpoint.operation)))
+        return failure();
+    }
+  }
+  for (unsigned index = 0; index < resolvedSlots.size(); ++index)
+    if (rootSlot(index) == index && resolvedSlots[index].boundary && resolvedSlots[index].split)
+      return reject(resolvedSlots[index].split,
+                    "split on a child-boundary-joined component requires global driver transport");
+  for (auto [node, slot] : resolvedValues)
+    if (resolvedSlots[rootSlot(slot)].boundary)
+      graph.nodes[node].hierarchyBoundary = true;
+  std::map<unsigned, SmallVector<unsigned, 2>> resolvedGroups;
+  for (auto [node, slot] : resolvedNodes)
+    resolvedGroups[rootSlot(slot)].push_back(node);
+  for (auto &[slot, nodes] : resolvedGroups) {
+    if (!resolvedSlots[slot].boundary)
+      continue;
+    llvm::sort(nodes);
+    unsigned canonical = nodes.front();
+    SmallVector<unsigned, 2> dependencies;
+    for (unsigned node : nodes) {
+      auto &original = graph.nodes[node].dependencies;
+      dependencies.append(original.begin(), original.end());
+      edges -= original.size();
+    }
+    for (unsigned node : nodes) {
+      auto &alias = graph.nodes[node];
+      alias.dependencies.clear();
+      if (node == canonical)
+        alias.dependencies = std::move(dependencies);
+      else
+        alias.dependencies.push_back(canonical);
+      if (alias.dependencies.size() > limits.maximumEdges - edges)
+        return reject(alias.use, "resolved hierarchy dependencies exceed finite edge budget");
+      edges += alias.dependencies.size();
+      // A joined component contributes only its actual drivers, not a nominal
+      // domain assertion at a projection. Original contexts stay on each node.
+      alias.hierarchyBoundary = true;
     }
   }
   SmallVector<unsigned> incoming(graph.nodes.size(), 0), pending;

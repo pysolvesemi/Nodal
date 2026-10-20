@@ -546,3 +546,54 @@ pinned primitive probes and the reusable-helper target plan as implementation in
 progress, including actual consumer limitations, rather than Nodal acceptance.
 Source bridge changes producing the four new inputs are a separate pending
 checkpoint. All required F58 child and parent obligations remain open.
+
+## Checkpoint 10 — native composition and scalar resolved topology
+
+On canonical checkpoint `2097ac43`, the additive v0.7 composition ingress is
+implemented by one bounded query-local `FsmCompositionModel`. It verifies actual
+private-state/control operands, exact owner states and domains, unique parentage,
+complete child inventories, acyclic depth/work bounds and structural completion
+possibility. Canonical local graph admission, encodings and lifecycle codes stay
+in `FlatFSMModel`; v3 adds its establishment result without changing v1/v2.
+Pure join/activation expansion uses the existing detached sequential candidate
+and operation budget before the unchanged state executor. Identity-only operands
+are excluded from combinational dependencies. All/Any joins observe registered
+child status; cancellation, restart, pause and recovery retain the v0.7 ordering.
+
+The native resolved slice extends the existing verified Interface dependency
+facts and occurrence graph, rather than introducing a second hierarchy engine.
+Scalar read/drive/pass-through joins retain actual drivers and their occurrence
+contexts; unaccessed endpoints are logical slots, not newly allocated nets.
+Nominal child domains cannot launder actual foreign drivers or restore strict
+attribution to joined aliases/read results. New boundary-joined split views still
+reject; complete split, standalone inout and public typed read/target support
+remain required continuation.
+
+The matched second native run executed **458/458 cases** in this checkpoint's
+six affected dialect/model suites: composition 17, FlatFSM 81, Sequential 84,
+AssignmentGuard 34, Interface 217 and observation 25. Composition tests include
+All/Any status truth tables, arbitrary binary current/next/lifecycle codes and
+event/control combinations, impossible joins, identity/domain/future forgeries,
+semantic dependency roles and exact resource bounds. An optimized-only dangling
+initializer-array bug in the new replacement loop was fixed with a stable local
+array; the same optimized test now passes. An ordinary-value role probe is
+explicitly non-diagnostic, and its causal regression passes. No assertion was
+weakened. The backend generator check and focused catalog 51 tests also pass.
+
+The complete workspace run additionally passed 190 target cases, but those use
+the pending named-field adapter and are **not** acceptance of this native-only
+checkpoint. Its target implementation/test files are deliberately excluded here.
+The frozen workspace diagnostic compiler is
+`.work/f58-composition-native/second/nodalc`, SHA256
+`23a5fa27949c0986722f5b82dc0453aa6302753a41c9a229b9f9f965343b7eda`.
+Before/after manifests including C++, headers, TableGen, registry includes,
+JSON and CMake match; commands and individual logs are adjacent. Earlier native
+manifest recipes covered C++/headers/TableGen/CMake with separate registry checks;
+they did not include every generated registry input in that manifest itself.
+
+Source composition/report/replay and resolved public projections remain a
+separate pending source checkpoint. Their shared compile exposed and repaired
+an exact public fixture argument error and a new companion effect-summary gap;
+focused source execution is still pending at this native checkpoint. The current
+slice does not itself establish a generated Verilog-* demonstration. No F58 child
+or parent is closed by these bounded native results.

@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/FsmCompositionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -199,6 +200,9 @@ std::string digitalValueSemanticPath(Value value) {
       StringRef role = flatFSMResultRole(value);
       return role.empty() ? std::string() : (path(definition) + "." + role).str();
     }
+    if (StringRef role = fsmCompositionResultRole(value); !role.empty())
+      return definition->getNumResults() == 1 ? path(definition).str()
+                                              : (path(definition) + "." + role).str();
     if (llvm::isa<AsyncFifoOp>(definition)) {
       auto endpoint = inspectExecutableCrossingResult(value);
       if (failed(endpoint))

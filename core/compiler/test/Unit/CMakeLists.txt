@@ -806,3 +806,10 @@ target_link_libraries(nodal-symbolic-hierarchy-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.symbolic-hierarchy-circt-unit COMMAND nodal-symbolic-hierarchy-circt-unit-tests)
 set_tests_properties(nodal.native.symbolic-hierarchy-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-fsm-composition-model-unit-tests FsmCompositionModelTest.cpp)
+llvm_update_compile_flags(nodal-fsm-composition-model-unit-tests)
+target_link_libraries(nodal-fsm-composition-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.fsm-composition-model-unit COMMAND nodal-fsm-composition-model-unit-tests)
+set_tests_properties(nodal.native.fsm-composition-model-unit PROPERTIES TIMEOUT 60)

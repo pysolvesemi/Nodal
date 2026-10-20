@@ -247,3 +247,22 @@ independent verification of a local component. Source capture must extend its
 existing path-based union and split owner with the same exact boundary relation.
 These obligations, their causal tests and supported-profile target emission
 remain required before resolved hierarchy acceptance.
+
+The scalar implementation uses an optional topology result on the existing
+verified dependency collector. It exposes existing component Values, aliases,
+read results, actual drivers and splits, plus complete resolved endpoint slots.
+The existing occurrence graph qualifies those slots and substitutes exact child
+relations through `HierarchyModel.childOccurrence`; it does not build a second
+hierarchy. Unaccessed slots remain logical identities. Only represented existing
+component nodes receive merged dependency edges, with deterministic one-way
+aliases and original occurrence contexts retained. Joined aliases and read
+results cannot independently reintroduce nominal-domain attribution.
+
+Resolved role rights are absolute read/drive/connect capabilities, not ordinary
+in/out direction inversion. The public scalar projection therefore preserves
+`driveMember`, `observeMember` and `forwardExact` rights and the finalized symbolic
+element type. A public typed read-to-expression adapter, standalone DigitalInout
+projection, cross-boundary split transport and resolved target profiles remain
+required. Native NetRead admission alone does not establish those public APIs or
+HDL emission. Focused results and checkpoint acceptance remain in the readiness
+record.

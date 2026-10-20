@@ -1,4 +1,3 @@
-#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -29,7 +28,9 @@
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/FsmCompositionModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
@@ -4403,6 +4404,11 @@ LogicalResult nodal::BehavioralIfOp::verify() {
 }
 LogicalResult nodal::SequentialSelectOp::verify() { return verifySequentialSelect(getOperation()); }
 LogicalResult nodal::SequentialUpdateOp::verify() { return verifySequentialUpdate(getOperation()); }
+
+LogicalResult nodal::FsmJoinOp::verify() { return verifyFsmCompositionOperation(getOperation()); }
+LogicalResult nodal::FsmActivationOp::verify() {
+  return verifyFsmCompositionOperation(getOperation());
+}
 
 LogicalResult nodal::FlatFSMOp::verify() { return verifyFlatFSMOperation(getOperation()); }
 LogicalResult nodal::EnumSwitchOp::verify() { return verifyEnumSwitchOperation(getOperation()); }

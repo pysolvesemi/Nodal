@@ -313,6 +313,40 @@ std::string hierarchyFixture(bool forged = false, bool input = false) {
   return "module attributes {nodal.root.module = @Top} {\n" + module("Top", top) +
          module("Child", child) + "}\n";
 }
+std::string hierarchyResolvedFixture(StringRef parentEffects = "", StringRef childEffects = "",
+                                     StringRef role = "sink", bool parentAccess = true,
+                                     bool childAccess = true, bool sibling = false) {
+  std::string permission = role == "source" ? "drive" : role == "monitor" ? "observe" : "connect";
+  std::string top =
+      hierarchyDomain("clock") + hierarchyDomain("other") + resolvedDefinition() +
+      "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, parameter_bindings = {}, "
+      "domain_bindings = {required = @clock}, metadata = {}}> : () -> ()\n" +
+      hierarchyBinding("required", "clock") + hierarchyBoundary();
+  if (parentAccess)
+    top += member("projected", "projected", resolved());
+  top += parentEffects.str();
+  if (sibling) {
+    top +=
+        "\"nodal.instance\"() <{sym_name = \"sibling\", module = @Child, parameter_bindings = {}, "
+        "domain_bindings = {required = @clock}, metadata = {}}> : () -> ()\n";
+    top +=
+        replace(hierarchyBinding("required", "clock"), "instance = @child", "instance = @sibling");
+    std::string boundary =
+        replace(hierarchyBoundary(), "sym_name = \"projected\"", "sym_name = \"sibling_view\"");
+    boundary = replace(boundary, "instance = @child", "instance = @sibling");
+    top += replace(boundary, "Top.projected", "Top.sibling_view");
+    top += member("sibling_view", "sibling_view", resolved());
+  }
+  std::string child = hierarchyRequirement("required") + resolvedDefinition() +
+                      instance("exported", role, permission, resolved(), "", "required");
+  if (childAccess)
+    child += member("exported", "exported", resolved());
+  child += childEffects.str();
+  return "module attributes {nodal.root.module = @Top} {\n"
+         "\"nodal.module\"() <{sym_name = \"Top\", metadata = {}}> ({\n" +
+         top + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
+         child + "}) : () -> ()\n}\n";
+}
 std::string hierarchyArrayFixture(StringRef actual = "P", bool symbolic = true) {
   const std::string formal = symbolic ? "N" : "2";
   const std::string selected = symbolic ? actual.str() : "2";
@@ -1074,18 +1108,137 @@ int main() {
              false);
   standalone("standalone-net-split-acyclic",
              net() + driver() + resolvedValues + netDrive() + split(), true);
-  auto hierarchy = [&](StringRef name, const std::string &source, bool expected) {
+  auto hierarchy = [&](StringRef name, const std::string &source, bool expected,
+                       StringRef expectedDiagnostic = "") {
     ++cases;
     diagnosticText.clear();
     auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
     bool valid = parsed && succeeded(verify(parsed->getOperation()));
-    bool passed = valid == expected;
+    bool passed =
+        valid == expected && (expectedDiagnostic.empty() ||
+                              diagnosticText.find(expectedDiagnostic.str()) != std::string::npos);
     failures += !passed;
     if (!passed)
       llvm::errs() << diagnosticText;
     (passed ? llvm::outs() : llvm::errs())
         << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
   };
+  auto resolvedRead = [&](StringRef endpoint, StringRef result = "read") {
+    return "%" + result.str() + " = \"nodal.net_read\"(%" + endpoint.str() + ") <{metadata = {" +
+           tag + "}}> : (" + resolved() + ") -> " + bits + "\n";
+  };
+  const std::string conditional = literal("value") + literal("enable", boolean);
+  const std::string childDriver =
+      driver("driver", "exported") + conditional + netDrive("driver", "exported");
+  const std::string parentDriver =
+      driver("driver", "projected") + conditional + netDrive("driver", "projected");
+  hierarchy("resolved-boundary-pass-through-without-drivers",
+            hierarchyResolvedFixture(resolvedRead("projected"), resolvedRead("exported")), true);
+  hierarchy("resolved-boundary-parent-and-child-drivers",
+            hierarchyResolvedFixture(parentDriver + resolvedRead("projected"), childDriver), true);
+  hierarchy("resolved-boundary-exact-repeated-child-components",
+            hierarchyResolvedFixture(parentDriver, childDriver, "sink", true, true, true), true);
+  hierarchy("resolved-boundary-unaccessed-child-is-not-a-fresh-net",
+            hierarchyResolvedFixture(parentDriver, "", "sink", true, false), true);
+  hierarchy("resolved-boundary-unaccessed-projection",
+            hierarchyResolvedFixture("", childDriver, "sink", false), true);
+  hierarchy("resolved-boundary-true-read-to-driver-feedback",
+            hierarchyResolvedFixture(driver("driver", "projected") + literal("enable", boolean) +
+                                     resolvedRead("projected", "value") +
+                                     netDrive("driver", "projected")),
+            false);
+  hierarchy(
+      "resolved-boundary-cross-scope-read-feedback",
+      hierarchyResolvedFixture(
+          resolvedRead("projected", "input") +
+              "%child_input = \"nodal.instance_port\"() <{instance = @child, port = \"input\", "
+              "direction = \"input\", metadata = {}}> : () -> " +
+              bits + "\n" +
+              "\"nodal.digital_assign\"(%child_input, %input) <{kind = \"continuous\", metadata = "
+              "{}}> : (" +
+              bits + ", " + bits + ") -> ()\n",
+          replace(replace(port("value", bits, "input", "required"), "sym_name = \"value\"",
+                          "sym_name = \"input\""),
+                  "port = @value", "port = @input") +
+              driver("driver", "exported") + literal("enable", boolean) +
+              netDrive("driver", "exported")),
+      false, "causal combinational dependency cycle");
+  hierarchy("resolved-boundary-split-requires-global-driver-transport",
+            hierarchyResolvedFixture(parentDriver, childDriver + split("exported")), false,
+            "split on a child-boundary-joined component requires global driver transport");
+  hierarchy("resolved-boundary-unaccessed-parent-cannot-hide-child-split",
+            hierarchyResolvedFixture("", childDriver + split("exported"), "sink", false), false,
+            "split on a child-boundary-joined component requires global driver transport");
+  hierarchy("resolved-boundary-local-split-remains-strict",
+            hierarchyResolvedFixture("", split("exported")), false);
+  hierarchy("resolved-boundary-monitor-cannot-gain-drive",
+            hierarchyResolvedFixture(parentDriver, "", "monitor"), false);
+  hierarchy("resolved-boundary-monitor-cannot-gain-connect",
+            hierarchyResolvedFixture(net() + through("projected", "net"), "", "monitor"), false);
+  hierarchy("resolved-boundary-constrained-mode-is-exact",
+            replace(hierarchyResolvedFixture(), "type = " + resolved(),
+                    "type = " + resolved("open_drain")),
+            false);
+  hierarchy("resolved-boundary-forged-actual-element-type",
+            replace(hierarchyResolvedFixture(), "semantic_path = \"Top.projected\"",
+                    "semantic_path = \"Top.projected\", actual_types = [{path = \"data\", type = " +
+                        resolved("push_pull", boolean) + "}]"),
+            false);
+  std::string siblingDomains = hierarchyResolvedFixture("", childDriver, "sink", true, true, true);
+  siblingDomains = replace(siblingDomains,
+                           "sym_name = \"sibling\", module = @Child, parameter_bindings = {}, "
+                           "domain_bindings = {required = @clock}",
+                           "sym_name = \"sibling\", module = @Child, parameter_bindings = {}, "
+                           "domain_bindings = {required = @other}");
+  siblingDomains = replace(
+      siblingDomains,
+      replace(hierarchyBinding("required", "clock"), "instance = @child", "instance = @sibling"),
+      replace(hierarchyBinding("required", "other"), "instance = @child", "instance = @sibling"));
+  hierarchy("resolved-repeated-definition-retains-distinct-actual-domains", siblingDomains, true);
+  const std::string sampled =
+      resolvedRead("projected", "sampled") +
+      "%q = \"nodal.digital_storage\"() <{name = \"q\", kind = \"register\", domain = @clock, "
+      "metadata = {}}> : () -> " +
+      bits +
+      "\n\"nodal.digital_assign\"(%q, %sampled) <{kind = \"register_next\", metadata = {}}> : (" +
+      bits + ", " + bits + ") -> ()\n";
+  std::string foreign = hierarchyResolvedFixture(
+      port("input", bits, "input", "other") +
+          "%child_input = \"nodal.instance_port\"() <{instance = @child, port = \"value\", "
+          "direction = \"input\", metadata = {}}> : () -> " +
+          bits +
+          "\n\"nodal.digital_assign\"(%child_input, %input) <{kind = \"continuous\", metadata = "
+          "{}}> : (" +
+          bits + ", " + bits + ") -> ()\n" + sampled,
+      hierarchyRequirement("alien") + port("value", bits, "input", "alien") +
+          driver("driver", "exported") + literal("enable", boolean) +
+          netDrive("driver", "exported"));
+  foreign = replace(foreign, "domain_bindings = {required = @clock}",
+                    "domain_bindings = {required = @clock, alien = @other}");
+  foreign = replace(foreign, hierarchyBinding("required", "clock"),
+                    hierarchyBinding("required", "clock") + hierarchyBinding("alien", "other"));
+  hierarchy("resolved-child-domain-label-cannot-hide-actual-foreign-driver", foreign, false,
+            "foreign or unresolved input domain");
+  std::string actualSame = replace(foreign, "alien = @other", "alien = @clock");
+  actualSame =
+      replace(actualSame, hierarchyBinding("alien", "other"), hierarchyBinding("alien", "clock"));
+  actualSame =
+      replace(actualSame,
+              "sym_name = \"input\", type = " + bits + ", direction = \"input\", domain = @other",
+              "sym_name = \"input\", type = " + bits + ", direction = \"input\", domain = @clock");
+  hierarchy("resolved-child-actual-same-domain-driver-is-observed", actualSame, true);
+  std::string attributedRead =
+      resolvedRead("projected", "sampled") +
+      "%synced = \"nodal.crossing\"(%sampled) <{source_domain = @clock, destination_domain = "
+      "@other, "
+      "kind = \"sync\", contract = \"level_v1\", stages = 2 : i64, metadata = "
+      "{semantic_path = \"Top.sync\"}}> : (" +
+      bits + ") -> " + bits + "\n";
+  std::string unAttributed = hierarchyResolvedFixture(attributedRead, "", "sink", true, false);
+  while (unAttributed.find(bits) != std::string::npos)
+    unAttributed = replace(unAttributed, bits, boolean);
+  hierarchy("resolved-unaccessed-child-is-not-attributed-by-domain-label", unAttributed, false,
+            "actual attributed dependency evidence");
   hierarchy("child-output-actual-crossing", hierarchyFixture(), true);
   hierarchy("child-input-forwarding", hierarchyFixture(false, true), true);
   hierarchy("child-output-domain-label-does-not-hide-source", hierarchyFixture(true), false);

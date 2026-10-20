@@ -234,11 +234,14 @@ SmallVector<ActionControl, 4> actionControls(Operation *op, const Graph &g) {
 FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
   if (!llvm::isa_and_nonnull<FlatFSMOp>(op))
     return failure();
-  bool controlled = text(op, "contract_version") == "flat-fsm-v2";
+  bool composed = text(op, "contract_version") == "flat-fsm-v3";
+  bool controlled = composed || text(op, "contract_version") == "flat-fsm-v2";
   unsigned guardOffset = controlled ? 5 : 1;
   if (!llvm::isa<ModuleOp>(op->getParentOp()) || op->getNumOperands() < guardOffset ||
-      op->getNumResults() != (controlled ? 4 : 2) || op->getNumSuccessors() ||
-      (!controlled && text(op, "contract_version") != "flat-fsm-v1") ||
+      op->getNumResults() != (composed     ? 5
+                              : controlled ? 4
+                                           : 2) ||
+      op->getNumSuccessors() || (!controlled && text(op, "contract_version") != "flat-fsm-v1") ||
       !canonical(text(op, "machine_id")) || path(op) != text(op, "machine_id") ||
       !closed(op->getAttrDictionary(),
               {"contract_version", "machine_id", "enum_ref", "domain", "initial_case",
@@ -272,7 +275,8 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
   StringRef prefix = path(module).empty() ? text(module, "sym_name") : path(module);
   if (!text(op, "machine_id").starts_with((prefix + ".").str()))
     return failure();
-  FlatFSMHeader h{op, module, unsigned(transitions.size()), guardOffset, controlled, {}, {}, {}};
+  FlatFSMHeader h{op, module, unsigned(transitions.size()), guardOffset, controlled, composed, {},
+                  {}, {}};
   unsigned offset = h.guardOffset + h.guards, captures = 0;
   llvm::StringSet<> identities;
   for (unsigned i = 0; i < actions.size(); ++i) {
@@ -300,11 +304,23 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
     return failure();
   return h;
 }
+Value FlatFSMHeader::currentLocal() const { return operation->getOperand(0); }
+Value FlatFSMHeader::currentStatus() const {
+  return controlled ? operation->getOperand(1) : Value();
+}
+Value FlatFSMHeader::restart() const { return controlled ? operation->getOperand(2) : Value(); }
+Value FlatFSMHeader::cancel() const { return controlled ? operation->getOperand(3) : Value(); }
+Value FlatFSMHeader::enable() const { return controlled ? operation->getOperand(4) : Value(); }
+Value FlatFSMHeader::next() const { return operation->getResult(0); }
+Value FlatFSMHeader::taken() const { return operation->getResult(1); }
+Value FlatFSMHeader::entered() const { return controlled ? operation->getResult(2) : Value(); }
+Value FlatFSMHeader::exited() const { return controlled ? operation->getResult(3) : Value(); }
+Value FlatFSMHeader::establishment() const { return composed ? operation->getResult(4) : Value(); }
 llvm::StringRef flatFSMResultRole(Value value) {
   auto result = llvm::dyn_cast<OpResult>(value);
   if (!result || failed(inspectFlatFSMHeader(result.getOwner())))
     return {};
-  static constexpr const char *roles[] = {"next", "taken", "entered", "exited"};
+  static constexpr const char *roles[] = {"next", "taken", "entered", "exited", "establishment"};
   return roles[result.getResultNumber()];
 }
 FailureOr<Value> flatFSMCaptureSource(BlockArgument arg) {
@@ -447,16 +463,10 @@ FailureOr<SmallVector<ParameterIntegerEnvironment, 4>> flatFSMIntegerContextsAtU
     return failure();
   return SmallVector<ParameterIntegerEnvironment, 4>{*context};
 }
-LogicalResult verifyFlatFSMOperation(Operation *op) {
-  auto h = inspectFlatFSMHeader(op);
-  if (failed(h))
-    return reject(
-        op,
-        "flat FSM requires exact bounded typed operands, result roles and isolated action headers");
-  auto g = graph(*h);
-  if (failed(g))
-    return reject(op,
-                  "flat FSM graph, encoding, coverage, ordering or action ownership is invalid");
+static LogicalResult verifyFlatFSMWithGraph(const FlatFSMHeader &header, const Graph &value) {
+  const auto *h = &header;
+  const auto *g = &value;
+  Operation *op = header.operation;
   if (text(op, "illegal_policy") != "error" && text(op, "illegal_policy") != "recover_to_initial")
     return reject(op, "flat FSM requires explicit Error or RecoverToInitial");
   auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
@@ -494,6 +504,33 @@ LogicalResult verifyFlatFSMOperation(Operation *op) {
     if (failed(verifySequentialBody(body)))
       return failure();
   return success();
+}
+FailureOr<FlatFSMGraphSummary> inspectFlatFSMGraphSummary(Operation *op) {
+  auto h = inspectFlatFSMHeader(op);
+  if (failed(h)) {
+    (void)reject(
+        op,
+        "flat FSM requires exact bounded typed operands, result roles and isolated action headers");
+    return failure();
+  }
+  auto g = graph(*h);
+  if (failed(g)) {
+    (void)reject(op, "flat FSM graph, encoding, coverage, ordering or action ownership is invalid");
+    return failure();
+  }
+  if (failed(verifyFlatFSMWithGraph(*h, *g)))
+    return failure();
+  FlatFSMGraphSummary summary;
+  summary.header = std::move(*h);
+  summary.caseIds.append(g->enumeration.caseIds.begin(), g->enumeration.caseIds.end());
+  summary.localCodes.append(g->codes.begin(), g->codes.end());
+  summary.terminal.append(g->terminal.begin(), g->terminal.end());
+  summary.initial = g->initial;
+  summary.width = g->width;
+  return summary;
+}
+LogicalResult verifyFlatFSMOperation(Operation *op) {
+  return success(succeeded(inspectFlatFSMGraphSummary(op)));
 }
 namespace {
 class Expansion {
@@ -541,7 +578,8 @@ public:
     // than a promised minimal count. Each input collection is independently
     // bounded by header/graph admission; checked addition cannot overflow.
     if (h.controlled) {
-      uint64_t extra = 128 + 4 * uint64_t(g.codes.size()) + 4 * uint64_t(actionRecords.size());
+      uint64_t extra = 128 + 4 * uint64_t(g.codes.size()) + 4 * uint64_t(actionRecords.size()) +
+                       (h.composed ? 2 : 0);
       if (cost > maximum || extra > uint64_t(maximum) - cost)
         return reject(op, "FSM expansion exceeds its bounded lifecycle preflight budget");
       cost += extra;
@@ -648,12 +686,13 @@ public:
         expression("digital_select", {choice.condition, choice.value, current}, current.getType());
     if (text(op, "illegal_policy") == "recover_to_initial")
       next = expression("digital_select", {valid, next, constants[g.initial]}, current.getType());
-    Value actionGate = notReset, restarting = zero, cancelling = zero;
+    Value actionGate = notReset, restarting = zero, cancelling = zero, recovering = zero;
     Value lifecycle, lifecycleNext, illegalProperty = valid;
     if (h.controlled) {
       lifecycle = op->getOperand(1);
-      Value runningCode = literal(llvm::APInt(2, 1)), completedCode = literal(llvm::APInt(2, 2)),
-            cancelledCode = literal(llvm::APInt(2, 3));
+      Value runningCode = literal(llvm::APInt(2, unsigned(FlatFSMLifecycle::Running))),
+            completedCode = literal(llvm::APInt(2, unsigned(FlatFSMLifecycle::Completed))),
+            cancelledCode = literal(llvm::APInt(2, unsigned(FlatFSMLifecycle::Cancelled)));
       Value running = eq(lifecycle, runningCode), completed = eq(lifecycle, completedCode);
       SmallVector<Value, 4> terminalStates;
       for (unsigned i = 0; i < g.terminal.size(); ++i)
@@ -680,6 +719,8 @@ public:
       next = selectValue(advance, next, current);
       if (text(op, "illegal_policy") == "recover_to_initial") {
         Value recover = both(ordinary, both(operational, negate(legal)));
+        if (h.composed)
+          recovering = both(notReset, recover);
         next = selectValue(recover, constants[g.initial], next);
         lifecycleNext = selectValue(recover, initialStatus, lifecycleNext);
       }
@@ -694,6 +735,9 @@ public:
     Value taken = expression("bool_and", {actionGate, choice.condition}, zero.getType(), ".taken");
     Value entered = h.controlled ? either(taken, restarting) : taken;
     Value exited = h.controlled ? either(taken, cancelling) : taken;
+    Value establishment = h.composed ? expression("bool_or", {restarting, recovering},
+                                                  zero.getType(), ".establishment")
+                                     : Value();
     if (broken)
       return failure();
     if (text(op, "illegal_policy") == "error") {
@@ -808,6 +852,8 @@ public:
     if (h.controlled) {
       op->getResult(2).replaceAllUsesWith(entered);
       op->getResult(3).replaceAllUsesWith(exited);
+      if (h.composed)
+        op->getResult(4).replaceAllUsesWith(establishment);
     }
     op->erase();
     return success();
@@ -914,10 +960,11 @@ LogicalResult expandFlatFSMModel(Operation *module, unsigned &generated, unsigne
       machines.push_back(&op);
   for (Operation *op : machines) {
     auto h = inspectFlatFSMHeader(op);
-    if (failed(h) || failed(verifyFlatFSMOperation(op)))
+    if (failed(h))
       return failure();
     auto g = graph(*h);
-    if (failed(g) || failed(Expansion(*h, *g, generated, maximum).run()))
+    if (failed(g) || failed(verifyFlatFSMWithGraph(*h, *g)) ||
+        failed(Expansion(*h, *g, generated, maximum).run()))
       return failure();
   }
   return success();

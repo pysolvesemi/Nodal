@@ -12,6 +12,7 @@
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
+#include "nodal/Dialect/Nodal/FsmCompositionModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -868,6 +869,8 @@ struct Model {
     if (!llvm::isa_and_nonnull<ModuleOp>(module) || module->getNumRegions() != 1 ||
         !module->getRegion(0).hasOneBlock())
       return failure();
+    if (failed(verifyFsmCompositionModel(module, limits.maximumOperations, limits.maximumDepth)))
+      return failure();
     llvm::DenseSet<Attribute> bindings;
     for (Operation &op : module->getRegion(0).front()) {
       if (++work > limits.maximumOperations)
@@ -1474,7 +1477,8 @@ LogicalResult normalizeSequentialCandidate(Operation *module, SequentialModelLim
   if (failed(preflightMemoryNormalization(module, memoryLimits)))
     return failure(); // Never repair forged order or expand over-budget raw ports.
   unsigned generated = 0;
-  if (failed(expandFlatFSMModel(module, generated, limits.maximumNormalizedOperations)) ||
+  if (failed(expandFsmCompositionModel(module, generated, limits.maximumNormalizedOperations)) ||
+      failed(expandFlatFSMModel(module, generated, limits.maximumNormalizedOperations)) ||
       failed(expandEnumSwitchModel(module, generated, limits.maximumNormalizedOperations)))
     return failure();
   limits.maximumNormalizedOperations -= generated;

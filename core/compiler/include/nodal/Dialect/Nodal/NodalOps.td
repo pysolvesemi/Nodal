@@ -2035,6 +2035,23 @@ def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update",
   let hasVerifier = 1;
 }
 
+// F58: pure composition ingress, expanded through the shared sequential owner.
+def Nodal_FsmJoinOp : Nodal_Op<"fsm_join", [HasParent<"ModuleOp">]> {
+  let summary = "Registered completion join with exact composition ownership";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$composition_contract,
+    FlatSymbolRefAttr:$domain, StrAttr:$owner_case, StrAttr:$mode,
+    StrAttr:$selection, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_FsmActivationOp : Nodal_Op<"fsm_activation", [HasParent<"ModuleOp">]> {
+  let summary = "Pure owned child activation from canonical parent FSM events";
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$composition_contract,
+    FlatSymbolRefAttr:$domain, StrAttr:$owner_case, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$restart, AnyType:$cancel, AnyType:$enable);
+  let hasVerifier = 1;
+}
+
 // F56 v0.2: executable closed action ingress; F19 descriptors remain unchanged.
 def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
     IsolatedFromAbove, NoTerminator]> {

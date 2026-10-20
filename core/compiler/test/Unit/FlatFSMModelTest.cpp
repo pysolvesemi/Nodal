@@ -412,6 +412,85 @@ int main(int argc, char **argv) {
     } else
       llvm::outs() << "PASS " << name << '\n';
   };
+  // This is an executor-local test, intentionally not whole-module topology
+  // admission. The composition owner separately rejects an orphan v3 machine.
+  for (bool reset : {false, true})
+    for (bool recover : {false, true}) {
+      ++total;
+      auto v3 = controlledMachine(false, recover ? "recover_to_initial" : "error");
+      v3 = replace(v3, "%next, %taken, %entered, %exited =",
+                   "%next, %taken, %entered, %exited, %establishment =");
+      v3 = replace(v3, "flat-fsm-v2", "flat-fsm-v3");
+      v3 = replace(v3, "-> (" + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ")",
+                   "-> (" + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ", " +
+                       bits(1) + ")");
+      v3 += "%establishment_observed = \"nodal.digital_expr\"(%establishment, %false) "
+            "<{operator_name = \"bool_or\", metadata = {semantic_path = "
+            "\"Fixture.establishment_observed\"}}> : (" +
+            bits(1) + ", " + bits(1) + ") -> " + bits(1) + "\n";
+      auto parsed = parseSourceString<mlir::ModuleOp>(wrap(controlledSetup(reset) + v3),
+                                                      ParserConfig(&context, false));
+      auto module = parsed ? *parsed->getOps<nodal::ModuleOp>().begin() : nodal::ModuleOp();
+      bool good = bool(module);
+      nodal::FlatFSMOp fsm;
+      if (module)
+        for (auto op : module.getOps<nodal::FlatFSMOp>())
+          fsm = op;
+      auto summary = fsm ? nodal::inspectFlatFSMGraphSummary(fsm)
+                         : FailureOr<nodal::FlatFSMGraphSummary>(failure());
+      good &= succeeded(summary);
+      if (succeeded(summary)) {
+        good &= summary->header.composed && summary->header.controlled && summary->initial == 0 &&
+                summary->width == 2 && summary->localCodes.size() == 3 && summary->terminal[2] &&
+                nodal::flatFSMResultRole(summary->header.establishment()) == "establishment";
+        unsigned generated = 0;
+        auto before = print(module);
+        good &= failed(nodal::expandFlatFSMModel(module, generated, 0)) && before == print(module);
+        generated = 0;
+        good &= succeeded(nodal::expandFlatFSMModel(module, generated, 65536)) && generated > 0;
+        Value observed;
+        module.walk([&](nodal::DigitalExprOp op) {
+          auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
+          auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+          if (path && path.getValue() == "Fixture.establishment_observed")
+            observed = op->getResult(0);
+        });
+        good &= bool(observed);
+        if (observed)
+          for (int state = 0; state != 4; ++state)
+            for (int status = 0; status != 4; ++status)
+              for (int restart = 0; restart != 2; ++restart)
+                for (int cancel = 0; cancel != 2; ++cancel)
+                  for (int enable = 0; enable != 2; ++enable)
+                    for (int asserted = 0; asserted != (reset ? 2 : 1); ++asserted) {
+                      bool cancelled = status == int(nodal::FlatFSMLifecycle::Running) && cancel;
+                      bool operational = status == int(nodal::FlatFSMLifecycle::Running) ||
+                                         status == int(nodal::FlatFSMLifecycle::Completed);
+                      bool legal =
+                          state < 3 &&
+                          (status != int(nodal::FlatFSMLifecycle::Completed) || state == 2);
+                      bool expected = !asserted && !cancelled &&
+                                      (restart || (recover && enable && operational && !legal));
+                      good &= evaluate(observed, {{"state", state},
+                                                  {"status", status},
+                                                  {"restart", restart},
+                                                  {"cancel", cancel},
+                                                  {"enable", enable},
+                                                  {"reset", asserted},
+                                                  {"go", 0},
+                                                  {"again", 0},
+                                                  {"done", 0}}) == expected;
+                    }
+      }
+      std::string name = std::string("composed-establishment-") +
+                         (reset ? "reset-" : "resetless-") + (recover ? "recover" : "error");
+      if (good)
+        llvm::outs() << "PASS " << name << '\n';
+      else {
+        ++failures;
+        llvm::errs() << "FAIL " << name << '\n';
+      }
+    }
   auto controlled = wrap(controlledSetup() + controlledMachine());
   check("contextual-reset-same-controlled-definition", requiredFixture(), true,
         [](nodal::ModuleOp module) {

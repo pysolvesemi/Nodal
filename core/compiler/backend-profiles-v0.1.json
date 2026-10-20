@@ -1016,7 +1016,19 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.fsm_activation",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.fsm_completion",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_join",
         "feature": "digital-behavior",
         "domain": "digital",
         "admission": "unsupported"

@@ -136,6 +136,7 @@ public:
   explicit Model(Operation *module) : module(module) {}
   LogicalResult verify();
   LogicalResult endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result);
+  LogicalResult topology(DigitalResolvedTopology &result);
   LogicalResult dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result,
                              SmallVectorImpl<DigitalInterfaceObservationGroup> *observations);
 
@@ -208,6 +209,15 @@ bool Model::equivalentBoundaryTypes(Type left, Operation *leftInstance, Type rig
   // contexts remain part of the key even when the raw types are identical.
   // Callers charge every represented member to the existing structural budget,
   // so the memo cannot grow beyond that bounded traversal.
+  auto leftResolved = llvm::dyn_cast<ResolvedType>(left);
+  auto rightResolved = llvm::dyn_cast<ResolvedType>(right);
+  if (leftResolved || rightResolved) {
+    if (!leftResolved || !rightResolved ||
+        leftResolved.getDriveMode() != rightResolved.getDriveMode())
+      return false;
+    left = leftResolved.getElementType();
+    right = rightResolved.getElementType();
+  }
   const auto key =
       std::make_pair(ContextualType{left, leftInstance}, ContextualType{right, rightInstance});
   auto found = boundaryTypeEqualities.find(key);
@@ -616,8 +626,7 @@ LogicalResult Model::boundary(Operation *operation) {
           return reject(operation, "Interface boundary comparison exceeds its structural budget");
         auto known = local.members.find(member.getKey());
         if (known == local.members.end() ||
-            ((analog(member.second.protocol) || member.second.protocol == "resolved" ||
-              isDigitalControlBoundaryType(member.second.type))
+            ((analog(member.second.protocol) || isDigitalControlBoundaryType(member.second.type))
                  ? known->second.type != member.second.type
                  : !equivalentBoundaryTypes(
                        known->second.type,
@@ -692,10 +701,13 @@ LogicalResult Model::boundary(Operation *operation) {
       return reject(operation, "Interface boundary actual types exceed their structural budget");
     StringRef path = symbol(&memberOperation);
     const Member &member = original.definition->members.find(path)->second;
-    if (analog(member.protocol) || member.protocol == "resolved" ||
-        isDigitalControlBoundaryType(member.type) ||
-        failed(inferDigitalBitPatternMaximumBits(member.type, boundary->module)))
-      return reject(operation, "child Interface projection requires ordinary digital data leaves");
+    auto resolved = llvm::dyn_cast<ResolvedType>(member.type);
+    Type payload = resolved ? resolved.getElementType() : member.type;
+    if (analog(member.protocol) || isDigitalControlBoundaryType(member.type) ||
+        failed(inferDigitalBitPatternMaximumBits(payload, boundary->module)))
+      return reject(operation, "child Interface projection requires digital data leaves");
+    if (resolved && !shape.empty())
+      return reject(operation, "resolved Interface boundary requires a scalar component");
     Type actual = member.type;
     if (actualInventory) {
       auto item = llvm::dyn_cast<DictionaryAttr>(actualInventory[memberIndex]);
@@ -703,15 +715,18 @@ LogicalResult Model::boundary(Operation *operation) {
       if (!item || item.size() != 2 || text(item, "path") != path || !type)
         return reject(operation, "Interface boundary actual types change ordered member identity");
       actual = type.getValue();
-    } else if (failed(inferDigitalBitPatternFixedBits(member.type, boundary->module))) {
+    } else if (failed(inferDigitalBitPatternFixedBits(payload, boundary->module))) {
       return reject(operation, "symbolic Interface boundary requires explicit actual member types");
     }
     ++memberIndex;
     if (!equivalentBoundaryTypes(member.type, boundary->instance, actual, nullptr))
       return reject(operation,
                     "Interface actual member type differs from exact finalized child binding");
-    Type shaped =
-        shape.empty() ? actual : nodal::ShapedType::get(module->getContext(), shape, actual);
+    auto actualResolved = llvm::dyn_cast<ResolvedType>(actual);
+    Type actualPayload = actualResolved ? actualResolved.getElementType() : actual;
+    Type shaped = shape.empty()
+                      ? actualPayload
+                      : nodal::ShapedType::get(module->getContext(), shape, actualPayload);
     if (failed(inferDigitalBitPatternMaximumBits(shaped, module)))
       return reject(operation, "Interface actual payload requires finite owned bit-pattern shape");
     actualTypes.try_emplace(path, actual);
@@ -895,8 +910,9 @@ LogicalResult Model::effect(Operation *operation) {
   StringRef permission = left.entry->access;
   bool resolved = left.member->protocol == "resolved";
   if (drive) {
-    if (left.instance->childInstance ? permission != "in"
-                                     : permission != "out" && permission != "drive")
+    if (resolved                       ? permission != "drive"
+        : left.instance->childInstance ? permission != "in"
+                                       : permission != "out")
       return reject(operation, "actual Interface role does not permit driving this member");
     Type expected = operation->getOperand(0).getType();
     if (resolved) {
@@ -975,10 +991,10 @@ LogicalResult Model::effect(Operation *operation) {
       left.member->protocol != right.member->protocol ||
       left.entry->nestedInterfaces != right.entry->nestedInterfaces || left.path != right.path ||
       left.instance->domain != right.instance->domain ||
-      ((resolved || isDigitalControlBoundaryType(operation->getOperand(0).getType()))
+      (isDigitalControlBoundaryType(operation->getOperand(0).getType())
            ? operation->getOperand(0).getType() != operation->getOperand(1).getType()
-           : !equivalentDigitalStorageTypes(operation->getOperand(0).getType(),
-                                            operation->getOperand(1).getType(), module)))
+           : !equivalentBoundaryTypes(operation->getOperand(0).getType(), nullptr,
+                                      operation->getOperand(1).getType(), nullptr)))
     return reject(
         operation,
         "Interface connection requires distinct exact members, dimensions and domain identity");
@@ -1330,6 +1346,71 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
                 std::make_move_iterator(collected.end()));
   return success();
 }
+LogicalResult Model::topology(DigitalResolvedTopology &result) {
+  DigitalResolvedTopology collected;
+  auto components = resolvedComponentValues();
+  llvm::DenseMap<unsigned, unsigned> positions;
+  for (Operation &operation : module->getRegion(0).front())
+    for (Value value : operation.getResults()) {
+      auto net = netIndices.find(value);
+      if (net == netIndices.end())
+        continue;
+      unsigned root = representative(net->second);
+      if (components.lookup(root) != value)
+        continue;
+      positions.try_emplace(root, collected.components.size());
+      collected.components.push_back({value, componentDomains.lookup(root), {}, {}, {}});
+    }
+  for (auto [index, operation] : conditionalDrivers)
+    collected.components[positions.lookup(representative(index))].drivers.push_back(operation);
+  for (auto [index, operation] : splits)
+    collected.components[positions.lookup(representative(index))].splits.push_back(operation);
+  std::map<std::pair<Operation *, std::string>, Value> resolvedMembers;
+  for (Operation &operation : module->getRegion(0).front()) {
+    for (Value value : operation.getResults()) {
+      auto net = netIndices.find(value);
+      if (net == netIndices.end())
+        continue;
+      unsigned root = representative(net->second);
+      collected.components[positions.lookup(root)].values.push_back(value);
+      auto access = accesses.find(value);
+      if (access != accesses.end())
+        resolvedMembers.try_emplace(
+            std::make_pair(access->second.instance->operation, access->second.path.str()),
+            components.lookup(root));
+    }
+    if (llvm::isa<NetReadOp>(operation) && marked(&operation)) {
+      unsigned root = representative(netIndices.lookup(operation.getOperand(0)));
+      collected.components[positions.lookup(root)].values.push_back(operation.getResult(0));
+    }
+    auto found = instances.find(&operation);
+    if (found == instances.end() || !found->second.dimensions.empty())
+      continue;
+    const Instance &instance = found->second;
+    for (Operation &memberOperation : instance.definition->operation->getRegion(0).front()) {
+      if (!llvm::isa<InterfaceMemberOp>(memberOperation) ||
+          text(&memberOperation, "protocol") != "resolved")
+        continue;
+      if (++work > digitalTypeMaximumNodes)
+        return reject(&operation, "resolved endpoint slots exceed their structural budget");
+      StringAttr path = memberOperation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      auto represented = resolvedMembers.find({&operation, path.getValue().str()});
+      // Member accesses may be authored after their declaration. Populate the
+      // represented component below, after the single authored-order inventory.
+      collected.endpoints.push_back(
+          {&operation, instance.childInstance,
+           instance.childEndpoint ? instance.childEndpoint : &operation, path, instance.domain,
+           represented == resolvedMembers.end() ? Value() : represented->second});
+    }
+  }
+  for (auto &endpoint : collected.endpoints) {
+    auto represented = resolvedMembers.find({endpoint.operation, endpoint.path.getValue().str()});
+    if (represented != resolvedMembers.end())
+      endpoint.component = represented->second;
+  }
+  result = std::move(collected);
+  return success();
+}
 LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependencies> &result,
                                   SmallVectorImpl<DigitalInterfaceObservationGroup> *observations) {
   SmallVector<DigitalInterfaceValueDependencies> collected;
@@ -1582,10 +1663,15 @@ collectDigitalInterfaceEndpoints(Operation *module,
 }
 LogicalResult collectDigitalInterfaceDependencies(
     Operation *module, SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
-    SmallVectorImpl<DigitalInterfaceObservationGroup> *observations) {
+    SmallVectorImpl<DigitalInterfaceObservationGroup> *observations,
+    DigitalResolvedTopology *topology) {
   Model model(module);
-  if (failed(model.verify()))
+  DigitalResolvedTopology collected;
+  if (failed(model.verify()) || (topology && failed(model.topology(collected))) ||
+      failed(model.dependencies(dependencies, observations)))
     return failure();
-  return model.dependencies(dependencies, observations);
+  if (topology)
+    *topology = std::move(collected);
+  return success();
 }
 } // namespace nodal

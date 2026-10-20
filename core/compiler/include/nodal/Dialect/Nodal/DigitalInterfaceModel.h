@@ -106,13 +106,35 @@ struct DigitalInterfaceObservationGroup {
   mlir::FlatSymbolRefAttr domain;
   llvm::SmallVector<mlir::Value, 2> values;
 };
+/// Existing local resolution facts, not another net allocation or topology owner.
+struct DigitalResolvedComponent {
+  mlir::Value value;
+  mlir::FlatSymbolRefAttr domain;
+  /// Existing net aliases and read results whose provenance follows this component.
+  llvm::SmallVector<mlir::Value, 2> values;
+  llvm::SmallVector<mlir::Operation *, 2> drivers, splits;
+};
+/// Logical slots include unaccessed leaves. A null component remains unrepresented.
+struct DigitalResolvedEndpoint {
+  mlir::Operation *operation = nullptr;
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *declaration = nullptr;
+  mlir::StringAttr path;
+  mlir::FlatSymbolRefAttr domain;
+  mlir::Value component;
+};
+struct DigitalResolvedTopology {
+  llvm::SmallVector<DigitalResolvedComponent> components;
+  llvm::SmallVector<DigitalResolvedEndpoint> endpoints;
+};
 /// Append dependencies and optional coherent observations transactionally after
 /// one shared validation. Unaccessed or undriven external leaves do not create
 /// observations. Ordering follows canonical values in authored source order;
 /// no physical bits/lanes or transitive provenance sets are expanded.
 mlir::LogicalResult collectDigitalInterfaceDependencies(
     mlir::Operation *module, llvm::SmallVectorImpl<DigitalInterfaceValueDependencies> &dependencies,
-    llvm::SmallVectorImpl<DigitalInterfaceObservationGroup> *observations = nullptr);
+    llvm::SmallVectorImpl<DigitalInterfaceObservationGroup> *observations = nullptr,
+    DigitalResolvedTopology *topology = nullptr);
 } // namespace nodal
 
 #endif

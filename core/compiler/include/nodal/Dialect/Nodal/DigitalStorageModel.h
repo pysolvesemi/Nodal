@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -118,6 +119,8 @@ struct DigitalDependencyGraph {
   /// Canonical coherent observations, never a module-wide group.
   llvm::SmallVector<DigitalObservationGroup> observations;
   std::shared_ptr<const HierarchyModel> hierarchy;
+  /// Canonical local Interface facts consumed by the existing occurrence graph.
+  DigitalResolvedTopology resolved;
 };
 mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(
     mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,

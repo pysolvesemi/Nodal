@@ -2,6 +2,8 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/SV/SVDialect.h"
+#include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
@@ -13,6 +15,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -23,6 +26,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <tuple>
 using namespace mlir;
 namespace {
 const std::string u8 = "!nodal.uint<8>", u9 = "!nodal.uint<9>", bit = "!nodal.bits<1>";
@@ -339,6 +343,228 @@ std::string levelBody(unsigned stages = 2, bool independent = false, std::string
             assign("otherResult", "independent", false, bit);
   return body;
 }
+std::string executableSetup(std::string type, std::string policy = "none",
+                            std::string sourceEdge = "rising",
+                            std::string destinationEdge = "rising",
+                            std::string polarity = "active_high") {
+  const std::string clock = "!nodal.capability<\"clock\">", reset = "!nodal.capability<\"reset\">";
+  std::string body;
+  for (const std::string name : {"source", "core"})
+    body += "\"nodal.domain\"() <{sym_name = \"" + name + "\", edge = \"" +
+            (name == "source" ? sourceEdge : destinationEdge) + "\", reset_policy = \"" + policy +
+            "\", metadata = {}}> : () -> ()\n";
+  body += replace(port("sourceClock", clock), "domain = @core", "domain = @source") +
+          port("clock", clock);
+  if (policy != "none")
+    body += port("reset", reset);
+  for (const std::string name : {"source", "core"}) {
+    std::string resetName = name + "Reset";
+    if (policy != "none")
+      body += "%" + resetName + " = \"nodal.reset_boundary\"(%reset) <{reset_polarity = \"" +
+              polarity + "\", release = \"external\", release_domain = @" + name + ", " +
+              metadata(resetName) + "}> : (" + reset + ") -> " + reset + "\n";
+    body += "\"nodal.local_domain_binding\"(%" +
+            std::string(name == "source" ? "sourceClock" : "clock") +
+            (policy == "none" ? "" : ", %" + resetName) + ") <{domain = @" + name +
+            ", reset_polarity = \"" + polarity + "\", metadata = {}}> : (" + clock +
+            (policy == "none" ? "" : ", " + reset) + ") -> ()\n";
+  }
+  return body + replace(port("input", type), "domain = @core", "domain = @source");
+}
+std::string executableCrossing(std::string kind, std::string type, unsigned stages = 2,
+                               std::string name = "sample") {
+  std::string obligations =
+      kind == "gray" ? "transition = \"one_bit_per_source_sample\", "
+                       "skew = \"less_than_source_period\", "
+                       "stability = \"stable_between_source_samples\""
+                     : "spacing = \"returned_acknowledgement\", "
+                       "width = \"single_source_cycle\", reset_epoch = \"common_assertion\"";
+  return "%" + name +
+         " = \"nodal.crossing\"(%input) <{source_domain = @source, "
+         "destination_domain = @core, kind = \"" +
+         kind + "\", contract = \"" + kind + "_v1\", stages = " + std::to_string(stages) +
+         " : i64, obligations = {" + obligations + "}, " + metadata(name) + "}> : (" + type +
+         ") -> " + type + "\n";
+}
+std::string executableBody(std::string kind, std::string type, unsigned stages = 2,
+                           std::string policy = "none", bool independent = false,
+                           std::string sourceEdge = "rising",
+                           std::string destinationEdge = "rising",
+                           std::string polarity = "active_high") {
+  std::string body = executableSetup(type, policy, sourceEdge, destinationEdge, polarity) +
+                     executableCrossing(kind, type, stages) + port("result", type, "output") +
+                     assign("result", "sample", false, type);
+  if (independent)
+    body += executableCrossing(kind, type, stages, "independent") +
+            port("otherResult", type, "output") + assign("otherResult", "independent", false, type);
+  return body;
+}
+bool owningClock(Value value, StringRef name, bool falling) {
+  if (falling) {
+    auto inverter = value.getDefiningOp<circt::seq::ClockInverterOp>();
+    if (!inverter)
+      return false;
+    value = inverter->getOperand(0);
+  }
+  auto argument = dyn_cast<BlockArgument>(value);
+  if (!argument)
+    return false;
+  auto hw = cast<circt::hw::HWModuleOp>(argument.getOwner()->getParentOp());
+  return hw.getPortList()[hw.getPortIdForInputId(argument.getArgNumber())].name.getValue() == name;
+}
+std::map<std::string, SmallVector<circt::seq::CompRegOp>> crossingRegisters(mlir::ModuleOp module,
+                                                                            bool &good) {
+  std::map<std::string, SmallVector<circt::seq::CompRegOp>> result;
+  llvm::StringSet<> names, symbols;
+  module.walk([&](circt::seq::CompRegOp reg) {
+    auto path = reg->getAttrOfType<StringAttr>("nodal.source_path");
+    auto index = reg->getAttrOfType<IntegerAttr>("nodal.crossing_stage");
+    auto symbol = reg.getInnerSymAttr();
+    good &= path && index && symbol && !reg.getReset() && !reg.getInitialValue();
+    if (!path || !index || !symbol)
+      return;
+    good &= names.insert(reg.getNameAttr().getValue()).second &&
+            symbols.insert(symbol.getSymName().getValue()).second;
+    auto &chain = result[path.getValue().str()];
+    good &= uint64_t(index.getInt()) == chain.size();
+    good &= reg->getAttrOfType<DictionaryAttr>("nodal.crossing_obligations") != nullptr;
+    chain.push_back(reg);
+  });
+  return result;
+}
+bool checkGray(mlir::ModuleOp module, unsigned bits, unsigned stages, unsigned chains = 1,
+               bool reset = false, bool sourceFalling = false, bool destinationFalling = false,
+               bool activeLow = false) {
+  bool good = true;
+  auto registers = crossingRegisters(module, good);
+  good &= registers.size() == chains;
+  for (auto &[path, regs] : registers) {
+    good &= regs.size() == stages + 2;
+    if (regs.size() != stages + 2)
+      continue;
+    for (unsigned i = 0; i < stages + 2; ++i) {
+      good &= regs[i].getResult().getType().isInteger(i == stages + 1 ? 1 : bits);
+      good &= owningClock(regs[i].getClk(), i < stages ? "clock" : "sourceClock",
+                          i < stages ? destinationFalling : sourceFalling);
+      good &= regs[i]->getAttrOfType<StringAttr>("nodal.crossing_contract").getValue() == "gray_v1";
+      // Neither the payload pipeline nor previous-payload monitor acquires an
+      // invented reset encoding. Only the seen-sample bookkeeping can reset.
+      if (i < stages + 1)
+        good &= !regs[i].getInput().getDefiningOp<circt::comb::MuxOp>();
+      if (i && i < stages)
+        good &= regs[i].getInput() == regs[i - 1].getResult();
+    }
+    good &= regs[0].getInput() == regs[stages].getInput();
+    if (bits <= 64) {
+      std::map<std::string, uint64_t> inputs{{"input", bits == 1 ? 1 : 3},
+                                             {"reset", activeLow ? 1 : 0}};
+      good &= evaluate(regs[stages].getInput(), inputs, 0) == (bits == 1 ? 1 : 3);
+      good &= evaluate(regs[stages + 1].getInput(), inputs, 0) == 1;
+      if (reset) {
+        inputs["reset"] = activeLow ? 0 : 1;
+        good &= evaluate(regs[stages].getInput(), inputs, 0) == (bits == 1 ? 1 : 3);
+        good &= evaluate(regs[stages + 1].getInput(), inputs, 0) == 0;
+      }
+    }
+  }
+  unsigned checks = 0, obligations = 0;
+  module.walk([&](circt::sv::VerbatimOp op) {
+    auto content = op->getAttrOfType<StringAttr>("format_string").getValue();
+    if (content.contains("skew=less_than_source_period") &&
+        content.contains("stability=stable_between_source_samples"))
+      ++obligations;
+    if (!op->hasAttr("nodal.crossing_check"))
+      return;
+    ++checks;
+    good &= content.contains("=== 1'b1") && content.contains("$fatal") &&
+            content.contains(sourceFalling ? "negedge" : "posedge");
+    auto clock = op->getOperand(0).getDefiningOp<circt::seq::FromClockOp>();
+    good &= clock && owningClock(clock->getOperand(0), "sourceClock", false);
+    if (bits > 64)
+      return;
+    auto path = op->getAttrOfType<StringAttr>("nodal.source_path").getValue().str();
+    auto &regs = registers[path];
+    if (regs.size() != stages + 2)
+      return;
+    std::map<std::string, uint64_t> inputs{{"reset", activeLow ? 1 : 0},
+                                           {"input", bits == 1 ? 1 : 3}};
+    inputs["state:" + regs[stages].getNameAttr().getValue().str()] = 0;
+    inputs["state:" + regs[stages + 1].getNameAttr().getValue().str()] = 0;
+    good &= evaluate(op->getOperand(1), inputs, 0) == 0;
+    inputs["state:" + regs[stages + 1].getNameAttr().getValue().str()] = 1;
+    good &= evaluate(op->getOperand(1), inputs, 0) == 1;
+    good &= evaluate(op->getOperand(2), inputs, 0) == (bits == 1);
+    inputs["input"] = 1;
+    good &= evaluate(op->getOperand(2), inputs, 0) == 1;
+    inputs["input"] = 0;
+    good &= evaluate(op->getOperand(2), inputs, 0) == 1;
+    if (reset) {
+      inputs["reset"] = activeLow ? 0 : 1;
+      good &= evaluate(op->getOperand(1), inputs, 0) == 0;
+    }
+  });
+  return good && checks == chains && obligations == chains;
+}
+bool checkPulse(mlir::ModuleOp module, unsigned chains = 1, bool sourceFalling = false,
+                bool destinationFalling = false, bool activeLow = false) {
+  bool good = true;
+  auto registers = crossingRegisters(module, good);
+  good &= registers.size() == chains;
+  auto hw = *module.getOps<circt::hw::HWModuleOp>().begin();
+  for (auto &[path, regs] : registers) {
+    good &= regs.size() == 7;
+    if (regs.size() != 7)
+      continue;
+    std::map<std::string, uint64_t> inputs{{"reset", activeLow ? 1 : 0}, {"input", 1}};
+    for (unsigned i = 0; i < 7; ++i) {
+      inputs["state:" + regs[i].getNameAttr().getValue().str()] = i % 2;
+      bool source = i < 2 || i > 4;
+      good &= owningClock(regs[i].getClk(), source ? "sourceClock" : "clock",
+                          source ? sourceFalling : destinationFalling);
+      good &= regs[i].getResult().getType().isInteger(1);
+    }
+    unsigned expected[] = {1, 1, 0, 0, 1, 0, 1};
+    for (unsigned i = 0; i < 7; ++i)
+      good &= evaluate(regs[i].getInput(), inputs, 0) == expected[i];
+    // Ack[0] consumes history[4], never forward[3], and toggle is NOT gated by ready.
+    good &= cast<circt::comb::MuxOp>(regs[5].getInput().getDefiningOp())->getOperand(2) ==
+            regs[4].getResult();
+    inputs["reset"] = activeLow ? 0 : 1;
+    for (unsigned i = 0; i < 7; ++i)
+      good &= evaluate(regs[i].getInput(), inputs, 1) == 0;
+    auto output = hw.getBodyBlock()->getTerminator()->getOperand(path == "Fixture.sample" ? 0 : 1);
+    good &= output.getDefiningOp<circt::comb::XorOp>() &&
+            output.getDefiningOp()->getOperand(0) == regs[3].getResult() &&
+            output.getDefiningOp()->getOperand(1) == regs[4].getResult();
+  }
+  unsigned checks = 0, obligations = 0;
+  module.walk([&](circt::sv::VerbatimOp op) {
+    auto content = op->getAttrOfType<StringAttr>("format_string").getValue();
+    obligations += content.contains("reset_epoch=common_assertion") &&
+                   content.contains("no one-sided restart");
+    if (!op->hasAttr("nodal.crossing_check"))
+      return;
+    ++checks;
+    good &= content.contains("assert (({{2}}) === 1'b1)") &&
+            content.contains("if (({{1}}) !== 1'b0)") && content.contains("$fatal");
+    auto &regs = registers[op->getAttrOfType<StringAttr>("nodal.source_path").getValue().str()];
+    if (regs.size() != 7)
+      return;
+    for (unsigned toggle = 0; toggle < 2; ++toggle)
+      for (unsigned ack = 0; ack < 2; ++ack)
+        for (unsigned prior = 0; prior < 2; ++prior)
+          for (unsigned input = 0; input < 2; ++input) {
+            std::map<std::string, uint64_t> inputs{{"reset", activeLow ? 1 : 0}, {"input", input}};
+            inputs["state:" + regs[0].getNameAttr().getValue().str()] = toggle;
+            inputs["state:" + regs[1].getNameAttr().getValue().str()] = prior;
+            inputs["state:" + regs[6].getNameAttr().getValue().str()] = ack;
+            good &= evaluate(op->getOperand(1), inputs, 0) == 1;
+            good &= evaluate(op->getOperand(2), inputs, 0) == (!input || (toggle == ack && !prior));
+            good &= evaluate(regs[0].getInput(), inputs, 0) == (toggle ^ input);
+          }
+  });
+  return good && checks == chains && obligations == chains;
+}
 // Check the emitted data graph at each pre-edge state, with the actual owning
 // clock and all stage/source identities. Input inversion makes bypass obvious.
 bool checkLevel(mlir::ModuleOp module, unsigned stages, unsigned chains, bool reset = false,
@@ -413,7 +639,7 @@ int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   DialectRegistry registry;
   registry.insert<nodal::NodalDialect, circt::hw::HWDialect, circt::comb::CombDialect,
-                  circt::seq::SeqDialect, circt::verif::VerifDialect>();
+                  circt::seq::SeqDialect, circt::verif::VerifDialect, circt::sv::SVDialect>();
   MLIRContext context(registry);
   context.loadAllAvailableDialects();
   std::string diagnostics;
@@ -445,6 +671,20 @@ int main(int argc, char **argv) {
         return 1;
       }
       std::string path = std::string(argv[2]) + "-" + name;
+      std::ofstream(path + ".nodal.mlir") << source;
+      std::ofstream(path + ".circt.mlir") << print(*module) << '\n';
+    }
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--emit-gray-pulse") {
+    for (const std::string kind : {"gray", "pulse"}) {
+      std::string source = wrap(executableBody(kind, kind == "gray" ? u8 : bit, 2, "sync", true));
+      auto module = parseSourceString<mlir::ModuleOp>(source, &context);
+      if (!module || failed(lower(*module))) {
+        llvm::errs() << diagnostics;
+        return 1;
+      }
+      std::string path = std::string(argv[2]) + "-" + kind;
       std::ofstream(path + ".nodal.mlir") << source;
       std::ofstream(path + ".circt.mlir") << print(*module) << '\n';
     }
@@ -739,6 +979,75 @@ int main(int argc, char **argv) {
       body += levelCrossing("bounded" + std::to_string(i), 32);
     negative("level-total-expansion-preflight-is-atomic", wrap(body),
              "target expansion exceeds 262144 operations before allocation");
+  }
+  for (const auto &[type, bits, stages] : {std::tuple<std::string, unsigned, unsigned>{bit, 1, 2},
+                                           {"!nodal.bits<4>", 4, 3},
+                                           {"!nodal.uint<8>", 8, 2},
+                                           {"!nodal.sint<17>", 17, 32},
+                                           {"!nodal.bits<4096>", 4096, 2}})
+    test("gray-fixed-scalar-" + std::to_string(bits) + "-" + std::to_string(stages),
+         executableBody("gray", type, stages),
+         [&](mlir::ModuleOp m) { return checkGray(m, bits, stages); });
+  test("gray-reset-keeps-payload-uninitialized", executableBody("gray", u8, 2, "sync"),
+       [&](mlir::ModuleOp m) { return checkGray(m, 8, 2, 1, true); });
+  test("gray-low-reset-falling-source-rising-destination",
+       executableBody("gray", u8, 2, "sync", false, "falling", "rising", "active_low"),
+       [&](mlir::ModuleOp m) { return checkGray(m, 8, 2, 1, true, true, false, true); });
+  test("gray-independent-identical-source-cse", executableBody("gray", u8, 2, "none", true),
+       [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkGray(m, 8, 2, 2);
+       });
+  for (bool falling : {false, true})
+    test(falling ? "pulse-low-falling-source" : "pulse-seven-state-delivery-ack",
+         executableBody("pulse", bit, 2, "sync", false, falling ? "falling" : "rising",
+                        falling ? "rising" : "falling", falling ? "active_low" : "active_high"),
+         [&](mlir::ModuleOp m) { return checkPulse(m, 1, falling, !falling, falling); });
+  test("pulse-independent-identical-source-cse", executableBody("pulse", bit, 2, "sync", true),
+       [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkPulse(m, 2);
+       });
+  test("pulse-asynchronous-all-seven-state-resets", executableBody("pulse", bit, 2, "async"),
+       [&](mlir::ModuleOp m) {
+         unsigned states = 0;
+         bool good = true;
+         m.walk([&](circt::seq::FirRegOp reg) {
+           ++states;
+           good &=
+               reg.getIsAsync() && bool(reg.getReset()) &&
+               reg->getAttrOfType<StringAttr>("nodal.crossing_contract").getValue() == "pulse_v1";
+           good &= evaluate(reg.getResetValue(), {}, 1) == 0;
+         });
+         return good && states == 7 && print(m).find("seq.initial") == std::string::npos;
+       });
+  negative("gray-aggregate-target-rejection-is-atomic",
+           wrap(executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<8>>")),
+           "only fixed scalar");
+  negative("gray-wide-target-rejection-is-atomic",
+           wrap(executableBody("gray", "!nodal.bits<4097>")), "only fixed scalar");
+  negative("gray-unsupported-sibling-is-atomic",
+           "module {" + owner(executableBody("gray", u8)) +
+               owner(replace(executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<8>>"),
+                             "Fixture.sample", "Other.sample"),
+                     "Other") +
+               "}",
+           "only fixed scalar");
+  negative("pulse-missing-reset-epoch-is-atomic", wrap(executableBody("pulse", bit)),
+           "reset-bearing");
+  {
+    auto original = parseSourceString<mlir::ModuleOp>(flatFSMFixture, &context);
+    auto enumDefinition = original ? *original->getOps<nodal::EnumOp>().begin() : nodal::EnumOp();
+    const std::string type = "!nodal.enum<\"Mode\", 3>";
+    auto raw = enumDefinition ? "module {" + print(enumDefinition) +
+                                    owner(executableBody("gray", type, 2, "sync")) + "}"
+                              : "";
+    auto typed = parseSourceString<mlir::ModuleOp>(raw, &context);
+    bool good = typed && succeeded(lower(*typed));
+    report("gray-enum-abi-retained", good && checkGray(*typed, 3, 2, 1, true) &&
+                                         typed->getOperation()->hasAttr("nodal.enum_abi"));
   }
   std::string alias = expression("alias", "digital_alias", "%input", u8, u8,
                                  ", digital_intent = {kind = \"keep\", value = \"inspection\"}");

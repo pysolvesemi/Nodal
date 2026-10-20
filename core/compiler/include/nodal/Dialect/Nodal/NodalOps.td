@@ -1609,6 +1609,7 @@ def Nodal_CrossingOp : Nodal_Op<"crossing"> {
     StrAttr:$kind,
     OptionalAttr<StrAttr>:$contract,
     OptionalAttr<I64Attr>:$stages,
+    OptionalAttr<DictionaryAttr>:$obligations,
     DictionaryAttr:$metadata
   );
   let results = (outs AnyType:$result);

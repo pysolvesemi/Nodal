@@ -6,6 +6,7 @@
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -741,6 +742,44 @@ FailureOr<int64_t> inferDigitalStorageMaximumBits(Type type, Operation *use,
     return failure();
   return ModuleTypeVerifier(module, environment).storageMaximumBits(type, use);
 }
+FailureOr<int64_t> inferDigitalBitPatternMaximumBits(Type type, Operation *use) {
+  // Validate complete structure, nominal ownership, parameter bounds and depth
+  // with the existing type owner before applying the bit-pattern leaf policy.
+  auto bits = inferDigitalStorageMaximumBits(type, use);
+  if (failed(bits))
+    return failure();
+  SmallVector<Type> pending{type};
+  llvm::DenseSet<Type> visited;
+  unsigned work = 0;
+  while (!pending.empty()) {
+    Type current = pending.pop_back_val();
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    if (!visited.insert(current).second)
+      continue;
+    if (isa<BitsType, UIntType, SIntType, ParametricIntegerType>(current))
+      continue;
+    if (auto enumeration = dyn_cast<EnumType>(current)) {
+      auto definition = inspectCanonicalEnumDefinition(
+          use, FlatSymbolRefAttr::get(use->getContext(), enumeration.getSymbol()));
+      if (failed(definition) || definition->type != current)
+        return failure();
+      continue;
+    }
+    if (auto shaped = dyn_cast<nodal::ShapedType>(current)) {
+      pending.push_back(shaped.getElementType());
+      continue;
+    }
+    if (auto structure = dyn_cast<StructType>(current)) {
+      for (Attribute field : structure.getFields())
+        pending.push_back(cast<DictionaryAttr>(field).getAs<TypeAttr>("type").getValue());
+      continue;
+    }
+    return failure();
+  }
+  return *bits;
+}
+
 } // namespace nodal
 
 // Preserve the ordinary entry-point ABI for existing non-contextual consumers.

@@ -23,6 +23,9 @@ struct SequentialSample {
   /// Values and controlling guards consumed by one actual target update share
   /// this owner identity. Independent register/memory effects remain separate.
   mlir::Operation *group = nullptr;
+  /// A level/Gray crossing cannot erase an actual pulse-producing boundary.
+  /// Ordinary same-domain consumers may still sample the pulse as a Bool.
+  bool rejectPulseSources = false;
 };
 struct DigitalDependencyGraph;
 /// Same sampling proof against an already constructed graph. This nonrecursive

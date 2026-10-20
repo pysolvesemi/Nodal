@@ -80,6 +80,11 @@ mlir::FailureOr<int64_t>
 inferDigitalStorageMaximumBits(mlir::Type type, mlir::Operation *use,
                                const ParameterIntegerEnvironment *environment = nullptr);
 
+/// Finite bit-pattern payloads preserve the complete storage ABI but exclude
+/// host Integer/Real and capabilities recursively. Enum leaves are admitted by
+/// their canonical ABI owner, without physical lane expansion.
+mlir::FailureOr<int64_t> inferDigitalBitPatternMaximumBits(mlir::Type type, mlir::Operation *use);
+
 /// Verify this actual operation under an optional admitted context. Collection
 /// block arguments and bodies belong to the collection proof coordinator.
 mlir::LogicalResult

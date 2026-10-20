@@ -438,12 +438,13 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
   unsigned work = alreadyCharged;
   const DomainModel domains(module);
   llvm::DenseSet<std::pair<unsigned, Attribute>> visited;
-  llvm::DenseSet<std::pair<unsigned, Attribute>> strictChecked;
+  llvm::DenseSet<std::pair<unsigned, Attribute>> strictChecked[2];
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
     if (roots[i] >= graph.nodes.size())
       return reject(sample.use, "sampling root is outside the physical dependency graph");
-    if (sample.requireAttributedSource && !strictChecked.insert({roots[i], sample.domain}).second)
+    if (sample.requireAttributedSource &&
+        !strictChecked[sample.rejectPulseSources].insert({roots[i], sample.domain}).second)
       continue;
     llvm::DenseSet<unsigned> strictVisited;
     bool attributed = false;
@@ -458,6 +459,9 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
       if (++work > limits.maximumOperations)
         return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
       const auto &node = graph.nodes[id];
+      if (sample.rejectPulseSources && node.crossing && text(node.crossing, "kind") == "pulse")
+        return sample.use->emitOpError(
+            "NODAL-CDC-003: Pulse-classified crossing result cannot be relabeled as level or Gray");
       auto source = sampleSource(module, node);
       if (source.boundary) {
         auto reference = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(source.domain);

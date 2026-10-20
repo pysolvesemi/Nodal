@@ -61,6 +61,64 @@ std::string crossing(std::string name = "sync", std::string input = "input", std
          " : i64, metadata = {semantic_path = \"Fixture." + name + "\"}}> : (" + bit + ") -> " +
          bit + "\n";
 }
+std::string grayCrossing(std::string type = "!nodal.uint<8>", unsigned stages = 2,
+                         std::string name = "gray", std::string input = "input") {
+  return "%" + name + " = \"nodal.crossing\"(%" + input +
+         ") <{source_domain = @a, destination_domain = @b, kind = \"gray\", "
+         "contract = \"gray_v1\", stages = " +
+         std::to_string(stages) +
+         " : i64, obligations = {transition = \"one_bit_per_source_sample\", "
+         "skew = \"less_than_source_period\", stability = \"stable_between_source_samples\"}, "
+         "metadata = {semantic_path = \"Fixture." +
+         name + "\"}}> : (" + type + ") -> " + type + "\n";
+}
+std::string pulseCrossing(std::string name = "pulse", std::string input = "input") {
+  return "%" + name + " = \"nodal.crossing\"(%" + input +
+         ") <{source_domain = @a, destination_domain = @b, kind = \"pulse\", "
+         "contract = \"pulse_v1\", stages = 2 : i64, obligations = "
+         "{spacing = \"returned_acknowledgement\", width = \"single_source_cycle\", "
+         "reset_epoch = \"common_assertion\"}, metadata = {semantic_path = \"Fixture." +
+         name + "\"}}> : (" + bit + ") -> " + bit + "\n";
+}
+std::string noZeroEnum() {
+  return "\"nodal.enum\"() <{sym_name = \"NoZero\", underlying_type = !nodal.uint<2>, "
+         "encoding = \"custom\", metadata = {abi_version = 1 : i64, semantic_type = "
+         "\"example.NoZero\", abi_hash = "
+         "\"8677e4c94965ad67d39908aa748086bab092b050966a4e4b92b15d4149e96250\"}}> ({\n"
+         "\"nodal.enum_case\"() <{sym_name = \"One\", value = 1 : i64, metadata = "
+         "{case_id = \"example.NoZero.One\"}}> : () -> ()\n"
+         "\"nodal.enum_case\"() <{sym_name = \"Two\", value = 2 : i64, metadata = "
+         "{case_id = \"example.NoZero.Two\"}}> : () -> ()\n}) : () -> ()\n";
+}
+std::string pulseSetup(bool common = true, bool shaped = false) {
+  const std::string reset = "!nodal.capability<\"reset\">", clock = "!nodal.capability<\"clock\">";
+  std::string result;
+  for (const std::string name : {"a", "b"})
+    result += "\"nodal.domain\"() <{sym_name = \"" + name +
+              "\", edge = \"rising\", reset_policy = \"async\", metadata = {}}> : () -> ()\n" +
+              port(name + "Clock", name, clock);
+  if (shaped) {
+    result += port("roots", "a", "!nodal.shaped<\"2\", " + reset + ">") +
+              "%i0 = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
+              "%i1 = \"nodal.constant\"() <{value = 1 : index, metadata = {}}> : () -> index\n";
+    for (int i = 0; i != 2; ++i)
+      result += "%root" + std::to_string(i) + " = \"nodal.shape_index\"(%roots, %i" +
+                std::to_string(i) + ") <{metadata = {}}> : (!nodal.shaped<\"2\", " + reset +
+                ">, index) -> " + reset + "\n";
+  } else
+    result += port("root0", "a", reset) + port("root1", "b", reset);
+  for (const std::string name : {"a", "b"}) {
+    result += "%" + name + "Reset = \"nodal.reset_boundary\"(%root" +
+              (common || name == "a" ? "0" : "1") +
+              ") <{reset_polarity = \"active_high\", release = \"external\", release_domain = @" +
+              name + ", metadata = {}}> : (" + reset + ") -> " + reset + "\n";
+    result += "\"nodal.local_domain_binding\"(%" + name + "Clock, %" + name +
+              "Reset) <{domain = @" + name +
+              ", reset_polarity = \"active_high\", metadata = {}}> : (" + clock + ", " + reset +
+              ") -> ()\n";
+  }
+  return result + port("input", "a");
+}
 std::string expression(std::string name, std::string left, std::string right) {
   return "%" + name + " = \"nodal.digital_expr\"(%" + left + ", %" + right +
          ") <{operator_name = \"bool_and\", metadata = {}}> : (" + bit + ", " + bit + ") -> " +
@@ -580,6 +638,140 @@ int main(int argc, char **argv) {
     op->setOperands({input});
     op->setAttr("stages", IntegerAttr::get(IntegerType::get(&context, 8), 2));
     report("native-stage-carrier-forgery", failed(nodal::verifyCrossingModel(module)));
+  }
+  // Gray/Pulse extend the same owned input-root proof and retained lineage.
+  const std::string u8 = "!nodal.uint<8>";
+  auto grayBody = [&](std::string type = "!nodal.uint<8>", unsigned stages = 2) {
+    return domain("a") + domain("b") + port("input", "a", type) + grayCrossing(type, stages);
+  };
+  for (const std::string &type : std::initializer_list<std::string>{
+           bit, u8, "!nodal.bits<4096>", "!nodal.sint<9>", "!nodal.shaped<\"2,3\", !nodal.uint<4>>",
+           "!nodal.struct<\"Pair\", [{name = \"low\", type = !nodal.bits<3>}, "
+           "{name = \"high\", type = !nodal.shaped<\"2\", !nodal.sint<5>>}]>"})
+    check("gray-complete-abi-" + type, grayBody(type), true);
+  check("gray-stage32", grayBody(u8, 32), true);
+  check("gray-stage1-rejected", grayBody(u8, 1), false);
+  check("gray-stage33-rejected", grayBody(u8, 33), false);
+  check("gray-host-integer-rejected", grayBody("i64"), false, "bit-pattern payload ABI");
+  check("gray-host-real-rejected", grayBody("f64"), false, "bit-pattern payload ABI");
+  check("gray-nested-real-rejected", grayBody("!nodal.shaped<\"2\", f64>"), false,
+        "bit-pattern payload ABI");
+  check("gray-resetless-state-budget", grayBody("!nodal.bits<8000>", 32), false, "state expansion");
+  check("gray-no-width-coercion",
+        domain("a") + domain("b") + port("input", "a", u8) +
+            replace(grayCrossing(), ") -> !nodal.uint<8>\n", ") -> !nodal.sint<8>\n"),
+        false);
+  check("gray-source-domain-spoof",
+        replace(grayBody(), "source_domain = @a, destination_domain = @b",
+                "source_domain = @b, destination_domain = @a"),
+        false);
+  check("gray-destination-reset-does-not-change-payload-abi",
+        domain("a") + domain("b", "sync") + port("input", "a", u8) + grayCrossing(), true);
+  for (const std::string field :
+       {"one_bit_per_source_sample", "less_than_source_period", "stable_between_source_samples"})
+    check("gray-obligation-forgery-" + field, replace(grayBody(), field, "unproved"), false,
+          "typed temporal/environment obligations");
+  check("gray-unknown-obligation",
+        replace(grayBody(), "transition = \"one_bit_per_source_sample\"",
+                "unrecognized = true, transition = \"one_bit_per_source_sample\""),
+        false);
+  const std::string enumeration = "!nodal.enum<\"NoZero\", 2>";
+  check("gray-resetless-nominal-enum-no-zero",
+        replace(wrap(grayBody(enumeration)), "module { ", "module { " + noZeroEnum()), true);
+  check("gray-reset-bearing-enum-no-zero-still-uninitialized",
+        replace(wrap(domain("a") + domain("b", "sync") + port("input", "a", enumeration) +
+                     grayCrossing(enumeration)),
+                "module { ", "module { " + noZeroEnum()),
+        true);
+  check("gray-shaped-enum-complete-abi",
+        replace(wrap(grayBody("!nodal.shaped<\"3\", " + enumeration + ">")), "module { ",
+                "module { " + noZeroEnum()),
+        true);
+  auto grayRoot = check("gray-checked-physical-bit-budget", grayBody(), true);
+  if (grayRoot) {
+    auto module = *grayRoot->getOps<nodal::ModuleOp>().begin();
+    auto op = *module.getOps<nodal::CrossingOp>().begin();
+    auto header = nodal::inspectExecutableCrossing(op);
+    report("gray-shared-header-counts-monitor-bits",
+           succeeded(header) && header->kind == nodal::CrossingKind::Gray &&
+               header->payloadMaximumBits == 8 && header->stateBits == 25);
+    nodal::SequentialModelLimits limits;
+    limits.maximumNormalizedOperations = 24;
+    report("gray-custom-total-bit-budget", failed(nodal::verifyCrossingModel(module, limits)));
+  }
+  const std::string pulse = pulseSetup() + pulseCrossing();
+  std::string lateBindings = pulseSetup();
+  size_t firstReset = lateBindings.find("%aReset =");
+  check("pulse-symbol-binding-may-follow-crossing",
+        lateBindings.substr(0, firstReset) + port("input", "a") + pulseCrossing() +
+            replace(lateBindings.substr(firstReset), port("input", "a"), ""),
+        true);
+  check("pulse-common-root-external-release", pulse, true);
+  std::string synchronized = pulseSetup();
+  for (const std::string name : {"a", "b"}) {
+    synchronized = replace(synchronized, "release = \"external\", release_domain = @" + name,
+                           "release = \"raw\"");
+    const std::string producer =
+        "%" + name + "Safe = \"nodal.reset_sync\"(%" + name + "Reset, %" + name +
+        "Clock) <{destination_domain = @" + name +
+        ", stages = 2 : i64, reset_polarity = \"active_high\", metadata = {}}> : "
+        "(!nodal.capability<\"reset\">, !nodal.capability<\"clock\">) -> "
+        "!nodal.capability<\"reset\">\n";
+    synchronized = replace(
+        synchronized, "\"nodal.local_domain_binding\"(%" + name + "Clock, %" + name + "Reset)",
+        producer + "\"nodal.local_domain_binding\"(%" + name + "Clock, %" + name + "Safe)");
+  }
+  check("pulse-common-root-independent-safe-release", synchronized + pulseCrossing(), true);
+  check("pulse-wrong-release-clock-rejected",
+        replace(pulse, "release_domain = @b", "release_domain = @a"), false,
+        "exact destination clock and edge");
+  check("pulse-common-shaped-element", pulseSetup(true, true) + pulseCrossing(), true);
+  check("pulse-distinct-physical-roots", pulseSetup(false) + pulseCrossing(), false,
+        "equal nonempty physical reset root/element/polarity sets");
+  check("pulse-distinct-shaped-elements", pulseSetup(false, true) + pulseCrossing(), false,
+        "equal nonempty physical reset root/element/polarity sets");
+  check("pulse-resetless-rejected", setup() + pulseCrossing(), false, "reset-bearing");
+  check("pulse-nonfixed-stages", replace(pulse, "stages = 2 : i64", "stages = 3 : i64"), false);
+  check("pulse-nonbool-rejected", replaceAll(pulse, bit, "!nodal.uint<1>"), false);
+  check("pulse-no-metadata-epoch-proof",
+        replace(pulse, "reset_epoch = \"common_assertion\"", "reset_epoch = \"independent\""),
+        false);
+  check("pulse-no-assumed-clock-ratio-spacing",
+        replace(pulse, "returned_acknowledgement", "two_source_cycles"), false);
+  check("pulse-source-spoof",
+        replace(pulse, "source_domain = @a, destination_domain = @b",
+                "source_domain = @b, destination_domain = @a"),
+        false);
+  check("pulse-independent-instances", pulse + pulseCrossing("other"), true);
+  check("pulse-reconvergence-not-waived",
+        pulse + pulseCrossing("other") + expression("joined", "pulse", "other") + sample("joined"),
+        false, "NODAL-CDC-057-002");
+  check("pulse-ordinary-destination-sampling-legal", pulse + sample("pulse"), true);
+  check("pulse-result-cannot-be-level", pulse + crossing("again", "pulse", "b", "a"), false,
+        "NODAL-CDC-003");
+  check("pulse-result-cannot-be-gray",
+        pulse + replace(grayCrossing(bit, 2, "again", "pulse"),
+                        "source_domain = @a, destination_domain = @b",
+                        "source_domain = @b, destination_domain = @a"),
+        false, "NODAL-CDC-003");
+  check("pulse-composition-cannot-be-level",
+        pulse + expression("joined", "pulse", "pulse") + crossing("again", "joined", "b", "a"),
+        false, "NODAL-CDC-003");
+  check("pulse-wire-alias-cannot-be-level",
+        pulse + wire("pulse") + crossing("again", "wire", "b", "a"), false, "NODAL-CDC-003");
+  std::string returnedPulse =
+      replace(pulseCrossing("returned", "pulse"), "source_domain = @a, destination_domain = @b",
+              "source_domain = @b, destination_domain = @a");
+  check("pulse-explicit-category-retransfer", pulse + returnedPulse, true);
+  check("pulse-source-proof-cache-retains-category",
+        pulse + returnedPulse + crossing("again", "pulse", "b", "a"), false, "NODAL-CDC-003");
+  auto pulseRoot = check("pulse-header-fixture", pulse, true);
+  if (pulseRoot) {
+    auto module = *pulseRoot->getOps<nodal::ModuleOp>().begin();
+    auto header = nodal::inspectExecutableCrossing(*module.getOps<nodal::CrossingOp>().begin());
+    report("pulse-shared-header-counts-return-sync-and-monitor",
+           succeeded(header) && header->kind == nodal::CrossingKind::Pulse && header->stages == 2 &&
+               header->payloadMaximumBits == 1 && header->stateBits == 7);
   }
   std::string many = setup();
   for (unsigned i = 0; i < 128; ++i)

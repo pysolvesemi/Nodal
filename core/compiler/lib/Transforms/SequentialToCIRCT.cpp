@@ -183,13 +183,18 @@ public:
         expansion = isa<ResetSyncOp>(op) ? 3 * op.getAttrOfType<IntegerAttr>("stages").getInt() + 5
                                          : 2 * op.getNumOperands() + 2;
       } else if (isa<CrossingOp>(op)) {
-        auto crossing = inspectLevelCrossing(&op, domains);
+        auto crossing = inspectExecutableCrossing(&op, domains);
         if (failed(crossing))
           return failure();
         // The canonical model verifies type, endpoints, source sampling and
         // independent identity. Only the finite target expansion belongs here.
         crossings.push_back(*crossing);
-        expansion = 2 * crossing->stages + 5;
+        // Bounds cover state, reset logic, source-clock runtime monitors and
+        // retained obligations. Payload bits were independently bounded by the
+        // native model; this profile additionally requires fixed scalar types.
+        expansion = crossing->kind == CrossingKind::Pulse  ? 64
+                    : crossing->kind == CrossingKind::Gray ? 2 * crossing->stages + 32
+                                                           : 3 * crossing->stages + 8;
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -304,9 +309,24 @@ public:
     // Symbols keep even identical-source chains distinct through target CSE.
     for (const auto &crossing : crossings) {
       SmallVector<StringAttr> names;
-      for (unsigned stage = 0; stage < crossing.stages; ++stage) {
-        std::string base = "__nodal_sync_" + std::to_string(crossingNames.size()) + "_stage_" +
-                           std::to_string(stage);
+      SmallVector<std::string> roles;
+      if (crossing.kind == CrossingKind::Pulse)
+        roles = {"source_toggle",       "previous_pulse", "forward_0", "forward_1",
+                 "destination_history", "return_0",       "return_1"};
+      else {
+        for (unsigned stage = 0; stage < crossing.stages; ++stage)
+          roles.push_back("stage_" + std::to_string(stage));
+        if (crossing.kind == CrossingKind::Gray) {
+          roles.push_back("previous_payload");
+          roles.push_back("seen_sample");
+        }
+      }
+      StringRef kind = crossing.kind == CrossingKind::Level  ? "sync"
+                       : crossing.kind == CrossingKind::Gray ? "gray"
+                                                             : "pulse";
+      for (const std::string &role : roles) {
+        std::string base =
+            "__nodal_" + kind.str() + "_" + std::to_string(crossingNames.size()) + "_" + role;
         std::string name = base;
         unsigned collision = 0;
         while (!targetNames.insert(name).second)
@@ -478,52 +498,80 @@ public:
     SmallVector<std::pair<Operation *, circt::Backedge>> crossingEdges;
     for (const auto &crossing : crossings) {
       Operation *op = crossing.operation;
-      Value clock = values.lookup(crossing.destinationBinding->getOperand(0));
-      if (!clock) {
+      auto destination = crossingControls(crossing.destinationDomain, crossing.destinationBinding);
+      if (failed(destination)) {
         backedges.abandon();
-        return reject(op, "crossing destination clock was not mapped to a module input");
+        return reject(op, "crossing destination physical clock/reset did not map");
       }
-      if (text(crossing.destinationDomain, "edge") == "falling")
-        clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
-      Value reset, zero;
-      if (text(crossing.destinationDomain, "reset_policy") != "none") {
-        reset = values.lookup(crossing.destinationBinding->getOperand(1));
-        if (!reset) {
-          backedges.abandon();
-          return reject(op, "crossing destination reset was not mapped to a module input");
-        }
-        reset = resetActive(reset, crossing.destinationBinding);
-        zero = constant(op, 1, 0);
-      }
-      auto input = backedges.get(builder.getI1Type(), op->getLoc());
-      Value previous = input;
-      const auto &names = crossingNames.find(op)->second;
-      for (unsigned stage = 0; stage < crossing.stages; ++stage) {
-        bool async =
-            text(crossing.destinationDomain, "reset_policy") == "async" ||
-            text(crossing.destinationDomain, "reset_policy") == "async_assert_sync_release";
-        Value next = reset && !async ? mux(op, reset, zero, previous) : previous;
-        Operation *state;
-        if (async)
-          state =
-              circt::seq::FirRegOp::create(builder, op->getLoc(), next, clock, names[stage], reset,
-                                           zero, circt::hw::InnerSymAttr::get(names[stage]), true);
-        else
-          state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, clock,
-                                                circt::StringAttrOrRef(names[stage]));
-        correlate(state, op);
-        // Keep the complete canonical source mapping and stage identity. The
-        // symbol, rather than an advisory metadata marker, prevents CSE merging.
-        state->setAttr("nodal.crossing", op->getAttr("metadata"));
-        state->setAttr("nodal.crossing_contract", op->getAttr("contract"));
-        state->setAttr("nodal.crossing_stages", op->getAttr("stages"));
-        state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
-        state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
-        state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(stage));
-        previous = state->getResult(0);
-      }
-      values[op->getResult(0)] = previous;
+      auto input = backedges.get(targetType(op->getOperand(0).getType()), op->getLoc());
       crossingEdges.emplace_back(op, input);
+      Value previous = input;
+      if (crossing.kind == CrossingKind::Level || crossing.kind == CrossingKind::Gray) {
+        for (unsigned stage = 0; stage < crossing.stages; ++stage)
+          previous = crossingState(crossing, stage, previous, *destination, "forward",
+                                   crossing.kind != CrossingKind::Gray);
+        values[op->getResult(0)] = previous;
+        if (crossing.kind == CrossingKind::Level)
+          continue;
+      }
+      auto sourceControl = crossingControls(crossing.sourceDomain, crossing.sourceBinding);
+      if (failed(sourceControl)) {
+        backedges.abandon();
+        return reject(op, "crossing source physical clock/reset did not map");
+      }
+      if (crossing.kind == CrossingKind::Gray) {
+        // The payload history has no reset value. In particular, an enum with
+        // no zero encoding must not acquire a fabricated source reset state.
+        // Only the seen marker resets, and the first real sample seeds history.
+        Value history = crossingState(crossing, crossing.stages, input, *sourceControl,
+                                      "previous_payload", false);
+        Value seen = crossingState(crossing, crossing.stages + 1, constant(op, 1, 1),
+                                   *sourceControl, "seen_sample");
+        unsigned bits = width(op->getOperand(0).getType());
+        Value delta = make(op, "comb.xor", history.getType(), {Value(input), history});
+        Value minusOne = make(op, "comb.sub", history.getType(), {delta, constant(op, bits, 1)});
+        Value changed = make(op, "comb.and", history.getType(), {delta, minusOne});
+        Value legal = compare(op, "digital_eq", changed, constant(op, bits, 0), false);
+        Value enable = sourceControl->reset ? make(op, "comb.and", builder.getI1Type(),
+                                                   {seen, invert(op, sourceControl->reset)})
+                                            : seen;
+        crossingAssertion(crossing, *sourceControl, enable, legal,
+                          "NODAL Gray transition must change at most one bit per source sample");
+        crossingComment(crossing,
+                        "Gray obligations: transition=one_bit_per_source_sample (checked); "
+                        "skew=less_than_source_period; stability=stable_between_source_samples. "
+                        "Payload stages have no invented reset value; output is unspecified during "
+                        "startup and N-sample reset recovery. Physical skew and between-sample "
+                        "stability are environment obligations, "
+                        "not proved by the digital monitor.");
+      } else {
+        // Acknowledgement samples destination HISTORY, not the second forward
+        // stage: readiness therefore means the destination has delivered the
+        // event, rather than merely bringing a pending event into its domain.
+        auto toggleNext = backedges.get(builder.getI1Type(), op->getLoc());
+        Value toggle = crossingState(crossing, 0, toggleNext, *sourceControl, "source_toggle");
+        Value priorPulse = crossingState(crossing, 1, input, *sourceControl, "previous_pulse");
+        Value forward = crossingState(crossing, 2, toggle, *destination, "forward");
+        forward = crossingState(crossing, 3, forward, *destination, "forward");
+        Value history = crossingState(crossing, 4, forward, *destination, "destination_history");
+        Value ack = crossingState(crossing, 5, history, *sourceControl, "return_acknowledgement");
+        ack = crossingState(crossing, 6, ack, *sourceControl, "return_acknowledgement");
+        toggleNext.setValue(make(op, "comb.xor", builder.getI1Type(), {toggle, Value(input)}));
+        values[op->getResult(0)] = make(op, "comb.xor", builder.getI1Type(), {forward, history});
+        Value ready = compare(op, "digital_eq", toggle, ack, false);
+        Value legalPulse =
+            make(op, "comb.and", builder.getI1Type(), {ready, invert(op, priorPulse)});
+        Value legal = make(op, "comb.or", builder.getI1Type(), {invert(op, input), legalPulse});
+        crossingAssertion(
+            crossing, *sourceControl, invert(op, sourceControl->reset), legal,
+            "NODAL pulse requires returned acknowledgement and single-source-cycle width");
+        crossingComment(crossing,
+                        "Pulse obligations: spacing=returned_acknowledgement; "
+                        "width=single_source_cycle; reset_epoch=common_assertion. Hold common "
+                        "assertion long enough for both domains to observe reset; no one-sided "
+                        "restart. Delivery is not promised before the common reset epoch or "
+                        "after a spacing/width violation.");
+      }
     }
     for (Operation &op : source.getBody().front()) {
       if (!op.getNumResults() || controlProjections.contains(&op) ||
@@ -639,6 +687,99 @@ public:
   }
 
 private:
+  struct CrossingControls {
+    Value clock;
+    Value assertionClock;
+    Value reset;
+    bool asynchronous = false;
+    bool falling = false;
+  };
+  FailureOr<CrossingControls> crossingControls(Operation *domain, Operation *binding) {
+    CrossingControls result;
+    result.clock = values.lookup(binding->getOperand(0));
+    if (!result.clock)
+      return failure();
+    result.assertionClock =
+        circt::seq::FromClockOp::create(builder, binding->getLoc(), result.clock);
+    result.falling = text(domain, "edge") == "falling";
+    if (result.falling)
+      result.clock = circt::seq::ClockInverterOp::create(builder, binding->getLoc(), result.clock);
+    StringRef policy = text(domain, "reset_policy");
+    result.asynchronous = policy == "async" || policy == "async_assert_sync_release";
+    if (policy != "none") {
+      result.reset = values.lookup(binding->getOperand(1));
+      if (!result.reset)
+        return failure();
+      result.reset = resetActive(result.reset, binding);
+    }
+    return result;
+  }
+  Value crossingState(const ExecutableCrossing &crossing, unsigned index, Value input,
+                      const CrossingControls &control, StringRef role, bool resetState = true) {
+    Operation *op = crossing.operation;
+    StringAttr name = crossingNames.find(op)->second[index];
+    Value reset = resetState ? control.reset : Value();
+    Value zero = reset ? constant(op, cast<IntegerType>(input.getType()).getWidth(), 0) : Value();
+    Value next = reset && !control.asynchronous ? mux(op, reset, zero, input) : input;
+    Operation *state;
+    if (reset && control.asynchronous)
+      state = circt::seq::FirRegOp::create(builder, op->getLoc(), next, control.clock, name, reset,
+                                           zero, circt::hw::InnerSymAttr::get(name), true);
+    else
+      state = circt::seq::CompRegOp::create(builder, op->getLoc(), next, control.clock,
+                                            circt::StringAttrOrRef(name));
+    correlate(state, op);
+    // Symbols preserve independent chains through CSE. Metadata retains the
+    // canonical source contract, every state role and the original source path.
+    state->setAttr("nodal.crossing", op->getAttr("metadata"));
+    state->setAttr("nodal.crossing_contract", op->getAttr("contract"));
+    state->setAttr("nodal.crossing_stages", op->getAttr("stages"));
+    state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
+    state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
+    state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(index));
+    state->setAttr("nodal.crossing_role", builder.getStringAttr(role));
+    if (Attribute obligations = op->getAttr("obligations"))
+      state->setAttr("nodal.crossing_obligations", obligations);
+    return state->getResult(0);
+  }
+  std::string crossingSourceComment(const ExecutableCrossing &crossing) {
+    std::string path = sourcePath(crossing.operation).str();
+    for (char &character : path)
+      if (character == '\n' || character == '\r')
+        character = ' ';
+      else if (character == '{')
+        character = '(';
+      else if (character == '}')
+        character = ')';
+    return "// NODAL crossing " + path + ": ";
+  }
+  void crossingComment(const ExecutableCrossing &crossing, StringRef comment) {
+    auto emitted = circt::sv::VerbatimOp::create(
+        builder, crossing.operation->getLoc(),
+        builder.getStringAttr(crossingSourceComment(crossing) + comment.str()), ValueRange{},
+        builder.getArrayAttr({}));
+    correlate(emitted, crossing.operation);
+  }
+  void crossingAssertion(const ExecutableCrossing &crossing, const CrossingControls &control,
+                         Value enable, Value property, StringRef message) {
+    // Pinned firtool emits verif.clocked_assert as concurrent SVA, unsupported
+    // by Icarus. A clocked immediate assertion preserves the runtime contract
+    // there too. Gray skips unknown seen-sample state deterministically. Pulse
+    // skips only a known asserted reset: an unknown release chain cannot hide
+    // an attempted pulse before reset. No initial block invents checker state.
+    std::string assertion =
+        crossingSourceComment(crossing) + message.str() + "\n" + "always @(" +
+        (control.falling ? "negedge" : "posedge") + " {{0}}) begin\n" +
+        (crossing.kind == CrossingKind::Pulse ? "  if (({{1}}) !== 1'b0) begin\n"
+                                              : "  if (({{1}}) === 1'b1) begin\n") +
+        "    assert (({{2}}) === 1'b1) else $fatal(1, \"NODAL-CROSSING-057: " + message.str() +
+        "\");\n  end\nend";
+    auto emitted = circt::sv::VerbatimOp::create(
+        builder, crossing.operation->getLoc(), builder.getStringAttr(assertion),
+        ValueRange{control.assertionClock, enable, property}, builder.getArrayAttr({}));
+    correlate(emitted, crossing.operation);
+    emitted->setAttr("nodal.crossing_check", crossing.operation->getAttr("contract"));
+  }
   LogicalResult planControlProjections() {
     if (source.getBody().front().empty())
       return success();
@@ -828,7 +969,7 @@ private:
   OpBuilder &builder;
   uint64_t &cost;
   DomainModel domains;
-  SmallVector<LevelCrossing> crossings;
+  SmallVector<ExecutableCrossing> crossings;
   SmallVector<Operation *> resets;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
@@ -853,7 +994,7 @@ public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SequentialToCIRCTPass)
   StringRef getArgument() const final { return "nodal-sequential-to-circt"; }
   StringRef getDescription() const final {
-    return "Transactionally lower verified finite scalar register/FSM/level-crossing dataflow to "
+    return "Transactionally lower verified finite scalar register/FSM/CDC dataflow to "
            "HW/Comb/Seq/Verif";
   }
   void getDependentDialects(DialectRegistry &registry) const final {

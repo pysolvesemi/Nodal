@@ -828,7 +828,7 @@ LogicalResult AssignmentQuery::verify() {
   };
   const DomainModel domains(module);
   llvm::StringSet<> crossingIdentities;
-  uint64_t crossingStages = 0;
+  uint64_t crossingStateBits = 0;
   SmallVector<Scope, 8> scopes{{&module->getRegion(0).front(), nullptr, 0}};
   for (unsigned cursor = 0; cursor < scopes.size(); ++cursor) {
     Scope scope = scopes[cursor];
@@ -837,14 +837,15 @@ LogicalResult AssignmentQuery::verify() {
       if (failed(guardWork(&operation)))
         return failure();
       if (llvm::isa<CrossingOp>(operation) &&
-          (operation.hasAttr("contract") || operation.hasAttr("stages"))) {
-        auto header = inspectLevelCrossing(&operation, domains);
+          (operation.hasAttr("contract") || operation.hasAttr("stages") ||
+           operation.hasAttr("obligations"))) {
+        auto header = inspectExecutableCrossing(&operation, domains);
         if (failed(header))
           return failure();
         if (!crossingIdentities.insert(header->identity).second)
           return reject(&operation, "executable crossings require distinct semantic identities");
-        crossingStages += header->stages;
-        if (crossingStages > SequentialModelLimits().maximumNormalizedOperations)
+        crossingStateBits += header->stateBits;
+        if (crossingStateBits > SequentialModelLimits().maximumNormalizedOperations)
           return reject(&operation, "crossing state expansion exceeds finite sequential budget");
         auto root = valueNode(operation.getOperand(0), &operation);
         if (failed(root))

@@ -2,10 +2,14 @@
 
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 
 #include "llvm/ADT/StringSet.h"
+
+#include <map>
 
 using namespace mlir;
 namespace nodal {
@@ -28,30 +32,71 @@ bool boolean(Type type) {
   auto bits = llvm::dyn_cast<BitsType>(type);
   return bits && bits.getWidth() == 1;
 }
-FailureOr<LevelCrossing> inspectHeader(Operation *op) {
-  auto fail = [&](StringRef reason) -> FailureOr<LevelCrossing> {
+FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
+  auto fail = [&](StringRef reason) -> FailureOr<ExecutableCrossing> {
     (void)reject(op, reason);
     return failure();
   };
   if (!llvm::isa_and_nonnull<CrossingOp>(op) || op->getNumOperands() != 1 ||
       op->getNumResults() != 1 || op->getNumRegions() || op->getNumSuccessors() ||
       !llvm::isa_and_nonnull<ModuleOp>(op->getParentOp()))
-    return fail("executable level crossing requires one actual module-owned input and result");
-  if (text(op, "contract") != "level_v1" || text(op, "kind") != "sync" ||
-      !llvm::all_of(op->getAttrs(), [](NamedAttribute a) {
+    return fail("executable crossing requires one actual module-owned input and result");
+  StringRef contract = text(op, "contract");
+  CrossingKind kind;
+  if (contract == "level_v1" && text(op, "kind") == "sync")
+    kind = CrossingKind::Level;
+  else if (contract == "gray_v1" && text(op, "kind") == "gray")
+    kind = CrossingKind::Gray;
+  else if (contract == "pulse_v1" && text(op, "kind") == "pulse")
+    kind = CrossingKind::Pulse;
+  else
+    return fail("unsupported or malformed executable crossing contract");
+  if (!llvm::all_of(op->getAttrs(), [](NamedAttribute a) {
         return llvm::is_contained(ArrayRef<StringRef>{"source_domain", "destination_domain", "kind",
-                                                      "contract", "stages", "metadata"},
+                                                      "contract", "stages", "obligations",
+                                                      "metadata"},
                                   a.getName().getValue());
       }))
-    return fail("unsupported or malformed executable level contract");
-  if (!boolean(op->getOperand(0).getType()) ||
-      op->getOperand(0).getType() != op->getResult(0).getType() ||
-      failed(verifyDigitalValueScope(op->getOperand(0), op)))
-    return fail("level synchronizer requires exact owned Bool input/result; Pulse is not a level");
+    return fail("unsupported or malformed executable crossing fields");
+  if (failed(verifyDigitalValueScope(op->getOperand(0), op)))
+    return fail("crossing requires its actual owned source input");
+  uint64_t payloadBits = 1;
+  if (kind == CrossingKind::Gray) {
+    auto footprint = inferDigitalBitPatternMaximumBits(op->getOperand(0).getType(), op);
+    if (failed(footprint) ||
+        !equivalentDigitalStorageTypes(op->getOperand(0).getType(), op->getResult(0).getType(),
+                                       op->getParentOp()))
+      return fail("Gray crossing requires an exact complete finite bit-pattern payload ABI");
+    payloadBits = *footprint;
+  } else if (!boolean(op->getOperand(0).getType()) ||
+             op->getOperand(0).getType() != op->getResult(0).getType())
+    return fail("level/pulse synchronizer requires exact owned Bool input/result");
   auto stages = op->getAttrOfType<IntegerAttr>("stages");
   if (!stages || !stages.getType().isSignlessInteger(64) || stages.getInt() < 2 ||
-      stages.getInt() > 32)
-    return fail("level synchronizer stages must be i64 in the inclusive range 2 through 32");
+      stages.getInt() > 32 || (kind == CrossingKind::Pulse && stages.getInt() != 2))
+    return fail("crossing stages must be i64 in 2 through 32; Pulse has exactly two stages");
+  auto obligations = op->getAttrOfType<DictionaryAttr>("obligations");
+  auto field = [&](StringRef key, StringRef expected) {
+    auto value = obligations ? obligations.getAs<StringAttr>(key) : StringAttr();
+    return value && value.getValue() == expected;
+  };
+  if ((kind == CrossingKind::Level && op->hasAttr("obligations")) ||
+      (kind == CrossingKind::Gray && (!obligations || obligations.size() != 3 ||
+                                      !field("transition", "one_bit_per_source_sample") ||
+                                      !field("skew", "less_than_source_period") ||
+                                      !field("stability", "stable_between_source_samples"))) ||
+      (kind == CrossingKind::Pulse &&
+       (!obligations || obligations.size() != 3 || !field("spacing", "returned_acknowledgement") ||
+        !field("width", "single_source_cycle") || !field("reset_epoch", "common_assertion"))))
+    return fail("executable crossing requires its exact typed temporal/environment obligations");
+  const uint64_t budget = SequentialModelLimits().maximumNormalizedOperations;
+  uint64_t stateBits = kind == CrossingKind::Pulse ? 7 : stages.getInt();
+  if (kind == CrossingKind::Gray) {
+    const uint64_t copies = stages.getInt() + 1;
+    if (payloadBits > (budget - 1) / copies)
+      return fail("crossing state expansion exceeds finite sequential budget");
+    stateBits = payloadBits * copies + 1;
+  }
   auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
   StringRef identity = path(op);
   StringRef ownerPath = path(op->getParentOp());
@@ -59,26 +104,27 @@ FailureOr<LevelCrossing> inspectHeader(Operation *op) {
     ownerPath = text(op->getParentOp(), "sym_name");
   if (!metadata || identity.empty() || identity.size() > 4096 || identity != identity.trim() ||
       !identity.starts_with((ownerPath + ".").str()) || identity.size() <= ownerPath.size() + 1)
-    return fail("level crossing requires its canonical owned semantic_path identity");
+    return fail("crossing requires its canonical owned semantic_path identity");
   // Existing source-map fields remain intact and non-authoritative. Reserved
   // executable fields cannot be smuggled through the descriptive dictionary.
   for (StringRef key : {"contract", "contract_version", "stages", "kind", "source_domain",
-                        "destination_domain", "verified", "safe", "category"})
+                        "destination_domain", "obligations", "verified", "safe", "category"})
     if (metadata.get(key))
       return fail("executable crossing facts belong in typed fields, not metadata");
   auto sourceRef = op->getAttrOfType<FlatSymbolRefAttr>("source_domain");
   auto destinationRef = op->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
   if (!sourceRef || !destinationRef || sourceRef == destinationRef)
-    return fail("level crossing requires distinct typed endpoint references");
-  return LevelCrossing{
-      op, nullptr, nullptr, nullptr, nullptr, static_cast<unsigned>(stages.getInt()), identity};
+    return fail("crossing requires distinct typed endpoint references");
+  return ExecutableCrossing{
+      op,       nullptr, nullptr,     nullptr,  nullptr, static_cast<unsigned>(stages.getInt()),
+      identity, kind,    payloadBits, stateBits};
 }
 } // namespace
-FailureOr<LevelCrossing> inspectLevelCrossing(Operation *op, const DomainModel &domains) {
+FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const DomainModel &domains) {
   auto header = inspectHeader(op);
   if (failed(header))
     return failure();
-  auto fail = [&](StringRef reason) -> FailureOr<LevelCrossing> {
+  auto fail = [&](StringRef reason) -> FailureOr<ExecutableCrossing> {
     (void)reject(op, reason);
     return failure();
   };
@@ -92,19 +138,39 @@ FailureOr<LevelCrossing> inspectLevelCrossing(Operation *op, const DomainModel &
   auto destinationBinding = domains.resolveBinding(destinationRef);
   if (failed(sourceBinding) || failed(destinationBinding))
     return fail("crossing endpoints require independently verified physical domain bindings");
+  if (header->kind == CrossingKind::Pulse) {
+    if ((*sourceBinding)->getNumOperands() != 2 || (*destinationBinding)->getNumOperands() != 2)
+      return fail("Pulse requires reset-bearing source/destination and a coordinated reset epoch");
+    auto sourceReset = inspectReset((*sourceBinding)->getOperand(1), *sourceBinding, domains);
+    auto destinationReset =
+        inspectReset((*destinationBinding)->getOperand(1), *destinationBinding, domains);
+    if (failed(sourceReset) || failed(destinationReset) || sourceReset->roots.empty() ||
+        destinationReset->roots.empty())
+      return fail("Pulse requires actual typed common reset roots with per-domain safe release");
+    // ResetModel owns lineage and release proof; compare only canonical physical
+    // root identities here. No textual reset-name registry or pairwise closure.
+    using RootKey = std::pair<Operation *, std::string>;
+    std::map<RootKey, StringAttr> sourceRoots, destinationRoots;
+    for (const auto &root : sourceReset->roots)
+      sourceRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
+    for (const auto &root : destinationReset->roots)
+      destinationRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
+    if (sourceRoots != destinationRoots)
+      return fail("Pulse requires equal nonempty physical reset root/element/polarity sets");
+  }
   header->sourceDomain = *source;
   header->destinationDomain = *destination;
   header->sourceBinding = *sourceBinding;
   header->destinationBinding = *destinationBinding;
   return *header;
 }
-FailureOr<LevelCrossing> inspectLevelCrossing(Operation *op) {
-  return inspectLevelCrossing(op, DomainModel(op));
+FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op) {
+  return inspectExecutableCrossing(op, DomainModel(op));
 }
 LogicalResult verifyCrossingOperation(Operation *op) {
   if (!llvm::isa_and_nonnull<CrossingOp>(op))
     return failure();
-  if (op->hasAttr("contract") || op->hasAttr("stages"))
+  if (op->hasAttr("contract") || op->hasAttr("stages") || op->hasAttr("obligations"))
     return succeeded(inspectHeader(op)) ? success() : failure();
   auto source = op->getAttrOfType<FlatSymbolRefAttr>("source_domain");
   auto destination = op->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
@@ -127,7 +193,8 @@ LogicalResult verifyCrossingSourceDependencies(Operation *module,
     if (failed(source))
       return reject(crossing.operation, "source domain lost its owned resolution");
     auto actual = FlatSymbolRefAttr::get(module->getContext(), text(*source, "sym_name"));
-    samples.push_back({crossing.operation->getOperand(0), actual, crossing.operation, true});
+    samples.push_back({crossing.operation->getOperand(0), actual, crossing.operation, true, nullptr,
+                       text(crossing.operation, "kind") != "pulse"});
     roots.push_back(crossing.sourceRoot);
   }
   return verifySequentialSampleDependencies(module, samples, graph, roots, limits);
@@ -146,19 +213,20 @@ LogicalResult verifyCrossingModel(Operation *module, SequentialModelLimits limit
       (void)reject(module, "crossing inventory exceeds finite operation budget");
       return WalkResult::interrupt();
     }
-    if (llvm::isa<CrossingOp>(op) && (op->hasAttr("contract") || op->hasAttr("stages"))) {
+    if (llvm::isa<CrossingOp>(op) &&
+        (op->hasAttr("contract") || op->hasAttr("stages") || op->hasAttr("obligations"))) {
       executable = true;
-      auto stages = op->getAttrOfType<IntegerAttr>("stages");
-      if (stages && stages.getType().isSignlessInteger(64) && stages.getInt() >= 2 &&
-          stages.getInt() <= 32) {
-        stateCount += static_cast<uint64_t>(stages.getInt());
-        if (stateCount > limits.maximumNormalizedOperations) {
-          (void)reject(op, "crossing state expansion exceeds finite sequential budget");
-          return WalkResult::interrupt();
-        }
+      auto header = inspectHeader(op);
+      if (failed(header))
+        return WalkResult::interrupt();
+      stateCount += header->stateBits;
+      if (stateCount > limits.maximumNormalizedOperations) {
+        (void)reject(op, "crossing state expansion exceeds finite sequential budget");
+        return WalkResult::interrupt();
       }
       if (op->getParentOp() != module) {
-        (void)reject(op, "executable level instance must be owned directly by its actual module");
+        (void)reject(op,
+                     "executable crossing instance must be owned directly by its actual module");
         return WalkResult::interrupt();
       }
     }

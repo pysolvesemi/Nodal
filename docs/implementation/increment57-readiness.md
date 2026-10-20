@@ -585,3 +585,58 @@ its stated limits. Required remaining F57 work moves to Gray/pulse and the other
 CDC/domain/clock categories; whole-increment acceptance and all F57 checklist
 children remain open. No CI, full qualification or physical CDC guarantee is
 claimed. Formatting, Python syntax, Markdown and diff checks pass.
+
+## Executable Gray/pulse native scalar checkpoint
+
+The approved [v0.3 contract](../design-gates/NodalClockResetExecution-DG-v0.3.md)
+is now implemented in the native crossing/type/provenance owners and scalar
+CIRCT target path. This is a scoped checkpoint, not F57 completion. Source
+construction work is validated separately; required fixed aggregate Gray target
+support and the remaining F57 categories stay open.
+
+The generalized executable crossing model retains one bounded physical dependency
+traversal. Pulse classifications survive aliases and cannot be relabeled by level
+or Gray crossings; cache identity includes that sampling obligation. Exact finite
+bit-pattern ABI admission reuses DigitalTypeModel and canonical enum definitions.
+Pulse epoch identity reuses ResetModel with the actual consuming domain binding
+as its SSA use anchor, including when bindings appear after a crossing declaration.
+No second graph engine or reset registry was added.
+
+Gray payload/history state is uninitialized, including no-zero Enum payloads.
+Only real reset clears the seen marker. Pulse uses seven bits, actual returned
+acknowledgement of delivered history and an ungated source toggle. Preserved,
+source-located immediate clocked target assertions use parenthesized four-state
+knownness tests: unknown Gray seen state skips the first sample intentionally;
+unknown Pulse readiness before a reset epoch fails rather than passing vacuously.
+Pinned firtool exports concurrent SVA unsupported by the selected Icarus, so these
+immediate checks preserve execution instead of stripping assertions. Physical
+stability/skew and common reset-duration assumptions remain explicit annotations.
+
+Focused current checks:
+
+- Native crossing model **140/140**, including all 90 unchanged level predecessors;
+  shared sequential model **71/71**; CIRCT target **102/102**.
+- Independent native ingress accepts **17/17** real Scala replay designs, including
+  four Pulse variants and Gray scalar, Enum, Vec and Struct admission. Aggregate
+  admission is not yet aggregate target lowering.
+- Actual Scala replay → nodalc → firtool SystemVerilog → Icarus **41/41** checks:
+  21 Gray and 20 Pulse. Both edges/polarities, stages 2/3/32, resetless first sample,
+  Bool/Bits/UInt/SInt and no-zero Enum pass. Invalid Gray transitions and Pulse
+  busy/width/pre-reset/simultaneous-edge cases fail nonzero with their expected
+  runtime assertion markers. Legal Pulse cases also reassert a common reset
+  during an outstanding event and check that no ghost pulse survives recovery.
+- Target reproduction: `tests/scala/gray-pulse-crossings/run_target.py` with actual
+  `Increment57GrayPulseReplay` output. Current logs are under
+  `.work/gray-pulse-scalar-final.log`, `.work/gray-pulse-scalar-final/manifest.json`,
+  `.work/gray-pulse-model-final.log`,
+  `.work/gray-pulse-native-source-admission.log` and `.work/f57-target/`.
+- Python syntax, Markdown and diff-whitespace checks pass. Additional directly
+  affected memory/FSM predecessor reruns are pending, not claimed here. No CI or
+  broad qualification was run.
+
+Architecture review: the narrow existing type, crossing, sampling, reset and
+target owners remain authoritative. Checked state allocation is proportional to
+bounded width and stages; stable physical symbols prevent independent chains
+from merging. No new optimization framework is needed. Fixed Vec/Struct target
+support is the next required Gray slice; handshake/FIFO, clock structures,
+relationship/hierarchy, waivers and restricted low-level events remain open.

@@ -8,7 +8,7 @@ class DomainModel;
 struct DigitalDependencyGraph;
 /// Independently inspected executable header. This is not source-sampling proof;
 /// verifyCrossingModel/the completed assignment graph owns that proof.
-enum class CrossingKind { Level, Gray, Pulse };
+enum class CrossingKind { Level, Gray, Pulse, Handshake };
 struct ExecutableCrossing {
   mlir::Operation *operation = nullptr;
   mlir::Operation *sourceDomain = nullptr;

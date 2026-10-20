@@ -141,9 +141,10 @@ public:
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
         if (aggregate && !isa<PortValueOp, CrossingOp, DigitalAssignOp>(op) &&
             !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
-          return reject(&op, "fixed aggregate target profile supports only whole-value Gray "
-                             "crossings and direct boundary/alias connections; projections "
-                             "require an explicit packed-offset lowering");
+          return reject(&op,
+                        "fixed aggregate target profile supports only whole-value Gray/handshake "
+                        "crossings and direct boundary/alias connections; projections "
+                        "require an explicit packed-offset lowering");
         for (Type type : op.getOperandTypes())
           if (!targetValueType(type))
             return reject(
@@ -198,10 +199,11 @@ public:
         crossings.push_back(*crossing);
         // Bounds cover state, reset logic, source-clock runtime monitors and
         // retained obligations. Payload bits were independently bounded by the
-        // native model; this profile additionally requires fixed scalar types.
-        expansion = crossing->kind == CrossingKind::Pulse  ? 64
-                    : crossing->kind == CrossingKind::Gray ? 2 * crossing->stages + 32
-                                                           : 3 * crossing->stages + 8;
+        // native model; this profile additionally requires fixed scalar/packed types.
+        expansion = crossing->kind == CrossingKind::Handshake ? 80
+                    : crossing->kind == CrossingKind::Pulse   ? 64
+                    : crossing->kind == CrossingKind::Gray    ? 2 * crossing->stages + 32
+                                                              : 3 * crossing->stages + 8;
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -320,6 +322,11 @@ public:
       if (crossing.kind == CrossingKind::Pulse)
         roles = {"source_toggle",       "previous_pulse", "forward_0", "forward_1",
                  "destination_history", "return_0",       "return_1"};
+      else if (crossing.kind == CrossingKind::Handshake)
+        roles = {"source_payload",           "destination_payload",
+                 "source_request",           "destination_request_0",
+                 "destination_request_1",    "destination_acknowledgement",
+                 "source_acknowledgement_0", "source_acknowledgement_1"};
       else {
         for (unsigned stage = 0; stage < crossing.stages; ++stage)
           roles.push_back("stage_" + std::to_string(stage));
@@ -328,9 +335,10 @@ public:
           roles.push_back("seen_sample");
         }
       }
-      StringRef kind = crossing.kind == CrossingKind::Level  ? "sync"
-                       : crossing.kind == CrossingKind::Gray ? "gray"
-                                                             : "pulse";
+      StringRef kind = crossing.kind == CrossingKind::Level   ? "sync"
+                       : crossing.kind == CrossingKind::Gray  ? "gray"
+                       : crossing.kind == CrossingKind::Pulse ? "pulse"
+                                                              : "handshake";
       for (const std::string &role : roles) {
         std::string base =
             "__nodal_" + kind.str() + "_" + std::to_string(crossingNames.size()) + "_" + role;
@@ -568,6 +576,58 @@ public:
                         "startup and N-sample reset recovery. Physical skew and between-sample "
                         "stability are environment obligations, "
                         "not proved by the digital monitor.");
+      } else if (crossing.kind == CrossingKind::Handshake) {
+        // The two payload registers have no reset encoding. Only actual
+        // protocol control state establishes the common reset epoch.
+        auto sourceNext = backedges.get(Value(input).getType(), op->getLoc());
+        auto destinationNext = backedges.get(Value(input).getType(), op->getLoc());
+        auto requestNext = backedges.get(builder.getI1Type(), op->getLoc());
+        auto acknowledgementNext = backedges.get(builder.getI1Type(), op->getLoc());
+        Value held =
+            crossingState(crossing, 0, sourceNext, *sourceControl, "source_payload", false);
+        Value delivered =
+            crossingState(crossing, 1, destinationNext, *destination, "destination_payload", false);
+        Value request = crossingState(crossing, 2, requestNext, *sourceControl, "source_request");
+        Value request0 = crossingState(crossing, 3, request, *destination, "destination_request_0");
+        Value request1 =
+            crossingState(crossing, 4, request0, *destination, "destination_request_1");
+        Value acknowledgement = crossingState(crossing, 5, acknowledgementNext, *destination,
+                                              "destination_acknowledgement");
+        Value ack0 =
+            crossingState(crossing, 6, acknowledgement, *sourceControl, "source_acknowledgement_0");
+        Value ack1 = crossingState(crossing, 7, ack0, *sourceControl, "source_acknowledgement_1");
+        Value idle = compare(op, "digital_eq", request, ack1, false);
+        Value pending = compare(op, "digital_ne", request1, acknowledgement, false);
+        sourceNext.setValue(mux(op, idle, input, held));
+        requestNext.setValue(mux(op, idle, invert(op, request), request));
+        destinationNext.setValue(mux(op, pending, held, delivered));
+        // Ack changes on the same edge that captures the old held payload,
+        // never merely when request arrives in either synchronizer stage.
+        acknowledgementNext.setValue(mux(op, pending, request1, acknowledgement));
+        values[op->getResult(0)] = delivered;
+        Value sourceKnown =
+            make(op, "comb.concat", builder.getIntegerType(3), {request, ack0, ack1});
+        Value destinationKnown = make(op, "comb.concat", builder.getIntegerType(3),
+                                      {request0, request1, acknowledgement});
+        crossingAssertion(
+            crossing, *sourceControl, invert(op, sourceControl->reset), sourceKnown,
+            "NODAL handshake source controls require an established common reset epoch",
+            "(^({{2}})) !== 1'bx");
+        crossingAssertion(
+            crossing, *destination, invert(op, destination->reset), destinationKnown,
+            "NODAL handshake destination controls require an established common reset epoch",
+            "(^({{2}})) !== 1'bx");
+        crossingComment(
+            crossing,
+            "Handshake obligations: delivery=latest_snapshot_coalescing; "
+            "bundled_data=settled_before_request_capture; reset_epoch=common_assertion. "
+            "Source payload is held through returned capture acknowledgement; public "
+            "payload changes while busy may coalesce. Payload state has no invented reset "
+            "value and output is unspecified before first delivery/during recovery. "
+            "Physical bundled-data settling is an environment timing obligation, not "
+            "proved by the digital monitor. Hold common assertion long enough for both "
+            "domains to observe reset; no one-sided restart. Known-state startup checks "
+            "do not universally detect repeated one-sided synchronous resets.");
       } else {
         // Acknowledgement samples destination HISTORY, not the second forward
         // stage: readiness therefore means the destination has delivered the
@@ -860,19 +920,20 @@ private:
     correlate(emitted, crossing.operation);
   }
   void crossingAssertion(const ExecutableCrossing &crossing, const CrossingControls &control,
-                         Value enable, Value property, StringRef message) {
+                         Value enable, Value property, StringRef message,
+                         StringRef predicate = "({{2}}) === 1'b1") {
     // Pinned firtool emits verif.clocked_assert as concurrent SVA, unsupported
     // by Icarus. A clocked immediate assertion preserves the runtime contract
     // there too. Gray skips unknown seen-sample state deterministically. Pulse
-    // skips only a known asserted reset: an unknown release chain cannot hide
-    // an attempted pulse before reset. No initial block invents checker state.
+    // and handshake skip only a known asserted reset: an unknown release chain
+    // cannot hide startup checks. No initial block invents checker state.
     std::string assertion =
         crossingSourceComment(crossing) + message.str() + "\n" + "always @(" +
         (control.falling ? "negedge" : "posedge") + " {{0}}) begin\n" +
-        (crossing.kind == CrossingKind::Pulse ? "  if (({{1}}) !== 1'b0) begin\n"
-                                              : "  if (({{1}}) === 1'b1) begin\n") +
-        "    assert (({{2}}) === 1'b1) else $fatal(1, \"NODAL-CROSSING-057: " + message.str() +
-        "\");\n  end\nend";
+        (crossing.kind != CrossingKind::Gray ? "  if (({{1}}) !== 1'b0) begin\n"
+                                             : "  if (({{1}}) === 1'b1) begin\n") +
+        "    assert (" + predicate.str() +
+        ") else $fatal(1, \"NODAL-CROSSING-057: " + message.str() + "\");\n  end\nend";
     auto emitted = circt::sv::VerbatimOp::create(
         builder, crossing.operation->getLoc(), builder.getStringAttr(assertion),
         ValueRange{control.assertionClock, enable, property}, builder.getArrayAttr({}));

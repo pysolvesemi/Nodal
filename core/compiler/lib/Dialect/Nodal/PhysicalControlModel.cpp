@@ -37,9 +37,10 @@ FailureOr<PhysicalControl> resolvePhysicalControl(Value value, Operation *use, S
   return PhysicalControl{port, projection->root, projection->canonicalScalarKey,
                          projection->literalRootFlatOffset};
 }
-bool samePhysicalControl(Value left, Value right, Operation *use, StringRef kind) {
-  auto lhs = resolvePhysicalControl(left, use, kind);
-  auto rhs = resolvePhysicalControl(right, use, kind);
+bool samePhysicalControl(Value left, Operation *leftUse, Value right, Operation *rightUse,
+                         StringRef kind) {
+  auto lhs = resolvePhysicalControl(left, leftUse, kind);
+  auto rhs = resolvePhysicalControl(right, rightUse, kind);
   return succeeded(lhs) && succeeded(rhs) && *lhs == *rhs;
 }
 } // namespace nodal

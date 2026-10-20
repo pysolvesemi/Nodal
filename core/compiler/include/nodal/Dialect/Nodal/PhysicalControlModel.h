@@ -27,7 +27,9 @@ struct PhysicalControl {
 /// dynamic selectors and symbolic/default-based guesses cannot establish proof.
 mlir::FailureOr<PhysicalControl> resolvePhysicalControl(mlir::Value value, mlir::Operation *use,
                                                         llvm::StringRef kind);
-bool samePhysicalControl(mlir::Value left, mlir::Value right, mlir::Operation *use,
-                         llvm::StringRef kind);
+/// Each control is checked at its actual SSA consumer. Symbol-resolved clock
+/// bindings may follow the reset producer or use distinct aliases of one port.
+bool samePhysicalControl(mlir::Value left, mlir::Operation *leftUse, mlir::Value right,
+                         mlir::Operation *rightUse, llvm::StringRef kind);
 } // namespace nodal
 #endif

@@ -12,6 +12,7 @@ struct ResetRoot {
   mlir::StringAttr polarity;
   mlir::Operation *release = nullptr;
   mlir::Value clock;
+  mlir::Operation *clockUse = nullptr;
   mlir::StringAttr edge;
 };
 struct ResetInfo {

@@ -108,7 +108,7 @@ public:
           }
         }
       }
-      ResetRoot root{*port, info.polarity, nullptr, {}, {}};
+      ResetRoot root{*port, info.polarity, nullptr, {}, nullptr, {}};
       StringRef release = text(op, "release");
       if (release == "raw") {
         if (op->hasAttr("release_domain")) {
@@ -126,8 +126,8 @@ public:
           auto owner = domains.resolveDomain(port->port->getAttr("domain"));
           auto ownerBinding = domains.resolveClockBinding(port->port->getAttr("domain"));
           if (failed(owner) || failed(ownerBinding) || text(*owner, "reset_policy") != "sync" ||
-              !samePhysicalControl((*ownerBinding)->getOperand(0), (*binding)->getOperand(0), op,
-                                   "clock") ||
+              !samePhysicalControl((*ownerBinding)->getOperand(0), *ownerBinding,
+                                   (*binding)->getOperand(0), *binding, "clock") ||
               (*owner)->getAttr("edge") != (*domain)->getAttr("edge")) {
             (void)reject(op, "synchronous assertion requires its owning Sync clock and edge");
             return failure();
@@ -135,6 +135,7 @@ public:
         }
         root.release = op;
         root.clock = (*binding)->getOperand(0);
+        root.clockUse = *binding;
         root.edge = (*domain)->getAttrOfType<StringAttr>("edge");
       } else {
         (void)reject(op, "unsupported reset boundary release contract");
@@ -153,7 +154,8 @@ public:
       auto binding = domains.resolveClockBinding(op->getAttr("destination_domain"));
       auto domain = domains.resolveDomain(op->getAttr("destination_domain"));
       if (failed(binding) || failed(domain) ||
-          !samePhysicalControl((*binding)->getOperand(0), op->getOperand(1), op, "clock") ||
+          !samePhysicalControl((*binding)->getOperand(0), *binding, op->getOperand(1), op,
+                               "clock") ||
           !capability(op->getOperand(1).getType(), "clock")) {
         (void)reject(op, "reset synchronizer clock must be the exact destination binding");
         return failure();
@@ -169,6 +171,7 @@ public:
       for (auto &root : info.roots) {
         root.release = op;
         root.clock = op->getOperand(1);
+        root.clockUse = op;
         root.edge = (*domain)->getAttrOfType<StringAttr>("edge");
       }
     } else if (isa<ResetCombineOp>(op)) {
@@ -270,7 +273,7 @@ LogicalResult verifyResetForBinding(Operation *binding, Operation *domain,
       return reject(binding,
                     "synchronous assertion contract cannot satisfy asynchronous reset policy");
     if (!root.release ||
-        !samePhysicalControl(root.clock, binding->getOperand(0), binding, "clock") ||
+        !samePhysicalControl(root.clock, root.clockUse, binding->getOperand(0), binding, "clock") ||
         root.edge != domain->getAttr("edge"))
       return reject(binding, "reset release lacks proof for the exact destination clock and edge");
   }

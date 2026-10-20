@@ -49,6 +49,8 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     kind = CrossingKind::Gray;
   else if (contract == "pulse_v1" && text(op, "kind") == "pulse")
     kind = CrossingKind::Pulse;
+  else if (contract == "handshake_snapshot_v1" && text(op, "kind") == "handshake")
+    kind = CrossingKind::Handshake;
   else
     return fail("unsupported or malformed executable crossing contract");
   if (!llvm::all_of(op->getAttrs(), [](NamedAttribute a) {
@@ -61,20 +63,23 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
   if (failed(verifyDigitalValueScope(op->getOperand(0), op)))
     return fail("crossing requires its actual owned source input");
   uint64_t payloadBits = 1;
-  if (kind == CrossingKind::Gray) {
+  if (kind == CrossingKind::Gray || kind == CrossingKind::Handshake) {
     auto footprint = inferDigitalBitPatternMaximumBits(op->getOperand(0).getType(), op);
     if (failed(footprint) ||
         !equivalentDigitalStorageTypes(op->getOperand(0).getType(), op->getResult(0).getType(),
                                        op->getParentOp()))
-      return fail("Gray crossing requires an exact complete finite bit-pattern payload ABI");
+      return fail(
+          "Gray/handshake crossing requires an exact complete finite bit-pattern payload ABI");
     payloadBits = *footprint;
   } else if (!boolean(op->getOperand(0).getType()) ||
              op->getOperand(0).getType() != op->getResult(0).getType())
     return fail("level/pulse synchronizer requires exact owned Bool input/result");
   auto stages = op->getAttrOfType<IntegerAttr>("stages");
   if (!stages || !stages.getType().isSignlessInteger(64) || stages.getInt() < 2 ||
-      stages.getInt() > 32 || (kind == CrossingKind::Pulse && stages.getInt() != 2))
-    return fail("crossing stages must be i64 in 2 through 32; Pulse has exactly two stages");
+      stages.getInt() > 32 ||
+      ((kind == CrossingKind::Pulse || kind == CrossingKind::Handshake) && stages.getInt() != 2))
+    return fail(
+        "crossing stages must be i64 in 2 through 32; Pulse/handshake have exactly two stages");
   auto obligations = op->getAttrOfType<DictionaryAttr>("obligations");
   auto field = [&](StringRef key, StringRef expected) {
     auto value = obligations ? obligations.getAs<StringAttr>(key) : StringAttr();
@@ -87,7 +92,12 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
                                       !field("stability", "stable_between_source_samples"))) ||
       (kind == CrossingKind::Pulse &&
        (!obligations || obligations.size() != 3 || !field("spacing", "returned_acknowledgement") ||
-        !field("width", "single_source_cycle") || !field("reset_epoch", "common_assertion"))))
+        !field("width", "single_source_cycle") || !field("reset_epoch", "common_assertion"))) ||
+      (kind == CrossingKind::Handshake &&
+       (!obligations || obligations.size() != 3 ||
+        !field("delivery", "latest_snapshot_coalescing") ||
+        !field("bundled_data", "settled_before_request_capture") ||
+        !field("reset_epoch", "common_assertion"))))
     return fail("executable crossing requires its exact typed temporal/environment obligations");
   const uint64_t budget = SequentialModelLimits().maximumNormalizedOperations;
   uint64_t stateBits = kind == CrossingKind::Pulse ? 7 : stages.getInt();
@@ -96,6 +106,10 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
     if (payloadBits > (budget - 1) / copies)
       return fail("crossing state expansion exceeds finite sequential budget");
     stateBits = payloadBits * copies + 1;
+  } else if (kind == CrossingKind::Handshake) {
+    if (payloadBits > (budget - 6) / 2)
+      return fail("crossing state expansion exceeds finite sequential budget");
+    stateBits = payloadBits * 2 + 6;
   }
   auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
   StringRef identity = path(op);
@@ -119,6 +133,32 @@ FailureOr<ExecutableCrossing> inspectHeader(Operation *op) {
       op,       nullptr, nullptr,     nullptr,  nullptr, static_cast<unsigned>(stages.getInt()),
       identity, kind,    payloadBits, stateBits};
 }
+// DomainModel has independently verified each effective binding/release. Keep
+// the common epoch proof shared by Pulse and snapshot handshake, while ResetModel
+// remains the sole owner of bounded reset producer/lineage inspection.
+LogicalResult verifyCommonResetEpoch(Operation *op, Operation *sourceBinding,
+                                     Operation *destinationBinding, const DomainModel &domains) {
+  if (sourceBinding->getNumOperands() != 2 || destinationBinding->getNumOperands() != 2)
+    return reject(op, "crossing requires reset-bearing endpoints and a coordinated reset epoch");
+  auto sourceReset = inspectReset(sourceBinding->getOperand(1), sourceBinding, domains);
+  auto destinationReset =
+      inspectReset(destinationBinding->getOperand(1), destinationBinding, domains);
+  if (failed(sourceReset) || failed(destinationReset) || sourceReset->roots.empty() ||
+      destinationReset->roots.empty())
+    return reject(op,
+                  "crossing requires actual typed common reset roots with per-domain safe release");
+  // Compare canonical physical identities only, not release paths or textual
+  // reset names: safe release is independently proved for each local clock.
+  using RootKey = std::pair<Operation *, std::string>;
+  std::map<RootKey, StringAttr> sourceRoots, destinationRoots;
+  for (const auto &root : sourceReset->roots)
+    sourceRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
+  for (const auto &root : destinationReset->roots)
+    destinationRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
+  if (sourceRoots != destinationRoots)
+    return reject(op, "crossing requires equal nonempty physical reset root/element/polarity sets");
+  return success();
+}
 } // namespace
 FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const DomainModel &domains) {
   auto header = inspectHeader(op);
@@ -138,26 +178,9 @@ FailureOr<ExecutableCrossing> inspectExecutableCrossing(Operation *op, const Dom
   auto destinationBinding = domains.resolveBinding(destinationRef);
   if (failed(sourceBinding) || failed(destinationBinding))
     return fail("crossing endpoints require independently verified physical domain bindings");
-  if (header->kind == CrossingKind::Pulse) {
-    if ((*sourceBinding)->getNumOperands() != 2 || (*destinationBinding)->getNumOperands() != 2)
-      return fail("Pulse requires reset-bearing source/destination and a coordinated reset epoch");
-    auto sourceReset = inspectReset((*sourceBinding)->getOperand(1), *sourceBinding, domains);
-    auto destinationReset =
-        inspectReset((*destinationBinding)->getOperand(1), *destinationBinding, domains);
-    if (failed(sourceReset) || failed(destinationReset) || sourceReset->roots.empty() ||
-        destinationReset->roots.empty())
-      return fail("Pulse requires actual typed common reset roots with per-domain safe release");
-    // ResetModel owns lineage and release proof; compare only canonical physical
-    // root identities here. No textual reset-name registry or pairwise closure.
-    using RootKey = std::pair<Operation *, std::string>;
-    std::map<RootKey, StringAttr> sourceRoots, destinationRoots;
-    for (const auto &root : sourceReset->roots)
-      sourceRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
-    for (const auto &root : destinationReset->roots)
-      destinationRoots.emplace(RootKey{root.physical.port, root.physical.scalarKey}, root.polarity);
-    if (sourceRoots != destinationRoots)
-      return fail("Pulse requires equal nonempty physical reset root/element/polarity sets");
-  }
+  if ((header->kind == CrossingKind::Pulse || header->kind == CrossingKind::Handshake) &&
+      failed(verifyCommonResetEpoch(op, *sourceBinding, *destinationBinding, domains)))
+    return failure();
   header->sourceDomain = *source;
   header->destinationDomain = *destination;
   header->sourceBinding = *sourceBinding;

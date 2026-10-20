@@ -737,3 +737,54 @@ The preceding fixed Gray aggregate work also retained successful executions of
 the unchanged sequential 71, memory 114 and flat-FSM 59 predecessor cases, in
 addition to its freshly rebuilt type/crossing/target 362 cases. These 606 focused
 native executions are recorded separately from the pending handshake backend.
+
+### Executable snapshot handshake native and target checkpoint
+
+The native/target continuation now implements v0.4's automatic coherent latest
+snapshot with `2W + 6` state bits, uninitialized payloads, real returned capture
+acknowledgement and independent physical synchronizer state. All six protocol
+control bits participate in their local knownness checks. The existing crossing
+owner factors common-reset proof for Pulse and handshake; the existing sampling
+owner prevents Pulse relabeling. There is no separate reset or dependency graph.
+
+A valid shared-clock Sync source witness exposed an existing reset-proof use
+anchor bug: symbol-resolved clocks were inspected relative to a reset boundary
+that does not itself consume them. PhysicalControlModel now accepts independent
+actual-use anchors, and reset lineage retains its actual clock consumer. Proof
+still compares exact physical clock and edge; late binding/read aliases pass,
+while genuinely different clocks and edges reject. No source reordering or
+physical-identity relaxation was used to hide the issue.
+
+Current native focused checks pass **495/495**: crossing 198, reset 65, domain 32,
+CIRCT target 129 and sequential 71. All **8/8** actual Scala handshake replay
+files independently pass native ingress. The actual source → CIRCT → SystemVerilog
+→ Icarus handshake matrix passes **44/44**:
+
+- Both clock edges and reset polarities, whole Vec/Struct, no-zero Enum and valid
+  shared-clock Sync reset execute coherent held snapshots and reset recovery.
+- Directed busy source updates coalesce rather than being falsely promised as
+  lossless events. Stopped/resumed and simultaneous clocks preserve the two-stage
+  request and returned-ack timing; destination retains its last delivered value.
+- Unestablished and raw-unknown reset epochs fail at each local clock with the
+  expected runtime assertion. Six separate post-reset mutations force each real
+  control bit unknown and require the corresponding local assertion to fail.
+- Affected actual target predecessors rerun on current nodalc: Gray/Pulse
+  **45/45** and scalar/shaped reset **12/12**, including shaped Sync composition.
+
+The target harness is `tests/scala/snapshot-handshakes/run_target.py`, using only
+actual `Increment57HandshakeReplay` output. Logs are
+`.work/handshake-target-actual.log`, `.work/handshake-target-actual/manifest.json`,
+`.work/handshake-gray-pulse-predecessor.log`,
+`.work/handshake-reset-predecessor.log` and the focused native logs under `.work`.
+Source-location/obligation comments and packed aggregate ABI survive export.
+Formatting, Python syntax, Markdown and diff checks pass. No CI or broad
+qualification was run. Known-state checks remain startup protection, not a
+universal dynamic detector of unilateral reset epochs; physical bundled-data
+settling and common reset duration remain explicit assumptions.
+
+Architecture review: the implementation reuses bounded exact type, reset,
+physical-control and sampling owners; generated state grows linearly with
+payload width, and existing stable symbols protect independent instances.
+The asynchronous FIFO with genuine ready/valid ownership is next. Remaining
+clock structures, relationships/hierarchy, waivers and low-level events keep
+F57 open; this checkpoint does not close any parent checklist prematurely.

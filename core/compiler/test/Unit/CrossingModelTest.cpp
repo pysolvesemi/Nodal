@@ -80,6 +80,16 @@ std::string pulseCrossing(std::string name = "pulse", std::string input = "input
          "reset_epoch = \"common_assertion\"}, metadata = {semantic_path = \"Fixture." +
          name + "\"}}> : (" + bit + ") -> " + bit + "\n";
 }
+std::string handshakeCrossing(std::string type = "!nodal.uint<8>", std::string name = "handshake",
+                              std::string input = "input") {
+  return "%" + name + " = \"nodal.crossing\"(%" + input +
+         ") <{source_domain = @a, destination_domain = @b, kind = \"handshake\", "
+         "contract = \"handshake_snapshot_v1\", stages = 2 : i64, obligations = "
+         "{delivery = \"latest_snapshot_coalescing\", "
+         "bundled_data = \"settled_before_request_capture\", "
+         "reset_epoch = \"common_assertion\"}, metadata = {semantic_path = \"Fixture." +
+         name + "\"}}> : (" + type + ") -> " + type + "\n";
+}
 std::string noZeroEnum() {
   return "\"nodal.enum\"() <{sym_name = \"NoZero\", underlying_type = !nodal.uint<2>, "
          "encoding = \"custom\", metadata = {abi_version = 1 : i64, semantic_type = "
@@ -772,6 +782,158 @@ int main(int argc, char **argv) {
     report("pulse-shared-header-counts-return-sync-and-monitor",
            succeeded(header) && header->kind == nodal::CrossingKind::Pulse && header->stages == 2 &&
                header->payloadMaximumBits == 1 && header->stateBits == 7);
+  }
+  // Snapshot handshake reuses the finite Gray payload ABI, actual source graph,
+  // and Pulse common-reset proof; neither payload register has an initializer.
+  auto handshakeBody = [&](std::string type = "!nodal.uint<8>") {
+    return replaceAll(pulseSetup(), bit, type) + handshakeCrossing(type);
+  };
+  const std::string handshake = handshakeBody();
+  for (const std::string &type : std::initializer_list<std::string>{
+           bit, u8, "!nodal.bits<4096>", "!nodal.sint<9>", "!nodal.shaped<\"2,3\", !nodal.uint<4>>",
+           "!nodal.struct<\"Pair\", [{name = \"low\", type = !nodal.bits<3>}, "
+           "{name = \"high\", type = !nodal.shaped<\"2\", !nodal.sint<5>>}]>"})
+    check("handshake-complete-abi-" + type, handshakeBody(type), true);
+  check("handshake-nominal-enum-without-zero",
+        replace(wrap(handshakeBody(enumeration)), "module { ", "module { " + noZeroEnum()), true);
+  check("handshake-shaped-enum-without-zero",
+        replace(wrap(handshakeBody("!nodal.shaped<\"3\", " + enumeration + ">")), "module { ",
+                "module { " + noZeroEnum()),
+        true);
+  for (const std::string &type : std::initializer_list<std::string>{
+           "i64", "f64", "!nodal.shaped<\"2\", f64>",
+           "!nodal.struct<\"RealPayload\", [{name = \"bad\", type = f64}]>"})
+    check("handshake-non-bit-pattern-" + type, handshakeBody(type), false,
+          "bit-pattern payload ABI");
+  check("handshake-exact-signedness",
+        replace(handshake, "}> : (!nodal.uint<8>) -> !nodal.uint<8>\n",
+                "}> : (!nodal.uint<8>) -> !nodal.sint<8>\n"),
+        false);
+  check("handshake-exact-result-width",
+        replace(handshake, "}> : (!nodal.uint<8>) -> !nodal.uint<8>\n",
+                "}> : (!nodal.uint<8>) -> !nodal.uint<9>\n"),
+        false);
+  for (int stages : {0, 1, 3, 32})
+    check("handshake-exact-two-stages-" + std::to_string(stages),
+          replace(handshake, "stages = 2 : i64", "stages = " + std::to_string(stages) + " : i64"),
+          false);
+  check("handshake-stage-exact-i64", replace(handshake, "stages = 2 : i64", "stages = 2 : i32"),
+        false);
+  check("handshake-missing-stages", replace(handshake, "stages = 2 : i64, ", ""), false);
+  check("handshake-wrong-contract", replace(handshake, "handshake_snapshot_v1", "handshake_v1"),
+        false);
+  check("handshake-kind-contract-mismatch",
+        replace(handshake, "kind = \"handshake\"", "kind = \"pulse\""), false);
+  for (const std::string field :
+       {"latest_snapshot_coalescing", "settled_before_request_capture", "common_assertion"})
+    check("handshake-obligation-forgery-" + field, replace(handshake, field, "unproved"), false,
+          "typed temporal/environment obligations");
+  check("handshake-missing-obligation",
+        replace(handshake, "bundled_data = \"settled_before_request_capture\", ", ""), false);
+  check("handshake-untyped-obligation",
+        replace(handshake, "delivery = \"latest_snapshot_coalescing\"", "delivery = true"), false);
+  check("handshake-extra-obligation",
+        replace(handshake, "delivery = \"latest_snapshot_coalescing\"",
+                "extra = true, delivery = \"latest_snapshot_coalescing\""),
+        false);
+  check("handshake-metadata-is-not-proof",
+        replace(handshake, "semantic_path = \"Fixture.handshake\"",
+                "semantic_path = \"Fixture.handshake\", safe = true"),
+        false);
+  check("handshake-resetless-rejected", setup() + handshakeCrossing(bit), false, "reset-bearing");
+  check("handshake-sync-reset-common-root",
+        replaceAll(handshake, "reset_policy = \"async\"", "reset_policy = \"sync\""), true);
+  check("handshake-common-root-independent-safe-release",
+        replaceAll(synchronized, bit, u8) + handshakeCrossing(), true);
+  check("handshake-common-shaped-element",
+        replaceAll(pulseSetup(true, true), bit, u8) + handshakeCrossing(), true);
+  check("handshake-distinct-roots", replaceAll(pulseSetup(false), bit, u8) + handshakeCrossing(),
+        false, "equal nonempty physical reset root/element/polarity sets");
+  check("handshake-distinct-shaped-elements",
+        replaceAll(pulseSetup(false, true), bit, u8) + handshakeCrossing(), false,
+        "equal nonempty physical reset root/element/polarity sets");
+  check("handshake-wrong-release-clock",
+        replace(handshake, "release_domain = @b", "release_domain = @a"), false,
+        "exact destination clock and edge");
+  check("handshake-raw-release-rejected",
+        replace(handshake, "release = \"external\", release_domain = @b", "release = \"raw\""),
+        false, "reset release lacks proof");
+  check("handshake-contradictory-root-polarity",
+        replace(handshake,
+                "%bReset = \"nodal.reset_boundary\"(%root0) <{reset_polarity = \"active_high\"",
+                "%bReset = \"nodal.reset_boundary\"(%root0) <{reset_polarity = \"active_low\""),
+        false, "contradictory polarities");
+  check("handshake-source-spoof",
+        replace(handshake, "source_domain = @a, destination_domain = @b",
+                "source_domain = @b, destination_domain = @a"),
+        false);
+  check("handshake-unattributed-source",
+        replace(handshake, port("input", "a", u8), port("input", "none", u8)), false);
+  check("handshake-source-wire-alias",
+        pulseSetup() + wire() + handshakeCrossing(bit, "handshake", "wire"), true);
+  check("handshake-result-destination-owned", handshake + replaceAll(sample("handshake"), bit, u8),
+        true);
+  check("handshake-result-not-source-owned",
+        handshake + replaceAll(sample("handshake", "a"), bit, u8), false);
+  check("handshake-pulse-source-not-relabeled",
+        pulse + replace(handshakeCrossing(bit, "again", "pulse"),
+                        "source_domain = @a, destination_domain = @b",
+                        "source_domain = @b, destination_domain = @a"),
+        false, "NODAL-CDC-003");
+  check("handshake-independent-instances", handshake + handshakeCrossing(u8, "other"), true);
+  check("handshake-duplicate-instance-identity",
+        handshake + replace(handshakeCrossing(u8, "other"), "Fixture.other", "Fixture.handshake"),
+        false);
+  check("handshake-reconvergence-not-waived",
+        handshakeBody(bit) + handshakeCrossing(bit, "other") +
+            expression("joined", "handshake", "other") + sample("joined"),
+        false, "NODAL-CDC-057-002");
+  check("handshake-same-instance-reused",
+        handshakeBody(bit) + expression("joined", "handshake", "handshake") + sample("joined"),
+        true);
+  const std::string boundedWidth =
+      "\"nodal.parameter\"() <{sym_name = \"W\", type = i64, parameter_kind = \"integer\", "
+      "classification = \"structural\", default_value = 4 : i64, variability = \"symbolic\", "
+      "metadata = {}}> : () -> ()\n"
+      "%lower = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", metadata = {}}> : "
+      "() -> i64\n"
+      "%upper = \"nodal.const_literal\"() <{value = 32 : i64, spelling = \"32\", metadata = {}}> : "
+      "() -> i64\n"
+      "\"nodal.parameter_constraint\"(%lower, %upper) <{parameter = @W, constraint_kind = "
+      "\"range\", "
+      "lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @W, effects = [\"shape\", \"width\"], "
+      "policy = \"static_generate\", metadata = {}}> : () -> ()\n";
+  auto boundedHandshake =
+      check("handshake-bounded-symbolic-payload-native",
+            boundedWidth + handshakeBody("!nodal.digital<\"uint\", \"W\">"), true);
+  if (boundedHandshake) {
+    auto module = *boundedHandshake->getOps<nodal::ModuleOp>().begin();
+    auto header = nodal::inspectExecutableCrossing(*module.getOps<nodal::CrossingOp>().begin());
+    report("handshake-symbolic-budget-uses-upper-not-default",
+           succeeded(header) && header->payloadMaximumBits == 32 && header->stateBits == 70);
+  }
+  check("handshake-unresolved-symbolic-width-rejected",
+        handshakeBody("!nodal.digital<\"uint\", \"W\">"), false);
+  check("handshake-maximum-state-budget", handshakeBody("!nodal.bits<131069>"), true);
+  check("handshake-state-budget-overflow", handshakeBody("!nodal.bits<131070>"), false,
+        "state expansion");
+  check("handshake-state-budget-arithmetic-overflow",
+        handshakeBody("!nodal.bits<9223372036854775807>"), false, "state expansion");
+  auto handshakeRoot = check("handshake-header-fixture", handshake, true);
+  if (handshakeRoot) {
+    auto module = *handshakeRoot->getOps<nodal::ModuleOp>().begin();
+    auto op = *module.getOps<nodal::CrossingOp>().begin();
+    auto header = nodal::inspectExecutableCrossing(op);
+    report("handshake-counts-two-payloads-six-controls",
+           succeeded(header) && header->kind == nodal::CrossingKind::Handshake &&
+               header->stages == 2 && header->payloadMaximumBits == 8 && header->stateBits == 22);
+    nodal::SequentialModelLimits limits;
+    limits.maximumNormalizedOperations = 21;
+    report("handshake-custom-total-bit-budget", failed(nodal::verifyCrossingModel(module, limits)));
+    limits.maximumNormalizedOperations = 22;
+    report("handshake-custom-exact-bit-budget",
+           succeeded(nodal::verifyCrossingModel(module, limits)));
   }
   std::string many = setup();
   for (unsigned i = 0; i < 128; ++i)

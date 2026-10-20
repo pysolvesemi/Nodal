@@ -460,8 +460,8 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
         return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
       const auto &node = graph.nodes[id];
       if (sample.rejectPulseSources && node.crossing && text(node.crossing, "kind") == "pulse")
-        return sample.use->emitOpError(
-            "NODAL-CDC-003: Pulse-classified crossing result cannot be relabeled as level or Gray");
+        return sample.use->emitOpError("NODAL-CDC-003: Pulse-classified crossing result cannot be "
+                                       "relabeled as a non-pulse crossing");
       auto source = sampleSource(module, node);
       if (source.boundary) {
         auto reference = llvm::dyn_cast_if_present<FlatSymbolRefAttr>(source.domain);

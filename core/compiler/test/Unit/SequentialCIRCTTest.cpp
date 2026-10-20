@@ -374,15 +374,19 @@ std::string executableSetup(std::string type, std::string policy = "none",
 std::string executableCrossing(std::string kind, std::string type, unsigned stages = 2,
                                std::string name = "sample") {
   std::string obligations =
-      kind == "gray" ? "transition = \"one_bit_per_source_sample\", "
-                       "skew = \"less_than_source_period\", "
-                       "stability = \"stable_between_source_samples\""
-                     : "spacing = \"returned_acknowledgement\", "
-                       "width = \"single_source_cycle\", reset_epoch = \"common_assertion\"";
+      kind == "gray"        ? "transition = \"one_bit_per_source_sample\", "
+                              "skew = \"less_than_source_period\", "
+                              "stability = \"stable_between_source_samples\""
+      : kind == "handshake" ? "delivery = \"latest_snapshot_coalescing\", "
+                              "bundled_data = \"settled_before_request_capture\", "
+                              "reset_epoch = \"common_assertion\""
+                            : "spacing = \"returned_acknowledgement\", "
+                              "width = \"single_source_cycle\", reset_epoch = \"common_assertion\"";
+  std::string contract = kind == "handshake" ? "handshake_snapshot_v1" : kind + "_v1";
   return "%" + name +
          " = \"nodal.crossing\"(%input) <{source_domain = @source, "
          "destination_domain = @core, kind = \"" +
-         kind + "\", contract = \"" + kind + "_v1\", stages = " + std::to_string(stages) +
+         kind + "\", contract = \"" + contract + "\", stages = " + std::to_string(stages) +
          " : i64, obligations = {" + obligations + "}, " + metadata(name) + "}> : (" + type +
          ") -> " + type + "\n";
 }
@@ -564,6 +568,157 @@ bool checkPulse(mlir::ModuleOp module, unsigned chains = 1, bool sourceFalling =
           }
   });
   return good && checks == chains && obligations == chains;
+}
+bool checkHandshake(mlir::ModuleOp module, unsigned bits, unsigned chains = 1,
+                    bool sourceFalling = false, bool destinationFalling = false,
+                    bool activeLow = false) {
+  bool good = true;
+  auto registers = crossingRegisters(module, good);
+  good &= registers.size() == chains;
+  auto hw = *module.getOps<circt::hw::HWModuleOp>().begin();
+  const char *roles[] = {"source_payload",           "destination_payload",
+                         "source_request",           "destination_request_0",
+                         "destination_request_1",    "destination_acknowledgement",
+                         "source_acknowledgement_0", "source_acknowledgement_1"};
+  for (auto &[path, regs] : registers) {
+    good &= regs.size() == 8;
+    if (regs.size() != 8)
+      continue;
+    unsigned storageBits = 0;
+    for (unsigned i = 0; i < 8; ++i) {
+      unsigned w = cast<IntegerType>(regs[i].getResult().getType()).getWidth();
+      storageBits += w;
+      good &= w == (i < 2 ? bits : 1);
+      bool source = i == 0 || i == 2 || i >= 6;
+      good &= owningClock(regs[i].getClk(), source ? "sourceClock" : "clock",
+                          source ? sourceFalling : destinationFalling);
+      good &= regs[i]->getAttrOfType<StringAttr>("nodal.crossing_role").getValue() == roles[i];
+      good &= regs[i]->getAttrOfType<StringAttr>("nodal.crossing_contract").getValue() ==
+              "handshake_snapshot_v1";
+    }
+    good &= storageBits == 2 * bits + 6;
+    Value output = hw.getBodyBlock()->getTerminator()->getOperand(path == "Fixture.sample" ? 0 : 1);
+    good &= output == regs[1].getResult();
+    // Payload state is an enabled capture/hold, never a reset mux or a public
+    // combinational bypass. The return path starts at actual capture ack[5].
+    auto sourceMux = regs[0].getInput().getDefiningOp<circt::comb::MuxOp>();
+    auto destinationMux = regs[1].getInput().getDefiningOp<circt::comb::MuxOp>();
+    good &= sourceMux && destinationMux;
+    if (!sourceMux || !destinationMux)
+      continue;
+    good &= sourceMux->getOperand(2) == regs[0].getResult() &&
+            destinationMux->getOperand(1) == regs[0].getResult() &&
+            destinationMux->getOperand(2) == regs[1].getResult();
+    unsigned predecessors[] = {2, 3, 5, 6};
+    unsigned followers[] = {3, 4, 6, 7};
+    for (unsigned i = 0; i < 4; ++i) {
+      auto resetMux = regs[followers[i]].getInput().getDefiningOp<circt::comb::MuxOp>();
+      good &= resetMux && resetMux->getOperand(2) == regs[predecessors[i]].getResult();
+    }
+    if (bits > 64)
+      continue;
+    uint64_t mask = bits == 64 ? ~uint64_t(0) : (uint64_t(1) << bits) - 1;
+    uint64_t held = 0xa5a5a5a5a5a5a5a5ULL & mask;
+    uint64_t delivered = 0x5a5a5a5a5a5a5a5aULL & mask;
+    // Every known control combination checks the actual generated pre-edge
+    // graph. In particular ack is not request-sync[1]'s NEXT value, which would
+    // acknowledge arrival before destination capture on simultaneous edges.
+    for (unsigned control = 0; control < 64; ++control) {
+      std::map<std::string, uint64_t> inputs{{"reset", activeLow ? 1 : 0}, {"input", mask}};
+      SmallVector<uint64_t> old{held, delivered};
+      for (unsigned i = 0; i < 6; ++i)
+        old.push_back((control >> i) & 1);
+      for (unsigned i = 0; i < 8; ++i)
+        inputs["state:" + regs[i].getNameAttr().getValue().str()] = old[i];
+      bool idle = old[2] == old[7], pending = old[4] != old[5];
+      uint64_t expected[] = {idle ? mask : held,
+                             pending ? held : delivered,
+                             idle ? old[2] ^ 1 : old[2],
+                             old[2],
+                             old[3],
+                             pending ? old[4] : old[5],
+                             old[5],
+                             old[6]};
+      for (unsigned i = 0; i < 8; ++i)
+        good &= evaluate(regs[i].getInput(), inputs, 0) == expected[i];
+      inputs["reset"] = activeLow ? 0 : 1;
+      // Only six controls reset. Payload may capture during reset but never
+      // acquires a fabricated initializer, even for an enum without zero.
+      for (unsigned i = 0; i < 8; ++i)
+        good &= evaluate(regs[i].getInput(), inputs, 0) == (i < 2 ? expected[i] : 0);
+    }
+    // Run both clocks against one snapshot of old physical state. Stop one
+    // clock while the public input changes, then resume and deliver the latest
+    // captured snapshot without changing the held destination while pending.
+    SmallVector<uint64_t> state{held, delivered, 0, 0, 0, 0, 0, 0};
+    auto tick = [&](bool source, bool destination, uint64_t input) {
+      std::map<std::string, uint64_t> inputs{{"reset", activeLow ? 1 : 0}, {"input", input}};
+      for (unsigned i = 0; i < 8; ++i)
+        inputs["state:" + regs[i].getNameAttr().getValue().str()] = state[i];
+      auto next = state;
+      for (unsigned i = 0; i < 8; ++i) {
+        bool sourceState = i == 0 || i == 2 || i >= 6;
+        if (sourceState ? source : destination)
+          next[i] = evaluate(regs[i].getInput(), inputs, 0);
+      }
+      state = next;
+    };
+    tick(true, false, mask);
+    for (unsigned i = 0; i < 4; ++i)
+      tick(true, false, i & mask);
+    good &= state[0] == mask && state[1] == delivered && state[2] == 1;
+    tick(true, true, 0);
+    tick(true, true, 0);
+    good &= state[1] == delivered && state[4] == 1 && state[5] == 0;
+    tick(true, true, 0);
+    good &= state[1] == mask && state[5] == 1 && state[6] == 0;
+    tick(true, true, 0);
+    tick(true, true, 0);
+    good &= state[0] == mask && state[7] == 1;
+    tick(true, true, 0);
+    good &= state[0] == 0 && state[2] == 0 && state[1] == mask;
+    tick(false, true, mask);
+    tick(false, true, mask);
+    good &= state[1] == mask;
+    tick(false, true, mask);
+    good &= state[1] == 0 && state[5] == 0;
+  }
+  unsigned checks = 0, obligations = 0;
+  module.walk([&](circt::sv::VerbatimOp op) {
+    auto content = op->getAttrOfType<StringAttr>("format_string").getValue();
+    obligations +=
+        content.contains("delivery=latest_snapshot_coalescing") &&
+        content.contains("bundled_data=settled_before_request_capture") &&
+        content.contains("reset_epoch=common_assertion") &&
+        content.contains("no one-sided restart") &&
+        content.contains("do not universally detect repeated one-sided synchronous resets");
+    if (!op->hasAttr("nodal.crossing_check"))
+      return;
+    ++checks;
+    good &= content.contains("assert ((^({{2}})) !== 1'bx)") &&
+            content.contains("if (({{1}}) !== 1'b0)") && content.contains("$fatal") &&
+            content.contains("NODAL handshake");
+    auto &regs = registers[op->getAttrOfType<StringAttr>("nodal.source_path").getValue().str()];
+    if (regs.size() != 8) {
+      good = false;
+      return;
+    }
+    bool source = content.contains("handshake source controls");
+    auto clock = op->getOperand(0).getDefiningOp<circt::seq::FromClockOp>();
+    good &= clock && owningClock(clock->getOperand(0), source ? "sourceClock" : "clock", false);
+    good &= content.contains((source ? sourceFalling : destinationFalling) ? "negedge" : "posedge");
+    auto bundle = op->getOperand(2).getDefiningOp<circt::comb::ConcatOp>();
+    good &= bundle && bundle->getNumOperands() == 3;
+    if (bundle && bundle->getNumOperands() == 3) {
+      unsigned indices[] = {source ? 2u : 3u, source ? 6u : 4u, source ? 7u : 5u};
+      for (unsigned i = 0; i < 3; ++i)
+        good &= bundle->getOperand(i) == regs[indices[i]].getResult();
+    }
+    good &= evaluate(op->getOperand(1), {{"reset", activeLow ? 0 : 1}}, 0) == 0;
+    good &= evaluate(op->getOperand(1), {{"reset", activeLow ? 1 : 0}}, 0) == 1;
+  });
+  return good && checks == 2 * chains && obligations == chains &&
+         print(module).find("seq.initial") == std::string::npos;
 }
 // Check the emitted data graph at each pre-edge state, with the actual owning
 // clock and all stage/source identities. Input inversion makes bypass obvious.
@@ -1029,6 +1184,51 @@ int main(int argc, char **argv) {
          });
          return good && states == 7 && print(m).find("seq.initial") == std::string::npos;
        });
+  for (const auto &[type, bits] : {std::pair<std::string, unsigned>{bit, 1},
+                                   {"!nodal.bits<4>", 4},
+                                   {u8, 8},
+                                   {"!nodal.sint<17>", 17},
+                                   {"!nodal.bits<64>", 64},
+                                   {"!nodal.bits<4096>", 4096}})
+    test("handshake-fixed-scalar-" + std::to_string(bits),
+         executableBody("handshake", type, 2, "sync"),
+         [&](mlir::ModuleOp m) { return checkHandshake(m, bits); });
+  for (bool falling : {false, true})
+    test(falling ? "handshake-low-falling-source" : "handshake-falling-destination",
+         executableBody("handshake", u8, 2, "sync", false, falling ? "falling" : "rising",
+                        falling ? "rising" : "falling", falling ? "active_low" : "active_high"),
+         [&](mlir::ModuleOp m) { return checkHandshake(m, 8, 1, falling, !falling, falling); });
+  test("handshake-independent-identical-source-cse",
+       executableBody("handshake", u8, 2, "sync", true), [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkHandshake(m, 8, 2);
+       });
+  test("handshake-asynchronous-six-controls-two-uninitialized-payloads",
+       executableBody("handshake", u8, 2, "async"), [&](mlir::ModuleOp m) {
+         unsigned controls = 0, payloads = 0;
+         bool good = true;
+         llvm::StringSet<> symbols;
+         m.walk([&](circt::seq::FirRegOp reg) {
+           ++controls;
+           good &= reg.getIsAsync() && bool(reg.getReset()) &&
+                   reg.getResult().getType().isInteger(1) && reg.getInnerSymAttr() &&
+                   symbols.insert(reg.getInnerSymAttr().getSymName().getValue()).second;
+           good &= reg->getAttrOfType<StringAttr>("nodal.crossing_contract").getValue() ==
+                   "handshake_snapshot_v1";
+           good &= evaluate(reg.getResetValue(), {}, 1) == 0;
+         });
+         m.walk([&](circt::seq::CompRegOp reg) {
+           ++payloads;
+           good &= reg.getResult().getType().isInteger(8) && !reg.getReset() &&
+                   !reg.getInitialValue() && reg.getInnerSymAttr() &&
+                   symbols.insert(reg.getInnerSymAttr().getSymName().getValue()).second;
+           auto role = reg->getAttrOfType<StringAttr>("nodal.crossing_role").getValue();
+           good &= role == "source_payload" || role == "destination_payload";
+         });
+         return good && controls == 6 && payloads == 2 &&
+                print(m).find("seq.initial") == std::string::npos;
+       });
   auto packedABI = [&](mlir::ModuleOp m, unsigned bits) {
     auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
     DictionaryAttr reference;
@@ -1093,6 +1293,36 @@ int main(int argc, char **argv) {
                 cast<DictionaryAttr>(tags[1]).getAs<StringAttr>("name").getValue() == "tag" &&
                 layout.getAs<StringAttr>("source_type").getValue().contains("Frame");
        });
+  test("handshake-fixed-vector-row-major-abi",
+       executableBody("handshake", "!nodal.shaped<\"2,3\", !nodal.uint<2>>", 2, "sync"),
+       [&](mlir::ModuleOp m) { return packedABI(m, 12) && checkHandshake(m, 12); });
+  test("handshake-fixed-nested-struct-abi", executableBody("handshake", packedStruct, 2, "sync"),
+       [&](mlir::ModuleOp m) { return packedABI(m, 20) && checkHandshake(m, 20); });
+  test("handshake-fixed-aggregate-independent-cse",
+       executableBody("handshake", "!nodal.shaped<\"2\", !nodal.uint<2>>", 2, "sync", true),
+       [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkHandshake(m, 4, 2);
+       });
+  test("handshake-fixed-packed-width-boundary",
+       executableBody("handshake", "!nodal.shaped<\"2\", !nodal.bits<2048>>", 2, "sync"),
+       [&](mlir::ModuleOp m) { return checkHandshake(m, 4096) && packedABI(m, 4096); });
+  negative("handshake-aggregate-width-rejection-is-atomic",
+           wrap(executableBody("handshake", "!nodal.shaped<\"3\", !nodal.bits<2048>>", 2, "sync")),
+           "only fixed scalar");
+  negative("handshake-wide-target-rejection-is-atomic",
+           wrap(executableBody("handshake", "!nodal.bits<4097>", 2, "sync")), "only fixed scalar");
+  negative("handshake-unsupported-sibling-is-atomic",
+           "module {" + owner(executableBody("handshake", u8, 2, "sync")) +
+               owner(replace(executableBody("handshake", "!nodal.shaped<\"3\", !nodal.bits<2048>>",
+                                            2, "sync"),
+                             "Fixture.sample", "Other.sample"),
+                     "Other") +
+               "}",
+           "only fixed scalar");
+  negative("handshake-missing-reset-epoch-is-atomic", wrap(executableBody("handshake", u8)),
+           "reset-bearing");
   test("gray-fixed-aggregate-independent-cse",
        executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<2>>", 2, "none", true),
        [&](mlir::ModuleOp m) {
@@ -1107,22 +1337,27 @@ int main(int argc, char **argv) {
            wrap(executableBody("gray", "!nodal.shaped<\"3\", !nodal.bits<2048>>")),
            "only fixed scalar");
   const std::string aggregate = "!nodal.shaped<\"2\", !nodal.uint<8>>";
-  negative("gray-vector-index-profile-rejection-is-atomic",
-           wrap(executableSetup(aggregate) + executableCrossing("gray", aggregate) +
-                "%index = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
-                "%lane = \"nodal.shape_index\"(%sample, %index) <{metadata = {}}> : (" +
-                aggregate + ", index) -> !nodal.uint<8>\n" + port("result", u8, "output") +
-                assign("result", "lane")),
-           "result requires fixed scalar");
-  negative("gray-struct-projection-rejection-is-atomic",
-           wrap(executableSetup(packedStruct) + executableCrossing("gray", packedStruct) +
-                "%head = \"nodal.digital_expr\"(%sample) <{operator_name = \"digital_struct_get\", "
-                "metadata = {}, struct_schema = " +
-                packedStruct + ", field_ordinal = 0 : i64, field_name = \"head\"}> : (" +
-                packedStruct + ") -> !nodal.uint<3>\n" +
-                port("result", "!nodal.uint<3>", "output") +
-                assign("result", "head", false, "!nodal.uint<3>")),
-           "fixed aggregate target profile");
+  for (const std::string kind : {"gray", "handshake"}) {
+    negative(
+        kind + "-vector-index-profile-rejection-is-atomic",
+        wrap(executableSetup(aggregate, kind == "handshake" ? "sync" : "none") +
+             executableCrossing(kind, aggregate) +
+             "%index = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
+             "%lane = \"nodal.shape_index\"(%sample, %index) <{metadata = {}}> : (" +
+             aggregate + ", index) -> !nodal.uint<8>\n" + port("result", u8, "output") +
+             assign("result", "lane")),
+        "result requires fixed scalar");
+    negative(
+        kind + "-struct-projection-rejection-is-atomic",
+        wrap(executableSetup(packedStruct, kind == "handshake" ? "sync" : "none") +
+             executableCrossing(kind, packedStruct) +
+             "%head = \"nodal.digital_expr\"(%sample) <{operator_name = \"digital_struct_get\", "
+             "metadata = {}, struct_schema = " +
+             packedStruct + ", field_ordinal = 0 : i64, field_name = \"head\"}> : (" +
+             packedStruct + ") -> !nodal.uint<3>\n" + port("result", "!nodal.uint<3>", "output") +
+             assign("result", "head", false, "!nodal.uint<3>")),
+        "fixed aggregate target profile");
+  }
   negative("gray-wide-target-rejection-is-atomic",
            wrap(executableBody("gray", "!nodal.bits<4097>")), "only fixed scalar");
   negative("gray-unsupported-sibling-is-atomic",
@@ -1138,13 +1373,17 @@ int main(int argc, char **argv) {
     auto original = parseSourceString<mlir::ModuleOp>(flatFSMFixture, &context);
     auto enumDefinition = original ? *original->getOps<nodal::EnumOp>().begin() : nodal::EnumOp();
     const std::string type = "!nodal.enum<\"Mode\", 3>";
-    auto raw = enumDefinition ? "module {" + print(enumDefinition) +
-                                    owner(executableBody("gray", type, 2, "sync")) + "}"
-                              : "";
-    auto typed = parseSourceString<mlir::ModuleOp>(raw, &context);
-    bool good = typed && succeeded(lower(*typed));
-    report("gray-enum-abi-retained", good && checkGray(*typed, 3, 2, 1, true) &&
-                                         typed->getOperation()->hasAttr("nodal.enum_abi"));
+    for (const std::string kind : {"gray", "handshake"}) {
+      auto raw = enumDefinition ? "module {" + print(enumDefinition) +
+                                      owner(executableBody(kind, type, 2, "sync")) + "}"
+                                : "";
+      auto typed = parseSourceString<mlir::ModuleOp>(raw, &context);
+      bool good = typed && succeeded(lower(*typed));
+      report(kind + "-enum-abi-retained",
+             good &&
+                 (kind == "gray" ? checkGray(*typed, 3, 2, 1, true) : checkHandshake(*typed, 3)) &&
+                 typed->getOperation()->hasAttr("nodal.enum_abi"));
+    }
   }
   std::string alias = expression("alias", "digital_alias", "%input", u8, u8,
                                  ", digital_intent = {kind = \"keep\", value = \"inspection\"}");

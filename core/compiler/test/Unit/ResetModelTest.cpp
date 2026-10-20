@@ -279,6 +279,41 @@ int main() {
         setup("sync") + boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") +
             bind("raw"),
         true);
+  const auto syncBeforeClock =
+      domain("core", "sync") + port("rst", reset) +
+      boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") +
+      port("clk", clockType) + bind("raw");
+  check("synchronous-boundary-clock-binding-after-producer", syncBeforeClock, true);
+  // Each referenced binding owns the scope of its actual clock operand. A
+  // distinct later SSA read of one physical pin is not a new clock domain.
+  const auto sharedSync =
+      domain("core", "sync") + domain("other", "sync") + port("rst", reset) +
+      boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") +
+      replace(port("clk", clockType), "domain = @core, ", "") + bind("raw", "other") +
+      "%clockAlias = \"nodal.port_value\"() <{port = @clk, metadata = {}}> : () -> " + clockType +
+      "\n" + replace(bind("raw"), "%clk", "%clockAlias");
+  check("synchronous-release-late-binding-clock-alias", sharedSync, true);
+  check("synchronous-release-late-binding-different-clock",
+        replace(sharedSync,
+                "%clockAlias = \"nodal.port_value\"() <{port = @clk, metadata = {}}> : () -> " +
+                    clockType + "\n",
+                replace(port("clockAlias", clockType), "domain = @core, ", "")),
+        false, "exact destination clock and edge");
+  check("synchronous-release-late-binding-different-edge",
+        replace(sharedSync, "sym_name = \"other\", edge = \"rising\"",
+                "sym_name = \"other\", edge = \"falling\""),
+        false, "exact destination clock and edge");
+  const auto syncAliasAfterProducer =
+      setup() + boundary() + sync() +
+      "%clockAlias = \"nodal.port_value\"() <{port = @clk, metadata = {}}> : () -> " + clockType +
+      "\n" + replace(bind(), "%clk", "%clockAlias");
+  check("reset-sync-binding-clock-alias-after-producer", syncAliasAfterProducer, true);
+  check("reset-sync-late-clock-different-physical-root",
+        replace(syncAliasAfterProducer,
+                "%clockAlias = \"nodal.port_value\"() <{port = @clk, metadata = {}}> : () -> " +
+                    clockType + "\n",
+                port("clockAlias", clockType)),
+        false, "exact destination binding");
   check("sync-is-not-async",
         setup() + boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") +
             bind("raw"),

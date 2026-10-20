@@ -19,7 +19,8 @@ private[nodal] object SequentialMlir:
 
   private def bindings(
       module: KernelModuleSnapshot,
-      resetValues: Set[String]
+      resetValues: Set[String],
+      controls: PhysicalControlMlir.Resolver
   )
       : Vector[(KernelDomainSnapshot, Vector[String], String)] =
     val declarations = module.declarations.map(value => value.path -> value).toMap
@@ -81,31 +82,21 @@ private[nodal] object SequentialMlir:
         if !Set("active_high", "active_low").contains(polarity) then
           fail("physical domain reset polarity is invalid", domain.path)
         val operands = Vector(clock) ++ reset
-        val exactInputs = operands.zip(Vector("Clock") ++ reset.map(_ => "Reset")).forall:
-          (path, dataType) =>
-            (dataType == "Reset" && resetValues.contains(path)) ||
-              declarations.get(path).exists(declaration =>
-                declaration.kind == "input" && declaration.dataType.contains(dataType) &&
-                  declaration.generatedScope.isEmpty &&
-                  (dataType != "Clock" ||
-                    declaration.domain.forall(clockOwnerAllowed(_, domain.path)))
-              )
-        if !exactInputs then
-          val missing =
-            operands.find(path => !declarations.contains(path) && !resetValues.contains(path))
-          fail(
-            if missing.nonEmpty then "physical domain operand has no actual owned declaration"
-            else "physical domain operand must be an exact same-domain typed input boundary",
-            missing.getOrElse(domain.path)
-          )
-        Option.when(exactInputs)((domain, operands, polarity))
+        operands.zip(Vector("Clock") ++ reset.map(_ => "Reset")).foreach: (path, dataType) =>
+          if dataType != "Reset" || !resetValues.contains(path) then
+            val resolved = controls.resolve(path, module.path, dataType)
+            if dataType == "Clock" &&
+              !resolved.declaration.domain.forall(clockOwnerAllowed(_, domain.path))
+            then fail("physical clock must belong to this domain or its generated parent", path)
+        Vector((domain, operands, polarity))
 
   final class Plan(
       module: KernelModuleSnapshot,
       crossingDomains: Set[String] = Set.empty,
-      resetValues: Set[String] = Set.empty
+      resetValues: Set[String] = Set.empty,
+      controls: PhysicalControlMlir.Resolver
   ):
-    private val physical = bindings(module, resetValues)
+    private val physical = bindings(module, resetValues, controls)
     crossingDomains.foreach: domain =>
       if !physical.exists(_._1.path == domain) then
         fail("level crossing endpoint requires an actual supported physical domain binding", domain)

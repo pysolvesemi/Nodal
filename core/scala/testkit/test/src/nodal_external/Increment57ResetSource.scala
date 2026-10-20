@@ -100,3 +100,97 @@ final class Increment57AliasedClockSource extends Module:
     100.MHz,
     name = "second"
   )
+
+/** Fixed physical array element selection remains an exact Clock/Reset capability. */
+final class Increment57ShapedResetSource(mode: String) extends Module:
+  val clocks = if mode == "matrix" then in(Vec(Clock, 2, 2)) else in(Vec(Clock, 2))
+  val resets = if mode == "matrix" then in(Vec(Reset, 2, 2)) else in(Vec(Reset, 2))
+  val selectedClock = if mode == "matrix" then clocks.row(1).at(0)
+  else if mode == "slice" then clocks.slice(1, 2).reshape(1, 1).at(0, 0)
+  else clocks.at(1)
+  val selectedReset = if mode == "matrix" then resets.row(1).at(0)
+  else if mode == "slice" then resets.slice(1, 2).reshape(1, 1).at(0, 0)
+  else resets.at(1)
+  val root = ClockDomain.from(
+    selectedClock,
+    selectedReset,
+    ClockEdge.Rising,
+    ResetPolicy.AsyncAssertSyncRelease(2),
+    ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "root"
+  )
+  val child = if mode == "combine" then
+    val other = ClockDomain.from(
+      selectedClock,
+      resets.at(0),
+      ClockEdge.Rising,
+      ResetPolicy.AsyncAssertSyncRelease(2),
+      ResetPolarity.ActiveHigh,
+      100.MHz,
+      name = "other"
+    )
+    val release = Rdc.sync(ResetController.combine(root.reset, other.reset), stages = 2)
+    ClockDomain.generated("child", selectedClock, root, ClockRelation.Same, release)
+  else root
+  child:
+    val done = out(Bool)
+    val state = Reg(false.B)
+    state := true.B
+    done := state
+
+final class Increment57ShapedResetAliasSource(polarityConflict: Boolean) extends Module:
+  val clocks = in(Vec(Clock, 2))
+  val resets = in(Vec(Reset, 2))
+  val root = ClockDomain.from(
+    clocks.at(1),
+    resets.at(1),
+    ClockEdge.Rising,
+    ResetPolicy.AsyncAssertSyncRelease(2),
+    ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "root"
+  )
+  val alias = ClockDomain.from(
+    clocks.at(1),
+    resets.reshape(1, 2).at(0, 1),
+    ClockEdge.Rising,
+    ResetPolicy.AsyncAssertSyncRelease(2),
+    if polarityConflict then ResetPolarity.ActiveLow else ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "alias"
+  )
+  val release = ResetController.combine(Rdc.sync(root.reset, root), Rdc.sync(alias.reset, alias))
+
+/** Different reset elements may have distinct synchronous receiving clocks. */
+final class Increment57ShapedSyncSource(sharedReset: Boolean) extends Module:
+  val clocks = in(Vec(Clock, 2))
+  val resets = in(Vec(Reset, 2))
+  val first = ClockDomain.from(
+    clocks.at(0),
+    resets.at(0),
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz,
+    name = "first"
+  )
+  val second = ClockDomain.from(
+    clocks.at(1),
+    resets.at(if sharedReset then 0 else 1),
+    ClockEdge.Falling,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    50.MHz,
+    name = "second"
+  )
+  first:
+    val doneA = out(Bool)
+    val stateA = Reg(false.B)
+    stateA := true.B
+    doneA := stateA
+  second:
+    val doneB = out(Bool)
+    val stateB = Reg(false.B)
+    stateB := true.B
+    doneB := stateB

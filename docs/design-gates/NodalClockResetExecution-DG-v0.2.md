@@ -123,3 +123,10 @@ constraints; this bounded fixed-shape slice does not silently close wider requir
 relationship, propagation or shaped support. The existing projected-clock
 predecessor is upgraded to actual binding/state execution, not changed to a
 rejection merely to make the scalar implementation pass.
+
+For shaped Sync declarations, aggregate port attribution is not per-element
+ownership. The actual owned Sync domain's existing clock-only physical binding
+must directly consume that exact reset boundary result. This supplies declaration
+ownership without a parallel element-domain map or reset-proof recursion. Claims
+for the same physical reset element must agree on actual clock and edge; distinct
+elements may have independent clocks/edges. Scalar Sync ownership remains unchanged.

@@ -11,19 +11,30 @@ private[nodal] object ResetMlir:
     )
     val values = snapshot.digitalExpressions.filter(_.reset.nonEmpty).map(v => v.path -> v).toMap
     val domains = snapshot.modules.flatMap(_.domains).map(d => d.path -> d).toMap
-    val declarations = snapshot.modules.flatMap(_.declarations).map(d => d.path -> d).toMap
-    val declarationOwners =
-      snapshot.modules.flatMap(m => m.declarations.map(d => d.path -> m.path)).toMap
+    val controls = new PhysicalControlMlir.Resolver(snapshot)
     val domainOwners = snapshot.modules.flatMap(m => m.domains.map(d => d.path -> m.path)).toMap
-    val polarities = mutable.Map.empty[String, String]
+    val polarities = mutable.Map.empty[PhysicalControlMlir.Identity, String]
+    val synchronousClocks = mutable.Map.empty[
+      PhysicalControlMlir.Identity,
+      (PhysicalControlMlir.Identity, String)
+    ]
+    final case class Release(
+        kind: String,
+        clock: Option[(PhysicalControlMlir.Identity, String)] = None,
+        producer: Option[String] = None
+    )
     var work = 0L
-    def clock(domain: String): (String, String) =
+    def clock(domain: String): (PhysicalControlMlir.Identity, String) =
       val d = domains.getOrElse(domain, fail("reset destination is not an owned domain", domain))
       (
-        d.attributes.toMap.getOrElse(
-          "clock_source",
-          fail("resolved domain lacks physical clock", domain)
-        ),
+        controls.resolve(
+          d.attributes.toMap.getOrElse(
+            "clock_source",
+            fail("resolved domain lacks physical clock", domain)
+          ),
+          domainOwners.getOrElse(domain, fail("clock domain is not owned", domain)),
+          "Clock"
+        ).identity,
         d.edge.getOrElse(fail("resolved domain lacks clock edge", domain))
       )
     def visit(
@@ -31,7 +42,7 @@ private[nodal] object ResetMlir:
         owner: String,
         chain: Set[String],
         depth: Int
-    ): Map[String, (String, String)] =
+    ): Map[PhysicalControlMlir.Identity, (String, Release)] =
       work += 1
       if depth > 128 || work > 524288 || chain(path) then
         fail("reset graph is cyclic or excessive", path)
@@ -65,29 +76,62 @@ private[nodal] object ResetMlir:
           ((r.release == "raw") != r.destination.isEmpty) || r.stages != 0
         then
           fail("invalid reset boundary release evidence", path)
-        val raw =
-          declarations.getOrElse(r.inputs.head, fail("reset boundary lacks physical input", path))
-        if raw.kind != "input" || !raw.dataType.contains("Reset") || raw.generatedScope.nonEmpty ||
-          !declarationOwners.get(raw.path).contains(owner)
-        then fail("reset boundary requires exact owned input", path)
+        val resolved = controls.resolve(r.inputs.head, owner, "Reset")
+        val raw = resolved.declaration
         if r.release == "sync" then
-          val sourceDomain = raw.domain.flatMap(domains.get).getOrElse(fail(
-            "synchronous reset lacks owned domain evidence",
-            path
-          ))
-          if !sourceDomain.resetPolicy.contains("sync") ||
-            !r.destination.exists(d => clock(d) == clock(sourceDomain.path))
-          then
-            fail("synchronous reset boundary differs from actual source clock and edge", path)
-        polarities.get(raw.path).foreach(p =>
+          val destination =
+            r.destination.getOrElse(fail("synchronous reset lacks destination", path))
+          val actualClock = clock(destination)
+          if raw.dataType.contains("Reset") then
+            val sourceDomain = raw.domain.flatMap(domains.get).getOrElse(fail(
+              "synchronous reset lacks owned domain evidence",
+              path
+            ))
+            if !domainOwners.get(sourceDomain.path).contains(owner) ||
+              !sourceDomain.resetPolicy.contains("sync") ||
+              actualClock != clock(sourceDomain.path)
+            then
+              fail("synchronous reset boundary differs from actual source clock and edge", path)
+          else
+            // A shaped port may carry independent synchronous reset elements. The actual
+            // consuming binding, not the containing port's domain, owns this scalar proof.
+            val destinationDomain = domains.getOrElse(
+              destination,
+              fail(
+                "shaped synchronous reset lacks owned destination",
+                path
+              )
+            )
+            val attributes = destinationDomain.attributes.toMap
+            if !destinationDomain.resetPolicy.contains("sync") ||
+              !attributes.get("effective_reset_source").contains(path)
+            then fail("shaped synchronous reset requires its exact consuming Sync binding", path)
+            val declared = attributes.getOrElse(
+              "reset_source",
+              fail(
+                "shaped synchronous reset lacks declared physical source",
+                path
+              )
+            )
+            if controls.resolve(declared, owner, "Reset").identity != resolved.identity then
+              fail("shaped synchronous reset differs from the declared physical element", path)
+          synchronousClocks.get(resolved.identity).foreach(previous =>
+            if previous != actualClock then
+              fail(
+                "physical reset element has contradictory synchronous clock or edge evidence",
+                path
+              )
+          )
+          synchronousClocks(resolved.identity) = actualClock
+        polarities.get(resolved.identity).foreach(p =>
           if p != r.polarity then fail("physical reset has contradictory polarities", path)
         )
-        polarities(raw.path) = r.polarity
-        Map(raw.path ->
-          (r.polarity, r.destination.map(d => r.release + clock(d).toString).getOrElse("raw")))
+        polarities(resolved.identity) = r.polarity
+        Map(resolved.identity ->
+          (r.polarity, Release(r.release, r.destination.map(clock))))
       else
         val inputs = if r.kind == "sync" then r.inputs.take(1) else r.inputs
-        val result = mutable.Map.empty[String, (String, String)]
+        val result = mutable.Map.empty[PhysicalControlMlir.Identity, (String, Release)]
         inputs.foreach: input =>
           visit(input, owner, chain + path, depth + 1).foreach: (root, fact) =>
             work += 1
@@ -99,11 +143,13 @@ private[nodal] object ResetMlir:
             result(root) = fact
         if r.kind == "sync" then
           if r.destination.isEmpty || r.inputs.size != 2 || r.stages < 2 || r.stages > 32 ||
-            r.inputs(1) != clock(r.destination.get)._1
+            controls.resolve(r.inputs(1), owner, "Clock").identity != clock(r.destination.get)._1
           then fail("reset sync has invalid physical destination", path)
           if values.get(r.inputs.head).flatMap(_.reset).forall(_.polarity != r.polarity) then
             fail("synchronizer cannot change reset polarity", path)
-          result.iterator.map((root, fact) => root -> (fact._1, path)).toMap
+          result.iterator.map((root, fact) =>
+            root -> (fact._1, Release("sync", producer = Some(path)))
+          ).toMap
         else result.toMap
     def safe(path: String, destination: String, asynchronous: Boolean, depth: Int): Boolean =
       work += 1

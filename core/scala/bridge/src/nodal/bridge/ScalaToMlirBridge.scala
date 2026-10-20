@@ -146,6 +146,7 @@ private[nodal] object ScalaToMlirBridge:
       digitalMaterialization.metadata
     )
     private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues)
+    private val physicalControls = new PhysicalControlMlir.Resolver(snapshot)
     private val interfaceValues = new InterfaceMlir.Plan(snapshot)
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
@@ -2629,7 +2630,8 @@ ${indent(body, 2)}
           .flatMap(value => Vector(value.sourceDomain, value.destinationDomain)).toSet,
         snapshot.digitalExpressions.filter(value =>
           value.owner == module.path && value.reset.nonEmpty
-        ).map(_.path).toSet
+        ).map(_.path).toSet,
+        physicalControls
       )
       val digital = digitalValues.renderModule(
         module,
@@ -3796,8 +3798,13 @@ ${indent(body, 2)}
             Some(declaration.path)
           )
         )
+      val clockInput = declaration.kind == "input" && declaration.dataType.exists:
+        case "Clock" => true
+        case value if value.startsWith("Vec(") =>
+          vecTypeParts(value, declaration.path)._1 == "Clock"
+        case _ => false
       val domainAttribute =
-        if declaration.kind == "input" && declaration.dataType.contains("Clock") &&
+        if clockInput &&
           declaration.domain.isEmpty && module.domains.size > 1
         then Vector.empty
         else

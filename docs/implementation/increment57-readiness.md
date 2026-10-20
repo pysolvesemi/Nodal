@@ -497,3 +497,65 @@ single domain label, and an unused last scalar projection needs valid scope
 anchoring rather than rejection. The source integration and three actual shaped
 waveform profiles are pending a frozen-source replay. All F57 checklist children
 remain open; no CI/full qualification is run.
+
+## Fixed shaped source and per-element Sync checkpoint (2026-10-20)
+
+The source session and bridge now reuse canonical shape coordinates for actual
+Clock/Reset projection roots. Equivalent index/view/reshape/slice paths resolve
+to the same element; distinct reset elements retain separate polarity and release
+lineage. Actual domain clocks are rooted in executable digital capture, while
+descriptor-only stimulus capture stays separate. The former projected-clock
+predecessor now proves an actual binding and actual register execution.
+
+Both trust boundaries establish a shaped Sync boundary's ownership from its
+existing actual Sync domain/binding. Same-element conflicting receiving clock or
+edge rejects; distinct elements may use independent domains. No element-domain
+registry or new schema is added. The target additionally handles valid unused-last
+projections without fabricating a scope anchor or materializing dead extraction.
+The prior new signed-comparison warning is corrected.
+
+Final frozen source checks: **134/134 pass across all 10 directly affected
+suites** (`.work/shaped-control-final.log`). Mill workers can aggregate more than
+one suite in a terminal count: the earlier 130-test/123-pass/seven-failure total
+was correct, but the interpretation that only nine suites ran or stimulus was
+omitted was incorrect. These current totals sum terminal summaries and verify
+all ten test-class starts. Native conditional replay branches not configured by
+these Scala suites are not claimed as separate target executions.
+
+Fresh native model/target checks: **59 reset, 32 DomainModel and 85 CIRCT cases
+pass**. Repair manifest SHA256 is
+`7cb9f1fc36df8849c1908040367cc36a5fad23f6760765c3613e7bede848b7f6`.
+Logs: `.work/shaped-control-{reset-model,domain-model,sequential-circt}-final.log`.
+The four directly affected native predecessor owners are revalidated separately
+below; their earlier scalar results are not automatically relabeled current.
+
+**11/11 actual source-to-target waveforms pass** with frozen compiled source and
+fresh replay (`.work/shaped-reset-target-final.log` and corresponding manifest).
+The seven scalar profiles remain green. Four added profiles prove nonzero vector
+selection, matrix row/index selection, two distinct composed reset elements, and
+two Sync elements on independent opposite-edge clocks. They check unselected
+clock/reset isolation and edge-only Sync assertion as well as reset/release
+latency. An intermediate fixture-source edit overlapped compilation and produced
+stale line-based names; frozen recompilation/replay fixed this test setup issue,
+without changing production naming or generated designs.
+
+```sh
+python3 tests/scala/reset-release/run_target.py --include-shaped --input .work/reset-source-ir --out .work/shaped-reset-target-final --nodalc .work/native-build/bin/nodalc --firtool .work/circt-toolchain/bin/firtool --iverilog .work/tools/iverilog/bin/iverilog --vvp .work/tools/iverilog/bin/vvp
+```
+
+Architecture review retains one shape proof owner and one physical-control query;
+source/native verify independently. Packed target extraction adds no lane
+unrolling. Existing producer/fact budgets and bounded projection traversal apply;
+global boundary consistency can revisit records, so no linear-time or speedup
+claim is made. Same-clock composition of purely Sync boundaries still needs
+policy propagation in the next narrow reset correction. General relationship,
+propagation, remaining CDC/gate/mux/waiver/event work stays open. This fixed-shape
+checkpoint does not close whole F57, parameter-unresolved target shapes or CI/full
+qualification. Python syntax, Markdown and diff checks pass.
+
+Final shared-library predecessor relink/recheck also passes: 71 sequential,
+114 memory, 59 FlatFSM and 90 crossing cases, for a **fresh native total of
+510/510** with the 176 model/target cases above. Logs are
+`.work/shaped-control-predecessor-{build,tests}.log` and
+`.work/shaped-control/predecessor-ctest-full.log`. This is the selected affected
+native coverage, not an unexecuted repository-wide pass.

@@ -30,6 +30,11 @@ bool closed(Operation *op, ArrayRef<StringRef> names) {
   });
 }
 class Inspector {
+  struct SyncOwner {
+    PhysicalControl clock;
+    StringAttr edge;
+  };
+
 public:
   explicit Inspector(const DomainModel &domains) : domains(domains) {}
   FailureOr<ResetInfo> inspect(Value value, Operation *use, unsigned depth = 0) {
@@ -70,18 +75,37 @@ public:
         (void)reject(op, "reset boundary must retain its exact physical input port");
         return failure();
       }
-      // Aliased port_value producers still designate the same physical root.
-      // A module may not reinterpret that root with contradictory active levels.
+      const bool shaped = isa<nodal::ShapedType>(port->root.getType());
+      std::optional<SyncOwner> syncOwner;
+      if (shaped && text(op, "release") == "sync") {
+        auto owner = projectedSyncOwner(op);
+        if (failed(owner))
+          return failure();
+        syncOwner = *owner;
+      }
+      // Aliased port_value/view producers still designate one physical element.
+      // One element cannot acquire contradictory polarity or Sync timing facts.
       for (Operation &other : op->getParentOp()->getRegion(0).front()) {
         if (failed(charge(op, 1)))
           return failure();
         if (!isa<ResetBoundaryOp>(other) || other.getNumOperands() != 1)
           continue;
         auto otherPort = resolvePhysicalControl(other.getOperand(0), &other, "reset");
-        if (succeeded(otherPort) && *otherPort == *port &&
-            text(&other, "reset_polarity") != text(op, "reset_polarity")) {
+        if (failed(otherPort) || !(*otherPort == *port))
+          continue;
+        if (text(&other, "reset_polarity") != text(op, "reset_polarity")) {
           (void)reject(op, "one physical reset root cannot have contradictory polarities");
           return failure();
+        }
+        if (syncOwner && text(&other, "release") == "sync") {
+          auto otherOwner = projectedSyncOwner(&other);
+          if (failed(otherOwner))
+            return failure();
+          if (!(syncOwner->clock == otherOwner->clock) || syncOwner->edge != otherOwner->edge) {
+            (void)reject(op,
+                         "one physical reset root cannot have incompatible Sync clocks or edges");
+            return failure();
+          }
         }
       }
       ResetRoot root{*port, info.polarity, nullptr, {}, {}};
@@ -98,7 +122,7 @@ public:
           (void)reject(op, "release contract requires an exact owned executable clock domain");
           return failure();
         }
-        if (release == "sync") {
+        if (release == "sync" && !shaped) {
           auto owner = domains.resolveDomain(port->port->getAttr("domain"));
           auto ownerBinding = domains.resolveClockBinding(port->port->getAttr("domain"));
           if (failed(owner) || failed(ownerBinding) || text(*owner, "reset_policy") != "sync" ||
@@ -183,6 +207,23 @@ public:
   }
 
 private:
+  FailureOr<SyncOwner> projectedSyncOwner(Operation *op) {
+    auto domain = domains.resolveDomain(op->getAttr("release_domain"));
+    auto binding = domains.resolveClockBinding(op->getAttr("release_domain"));
+    // Existing physical binding is the per-element declaration owner. Do not
+    // infer an element's ownership from its aggregate port's first domain, nor
+    // accept a release_domain label without its actual binding SSA edge.
+    if (failed(domain) || failed(binding) || text(*domain, "reset_policy") != "sync" ||
+        (*binding)->getNumOperands() != 2 || op->getNumResults() != 1 ||
+        (*binding)->getOperand(1) != op->getResult(0)) {
+      (void)reject(op, "projected synchronous assertion requires its actual owning Sync binding");
+      return failure();
+    }
+    auto clock = resolvePhysicalControl((*binding)->getOperand(0), *binding, "clock");
+    if (failed(clock))
+      return failure();
+    return SyncOwner{*clock, (*domain)->getAttrOfType<StringAttr>("edge")};
+  }
   LogicalResult charge(Operation *op, uint64_t n) {
     if (n > 65536 - work)
       return reject(op, "reset ancestry exceeds bounded producer/fact traversal");

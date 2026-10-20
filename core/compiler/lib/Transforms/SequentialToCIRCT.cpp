@@ -659,10 +659,17 @@ private:
       if (!port || text(port, "direction") != "input")
         return reject(&op, "physical control projection requires an owned input port");
       if (auto scalar = dyn_cast<ControlCapabilityType>(op.getResult(0).getType())) {
-        auto control = resolvePhysicalControl(op.getResult(0), use, scalar.getKind());
-        if (failed(control) || !control->literalOffset)
+        if (!projection->literalRootFlatOffset)
           return reject(&op, "physical control projection requires a proved literal input offset");
-        physicalControls.emplace_back(op.getResult(0), *control);
+        // A dead last projection has no later use at which to establish scope.
+        // Its shape/root proof is still checked, but it needs no target value.
+        if (!op.getResult(0).use_empty()) {
+          auto control = resolvePhysicalControl(op.getResult(0), use, scalar.getKind());
+          if (failed(control) || !control->literalOffset)
+            return reject(&op,
+                          "physical control projection requires a proved literal input offset");
+          physicalControls.emplace_back(op.getResult(0), *control);
+        }
       }
       controlProjections.insert(&op);
       llvm::append_range(selectors, op.getOperands().drop_front());

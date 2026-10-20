@@ -127,6 +127,77 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   )
   private val resetRecords = new IdentityHashMap[Expr[Reset], ResetRecord]()
   private val resetBoundaries = new IdentityHashMap[Expr[Reset], Expr[Reset]]()
+  private val physicalResetBoundaries = mutable.Map.empty[(DeclarationRef, Long), Expr[Reset]]
+
+  private def physicalControlIdentity(value: Expr[?]): (DeclarationRef, Long) =
+    import StructuralShapeCoordinates.{Coordinate, Projection}
+    var reference = assignmentReference(value)
+    var projections = Vector.empty[Projection]
+    var depth = 0
+    while reference.isInstanceOf[ExpressionRef] do
+      depth += 1
+      if depth > 128 then resetFailure("physical control projection exceeds depth budget")
+      val expression = reference.asInstanceOf[ExpressionRef]
+      if expressionRegions.contains(expression) then
+        resetFailure("physical control projection must be module-owned")
+      shapeIndices.get(expression) match
+        case Some(index) =>
+          if index.generatedScope.nonEmpty || index.conservative.nonEmpty then
+            resetFailure("physical control projection has invalid scope")
+          projections = Projection.Index(
+            index.indices.map(generatedBound),
+            index.resultDimensions.map(renderShapeDimension(_, expression.module))
+          ) +: projections
+          reference = index.input
+        case None =>
+          val view = shapeViews.getOrElse(
+            expression,
+            resetFailure("physical control requires an owned input or static projection")
+          )
+          if view.generatedScope.nonEmpty then
+            resetFailure("physical control projection has invalid scope")
+          projections = Projection.View(
+            view.dimensions.map(renderShapeDimension(_, expression.module)),
+            view.slice.map(slice =>
+              KernelShapeSliceSnapshot(
+                slice.axis,
+                generatedBound(slice.lower),
+                generatedBound(slice.upperExclusive)
+              )
+            )
+          ) +: projections
+          reference = view.input
+    val root = reference.asInstanceOf[DeclarationRef]
+    val declaration = records(root.module).declarations(root.index)
+    val finalType = CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor)
+    if !finalType.exists(t => Set("Clock", "Reset")(t.kind) && t.arguments.isEmpty) ||
+      records(root.module).generatedRegions.exists(_.declarations.contains(root)) ||
+      projections.size > 128
+    then resetFailure("physical control must be an unscoped scalar Clock or Reset")
+    if declaration.kind != KernelSignalKind.Input then
+      resetFailure("physical control root must be an exact owned input")
+    val descriptor = CandidateRuntime.typeDescriptor(declaration.dataType.get)
+    val dimensions = if descriptor.kind == "Vec" then
+      descriptor.arguments(1).asInstanceOf[Seq[Any]].toVector.map(renderShapeDimension(
+        _,
+        root.module
+      ))
+    else Vector.empty
+    val tokens = dimensions ++ projections.flatMap {
+      case Projection.Index(indices, result) => indices ++ result
+      case Projection.View(result, slice) =>
+        result ++ slice.toVector.flatMap(v => Vector(v.lower, v.upperExclusive))
+    }
+    if tokens.exists(_.toLongOption.isEmpty) then
+      resetFailure("physical control execution requires fixed literal shape coordinates")
+    val region = StructuralShapeCoordinates.scalarRegion(dimensions, projections)
+    (region.cardinality, region.rootOrdinal) match
+      case (Coordinate.Literal(1), Coordinate.Literal(offset))
+          if offset >= 0 && BigInt(offset) < dimensions.foldLeft(BigInt(1))((n, d) =>
+            n * BigInt(d)
+          ) => (root, offset)
+      case _ => resetFailure("physical control projection must select one exact fixed scalar")
+
   private val effectiveResets = new IdentityHashMap[ClockDomain, Expr[Reset]]()
   private var resetState = 0L
   private def resetFailure(message: String): Nothing =
@@ -139,7 +210,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     then resetFailure("reset structures require direct module-level construction")
 
   private def actualReset(value: Expr[Reset]): Expr[Reset] =
-    Option(resetBoundaries.get(value)).getOrElse(value)
+    if resetRecords.containsKey(value) then value
+    else
+      Option(
+        resetBoundaries.get(value)
+      ).orElse(physicalResetBoundaries.get(physicalControlIdentity(value))).getOrElse(value)
 
   private def resetRecord(value: Expr[Reset]): ResetRecord =
     resetRecords.get(actualReset(value)) match
@@ -203,13 +278,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if owner != currentModule.handle then
           resetFailure("composition requires owned reset producers")
       var work = 0L
-      def lineage(value: Expr[Reset], depth: Int): Map[Expr[Reset], (ResetPolarity, Expr[Reset])] =
+      def lineage(
+          value: Expr[Reset],
+          depth: Int
+      ): Map[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])] =
         work += 1
         if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
         val node = resetRecord(value)
-        if node.kind == "boundary" then Map(node.inputs.head -> (node.polarity, value))
+        if node.kind == "boundary" then
+          Map(physicalControlIdentity(node.inputs.head) -> (node.polarity, value))
         else
-          val result = scala.collection.mutable.Map.empty[Expr[Reset], (ResetPolarity, Expr[Reset])]
+          val result =
+            scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
           node.inputs.foreach(input =>
             lineage(input, depth + 1).foreach { (root, fact) =>
               work += 1
@@ -223,7 +303,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           if node.kind == "sync" then
             result.iterator.map((root, fact) => root -> (fact._1, value)).toMap
           else result.toMap
-      val seen = scala.collection.mutable.Map.empty[Expr[Reset], (ResetPolarity, Expr[Reset])]
+      val seen =
+        scala.collection.mutable.Map.empty[(DeclarationRef, Long), (ResetPolarity, Expr[Reset])]
       inputs.foreach(input =>
         lineage(input, 0).foreach { (root, fact) =>
           seen.get(root).foreach(previous =>
@@ -246,9 +327,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       domain.resetPolicy match
         case Some(ResetPolicy.None) => ()
         case Some(policy) =>
+          if !resetRecords.containsKey(domain.reset) && physicalControlIdentity(
+              domain.reset
+            )._1.module != domainRef(domain).module
+          then
+            resetFailure("physical reset root belongs to another module")
           val polarity = domain.resetPolarity.getOrElse(resetFailure("reset polarity is required"))
           val known = Option(resetRecords.get(domain.reset)).orElse(
-            Option(resetBoundaries.get(domain.reset)).map(resetRecords.get)
+            Option(resetRecords.get(actualReset(domain.reset)))
           )
           known.foreach(record =>
             if record.polarity != polarity then
@@ -272,6 +358,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               "reset_boundary"
             )
             resetBoundaries.put(domain.reset, boundary)
+            physicalResetBoundaries(physicalControlIdentity(domain.reset)) = boundary
             boundary
           val result = policy match
             case ResetPolicy.AsyncAssertSyncRelease(stages) =>
@@ -6775,7 +6862,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
       if actual.size == 1 then resolved.get(actual.head.reference)
       else if declaration.dataType.exists(value =>
-          CandidateRuntime.typeDescriptor(value).kind == "Reset"
+          boundaryElementKind(value) == "Reset"
         )
       then
         actual.headOption.flatMap(value => resolved.get(value.reference))
@@ -7906,7 +7993,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
         behavioralIfs.valuesIterator.map(_.predicate).toVector ++
         flatFsms.valuesIterator.flatMap(_.transitions.map(_.guard)).toVector ++
-        enumSwitches.valuesIterator.map(_.selector).toVector,
+        enumSwitches.valuesIterator.map(_.selector).toVector ++
+        Option.when(!stimulusOnly)(
+          records.valuesIterator.flatMap(_.domains.iterator.flatMap(_.domain.clock)).toVector
+        ).toVector.flatten,
       (shapeIndices.keysIterator.map(expressionPath) ++ shapeViews.keysIterator.map(
         expressionPath
       )).toSet,

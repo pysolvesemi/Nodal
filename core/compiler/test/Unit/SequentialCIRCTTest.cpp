@@ -288,7 +288,7 @@ std::string projectedSetup(std::string mode, std::string policy = "sync") {
                    controlProjection(name, mode));
   return body;
 }
-bool packedClock(Value clock, uint64_t offset) {
+bool packedClock(Value clock, int64_t offset) {
   auto converted = clock.getDefiningOp<circt::seq::ToClockOp>();
   if (!converted)
     return false;
@@ -485,6 +485,21 @@ int main(int argc, char **argv) {
     bool good = m && succeeded(lower(*m));
     report(name, good && check(*m));
   };
+  test("unused-last-shaped-control-is-proof-only",
+       "\"nodal.domain\"() <{sym_name = \"core\", edge = \"rising\", reset_policy = \"none\", "
+       "metadata = {}}> : () -> ()\n" +
+           port("unusedPins", controlShape("2", "!nodal.capability<\"reset\">")) +
+           literal("unusedIndex", 1, "i64") +
+           "%unused = \"nodal.shape_index\"(%unusedPins, %unusedIndex) <{metadata = {}}> : "
+           "(!nodal.shaped<\"2\", !nodal.capability<\"reset\">>, i64) -> "
+           "!nodal.capability<\"reset\">\n",
+       [&](mlir::ModuleOp m) {
+         auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
+         bool extract = false;
+         m.walk([&](circt::comb::ExtractOp) { extract = true; });
+         return hw.getBodyBlock()->getNumArguments() == 1 &&
+                hw.getBodyBlock()->getArgument(0).getType().isInteger(2) && !extract;
+       });
   for (std::string mode : {"direct", "nested", "view-slice"})
     test("shaped-control-state-" + mode,
          projectedSetup(mode) + enabled() + assign("result", "state"), [&](mlir::ModuleOp m) {

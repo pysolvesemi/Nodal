@@ -310,13 +310,16 @@ object Increment56SequentialBridgeTests extends TestSuite:
         "actual structural topology classification"
       )
 
-    test("projected clock descriptor stays honest and cannot activate executable state"):
+    test("fixed projected clock retains physical binding and executable state"):
       val captured = ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor)
       val text = ScalaToMlirBridge.fromSnapshot(captured).text
-      assert(!text.contains("nodal.local_domain_binding"))
-      rejected(
-        ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor(true)),
-        "actual owned declaration"
+      assert(text.contains("nodal.local_domain_binding"), text.contains("nodal.shape_index"))
+      val executable = ScalaToMlirBridge.fromSnapshot(
+        ConstructionKernel.inspect(new SequentialBridgeProjectedDescriptor(true))
+      ).text
+      assert(
+        executable.contains("nodal.digital_storage"),
+        executable.contains("nodal.local_domain_binding")
       )
 
     test("distinct physical roots resolve exact domains and contradictory aliases reject"):

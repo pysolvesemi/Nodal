@@ -18,6 +18,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--include-shaped", action="store_true",
+                        help="also run four fixed shaped-control source profiles")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated outputs must remain under ignored .work")
@@ -26,6 +28,9 @@ def main() -> None:
              for edge in ("Rising", "Falling") for polarity in ("ActiveHigh", "ActiveLow")]
     cases += [("cascade", True, True, 5), ("external", True, True, 0),
               ("mixed", True, False, 2)]
+    if args.include_shaped:
+        cases += [("shaped_" + mode, True, True, 2)
+                  for mode in ("single", "combine", "matrix", "sync")]
     manifest = {"status": "running", "cases": []}
 
     def run(label: str, command: list[str]) -> str:
@@ -52,7 +57,11 @@ def main() -> None:
         if match is None:
             raise RuntimeError(f"{name}: no generated hardware module")
         module = match.group(1)
-        expected = ["root_clock", "root_reset", "childClock", "done"]
+        shaped = name.startswith("shaped_")
+        expected = (["clocks", "resets", "done"] if shaped else
+                    ["root_clock", "root_reset", "childClock", "done"])
+        if name == "shaped_sync":
+            expected = ["clocks", "resets", "doneA", "doneB"]
         if name == "mixed":
             expected += ["other_clock", "other_reset"]
         for port in expected:
@@ -89,6 +98,63 @@ initial begin
   root_reset={released};
   repeat({stages}) begin tick; check(0); end
   tick; check(1);
+  $display("RESET_TARGET_PASS {name}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+'''
+        if shaped:
+            width, selected = (4, 2) if name == "shaped_matrix" else (2, 1)
+            unused = 0
+            other_reset = ("resets[0]=1; #1; check(0); resets[0]=0; "
+                           "repeat(2) begin tick; check(0); end tick; check(1);"
+                           if name == "shaped_combine" else
+                           "resets[0]=1; #1; check(1); resets[0]=0; #1; check(1);")
+            bench = f'''module tb;
+reg [{width - 1}:0] clocks=0, resets=0;
+wire done;
+{module} dut({connections});
+task tick; begin #2; clocks[{selected}]=1; #1; clocks[{selected}]=0; #1; end endtask
+task other_tick; begin #2; clocks[{unused}]=1; #1; clocks[{unused}]=0; #1; end endtask
+task check(input expected); begin
+  if(done !== expected) $fatal(1,"{name}: expected %b got %b at %t",expected,done,$time);
+end endtask
+initial begin
+  #1; if(done !== 1'bx) $fatal(1,"{name}: fabricated initialized startup");
+  resets[{selected}]=1; #1; check(0);
+  resets[{selected}]=0;
+  repeat(4) begin other_tick; check(0); end
+  repeat(2) begin tick; check(0); end
+  tick; check(1);
+  {other_reset}
+  resets[{selected}]=1; #1; check(0); resets[{selected}]=0;
+  repeat(2) begin tick; check(0); end
+  tick; check(1);
+  $display("RESET_TARGET_PASS {name}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+'''
+        if name == "shaped_sync":
+            bench = f'''module tb;
+reg [1:0] clocks=2'b10, resets=0;
+wire doneA, doneB;
+{module} dut({connections});
+task tickA; begin #2; clocks[0]=1; #1; clocks[0]=0; #1; end endtask
+task tickB; begin #2; clocks[1]=0; #1; clocks[1]=1; #1; end endtask
+task check(input a, input b); begin
+  if(doneA !== a || doneB !== b)
+    $fatal(1,"{name}: expected %b/%b got %b/%b",a,b,doneA,doneB);
+end endtask
+initial begin
+  #1; check(1'bx,1'bx);
+  resets=3; #1; check(1'bx,1'bx);
+  tickA; check(0,1'bx); tickB; check(0,0);
+  resets=0; tickA; check(1,0); tickB; check(1,1);
+  resets[0]=1; #1; check(1,1);
+  tickB; check(1,1); tickA; check(0,1);
+  resets=2; tickA; check(1,1); tickB; check(1,0);
+  resets=0; tickB; check(1,1);
   $display("RESET_TARGET_PASS {name}"); $finish;
 end
 initial begin #1000; $fatal(1,"timeout"); end

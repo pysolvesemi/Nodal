@@ -127,3 +127,50 @@ object Increment57ResetSourceTests extends TestSuite:
           s.modules.map(m => m.copy(domains = m.domains.map(_.copy(resetPolicy = policy))))
         )
         assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(bad)).isFailure)
+    test("fixed shaped physical control elements retain actual projections"):
+      for mode <- Vector("single", "combine", "matrix", "slice") do
+        val captured = ConstructionKernel.inspect(new Increment57ShapedResetSource(mode))
+        val text = ScalaToMlirBridge.fromSnapshot(captured).text
+        assert(
+          text.contains("nodal.shape_index"),
+          text.contains("nodal.local_domain_binding"),
+          text.contains("nodal.reset_sync")
+        )
+    test("shaped aliases preserve physical polarity and release lineage"):
+      for (conflict, message) <- Vector(true -> "contradictory polarities", false -> "reconverge")
+      do
+        val result = scala.util.Try(
+          ConstructionKernel.inspect(new Increment57ShapedResetAliasSource(conflict))
+        )
+        assert(result.failed.toOption.exists(_.getMessage.contains(message)))
+    test("forged shaped control selector rejects before execution"):
+      val captured = ConstructionKernel.inspect(new Increment57ShapedResetSource("single"))
+      val index = captured.shapeIndices.head
+      for changed <- Vector(
+          index.copy(indices = Vector("2")),
+          index.copy(indices = Vector("param.selector")),
+          index.copy(owner = "foreign"),
+          index.copy(region = Some("foreign.region"))
+        )
+      do
+        val bad = captured.copy(shapeIndices =
+          captured.shapeIndices.map(value => if value.path == index.path then changed else value)
+        )
+        assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(bad)).isFailure)
+    test("distinct shaped Sync elements retain independent actual receiving clocks"):
+      val captured = ConstructionKernel.inspect(new Increment57ShapedSyncSource(false))
+      assert(ScalaToMlirBridge.fromSnapshot(captured).text.contains("nodal.reset_boundary"))
+      val shared = ConstructionKernel.inspect(new Increment57ShapedSyncSource(true))
+      assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(shared)).isFailure)
+      val boundary = captured.digitalExpressions.find(_.reset.exists(_.release == "sync")).get
+      val other = captured.modules.head.domains.find(d =>
+        !boundary.reset.get.destination.contains(d.path)
+      ).get
+      val retargeted = captured.copy(digitalExpressions =
+        captured.digitalExpressions.map(value =>
+          if value.path == boundary.path then
+            value.copy(reset = value.reset.map(_.copy(destination = Some(other.path))))
+          else value
+        )
+      )
+      assert(scala.util.Try(ScalaToMlirBridge.fromSnapshot(retargeted)).isFailure)

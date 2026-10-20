@@ -235,6 +235,40 @@ int main() {
                 "%i0 = \"builtin.unrealized_conversion_cast\"()") +
             boundary() + sync() + bind(),
         false);
+  const auto syncElements =
+      replace(replace(projected, "reset_policy = \"async\"", "reset_policy = \"sync\""),
+              "type = " + shaped(clockType) + ", domain = @core", "type = " + shaped(clockType)) +
+      domain("other", "sync") + index("otherClock", "clocks", clockType, "2", "1") +
+      index("otherReset", "resets", reset, "2", "0");
+  const auto syncBoundaries =
+      boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") +
+      boundary("otherRaw", "otherReset", "active_high", "sync", "release_domain = @other, ") +
+      bind("raw") + replace(bind("otherRaw", "other"), "%clk", "%otherClock");
+  check("distinct-reset-elements-own-distinct-sync-clocks", syncElements + syncBoundaries, true);
+  check("same-reset-element-cannot-own-distinct-sync-clocks",
+        replace(syncElements, "(%resets, %i0)", "(%resets, %i1)") + syncBoundaries, false,
+        "incompatible Sync clocks or edges");
+  check("same-reset-element-same-sync-clock-aliases",
+        replace(replace(syncElements, "(%resets, %i0)", "(%resets, %i1)"), "(%clocks, %i1)",
+                "(%clocks, %i0)") +
+            syncBoundaries,
+        true);
+  check("same-reset-element-cannot-own-distinct-sync-edges",
+        replace(replace(replace(syncElements, "(%resets, %i0)", "(%resets, %i1)"), "(%clocks, %i1)",
+                        "(%clocks, %i0)"),
+                "sym_name = \"other\", edge = \"rising\"",
+                "sym_name = \"other\", edge = \"falling\"") +
+            syncBoundaries,
+        false, "incompatible Sync clocks or edges");
+  check("projected-sync-owner-requires-boundary-result",
+        replace(projected, "reset_policy = \"async\"", "reset_policy = \"sync\"") +
+            boundary("raw", "rst", "active_high", "sync", "release_domain = @core, ") + bind("rst"),
+        false, "actual owning Sync binding");
+  check("projected-sync-boundary-cannot-retarget-clock",
+        syncElements +
+            boundary("otherRaw", "rst", "active_high", "sync", "release_domain = @other, ") +
+            bind("otherRaw") + replace(bind("otherRaw", "other"), "%clk", "%otherClock"),
+        false, "exact destination clock and edge");
   const auto good = setup() + boundary() + sync() + bind();
   check("owned-release", good, true);
   check("raw-async-without-state-rejected", setup() + bind("rst"), false, "NODAL-RESET-057-001");

@@ -26,3 +26,6 @@ object Increment57ResetReplay:
       new Increment57ResetSource(ClockEdge.Rising, ResetPolarity.ActiveHigh, "external")
     )
     save("mixed", new Increment57MixedResetSource)
+    for mode <- Vector("single", "combine", "matrix") do
+      save("shaped_" + mode, new Increment57ShapedResetSource(mode))
+    save("shaped_sync", new Increment57ShapedSyncSource(false))

@@ -1064,3 +1064,27 @@ regeneration comparison and target predecessor checks remain to be recorded
 before final selected clock acceptance. The already-passing 637 native model,
 171 target structure and 36 actual clock waveform checks retain their scoped
 meaning. No CI or broad qualification was run; remaining F57 slices stay open.
+
+### Scoped owned clock acceptance
+
+After the bridge repair, all **12 actual clock replay profiles regenerate
+byte-identically** to the inputs of the final **36/36** waveform matrix. Combined
+source/predecessor checks pass **164/164**. Native evidence covers **663 distinct
+focused checks**: 51 ClockModel, 26 ClockCIRCT, 32 domain, 65 reset, 71 sequential,
+273 crossing and 145 existing CIRCT. The earlier model637 and target171 counts
+overlap in the existing145 CIRCT checks; they are not additive.
+
+On the immutable final clock compiler, affected actual target predecessors also
+pass: FIFO **84/84**, snapshot handshake **44/44**, Gray/Pulse **45/45** and
+scalar/shaped reset **12/12**. Logs/manifests are under
+`.work/owned-clock-{fifo,handshake,gray-pulse,reset}-predecessor`; regenerated
+source evidence is `.work/owned-clock-source-replay-final` and its adjacent log.
+Both reported source predecessor issues are fixed without weakening native
+scope/reset checks. The selected gate/mux execution scope is accepted.
+
+Physical setup/hold and reset-duration assumptions, resetless gate startup and
+the protected mux reset-assertion exception remain exactly as DG v0.6 states.
+This does not certify physical timing or close the remaining relationship,
+hierarchy, observed-output reconvergence, waiver, event, scale and final F57
+integration work. All coarse F57 items remain open. No CI or broad qualification
+was run. DG v0.7 selects the next bounded executable relationship-proof slice.

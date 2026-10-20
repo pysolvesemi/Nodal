@@ -7,18 +7,21 @@ namespace nodal {
 struct FlatFSMHeader {
   mlir::Operation *operation = nullptr, *module = nullptr;
   unsigned guards = 0, guardOffset = 1;
-  bool controlled = false, composed = false;
+  bool controlled = false, composed = false, extended = false, timed = false;
   mlir::Value currentLocal() const;
   mlir::Value currentStatus() const;
   mlir::Value restart() const;
   mlir::Value cancel() const;
   mlir::Value enable() const;
+  mlir::Value elapsed() const;
+  llvm::SmallVector<mlir::Value> privateStateOperands() const;
+  llvm::SmallVector<mlir::Value> sampledInputs() const;
   mlir::Value next() const;
   mlir::Value taken() const;
   mlir::Value entered() const;
   mlir::Value exited() const;
   mlir::Value establishment() const;
-  unsigned privateStateCount() const { return controlled ? 2 : 1; }
+  unsigned privateStateCount() const { return 1 + unsigned(controlled) + unsigned(timed); }
   llvm::SmallVector<mlir::Block *, 4> bodies;
   llvm::SmallVector<unsigned, 4> captureOffsets, captureCounts;
 };
@@ -34,7 +37,10 @@ struct FlatFSMGraphSummary {
 mlir::FailureOr<FlatFSMGraphSummary> inspectFlatFSMGraphSummary(mlir::Operation *operation);
 mlir::FailureOr<FlatFSMHeader> inspectFlatFSMHeader(mlir::Operation *operation);
 mlir::LogicalResult verifyFlatFSMOperation(mlir::Operation *operation);
-/// Canonical distinct result roles of an independently admitted v1/v2/v3 header.
+mlir::LogicalResult verifyFsmTimingOperation(mlir::Operation *operation);
+mlir::LogicalResult fsmTimingDependencies(mlir::Value result,
+                                          llvm::SmallVectorImpl<mlir::Value> &dependencies);
+/// Canonical distinct result roles of an independently admitted v1/v2/v3/v4 header.
 llvm::StringRef flatFSMResultRole(mlir::Value result);
 mlir::FailureOr<mlir::Value> flatFSMCaptureSource(mlir::BlockArgument argument);
 mlir::LogicalResult flatFSMArgumentDependencies(mlir::BlockArgument argument,

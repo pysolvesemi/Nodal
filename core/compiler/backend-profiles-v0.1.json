@@ -1028,6 +1028,18 @@
         "admission": "unsupported"
       },
       {
+        "operation": "nodal.fsm_elapsed",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
+        "operation": "nodal.fsm_transfer",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
+      },
+      {
         "operation": "nodal.fsm_join",
         "feature": "digital-behavior",
         "domain": "digital",
@@ -1218,6 +1230,12 @@
         "feature": "natures-disciplines",
         "domain": "analog",
         "admission": "direct"
+      },
+      {
+        "operation": "nodal.net_boundary",
+        "feature": "digital-behavior",
+        "domain": "digital",
+        "admission": "unsupported"
       },
       {
         "operation": "nodal.net_drive",

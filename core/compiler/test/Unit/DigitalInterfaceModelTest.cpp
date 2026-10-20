@@ -347,6 +347,50 @@ std::string hierarchyResolvedFixture(StringRef parentEffects = "", StringRef chi
          top + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
          child + "}) : () -> ()\n}\n";
 }
+std::string standaloneBoundary(StringRef value = "projected", StringRef instance = "child",
+                               StringRef endpoint = "exported", StringRef type = bits) {
+  return "%" + value.str() + " = \"nodal.net_boundary\"() <{instance = @" + instance.str() +
+         ", endpoint = \"" + endpoint.str() + "\", metadata = {" + tag +
+         ", semantic_path = \"Top." + value.str() +
+         "\", placement = \"top_level_pin\", profile = \"portable_boundary_only\"}}> : () -> " +
+         resolved("push_pull", type) + "\n";
+}
+std::string asStandaloneBoundary(std::string source) {
+  source = replace(source, resolvedDefinition(), "");
+  source = replace(source, resolvedDefinition(), "");
+  source = replace(source, hierarchyBoundary(), standaloneBoundary());
+  source = replace(source, member("projected", "projected", resolved()), "");
+  source = replace(source, instance("exported", "sink", "connect", resolved(), "", "required"),
+                   net("exported"));
+  return replace(source, member("exported", "exported", resolved()), "");
+}
+std::string standaloneBoundaryFixture(StringRef parentEffects = "", StringRef childEffects = "") {
+  return asStandaloneBoundary(hierarchyResolvedFixture(parentEffects, childEffects));
+}
+std::string symbolicStandaloneBoundaryFixture(bool wrong = false) {
+  std::string parentParameter = parameter();
+  parentParameter = replace(parentParameter, "sym_name = \"N\"", "sym_name = \"P\"");
+  while (parentParameter.find("parameter = @N") != std::string::npos)
+    parentParameter = replace(parentParameter, "parameter = @N", "parameter = @P");
+  std::string source = standaloneBoundaryFixture();
+  source = replace(
+      source, hierarchyDomain("clock"),
+      hierarchyDomain("clock") + parentParameter +
+          "%p = \"nodal.const_parameter_ref\"() <{parameter = @P, metadata = {}}> : () -> i64\n");
+  source = replace(source, hierarchyBinding("required", "clock"),
+                   hierarchyBinding("required", "clock") +
+                       "\"nodal.parameter_override\"(%p) <{instance = @child, parameter = @N, "
+                       "metadata = {}}> : (i64) -> ()\n");
+  source = replace(source, hierarchyRequirement("required"),
+                   hierarchyRequirement("required") + parameter());
+  source =
+      replace(source, standaloneBoundary(),
+              standaloneBoundary("projected", "child", "exported",
+                                 wrong ? "!nodal.uint<2>" : "!nodal.digital<\"uint\", \"P\">"));
+  source = replace(source, net("exported"),
+                   replace(net("exported"), bits, "!nodal.digital<\"uint\", \"N\">"));
+  return source;
+}
 std::string hierarchyArrayFixture(StringRef actual = "P", bool symbolic = true) {
   const std::string formal = symbolic ? "N" : "2";
   const std::string selected = symbolic ? actual.str() : "2";
@@ -1132,6 +1176,89 @@ int main() {
       driver("driver", "exported") + conditional + netDrive("driver", "exported");
   const std::string parentDriver =
       driver("driver", "projected") + conditional + netDrive("driver", "projected");
+  const std::string repeatedStandalone =
+      "\"nodal.instance\"() <{sym_name = \"sibling\", module = @Child, parameter_bindings = {}, "
+      "domain_bindings = {required = @other}, metadata = {}}> : () -> ()\n" +
+      replace(hierarchyBinding("required", "other"), "instance = @child", "instance = @sibling") +
+      standaloneBoundary("sibling_view", "sibling");
+  hierarchy("standalone-boundary-repeated-child-retains-occurrence-identity",
+            standaloneBoundaryFixture(repeatedStandalone, childDriver), true);
+  hierarchy("standalone-boundary-wrong-element-rejected",
+            replace(standaloneBoundaryFixture(), standaloneBoundary(),
+                    standaloneBoundary("projected", "child", "exported", boolean)),
+            false, "must preserve exact mode");
+  hierarchy("standalone-boundary-parent-marker-required",
+            replace(standaloneBoundaryFixture(), standaloneBoundary(),
+                    replace(standaloneBoundary(), tag + ", ", "")),
+            false, "interface_abi_version");
+  hierarchy("standalone-boundary-imported-policy-is-independently-verified",
+            replace(standaloneBoundaryFixture(), net("exported"),
+                    net("exported", "push_pull", "internal_resolved_net")),
+            false, "portable boundary resolution cannot represent an internal resolved net");
+  hierarchy("standalone-boundary-read-retains-child-component",
+            standaloneBoundaryFixture(resolvedRead("projected"), resolvedRead("exported")), true);
+  hierarchy("standalone-boundary-parent-and-child-conditional-drivers",
+            standaloneBoundaryFixture(parentDriver + resolvedRead("projected"), childDriver), true);
+  hierarchy("standalone-boundary-pass-through-is-not-a-causal-cycle",
+            standaloneBoundaryFixture(net("local") + through("projected", "local") +
+                                      through("local", "projected")),
+            true);
+  hierarchy("standalone-boundary-exact-symbolic-element-binding",
+            symbolicStandaloneBoundaryFixture(), true);
+  hierarchy("standalone-boundary-default-is-not-symbolic-element-proof",
+            symbolicStandaloneBoundaryFixture(true), false, "must preserve exact mode");
+  hierarchy("standalone-boundary-duplicate-projection-rejected",
+            standaloneBoundaryFixture(standaloneBoundary("again")), false,
+            "duplicate child resolved projection");
+  hierarchy(
+      "standalone-boundary-unknown-child-net-rejected",
+      replace(standaloneBoundaryFixture(), "endpoint = \"exported\"", "endpoint = \"missing\""),
+      false, "exact immediate child's direct net");
+  hierarchy("standalone-boundary-foreign-instance-rejected",
+            replace(standaloneBoundaryFixture(), "instance = @child, endpoint",
+                    "instance = @missing, endpoint"),
+            false);
+  hierarchy("standalone-boundary-duplicate-child-name-rejected",
+            standaloneBoundaryFixture(
+                "", replace(net("alias"), "name = \"alias\"", "name = \"exported\"")),
+            false, "unambiguous identities");
+  hierarchy("standalone-boundary-legacy-child-net-rejected",
+            replace(standaloneBoundaryFixture(), net("exported"),
+                    replace(net("exported"), tag + ", ", "")),
+            false, "exact immediate child's direct net");
+  hierarchy("standalone-boundary-profile-cannot-be-upgraded",
+            replace(standaloneBoundaryFixture(), "profile = \"portable_boundary_only\"",
+                    "profile = \"technology_mapped\""),
+            false, "must preserve exact mode");
+  hierarchy("standalone-boundary-placement-cannot-be-forged",
+            replace(standaloneBoundaryFixture(), "placement = \"top_level_pin\"",
+                    "placement = \"internal_resolved_net\""),
+            false, "must preserve exact mode");
+  hierarchy("standalone-boundary-mode-cannot-be-forged",
+            replace(standaloneBoundaryFixture(), resolved(), resolved("open_drain")), false,
+            "must preserve exact mode");
+  hierarchy("standalone-boundary-domain-label-is-not-a-proof",
+            replace(standaloneBoundaryFixture(), "semantic_path = \"Top.projected\"",
+                    "semantic_path = \"Top.projected\", domain = @clock"),
+            false, "without inventing a domain constraint");
+  hierarchy("standalone-boundary-readonly-driver-remains-forbidden",
+            replace(replace(standaloneBoundaryFixture(driver("driver", "projected", "read_only")),
+                            standaloneBoundary(),
+                            replace(standaloneBoundary(), resolved(), resolved("read_only"))),
+                    net("exported"), net("exported", "read_only")),
+            false, "does not permit creating or using a driver");
+  hierarchy("standalone-boundary-joined-split-explicitly-requires-global-transport",
+            standaloneBoundaryFixture("", childDriver + split("exported")), false,
+            "split on a child-boundary-joined component requires global driver transport");
+  hierarchy("standalone-boundary-no-local-driver-split-remains-strict",
+            standaloneBoundaryFixture("", split("exported")), false,
+            "exactly one authored conditional driver");
+  hierarchy("standalone-boundary-read-feedback-remains-a-real-cycle",
+            standaloneBoundaryFixture(driver("driver", "projected") + literal("enable", boolean) +
+                                      resolvedRead("projected", "value") +
+                                      netDrive("driver", "projected")),
+            false,
+            "NODAL-DIGITAL-055-010: digital dependency graph contains a combinational value cycle");
   hierarchy("resolved-boundary-pass-through-without-drivers",
             hierarchyResolvedFixture(resolvedRead("projected"), resolvedRead("exported")), true);
   hierarchy("resolved-boundary-parent-and-child-drivers",
@@ -1227,6 +1354,11 @@ int main() {
               "sym_name = \"input\", type = " + bits + ", direction = \"input\", domain = @other",
               "sym_name = \"input\", type = " + bits + ", direction = \"input\", domain = @clock");
   hierarchy("resolved-child-actual-same-domain-driver-is-observed", actualSame, true);
+  hierarchy("standalone-child-foreign-driver-remains-causal", asStandaloneBoundary(foreign), false,
+            "foreign or unresolved input domain");
+  hierarchy("standalone-child-same-domain-driver-is-observed", asStandaloneBoundary(actualSame),
+            true);
+
   std::string attributedRead =
       resolvedRead("projected", "sampled") +
       "%synced = \"nodal.crossing\"(%sampled) <{source_domain = @clock, destination_domain = "

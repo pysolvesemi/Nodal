@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
@@ -946,14 +947,13 @@ struct Model {
             if (!identities.insert(digitalRegionSemanticPath(body)).second)
               return reject(&op, "FSM action identities must be unique within their module");
           Value state = op.getOperand(0);
-          for (unsigned index = 0; index < h->privateStateCount(); ++index) {
-            auto inserted = roots.try_emplace(op.getOperand(index), &op);
+          for (Value privateState : h->privateStateOperands()) {
+            auto inserted = roots.try_emplace(privateState, &op);
             if (!inserted.second && inserted.first->second != &op)
               return reject(&op, "private FSM state has an unrelated writer");
           }
-          for (unsigned index = h->privateStateCount(); index < h->guardOffset + h->guards; ++index)
-            if (failed(sampled(op.getOperand(index), op.getAttr("domain"), &op,
-                               state.getDefiningOp())))
+          for (Value input : h->sampledInputs())
+            if (failed(sampled(input, op.getAttr("domain"), &op, state.getDefiningOp())))
               return failure();
           SmallVector<SmallVector<Value, 4>, 4> controls;
           if (failed(
@@ -1019,8 +1019,8 @@ struct Model {
             auto header = inspectFlatFSMHeader(scope.root);
             if (failed(header))
               return failure();
-            for (unsigned index = 0; index < header->privateStateCount(); ++index)
-              if (*target == scope.root->getOperand(index))
+            for (Value privateState : header->privateStateOperands())
+              if (*target == privateState)
                 return reject(&op, "an action cannot directly write private FSM storage");
           }
           if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
@@ -1080,6 +1080,35 @@ public:
           return failure();
       }
     }
+    // Authored updates name their domain without consuming its physical SSA
+    // controls. Normalization makes that dependency explicit, possibly inside a
+    // generated or structural region preceding the original control producers.
+    // Restore only the affected block schedules using actual SSA dependencies,
+    // including implicit region captures. Keep every producer in its original
+    // scope and retain identity; moving/cloning selected clock kinds would miss
+    // reset chains and family-result users.
+    for (auto [block, range] : lateCaptureRanges) {
+      // Stability preserves ready operations, not effect order when one is
+      // temporarily blocked. Keep the complete result-free non-symbol
+      // subsequence, conservatively including every explicit effect owner.
+      // Restrict the sort to the actual dependency span so unrelated bindings
+      // and effects after the last needed producer are not pulled forward.
+      auto effectSequence = [&] {
+        SmallVector<Operation *> result;
+        for (Operation &op : *block)
+          if (!op.getNumResults() && !isa<SymbolOpInterface>(op))
+            result.push_back(&op);
+        return result;
+      };
+      auto before = effectSequence();
+      if (!sortTopologically(block, llvm::make_range(range.first->getIterator(),
+                                                     std::next(range.second->getIterator()))))
+        return reject(block->getParentOp(),
+                      "normalized lexical controls form a cyclic SSA schedule");
+      if (before != effectSequence())
+        return reject(block->getParentOp(),
+                      "normalized lexical controls would reorder explicit effects");
+    }
     // A binding may materialize its actual clock after an authored write root.
     // Commit owned memory effects only after all value producers and register
     // updates, retaining their actual source-root/body sequence. Moving only
@@ -1101,6 +1130,7 @@ private:
   Model &model;
   OpBuilder builder;
   unsigned generated = 0;
+  llvm::MapVector<Block *, std::pair<Operation *, Operation *>> lateCaptureRanges;
   LogicalResult charge(Operation *at) {
     if (++generated > model.limits.maximumNormalizedOperations)
       return reject(at, "normalized sequential SSA exceeds its finite expansion budget");
@@ -1129,6 +1159,17 @@ private:
     auto outer = inBlock(value, owner->getBlock(), depth + 1);
     if (failed(outer))
       return failure();
+    if (Operation *producer = outer->getDefiningOp(); producer &&
+                                                      producer->getBlock() == owner->getBlock() &&
+                                                      !producer->isBeforeInBlock(owner)) {
+      auto inserted =
+          lateCaptureRanges.try_emplace(owner->getBlock(), std::make_pair(owner, producer));
+      auto &range = inserted.first->second;
+      if (owner->isBeforeInBlock(range.first))
+        range.first = owner;
+      if (range.second->isBeforeInBlock(producer))
+        range.second = producer;
+    }
     if (isa<GenerateOp>(owner))
       return *outer; // Non-isolated, actual dominating lexical value.
     auto header = inspectStructuralIfHeader(owner);

@@ -55,6 +55,7 @@ add_mlir_dialect_library(NodalDialect
 
   LINK_LIBS PUBLIC
     NodalSupport
+    MLIRAnalysis
     MLIRBytecodeOpInterface
     MLIRIR
     MLIRPass

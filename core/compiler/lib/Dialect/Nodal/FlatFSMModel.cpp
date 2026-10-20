@@ -231,23 +231,36 @@ SmallVector<ActionControl, 4> actionControls(Operation *op, const Graph &g) {
   return result;
 }
 } // namespace
-FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
+static FailureOr<FlatFSMHeader> inspectFlatFSMHeaderImpl(Operation *op, bool actionHeaders) {
   if (!llvm::isa_and_nonnull<FlatFSMOp>(op))
     return failure();
-  bool composed = text(op, "contract_version") == "flat-fsm-v3";
-  bool controlled = composed || text(op, "contract_version") == "flat-fsm-v2";
-  unsigned guardOffset = controlled ? 5 : 1;
+  bool extended = text(op, "contract_version") == "flat-fsm-v4";
+  StringRef mode = text(op, "lifecycle_mode");
+  bool composed = text(op, "contract_version") == "flat-fsm-v3" || (extended && mode == "composed");
+  bool controlled = composed || text(op, "contract_version") == "flat-fsm-v2" ||
+                    (extended && mode == "controlled");
+  auto timers = op->getAttrOfType<ArrayAttr>("timer_edges"),
+       transfers = op->getAttrOfType<ArrayAttr>("transfer_edges");
+  if (extended ? (!timers || !transfers || (timers.empty() && transfers.empty()) ||
+                  timers.size() + transfers.size() > 65536 ||
+                  (mode != "legacy" && mode != "controlled" && mode != "composed"))
+               : (op->hasAttr("lifecycle_mode") || op->hasAttr("timer_edges") ||
+                  op->hasAttr("transfer_edges")))
+    return failure();
+  bool timed = extended && !timers.empty();
+  unsigned privateOffset = controlled ? 5 : 1, guardOffset = privateOffset + unsigned(timed);
   if (!llvm::isa<ModuleOp>(op->getParentOp()) || op->getNumOperands() < guardOffset ||
       op->getNumResults() != (composed     ? 5
                               : controlled ? 4
                                            : 2) ||
-      op->getNumSuccessors() || (!controlled && text(op, "contract_version") != "flat-fsm-v1") ||
+      op->getNumSuccessors() ||
+      (!controlled && !extended && text(op, "contract_version") != "flat-fsm-v1") ||
       !canonical(text(op, "machine_id")) || path(op) != text(op, "machine_id") ||
       !closed(op->getAttrDictionary(),
               {"contract_version", "machine_id", "enum_ref", "domain", "initial_case",
                "requested_encoding", "resolved_encoding", "local_width", "case_ids", "local_codes",
                "illegal_policy", "states", "transitions", "actions", "action_capture_counts",
-               "metadata"}))
+               "metadata", "lifecycle_mode", "timer_edges", "transfer_edges"}))
     return failure();
   auto transitions = op->getAttrOfType<ArrayAttr>("transitions"),
        actions = op->getAttrOfType<ArrayAttr>("actions");
@@ -268,15 +281,27 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
   for (unsigned i = 1; i < op->getNumResults(); ++i)
     if (op->getResult(i).getType() != boolean)
       return failure();
-  for (unsigned i = controlled ? 2 : 1; i < guardOffset + transitions.size(); ++i)
-    if (op->getOperand(i).getType() != boolean)
-      return failure();
+  if (timed && op->getOperand(privateOffset).getType() != UIntType::get(op->getContext(), 31))
+    return failure();
+  if (actionHeaders)
+    for (unsigned i = controlled ? 2 : 1; i < guardOffset + transitions.size(); ++i)
+      if ((!timed || i != privateOffset) && op->getOperand(i).getType() != boolean)
+        return failure();
   Operation *module = op->getParentOp();
   StringRef prefix = path(module).empty() ? text(module, "sym_name") : path(module);
   if (!text(op, "machine_id").starts_with((prefix + ".").str()))
     return failure();
-  FlatFSMHeader h{op, module, unsigned(transitions.size()), guardOffset, controlled, composed, {},
-                  {}, {}};
+  FlatFSMHeader h;
+  h.operation = op;
+  h.module = module;
+  h.guards = transitions.size();
+  h.guardOffset = guardOffset;
+  h.controlled = controlled;
+  h.composed = composed;
+  h.extended = extended;
+  h.timed = timed;
+  if (!actionHeaders)
+    return h;
   unsigned offset = h.guardOffset + h.guards, captures = 0;
   llvm::StringSet<> identities;
   for (unsigned i = 0; i < actions.size(); ++i) {
@@ -304,6 +329,9 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
     return failure();
   return h;
 }
+FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
+  return inspectFlatFSMHeaderImpl(op, true);
+}
 Value FlatFSMHeader::currentLocal() const { return operation->getOperand(0); }
 Value FlatFSMHeader::currentStatus() const {
   return controlled ? operation->getOperand(1) : Value();
@@ -311,6 +339,25 @@ Value FlatFSMHeader::currentStatus() const {
 Value FlatFSMHeader::restart() const { return controlled ? operation->getOperand(2) : Value(); }
 Value FlatFSMHeader::cancel() const { return controlled ? operation->getOperand(3) : Value(); }
 Value FlatFSMHeader::enable() const { return controlled ? operation->getOperand(4) : Value(); }
+Value FlatFSMHeader::elapsed() const {
+  return timed ? operation->getOperand(controlled ? 5 : 1) : Value();
+}
+SmallVector<Value> FlatFSMHeader::privateStateOperands() const {
+  SmallVector<Value> result{currentLocal()};
+  if (controlled)
+    result.push_back(currentStatus());
+  if (timed)
+    result.push_back(elapsed());
+  return result;
+}
+SmallVector<Value> FlatFSMHeader::sampledInputs() const {
+  SmallVector<Value> result;
+  if (controlled)
+    result.append({restart(), cancel(), enable()});
+  result.append(operation->operand_begin() + guardOffset,
+                operation->operand_begin() + guardOffset + guards);
+  return result;
+}
 Value FlatFSMHeader::next() const { return operation->getResult(0); }
 Value FlatFSMHeader::taken() const { return operation->getResult(1); }
 Value FlatFSMHeader::entered() const { return controlled ? operation->getResult(2) : Value(); }
@@ -463,6 +510,124 @@ FailureOr<SmallVector<ParameterIntegerEnvironment, 4>> flatFSMIntegerContextsAtU
     return failure();
   return SmallVector<ParameterIntegerEnvironment, 4>{*context};
 }
+namespace {
+bool timingOperation(Operation *op) {
+  return op && (op->getName().getStringRef() == "nodal.fsm_elapsed" ||
+                op->getName().getStringRef() == "nodal.fsm_transfer");
+}
+bool elapsedOperation(Operation *op) { return op->getName().getStringRef() == "nodal.fsm_elapsed"; }
+LogicalResult timingShape(Operation *op) {
+  bool elapsed = elapsedOperation(op);
+  auto cycles = op->getAttrOfType<IntegerAttr>("cycles");
+  if (!llvm::isa<ModuleOp>(op->getParentOp()) || op->getNumResults() != 1 ||
+      op->getNumOperands() != (elapsed ? 1 : 2) || op->getNumRegions() || op->getNumSuccessors() ||
+      op->getResult(0).getType() != BitsType::get(op->getContext(), 1) ||
+      !op->getAttrOfType<FlatSymbolRefAttr>("domain") ||
+      !closed(op->getAttrDictionary(), {"domain", "cycles", "metadata"}) ||
+      (op->hasAttr("metadata") && !op->getAttrOfType<DictionaryAttr>("metadata")) ||
+      (elapsed ? (!cycles || !cycles.getType().isSignlessInteger(64) || cycles.getInt() < 1 ||
+                  cycles.getInt() > 2147483647)
+               : op->hasAttr("cycles")))
+    return reject(op, "timing predicate requires its closed bounded typed shape");
+  for (Value input : op->getOperands())
+    if (input.getType() != (elapsed ? Type(UIntType::get(op->getContext(), 31))
+                                    : Type(BitsType::get(op->getContext(), 1))) ||
+        failed(verifyDigitalValueScope(input, op)))
+      return reject(op, "timing predicate requires exact owned UInt31 or Bool operands");
+  return success();
+}
+LogicalResult timingTables(const FlatFSMHeader &h) {
+  if (!h.extended)
+    return success();
+  auto edges = h.operation->getAttrOfType<ArrayAttr>("transitions");
+  llvm::DenseMap<int64_t, unsigned> indices;
+  for (auto [index, raw] : llvm::enumerate(edges)) {
+    auto record = llvm::dyn_cast<DictionaryAttr>(raw);
+    if (!record || ordinal(record) < 0 || !indices.try_emplace(ordinal(record), index).second)
+      return reject(h.operation, "timing owner requires distinct actual transition ordinals");
+  }
+  llvm::DenseSet<int64_t> retained;
+  for (StringRef name : {"timer_edges", "transfer_edges"}) {
+    bool elapsed = name == "timer_edges";
+    int64_t previous = -1;
+    for (Attribute raw : h.operation->getAttrOfType<ArrayAttr>(name)) {
+      auto entry = llvm::dyn_cast<DictionaryAttr>(raw);
+      auto found = indices.find(ordinal(entry));
+      auto cycles = entry ? entry.getAs<IntegerAttr>("cycles") : IntegerAttr();
+      if (!entry ||
+          !closed(entry, elapsed ? ArrayRef<StringRef>{"ordinal", "cycles"}
+                                 : ArrayRef<StringRef>{"ordinal"}) ||
+          found == indices.end() || ordinal(entry) <= previous ||
+          !retained.insert(ordinal(entry)).second ||
+          (elapsed && (!cycles || !cycles.getType().isSignlessInteger(64) || cycles.getInt() < 1 ||
+                       cycles.getInt() > 2147483647)))
+        return reject(
+            h.operation,
+            "timing table requires distinct actual edge ordinals and positive bounded cycles");
+      previous = ordinal(entry);
+      Operation *query = h.operation->getOperand(h.guardOffset + found->second).getDefiningOp();
+      if (!timingOperation(query) || elapsedOperation(query) != elapsed ||
+          failed(timingShape(query)) ||
+          query->getAttr("domain") != h.operation->getAttr("domain") ||
+          query->getParentOp() != h.module ||
+          (elapsed && (query->getOperand(0) != h.elapsed() || query->getAttr("cycles") != cycles)))
+        return reject(
+            h.operation,
+            "timing table must retain the exact predicate, counter and domain of its actual guard");
+    }
+  }
+  for (unsigned index = 0; index < h.guards; ++index)
+    if (timingOperation(h.operation->getOperand(h.guardOffset + index).getDefiningOp()) &&
+        !retained.contains(ordinal(llvm::cast<DictionaryAttr>(edges[index]))))
+      return reject(h.operation, "timing guard has no exact retained edge table entry");
+  return success();
+}
+} // namespace
+LogicalResult verifyFsmTimingOperation(Operation *op) {
+  if (!timingOperation(op))
+    return failure();
+  if (failed(timingShape(op)))
+    return failure();
+  Operation *owner = nullptr;
+  unsigned work = 0;
+  for (OpOperand &use : op->getResult(0).getUses()) {
+    if (++work > 65536)
+      return reject(op, "timing predicate use budget exceeded");
+    // Full action and table admission belongs to the actual FSM verifier. The
+    // predicate only needs the canonical operand layout and one sorted table lookup.
+    auto h = inspectFlatFSMHeaderImpl(use.getOwner(), false);
+    if (failed(h) || !h->extended || (owner && owner != h->operation) ||
+        use.getOperandNumber() < h->guardOffset ||
+        use.getOperandNumber() >= h->guardOffset + h->guards || op->getParentOp() != h->module ||
+        op->getAttr("domain") != h->operation->getAttr("domain"))
+      return reject(op,
+                    "timing predicate may only feed guard operands of its one actual FSM owner");
+    owner = h->operation;
+    auto edges = owner->getAttrOfType<ArrayAttr>("transitions");
+    int64_t edge =
+        ordinal(llvm::dyn_cast<DictionaryAttr>(edges[use.getOperandNumber() - h->guardOffset]));
+    auto table =
+        owner->getAttrOfType<ArrayAttr>(elapsedOperation(op) ? "timer_edges" : "transfer_edges");
+    auto found = llvm::lower_bound(table, edge, [](Attribute raw, int64_t value) {
+      return ordinal(llvm::dyn_cast<DictionaryAttr>(raw)) < value;
+    });
+    auto record = found == table.end() ? DictionaryAttr() : llvm::dyn_cast<DictionaryAttr>(*found);
+    if (edge < 0 || !record || ordinal(record) != edge ||
+        (elapsedOperation(op) &&
+         (record.get("cycles") != op->getAttr("cycles") || op->getOperand(0) != h->elapsed())))
+      return reject(op,
+                    "timing predicate is not the exact retained guard/counter policy of its owner");
+  }
+  return owner ? success() : reject(op, "timing predicate requires an actual transition owner");
+}
+LogicalResult fsmTimingDependencies(Value value, SmallVectorImpl<Value> &dependencies) {
+  auto result = llvm::dyn_cast<OpResult>(value);
+  if (!result || !timingOperation(result.getOwner()) ||
+      failed(verifyFsmTimingOperation(result.getOwner())))
+    return failure();
+  dependencies.append(result.getOwner()->operand_begin(), result.getOwner()->operand_end());
+  return success();
+}
 static LogicalResult verifyFlatFSMWithGraph(const FlatFSMHeader &header, const Graph &value) {
   const auto *h = &header;
   const auto *g = &value;
@@ -472,12 +637,12 @@ static LogicalResult verifyFlatFSMWithGraph(const FlatFSMHeader &header, const G
   auto controls = inspectSequentialDomainControls(op, op->getAttr("domain"));
   if (failed(controls))
     return reject(op, "flat FSM requires an exact local binding or unresolved requirement");
-  for (unsigned index = 0; index < h->privateStateCount(); ++index) {
-    Operation *state = op->getOperand(index).getDefiningOp();
+  llvm::DenseSet<Value> privateValues;
+  for (Value storage : h->privateStateOperands()) {
+    Operation *state = storage.getDefiningOp();
     if (!llvm::isa_and_nonnull<DigitalStorageOp>(state) || text(state, "kind") != "register" ||
         state->getParentOp() != h->module || state->getAttr("domain") != op->getAttr("domain") ||
-        failed(verifyDigitalStorageOperation(state)) ||
-        (index && op->getOperand(index) == op->getOperand(0)))
+        failed(verifyDigitalStorageOperation(state)) || !privateValues.insert(storage).second)
       return reject(op, "flat FSM requires distinct actual private registers in its exact domain");
     bool initialized = controls->resetAvailability != SequentialResetAvailability::Absent;
     if (initialized != (state->getNumOperands() == 1) ||
@@ -488,15 +653,24 @@ static LogicalResult verifyFlatFSMWithGraph(const FlatFSMHeader &header, const G
     if (state->getNumOperands()) {
       Operation *initial = state->getOperand(0).getDefiningOp();
       auto code = initial ? initial->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
-      unsigned width = index ? 2 : g->width;
-      llvm::APInt expected = index ? llvm::APInt(2, 0) : g->codes[g->initial];
+      bool local = storage == h->currentLocal();
+      unsigned width = local ? g->width : storage == h->elapsed() ? 31 : 2;
+      llvm::APInt expected = local ? g->codes[g->initial] : llvm::APInt(width, 0);
       if (!llvm::isa_and_nonnull<ConstLiteralOp, ConstantOp>(initial) || !code ||
           failed(verifyDigitalLiteralOperation(initial)) || code.getValue().getBitWidth() > 4096 ||
           code.getValue().zextOrTrunc(width) != expected)
-        return reject(op, index ? "FSM lifecycle initializer must be exact Dormant code zero"
-                                : "FSM initializer must be the actual exact local initial code");
+        return reject(op, local ? "FSM initializer must be the actual exact local initial code"
+                                : "FSM lifecycle/timer initializer must be exact zero");
     }
   }
+  if (failed(timingTables(header)))
+    return failure();
+  llvm::DenseSet<Operation *> timingQueries;
+  for (Value value : header.sampledInputs())
+    if (timingOperation(value.getDefiningOp()) &&
+        timingQueries.insert(value.getDefiningOp()).second &&
+        failed(verifyFsmTimingOperation(value.getDefiningOp())))
+      return failure();
   for (Value value : op->getOperands())
     if (failed(verifyDigitalValueScope(value, op)))
       return reject(op, "FSM values must retain actual lexical ownership");
@@ -584,13 +758,26 @@ public:
         return reject(op, "FSM expansion exceeds its bounded lifecycle preflight budget");
       cost += extra;
     }
+    if (h.extended) {
+      uint64_t extra = 3 * uint64_t(op->getAttrOfType<ArrayAttr>("timer_edges").size()) +
+                       uint64_t(op->getAttrOfType<ArrayAttr>("transfer_edges").size()) +
+                       (h.timed ? 128 + 4 * uint64_t(g.codes.size()) : 0);
+      if (cost > maximum || extra > uint64_t(maximum) - cost)
+        return reject(op,
+                      "FSM timing expansion exceeds its conservative structural preflight budget");
+      cost += extra;
+    }
     llvm::SetVector<Value> externalCaptures;
     externalCaptures.insert(op->getOperand(0));
     if (h.controlled)
       externalCaptures.insert(op->getOperand(1));
+    if (h.timed)
+      externalCaptures.insert(h.elapsed());
     for (Value value : op->getOperands().drop_front(h.guardOffset + h.guards))
       externalCaptures.insert(value);
-    if (externalCaptures.size() + (h.controlled ? 4 : 3) + actionRecords.size() > 8192 ||
+    if (externalCaptures.size() + (h.controlled ? 4 : 3) + unsigned(h.timed) +
+                actionRecords.size() >
+            8192 ||
         cost > maximum - std::min(maximum, generated))
       return reject(op, "FSM expansion exceeds the exact operation/capture preflight budget");
     builder.setInsertionPoint(op);
@@ -598,6 +785,26 @@ public:
     one = literal(llvm::APInt(1, 1));
     if (!zero || !one)
       return failure();
+    if (h.extended) {
+      llvm::SetVector<Operation *> queries;
+      for (Value guard : op->getOperands().slice(h.guardOffset, h.guards))
+        if (timingOperation(guard.getDefiningOp()))
+          queries.insert(guard.getDefiningOp());
+      for (Operation *query : queries) {
+        Value predicate;
+        if (elapsedOperation(query)) {
+          auto cycles = query->getAttrOfType<IntegerAttr>("cycles").getInt();
+          Value threshold =
+              literal(llvm::APInt(31, cycles - 1), UIntType::get(builder.getContext(), 31));
+          predicate = expression("digital_ge", {query->getOperand(0), threshold}, zero.getType());
+        } else
+          predicate = both(query->getOperand(0), query->getOperand(1));
+        if (!predicate)
+          return failure();
+        query->getResult(0).replaceAllUsesWith(predicate);
+        query->erase();
+      }
+    }
     Value current = op->getOperand(0);
     SmallVector<Value, 8> constants, decoded;
     for (const auto &code : g.codes) {
@@ -719,7 +926,7 @@ public:
       next = selectValue(advance, next, current);
       if (text(op, "illegal_policy") == "recover_to_initial") {
         Value recover = both(ordinary, both(operational, negate(legal)));
-        if (h.composed)
+        if (h.composed || h.timed)
           recovering = both(notReset, recover);
         next = selectValue(recover, constants[g.initial], next);
         lifecycleNext = selectValue(recover, initialStatus, lifecycleNext);
@@ -730,6 +937,8 @@ public:
       illegalProperty =
           either(either(restartSelected, cancelSelected), either(negate(operational), legal));
     }
+    if (h.timed && !h.controlled && text(op, "illegal_policy") == "recover_to_initial")
+      recovering = both(notReset, negate(valid));
     Value effective = expression("digital_select", {reset, constants[g.initial], next},
                                  current.getType(), ".next");
     Value taken = expression("bool_and", {actionGate, choice.condition}, zero.getType(), ".taken");
@@ -738,6 +947,32 @@ public:
     Value establishment = h.composed ? expression("bool_or", {restarting, recovering},
                                                   zero.getType(), ".establishment")
                                      : Value();
+    Value elapsedNext;
+    if (h.timed) {
+      llvm::DenseSet<int64_t> timedEdges;
+      for (Attribute raw : op->getAttrOfType<ArrayAttr>("timer_edges"))
+        timedEdges.insert(ordinal(llvm::cast<DictionaryAttr>(raw)));
+      llvm::DenseSet<unsigned> timedStates;
+      for (const auto &edge : g.transitions)
+        if (timedEdges.contains(edge.ordinal))
+          timedStates.insert(edge.source);
+      SmallVector<Value> states;
+      for (unsigned state = 0; state < decoded.size(); ++state)
+        if (timedStates.contains(state))
+          states.push_back(decoded[state]);
+      Value clear = either(reset, either(entered, either(cancelling, recovering)));
+      Value advance = both(actionGate, any(states));
+      Type counterType = UIntType::get(builder.getContext(), 31);
+      Value initial = literal(llvm::APInt(31, 0), counterType);
+      Value limit = literal(llvm::APInt(31, 2147483646), counterType);
+      Value unit = literal(llvm::APInt(31, 1), counterType);
+      Value saturated = expression("digital_ge", {h.elapsed(), limit}, zero.getType());
+      Value sum =
+          expression("digital_add", {h.elapsed(), unit}, UIntType::get(builder.getContext(), 32));
+      Value incremented = expression("digital_truncate", {sum}, counterType);
+      Value increment = selectValue(saturated, limit, incremented);
+      elapsedNext = selectValue(clear, initial, selectValue(advance, increment, h.elapsed()));
+    }
     if (broken)
       return failure();
     if (text(op, "illegal_policy") == "error") {
@@ -795,6 +1030,10 @@ public:
       values.insert(lifecycle);
       values.insert(lifecycleNext);
     }
+    if (h.timed) {
+      values.insert(h.elapsed());
+      values.insert(elapsedNext);
+    }
     for (Value v : conditions)
       values.insert(v);
     for (unsigned i = h.guardOffset + h.guards; i < op->getNumOperands(); ++i)
@@ -822,6 +1061,14 @@ public:
       statusAssignment.addAttribute("kind", builder.getStringAttr("register_next"));
       statusAssignment.addAttribute("metadata", metadata(".status_next"));
       if (!create(statusAssignment))
+        return failure();
+    }
+    if (h.timed) {
+      OperationState timerAssignment(op->getLoc(), "nodal.digital_assign");
+      timerAssignment.addOperands({mapping.lookup(h.elapsed()), mapping.lookup(elapsedNext)});
+      timerAssignment.addAttribute("kind", builder.getStringAttr("register_next"));
+      timerAssignment.addAttribute("metadata", metadata(".elapsed_next"));
+      if (!create(timerAssignment))
         return failure();
     }
     for (unsigned i : order) {
@@ -893,9 +1140,9 @@ private:
   Value selectValue(Value condition, Value a, Value b) {
     return expression("digital_select", {condition, a, b}, a.getType());
   }
-  Value literal(const llvm::APInt &value) {
+  Value literal(const llvm::APInt &value, Type type = {}) {
     OperationState op(h.operation->getLoc(), "nodal.const_literal");
-    op.addTypes(BitsType::get(builder.getContext(), value.getBitWidth()));
+    op.addTypes(type ? type : BitsType::get(builder.getContext(), value.getBitWidth()));
     op.addAttribute("value",
                     IntegerAttr::get(IntegerType::get(builder.getContext(), value.getBitWidth(),
                                                       IntegerType::Unsigned),
@@ -958,6 +1205,12 @@ LogicalResult expandFlatFSMModel(Operation *module, unsigned &generated, unsigne
   for (Operation &op : module->getRegion(0).front())
     if (llvm::isa<FlatFSMOp>(op))
       machines.push_back(&op);
+  uint64_t timerBits = 0;
+  for (Operation *op : machines) {
+    auto h = inspectFlatFSMHeader(op);
+    if (failed(h) || (timerBits += h->timed ? 31 : 0) > 65536)
+      return reject(op, "actual private timer state exceeds its finite bit budget");
+  }
   for (Operation *op : machines) {
     auto h = inspectFlatFSMHeader(op);
     if (failed(h))

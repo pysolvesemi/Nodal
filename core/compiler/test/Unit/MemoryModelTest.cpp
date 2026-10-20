@@ -448,6 +448,31 @@ int main(int argc, char **argv) {
   auto lateClock = normalize("late-bound-clock-retains-write-order",
                              domain() + memory() + input() + read() + write("early") +
                                  setup().substr(domain().size()) + write("late"));
+  const std::string generatedHold =
+      literal("familyLo", 0, "i64") + literal("familyHi", 4, "i64") +
+      literal("familyStep", 1, "i64") +
+      "%family = \"nodal.generate\"(%familyLo, %familyHi, %familyStep) <{induction = \"i\", "
+      "region_id = \"Fixture.family\", induction_path = \"Fixture.family.i\", "
+      "metadata = {maximum_trip_count = 4 : i64}}> ({^bb0(%i: i64):\n"
+      "%state = \"nodal.digital_storage\"() <{name = \"state\", kind = \"register\", "
+      "domain = @core, metadata = {semantic_path = \"Fixture.family.state\"}}> : () -> " +
+      u32 +
+      "\n\"nodal.generated_export\"(%state) <{member = \"state\", access = \"read\", "
+      "metadata = {}}> : (" +
+      u32 + ") -> ()\n}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  auto scheduled = normalize("generated-late-control-keeps-ordered-memory-effects",
+                             domain() + memory() + input() + read() + write("early") +
+                                 generatedHold + setup().substr(domain().size()) + write("late"));
+  if (scheduled) {
+    SmallVector<StringRef> roots;
+    bool dense = true;
+    scheduled->walk([&](nodal::MemoryWriteEffectOp op) {
+      dense &= op->getAttrOfType<IntegerAttr>("order").getInt() == int64_t(roots.size());
+      roots.push_back(op->getAttrOfType<StringAttr>("root_id").getValue());
+    });
+    report("late-family-schedule-retains-memory-root-subsequence",
+           dense && roots == SmallVector<StringRef>{"Fixture.early", "Fixture.late"});
+  }
   if (lateClock) {
     nodal::MemoryWriteEffectOp effect;
     lateClock->walk([&](nodal::MemoryWriteEffectOp op) { effect = op; });

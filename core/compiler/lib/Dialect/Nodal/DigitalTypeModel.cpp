@@ -462,7 +462,8 @@ private:
       return reject(
           "static predicate tokens cannot be stored or manufactured by runtime operations");
     if (llvm::isa<GeneratedFamilyType>(type) &&
-        (depth != 1 || storageContext || !llvm::isa<GenerateOp, GeneratedMemberOp>(currentUse)))
+        (depth != 1 || storageContext ||
+         !llvm::isa<GenerateOp, GeneratedMemberOp, GeneratedExportOp>(currentUse)))
       return reject("generated family capabilities support only their exact declaration and "
                     "checked member projection, never payload storage");
     const auto key = std::make_pair(type, static_cast<unsigned>(storageContext));

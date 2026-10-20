@@ -43,7 +43,8 @@ bool newOperation(Operation *operation) {
   return named(operation, "nodal.interface_connect") || named(operation, "nodal.interface_drive") ||
          named(operation, "nodal.interface_observe") || named(operation, "nodal.net_release") ||
          named(operation, "nodal.net_drive_level") || named(operation, "nodal.net_pass_through") ||
-         named(operation, "nodal.net_split") || named(operation, "nodal.interface_boundary");
+         named(operation, "nodal.net_split") || named(operation, "nodal.interface_boundary") ||
+         named(operation, "nodal.net_boundary");
 }
 bool oldOperation(Operation *operation) {
   return llvm::isa<InterfaceOp, InterfaceRoleOp, InterfaceMemberOp, InterfaceInstanceOp,
@@ -148,6 +149,8 @@ private:
   LogicalResult access(Operation *operation);
   LogicalResult abi(Operation *operation);
   LogicalResult net(Operation *operation);
+  LogicalResult netBoundary(Operation *operation);
+  void addNet(Value value, StringRef profile, StringRef mode);
   LogicalResult effect(Operation *operation);
   LogicalResult resolvedEffect(Operation *operation);
   LogicalResult ownership(Operation *operation);
@@ -178,6 +181,9 @@ private:
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
   SmallVector<Net> nets;
+  std::map<Operation *, llvm::StringMap<Operation *>> childNetDeclarations;
+  std::map<Operation *, std::pair<Operation *, Operation *>> netBoundaries;
+  std::set<std::pair<Operation *, Operation *>> netBoundaryIdentities;
   llvm::DenseMap<unsigned, FlatSymbolRefAttr> componentDomains;
   SmallVector<unsigned> parents, ranks;
   llvm::StringMap<Operation *> driverIdentities;
@@ -827,8 +833,11 @@ LogicalResult Model::abi(Operation *operation) {
   return success();
 }
 
-LogicalResult Model::net(Operation *operation) {
-  if (failed(ownership(operation)) || failed(arity(operation, 0, 1)))
+// Shared declaration policy for local nets and exact imported declarations. This
+// reads facts only: importing a declaration never imports its local driver graph.
+LogicalResult verifyResolvedNetDeclaration(Operation *operation) {
+  if (!llvm::isa_and_nonnull<ResolvedNetOp>(operation) ||
+      failed(verifyDigitalInterfaceOperation(operation)) || failed(arity(operation, 0, 1)))
     return failure();
   auto type = llvm::dyn_cast<ResolvedType>(operation->getResult(0).getType());
   if (!identity(text(operation, "name")) || !type || !driveMode(type.getDriveMode()) ||
@@ -848,11 +857,62 @@ LogicalResult Model::net(Operation *operation) {
   if (profile == "portable_boundary_only" && placement == "internal_resolved_net")
     return reject(operation,
                   "portable boundary resolution cannot represent an internal resolved net");
+  return success();
+}
+void Model::addNet(Value value, StringRef profile, StringRef mode) {
   unsigned index = nets.size();
-  netIndices.try_emplace(operation->getResult(0), index);
-  nets.push_back(Net{operation->getResult(0), profile, type.getDriveMode()});
+  netIndices.try_emplace(value, index);
+  nets.push_back(Net{value, profile, mode});
   parents.push_back(index);
   ranks.push_back(0);
+}
+LogicalResult Model::net(Operation *operation) {
+  if (failed(ownership(operation)) || failed(verifyResolvedNetDeclaration(operation)))
+    return failure();
+  auto type = llvm::cast<ResolvedType>(operation->getResult(0).getType());
+  addNet(operation->getResult(0), text(metadata(operation), "profile"), type.getDriveMode());
+  return success();
+}
+LogicalResult Model::netBoundary(Operation *operation) {
+  if (failed(ownership(operation)) || failed(arity(operation, 0, 1)))
+    return failure();
+  auto child = resolveHierarchyInstance(operation, operation->getAttr("instance"));
+  if (failed(child))
+    return failure();
+  auto [inventory, inserted] = childNetDeclarations.try_emplace(child->module);
+  if (inserted)
+    for (Operation &declaration : child->module->getRegion(0).front()) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(operation, "resolved boundary declaration inventory exceeds its budget");
+      if (!llvm::isa<ResolvedNetOp>(declaration) || !marked(&declaration))
+        continue;
+      if (failed(verifyResolvedNetDeclaration(&declaration)))
+        return failure();
+      if (!inventory->second.try_emplace(text(&declaration, "name"), &declaration).second)
+        return reject(operation, "child resolved net names must be unambiguous identities");
+    }
+  StringRef endpoint = text(operation, "endpoint");
+  auto original = inventory->second.find(endpoint);
+  if (!identity(endpoint) || original == inventory->second.end())
+    return reject(operation, "resolved boundary requires its exact immediate child's direct net");
+  Operation *declaration = original->second;
+  if (!netBoundaryIdentities.emplace(child->instance, declaration).second)
+    return reject(operation,
+                  "duplicate child resolved projection must reuse its physical identity");
+  auto formal = llvm::cast<ResolvedType>(declaration->getResult(0).getType());
+  auto actual = llvm::dyn_cast<ResolvedType>(operation->getResult(0).getType());
+  auto facts = metadata(operation);
+  if (!actual || !identity(text(facts, "semantic_path")) ||
+      text(facts, "profile") != text(metadata(declaration), "profile") ||
+      text(facts, "placement") != text(metadata(declaration), "placement") || facts.get("domain") ||
+      metadata(declaration).get("domain") ||
+      !equivalentBoundaryTypes(formal, child->instance, actual, nullptr) ||
+      failed(inferDigitalStorageMaximumBits(actual.getElementType(), operation)))
+    return reject(operation,
+                  "resolved boundary must preserve exact mode, actual type, placement and profile "
+                  "without inventing a domain constraint");
+  addNet(operation->getResult(0), text(metadata(declaration), "profile"), formal.getDriveMode());
+  netBoundaries.emplace(operation, std::make_pair(child->instance, declaration));
   return success();
 }
 FailureOr<unsigned> Model::netIndex(Value value, Operation *operation) {
@@ -1185,6 +1245,9 @@ LogicalResult Model::verify() {
     } else if (llvm::isa<ResolvedNetOp>(operation) && marked(&operation)) {
       if (failed(net(&operation)))
         return failure();
+    } else if (llvm::isa<ResolvedBoundaryOp>(operation)) {
+      if (failed(netBoundary(&operation)))
+        return failure();
     }
   }
   // Multiple role-qualified accesses retain one physical member identity.
@@ -1220,7 +1283,7 @@ LogicalResult Model::verify() {
       continue;
     }
     if (llvm::isa<InterfaceOp, InterfaceInstanceOp, InterfaceBoundaryOp, MemberAccessOp,
-                  ResolvedNetOp>(operation))
+                  ResolvedNetOp, ResolvedBoundaryOp>(operation))
       continue;
     if (llvm::isa<InterfaceAbiOp>(operation)) {
       if (failed(abi(&operation)))
@@ -1383,6 +1446,21 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
       unsigned root = representative(netIndices.lookup(operation.getOperand(0)));
       collected.components[positions.lookup(root)].values.push_back(operation.getResult(0));
     }
+    if (llvm::isa<ResolvedNetOp, ResolvedBoundaryOp>(operation) && marked(&operation)) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(&operation, "resolved net endpoint slots exceed their structural budget");
+      auto boundary = netBoundaries.find(&operation);
+      auto index = netIndices.find(operation.getResult(0));
+      if (index == netIndices.end())
+        return reject(&operation, "resolved endpoint has no existing component identity");
+      collected.endpoints.push_back(
+          {&operation,
+           boundary == netBoundaries.end() ? nullptr : boundary->second.first,
+           boundary == netBoundaries.end() ? &operation : boundary->second.second,
+           StringAttr::get(module->getContext(), ""),
+           {},
+           components.lookup(representative(index->second))});
+    }
     auto found = instances.find(&operation);
     if (found == instances.end() || !found->second.dimensions.empty())
       continue;
@@ -1404,6 +1482,8 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
     }
   }
   for (auto &endpoint : collected.endpoints) {
+    if (llvm::isa<ResolvedNetOp, ResolvedBoundaryOp>(endpoint.operation))
+      continue;
     auto represented = resolvedMembers.find({endpoint.operation, endpoint.path.getValue().str()});
     if (represented != resolvedMembers.end())
       endpoint.component = represented->second;

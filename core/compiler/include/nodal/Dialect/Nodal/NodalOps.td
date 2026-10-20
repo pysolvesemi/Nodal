@@ -656,14 +656,15 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
 def Nodal_GeneratedExportOp : Nodal_Op<"generated_export", [HasParent<"GenerateOp">]> {
   let summary = "Exact existing storage export from one generated family template";
   let arguments = (ins AnyType:$value, StrAttr:$member, StrAttr:$access,
-    DictionaryAttr:$metadata);
+    DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$kind);
   let hasVerifier = 1;
 }
 
 def Nodal_GeneratedMemberOp : Nodal_Op<"generated_member"> {
   let summary = "Checked static ordinal and member projection from an exact family";
   let arguments = (ins Nodal_GeneratedFamilyType:$family, I64:$ordinal,
-    StrAttr:$member, StrAttr:$access, DictionaryAttr:$metadata);
+    StrAttr:$member, StrAttr:$access, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$kind);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -709,6 +710,16 @@ def Nodal_ResolvedNetOp : Nodal_Op<"resolved_net",
     [HasParent<"ModuleOp">]> {
   let summary = "Resolved digital net identity";
   let arguments = (ins StrAttr:$name, DictionaryAttr:$metadata);
+  let results = (outs Nodal_ResolvedType:$result);
+  let hasVerifier = 1;
+}
+
+// Exact child reference, never another resolved-net allocation.
+def Nodal_ResolvedBoundaryOp : Nodal_Op<"net_boundary",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Parent-owned alias of an exact immediate-child resolved net";
+  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$endpoint,
+    DictionaryAttr:$metadata);
   let results = (outs Nodal_ResolvedType:$result);
   let hasVerifier = 1;
 }
@@ -2052,6 +2063,22 @@ def Nodal_FsmActivationOp : Nodal_Op<"fsm_activation", [HasParent<"ModuleOp">]> 
   let hasVerifier = 1;
 }
 
+// F58: closed read-only predicates retain exact owning transition tables.
+def Nodal_FsmElapsedOp : Nodal_Op<"fsm_elapsed", [HasParent<"ModuleOp">]> {
+  let summary = "Registered elapsed-edge predicate owned by one timed FSM";
+  let arguments = (ins AnyType:$elapsed, I64Attr:$cycles, FlatSymbolRefAttr:$domain,
+    OptionalAttr<DictionaryAttr>:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_FsmTransferOp : Nodal_Op<"fsm_transfer", [HasParent<"ModuleOp">]> {
+  let summary = "Read-only valid-ready conjunction owned by one FSM transition";
+  let arguments = (ins AnyType:$valid, AnyType:$ready, FlatSymbolRefAttr:$domain,
+    OptionalAttr<DictionaryAttr>:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 // F56 v0.2: executable closed action ingress; F19 descriptors remain unchanged.
 def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
     IsolatedFromAbove, NoTerminator]> {
@@ -2061,7 +2088,9 @@ def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
     StrAttr:$initial_case, StrAttr:$requested_encoding, StrAttr:$resolved_encoding,
     I64Attr:$local_width, ArrayAttr:$case_ids, ArrayAttr:$local_codes,
     StrAttr:$illegal_policy, ArrayAttr:$states, ArrayAttr:$transitions,
-    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata);
+    ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$lifecycle_mode, OptionalAttr<ArrayAttr>:$timer_edges,
+    OptionalAttr<ArrayAttr>:$transfer_edges);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<AnyRegion>:$action_bodies);
   let hasVerifier = 1;

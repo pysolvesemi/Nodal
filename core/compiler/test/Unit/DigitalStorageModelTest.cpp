@@ -814,6 +814,53 @@ int main() {
         generatedDomain + nestedFamily(family("0", "3", "1") + storage(sint, "outerCopy") +
                                        assign(sint, sint, "outerCopy", "stored")),
         false);
+  const std::string familyExport =
+      "\"nodal.generated_export\"(%family) <{member = \"inner\", access = \"read\", "
+      "kind = \"family\", metadata = {}}> : (!nodal.generated_family) -> ()\n";
+  auto familyView = [&](StringRef ordinal) {
+    return literal("i64", ordinal, "outerOrdinal") +
+           "%innerView = \"nodal.generated_member\"(%outerFamily, %outerOrdinal) "
+           "<{member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> "
+           ": (!nodal.generated_family, i64) -> !nodal.generated_family\n";
+  };
+  const std::string exportedNested = nestedFamily(family("0", "3", "1") + familyExport);
+  const std::string nestedRead =
+      replace(selected("1"), "%family, %ordinal", "%innerView, %ordinal");
+  check("family-view-exact-two-level-selection",
+        generatedDomain + exportedNested + familyView("0") + nestedRead, true);
+  check("family-view-terminal-real-storage-dependency",
+        generatedDomain + exportedNested + familyView("1") + nestedRead + storage(sint) +
+            assign(sint, sint, "wire", "selected"),
+        true);
+  check("family-view-outer-bound-rejected",
+        generatedDomain + exportedNested + familyView("2") + nestedRead, false);
+  check("family-view-inner-bound-rejected",
+        generatedDomain + exportedNested + familyView("0") +
+            replace(selected("3"), "%family, %ordinal", "%innerView, %ordinal"),
+        false);
+  check("family-view-export-cannot-expand-access",
+        generatedDomain +
+            nestedFamily(family("0", "3", "1") +
+                         replace(familyExport, "access = \"read\"", "access = \"wire\"")),
+        false);
+  check("family-view-selection-cannot-expand-access",
+        generatedDomain + exportedNested +
+            replace(familyView("0"), "access = \"read\"", "access = \"register\""),
+        false);
+  check("family-view-kind-cannot-be-omitted",
+        generatedDomain + exportedNested + replace(familyView("0"), "kind = \"family\", ", ""),
+        false);
+  check("family-view-export-kind-unknown",
+        generatedDomain +
+            nestedFamily(family("0", "3", "1") +
+                         replace(familyExport, "kind = \"family\"", "kind = \"instance\"")),
+        false);
+  check("family-view-duplicate-unused-export",
+        generatedDomain + nestedFamily(family("0", "3", "1") + familyExport + familyExport), false);
+  check("family-view-storage-is-not-family",
+        generatedDomain + replace(family("0", "3", "1"), "member = \"stored\"",
+                                  "member = \"stored\", kind = \"family\""),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

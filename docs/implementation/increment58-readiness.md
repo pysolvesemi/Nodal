@@ -775,3 +775,52 @@ qualification or completion of fixed-Struct CDC inverse adaptation. Those requir
 continuations and pinned generate-consumer limitations remain explicit in the
 existing gates. Markdown, Python syntax and diff checks pass; no F58 completion
 box changes.
+
+## Checkpoint 16 — timed execution, selected family chains and net aliases
+
+The canonical FlatFSM executor admits v4 timer and read-only transfer predicates,
+retaining explicit lifecycle mode and actual private/sample operand queries.
+Each timed occurrence owns one UInt31 saturating elapsed register; timer expiry,
+entry/reentry/recovery, pause, cancellation and reset use the existing transition
+and sequential-update owners. Stream transfer is a sampled valid-and-ready
+predicate, not new ready ownership or a protocol scheduler. Legacy v1-v3 remain
+admitted. The fixed counter width is an explicit bounded-storage tradeoff, not a
+minimal-area optimization claim.
+
+Generated exports and members gain a closed optional family kind. A family view
+retains the exact direct nested Generate and ordered actual selection prefix;
+its read-only structural access does not invent or erase descendant storage
+capabilities. The existing storage verifier bounds query depth at 128 and work
+at 65536, verifies complete unique inventories and rejects runtime/escaped
+family handles. No second family registry or sampled-lane expansion is added.
+External selected writes, generated symbol views and target loops remain open.
+
+Standalone resolved-net boundary aliases reuse the actual immediate-child
+endpoint and existing resolved topology. They preserve exact contextual types,
+resolution policy and real driver/read dependencies, without fabricating a
+standalone domain constraint. Source carriers and resolved/inout target support
+are separate remaining work. Sequential normalization now orders the bounded
+late-control dependency span before capturing it, checks the original explicit
+effect subsequence and fails transactionally if that order cannot be retained.
+It does not hoist declarations across scopes or reorder unrelated late bindings.
+
+Focused native acceptance is **987/987** cases: Sequential 89, Memory 116,
+FlatFSM 94, composition 20, assignment guards 34, Interface 241, observation 25,
+storage 165, structural-if 73 and shape/iteration 130. The Parameter executable
+also exits zero, including its 23 named symbolic checks and earlier assertions.
+The initial recovered run had two correctly rejected new negatives with stale
+expected diagnostic text; only those exact assertions changed. Their final
+89/89 and 241/241 reruns pass. Interrupted pre-restart runs are not counted.
+Production manifests remain identical; the final copied compiler has SHA256
+`3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
+Commands and matched manifests are under `.work/f58-generated-normalization`.
+
+All six maintained GeneratedArea inputs now normalize successfully, including
+symbolic and concrete per-lane registers. Six scratch selected-family source
+witnesses pass the full native gate, including three-level and separate-JAR
+views. Four standalone-net controls accept the real read/driver case and reject
+wrong mode, missing endpoint and feedback; its target conversion still refuses
+resolved carriers explicitly. The actual timer-source and target demonstrations
+have also passed on this compiler, but their source/API and maintained runner
+changes are reserved for the next coherent checkpoint. No F58 parent/child box
+is closed by this backend slice.

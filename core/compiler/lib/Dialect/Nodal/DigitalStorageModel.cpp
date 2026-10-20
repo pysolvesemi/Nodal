@@ -91,13 +91,27 @@ LogicalResult verifyGeneratedExportOperation(Operation *operation) {
     return reject(operation,
                   "generated export requires its direct actual family and one storage value");
   for (NamedAttribute attribute : operation->getAttrs())
-    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "metadata"},
+    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "kind", "metadata"},
                             attribute.getName().getValue()))
       return reject(operation, "generated export has unsupported metadata authority");
   StringRef member = text(operation, "member"), access = text(operation, "access");
   if (member.empty() || member.size() > 1024 || member != member.trim() ||
       llvm::any_of(member, [](unsigned char c) { return c <= 32 || c == 127; }))
     return reject(operation, "generated export requires an exact bounded member key");
+  StringRef kind = text(operation, "kind");
+  if (!kind.empty() && kind != "family")
+    return reject(operation, "generated export has unknown closed member kind");
+  if (kind == "family") {
+    Operation *nested = operation->getOperand(0).getDefiningOp();
+    if (access != "read" || !llvm::isa_and_nonnull<GenerateOp>(nested) ||
+        nested->getParentOp() != family || nested->getNumResults() != 1 ||
+        !llvm::isa<GeneratedFamilyType>(operation->getOperand(0).getType()) ||
+        !ownedFamilyScope(nested) || failed(resolveGeneratedDomain(nested)) ||
+        failed(verifyDigitalValueScope(operation->getOperand(0), operation)))
+      return reject(operation,
+                    "family export requires its preceding direct nested family and read access");
+    return success();
+  }
   Operation *storage = operation->getOperand(0).getDefiningOp();
   if (!llvm::isa_and_nonnull<DigitalStorageOp>(storage) || storage->getParentOp() != family ||
       failed(verifyDigitalValueScope(operation->getOperand(0), operation)) ||
@@ -133,50 +147,96 @@ LogicalResult verifyGeneratedFamilyOperation(Operation *operation) {
         failed(verifyGeneratedExportOperation(&child)))
       return reject(&child, "family exports must have unique verified member keys");
   }
-  for (Operation *user : operation->getResult(0).getUsers())
-    if (user->getName().getStringRef() != "nodal.generated_member" || user->getNumOperands() != 2 ||
+  for (Operation *user : operation->getResult(0).getUsers()) {
+    if (llvm::isa<GeneratedExportOp>(user) && text(user, "kind") == "family" &&
+        succeeded(verifyGeneratedExportOperation(user)))
+      continue;
+    if (!llvm::isa<GeneratedMemberOp>(user) || user->getNumOperands() != 2 ||
         user->getOperand(0) != operation->getResult(0))
       return reject(user, "family handle is not a runtime payload or arbitrary capability");
+  }
   return success();
 }
 
-FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation) {
+namespace {
+FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work) {
   auto rejectMember = [&](StringRef reason) -> FailureOr<GeneratedMember> {
     (void)reject(operation, reason);
     return failure();
   };
-  if (operation->getNumOperands() != 2 || operation->getNumResults() != 1 ||
-      operation->getNumRegions() || operation->getNumSuccessors())
+  if (depth > 128 || !work--)
+    return rejectMember("generated selection chain exceeds finite depth or work budget");
+  if (!llvm::isa<GeneratedMemberOp>(operation) || operation->getNumOperands() != 2 ||
+      operation->getNumResults() != 1 || operation->getNumRegions() ||
+      operation->getNumSuccessors())
     return rejectMember("generated member requires one exact family and ordinal");
   for (NamedAttribute attribute : operation->getAttrs())
-    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "metadata"},
+    if (!llvm::is_contained(ArrayRef<StringRef>{"member", "access", "kind", "metadata"},
                             attribute.getName().getValue()))
       return rejectMember("generated member has unsupported proof metadata");
-  Operation *family = operation->getOperand(0).getDefiningOp();
-  if (!llvm::isa_and_nonnull<GenerateOp>(family) ||
-      failed(verifyDigitalValueScope(operation->getOperand(0), operation)) ||
-      failed(verifyGeneratedFamilyOperation(family)))
+  Value handle = operation->getOperand(0);
+  if (!llvm::isa<GeneratedFamilyType>(handle.getType()) ||
+      failed(verifyDigitalValueScope(handle, operation)))
     return rejectMember("generated member must retain its actual dominating family");
+  Operation *family = handle.getDefiningOp();
+  llvm::SmallVector<GeneratedSelection, 2> selections;
+  if (llvm::isa_and_nonnull<GeneratedMemberOp>(family)) {
+    auto parent = inspectMember(family, depth + 1, work);
+    if (failed(parent) || !parent->familyView)
+      return rejectMember("nested family selection requires a checked immutable family view");
+    selections = std::move(parent->selections);
+    family = parent->storage.getDefiningOp();
+  }
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || family->getNumRegions() != 1 ||
+      !llvm::hasSingleElement(family->getRegion(0)))
+    return rejectMember("generated member must retain an actual family declaration");
+  for (Operation &child : family->getRegion(0).front()) {
+    (void)child;
+    if (!work--)
+      return rejectMember("generated selection inventory exceeds finite work budget");
+  }
+  if (failed(verifyGeneratedFamilyOperation(family)))
+    return failure();
   Operation *exported = nullptr;
   for (Operation &child : family->getRegion(0).front())
-    if (child.getName().getStringRef() == "nodal.generated_export" &&
-        text(&child, "member") == text(operation, "member"))
+    if (llvm::isa<GeneratedExportOp>(child) && text(&child, "member") == text(operation, "member"))
       exported = &child;
   if (!exported)
     return rejectMember("generated member key is absent from the actual closed export inventory");
   Value storage = exported->getOperand(0);
-  StringRef access = text(operation, "access");
-  if ((access != "read" && access != text(exported, "access")) ||
+  StringRef access = text(operation, "access"), kind = text(operation, "kind");
+  bool familyView = kind == "family";
+  if ((!kind.empty() && !familyView) || kind != text(exported, "kind") ||
+      (familyView && access != "read") ||
+      (access != "read" && access != text(exported, "access")) ||
       (access != "read" && access != "wire" && access != "register") ||
       operation->getResult(0).getType() != storage.getType())
-    return rejectMember("generated member must retain exact type and monotonic export access");
+    return rejectMember(
+        "generated member must retain exact kind, type and monotonic export access");
   auto coordinate = resolveGeneratedOrdinal(family, operation->getOperand(1), operation);
   if (failed(coordinate))
     return rejectMember("generated ordinal lacks an all-legal existence proof");
-  return GeneratedMember{family, exported, storage, *coordinate,
+  selections.push_back({family, operation->getOperand(1), *coordinate});
+  if (familyView)
+    for (Operation *user : operation->getResult(0).getUsers())
+      if (!llvm::isa<GeneratedMemberOp>(user) || user->getNumOperands() != 2 ||
+          user->getOperand(0) != operation->getResult(0))
+        return rejectMember("family view is immutable structure, not a runtime payload or export");
+  return GeneratedMember{family,
+                         exported,
+                         storage,
+                         *coordinate,
+                         std::move(selections),
+                         familyView,
                          access == "wire"       ? GeneratedMember::Access::Wire
                          : access == "register" ? GeneratedMember::Access::Register
                                                 : GeneratedMember::Access::Read};
+}
+} // namespace
+
+FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation) {
+  unsigned work = 65536;
+  return inspectMember(operation, 0, work);
 }
 
 LogicalResult verifyDigitalStorageModel(Operation *module) {

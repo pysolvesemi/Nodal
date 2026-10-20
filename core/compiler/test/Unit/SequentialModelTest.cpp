@@ -263,6 +263,10 @@ int main(int argc, char **argv) {
                       name == "structural-third-overlapping-root" ||
                       name == "structural-independent-choices-not-exclusive"))
       causal = diagnostics.find("NODAL-STATE-001") != std::string::npos;
+    if (name == "generated-late-foreign-clock-remains-rejected")
+      causal = diagnostics.find(
+                   "clock/reset producer must match an actual local input port and domain") !=
+               std::string::npos;
     report(name, ok == expected && causal);
     return m;
   };
@@ -696,6 +700,47 @@ int main(int argc, char **argv) {
   }
   normalize("generated-declaration-only-reset-hold",
             generatedSetup + family(state() + exportState));
+  const std::string lateSetup = replace(generatedSetup, binding(), "");
+  auto late = normalize("generated-late-clock-reset-producers",
+                        lateSetup + parameter(true) +
+                            "\"nodal.parameter_envelope\"() <{parameter = @MODE, effects = "
+                            "[\"topology\"], policy = \"static_generate\", metadata = {}}> : "
+                            "() -> ()\n" +
+                            family(state() + twoArms + exportState) +
+                            "%selected = \"nodal.generated_member\"(%family, %familyLo) "
+                            "<{member = \"state\", access = \"read\", metadata = {}}> : "
+                            "(!nodal.generated_family, i64) -> " +
+                            u8 + "\n" + binding());
+  if (late) {
+    Operation *familyOp = nullptr;
+    unsigned clocks = 0, resets = 0, registers = 0, updates = 0;
+    bool dominating = true;
+    late->walk([&](nodal::GenerateOp op) { familyOp = op; });
+    late->walk([&](nodal::PortValueOp op) {
+      StringRef name = op->getAttrOfType<FlatSymbolRefAttr>("port").getValue();
+      if (name != "coreClock" && name != "coreReset")
+        return;
+      clocks += name == "coreClock";
+      resets += name == "coreReset";
+      dominating &= familyOp && op->isBeforeInBlock(familyOp);
+    });
+    late->walk([&](nodal::DigitalStorageOp) { ++registers; });
+    late->walk([&](nodal::SequentialUpdateOp) { ++updates; });
+    late->walk([&](nodal::GeneratedMemberOp op) {
+      dominating &= familyOp && familyOp->isBeforeInBlock(op);
+    });
+    report("late-controls-scheduled-once-with-one-template",
+           dominating && clocks == 1 && resets == 1 && registers == 1 && updates == 2);
+  }
+  normalize("ordinary-structural-late-control-producers",
+            replace(staticSetup, binding(), "") + twoArms + binding());
+  normalize("generated-late-reset-chain-and-hold",
+            replace(replace(setup("async"), state(), ""), binding("async"), "") +
+                family(state() + exportState) + binding("async"));
+  check("generated-late-foreign-clock-remains-rejected",
+        lateSetup + family(state() + enabled("family.when") + exportState) +
+            replace(binding(), "port = @coreClock", "port = @input"),
+        false);
   auto bounded = parse(setup() + enabled());
   if (bounded) {
     auto m = *bounded->getOps<nodal::ModuleOp>().begin();

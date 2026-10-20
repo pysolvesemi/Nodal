@@ -3231,6 +3231,10 @@ LogicalResult nodal::ResolvedNetOp::verify() {
   return requireText(getOperation(), "name", "resolved-net name");
 }
 
+LogicalResult nodal::ResolvedBoundaryOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
+
 LogicalResult nodal::NetReadOp::verify() {
   if (hasDigitalInterfaceContract(getOperation()))
     return verifyDigitalInterfaceOperation(getOperation());
@@ -4405,6 +4409,8 @@ LogicalResult nodal::BehavioralIfOp::verify() {
 LogicalResult nodal::SequentialSelectOp::verify() { return verifySequentialSelect(getOperation()); }
 LogicalResult nodal::SequentialUpdateOp::verify() { return verifySequentialUpdate(getOperation()); }
 
+LogicalResult nodal::FsmElapsedOp::verify() { return verifyFsmTimingOperation(getOperation()); }
+LogicalResult nodal::FsmTransferOp::verify() { return verifyFsmTimingOperation(getOperation()); }
 LogicalResult nodal::FsmJoinOp::verify() { return verifyFsmCompositionOperation(getOperation()); }
 LogicalResult nodal::FsmActivationOp::verify() {
   return verifyFsmCompositionOperation(getOperation());

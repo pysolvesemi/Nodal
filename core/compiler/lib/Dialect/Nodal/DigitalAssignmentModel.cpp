@@ -744,6 +744,8 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     auto member = inspectGeneratedMember(definition);
     if (failed(member))
       return failure();
+    if (member->familyView)
+      return reject(use, "generated family view is not a runtime dependency");
     // The selected reference retains its real storage dependency and sampling
     // provenance. The family handle itself is not a hardware data dependency.
     return depend(node, member->storage, member->exportOperation);
@@ -787,6 +789,14 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     // Synchronous response is state. Its sampled address is checked separately
     // by the same sampling owner; async response keeps its address edge here.
     return port->latency ? success() : depend(node, definition->getOperand(0), definition);
+  }
+  if (llvm::isa<FsmElapsedOp, FsmTransferOp>(definition)) {
+    SmallVector<Value, 2> dependencies;
+    if (failed(fsmTimingDependencies(value, dependencies)))
+      return reject(definition, "FSM timing predicate lacks its exact checked guard owner");
+    for (Value input : dependencies)
+      if (failed(depend(node, input, definition))) return failure();
+    return success();
   }
   if (llvm::isa<FsmJoinOp, FsmActivationOp>(definition)) {
     SmallVector<Value, 8> dependencies;
@@ -1050,9 +1060,8 @@ LogicalResult AssignmentQuery::verify() {
         if (failed(header) || failed(verifyFlatFSMOperation(&operation)) ||
             scope.depth >= limits.maximumGuardDepth)
           return failure();
-        for (unsigned i = header->privateStateCount(); i < header->guardOffset + header->guards;
-             ++i)
-          if (failed(valueNode(operation.getOperand(i), &operation)))
+        for (Value input : header->sampledInputs())
+          if (failed(valueNode(input, &operation)))
             return failure();
         for (Block *body : header->bodies)
           scopes.push_back({body, scope.iteration, scope.depth + 1});

@@ -114,7 +114,9 @@ struct DigitalResolvedComponent {
   llvm::SmallVector<mlir::Value, 2> values;
   llvm::SmallVector<mlir::Operation *, 2> drivers, splits;
 };
-/// Logical slots include unaccessed leaves. A null component remains unrepresented.
+/// Logical slots include unaccessed Interface leaves and existing standalone nets.
+/// Standalone declarations/boundaries use an explicit empty member path. A null
+/// component remains unrepresented, never permission to allocate a new net.
 struct DigitalResolvedEndpoint {
   mlir::Operation *operation = nullptr;
   mlir::Operation *instance = nullptr;

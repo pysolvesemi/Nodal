@@ -168,6 +168,39 @@ std::string controlledMachine(bool actions = true, std::string policy = "recover
               event + "\"}}> : (" + bits(1) + ", " + bits(1) + ") -> " + bits(1) + "\n";
   return result;
 }
+std::string timedSetup(bool reset = true) {
+  return controlledSetup(reset) +
+         replace(literal("elapsedZero", 0, 31), bits(31), "!nodal.uint<31>") +
+         state("elapsed", "!nodal.uint<31>", reset ? "elapsedZero" : "");
+}
+std::string timedMachine(int cycles = 3, bool controlled = true) {
+  auto source = controlled ? controlledMachine(false) : machine(false, "recover_to_initial");
+  source = replace(source, controlled ? "flat-fsm-v2" : "flat-fsm-v1", "flat-fsm-v4");
+  source = replace(source, "machine_id =",
+                   "lifecycle_mode = \"" + std::string(controlled ? "controlled" : "legacy") +
+                       "\", timer_edges = [{ordinal = 0 : i64, cycles = " + std::to_string(cycles) +
+                       " : i64}], transfer_edges = [], machine_id =");
+  source = replace(source, controlled ? "%enable, %go" : "%state, %go",
+                   controlled ? "%enable, %elapsed, %expired" : "%state, %elapsed, %expired");
+  std::string prefix =
+      " : (" + bits(2) + ", " +
+      (controlled ? bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ", " : "");
+  source = replace(source, prefix, prefix + "!nodal.uint<31>, ");
+  return "%expired = \"nodal.fsm_elapsed\"(%elapsed) <{cycles = " + std::to_string(cycles) +
+         " : i64, domain = @core, metadata = {semantic_path = \"Fixture.expired\"}}> : "
+         "(!nodal.uint<31>) -> " +
+         bits(1) + "\n" + source;
+}
+std::string transferMachine() {
+  auto source = replace(controlledMachine(false), "flat-fsm-v2", "flat-fsm-v4");
+  source = replace(source, "machine_id =",
+                   "lifecycle_mode = \"controlled\", timer_edges = [], transfer_edges = [{ordinal "
+                   "= 0 : i64}], machine_id =");
+  source = replace(source, "%enable, %go", "%enable, %transferred");
+  return "%transferred = \"nodal.fsm_transfer\"(%go, %done) <{domain = @core, metadata = "
+         "{semantic_path = \"Fixture.transferred\"}}> : (" +
+         bits(1) + ", " + bits(1) + ") -> " + bits(1) + "\n" + source;
+}
 std::string requiredFixture(bool controlled = true, bool conditional = true, bool error = false,
                             bool bothReset = false) {
   auto child = controlled ? controlledSetup() : setup();
@@ -267,6 +300,12 @@ int evaluate(Value value, const std::map<std::string, int> &inputs) {
     return at(0) || at(1);
   if (code == "digital_eq")
     return at(0) == at(1);
+  if (code == "digital_ge")
+    return at(0) >= at(1);
+  if (code == "digital_add")
+    return at(0) + at(1);
+  if (code == "digital_truncate")
+    return at(0) & 0x7fffffff;
   if (code == "digital_select")
     return at(0) ? at(1) : at(2);
   if (code == "enum_is_valid")
@@ -1240,6 +1279,114 @@ int main(int argc, char **argv) {
          last = pairBudget.find("], actions", first);
   pairBudget.replace(first, last - first, edgeRecords);
   check("exclusive-pair-work-budget", wrap(setup() + literal("false", 0, 1) + pairBudget), false);
+  for (bool reset : {true, false}) {
+    check(reset ? "timed-controlled-cycle-pause-reentry-reset"
+                : "timed-resetless-establishment-and-cancel",
+          wrap(timedSetup(reset) + timedMachine()), true, [&](nodal::ModuleOp module) {
+            bool good = true;
+            for (int state : {0, 1, 2, 3})
+              for (int status : {0, 1, 2, 3})
+                for (int elapsed : {0, 1, 2, 2147483646, 2147483647})
+                  for (int restart : {0, 1})
+                    for (int cancel : {0, 1})
+                      for (int enable : {0, 1}) {
+                        std::map<std::string, int> values{
+                            {"state", state},     {"status", status}, {"elapsed", elapsed},
+                            {"restart", restart}, {"cancel", cancel}, {"enable", enable},
+                            {"reset", 0},         {"go", 0},          {"again", 0},
+                            {"done", 0},          {"count", 0}};
+                        bool cancelling = status == 1 && cancel,
+                             restarting = restart && !cancelling;
+                        bool ordinary = !cancelling && !restart && enable;
+                        bool recovery = ordinary && (status == 1 || status == 2) &&
+                                        (state == 3 || (status == 2 && state != 2));
+                        bool taken = ordinary && status == 1 && state == 0 && elapsed >= 2;
+                        int expected = cancelling || restarting || recovery || taken ? 0
+                                       : ordinary && status == 1 && state == 0
+                                           ? std::min(elapsed + 1, 2147483646)
+                                           : elapsed;
+                        module.walk([&](nodal::SequentialUpdateOp op) {
+                          if (op->getOperand(0)
+                                  .getDefiningOp()
+                                  ->getAttrOfType<StringAttr>("name")
+                                  .getValue() == "elapsed")
+                            good &= evaluate(op->getOperand(1), values) == expected;
+                        });
+                      }
+            return good;
+          });
+  }
+  check("timed-legacy-public-after", wrap(timedSetup() + timedMachine(1, false)), true);
+  check("timed-maximum-threshold-saturates", wrap(timedSetup() + timedMachine(2147483647)), true,
+        [](nodal::ModuleOp module) {
+          bool good = true;
+          for (int elapsed : {2147483645, 2147483646, 2147483647})
+            module.walk([&](nodal::SequentialUpdateOp op) {
+              if (op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue() ==
+                  "elapsed")
+                good &= evaluate(op->getOperand(1), {{"state", 0},
+                                                     {"status", 1},
+                                                     {"elapsed", elapsed},
+                                                     {"restart", 0},
+                                                     {"cancel", 0},
+                                                     {"enable", 1},
+                                                     {"reset", 0},
+                                                     {"again", 0},
+                                                     {"done", 0}}) ==
+                        (elapsed >= 2147483646 ? 0 : 2147483646);
+            });
+          return good;
+        });
+  check(
+      "transfer-valid-ready-observation", wrap(controlledSetup() + transferMachine()), true,
+      [](nodal::ModuleOp module) {
+        bool good = true;
+        for (int valid : {0, 1})
+          for (int ready : {0, 1})
+            module.walk([&](nodal::SequentialUpdateOp op) {
+              if (op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue() ==
+                  "state")
+                good &= evaluate(op->getOperand(1), {{"state", 0},
+                                                     {"status", 1},
+                                                     {"restart", 0},
+                                                     {"cancel", 0},
+                                                     {"enable", 1},
+                                                     {"reset", 0},
+                                                     {"go", valid},
+                                                     {"done", ready},
+                                                     {"again", 0}}) == (valid && ready ? 1 : 0);
+            });
+        return good;
+      });
+  check("timed-zero-count-rejected", wrap(timedSetup() + timedMachine(0)), false);
+  check("timed-negative-count-rejected", wrap(timedSetup() + timedMachine(-1)), false);
+  check("timed-counter-wrong-type",
+        wrap(timedSetup() + replace(timedMachine(), "%elapsed) <{cycles", "%state) <{cycles")),
+        false);
+  check("timed-table-disagrees",
+        wrap(timedSetup() + replace(timedMachine(), "cycles = 3 : i64}],", "cycles = 4 : i64}],")),
+        false);
+  check("timed-query-extra-consumer",
+        wrap(timedSetup() + timedMachine() +
+             "%escape = \"nodal.digital_expr\"(%expired) <{operator_name = \"bool_not\", metadata "
+             "= {}}> : (" +
+             bits(1) + ") -> " + bits(1) + "\n"),
+        false);
+  check("timed-orphan-query",
+        wrap(timedSetup() + timedMachine().substr(0, timedMachine().find("%next"))), false);
+  check(
+      "timed-private-counter-writer-rejected",
+      wrap(timedSetup() + timedMachine() + assignment("elapsed", "elapsedZero", "!nodal.uint<31>")),
+      false);
+  check(
+      "timed-below-bound-budget-transaction", wrap(timedSetup() + timedMachine()), true,
+      [](nodal::ModuleOp module) {
+        auto before = print(module);
+        nodal::SequentialModelLimits limits;
+        limits.maximumOperations = 16;
+        return failed(nodal::normalizeSequentialModel(module, limits)) && print(module) == before;
+      },
+      false);
   llvm::outs() << total << " flat FSM cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

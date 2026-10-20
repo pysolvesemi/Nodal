@@ -15,11 +15,19 @@ namespace nodal {
 class HierarchyModel;
 
 /// A query over the actual Generate/export SSA graph, never a second family registry.
+struct GeneratedSelection {
+  mlir::Operation *family = nullptr;
+  mlir::Value ordinal;
+  InstantiatedIntegerExpression coordinate;
+};
 struct GeneratedMember {
   mlir::Operation *family = nullptr;
   mlir::Operation *exportOperation = nullptr;
   mlir::Value storage;
   InstantiatedIntegerExpression coordinate;
+  /// Ordered actual outer-to-inner selections, never sampled occurrence clones.
+  llvm::SmallVector<GeneratedSelection, 2> selections;
+  bool familyView = false;
   enum class Access { Read, Wire, Register } access = Access::Read;
 };
 mlir::LogicalResult verifyGeneratedFamilyOperation(mlir::Operation *operation);

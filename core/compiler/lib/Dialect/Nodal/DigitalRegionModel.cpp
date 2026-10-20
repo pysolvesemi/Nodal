@@ -195,8 +195,10 @@ std::string digitalValueSemanticPath(Value value) {
   }
   if (auto result = llvm::dyn_cast<OpResult>(value)) {
     Operation *definition = result.getOwner();
-    if (llvm::isa<FlatFSMOp>(definition) && succeeded(inspectFlatFSMHeader(definition)))
-      return (path(definition) + (result.getResultNumber() ? ".taken" : ".next")).str();
+    if (llvm::isa<FlatFSMOp>(definition)) {
+      StringRef role = flatFSMResultRole(value);
+      return role.empty() ? std::string() : (path(definition) + "." + role).str();
+    }
     if (llvm::isa<AsyncFifoOp>(definition)) {
       auto endpoint = inspectExecutableCrossingResult(value);
       if (failed(endpoint))

@@ -68,6 +68,7 @@ struct Graph {
   SmallVector<llvm::APInt, 4> codes;
   SmallVector<Transition, 8> transitions;
   SmallVector<SmallVector<unsigned, 4>, 4> outgoing, incoming;
+  SmallVector<bool, 4> terminal;
   unsigned initial = 0, width = 0;
 };
 FailureOr<Graph> graph(const FlatFSMHeader &h) {
@@ -87,7 +88,7 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
       ids.size() != enumeration->caseIds.size() || codes.size() != ids.size() ||
       states.size() != ids.size())
     return failure();
-  Graph g{*enumeration, {}, {}, {}, {}, 0, unsigned(width.getInt())};
+  Graph g{*enumeration, {}, {}, {}, {}, {}, 0, unsigned(width.getInt())};
   llvm::StringMap<unsigned> index;
   llvm::DenseSet<Attribute> uniqueCodes;
   uint64_t codeBits = 0;
@@ -128,7 +129,7 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     if (g.codes[i] != expected)
       return failure();
   }
-  SmallVector<bool, 4> terminal(ids.size(), false);
+  g.terminal.resize(ids.size(), false);
   llvm::DenseSet<unsigned> stateIds;
   int64_t previous = -1;
   for (Attribute a : states) {
@@ -139,7 +140,7 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
         !stateIds.insert(found->second).second || ordinal(state) <= previous)
       return failure();
     previous = ordinal(state);
-    terminal[found->second] = end.getValue();
+    g.terminal[found->second] = end.getValue();
   }
   g.outgoing.resize(ids.size());
   g.incoming.resize(ids.size());
@@ -161,7 +162,7 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     auto inserted = modes.try_emplace(from->getKey(), mode);
     if (!inserted.second && inserted.first->second != mode)
       return failure();
-    if (terminal[from->second])
+    if (g.terminal[from->second])
       return failure();
     if (requested == "gray" && from->second != to->second &&
         (g.codes[from->second] ^ g.codes[to->second]).popcount() != 1)
@@ -171,8 +172,9 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
         if (!remaining)
           return failure();
         --remaining;
-        auto disjoint = proveBehavioralGuardsDisjoint(op->getOperand(1 + earlier),
-                                                      op->getOperand(1 + i), op, remaining);
+        auto disjoint =
+            proveBehavioralGuardsDisjoint(op->getOperand(h.guardOffset + earlier),
+                                          op->getOperand(h.guardOffset + i), op, remaining);
         if (failed(disjoint))
           return failure();
         if (!*disjoint) {
@@ -185,7 +187,7 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     g.incoming[to->second].push_back(i);
   }
   for (unsigned i = 0; i < ids.size(); ++i)
-    if (!terminal[i] && g.outgoing[i].empty())
+    if (!g.terminal[i] && g.outgoing[i].empty())
       return failure();
   SmallVector<bool, 4> reached(ids.size(), false);
   SmallVector<unsigned, 8> pending{g.initial};
@@ -246,10 +248,14 @@ SmallVector<ActionControl, 4> actionControls(Operation *op, const Graph &g) {
 }
 } // namespace
 FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
-  if (!llvm::isa_and_nonnull<FlatFSMOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
-      op->getNumOperands() < 1 || op->getNumResults() != 2 || op->getNumSuccessors() ||
-      text(op, "contract_version") != "flat-fsm-v1" || !canonical(text(op, "machine_id")) ||
-      path(op) != text(op, "machine_id") ||
+  if (!llvm::isa_and_nonnull<FlatFSMOp>(op))
+    return failure();
+  bool controlled = text(op, "contract_version") == "flat-fsm-v2";
+  unsigned guardOffset = controlled ? 5 : 1;
+  if (!llvm::isa<ModuleOp>(op->getParentOp()) || op->getNumOperands() < guardOffset ||
+      op->getNumResults() != (controlled ? 4 : 2) || op->getNumSuccessors() ||
+      (!controlled && text(op, "contract_version") != "flat-fsm-v1") ||
+      !canonical(text(op, "machine_id")) || path(op) != text(op, "machine_id") ||
       !closed(op->getAttrDictionary(),
               {"contract_version", "machine_id", "enum_ref", "domain", "initial_case",
                "requested_encoding", "resolved_encoding", "local_width", "case_ids", "local_codes",
@@ -263,22 +269,27 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
   if (!transitions || !actions || transitions.size() + actions.size() > 65536 || !counts ||
       size_t(counts.size()) != actions.size() || op->getNumRegions() != actions.size() || !width ||
       !width.getType().isSignlessInteger(64) || width.getInt() < 1 || width.getInt() > 4096 ||
-      1 + transitions.size() > op->getNumOperands())
+      guardOffset + transitions.size() > op->getNumOperands())
     return failure();
   Type bits = BitsType::get(op->getContext(), width.getInt()),
        boolean = BitsType::get(op->getContext(), 1);
   if (op->getOperand(0).getType() != bits || op->getResult(0).getType() != bits ||
       op->getResult(1).getType() != boolean)
     return failure();
-  for (unsigned i = 0; i < transitions.size(); ++i)
-    if (op->getOperand(1 + i).getType() != boolean)
+  if (controlled && op->getOperand(1).getType() != BitsType::get(op->getContext(), 2))
+    return failure();
+  for (unsigned i = 1; i < op->getNumResults(); ++i)
+    if (op->getResult(i).getType() != boolean)
+      return failure();
+  for (unsigned i = controlled ? 2 : 1; i < guardOffset + transitions.size(); ++i)
+    if (op->getOperand(i).getType() != boolean)
       return failure();
   Operation *module = op->getParentOp();
   StringRef prefix = path(module).empty() ? text(module, "sym_name") : path(module);
   if (!text(op, "machine_id").starts_with((prefix + ".").str()))
     return failure();
-  FlatFSMHeader h{op, module, unsigned(transitions.size()), {}, {}, {}};
-  unsigned offset = 1 + h.guards, captures = 0;
+  FlatFSMHeader h{op, module, unsigned(transitions.size()), guardOffset, controlled, {}, {}, {}};
+  unsigned offset = h.guardOffset + h.guards, captures = 0;
   llvm::StringSet<> identities;
   for (unsigned i = 0; i < actions.size(); ++i) {
     auto action = llvm::dyn_cast<DictionaryAttr>(actions[i]);
@@ -305,6 +316,13 @@ FailureOr<FlatFSMHeader> inspectFlatFSMHeader(Operation *op) {
     return failure();
   return h;
 }
+llvm::StringRef flatFSMResultRole(Value value) {
+  auto result = llvm::dyn_cast<OpResult>(value);
+  if (!result || failed(inspectFlatFSMHeader(result.getOwner())))
+    return {};
+  static constexpr const char *roles[] = {"next", "taken", "entered", "exited"};
+  return roles[result.getResultNumber()];
+}
 FailureOr<Value> flatFSMCaptureSource(BlockArgument arg) {
   auto h = inspectFlatFSMHeader(arg.getOwner()->getParentOp());
   if (failed(h))
@@ -326,7 +344,7 @@ LogicalResult flatFSMResultDependencies(Value result, SmallVectorImpl<Value> &de
   auto h = inspectFlatFSMHeader(op);
   if (failed(h))
     return failure();
-  deps.append(op->operand_begin(), op->operand_begin() + 1 + h->guards);
+  deps.append(op->operand_begin(), op->operand_begin() + h->guardOffset + h->guards);
   Operation *bound = binding(op);
   if (!bound || failed(verifyLocalDomainBinding(bound)))
     return failure();
@@ -359,6 +377,11 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
     if (failed(charge()))
       return failure();
     roots.push_back(op->getOperand(0));
+    for (unsigned i = 1; i < h->guardOffset; ++i) {
+      if (failed(charge()))
+        return failure();
+      roots.push_back(op->getOperand(i));
+    }
     if (bound->getNumOperands() == 2) {
       if (failed(charge()))
         return failure();
@@ -390,7 +413,7 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
           break;
         if (failed(charge()))
           return failure();
-        roots.push_back(op->getOperand(1 + edge));
+        roots.push_back(op->getOperand(h->guardOffset + edge));
       }
     dependencies.push_back(std::move(roots));
   }
@@ -450,24 +473,30 @@ LogicalResult verifyFlatFSMOperation(Operation *op) {
                   "flat FSM graph, encoding, coverage, ordering or action ownership is invalid");
   if (text(op, "illegal_policy") != "error" && text(op, "illegal_policy") != "recover_to_initial")
     return reject(op, "flat FSM requires explicit Error or RecoverToInitial");
-  Operation *state = op->getOperand(0).getDefiningOp(), *bound = binding(op);
-  if (!llvm::isa_and_nonnull<DigitalStorageOp>(state) || text(state, "kind") != "register" ||
-      state->getParentOp() != h->module || state->getAttr("domain") != op->getAttr("domain") ||
-      !bound || failed(verifyLocalDomainBinding(bound)) ||
-      failed(verifyDigitalStorageOperation(state)))
-    return reject(
-        op, "flat FSM requires one actual private register and exact physical domain binding");
-  if ((bound->getNumOperands() == 2) != (state->getNumOperands() == 1))
-    return reject(
-        op,
-        "FSM state resets to initial with reset and is deliberately uninitialized without reset");
-  if (state->getNumOperands()) {
-    Operation *initial = state->getOperand(0).getDefiningOp();
-    auto code = initial ? initial->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
-    if (!llvm::isa_and_nonnull<ConstLiteralOp, ConstantOp>(initial) || !code ||
-        failed(verifyDigitalLiteralOperation(initial)) || code.getValue().getBitWidth() > 4096 ||
-        code.getValue().zextOrTrunc(g->width) != g->codes[g->initial])
-      return reject(op, "FSM initializer must be the actual exact local initial code");
+  Operation *bound = binding(op);
+  if (!bound || failed(verifyLocalDomainBinding(bound)))
+    return reject(op, "flat FSM requires an exact physical domain binding");
+  for (unsigned index = 0; index < h->privateStateCount(); ++index) {
+    Operation *state = op->getOperand(index).getDefiningOp();
+    if (!llvm::isa_and_nonnull<DigitalStorageOp>(state) || text(state, "kind") != "register" ||
+        state->getParentOp() != h->module || state->getAttr("domain") != op->getAttr("domain") ||
+        failed(verifyDigitalStorageOperation(state)) ||
+        (index && op->getOperand(index) == op->getOperand(0)))
+      return reject(op, "flat FSM requires distinct actual private registers in its exact domain");
+    if ((bound->getNumOperands() == 2) != (state->getNumOperands() == 1))
+      return reject(
+          op, "FSM storage resets with reset and is deliberately uninitialized without reset");
+    if (state->getNumOperands()) {
+      Operation *initial = state->getOperand(0).getDefiningOp();
+      auto code = initial ? initial->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+      unsigned width = index ? 2 : g->width;
+      llvm::APInt expected = index ? llvm::APInt(2, 0) : g->codes[g->initial];
+      if (!llvm::isa_and_nonnull<ConstLiteralOp, ConstantOp>(initial) || !code ||
+          failed(verifyDigitalLiteralOperation(initial)) || code.getValue().getBitWidth() > 4096 ||
+          code.getValue().zextOrTrunc(width) != expected)
+        return reject(op, index ? "FSM lifecycle initializer must be exact Dormant code zero"
+                                : "FSM initializer must be the actual exact local initial code");
+    }
   }
   for (Value value : op->getOperands())
     if (failed(verifyDigitalValueScope(value, op)))
@@ -514,11 +543,22 @@ public:
     for (Block *body : h.bodies)
       for (Operation &child : *body)
         child.walk([&](Operation *) { ++cost; });
+    // The v2 control network has a conservative structural upper bound rather
+    // than a promised minimal count. Each input collection is independently
+    // bounded by header/graph admission; checked addition cannot overflow.
+    if (h.controlled) {
+      uint64_t extra = 128 + 4 * uint64_t(g.codes.size()) + 4 * uint64_t(actionRecords.size());
+      if (cost > maximum || extra > uint64_t(maximum) - cost)
+        return reject(op, "FSM expansion exceeds its bounded lifecycle preflight budget");
+      cost += extra;
+    }
     llvm::SetVector<Value> externalCaptures;
     externalCaptures.insert(op->getOperand(0));
-    for (Value value : op->getOperands().drop_front(1 + h.guards))
+    if (h.controlled)
+      externalCaptures.insert(op->getOperand(1));
+    for (Value value : op->getOperands().drop_front(h.guardOffset + h.guards))
       externalCaptures.insert(value);
-    if (externalCaptures.size() + 3 + actionRecords.size() > 8192 ||
+    if (externalCaptures.size() + (h.controlled ? 4 : 3) + actionRecords.size() > 8192 ||
         cost > maximum - std::min(maximum, generated))
       return reject(op, "FSM expansion exceeds the exact operation/capture preflight budget");
     builder.setInsertionPoint(op);
@@ -567,7 +607,7 @@ public:
         unsigned id = tree.size();
         tree.push_back({a, b, 0, 0, {}});
         if (b - a == 1)
-          tree[id].any = op->getOperand(1 + edges[a]);
+          tree[id].any = op->getOperand(h.guardOffset + edges[a]);
         else {
           unsigned m = a + (b - a) / 2, l = build(a, m), r = build(m, b);
           tree[id].left = l;
@@ -613,13 +653,56 @@ public:
         expression("digital_select", {choice.condition, choice.value, current}, current.getType());
     if (text(op, "illegal_policy") == "recover_to_initial")
       next = expression("digital_select", {valid, next, constants[g.initial]}, current.getType());
+    Value actionGate = notReset, restarting = zero, cancelling = zero;
+    Value lifecycle, lifecycleNext, illegalProperty = valid;
+    if (h.controlled) {
+      lifecycle = op->getOperand(1);
+      Value runningCode = literal(llvm::APInt(2, 1)), completedCode = literal(llvm::APInt(2, 2)),
+            cancelledCode = literal(llvm::APInt(2, 3));
+      Value running = eq(lifecycle, runningCode), completed = eq(lifecycle, completedCode);
+      SmallVector<Value, 4> terminalStates;
+      for (unsigned i = 0; i < g.terminal.size(); ++i)
+        if (g.terminal[i])
+          terminalStates.push_back(decoded[i]);
+      Value terminal = any(terminalStates);
+      Value operational = either(running, completed);
+      Value legal = both(valid, either(negate(completed), terminal));
+      Value cancelSelected = both(running, op->getOperand(3));
+      Value restartSelected = both(op->getOperand(2), negate(cancelSelected));
+      restarting = both(notReset, restartSelected);
+      cancelling = both(notReset, cancelSelected);
+      Value ordinary =
+          both(both(negate(cancelSelected), negate(op->getOperand(2))), op->getOperand(4));
+      Value advance = both(ordinary, running);
+      actionGate = both(notReset, both(advance, valid));
+      Value initialStatus = g.terminal[g.initial] ? completedCode : runningCode;
+      SmallVector<Value, 4> nextTerminals;
+      for (unsigned i = 0; i < g.terminal.size(); ++i)
+        if (g.terminal[i])
+          nextTerminals.push_back(eq(next, constants[i]));
+      Value advancedStatus = selectValue(any(nextTerminals), completedCode, runningCode);
+      lifecycleNext = selectValue(advance, advancedStatus, lifecycle);
+      next = selectValue(advance, next, current);
+      if (text(op, "illegal_policy") == "recover_to_initial") {
+        Value recover = both(ordinary, both(operational, negate(legal)));
+        next = selectValue(recover, constants[g.initial], next);
+        lifecycleNext = selectValue(recover, initialStatus, lifecycleNext);
+      }
+      next = selectValue(restartSelected, constants[g.initial], next);
+      lifecycleNext = selectValue(restartSelected, initialStatus, lifecycleNext);
+      lifecycleNext = selectValue(cancelSelected, cancelledCode, lifecycleNext);
+      illegalProperty =
+          either(either(restartSelected, cancelSelected), either(negate(operational), legal));
+    }
     Value effective = expression("digital_select", {reset, constants[g.initial], next},
                                  current.getType(), ".next");
-    Value taken = expression("bool_and", {notReset, choice.condition}, zero.getType(), ".taken");
+    Value taken = expression("bool_and", {actionGate, choice.condition}, zero.getType(), ".taken");
+    Value entered = h.controlled ? either(taken, restarting) : taken;
+    Value exited = h.controlled ? either(taken, cancelling) : taken;
     if (broken)
       return failure();
     if (text(op, "illegal_policy") == "error") {
-      Value property = expression("bool_or", {reset, valid}, zero.getType());
+      Value property = expression("bool_or", {reset, illegalProperty}, zero.getType());
       Operation *domain =
           SymbolTable::lookupSymbolIn(h.module, op->getAttrOfType<FlatSymbolRefAttr>("domain"));
       OperationState assertion(op->getLoc(), "nodal.sequential_assert");
@@ -649,7 +732,12 @@ public:
               ? decoded[control.owner]
               : groupAny(control.phase == "exit" ? ArrayRef<unsigned>(g.outgoing[control.owner])
                                                  : ArrayRef<unsigned>(g.incoming[control.owner]));
-      conditions.push_back(expression("bool_and", {notReset, condition}, zero.getType()));
+      condition = both(actionGate, condition);
+      if (h.controlled && control.phase == "entry" && control.owner == g.initial)
+        condition = either(condition, restarting);
+      if (h.controlled && control.phase == "exit")
+        condition = either(condition, both(cancelling, decoded[control.owner]));
+      conditions.push_back(condition);
       order.push_back(i);
     }
     auto rank = [&](unsigned i) {
@@ -660,9 +748,13 @@ public:
     llvm::SetVector<Value> values;
     for (Value v : {current, next, effective, taken})
       values.insert(v);
+    if (h.controlled) {
+      values.insert(lifecycle);
+      values.insert(lifecycleNext);
+    }
     for (Value v : conditions)
       values.insert(v);
-    for (unsigned i = 1 + h.guards; i < op->getNumOperands(); ++i)
+    for (unsigned i = h.guardOffset + h.guards; i < op->getNumOperands(); ++i)
       values.insert(op->getOperand(i));
     if (values.size() > 8192 || broken)
       return reject(op, "FSM root captures exceed the shared behavioral budget");
@@ -681,6 +773,14 @@ public:
     assignment.addAttribute("metadata", metadata(".state_next"));
     if (!create(assignment))
       return failure();
+    if (h.controlled) {
+      OperationState statusAssignment(op->getLoc(), "nodal.digital_assign");
+      statusAssignment.addOperands({mapping.lookup(lifecycle), mapping.lookup(lifecycleNext)});
+      statusAssignment.addAttribute("kind", builder.getStringAttr("register_next"));
+      statusAssignment.addAttribute("metadata", metadata(".status_next"));
+      if (!create(statusAssignment))
+        return failure();
+    }
     for (unsigned i : order) {
       SmallVector<Value, 8> inputs{mapping.lookup(current), mapping.lookup(effective),
                                    mapping.lookup(taken)};
@@ -706,6 +806,10 @@ public:
     }
     op->getResult(0).replaceAllUsesWith(effective);
     op->getResult(1).replaceAllUsesWith(taken);
+    if (h.controlled) {
+      op->getResult(2).replaceAllUsesWith(entered);
+      op->getResult(3).replaceAllUsesWith(exited);
+    }
     op->erase();
     return success();
   }
@@ -736,6 +840,13 @@ private:
     if (!charge())
       return nullptr;
     return builder.create(op);
+  }
+  Value both(Value a, Value b) { return expression("bool_and", {a, b}, zero.getType()); }
+  Value either(Value a, Value b) { return expression("bool_or", {a, b}, zero.getType()); }
+  Value negate(Value a) { return expression("bool_not", {a}, zero.getType()); }
+  Value eq(Value a, Value b) { return expression("digital_eq", {a, b}, zero.getType()); }
+  Value selectValue(Value condition, Value a, Value b) {
+    return expression("digital_select", {condition, a, b}, a.getType());
   }
   Value literal(const llvm::APInt &value) {
     OperationState op(h.operation->getLoc(), "nodal.const_literal");

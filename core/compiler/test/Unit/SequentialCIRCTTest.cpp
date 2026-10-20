@@ -106,6 +106,16 @@ LogicalResult lower(mlir::ModuleOp module) {
   pm.addPass(nodal::createSequentialToCIRCTPass());
   return pm.run(module);
 }
+bool binaryAttributedBitwise(mlir::ModuleOp module) {
+  bool valid = true;
+  module.walk([&](Operation *op) {
+    auto name = op->getName().getStringRef();
+    if (op->hasAttr("nodal.source_path") &&
+        (name == "comb.or" || name == "comb.and" || name == "comb.xor"))
+      valid &= op->getNumOperands() <= 2;
+  });
+  return valid;
+}
 // Interpret the actual generated scalar graph, with Seq registers as pre-edge
 // state cuts. This tests reset/hold/width semantics rather than matching text.
 uint64_t evaluate(Value value, const std::map<std::string, uint64_t> &inputs, uint64_t state) {
@@ -1113,6 +1123,38 @@ int main(int argc, char **argv) {
     bool good = m && succeeded(lower(*m));
     report(name, good && check(*m));
   };
+  {
+    const std::string resetType = "!nodal.capability<\"reset\">";
+    std::string composition = port("reset2", resetType) + port("reset3", resetType);
+    for (unsigned index = 0; index != 3; ++index) {
+      std::string pin = index ? "reset" + std::to_string(index + 1) : "reset";
+      std::string name = "resetSource" + std::to_string(index);
+      composition += "%" + name + " = \"nodal.reset_boundary\"(%" + pin +
+                     ") <{reset_polarity = \"active_high\", release = \"sync\", "
+                     "release_domain = @core, " +
+                     metadata(name) + "}> : (" + resetType + ") -> " + resetType + "\n";
+    }
+    composition += "%joined = \"nodal.reset_combine\"(%resetSource0, %resetSource1, "
+                   "%resetSource2) <{reset_polarity = \"active_high\", " +
+                   metadata("joined") + "}> : (" + resetType + ", " + resetType + ", " + resetType +
+                   ") -> " + resetType + "\n";
+    std::string body = replace(setup(), "\"nodal.local_domain_binding\"(%clock, %reset)",
+                               composition + "\"nodal.local_domain_binding\"(%clock, %joined)");
+    test("three-reset-inputs-retain-every-binary-tree-leaf",
+         body + enabled() + assign("result", "state"), [&](mlir::ModuleOp m) {
+           auto reg = state(m);
+           bool valid = reg && binaryAttributedBitwise(m);
+           for (unsigned mask = 0; mask != 8; ++mask)
+             valid &= evaluate(reg.getInput(),
+                               {{"reset", mask & 1},
+                                {"reset2", (mask >> 1) & 1},
+                                {"reset3", (mask >> 2) & 1},
+                                {"enable", 0},
+                                {"input", 71}},
+                               99) == (mask ? 0 : 99);
+           return valid;
+         });
+  }
   test("unused-last-shaped-control-is-proof-only",
        "\"nodal.domain\"() <{sym_name = \"core\", edge = \"rising\", reset_policy = \"none\", "
        "metadata = {}}> : () -> ()\n" +
@@ -1254,15 +1296,15 @@ int main(int argc, char **argv) {
            "module {" + owner(setup() + enabled() + assign("result", "state")) +
                owner(setup("async") + assign("result", "state"), "Other") + "}",
            "NODAL-RESET-057-001");
-  negative("symbolic-parameter-is-not-specialized",
+  negative("unbounded-ordinary-parameter-is-not-specialized",
            wrap(setup() +
                 "\"nodal.parameter\"() <{sym_name = \"P\", type = i64, default_value = 4 : i64, "
                 "variability = \"symbolic\", metadata = {}}> : () -> ()\n" +
                 assign("result", "state")),
-           "outside the finite scalar");
+           "target Integer parameter envelope must fit signed 32-bit arithmetic");
   negative("width-cap-is-explicit",
            wrap(setup() + port("tooWide", "!nodal.bits<4097>") + assign("result", "state")),
-           "only fixed scalar");
+           "only supported scalar");
 
   negative("undriven-output-is-not-invented", wrap(setup() + enabled()),
            "undriven combinational wire");
@@ -1279,7 +1321,7 @@ int main(int argc, char **argv) {
   negative("shaped-control-width-cap-is-atomic",
            wrap(setup() + port("tooWide", controlShape("4097", "!nodal.capability<\"reset\">")) +
                 assign("result", "state")),
-           "only fixed scalar");
+           "only supported scalar");
   negative("shaped-control-output-is-atomic",
            wrap(setup() +
                 port("clocksOut", controlShape("2", "!nodal.capability<\"clock\">"), "output") +
@@ -1571,9 +1613,9 @@ int main(int argc, char **argv) {
     });
   }
   negative("fifo-wide-target-rejection-is-atomic", wrap(fifoBody("!nodal.bits<4097>")),
-           "only fixed scalar");
+           "only supported scalar");
   negative("fifo-aggregate-target-rejection-is-atomic",
-           wrap(fifoBody("!nodal.shaped<\"3\", !nodal.bits<2048>>")), "only fixed scalar");
+           wrap(fifoBody("!nodal.shaped<\"3\", !nodal.bits<2048>>")), "only supported scalar");
   negative("fifo-missing-reset-epoch-is-atomic", wrap(fifoBody(u8, 4, "none")), "reset-bearing");
   auto packedABI = [&](mlir::ModuleOp m, unsigned bits) {
     auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
@@ -1662,9 +1704,10 @@ int main(int argc, char **argv) {
        [&](mlir::ModuleOp m) { return checkHandshake(m, 4096) && packedABI(m, 4096); });
   negative("handshake-aggregate-width-rejection-is-atomic",
            wrap(executableBody("handshake", "!nodal.shaped<\"3\", !nodal.bits<2048>>", 2, "sync")),
-           "only fixed scalar");
+           "only supported scalar");
   negative("handshake-wide-target-rejection-is-atomic",
-           wrap(executableBody("handshake", "!nodal.bits<4097>", 2, "sync")), "only fixed scalar");
+           wrap(executableBody("handshake", "!nodal.bits<4097>", 2, "sync")),
+           "only supported scalar");
   negative("handshake-unsupported-sibling-is-atomic",
            "module {" + owner(executableBody("handshake", u8, 2, "sync")) +
                owner(replace(executableBody("handshake", "!nodal.shaped<\"3\", !nodal.bits<2048>>",
@@ -1672,7 +1715,7 @@ int main(int argc, char **argv) {
                              "Fixture.sample", "Other.sample"),
                      "Other") +
                "}",
-           "only fixed scalar");
+           "only supported scalar");
   negative("handshake-missing-reset-epoch-is-atomic", wrap(executableBody("handshake", u8)),
            "reset-bearing");
   test("gray-fixed-aggregate-independent-cse",
@@ -1687,7 +1730,7 @@ int main(int argc, char **argv) {
        [&](mlir::ModuleOp m) { return checkGray(m, 4096, 2) && packedABI(m, 4096); });
   negative("gray-aggregate-width-rejection-is-atomic",
            wrap(executableBody("gray", "!nodal.shaped<\"3\", !nodal.bits<2048>>")),
-           "only fixed scalar");
+           "only supported scalar");
   const std::string aggregate = "!nodal.shaped<\"2\", !nodal.uint<8>>";
   for (const std::string kind : {"gray", "handshake"}) {
     negative(
@@ -1711,14 +1754,14 @@ int main(int argc, char **argv) {
         "fixed aggregate target profile");
   }
   negative("gray-wide-target-rejection-is-atomic",
-           wrap(executableBody("gray", "!nodal.bits<4097>")), "only fixed scalar");
+           wrap(executableBody("gray", "!nodal.bits<4097>")), "only supported scalar");
   negative("gray-unsupported-sibling-is-atomic",
            "module {" + owner(executableBody("gray", u8)) +
                owner(replace(executableBody("gray", "!nodal.shaped<\"3\", !nodal.bits<2048>>"),
                              "Fixture.sample", "Other.sample"),
                      "Other") +
                "}",
-           "only fixed scalar");
+           "only supported scalar");
   negative("pulse-missing-reset-epoch-is-atomic", wrap(executableBody("pulse", bit)),
            "reset-bearing");
   {
@@ -1936,6 +1979,25 @@ int main(int argc, char **argv) {
               enumMetadata + ", semantic_path = \"Fixture.equal\"}}> : (" + enumType + ", " +
               enumType + ") -> " + bit + "\n";
   observed += port("equalOut", bit, "output") + assign("equalOut", "equal", false, bit);
+  observed += port("rawBits", "!nodal.bits<3>");
+  std::string decode = "%decoded = \"nodal.enum_expr\"(%rawBits) <{operator_name = "
+                       "\"enum_decode\", enum_ref = @Mode, case_ids = [\"example.Mode.Run\"], "
+                       "metadata = {" +
+                       enumMetadata +
+                       ", semantic_path = \"Fixture.decoded\"}}> : (!nodal.bits<3>) -> " +
+                       enumType + "\n";
+  observed += decode + port("decodedOut", enumType, "output") +
+              assign("decodedOut", "decoded", false, enumType);
+  observed += "%rawValid = \"nodal.enum_expr\"(%rawBits) <{operator_name = \"enum_is_valid\", "
+              "enum_ref = @Mode, case_ids = [], metadata = {" +
+              enumMetadata + ", semantic_path = \"Fixture.rawValid\"}}> : (!nodal.bits<3>) -> " +
+              bit + "\n";
+  observed += port("rawValidOut", bit, "output") + assign("rawValidOut", "rawValid", false, bit);
+  negative("enum-decode-foreign-default-rejected-atomically",
+           replace(flatFSMFixture, "}) : () -> () }",
+                   replace(observed, decode, replace(decode, "example.Mode.Run", "foreign.Run")) +
+                       "}) : () -> () }"),
+           "enum case IDs must be unique and belong");
   for (bool recovery : {false, true}) {
     std::string raw = replace(flatFSMFixture, "}) : () -> () }", observed + "}) : () -> () }");
     if (recovery)
@@ -1995,6 +2057,16 @@ int main(int argc, char **argv) {
           evaluate(outputs->getOperand(8), input, 0) == (code == 3);
     }
     report(recovery ? "sparse-enum-recovery-validity" : "sparse-enum-error-validity", sparseValid);
+    bool decodeValid = binaryAttributedBitwise(*m);
+    for (unsigned code = 0; code < 8; ++code) {
+      std::map<std::string, uint64_t> input{{"rawBits", code}};
+      bool member = code == 0 || code == 3 || code == 7;
+      decodeValid &= evaluate(outputs->getOperand(9), input, 0) == (member ? code : 3) &&
+                     evaluate(outputs->getOperand(10), input, 0) == member;
+    }
+    report(recovery ? "sparse-enum-recovery-decode-preserves-original-validity"
+                    : "sparse-enum-error-decode-preserves-original-validity",
+           decodeValid);
     valid &= regs.size() == 2 && assertions == unsigned(!recovery) &&
              m->getOperation()->hasAttr("nodal.enum_abi");
     auto parsed = parseSourceString<mlir::ModuleOp>(print(*m), &context);

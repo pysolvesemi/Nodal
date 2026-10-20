@@ -20,6 +20,7 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EventModel.h"
+#include "nodal/Dialect/Nodal/HierarchyBoundaryModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/PhysicalControlModel.h"
@@ -35,6 +36,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <limits>
 #include <string>
 
 using namespace mlir;
@@ -297,11 +299,14 @@ public:
         variant(variant) {}
 
   LogicalResult preflight() {
-    if (failed(domains.verifyRelationships()) || failed(planControlProjections()))
+    if (failed(domains.verifyRelationships()) || failed(planControlProjections()) ||
+        failed(planParameters()))
       return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
       StringRef name = op.getName().getStringRef();
+      if (staticOperations.contains(&op))
+        continue;
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
       bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op);
@@ -328,6 +333,19 @@ public:
             return reject(
                 &op, "result requires fixed scalar/packed width 1..4096 or a fixed control input");
       }
+      bool symbolic =
+          llvm::any_of(op.getOperandTypes(),
+                       [&](Type type) {
+                         return isa_and_nonnull<circt::hw::IntType>(targetValueType(type));
+                       }) ||
+          llvm::any_of(op.getResultTypes(), [&](Type type) {
+            return isa_and_nonnull<circt::hw::IntType>(targetValueType(type));
+          });
+      if (symbolic && !isa<PortValueOp, InstancePortOp, DigitalAssignOp>(op) &&
+          !(isa<DigitalStorageOp>(op) && text(&op, "kind") == "wire") &&
+          !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
+        return reject(&op, "symbolic boundary target currently admits whole-value connections, "
+                           "wires and aliases only");
       uint64_t expansion = 1;
       if (structural) {
         // Shape/index expressions are compile-time proof, not hardware values.
@@ -339,8 +357,8 @@ public:
           lowered = targetControlShapeType(type.getValue(), source);
         if (!type || !lowered ||
             (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
-          return reject(&op, "only fixed scalar/packed input/output and fixed Clock/Reset input "
-                             "ports are supported");
+          return reject(&op, "only supported scalar/packed input/output and fixed Clock/Reset "
+                             "input ports are supported");
         if (text(&op, "direction") == "output" &&
             !getDigitalControlBoundaryKind(type.getValue()).empty())
           return reject(&op, "clock/reset output capabilities require a later boundary profile");
@@ -360,10 +378,12 @@ public:
         if (text(&op, "direction") == "input")
           seeds.emplace_back(op.getResult(0), &op);
       } else if (isa<InstanceOp>(op)) {
-        if (!variant || !variant->children.count(&op) ||
-            !op.getAttrOfType<DictionaryAttr>("parameter_bindings").empty())
-          return reject(&op, "first hierarchy target profile requires concrete unparameterized "
-                             "instances");
+        if (!variant || !variant->children.count(&op))
+          return reject(&op, "hierarchy target requires an exact verified child variant");
+        auto actuals = instanceParameters(&op);
+        if (failed(actuals))
+          return reject(&op, "instance parameters require exact supported static Integer actuals");
+        targetInstanceParameters.try_emplace(&op, *actuals);
         instances.push_back(&op);
       } else if (isa<InstanceDomainBindingOp>(op)) {
         if (!hierarchy)
@@ -462,7 +482,7 @@ public:
       } else if (isa<EnumExprOp>(op)) {
         StringRef code = text(&op, "operator_name");
         if (code != "enum_literal" && code != "enum_eq" && code != "enum_as_bits" &&
-            code != "enum_is_one_of" && code != "enum_is_valid")
+            code != "enum_is_one_of" && code != "enum_is_valid" && code != "enum_decode")
           return reject(&op, "unsupported canonical enum operation '" + code + "'");
         auto reference = op.getAttrOfType<FlatSymbolRefAttr>("enum_ref");
         auto inserted = enumCodes.try_emplace(reference);
@@ -477,9 +497,12 @@ public:
           }
         }
         auto cases = op.getAttrOfType<ArrayAttr>("case_ids");
-        uint64_t tests = code == "enum_is_valid" ? inserted.first->second.inDeclarationOrder.size()
-                                                 : cases.size();
-        expansion = code == "enum_is_one_of" || code == "enum_is_valid" ? 3 * tests + 2 : 3;
+        uint64_t tests = code == "enum_is_valid" || code == "enum_decode"
+                             ? inserted.first->second.inDeclarationOrder.size()
+                             : cases.size();
+        expansion = code == "enum_is_one_of" || code == "enum_is_valid" || code == "enum_decode"
+                        ? 3 * tests + 4
+                        : 3;
       } else
         return reject(&op, "operation is outside the finite scalar CIRCT profile");
       // Producer references are temporary graph operations too. Charge their
@@ -737,7 +760,7 @@ public:
         circt::hw::HWModuleOp::create(builder, source.getLoc(),
                                       variant ? builder.getStringAttr(variant->name)
                                               : source->getAttrOfType<StringAttr>("sym_name"),
-                                      circt::hw::ModulePortInfo(targetPorts));
+                                      circt::hw::ModulePortInfo(targetPorts), targetParameters);
     if (variant) {
       variant->target = target;
       target->setAttr("nodal.definition", source->getAttr("sym_name"));
@@ -797,7 +820,8 @@ public:
     // by a raw pin or reject a legitimate state-to-clock dependency.
     SmallVector<std::pair<Value, circt::Backedge>> producerEdges;
     for (Operation &op : source.getBody().front()) {
-      if (isa<PortValueOp, RequirementClockOp, RequirementResetOp>(op) ||
+      if (staticOperations.contains(&op) ||
+          isa<PortValueOp, RequirementClockOp, RequirementResetOp>(op) ||
           controlProjections.contains(&op) || controlSelectors.contains(&op))
         continue;
       for (Value original : op.getResults()) {
@@ -863,7 +887,7 @@ public:
       auto targetInstance = circt::hw::InstanceOp::create(
           builder, instance->getLoc(), child.target,
           instance->getAttrOfType<StringAttr>("sym_name"), ArrayRef<Value>(inputs),
-          builder.getArrayAttr({}),
+          targetInstanceParameters.lookup(instance),
           circt::hw::InnerSymAttr::get(instance->getAttrOfType<StringAttr>("sym_name")));
       correlate(targetInstance, instance);
       targetInstance->setAttr("nodal.domain_bindings", instance->getAttr("domain_bindings"));
@@ -1184,9 +1208,9 @@ public:
       comment->setAttr("nodal.clock_relationship", op->getAttrDictionary());
     }
     for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults() || controlProjections.contains(&op) ||
-          controlSelectors.contains(&op) || named(&op, "nodal.clock_gate") ||
-          named(&op, "nodal.clock_mux") ||
+      if (!op.getNumResults() || staticOperations.contains(&op) ||
+          controlProjections.contains(&op) || controlSelectors.contains(&op) ||
+          named(&op, "nodal.clock_gate") || named(&op, "nodal.clock_mux") ||
           isa<DigitalStorageOp, PortValueOp, InstancePortOp, RequirementClockOp, RequirementResetOp,
               CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op))
         continue;
@@ -1313,21 +1337,184 @@ public:
   }
 
 private:
+  TypedAttr parameterNode(const std::shared_ptr<const InstantiatedIntegerNode> &node,
+                          unsigned depth = 0) {
+    if (!node || depth > digitalTypeMaximumDepth)
+      return {};
+    if (node->bounds.lower < std::numeric_limits<int32_t>::min() ||
+        node->bounds.upper > std::numeric_limits<int32_t>::max()) {
+      source.emitOpError("NODAL-CIRCT-056-001: static Integer expression bounds must fit signed "
+                         "32-bit arithmetic without truncation");
+      return {};
+    }
+    if (auto found = parameterExpressions.find(node.get()); found != parameterExpressions.end())
+      return found->second;
+    if (parameterExpressions.size() >= maximumAuthoredOperations ||
+        cost >= maximumGeneratedOperations)
+      return {};
+    ++cost; // Parameter DAG attributes share the transaction's expansion budget.
+    TypedAttr value;
+    using Kind = InstantiatedIntegerNode::Kind;
+    if (node->kind == Kind::Literal)
+      value = builder.getI32IntegerAttr(node->literal);
+    else if (node->kind == Kind::ParentParameter) {
+      if (!symbolicParameters.contains(node->parameter))
+        return {};
+      value = circt::hw::ParamDeclRefAttr::get(
+          node->parameter->getAttrOfType<StringAttr>("sym_name"), builder.getI32Type());
+    } else if (node->kind == Kind::Apply) {
+      SmallVector<TypedAttr> operands;
+      for (const auto &operand : node->operands) {
+        auto actual = parameterNode(operand, depth + 1);
+        if (!actual)
+          return {};
+        operands.push_back(actual);
+      }
+      if (node->opcode == "add" && operands.size() == 2)
+        value = circt::hw::ParamExprAttr::get(circt::hw::PEO::Add, operands);
+      else if (node->opcode == "mul" && operands.size() == 2)
+        value = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, operands);
+      else if ((node->opcode == "sub" && operands.size() == 2) ||
+               (node->opcode == "neg" && operands.size() == 1)) {
+        // CIRCT expresses subtraction through multiplication by -1. Preserve
+        // the source mathematical contract for that new signed-i32 intermediate.
+        if (node->operands.back()->bounds.lower == std::numeric_limits<int32_t>::min() ||
+            maximumGeneratedOperations - cost < 2)
+          return {};
+        cost += 2;
+        auto negative = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, operands.back(),
+                                                      builder.getI32IntegerAttr(-1));
+        value = operands.size() == 1 ? negative
+                                     : circt::hw::ParamExprAttr::get(circt::hw::PEO::Add,
+                                                                     operands.front(), negative);
+      } else
+        return {}; // No unchecked verbatim fallback or evaluated default.
+    }
+    if (value)
+      parameterExpressions.try_emplace(node.get(), value);
+    return value;
+  }
+  TypedAttr parameterExpression(const InstantiatedIntegerExpression &expression) {
+    // The memo keys refer to immutable query-local proof nodes. Retain their
+    // owning roots for this target transaction, never pointers into dead queries.
+    if (parameterExpressionRoots.size() >= maximumAuthoredOperations)
+      return {};
+    parameterExpressionRoots.push_back(expression.root);
+    return parameterNode(expression.root);
+  }
+  LogicalResult planParameters() {
+    llvm::DenseMap<Attribute, Value> defaults;
+    for (Operation &op : source.getBody().front()) {
+      if (isa<ParameterOp>(op)) {
+        auto type = op.getAttrOfType<TypeAttr>("type");
+        if (!type || !type.getValue().isSignlessInteger(64) || getParameterKind(&op) != "integer" ||
+            op.hasAttr("unit"))
+          return reject(&op, "symbolic target parameters require unitless i64 Integer");
+        if (text(&op, "variability") == "symbolic")
+          symbolicParameters.insert(&op);
+        staticOperations.insert(&op);
+      } else if (isa<ParameterValueOp>(op)) {
+        defaults.try_emplace(op.getAttr("parameter"), op.getOperand(0));
+        staticOperations.insert(&op);
+      } else if (isa<ParameterConstraintOp, ParameterEnvelopeOp, ParameterOverrideOp>(op))
+        staticOperations.insert(&op);
+      else if (isa<ConstParameterRefOp, ConstExprOp, ConstLiteralOp>(op) &&
+               op.getNumResults() == 1 && op.getResult(0).getType().isSignlessInteger(64))
+        staticOperations.insert(&op);
+    }
+    for (Operation *op : staticOperations)
+      for (Value result : op->getResults())
+        for (Operation *user : result.getUsers())
+          if (!staticOperations.contains(user) && !controlSelectors.contains(user) &&
+              !controlProjections.contains(user))
+            return reject(user, "static Integer target parameters cannot become runtime values");
+    SmallVector<Attribute> declarations;
+    for (Operation &op : source.getBody().front()) {
+      if (!symbolicParameters.contains(&op))
+        continue;
+      // HW IntType's textual width contract uses i32 parameter expressions.
+      // Reject wider legal envelopes instead of truncating native i64 semantics.
+      auto envelope =
+          resolveOwnedIntegerParameter(source, &op, ParameterIntegerMode::MathematicalSigned64);
+      if (failed(envelope) || !parameterExpression(*envelope))
+        return reject(&op, "target Integer parameter envelope must fit signed 32-bit arithmetic");
+      TypedAttr value;
+      auto reference = FlatSymbolRefAttr::get(builder.getContext(), text(&op, "sym_name"));
+      if (Value expression = defaults.lookup(reference)) {
+        auto proof = resolveOwnedIntegerExpression(source, expression,
+                                                   ParameterIntegerMode::MathematicalSigned64);
+        if (succeeded(proof))
+          value = parameterExpression(*proof);
+      } else {
+        auto literal = dyn_cast_or_null<IntegerAttr>(op.getAttr("default_value"));
+        if (literal && literal.getType().isSignlessInteger(64) &&
+            literal.getInt() >= std::numeric_limits<int32_t>::min() &&
+            literal.getInt() <= std::numeric_limits<int32_t>::max())
+          value = builder.getI32IntegerAttr(literal.getInt());
+      }
+      if (!value || value.getType() != builder.getI32Type())
+        return reject(&op,
+                      "parameter default requires a supported exact static Integer expression");
+      declarations.push_back(
+          circt::hw::ParamDeclAttr::get(op.getAttrOfType<StringAttr>("sym_name"), value));
+    }
+    targetParameters = builder.getArrayAttr(declarations);
+    return success();
+  }
+  FailureOr<ArrayAttr> instanceParameters(Operation *instance) {
+    Operation *child = resolveInstanceModuleDefinition(instance);
+    if (!child)
+      return failure();
+    SmallVector<Attribute> actuals;
+    for (Operation &op : child->getRegion(0).front()) {
+      if (!isa<ParameterOp>(op) || text(&op, "variability") != "symbolic")
+        continue;
+      auto proof = resolveInstanceIntegerParameter(instance, &op,
+                                                   ParameterIntegerMode::MathematicalSigned64);
+      TypedAttr value = succeeded(proof) ? parameterExpression(*proof) : TypedAttr();
+      if (!value || cost >= maximumGeneratedOperations)
+        return failure();
+      ++cost;
+      actuals.push_back(
+          circt::hw::ParamDeclAttr::get(op.getAttrOfType<StringAttr>("sym_name"), value));
+    }
+    return builder.getArrayAttr(actuals);
+  }
   static bool aggregatePayload(Type type) {
     return isa<nodal::ShapedType, StructType>(type) && getDigitalControlBoundaryKind(type).empty();
   }
   Type targetValueType(Type type) {
     if (Type scalar = targetType(type))
       return scalar;
-    if (!aggregatePayload(type))
+    if (!aggregatePayload(type) && !isa<ParametricIntegerType>(type))
       return {};
     auto [entry, inserted] = packedTypes.try_emplace(type, Type());
     if (inserted) {
-      // Canonical type/enum/shape owners establish exactness. A finite maximum
-      // or an overridable parameter default is never an actual packed width.
-      auto bits = inferDigitalBitPatternFixedBits(type, source);
-      if (succeeded(bits) && *bits > 0 && *bits <= maximumWidth)
-        entry->second = builder.getIntegerType(*bits);
+      auto view = inspectHierarchyBoundaryType(type, source);
+      auto maximum = inferDigitalBitPatternMaximumBits(type, source);
+      if (succeeded(view) && succeeded(maximum) && *maximum <= maximumWidth &&
+          view->leaves.size() == 1 && view->leaves[0].path.empty()) {
+        // Preserve actual parameter atoms even for singleton legal envelopes.
+        // Only a literal expression may become a fixed target width.
+        const auto &leaf = view->leaves[0];
+        TypedAttr packed = parameterExpression(leaf.width);
+        for (const auto &group : leaf.dimensions)
+          for (const auto &extent : group.extents) {
+            TypedAttr factor = parameterExpression(extent);
+            if (!packed || !factor || cost >= maximumGeneratedOperations)
+              return {};
+            ++cost;
+            packed = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, packed, factor);
+          }
+        if (packed)
+          entry->second = circt::hw::IntType::get(packed);
+      } else {
+        // Keep the established fixed recursive Struct profile. General symbolic
+        // named-field vectors require the subsequent explicit adapter plan.
+        auto bits = inferDigitalBitPatternFixedBits(type, source);
+        if (succeeded(bits) && *bits > 0 && *bits <= maximumWidth)
+          entry->second = builder.getIntegerType(*bits);
+      }
     }
     return entry->second;
   }
@@ -1339,7 +1526,27 @@ private:
     // Exact width/shape facts were established by the canonical owners above.
     // Record structural strides rather than expanding physical vector lanes.
     auto bits = inferDigitalBitPatternFixedBits(type, source);
-    assert(succeeded(bits) && *bits <= maximumWidth);
+    if (failed(bits) || isa_and_nonnull<circt::hw::IntType>(packedTypes.lookup(type))) {
+      auto view = inspectHierarchyBoundaryType(type, source);
+      assert(succeeded(view) && view->leaves.size() == 1 && view->leaves[0].path.empty());
+      const auto &leaf = view->leaves.front();
+      NamedAttrList layout;
+      layout.set("kind", builder.getStringAttr("scalar-element-vec"));
+      layout.set("order", builder.getStringAttr("recursive-row-major-fields-lsb-first"));
+      layout.set("element_width", parameterExpression(leaf.width));
+      SmallVector<Attribute> groups;
+      for (const auto &group : leaf.dimensions) {
+        SmallVector<Attribute> extents;
+        for (const auto &extent : group.extents)
+          extents.push_back(parameterExpression(extent));
+        groups.push_back(builder.getArrayAttr(extents));
+      }
+      layout.set("dimension_groups", builder.getArrayAttr(groups));
+      auto result = builder.getDictionaryAttr(layout);
+      packedLayouts.try_emplace(type, result);
+      return result;
+    }
+    assert(*bits <= maximumWidth);
     NamedAttrList layout;
     std::string identity;
     llvm::raw_string_ostream stream(identity);
@@ -1901,6 +2108,23 @@ private:
   }
   Value make(Operation *at, StringRef name, Type type, ValueRange operands,
              ArrayRef<NamedAttribute> attrs = {}) {
+    // The pinned exporter truncates attributed variadic bitwise operations to
+    // their first two operands. Retain provenance with a balanced binary tree,
+    // rather than dropping source correlation or relying on optimization.
+    // Enum and reset fan-in preflight already charge at least n-1 nodes.
+    if (operands.size() > 2 && (name == "comb.or" || name == "comb.and" || name == "comb.xor")) {
+      SmallVector<Value> level(operands.begin(), operands.end());
+      while (level.size() > 1) {
+        SmallVector<Value> next;
+        next.reserve((level.size() + 1) / 2);
+        for (unsigned index = 0; index < level.size(); index += 2)
+          next.push_back(index + 1 == level.size()
+                             ? level[index]
+                             : make(at, name, type, {level[index], level[index + 1]}, attrs));
+        level = std::move(next);
+      }
+      return level.front();
+    }
     OperationState state(at->getLoc(), name);
     state.addOperands(operands);
     state.addTypes(type);
@@ -2013,7 +2237,7 @@ private:
       if (code == "enum_eq")
         return compare(op, code, inputs[0], inputs[1], false);
       SmallVector<IntegerAttr> codes;
-      if (code == "enum_is_valid")
+      if (code == "enum_is_valid" || code == "enum_decode")
         codes = enumCodes.find(op->getAttr("enum_ref"))->second.inDeclarationOrder;
       else
         for (Attribute id : ids)
@@ -2025,7 +2249,14 @@ private:
       }
       if (tests.empty())
         return constant(op, 1, 0);
-      return tests.size() == 1 ? tests.front() : make(op, "comb.or", builder.getI1Type(), tests);
+      Value valid =
+          tests.size() == 1 ? tests.front() : make(op, "comb.or", builder.getI1Type(), tests);
+      if (code == "enum_decode") {
+        Value fallback =
+            constant(op, bits, enumCode(op, cast<StringAttr>(ids[0]).getValue()).getValue());
+        return mux(op, valid, inputs[0], fallback);
+      }
+      return valid;
     }
     if (code == "digital_alias")
       return inputs[0];
@@ -2069,6 +2300,12 @@ private:
   DomainModel domains;
   HierarchyTargetPlan *hierarchy = nullptr;
   ModuleVariantPlan *variant = nullptr;
+  ArrayAttr targetParameters;
+  llvm::DenseSet<Operation *> staticOperations;
+  llvm::DenseSet<Operation *> symbolicParameters;
+  llvm::DenseMap<const InstantiatedIntegerNode *, TypedAttr> parameterExpressions;
+  SmallVector<std::shared_ptr<const InstantiatedIntegerNode>> parameterExpressionRoots;
+  llvm::DenseMap<Operation *, ArrayAttr> targetInstanceParameters;
   llvm::DenseMap<Attribute, std::pair<Value, Value>> domainInputs;
   SmallVector<Operation *> instances;
   llvm::DenseMap<std::pair<Operation *, Operation *>, SmallVector<Value>> instancePortValues;
@@ -2121,7 +2358,7 @@ public:
       }
       return WalkResult::advance();
     });
-    if (walk.wasInterrupted() || failed(verify(input))) {
+    if (walk.wasInterrupted() || failed(verify(input)) || failed(verifyParameterModel(input))) {
       signalPassFailure();
       return;
     }

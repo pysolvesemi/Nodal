@@ -313,6 +313,52 @@ std::string hierarchyFixture(bool forged = false, bool input = false) {
   return "module attributes {nodal.root.module = @Top} {\n" + module("Top", top) +
          module("Child", child) + "}\n";
 }
+std::string hierarchyArrayFixture(StringRef actual = "P", bool symbolic = true) {
+  const std::string formal = symbolic ? "N" : "2";
+  const std::string selected = symbolic ? actual.str() : "2";
+  const std::string parentType = "!nodal.shaped<\"" + selected + "\", " + boolean + ">";
+  const std::string childType = "!nodal.shaped<\"" + formal + "\", " + boolean + ">";
+  std::string parameters;
+  if (symbolic) {
+    auto renamedParameter = [](StringRef name) {
+      std::string result = parameter();
+      for (auto [from, to] : {std::pair{std::string("N"), name.str()},
+                              std::pair{std::string("%low"), "%" + name.str() + "_low"},
+                              std::pair{std::string("%high"), "%" + name.str() + "_high"}}) {
+        size_t position = 0;
+        while ((position = result.find(from, position)) != std::string::npos) {
+          result.replace(position, from.size(), to);
+          position += to.size();
+        }
+      }
+      return result;
+    };
+    parameters =
+        renamedParameter("P") + renamedParameter("Q") +
+        "%p = \"nodal.const_parameter_ref\"() <{parameter = @P, metadata = {}}> : () -> i64\n";
+  }
+  std::string top =
+      hierarchyDomain("clock") + parameters + definition(boolean) +
+      instance("top", "sink", "in", boolean, "\"" + selected + "\"") +
+      "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, parameter_bindings = {}, "
+      "domain_bindings = {required = @clock}, metadata = {}}> : () -> ()\n" +
+      (symbolic ? "\"nodal.parameter_override\"(%p) <{instance = @child, parameter = @N, metadata "
+                  "= {}}> : (i64) -> ()\n"
+                : "") +
+      hierarchyBinding("required", "clock") +
+      replace(hierarchyBoundary(), "semantic_path = \"Top.projected\"",
+              "semantic_path = \"Top.projected\", dimensions = [\"" + selected + "\"]") +
+      member("projected", "projected", parentType) + member("top", "top", parentType) +
+      connect("top", "projected", parentType);
+  std::string child =
+      hierarchyRequirement("required") + (symbolic ? parameter() : "") + definition(boolean) +
+      instance("exported", "sink", "in", boolean, "\"" + formal + "\"", "required") +
+      member("exported", "exported", childType) + observe("exported", childType);
+  return "module attributes {nodal.root.module = @Top} {\n\"nodal.module\"() <{sym_name = \"Top\", "
+         "metadata = {}}> ({\n" +
+         top + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
+         child + "}) : () -> ()\n}\n";
+}
 std::string hiddenDefinition(StringRef hiddenType = boolean, bool changedRole = false) {
   std::string result = definition(boolean);
   for (auto pair :
@@ -969,6 +1015,155 @@ int main() {
             replace(hierarchyFixture(), member("projected", "projected", boolean),
                     member("projected", "projected", boolean, "sink")),
             false);
+  hierarchy("concrete-whole-array-forwarding", hierarchyArrayFixture("P", false), true);
+  hierarchy("symbolic-whole-array-exact-substitution", hierarchyArrayFixture(), true);
+  hierarchy("symbolic-array-equal-bounds-other-parameter", hierarchyArrayFixture("Q"), false);
+  hierarchy("symbolic-array-default-is-not-binding", hierarchyArrayFixture("2"), false);
+  hierarchy("symbolic-array-missing-substitution-metadata",
+            replace(hierarchyArrayFixture(),
+                    "semantic_path = \"Top.projected\", dimensions = [\"P\"]",
+                    "semantic_path = \"Top.projected\""),
+            false);
+  hierarchy("symbolic-array-forged-rank",
+            replace(hierarchyArrayFixture(),
+                    "semantic_path = \"Top.projected\", dimensions = [\"P\"]",
+                    "semantic_path = \"Top.projected\", dimensions = [\"P\", \"2\"]"),
+            false);
+  hierarchy("scalar-boundary-cannot-acquire-array-rank",
+            replace(hierarchyFixture(), "semantic_path = \"Top.projected\"",
+                    "semantic_path = \"Top.projected\", dimensions = [\"2\"]"),
+            false);
+  auto endpointQuery = [&](StringRef name, const std::string &source, bool expected, auto inspect) {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool passed = false;
+    if (parsed && !parsed->getBody()->empty()) {
+      Operation *owner = nullptr;
+      for (Operation &operation : *parsed->getBody())
+        if (operation.getName().getStringRef() == "nodal.module") {
+          owner = &operation;
+          break;
+        }
+      auto before = print(parsed->getOperation());
+      SmallVector<nodal::DigitalInterfaceEndpoint> endpoints(1);
+      endpoints.front().operation = owner;
+      bool valid = owner && succeeded(nodal::collectDigitalInterfaceEndpoints(owner, endpoints));
+      passed = valid == expected && before == print(parsed->getOperation()) &&
+               endpoints.front().operation == owner &&
+               (valid ? inspect(ArrayRef<nodal::DigitalInterfaceEndpoint>(endpoints).drop_front())
+                      : endpoints.size() == 1);
+    }
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  auto symbolName = [](Operation *operation) {
+    return operation->getAttrOfType<StringAttr>("sym_name").getValue();
+  };
+  endpointQuery("projected-array-query-retains-child-formal-dimensions", hierarchyArrayFixture(),
+                true, [&](const auto &endpoints) {
+                  return endpoints.size() == 2 && endpoints[1].instance &&
+                         endpoints[1].declarationOwner != endpoints[1].domainOwner &&
+                         endpoints[1].dimensions.size() == 1 &&
+                         llvm::cast<StringAttr>(endpoints[1].dimensions[0]).getValue() == "N";
+                });
+  endpointQuery("logical-endpoints-retain-unaccessed-leaves-and-exact-boundary", hiddenFixture(),
+                true, [&](auto endpoints) {
+                  return endpoints.size() == 2 && symbolName(endpoints[0].operation) == "top" &&
+                         !endpoints[0].instance &&
+                         endpoints[0].declaration == endpoints[0].operation &&
+                         endpoints[0].leaves.size() == 2 && endpoints[0].leaves[0].path == "data" &&
+                         endpoints[0].leaves[1].path == "hidden" &&
+                         symbolName(endpoints[1].operation) == "projected" &&
+                         symbolName(endpoints[1].declaration) == "exported" &&
+                         symbolName(endpoints[1].declarationOwner) == "Child" &&
+                         symbolName(endpoints[1].domainOwner) == "Top" &&
+                         symbolName(endpoints[1].instance) == "child" &&
+                         symbolName(endpoints[1].selectedRole) == "source" &&
+                         endpoints[1].semanticIdentity == "pkg.Bus" &&
+                         endpoints[1].domain.getValue() == "b" && endpoints[1].leaves.size() == 2 &&
+                         endpoints[1].leaves[1].access == "out" &&
+                         !endpoints[1].leaves[1].resolvedComponent;
+                });
+  endpointQuery("logical-endpoints-retain-symbolic-width-and-ordered-shape",
+                model(domain() + parameter() + definition(symbolic) +
+                      instance("left", "source", "out", symbolic, "\"N\", \"2\"")),
+                true, [&](auto endpoints) {
+                  return endpoints.size() == 1 && endpoints[0].dimensions.size() == 2 &&
+                         llvm::cast<StringAttr>(endpoints[0].dimensions[0]).getValue() == "N" &&
+                         llvm::cast<StringAttr>(endpoints[0].dimensions[1]).getValue() == "2" &&
+                         endpoints[0].leaves.size() == 1 &&
+                         endpoints[0].leaves[0].type ==
+                             endpoints[0]
+                                 .leaves[0]
+                                 .declaration->template getAttrOfType<TypeAttr>("type")
+                                 .getValue();
+                });
+  endpointQuery(
+      "logical-endpoints-do-not-expand-billion-lane-shape",
+      model(domain() + definition() + instance("left", "source", "out", bits, "\"1000000000\"")),
+      true, [](auto endpoints) {
+        return endpoints.size() == 1 && endpoints[0].leaves.size() == 1 &&
+               endpoints[0].dimensions.size() == 1 &&
+               llvm::cast<StringAttr>(endpoints[0].dimensions[0]).getValue() == "1000000000";
+      });
+  endpointQuery("logical-endpoints-retain-nested-role-contract", model(nestedFixture()), true,
+                [](auto endpoints) {
+                  return endpoints.size() == 1 && endpoints[0].leaves.size() == 1 &&
+                         endpoints[0].leaves[0].path == "nested.data" &&
+                         endpoints[0].leaves[0].role == "source" &&
+                         endpoints[0].leaves[0].nestedRoles.size() == 1 &&
+                         endpoints[0].leaves[0].nestedInterfaces.size() == 1;
+                });
+  endpointQuery(
+      "logical-endpoints-do-not-invent-unrepresented-resolved-net",
+      model(domain() + resolvedDefinition() + instance("left", "sink", "connect", resolved())),
+      true, [](auto endpoints) {
+        return endpoints.size() == 1 && endpoints[0].leaves.size() == 1 &&
+               endpoints[0].leaves[0].protocol == "resolved" &&
+               !endpoints[0].leaves[0].resolvedComponent;
+      });
+  endpointQuery(
+      "logical-endpoints-reuse-authored-order-resolved-component",
+      model(domain() + resolvedDefinition() + instance("left", "sink", "connect", resolved()) +
+            instance("right", "sink", "connect", resolved()) + net("earlier") +
+            member("first", "left", resolved()) + member("alias", "left", resolved(), "monitor") +
+            member("second", "right", resolved()) + connect("first", "second", resolved()) +
+            through("first", "earlier")),
+      true, [](auto endpoints) {
+        if (endpoints.size() != 2 || endpoints[0].leaves.size() != 1 ||
+            endpoints[1].leaves.size() != 1)
+          return false;
+        Value component = endpoints[0].leaves[0].resolvedComponent;
+        return component && component == endpoints[1].leaves[0].resolvedComponent &&
+               component.getDefiningOp()->getAttrOfType<StringAttr>("name").getValue() == "earlier";
+      });
+  endpointQuery("logical-endpoints-retain-conservative-capability",
+                model(domain() + analogDefinition(true) + analogInstance(true), analogOwners()),
+                true, [](auto endpoints) {
+                  return endpoints.size() == 1 && endpoints[0].leaves.size() == 1 &&
+                         endpoints[0].leaves[0].protocol == "conservative" &&
+                         endpoints[0].leaves[0].access == "connect" &&
+                         endpoints[0].leaves[0].analogMetadata.size() == 3 &&
+                         endpoints[0].leaves[0].analogReferences.size() == 3 &&
+                         !endpoints[0].leaves[0].resolvedComponent;
+                });
+  endpointQuery("logical-endpoints-retain-signal-flow-capability",
+                model(domain() + analogDefinition(false) + analogInstance(false)), true,
+                [](auto endpoints) {
+                  return endpoints.size() == 1 && endpoints[0].leaves.size() == 1 &&
+                         endpoints[0].leaves[0].protocol == "signal_flow" &&
+                         endpoints[0].leaves[0].type.isF64() &&
+                         endpoints[0].leaves[0].analogMetadata.size() == 1 &&
+                         !endpoints[0].leaves[0].resolvedComponent;
+                });
+  endpointQuery("logical-endpoints-reject-forged-ABI-transactionally", hiddenFixture(bits), false,
+                [](auto) { return true; });
+  endpointQuery("logical-endpoints-reject-forged-shared-role-transactionally",
+                siblingRoleFixture(true), false, [](auto) { return true; });
   llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

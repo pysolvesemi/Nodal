@@ -58,10 +58,22 @@ StringRef scalarKind(Type type) {
 
 FailureOr<InstantiatedIntegerExpression>
 dimensionExpression(Operation *module, StringRef token, StringRef effect,
-                    const ParameterIntegerEnvironment *environment) {
+                    const ParameterIntegerEnvironment *environment, Operation *instance = nullptr) {
   auto dimension = resolveStaticShapeDimension(module, token, effect, environment);
   if (failed(dimension))
     return failure();
+  if (instance) {
+    if (environment || resolveInstanceModuleDefinition(instance) != module)
+      return failure();
+    if (dimension->parameter)
+      return resolveInstanceIntegerParameter(instance, dimension->parameter);
+    if (dimension->expression)
+      return resolveInstanceIntegerExpression(instance, dimension->expression,
+                                              effect == "width"
+                                                  ? ParameterIntegerMode::MathematicalSigned64
+                                                  : ParameterIntegerMode::Storage);
+    return makeLiteralIntegerExpression(dimension->literal);
+  }
   if (dimension->parameter)
     return environment ? resolveOwnedIntegerParameter(module, dimension->parameter, *environment)
                        : resolveOwnedIntegerParameter(module, dimension->parameter);
@@ -195,7 +207,8 @@ class ModuleTypeVerifier {
 public:
   explicit ModuleTypeVerifier(Operation *module,
                               const ParameterIntegerEnvironment *environment = nullptr)
-      : module(module), environment(environment), rightEnvironment(environment) {}
+      : module(module), rightModule(module), environment(environment),
+        rightEnvironment(environment) {}
 
   FailureOr<int64_t> storageMaximumBits(Type type, Operation *use) {
     currentUse = use;
@@ -224,6 +237,16 @@ public:
       return false;
     rightEnvironment = rightContext;
     return equivalentStoragePair(left, right, 1, false);
+  }
+  bool equivalentInstanceStorageTypes(Operation *instance, Type formal, Type actual) {
+    Operation *parent = instance->getParentOp();
+    ModuleTypeVerifier other(parent);
+    if (failed(storageMaximumBits(formal, module)) ||
+        failed(other.storageMaximumBits(actual, parent)))
+      return false;
+    leftInstance = instance;
+    rightModule = parent;
+    return equivalentStoragePair(formal, actual, 1, false);
   }
 
   LogicalResult verify(Operation *use) {
@@ -328,11 +351,12 @@ private:
     const auto pair = std::make_pair(left, right);
     if (equivalentPairs.contains(pair))
       return true;
-    bool equal = left == right && environment == rightEnvironment;
+    bool equal =
+        left == right && module == rightModule && !leftInstance && environment == rightEnvironment;
     StringRef kind = scalarKind(left);
     if (!equal && !kind.empty() && kind == scalarKind(right)) {
       auto lhs = widthExpression(left);
-      auto rhs = inferDigitalWidthExpression(right, module, rightEnvironment);
+      auto rhs = inferDigitalWidthExpression(right, rightModule, rightEnvironment);
       equal = succeeded(lhs) && succeeded(rhs) &&
               (widthFamily || equivalentInstantiatedIntegerExpressions(*lhs, *rhs));
     } else if (!equal) {
@@ -348,8 +372,8 @@ private:
           for (unsigned index = 0; equal && index < a.size(); ++index) {
             if (++comparisonWork > digitalTypeMaximumNodes)
               return false;
-            auto x = dimensionExpression(module, a[index], "shape", environment);
-            auto y = dimensionExpression(module, b[index], "shape", rightEnvironment);
+            auto x = dimensionExpression(module, a[index], "shape", environment, leftInstance);
+            auto y = dimensionExpression(rightModule, b[index], "shape", rightEnvironment);
             equal =
                 succeeded(x) && succeeded(y) && equivalentInstantiatedIntegerExpressions(*x, *y);
           }
@@ -379,7 +403,8 @@ private:
     auto known = widthExpressions.find(type);
     if (known != widthExpressions.end())
       return known->second;
-    auto expression = inferDigitalWidthExpression(type, module, environment);
+    auto expression = leftInstance ? inferInstanceDigitalWidthExpression(type, leftInstance)
+                                   : inferDigitalWidthExpression(type, module, environment);
     if (succeeded(expression))
       widthExpressions.try_emplace(type, *expression);
     return expression;
@@ -532,6 +557,8 @@ private:
   }
 
   Operation *module;
+  Operation *rightModule;
+  Operation *leftInstance = nullptr;
   const ParameterIntegerEnvironment *environment;
   const ParameterIntegerEnvironment *rightEnvironment;
   Operation *currentUse = nullptr;
@@ -648,6 +675,17 @@ inferDigitalWidthExpression(Type type, Operation *module,
     return dimensionExpression(module, symbolic.getWidth(), "width", environment);
   return makeLiteralIntegerExpression(bounds->lower);
 }
+FailureOr<InstantiatedIntegerExpression> inferInstanceDigitalWidthExpression(Type type,
+                                                                             Operation *instance) {
+  Operation *module = resolveInstanceModuleDefinition(instance);
+  if (!module || !isa_and_nonnull<nodal::ModuleOp>(instance->getParentOp()))
+    return failure();
+  if (failed(inferDigitalWidthBounds(type, module)))
+    return failure();
+  if (auto symbolic = dyn_cast<ParametricIntegerType>(type))
+    return dimensionExpression(module, symbolic.getWidth(), "width", nullptr, instance);
+  return inferDigitalWidthExpression(type, module);
+}
 
 bool equivalentDigitalStorageTypes(Type left, Type right, Operation *module,
                                    const ParameterIntegerEnvironment *environment) {
@@ -673,6 +711,12 @@ bool equivalentDigitalStorageTypesAcross(Type left, const ParameterIntegerEnviro
     return false;
   return ModuleTypeVerifier(module, leftContext)
       .equivalentStorageTypesAcross(left, right, rightContext);
+}
+bool equivalentInstanceDigitalStorageTypes(Operation *instance, Type formal, Type actual) {
+  Operation *child = resolveInstanceModuleDefinition(instance);
+  if (!child || !isa_and_nonnull<nodal::ModuleOp>(instance->getParentOp()))
+    return false;
+  return ModuleTypeVerifier(child).equivalentInstanceStorageTypes(instance, formal, actual);
 }
 
 LogicalResult verifyDigitalTypeOperation(Operation *operation,

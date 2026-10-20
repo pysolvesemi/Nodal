@@ -6,12 +6,16 @@
 namespace nodal {
 struct FlatFSMHeader {
   mlir::Operation *operation = nullptr, *module = nullptr;
-  unsigned guards = 0;
+  unsigned guards = 0, guardOffset = 1;
+  bool controlled = false;
+  unsigned privateStateCount() const { return controlled ? 2 : 1; }
   llvm::SmallVector<mlir::Block *, 4> bodies;
   llvm::SmallVector<unsigned, 4> captureOffsets, captureCounts;
 };
 mlir::FailureOr<FlatFSMHeader> inspectFlatFSMHeader(mlir::Operation *operation);
 mlir::LogicalResult verifyFlatFSMOperation(mlir::Operation *operation);
+/// Canonical distinct result roles of an independently admitted v1/v2 header.
+llvm::StringRef flatFSMResultRole(mlir::Value result);
 mlir::FailureOr<mlir::Value> flatFSMCaptureSource(mlir::BlockArgument argument);
 mlir::LogicalResult flatFSMArgumentDependencies(mlir::BlockArgument argument,
                                                 llvm::SmallVectorImpl<mlir::Value> &dependencies);

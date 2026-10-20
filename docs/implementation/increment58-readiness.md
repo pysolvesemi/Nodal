@@ -267,3 +267,49 @@ Receipts remain under `.work/f58-source-checkpoint-tests.log`,
 avoid repeated declaration scans; existing depth/transaction limits remain.
 Generated Area collections, symbolic boundary selection, Interface arrays,
 resolved/conservative propagation and target adapters remain required open work.
+
+## Checkpoint 4: contextual native boundary and controlled execution
+
+The [boundary ABI contract](../design-gates/NodalHierarchyBoundaryABI-DG-v0.1.md)
+adds a bounded, query-local view over the existing hierarchy, parameter, shape,
+digital type and Interface owners. Exact formal/actual type comparison uses the
+actual occurrence substitution, not equal type text, equal defaults or equal
+bounds. Complete Interface leaves retain roles and dimensions even when no
+source access names them. No second occurrence graph or endpoint is introduced.
+
+The native target now transports bounded symbolic scalar and packed-Vec child
+ports through reusable parameterized modules and real instances. Checked signed
+32-bit target parameter arithmetic is a representation constraint of the pinned
+CIRCT textual roundtrip; semantic source integer facts remain 64-bit. Bounded
+ordinary Integer configuration uses existing parameter constraints rather than
+being relabeled structural. Unsupported or overflowing target expressions fail
+transactionally. Generic bodies are not cloned for individual parameter values.
+
+The [controlled execution contract](../design-gates/NodalSequentialState-DG-v0.6.md)
+extends the existing flat-FSM executor with an explicit four-code lifecycle and
+separate local-state storage. Native v2 normalization preserves reset, cancel,
+restart, enable, entry and exit priority; ordinary v1 behavior is unchanged.
+Result identities come from the same FSM owner. Sparse enum decoding preserves
+both the original-input validity and the declared fallback, rather than assuming
+contiguous codes or a zero fallback. Attributed bitwise fan-in is emitted as
+bounded balanced binary trees: a focused exported-HDL witness exposed the pinned
+firtool dropping later operands of attributed variadic operations. The repair
+retains all operands and source correlation; the three-reset regression checks
+each independent reset cause.
+
+Focused native checks passed 800 cases across 12 suites: digital types 114,
+materialization 46, Interface 186, observations 25, sequential 71, FSM 70,
+sequential target 149, hierarchy target 13, hierarchy control 27, hierarchy data
+64, boundary ABI 23 and symbolic target 12. This is focused prototype acceptance,
+not global qualification. Source capture and bridge additions for these native
+contracts are a separate checkpoint; their working-tree demonstrations are not
+claimed as committed public API by this native slice.
+
+Architecture review: canonical owners remain authoritative, derived views are
+query-local and bounded, complete ABI collection does not require eager source
+member access, and target work is bounded by legal footprints rather than a loop
+over parameter values. The target limit remains distinct from source metadata
+scale. Symbolic named-field adapters, Interface target connections and resolved
+or conservative topology, generated families and real target loops, formal-domain
+FSM instances, hierarchical/parallel composition and bounded recursive control
+remain required open F58 work. No checklist parent or child closes here.

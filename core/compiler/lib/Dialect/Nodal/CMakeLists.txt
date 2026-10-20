@@ -14,6 +14,7 @@ add_mlir_dialect_library(NodalDialect
   DigitalTypeModel.cpp
   DigitalStorageModel.cpp
   HierarchyModel.cpp
+  HierarchyBoundaryModel.cpp
   DomainModel.cpp
   DomainRelationshipModel.cpp
   ClockModel.cpp

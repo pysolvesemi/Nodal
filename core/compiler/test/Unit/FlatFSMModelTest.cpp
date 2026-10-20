@@ -5,6 +5,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
@@ -138,6 +139,33 @@ std::string replace(std::string s, std::string a, std::string b) {
     llvm::report_fatal_error("missing replacement");
   s.replace(at, a.size(), b);
   return s;
+}
+std::string controlledSetup(bool reset = true) {
+  return setup(reset) + literal("false", 0, 1) + literal("dormant", 0, 2) +
+         state("status", bits(2), reset ? "dormant" : "") + port("restart", bits(1)) +
+         port("cancel", bits(1)) + port("enable", bits(1));
+}
+std::string controlledMachine(bool actions = true, std::string policy = "recover_to_initial") {
+  auto result = machine(actions, policy);
+  result = replace(result, "%next, %taken =", "%next, %taken, %entered, %exited =");
+  result = replace(result, "flat-fsm-v1", "flat-fsm-v2");
+  result = replace(result, "%state, %go", "%state, %status, %restart, %cancel, %enable, %go");
+  result = replace(result, " : (" + bits(2) + ", " + bits(1),
+                   " : (" + bits(2) + ", " + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " +
+                       bits(1) + ", " + bits(1));
+  result = replace(result, "-> (" + bits(2) + ", " + bits(1) + ")",
+                   "-> (" + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ")");
+  if (actions)
+    result = replace(result,
+                     "region_id = \"Fixture.machine.action3\", phase = \"entry\", owner_case = "
+                     "\"example.Mode.Run\"",
+                     "region_id = \"Fixture.machine.action3\", phase = \"entry\", owner_case = "
+                     "\"example.Mode.Idle\"");
+  for (std::string event : {"entered", "exited"})
+    result += "%observed_" + event + " = \"nodal.digital_expr\"(%" + event +
+              ", %false) <{operator_name = \"bool_or\", metadata = {semantic_path = \"Fixture." +
+              event + "\"}}> : (" + bits(1) + ", " + bits(1) + ") -> " + bits(1) + "\n";
+  return result;
 }
 std::string print(Operation *op) {
   std::string s;
@@ -316,6 +344,166 @@ int main(int argc, char **argv) {
     } else
       llvm::outs() << "PASS " << name << '\n';
   };
+  auto controlled = wrap(controlledSetup() + controlledMachine());
+  check(
+      "controlled-distinct-result-semantic-identities", controlled, true,
+      [](nodal::ModuleOp module) {
+        unsigned count = 0;
+        bool good = true;
+        const char *roles[] = {"next", "taken", "entered", "exited"};
+        module.walk([&](nodal::FlatFSMOp op) {
+          for (Value result : op->getResults()) {
+            good &= count < 4 && nodal::digitalValueSemanticPath(result) ==
+                                     "Fixture.machine." + std::string(roles[count]);
+            ++count;
+          }
+        });
+        return good && count == 4;
+      },
+      false);
+  check(
+      "controlled-lifecycle-priority-actions-events", controlled, true,
+      [&](nodal::ModuleOp module) {
+        struct Case {
+          int state, status, restart, cancel, enable, go, again, done, reset;
+          int next, nextStatus, count, taken, entered, exited;
+        };
+        const Case cases[] = {
+            {0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 99, 0, 0, 0}, // dormant does not implicitly boot
+            {3, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 4, 0, 1,
+             0}, // restart ignores old local code and enable
+            {0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 99, 1, 1, 1},
+            {1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 3, 1, 1, 1}, // active, exit, transition precedence
+            {1, 1, 0, 0, 1, 0, 0, 1, 0, 2, 2, 5, 1, 1, 1}, // terminal entry completes
+            {2, 2, 0, 0, 1, 1, 1, 1, 0, 2, 2, 99, 0, 0, 0},
+            {1, 1, 0, 1, 0, 0, 1, 1, 0, 1, 3, 2, 0, 0,
+             1}, // cancel runs exit, independent of enable
+            {1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 3, 2, 0, 0, 1}, // cancel-Running wins restart
+            {2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 1, 4, 0, 1,
+             0}, // nonrunning cancel does not block restart
+            {1, 1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 99, 0, 0, 0},
+            {1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 99, 0, 0, 0}, // reset wins all controls/actions
+            {3, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 99, 0, 0, 0}, // illegal local recovery has no actions
+            {1, 2, 0, 0, 1, 1, 1, 1, 0, 0, 1, 99, 0, 0, 0}, // forged Completed/nonterminal recovers
+            {3, 0, 0, 0, 1, 1, 1, 1, 0, 3, 0, 99, 0, 0, 0},
+            {3, 1, 1, 1, 1, 1, 1, 1, 0, 3, 3, 99, 0, 0, 1},
+            {3, 3, 1, 0, 1, 1, 1, 1, 0, 0, 1, 4, 0, 1, 0},
+        };
+        bool good = true;
+        for (const auto &c : cases) {
+          std::map<std::string, int> values{
+              {"state", c.state},   {"status", c.status}, {"count", 99}, {"restart", c.restart},
+              {"cancel", c.cancel}, {"enable", c.enable}, {"go", c.go},  {"again", c.again},
+              {"done", c.done},     {"reset", c.reset},   {"clock", 0}};
+          unsigned updates = 0, observations = 0;
+          module.walk([&](nodal::SequentialUpdateOp op) {
+            ++updates;
+            StringRef name =
+                op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+            int actual = c.reset && op->getNumOperands() == 5 ? evaluate(op->getOperand(4), values)
+                                                              : evaluate(op->getOperand(1), values);
+            int expected = name == "state" ? c.next : name == "status" ? c.nextStatus : c.count;
+            good &= actual == expected;
+            good &= op->getAttrOfType<StringAttr>("root_id").getValue() == "Fixture.machine";
+          });
+          module.walk([&](Operation *op) {
+            auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
+            auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+            if (!path || !op->getNumResults())
+              return;
+            int expected;
+            if (path.getValue() == "Fixture.machine.next")
+              expected = c.next;
+            else if (path.getValue() == "Fixture.machine.taken")
+              expected = c.taken;
+            else if (path.getValue() == "Fixture.entered")
+              expected = c.entered;
+            else if (path.getValue() == "Fixture.exited")
+              expected = c.exited;
+            else
+              return;
+            ++observations;
+            good &= evaluate(op->getResult(0), values) == expected;
+          });
+          good &= updates == 3 && observations == 4;
+        }
+        return good;
+      });
+  check("controlled-resetless-establishment-cancel-tie",
+        wrap(controlledSetup(false) + controlledMachine()), true, [&](nodal::ModuleOp module) {
+          bool good = true;
+          for (int status = 0; status < 4; ++status)
+            for (int cancel = 0; cancel < 2; ++cancel) {
+              bool cancelled = status == 1 && cancel;
+              std::map<std::string, int> values{{"state", 3},   {"status", status}, {"count", 99},
+                                                {"restart", 1}, {"cancel", cancel}, {"enable", 0},
+                                                {"go", 1},      {"again", 1},       {"done", 1},
+                                                {"clock", 0}};
+              module.walk([&](nodal::SequentialUpdateOp op) {
+                good &= op->getNumOperands() == 3;
+                StringRef name =
+                    op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+                int expected = name == "state"    ? (cancelled ? 3 : 0)
+                               : name == "status" ? (cancelled ? 3 : 1)
+                                                  : (cancelled ? 99 : 4);
+                good &= evaluate(op->getOperand(1), values) == expected;
+              });
+            }
+          return good;
+        });
+  check("controlled-error-operational-gating",
+        wrap(controlledSetup() + controlledMachine(false, "error")), true,
+        [&](nodal::ModuleOp module) {
+          bool good = true;
+          unsigned assertions = 0;
+          module.walk([&](nodal::SequentialAssertOp op) {
+            ++assertions;
+            for (int status : {0, 1, 2, 3})
+              for (int restart : {0, 1})
+                for (int cancel : {0, 1}) {
+                  std::map<std::string, int> values{
+                      {"state", 3},       {"status", status}, {"restart", restart},
+                      {"cancel", cancel}, {"enable", 1},      {"go", 1},
+                      {"again", 1},       {"done", 1},        {"reset", 0}};
+                  bool expected =
+                      restart || (status == 1 && cancel) || (status != 1 && status != 2);
+                  good &= evaluate(op->getOperand(0), values) == expected;
+                }
+          });
+          return good && assertions == 1;
+        });
+  check("controlled-distinct-private-status",
+        replace(controlled, "%state, %status, %restart", "%state, %state, %restart"), false);
+  check("controlled-wrong-status-initializer",
+        replace(controlled, literal("dormant", 0, 2), literal("dormant", 1, 2)), false);
+  check("controlled-external-status-writer",
+        wrap(controlledSetup() + controlledMachine() + assignment("status", "initial", bits(2))),
+        false);
+  check("controlled-exact-result-arity",
+        replace(controlled, "%next, %taken, %entered, %exited =", "%next, %taken ="), false);
+  check("controlled-resetless-no-fabricated-init",
+        wrap(controlledSetup(false) + controlledMachine()), true, [&](nodal::ModuleOp module) {
+          bool good = true;
+          module.walk([&](nodal::DigitalStorageOp op) { good &= op->getNumOperands() == 0; });
+          return good;
+        });
+  check(
+      "controlled-transactional-bound", controlled, true,
+      [&](nodal::ModuleOp module) {
+        std::string before = print(module);
+        nodal::SequentialModelLimits limits;
+        limits.maximumNormalizedOperations = 100;
+        bool good =
+            failed(nodal::normalizeSequentialModel(module, limits)) && before == print(module);
+        unsigned generated = 0;
+        auto candidateRoot = llvm::cast<mlir::ModuleOp>(module->getParentOp()->clone());
+        auto candidate = *candidateRoot.getOps<nodal::ModuleOp>().begin();
+        good &= succeeded(nodal::expandFlatFSMModel(candidate, generated, 65536));
+        llvm::outs() << "controlled representative expansion: " << generated << " operations\n";
+        candidateRoot->erase();
+        return good && generated > 50 && generated < limits.maximumNormalizedOperations;
+      },
+      false);
   auto base = wrap(setup() + machine());
   check("action-order-self-edge-reset-hold", base, true, [&](nodal::ModuleOp module) {
     bool good = true;
@@ -529,6 +717,11 @@ int main(int argc, char **argv) {
               "domain = @other") +
       "\"nodal.local_domain_binding\"(%otherClock) <{domain = @other, reset_polarity = "
       "\"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">) -> ()\n";
+  check("controlled-foreign-clock-control-rejected",
+        wrap(controlledSetup() + foreignDomain +
+             replace(port("foreignRestart", bits(1)), "domain = @core", "domain = @other") +
+             replace(controlledMachine(false), "%restart", "%foreignRestart")),
+        false);
   auto foreignSetup =
       replace(setup(), state("count", bits(8)),
               replace(state("count", bits(8)), "domain = @core", "domain = @other"));

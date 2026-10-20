@@ -260,13 +260,13 @@ int main() {
            replace(fixture(false, false, true), owner("Resetless", leaf(false)),
                    owner("Resetless", leaf(true))),
            "initialized child state requires");
-  negative("symbolic-parameter-remains-unsupported-atomically",
+  negative("unbounded-ordinary-parameter-remains-unsupported-atomically",
            replace(fixture(), owner("Child", leaf()),
                    owner("Child",
                          leaf() + "\"nodal.parameter\"() <{sym_name = \"N\", type = i64, "
                                   "default_value = 4 : i64, variability = \"symbolic\", metadata "
                                   "= {}}> : () -> ()\n")),
-           "outside the finite scalar");
+           "target Integer parameter envelope must fit signed 32-bit arithmetic");
   diagnostics.clear();
   auto normalized = parseSourceString<mlir::ModuleOp>(fixture(), ParserConfig(&context, false));
   bool ok = bool(normalized);

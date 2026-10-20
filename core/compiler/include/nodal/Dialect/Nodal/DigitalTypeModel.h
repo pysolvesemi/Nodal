@@ -49,6 +49,11 @@ inferDigitalWidthBounds(mlir::Type type, mlir::Operation *module,
 mlir::FailureOr<InstantiatedIntegerExpression>
 inferDigitalWidthExpression(mlir::Type type, mlir::Operation *module,
                             const ParameterIntegerEnvironment *environment = nullptr);
+/// Exact child scalar width under a finalized immediate instance substitution.
+/// The child type retains its declaration owner; no parent token lookup or
+/// default/bounds-based identity is permitted.
+mlir::FailureOr<InstantiatedIntegerExpression>
+inferInstanceDigitalWidthExpression(mlir::Type type, mlir::Operation *instance);
 
 /// Same complete storage type within one actual module: retain scalar kind,
 /// nominal enum/Struct identity, ordered fields and shape rank, while comparing
@@ -65,6 +70,12 @@ bool equivalentDigitalStorageTypesAcross(mlir::Type left,
                                          mlir::Type right,
                                          const ParameterIntegerEnvironment *rightContext,
                                          mlir::Operation *module);
+/// Complete child formal versus parent actual ABI under this exact direct
+/// instance's finalized parameter environment. Reuses the ordinary recursive
+/// type checker with independently validated owners, shapes and width DAGs.
+/// Generated lexical instances require their separately admitted family view.
+bool equivalentInstanceDigitalStorageTypes(mlir::Operation *instance, mlir::Type formal,
+                                           mlir::Type actual);
 
 /// Construction-only width-family relation. Both complete types are validated.
 /// Scalar width leaves may differ; scalar kind, enum ABI, Struct name/ordered

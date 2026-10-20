@@ -802,11 +802,13 @@ struct Model {
             if (!identities.insert(digitalRegionSemanticPath(body)).second)
               return reject(&op, "FSM action identities must be unique within their module");
           Value state = op.getOperand(0);
-          auto inserted = roots.try_emplace(state, &op);
-          if (!inserted.second && inserted.first->second != &op)
-            return reject(&op, "private FSM state has an unrelated writer");
-          for (unsigned g = 0; g < h->guards; ++g)
-            if (failed(sampled(op.getOperand(1 + g), op.getAttr("domain"), &op,
+          for (unsigned index = 0; index < h->privateStateCount(); ++index) {
+            auto inserted = roots.try_emplace(op.getOperand(index), &op);
+            if (!inserted.second && inserted.first->second != &op)
+              return reject(&op, "private FSM state has an unrelated writer");
+          }
+          for (unsigned index = h->privateStateCount(); index < h->guardOffset + h->guards; ++index)
+            if (failed(sampled(op.getOperand(index), op.getAttr("domain"), &op,
                                state.getDefiningOp())))
               return failure();
           SmallVector<SmallVector<Value, 4>, 4> controls;
@@ -869,9 +871,14 @@ struct Model {
           if (failed(target))
             return reject(&op, "sequential update must target one whole owned register");
           Operation *reg = target->getDefiningOp();
-          if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
-              *target == scope.root->getOperand(0))
-            return reject(&op, "an action cannot directly write private FSM storage");
+          if (scope.root && llvm::isa<FlatFSMOp>(scope.root)) {
+            auto header = inspectFlatFSMHeader(scope.root);
+            if (failed(header))
+              return failure();
+            for (unsigned index = 0; index < header->privateStateCount(); ++index)
+              if (*target == scope.root->getOperand(index))
+                return reject(&op, "an action cannot directly write private FSM storage");
+          }
           if (scope.root && llvm::isa<FlatFSMOp>(scope.root) &&
               reg->getAttr("domain") != scope.root->getAttr("domain"))
             return reject(&op, "FSM actions must update registers in their actual owning domain");

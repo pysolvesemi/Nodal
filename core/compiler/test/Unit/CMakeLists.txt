@@ -791,3 +791,18 @@ target_link_libraries(nodal-event-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.event-circt-unit COMMAND nodal-event-circt-unit-tests)
 set_tests_properties(nodal.native.event-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-hierarchy-boundary-model-unit-tests HierarchyBoundaryModelTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-boundary-model-unit-tests)
+target_link_libraries(nodal-hierarchy-boundary-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-boundary-model-unit COMMAND nodal-hierarchy-boundary-model-unit-tests)
+set_tests_properties(nodal.native.hierarchy-boundary-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-symbolic-hierarchy-circt-unit-tests SymbolicHierarchyCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-symbolic-hierarchy-circt-unit-tests)
+target_link_libraries(nodal-symbolic-hierarchy-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.symbolic-hierarchy-circt-unit COMMAND nodal-symbolic-hierarchy-circt-unit-tests)
+set_tests_properties(nodal.native.symbolic-hierarchy-circt-unit PROPERTIES TIMEOUT 60)

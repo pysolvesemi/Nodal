@@ -979,8 +979,9 @@ LogicalResult AssignmentQuery::verify() {
         if (failed(header) || failed(verifyFlatFSMOperation(&operation)) ||
             scope.depth >= limits.maximumGuardDepth)
           return failure();
-        for (unsigned i = 0; i < header->guards; ++i)
-          if (failed(valueNode(operation.getOperand(1 + i), &operation)))
+        for (unsigned i = header->privateStateCount();
+             i < header->guardOffset + header->guards; ++i)
+          if (failed(valueNode(operation.getOperand(i), &operation)))
             return failure();
         for (Block *body : header->bodies)
           scopes.push_back({body, scope.iteration, scope.depth + 1});

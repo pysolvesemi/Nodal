@@ -41,6 +41,47 @@ mlir::LogicalResult verifyDigitalInterfaceOperation(mlir::Operation *operation);
 /// Read-only, bounded metadata traversal; pass-through uses union-find and each
 /// represented driver is counted once for all split views.
 mlir::LogicalResult verifyDigitalInterfaceModel(mlir::Operation *module);
+
+/// Immutable logical leaf facts from the complete selected role, including
+/// leaves never materialized by a member-access operation. Types and ordered
+/// dimensions remain structural; this query never expands physical bits/lanes.
+struct DigitalInterfaceLeaf {
+  mlir::Operation *declaration = nullptr;
+  mlir::StringAttr path;
+  mlir::Type type;
+  mlir::StringAttr protocol, role, access;
+  mlir::ArrayAttr nestedRoles, nestedInterfaces;
+  mlir::DictionaryAttr analogMetadata, analogReferences;
+  /// Authored-order representative of the existing local resolved component.
+  /// Null means unrepresented, never permission to allocate another net.
+  mlir::Value resolvedComponent;
+};
+struct DigitalInterfaceEndpoint {
+  /// Parent-owned local declaration or exact child projection operation.
+  mlir::Operation *operation = nullptr;
+  /// Actual endpoint, which may belong to an immediate child definition.
+  mlir::Operation *declaration = nullptr;
+  mlir::Operation *declarationOwner = nullptr;
+  /// The actual domain below is local to this owner, not declarationOwner.
+  mlir::Operation *domainOwner = nullptr;
+  /// Non-null only for a child boundary; declared roles are never inverted.
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *definition = nullptr;
+  mlir::Operation *selectedRole = nullptr;
+  mlir::StringAttr semanticIdentity;
+  mlir::FlatSymbolRefAttr domain;
+  mlir::ArrayAttr dimensions;
+  llvm::SmallVector<DigitalInterfaceLeaf> leaves;
+};
+/// Validate once per owning module and transactionally append all endpoints and
+/// complete selected-role leaves in authored declaration order. These are
+/// borrowed IR facts, valid only while the IR remains alive and unchanged.
+/// Occurrence/parameter substitution and target physical adapters remain with
+/// their existing owners; no parallel hierarchy or resolved registry is built.
+mlir::LogicalResult
+collectDigitalInterfaceEndpoints(mlir::Operation *module,
+                                 llvm::SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints);
+
 /// Verified implicit read edges for actual typed member/net values. Canonical
 /// aliases and pass-through components share one physical identity; resolution
 /// retains every authored driver without applying ordinary single-writer rules.

@@ -133,11 +133,12 @@ FailureOr<InstancePort> inspectInstancePort(Operation *op) {
                        : local(boundary->module, FlatSymbolRefAttr::get(op->getContext(), name));
   auto type = boundary->port ? boundary->port->getAttrOfType<TypeAttr>("type") : TypeAttr();
   if (!isa_and_nonnull<PortOp>(boundary->port) || !type ||
-      type.getValue() != op->getResult(0).getType() ||
+      !equivalentInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
+                                             op->getResult(0).getType()) ||
       !llvm::is_contained(ArrayRef<StringRef>{"input", "output"}, text(op, "direction")) ||
       text(op, "direction") != text(boundary->port, "direction") ||
       isDigitalControlBoundaryType(type.getValue()) ||
-      failed(inferDigitalStorageMaximumBits(type.getValue(), op)))
+      failed(inferDigitalStorageMaximumBits(type.getValue(), boundary->port)))
     return fail("instance port must retain exact child data type and input/output direction");
   return *boundary;
 }

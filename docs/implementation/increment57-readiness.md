@@ -1292,3 +1292,15 @@ causal diagnostics. A default-initialized child projection check, standalone
 output/Interface observation integration, waivers, events and final F57 integration
 also remain open. These are focused prototype checks, not exhaustive qualification;
 no CI ran and no coarse F57 checklist closes from this checkpoint.
+
+### Default initialized child reset check
+
+The previously noted projection question is resolved without a production change.
+An initialized child register outside every lexical domain passes actual
+source-to-bridge-to-native admission with each default, named and inherited
+binding. All three resetless variants reject. The unused formal Reset projection
+is absent in these witnesses because generic initialized state resolves the
+reset-bearing actual instance binding directly; absence is not a reset-proof
+bypass. The isolated suite passes **3/3**, with all three positive native replays
+under `.work/hierarchy-default-reset/replay` and adjacent `tests1.log`/`replay.log`.
+Assignment source-location and observation follow-ons remain open.

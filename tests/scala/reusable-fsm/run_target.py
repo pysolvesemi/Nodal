@@ -10,10 +10,82 @@ import re
 import subprocess
 
 
+def controlled_bench(top: str) -> str:
+    return f"""module tb;
+reg clock=0, reset=1, restartA=0, restartB=0, cancel=0, enable=1, go=0, finish=0;
+reg [7:0] data=0;
+wire [1:0] statusA,statusB,stateA,stateB;
+wire doneA,runningA,cancelledA,enteringA,exitingA,takenA;
+wire [7:0] valueA,valueB;
+{top} dut(.clock(clock),.reset(reset),.restartA(restartA),.restartB(restartB),
+ .cancel(cancel),.enable(enable),.go(go),.finish(finish),.input_0(data),
+ .statusA(statusA),.statusB(statusB),.stateA(stateA),.stateB(stateB),
+ .doneA(doneA),.runningA(runningA),.cancelledA(cancelledA),
+ .enteringA(enteringA),.exitingA(exitingA),.takenA(takenA),.valueA(valueA),.valueB(valueB));
+task tick; begin #2; clock=1; #1; clock=0; #1; end endtask
+task check(input [1:0] a,b,sa,sb,input [7:0] x,y); begin
+ if(stateA !== a || stateB !== b || statusA !== sa || statusB !== sb || valueA !== x || valueB !== y)
+  $fatal(1,"controlled mismatch local=%d,%d status=%d,%d values=%d,%d",stateA,stateB,statusA,statusB,valueA,valueB);
+ if(doneA !== (sa==2 && a==2) || runningA !== (sa==1) || cancelledA !== (sa==3))
+  $fatal(1,"typed lifecycle observation mismatch");
+end endtask
+task events(input ent,ext,taken); begin #1;
+ if(enteringA !== ent || exitingA !== ext || takenA !== taken)
+  $fatal(1,"lifecycle event is not an ordinary transition: %d %d %d",enteringA,exitingA,takenA);
+end endtask
+initial begin
+ tick; check(0,0,0,0,0,0); reset=0; go=1;
+ tick; check(0,0,0,0,0,0);
+ restartA=1; enable=0; events(1,0,0); tick; check(0,0,1,0,0,0);
+ restartA=0; enable=1; events(0,0,1); tick; check(1,0,1,0,4,0);
+ restartB=1; data=17; tick; check(1,0,1,1,17,0);
+ restartB=0; enable=0; data=22; events(0,0,0); tick; check(1,0,1,1,17,0);
+ cancel=1; restartA=1; events(0,1,0); tick; check(1,0,3,3,17,0);
+ cancel=0; enable=1; events(1,0,0); tick; check(0,0,1,3,17,0);
+ restartA=0; restartB=1; tick; check(1,0,1,1,4,0);
+ restartB=0; finish=1; data=29; tick; check(2,1,2,1,29,14);
+ go=0; data=31; tick; check(2,2,2,2,29,31);
+ finish=0; data=44; tick; check(2,2,2,2,29,31);
+ restartA=1; cancel=1; events(1,0,0); tick; check(0,2,1,2,29,31);
+ restartA=0; cancel=0; go=1; tick; check(1,2,1,2,4,31);
+ reset=1; #1; check(1,2,1,2,4,31); events(0,0,0); tick; check(0,0,0,0,0,0);
+ $display("REUSABLE_FSM_TARGET_PASS"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
+def terminal_bench(top: str) -> str:
+    return f"""module tb;
+reg clock=0,reset=1,restart=0,cancel=0,enable=0;
+wire [1:0] status;
+wire done;
+wire [7:0] value;
+{top} dut(.clock(clock),.reset(reset),.restart(restart),.cancel(cancel),.enable(enable),
+ .status(status),.done(done),.value(value));
+task tick; begin #2; clock=1; #1; clock=0; #1; end endtask
+task check(input [1:0] s,input d,input [7:0] v); begin
+ if(status !== s || done !== d || value !== v) $fatal(1,"initial terminal lifecycle mismatch");
+end endtask
+initial begin
+ tick; check(0,0,0); reset=0; enable=1; tick; check(0,0,0);
+ restart=1; enable=0; tick; check(2,1,7);
+ restart=0; cancel=1; enable=1; tick; check(2,1,7);
+ restart=1; tick; check(2,1,7);
+ reset=1; tick; check(0,0,0);
+ $display("REUSABLE_FSM_TARGET_PASS"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--profile", choices=("legacy", "controlled", "terminal"), default="legacy")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated outputs must stay under .work")
@@ -25,13 +97,15 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     args.out = args.out.resolve()
     source = args.input.read_text()
-    if source.count('"nodal.flat_fsm"') != 2:
+    expected_machines = 1 if args.profile == "terminal" else 2
+    if source.count('"nodal.flat_fsm"') != expected_machines:
         raise RuntimeError("expected the actual two-instance Scala witness")
-    if source.count('illegal_policy = "recover_to_initial"') != 2:
+    if source.count('illegal_policy = "recover_to_initial"') != expected_machines:
         raise RuntimeError("Icarus replay requires the explicit recovery-policy Scala witness; "
                            "Error-policy assertions must not be disabled")
     manifest = {
         "status": "running",
+        "profile": args.profile,
         "source_sha256": hashlib.sha256(args.input.read_bytes()).hexdigest(),
         "tools": {name: hashlib.sha256(getattr(args, name).read_bytes()).hexdigest()
                   for name in ("nodalc", "firtool", "iverilog", "vvp")},
@@ -46,6 +120,9 @@ def main() -> None:
                                 stderr=subprocess.STDOUT, timeout=120)
         (args.out / f"{label}.log").write_text(result.stdout)
         if result.returncode:
+            manifest["status"] = "failed"
+            manifest["failed_step"] = label
+            save()
             raise RuntimeError(f"{label} exited {result.returncode}\n{result.stdout[-8000:]}")
         return result.stdout
 
@@ -65,41 +142,46 @@ def main() -> None:
     if len(modules) != 1:
         raise RuntimeError(f"expected one generated module, got {modules}")
     top = modules[0]
-    state_registers = re.findall(r"\breg\s+\[1:0\]\s+(register_\w+)\s*;", design)
-    if len(state_registers) != 1:
-        raise RuntimeError("expected exactly one compact private state register")
-    compact_state = state_registers[0]
-    bench = f"""module tb;
-reg clock=0, reset=1, requestA=0, requestB=0, finish=0;
-reg [7:0] data=0;
-wire doneA, doneB;
-wire [1:0] stateA, stateB;
-wire [7:0] valueA, valueB;
-{top} dut(.clock(clock), .reset(reset), .requestA(requestA),
-  .requestB(requestB), .finish(finish), .input_0(data), .doneA(doneA), .doneB(doneB),
-  .stateA(stateA), .stateB(stateB), .valueA(valueA), .valueB(valueB));
-task tick; begin #2; clock=1; #1; clock=0; #1; end endtask
-task check(input [1:0] a, input [1:0] b, input [7:0] x, input [7:0] y); begin
-  if(stateA !== a || stateB !== b || valueA !== x || valueB !== y)
-    $fatal(1,"state/value mismatch: %d %d %d %d",stateA,stateB,valueA,valueB);
-  if(doneA !== (a==2) || doneB !== (b==2))
-    $fatal(1,"typed completion does not match terminal membership");
-end endtask
-initial begin
-  tick; check(0,0,0,0); reset=0;
-  requestA=1; tick; check(1,0,4,0);
-  requestA=0; requestB=1; data=17; tick; check(1,1,17,4);
-  requestB=0; finish=1; data=29; tick; check(2,2,29,29);
-  finish=0; data=44; tick; check(2,2,29,29);
-  force dut.{compact_state}=2'b11; #1;
-  if(doneA !== 0 || stateA !== 0) $fatal(1,"invalid state must not report completion");
-  release dut.{compact_state}; tick; check(0,2,29,29);
-  reset=1; #1; check(0,2,29,29); tick; check(0,0,0,0);
-  $display("REUSABLE_FSM_TARGET_PASS"); $finish;
-end
-initial begin #1000; $fatal(1,"timeout"); end
-endmodule
-"""
+    if args.profile == "controlled":
+        bench = controlled_bench(top)
+    elif args.profile == "terminal":
+        bench = terminal_bench(top)
+    else:
+        state_registers = re.findall(r"\breg\s+\[1:0\]\s+(register_\w+)\s*;", design)
+        if len(state_registers) != 1:
+            raise RuntimeError("expected exactly one compact private state register")
+        compact_state = state_registers[0]
+        bench = f"""module tb;
+    reg clock=0, reset=1, requestA=0, requestB=0, finish=0;
+    reg [7:0] data=0;
+    wire doneA, doneB;
+    wire [1:0] stateA, stateB;
+    wire [7:0] valueA, valueB;
+    {top} dut(.clock(clock), .reset(reset), .requestA(requestA),
+      .requestB(requestB), .finish(finish), .input_0(data), .doneA(doneA), .doneB(doneB),
+      .stateA(stateA), .stateB(stateB), .valueA(valueA), .valueB(valueB));
+    task tick; begin #2; clock=1; #1; clock=0; #1; end endtask
+    task check(input [1:0] a, input [1:0] b, input [7:0] x, input [7:0] y); begin
+      if(stateA !== a || stateB !== b || valueA !== x || valueB !== y)
+        $fatal(1,"state/value mismatch: %d %d %d %d",stateA,stateB,valueA,valueB);
+      if(doneA !== (a==2) || doneB !== (b==2))
+        $fatal(1,"typed completion does not match terminal membership");
+    end endtask
+    initial begin
+      tick; check(0,0,0,0); reset=0;
+      requestA=1; tick; check(1,0,4,0);
+      requestA=0; requestB=1; data=17; tick; check(1,1,17,4);
+      requestB=0; finish=1; data=29; tick; check(2,2,29,29);
+      finish=0; data=44; tick; check(2,2,29,29);
+      force dut.{compact_state}=2'b11; #1;
+      if(doneA !== 0 || stateA !== 0) $fatal(1,"invalid state must not report completion");
+      release dut.{compact_state}; tick; check(0,2,29,29);
+      reset=1; #1; check(0,2,29,29); tick; check(0,0,0,0);
+      $display("REUSABLE_FSM_TARGET_PASS"); $finish;
+    end
+    initial begin #1000; $fatal(1,"timeout"); end
+    endmodule
+    """
     tb = args.out / "tb.sv"
     tb.write_text(bench)
     binary = args.out / "simulation"
@@ -107,6 +189,9 @@ endmodule
                     str(sv), str(tb)])
     output = run("simulate", [str(args.vvp), str(binary)])
     if "REUSABLE_FSM_TARGET_PASS" not in output or re.search(r"ERROR|FATAL", output):
+        manifest["status"] = "failed"
+        manifest["failed_step"] = "runtime-checks"
+        save()
         raise RuntimeError("generated target did not satisfy the runtime checks\n" + output)
     manifest["status"] = "passed"
     save()

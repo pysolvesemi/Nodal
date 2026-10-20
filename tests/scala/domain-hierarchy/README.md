@@ -50,3 +50,22 @@ Use `--case shared` (or another named case) to select a narrower replay.
 The ignored output directory contains command lines, logs, actual target files,
 testbenches and a manifest with input and output hashes. No generated outputs
 are committed.
+
+## Symbolic whole-value boundaries
+
+`Increment58SymbolicHierarchyReplay` exports the maintained public source
+`nodal_external/Increment58SymbolicHierarchySource.scala`. Its four cases are
+`scalar-early`, `scalar-late`, `vector-early` and `vector-late`. Early/late
+select whether overrides are supplied before or after port selection.
+The Scala width and extent remain symbolic; no preferred default is used as
+shape identity or as an emitted specialization.
+
+Run the same export command with that replay class and a separate `.work`
+directory. Pass its output to the same target runner with all four explicit
+`--case` arguments. These cases are opt-in and do not change the five-case
+default above. The testbench instantiates the actual generated root twice with
+different legal parameter values, checks elaborated port widths and compares
+complete input/output bit patterns. It requires exactly two reusable module
+bodies and real hierarchical instances. This is a whole-value scalar/packed-Vec
+witness, not generated Area, symbolic operation, Struct adapter or Interface
+target qualification.

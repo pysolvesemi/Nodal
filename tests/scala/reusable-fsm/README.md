@@ -39,3 +39,21 @@ python tests/scala/reusable-fsm/run_target.py \
 Every generated file and command/result receipt stays under `.work/`. These
 focused witnesses cover the first immutable graph/binding slice, not the
 remaining F58 nested/parallel/timed/recursive statechart requirements.
+
+## Controlled lifecycle substrate
+
+`Increment58ControlledFsmTests` additionally captures two independent controlled
+instances, validates real private lifecycle storage and canonical `FsmStatus`,
+rejects escaped/foreign controls and forged bridge state/event identities, and
+requires a configured native executable. It exports `valid.source.mlir`,
+`resetless.source.mlir` and `terminal.source.mlir` under
+`.work/f58-statecharts/lifecycle/source-native/`.
+
+The same target runner accepts `--profile controlled` for the two-instance
+witness and `--profile terminal` for the single initially-terminal witness. For
+example, use the command above with the controlled `valid.source.mlir`, an output
+under `.work/f58-statecharts/lifecycle/target`, and `--profile controlled`.
+These profiles check actual SystemVerilog dormant behavior, pause, explicit
+restart, cancel/restart/reset priority, lifecycle events versus ordinary taken
+edges, independent state, latched completion, and initially-terminal startup.
+They do not claim nested/parallel/timed/recursive statechart completion.

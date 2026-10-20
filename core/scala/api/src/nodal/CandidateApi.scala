@@ -56,6 +56,20 @@ private[nodal] final class KernelDataType[A <: Data](
 ) extends DataType[A],
       KernelDescribedType
 
+/** A boundary view, sealed from the exact finalized child binding before snapshot publication. The
+  * child descriptor is retained only for construction metadata, never as parent shape proof.
+  */
+private[nodal] final class KernelInstanceDataType[A <: Data](
+    val formal: KernelTypeDescriptor
+) extends DataType[A],
+      KernelDescribedType:
+  private var resolved: Option[KernelTypeDescriptor] = None
+  def finalized: Boolean = resolved.nonEmpty
+  def kernelDescriptor: KernelTypeDescriptor = resolved.getOrElse(formal)
+  def seal(value: KernelTypeDescriptor): Unit =
+    require(resolved.isEmpty, "instance type may be finalized only once")
+    resolved = Some(value)
+
 case object Real extends DataType[Real]
 case object Integer extends DataType[Integer]
 case object Bool extends DataType[Bool]
@@ -479,6 +493,8 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
       result match
         case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
         case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
+        case array: InterfaceArray[?, ?] =>
+          ConstructionKernel.instanceInterfaceArray(array).asInstanceOf[A]
         case port: InterfacePort[?, ?] =>
           ConstructionKernel.instanceInterfacePort(port).asInstanceOf[A]
         case _ => result

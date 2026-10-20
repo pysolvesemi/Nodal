@@ -37,7 +37,8 @@ private[nodal] final class FlatFsmRecord[S](
     val storage: Register[Bits],
     val nextLocal: KernelExpr[Bits],
     val taken: KernelExpr[Bool],
-    val sourceOrdinal: Int
+    val sourceOrdinal: Int,
+    val lifecycle: Option[FlatFsmLifecycleRecord]
 ):
   var open = true
   var captureCount = 0
@@ -59,7 +60,12 @@ private[nodal] final class FlatFsmRecord[S](
     .map((edge, index) => edge.ordinal -> (edge.sourceCase, index)).toMap
   private lazy val samplingIncoming = transitions.toVector.groupBy(_.destinationCase)
 
-  lazy val futureSampleDependencies: Vector[Any] = storage +: transitions.map(_.guard).toVector
+  def controlInputs: Vector[Expr[Bool]] = lifecycle.toVector.flatMap(value =>
+    Vector(value.control.restart, value.control.cancel, value.control.enable)
+  )
+  def privateStorage: Vector[Register[Bits]] = Vector(storage) ++ lifecycle.map(_.storage)
+  private def stateAndControls: Vector[Any] = privateStorage ++ controlInputs
+  lazy val futureSampleDependencies: Vector[Any] = stateAndControls ++ transitions.map(_.guard)
 
   def actionSampleDependencies(header: FlatFsmActionHeader): Vector[Any] =
     val selected = header.phase match
@@ -82,7 +88,14 @@ private[nodal] final class FlatFsmRecord[S](
     val guards = prefixes.iterator.flatMap((source, last) =>
       samplingOutgoing(source).iterator.take(last + 1).map(_.guard)
     ).toVector
-    storage +: guards
+    stateAndControls ++ guards
+
+private[nodal] final case class FlatFsmLifecycleRecord(
+    storage: Register[Bits],
+    control: FsmControl,
+    entered: KernelExpr[Bool],
+    exited: KernelExpr[Bool]
+)
 
 private[nodal] final case class FlatFsmCompletionMetadata(record: FlatFsmRecord[?])
 private[nodal] final case class FlatFsmObservation(record: FlatFsmRecord[?], future: Boolean)

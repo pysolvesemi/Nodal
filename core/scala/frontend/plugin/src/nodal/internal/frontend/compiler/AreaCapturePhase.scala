@@ -15,7 +15,8 @@ import dotty.tools.dotc.report
 
 import scala.collection.mutable
 
-/** Lexical lifecycle only; the shared callback phase continues to own hardware effect validation. */
+/** Lexical lifecycle only; the shared callback phase continues to own hardware effect validation.
+  */
 private[compiler] final class AreaCapturePhase extends PluginPhase:
   val phaseName = "nodalAreaCapture"
   override val runsAfter = Set("nodalConstructorCapture")
@@ -43,18 +44,20 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
         val scan = new TreeTraverser:
           override def traverse(current: Tree)(using Context): Unit =
             current match
-              case definition: TypeDef if definition.symbol.isClass &&
-                  definition.symbol != areaClass && definition.symbol.derivesFrom(areaClass) =>
+              case definition: TypeDef
+                  if definition.symbol.isClass &&
+                    definition.symbol != areaClass && definition.symbol.derivesFrom(areaClass) =>
                 val cls = definition.symbol.asClass
                 def parentApplication(parent: Tree): Unit = parent match
                   case application: Apply =>
                     if application.fun.symbol.isConstructor then
-                      parentApplications += ((
-                        application.fun.symbol,
-                        ctx.source.file.path,
-                        application.span.start,
-                        application.span.end
-                      ))
+                      parentApplications +=
+                        ((
+                          application.fun.symbol,
+                          ctx.source.file.path,
+                          application.span.start,
+                          application.span.end
+                        ))
                     parentApplication(application.fun)
                   case TypeApply(function, _) => parentApplication(function)
                   case _ => ()
@@ -69,21 +72,31 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
                     List(number(1)),
                     definition.span
                   ))
-              case reference: RefTree if reference.symbol.exists &&
-                  reference.symbol.owner.fullName.toString == "nodal.AreaCaptureRuntime" =>
-                fail("FORGED", "source must not call compiler-owned Area capture methods", reference)
+              case reference: RefTree
+                  if reference.symbol.exists &&
+                    reference.symbol.owner.fullName.toString == "nodal.AreaCaptureRuntime" =>
+                fail(
+                  "FORGED",
+                  "source must not call compiler-owned Area capture methods",
+                  reference
+                )
               case _ => ()
             traverseChildren(current)
         scan.traverse(unit.tpdTree)
     ctx
 
   private def capturedClass(cls: Symbol, tree: Tree)(using Context): Boolean =
-    val bases = cls.info.baseClasses.filter(value => value != areaClass && value.derivesFrom(areaClass))
+    val bases =
+      cls.info.baseClasses.filter(value => value != areaClass && value.derivesFrom(areaClass))
     bases.forall: base =>
       val valid = base.getAnnotation(schemaClass).exists: annotation =>
         annotation.argumentConstant(0).exists(_.value == 1)
       if !valid then
-        fail("MISSING", "Area class or base requires matching compiler-owned capture metadata", tree)
+        fail(
+          "MISSING",
+          "Area class or base requires matching compiler-owned capture metadata",
+          tree
+        )
       valid
 
   private def guarded(body: Tree)(using Context): Tree =
@@ -92,11 +105,17 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
       .appliedToArgs(List(string(ctx.source.file.path + ":" + body.span.start), thunk))
 
   override def transformApply(tree: Apply)(using Context): Tree = tree.fun match
-    case selection: Select if selection.qualifier.isInstanceOf[New] &&
-        selection.symbol.isConstructor && selection.symbol.owner.derivesFrom(areaClass) =>
+    case selection: Select
+        if selection.qualifier.isInstanceOf[New] &&
+          selection.symbol.isConstructor && selection.symbol.owner.derivesFrom(areaClass) =>
       val cls = selection.symbol.owner
       if cls == areaClass ||
-        parentApplications((selection.symbol, ctx.source.file.path, tree.span.start, tree.span.end)) ||
+        parentApplications((
+          selection.symbol,
+          ctx.source.file.path,
+          tree.span.start,
+          tree.span.end
+        )) ||
         !capturedClass(cls, tree)
       then tree
       else
@@ -130,16 +149,25 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
 
   private def hardware(tpe: Type)(using Context): Boolean =
     val value = tpe.widen.dealias
-    List("nodal.Expr", "nodal.Instance", "nodal.Module", "nodal.Area", "nodal.ClockDomain",
-      "nodal.InterfacePort", "nodal.InterfaceArray", "nodal.DigitalInout",
-      "nodal.Node", "nodal.NodeArray").exists(name => value.derivesFrom(requiredClass(name)))
+    List(
+      "nodal.Expr",
+      "nodal.Instance",
+      "nodal.Module",
+      "nodal.Area",
+      "nodal.ClockDomain",
+      "nodal.InterfacePort",
+      "nodal.InterfaceArray",
+      "nodal.DigitalInout",
+      "nodal.Node",
+      "nodal.NodeArray"
+    ).exists(name => value.derivesFrom(requiredClass(name)))
 
   private def bindingPriority(owner: Symbol)(using Context): Int =
     if owner.isClass then 2
     else
       var enclosing = owner
       while enclosing.exists && !enclosing.isClass &&
-          !(enclosing.is(Method) && !enclosing.is(Synthetic))
+        !(enclosing.is(Method) && !enclosing.is(Synthetic))
       do enclosing = enclosing.owner
       if enclosing.exists && enclosing.isConstructor then 1 else 0
 
@@ -148,20 +176,36 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
     else
       val owner = tree.symbol.owner
       val areaField = owner.isClass && owner.derivesFrom(areaClass) && owner != areaClass
-      val member = areaField && !tree.symbol.isOneOf(Mutable | Lazy)
       if areaField && hardware(tree.tpt.tpe) && tree.symbol.isOneOf(Mutable | Lazy) then
         fail("MEMBER", "hardware Area members must be immutable eager vals", tree)
         tree
       else
         val bound = if area(tree.tpt.tpe) then
           runtime("bind").appliedToType(tree.tpt.tpe)
-            .appliedToArgs(List(string(tree.name.toString), number(bindingPriority(owner)), tree.rhs))
+            .appliedToArgs(List(
+              string(tree.name.toString),
+              number(bindingPriority(owner)),
+              tree.rhs
+            ))
         else tree.rhs
-        val captured = if member then
-          runtime("member").appliedToType(tree.tpt.tpe).appliedToArgs(List(
-            This(owner.asClass),
-            string(tree.name.toString),
-            bound
+        cpy.ValDef(tree)(rhs = bound)
+
+  /** Capture the actual initialized field, including private anonymous members returned through a
+    * generic helper. The field read is semantic capture, not an artificial unused-warning
+    * exemption.
+    */
+  override def transformTemplate(tree: Template)(using Context): Tree =
+    val cls = tree.symbol.owner
+    if !cls.isClass || cls == areaClass || !cls.derivesFrom(areaClass) then tree
+    else
+      val body = tree.body.flatMap:
+        case field: ValDef
+            if !field.rhs.isEmpty && !field.symbol.isOneOf(Synthetic | Mutable | Lazy) =>
+          val captured = runtime("member").appliedToType(field.tpt.tpe).appliedToArgs(List(
+            This(cls.asClass),
+            string(field.name.toString),
+            ref(field.symbol)
           ))
-        else bound
-        cpy.ValDef(tree)(rhs = captured)
+          List(field, captured)
+        case other => List(other)
+      cpy.Template(tree)(body = body)

@@ -522,7 +522,7 @@ private[nodal] object ReproducibilityContract:
       )
     ))).toVector ++ Option.when(snapshot.flatFsms.nonEmpty)("flat_fsms" ->
     array(snapshot.flatFsms.sortBy(_.path).map(value =>
-      obj(
+      obj((Vector(
         "path" -> string(value.path),
         "owner" -> string(value.owner),
         "parent_region" -> optionalString(value.parentRegion),
@@ -573,7 +573,16 @@ private[nodal] object ReproducibilityContract:
             "source_ordinal" -> number(action.sourceOrdinal)
           )
         ))
-      )
+      ) ++ value.control.map(control =>
+        "control" -> obj(
+          "storage" -> string(control.storage),
+          "restart" -> string(control.restart),
+          "cancel" -> string(control.cancel),
+          "enable" -> string(control.enable),
+          "entered" -> string(control.entered),
+          "exited" -> string(control.exited)
+        )
+      ))*)
     ))).toVector ++ Option.when(snapshot.eventProcesses.nonEmpty)("event_processes" ->
     array(snapshot.eventProcesses.sortBy(_.path).map(value =>
       obj(

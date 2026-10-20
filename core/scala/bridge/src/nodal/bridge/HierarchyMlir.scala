@@ -134,14 +134,34 @@ private[nodal] object HierarchyMlir:
           check(
             Set("input", "output")(proxy.direction) && port.kind == proxy.direction &&
               declaration.kind == "instance-" + proxy.direction &&
-              declaration.dataType == port.dataType &&
-              declaration.dataType.nonEmpty && declaration.domain.isEmpty &&
+              declaration.dataType.nonEmpty && port.dataType.nonEmpty &&
+              declaration.domain.isEmpty &&
               declaration.attributes.isEmpty &&
               declaration.generatedScope.isEmpty && instance.generatedScope.isEmpty &&
               port.generatedScope.isEmpty && declaration.conservativeDimensions.isEmpty,
             "instance port requires exact digital type, direction and direct boundary ownership",
             declaration.path
           )
+
+    def validatePortTypes(
+        compare: (
+            KernelDeclarationSnapshot,
+            KernelDeclarationSnapshot,
+            String,
+            KernelInstanceSnapshot
+        ) => Boolean
+    ): Unit =
+      snapshot.modules.foreach: module =>
+        val instances = module.instances.map(value => value.path -> value).toMap
+        module.declarations.foreach: declaration =>
+          declaration.instancePort.foreach: proxy =>
+            val instance = instances(proxy.instance)
+            val port = modules(instance.childModule).declarations.find(_.path == proxy.port).get
+            check(
+              compare(declaration, port, module.path, instance),
+              "instance port type differs from its exact finalized child binding",
+              declaration.path
+            )
 
     private val bindingPaths =
       snapshot.modules.flatMap(_.instances.flatMap(_.actualBindings.map(_.path)))

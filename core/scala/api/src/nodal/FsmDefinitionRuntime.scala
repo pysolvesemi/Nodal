@@ -139,6 +139,15 @@ private[nodal] object FsmDefinitionRuntime:
     )
     new FsmDef(owner, initial, frozen, guards.toVector, actions.toVector, evidence)
 
+  def control(restart: Expr[Bool], cancel: Expr[Bool], enable: Expr[Bool]): FsmControl =
+    if Vector(restart, cancel, enable).exists(value =>
+        value == null ||
+          CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor) !=
+          Some(KernelTypeDescriptor("Bool"))
+      )
+    then fail("instance controls require exact non-null Bool values")
+    new FsmControl(restart, cancel, enable)
+
   def instantiate[S](
       definition: FsmDef[S],
       bindings: FsmBindings[S],
@@ -147,7 +156,48 @@ private[nodal] object FsmDefinitionRuntime:
       illegalState: IllegalStatePolicy,
       observe: FsmInstance[S] => Unit
   ): Unit =
-    if bindings == null || observe == null then fail("instance requires bindings and observations")
+    if observe == null then fail("instance requires observations")
+    capture(
+      definition,
+      bindings,
+      encoding,
+      custom,
+      illegalState,
+      None,
+      machine => observe(new FsmInstance(machine))
+    )
+
+  def instantiateControlled[S](
+      definition: FsmDef[S],
+      bindings: FsmBindings[S],
+      control: FsmControl,
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      observe: FsmRun[S] => Unit
+  ): Unit =
+    if control == null || observe == null then
+      fail("controlled instance requires controls and observations")
+    capture(
+      definition,
+      bindings,
+      encoding,
+      custom,
+      illegalState,
+      Some(control),
+      machine => observe(new FsmRun(machine))
+    )
+
+  private def capture[S](
+      definition: FsmDef[S],
+      bindings: FsmBindings[S],
+      encoding: FsmEncoding,
+      custom: Option[FsmLocalEncoding[S]],
+      illegalState: IllegalStatePolicy,
+      control: Option[FsmControl],
+      observe: FsmBuilder[S] => Unit
+  ): Unit =
+    if bindings == null then fail("instance requires bindings")
     val guards = bindings.guards.map(value => value.slot -> value.value).toMap
     val actions = bindings.actions.map(value => value.slot -> value.body).toMap
     if guards.keySet != definition.guards.toSet || actions.keySet != definition.actions.toSet then
@@ -181,7 +231,8 @@ private[nodal] object FsmDefinitionRuntime:
                 if state.isTerminal then ConstructionKernel.flatFsmTerminal(builder)
               }
             )
-        observe(new FsmInstance(machine))
+        observe(machine)
       },
-      definition.evidence
+      definition.evidence,
+      control
     )

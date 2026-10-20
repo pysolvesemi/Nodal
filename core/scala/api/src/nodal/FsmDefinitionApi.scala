@@ -108,6 +108,43 @@ final class FsmInstance[S] private[nodal] (private val builder: FsmBuilder[S]):
   def transitionTaken: Expr[Bool] = builder.transitionTaken
   def completed: Expr[Bool] = builder.completed
 
+/** Explicit per-instance controls. Restart/cancel are independent of normal execution enable. */
+final class FsmControl private[nodal] (
+    private[nodal] val restart: Expr[Bool],
+    private[nodal] val cancel: Expr[Bool],
+    private[nodal] val enable: Expr[Bool]
+)
+
+object FsmControl:
+  def apply(restart: Expr[Bool], cancel: Expr[Bool], enable: Expr[Bool]): FsmControl =
+    FsmDefinitionRuntime.control(restart, cancel, enable)
+
+/** Fixed canonical lifecycle ABI. This is independent of the machine's local state encoding. */
+enum FsmStatus:
+  case Dormant, Running, Completed, Cancelled
+
+object FsmStatus:
+  given HwEnum[FsmStatus] = HwEnum.fromDeclaration(EnumDeclaration(
+    "nodal.FsmStatus",
+    Vector(
+      "Dormant" -> Dormant,
+      "Running" -> Running,
+      "Completed" -> Completed,
+      "Cancelled" -> Cancelled
+    ).map((name, value) =>
+      EnumDeclaredCase(s"nodal.FsmStatus.$name", name, value, None)
+    ),
+    None
+  ))
+
+/** Read-only controlled observations with the same lexical lifetime as the machine instance. */
+final class FsmRun[S] private[nodal] (private val builder: FsmBuilder[S]):
+  val state: FsmInstance[S] = new FsmInstance(builder)
+  def status: DecodedEnum[Expr[EnumValue[FsmStatus]]] = ConstructionKernel.flatFsmStatus(builder)
+  def running: Expr[Bool] = status.value.isOneOf(FsmStatus.Running)
+  def completed: Expr[Bool] = state.completed
+  def cancelled: Expr[Bool] = status.value.isOneOf(FsmStatus.Cancelled)
+
 /** Reusable control graph. It retains only enum cases, immutable declarations and typed slots. */
 final class FsmDef[S] private[nodal] (
     val definition: FsmDefinition[S],
@@ -137,6 +174,45 @@ final class FsmDef[S] private[nodal] (
     FsmDefinitionRuntime.instantiate(
       this,
       bindings,
+      FsmEncoding.Custom,
+      Some(encoding),
+      illegalState,
+      observe
+    )
+
+  def instantiateControlled(
+      bindings: FsmBindings[S],
+      control: FsmControl,
+      encoding: FsmEncoding = FsmEncoding.Compact,
+      illegalState: IllegalStatePolicy = IllegalStatePolicy.Error
+  )(observe: FsmRun[S] => Unit): Unit =
+    FsmDefinitionRuntime.instantiateControlled(
+      this,
+      bindings,
+      control,
+      encoding,
+      None,
+      illegalState,
+      observe
+    )
+
+  def instantiateControlled(
+      bindings: FsmBindings[S],
+      control: FsmControl,
+      encoding: FsmLocalEncoding[S]
+  )(observe: FsmRun[S] => Unit): Unit =
+    instantiateControlled(bindings, control, encoding, IllegalStatePolicy.Error)(observe)
+
+  def instantiateControlled(
+      bindings: FsmBindings[S],
+      control: FsmControl,
+      encoding: FsmLocalEncoding[S],
+      illegalState: IllegalStatePolicy
+  )(observe: FsmRun[S] => Unit): Unit =
+    FsmDefinitionRuntime.instantiateControlled(
+      this,
+      bindings,
+      control,
       FsmEncoding.Custom,
       Some(encoding),
       illegalState,

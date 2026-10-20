@@ -313,3 +313,56 @@ scale. Symbolic named-field adapters, Interface target connections and resolved
 or conservative topology, generated families and real target loops, formal-domain
 FSM instances, hierarchical/parallel composition and bounded recursive control
 remain required open F58 work. No checklist parent or child closes here.
+
+## Checkpoint 5: finalized symbolic source boundaries and lifecycle API
+
+Source capture defers only exact child digital-port boundary views until all
+instance parameter overrides are final. One shared, bounded instance-query cache
+then resolves actual parent-owned widths and dimensions for digital ports and
+Interface arrays. The bridge independently repeats contextual ABI checks; equal
+bounds, defaults or formal spelling cannot substitute for occurrence identity.
+Only reachable canonical integer DAG nodes are exported. Ordinary Integer range
+constraints are emitted without inventing structural effects. Interface arrays
+retain declared role authority, complete dimensions and exact child identity;
+unsupported resolved-member effects remain explicit errors.
+
+Controlled immutable FSM instances use the existing construction, flat-FSM and
+sequential owners. Separate instances retain independent local state and lifecycle
+storage. Controls and observations preserve lexical lifetime, exact types and
+construction ownership. Resetless initialization requires the explicit restart
+contract. The source API does not yet claim formal-domain machines, nested or
+parallel submachines, timed/protocol policies or bounded call stacks.
+
+The final focused source run passed 41 groups: symbolic hierarchy 4, shared
+structural boundary 5, Interface arrays 5, controlled FSM 7, predecessor boundary
+arrays 9 and digital collections 11. Earlier affected predecessor runs passed
+55 Interface/hierarchy groups and 52 ordinary/reusable FSM groups; those receipts
+remain distinct from the final 41-group snapshot. Configured native checks ran
+rather than skipping. Controlled source is independently admitted through the
+full default gate and standalone normalization, each starting from original IR.
+
+Actual source replay and target demonstrations remain under
+`tests/scala/domain-hierarchy/` and `tests/scala/reusable-fsm/`. Scalar and Vec
+hierarchy witnesses retain two generic modules and two tested root parameter
+configurations, with identical early/late override captures. No per-value module
+clones are used. These are bounded SystemVerilog/CIRCT witnesses, not a portable
+Verilog or global qualification claim. The standalone Area regression also covers
+eager fields produced by ordinary Scala collection mapping; those host loops
+remain elaboration-only.
+
+The shared owners and bounded query lifetimes are unchanged. The reachable-DAG
+regression adds 256 unrelated nodes without enlarging the exported expression
+graph; this is a structural check, not a broad performance measurement. All
+remaining feature obligations listed in checkpoint 4 stay open.
+
+The final target compiler (`efd32347`) passed all nine hierarchy profiles: four
+symbolic scalar/Vec cases and five concrete predecessor cases (shared and nested
+hierarchy, material domain variants, resetless and inherited reset release).
+Both lifecycle profiles, reused controlled machines and an initially-terminal
+machine, passed unchanged waveform assertions through the actual production
+pipeline. Receipts are in `.work/f58-symbolic-target-checkpoint4/`,
+`.work/f58-hierarchy-target-checkpoint4/` and
+`.work/f58-statecharts/lifecycle/{target-passed,terminal-target-passed}/`.
+Failed earlier export receipts remain separate; hand-edited diagnostic IR is not
+acceptance evidence. The native compiler has 800 passing focused cases as
+recorded in checkpoint 4.

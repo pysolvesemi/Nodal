@@ -365,6 +365,14 @@ private[nodal] final case class KernelFlatFsmAction(
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument]
 )
+private[nodal] final case class KernelFlatFsmControl(
+    storage: String,
+    restart: String,
+    cancel: String,
+    enable: String,
+    entered: String,
+    exited: String
+)
 private[nodal] final case class KernelFlatFsmSnapshot(
     path: String,
     owner: String,
@@ -383,7 +391,8 @@ private[nodal] final case class KernelFlatFsmSnapshot(
     actions: Vector[KernelFlatFsmAction],
     nextLocal: String,
     transitionTaken: String,
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    control: Option[KernelFlatFsmControl] = None
 )
 private[nodal] final case class KernelEnumSwitchSnapshot(
     path: String,

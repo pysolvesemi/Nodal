@@ -333,7 +333,8 @@ private[nodal] object ConstructionKernel:
       custom: Option[FsmLocalEncoding[S]],
       illegalState: IllegalStatePolicy,
       body: FsmBuilder[S] => Unit,
-      evidence: HwEnum[S]
+      evidence: HwEnum[S],
+      control: Option[FsmControl] = None
   ): Unit = flatFsmSession.captureFlatFsm(
     definition,
     initial,
@@ -341,7 +342,8 @@ private[nodal] object ConstructionKernel:
     custom,
     illegalState,
     body,
-    evidence
+    evidence,
+    control
   )
 
   def flatFsmState[S](builder: FsmBuilder[S], value: S, body: StateBuilder[S] => Unit): Unit =
@@ -381,6 +383,9 @@ private[nodal] object ConstructionKernel:
 
   def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
     flatFsmSession.flatFsmCompleted(builder)
+
+  def flatFsmStatus[S](builder: FsmBuilder[S]): DecodedEnum[Expr[EnumValue[FsmStatus]]] =
+    flatFsmSession.flatFsmStatus(builder)
 
   def enumSwitch[S](
       selector: Expr[EnumValue[S]],
@@ -544,6 +549,13 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
     ).instanceInterfacePort(value)
+
+  def instanceInterfaceArray[I <: Interface, R <: RoleKind](
+      value: InterfaceArray[I, R]
+  ): InterfaceArray[I, R] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfaceArray(value)
 
   def instanceDigitalPort[A <: Data](value: Signal[A]): Signal[A] =
     active.getOrElse(

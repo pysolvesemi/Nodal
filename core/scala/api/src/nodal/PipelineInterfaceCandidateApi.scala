@@ -227,6 +227,13 @@ object RoleCanDrive:
   given deviceCanDrive: RoleCanDrive[DeviceRole] with {}
   given environmentCanDrive: RoleCanDrive[EnvironmentRole] with {}
 
+private[nodal] sealed trait InterfaceEndpoint:
+  def definition: InterfaceType[?]
+  def role: Role[?]
+  def name: String
+  def domain: ClockDomain
+  private[nodal] def boundary: Boolean
+
 final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
     val role: Role[R],
@@ -235,7 +242,7 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
     private[nodal] val exported: Boolean,
     private[nodal] val origin: Option[InterfacePort[I, ?]] = None,
     private[nodal] val boundary: Boolean = false
-):
+) extends InterfaceEndpoint:
   if exported then
     CandidateRuntime.declare(
       this,
@@ -248,21 +255,32 @@ final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
 final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val definition: InterfaceType[I],
     val role: Role[R],
-    val count: Dimension,
+    private[nodal] val formalCount: Dimension,
     val name: String,
-    val domain: ClockDomain
-):
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.InterfaceArray,
-    explicitName = Some(name),
-    domain = Some(domain),
-    attributes = Vector(
-      "interface" -> definition.name,
-      "role" -> role.name,
-      "count" -> count
+    val domain: ClockDomain,
+    private[nodal] val exported: Boolean = true,
+    private[nodal] val boundary: Boolean = false
+) extends InterfaceEndpoint:
+  /** Local declared count. A projected count is finalized after all Instance overrides. */
+  def count: Dimension =
+    if boundary then
+      DigitalInterfaceContract.fail(
+        7,
+        "projected InterfaceArray count is formal metadata, not a parent expression"
+      )
+    formalCount
+  if exported then
+    CandidateRuntime.declare(
+      this,
+      KernelSignalKind.InterfaceArray,
+      explicitName = Some(name),
+      domain = Some(domain),
+      attributes = Vector(
+        "interface" -> definition.name,
+        "role" -> role.name,
+        "count" -> formalCount
+      )
     )
-  )
 
 def interfacePort[I <: Interface, R <: RoleKind](
     definition: InterfaceType[I],
@@ -320,6 +338,24 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
     ConstructionKernel.operation("interface-connect", endpoint, other)
 
   def driveMember[A <: Data](member: String, value: Expr[A])(using RoleCanDrive[R]): Unit =
+    ConstructionKernel.operation("interface-drive", endpoint, member, value)
+
+  def observeMember(member: String): Unit =
+    ConstructionKernel.operation("interface-observe", endpoint, member)
+
+extension [I <: Interface, R <: RoleKind](endpoint: InterfaceArray[I, R])
+  def connectExact[OtherRole <: RoleKind](
+      other: InterfaceArray[I, OtherRole]
+  )(using RoleConnection[R, OtherRole]): Unit =
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
+  /** Forward the whole structural array; no lane or member identity is flattened. */
+  def forwardExact(other: InterfaceArray[I, R]): Unit =
+    if endpoint.boundary == other.boundary then
+      DigitalInterfaceContract.fail(3, "forwardExact requires one local and one child endpoint")
+    ConstructionKernel.operation("interface-connect", endpoint, other)
+
+  def driveMember[A <: Data](member: String, value: Expr[Vec[A]])(using RoleCanDrive[R]): Unit =
     ConstructionKernel.operation("interface-drive", endpoint, member, value)
 
   def observeMember(member: String): Unit =

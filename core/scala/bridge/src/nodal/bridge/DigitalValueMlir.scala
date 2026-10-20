@@ -189,11 +189,27 @@ private[nodal] object DigitalValueMlir:
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
     ).toMap
     private val machines = snapshot.flatFsms.map(value => value.path -> value).toMap
-    private val privateMachineStorage = snapshot.flatFsms.map(_.storage).toSet
+    private def machineInputs(value: KernelFlatFsmSnapshot): Vector[String] =
+      Vector(value.storage) ++ value.control.toVector.flatMap(control =>
+        Vector(control.storage, control.restart, control.cancel, control.enable)
+      ) ++ value.transitions.map(_.guard)
+    private def machineProjections(value: KernelFlatFsmSnapshot): Vector[(String, String, String)] =
+      Vector(
+        (value.nextLocal, "flat_fsm_next", s"Bits(${value.localWidth})"),
+        (value.transitionTaken, "flat_fsm_taken", "Bool")
+      ) ++ value.control.toVector.flatMap(control =>
+        Vector(
+          (control.entered, "flat_fsm_entered", "Bool"),
+          (control.exited, "flat_fsm_exited", "Bool")
+        )
+      )
+    private val privateMachineStorage = snapshot.flatFsms.flatMap(value =>
+      Vector(value.storage) ++ value.control.map(_.storage)
+    ).toSet
     private val enumDefinitions =
       snapshot.enumDefinitions.map(value => value.identity -> value).toMap
     private val machineResults = snapshot.flatFsms.flatMap(value =>
-      Vector(value.nextLocal -> value, value.transitionTaken -> value)
+      machineProjections(value).map((path, _, _) => path -> value)
     ).toMap
     private val actions = snapshot.flatFsms.flatMap(value =>
       value.actions.map(action => action.path -> (value, action))
@@ -889,7 +905,8 @@ private[nodal] object DigitalValueMlir:
     requireValid(
       machines.size == snapshot.flatFsms.size && machines.size <= 4096 &&
         switches.size == snapshot.enumSwitches.size && switches.size <= 65536 &&
-        machineResults.size == 2 * machines.size &&
+        machineResults.size == snapshot.flatFsms.map(value => 2 + 2 * value.control.size).sum &&
+        privateMachineStorage.size == snapshot.flatFsms.map(value => 1 + value.control.size).sum &&
         snapshot.flatFsms.map(_.storage).distinct.size == machines.size &&
         actions.size == snapshot.flatFsms.map(_.actions.size).sum &&
         switchArms.size == snapshot.enumSwitches.map(value => value.arms.size + 1).sum,
@@ -940,10 +957,44 @@ private[nodal] object DigitalValueMlir:
         "flat FSM results must retain canonical next and taken identities",
         path
       )
-      Vector(
-        (machine.nextLocal, "flat_fsm_next", s"Bits(${machine.localWidth})"),
-        (machine.transitionTaken, "flat_fsm_taken", "Bool")
-      ).foreach: (result, operation, dataType) =>
+      machine.control.foreach: control =>
+        requireValid(
+          control.entered == path + ".entered" && control.exited == path + ".exited",
+          "controlled FSM events must retain canonical identities",
+          path
+        )
+        requireVisible(control.storage, machine.owner, None, path)
+        requireValid(
+          declarations.get(control.storage).exists((owner, value) =>
+            owner == machine.owner && value.kind == "register" && value.generatedScope.isEmpty &&
+              value.dataType.contains("Bits(2)") && (value.domain.contains(machine.domain) ||
+                value.attributes.contains("declared_domain" -> machine.domain))
+          ),
+          "controlled FSM status must be a distinct actual local two-bit register",
+          path
+        )
+        Vector(control.restart, control.cancel, control.enable).foreach: input =>
+          requireVisible(input, machine.owner, None, path)
+          requireValid(
+            expressionType(input) == "Bool",
+            "controlled FSM requires actual Bool controls",
+            path
+          )
+        val initial = DigitalStorageMlir.initializer(declarations(control.storage)._2)
+        requireValid(
+          if domain.get.resetPolicy.contains("none") then initial.isEmpty
+          else
+            initial.flatMap(expressions.get).exists(value =>
+              value.owner == machine.owner && value.region.isEmpty && value.dataType == "Bits(2)" &&
+                value.operation == "integer" && value.operands.isEmpty && value.literal.contains(
+                  "0"
+                )
+            )
+          ,
+          "controlled FSM status resets to exact Dormant or stays deliberately uninitialized",
+          path
+        )
+      machineProjections(machine).foreach: (result, operation, dataType) =>
         requireValid(
           expressions.get(result).exists(value =>
             value.owner == machine.owner &&
@@ -1090,14 +1141,14 @@ private[nodal] object DigitalValueMlir:
       // before rendering and do not specialize static predicates to their declared defaults.
       val seen = mutable.HashSet.empty[String]
       val frontier = mutable.ArrayDeque.from(
-        machine.transitions.map(_.guard) ++ machine.actions.flatMap(_.captures)
+        machineInputs(machine).drop(1) ++ machine.actions.flatMap(_.captures)
       )
       while frontier.nonEmpty do
         val input = frontier.removeHead()
         if seen.add(input) then
           sequentialDependencyWork += 1
           requireValid(
-            sequentialDependencyWork <= 65536 && input != machine.nextLocal && input != machine.transitionTaken,
+            sequentialDependencyWork <= 65536 && !machineProjections(machine).exists(_._1 == input),
             "flat FSM guard/action capture has a forward dependency on its own next/taken result",
             path
           )
@@ -1105,7 +1156,7 @@ private[nodal] object DigitalValueMlir:
           predicates.get(input).foreach(value => frontier ++= value.operands)
           staticExpressions.get(input).foreach(value => frontier ++= value.operands)
     expressions.valuesIterator.filter(value =>
-      Set("flat_fsm_next", "flat_fsm_taken")(value.operation)
+      Set("flat_fsm_next", "flat_fsm_taken", "flat_fsm_entered", "flat_fsm_exited")(value.operation)
     ).foreach: value =>
       requireValid(
         machineResults.contains(value.path),
@@ -2510,7 +2561,7 @@ private[nodal] object DigitalValueMlir:
               case (key, path) if Set("clock_source", "effective_reset_source")(key) => path
             }
             .foreach(path => { emit(path, depth + 1, None, output); () })
-          val inputs = Vector(machine.storage) ++ machine.transitions.map(_.guard)
+          val inputs = machineInputs(machine)
           val operands = (inputs ++ machine.actions.flatMap(_.captures)).map(
             emit(_, depth + 1, None, output, topology = false)
           )
@@ -2560,7 +2611,8 @@ private[nodal] object DigitalValueMlir:
           val counts = if machine.actions.isEmpty then "array<i32>"
           else s"array<i32: ${machine.actions.map(_.captures.size).mkString(", ")}>"
           val attributes = dictionary(Vector(
-            "contract_version" -> quoted("flat-fsm-v1"),
+            "contract_version" -> quoted(if machine.control.nonEmpty then "flat-fsm-v2"
+            else "flat-fsm-v1"),
             "machine_id" -> quoted(machine.path),
             "enum_ref" -> enums.reference(machine.enumIdentity, machine.path),
             "domain" -> domainReference(machine.domain),
@@ -2583,13 +2635,14 @@ private[nodal] object DigitalValueMlir:
             "action_capture_counts" -> counts,
             "metadata" -> effectMetadata(machine.path, machine.sourceOrdinal)
           ))
-          output += s"$result:2 = ${quoted("nodal.flat_fsm")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
+          val resultPaths = machineProjections(machine).map(_._1)
+          val resultTypes = Vector(bits) ++ resultPaths.drop(1).map(_ => "!nodal.bits<1>")
+          output += s"$result:${resultPaths.size} = ${quoted("nodal.flat_fsm")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
             (if rendered.isEmpty then "" else rendered.mkString(" (", ", ", ")")) +
-            s" : (${operands.map(_._2).mkString(", ")}) -> ($bits, !nodal.bits<1>)${sourceLocation(machine.path)}"
+            s" : (${operands.map(_._2).mkString(", ")}) -> (${resultTypes.mkString(", ")})${sourceLocation(machine.path)}"
           val height = inputs.map(heights).maxOption.getOrElse(0) + 1
-          Vector(
-            (machine.nextLocal, result + "#0", bits),
-            (machine.transitionTaken, result + "#1", "!nodal.bits<1>")
+          resultPaths.zip(resultTypes).zipWithIndex.map((value, index) =>
+            (value._1, s"$result#$index", value._2)
           ).foreach: (path, name, dataType) =>
             values.update(path, name -> dataType)
             heights.update(path, height)

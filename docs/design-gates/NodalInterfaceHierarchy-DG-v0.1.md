@@ -132,3 +132,40 @@ emission uses its applicable backend. Source-to-target demonstrations for newly
 supported profiles, including structural arrays, resolved pass-through and
 conservative topology, remain required. Admission-only success and transactional
 target rejection do not complete B.1 or F58.
+
+## Whole-array substitution and complete logical endpoint query
+
+The next bounded array slice retains a single `InterfaceArray` capability and
+one member value with an outer structural shape. `forwardExact`, `connectExact`,
+`driveMember(Expr[Vec[A]])` and observation operate on the whole array. They do
+not enumerate lanes, invent indexed endpoint declarations or authorize an
+`at` shortcut. A projected public `count` is not available as a parent-owned
+expression: the child formal remains private metadata until finalized instance
+overrides have been applied. Early and late overrides use the same final query.
+
+`StructuralParameterBinding.Query` is the source authority for exact count
+substitution. Its `resolveInterfaceDimensions` reads the actual child declaration,
+not a caller-supplied shape; `validateInterfaceDimensions` independently checks
+bridge transport against the finalized instance. Conservative dimensions,
+digital port types and Interface counts reuse the construction session's single
+structural-expression materializer. Equal defaults or range bounds do not prove
+identity. The native boundary stores parent-context actual dimensions separately
+and verifies each against the original child dimension through `ShapeModel`'s
+exact instance proof. Generated-family binding, indexed views and symbolic
+payload-width substitution are separate required capabilities, not consequences
+of whole-array count support.
+
+`collectDigitalInterfaceEndpoints` exposes complete immutable logical facts from
+one verified existing Interface model, including unaccessed leaves in authored
+order. It reports actual declaration owner separately from domain owner and
+projection instance. Dimensions remain the original child declaration tokens,
+interpreted in that owner and optional exact instance context. Selected roles,
+nested roles/interfaces and protocol identity are never inferred from names.
+Resolved leaves report an existing deterministic authored-order component value
+when one is represented; absence does not authorize allocation of a new net.
+Conservative and signal-flow metadata remain distinct capabilities.
+
+The shared hierarchy boundary plan will consume this query once per source
+definition and derive physical names/layout and inverse paths in the target
+owner. The collector itself is not Interface target execution. Until that actual
+consumer and emission exist, arrays and endpoint inspection do not close B.1.

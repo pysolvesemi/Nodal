@@ -138,6 +138,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "flatFsmEvent",
       "flatFsmTaken",
       "flatFsmCompleted",
+      "flatFsmStatus",
       "enumSwitch",
       "enumSwitchCase"
     )
@@ -234,6 +235,15 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           "transitionTaken",
           "completed"
         )
+    pureMethods ++= methods(
+      requiredClass("nodal.FsmRun"),
+      "state",
+      "status",
+      "running",
+      "completed",
+      "cancelled"
+    )
+    pureMethods ++= moduleMethods("nodal.FsmControl", "apply")
     // These factories construct immutable control data only. Runtime predicates/actions enter
     // through separately checked bindings; none of these methods executes an authored callback.
     List(
@@ -1268,8 +1278,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             valid
           case None => importedSummary(cls, "constructor", tree)
 
-    /** Scala inserts this cast for structural val selection. Admit only the exact refined
-      * member type, never an authored capability-changing or arbitrary Any cast.
+    /** Scala inserts this cast for structural val selection. Admit only the exact refined member
+      * type, never an authored capability-changing or arbitrary Any cast.
       */
     private def areaMemberProjection(tree: Tree, result: Type): Boolean = tree match
       case Apply(selection: Select, List(Literal(constant)))

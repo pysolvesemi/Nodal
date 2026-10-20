@@ -15,9 +15,41 @@ import subprocess
 
 
 PROFILES = ("shared", "nested", "material", "resetless", "inherited-release")
+SYMBOLIC_PROFILES = ("scalar-early", "scalar-late", "vector-early", "vector-late")
 
 
 def bench(profile: str, top: str) -> str:
+    if profile in SYMBOLIC_PROFILES:
+        vector = profile.startswith("vector")
+        first_bits, second_bits = (21, 6) if vector else (7, 3)
+        return f"""module tb;
+reg [{first_bits - 1}:0] first = 0;
+reg [{second_bits - 1}:0] second = 0;
+wire [{first_bits - 1}:0] first_out;
+wire [{second_bits - 1}:0] second_out;
+{top} #(.width(7), .count(3)) wide(
+  .core_clock(1'b0), .inputData(first), .outputData(first_out));
+{top} #(.width(3), .count(2)) narrow(
+  .core_clock(1'b0), .inputData(second), .outputData(second_out));
+task check; begin
+  #1;
+  if(first_out !== first || second_out !== second)
+    $fatal(1,"{profile}: generic parameter pass-through mismatch");
+end endtask
+initial begin
+  if($bits(wide.inputData) != {first_bits} ||
+     $bits(narrow.inputData) != {second_bits})
+    $fatal(1,"{profile}: parameters collapsed to default widths");
+  check;
+  first='1; second='0; check;
+  first='0; second='1; check;
+  first='h155555; second='h2a; check;
+  first='1; second='1; check;
+  $display("HIERARCHY_TARGET_PASS {profile}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
     if profile == "inherited-release":
         return f"""module tb;
 reg root_clock=0, root_reset=1, inputValue=1;
@@ -99,7 +131,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=PROFILES, action="append")
+    parser.add_argument("--case", choices=PROFILES + SYMBOLIC_PROFILES, action="append")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated artifacts must remain under ignored .work")
@@ -141,15 +173,17 @@ def main() -> None:
         run(profile + "-export", [str(args.firtool), str(circt), "--format=mlir", "--verilog",
                                  "--verify-each", "--disable-all-randomization", "-o", str(sv)])
         design = sv.read_text()
-        modules = re.findall(r"\bmodule\s+([A-Za-z_]\w*)\s*\(", design)
-        expected_count = 2 if profile == "shared" else 3
+        modules = re.findall(r"^module[ \t]+([A-Za-z_]\w*)\b", design, re.MULTILINE)
+        expected_count = 2 if profile == "shared" or profile in SYMBOLIC_PROFILES else 3
         if top not in modules or len(modules) != expected_count:
             raise RuntimeError(f"{profile}: expected {expected_count} real reusable modules, "
                                f"including {top}; got {modules}")
         if not re.search(r"\bhw\.instance\b", circt.read_text()):
             raise RuntimeError(f"{profile}: no real hierarchical target instances")
-        if "__nodal_required_clock" not in design:
+        if profile not in SYMBOLIC_PROFILES and "__nodal_required_clock" not in design:
             raise RuntimeError(f"{profile}: inferred child requirement clock port missing")
+        if profile in SYMBOLIC_PROFILES and not re.search(r"\bparameter\b", design):
+            raise RuntimeError(f"{profile}: generic target parameters missing")
         tb = args.out / f"{profile}.tb.sv"
         tb.write_text(bench(profile, top))
         executable = args.out / f"{profile}.vvp"

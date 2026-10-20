@@ -1225,7 +1225,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       custom: Option[FsmLocalEncoding[S]],
       illegalState: IllegalStatePolicy,
       body: FsmBuilder[S] => Unit,
-      evidence: HwEnum[S]
+      evidence: HwEnum[S],
+      control: Option[FsmControl]
   ): Unit = fsmTransaction:
     if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty || analogStack.nonEmpty ||
       analogSemanticContext.nonEmpty || openFsms.nonEmpty || flatFsms.size >= 4096
@@ -1245,6 +1246,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ).contains)
     then
       FlatFsmRuntime.fail("machine requires an actual supported local Clock/Reset binding")
+    val boundControl = control.map: value =>
+      val _ = FsmDefinitionRuntime.control(value.restart, value.cancel, value.enable)
+      val _ = validateFsmObservations(Vector(value.restart, value.cancel, value.enable))
+      def bind(value: Expr[Bool]): Expr[Bool] =
+        bindCollectionValue(value, None, module.handle).asInstanceOf[Expr[Bool]]
+      new FsmControl(bind(value.restart), bind(value.cancel), bind(value.enable))
     val canonical = DigitalEnumContract.abi(definition.canonicalType)
     val initialId = DigitalEnumContract.selectedCase(initial, evidence, canonical)
     val (resolvedEncoding, local) = FlatFsmRuntime.localCodes(encoding, custom, evidence)
@@ -1254,6 +1261,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val initialCode = local.cases.find(_.id == initialId).get.code
     val storage = if domain.resetPolicy.contains(ResetPolicy.None) then Reg.uninitialized(localType)
     else Reg(FlatFsmRuntime.bits(initialCode, local.width))
+    val statusStorage = boundControl.map: _ =>
+      if domain.resetPolicy.contains(ResetPolicy.None) then Reg.uninitialized(Bits(2))
+      else Reg(FlatFsmRuntime.bits(0, 2))
     val reference = ExpressionRef(module.handle, module.expressionCount)
     module.expressionCount += 1
     def projection[A <: Data](operation: String, dataType: KernelTypeDescriptor): KernelExpr[A] =
@@ -1266,6 +1276,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       KernelTypeDescriptor("Bits", Vector(local.width))
     )
     val taken = projection[Bool](FlatFsmRuntime.TakenOperation, KernelTypeDescriptor("Bool"))
+    val lifecycle = boundControl.map(value =>
+      FlatFsmLifecycleRecord(
+        statusStorage.get,
+        value,
+        projection[Bool](FlatFsmRuntime.EnteredOperation, KernelTypeDescriptor("Bool")),
+        projection[Bool](FlatFsmRuntime.ExitedOperation, KernelTypeDescriptor("Bool"))
+      )
+    )
     val record = new FlatFsmRecord(
       reference,
       definition,
@@ -1280,13 +1298,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       storage,
       next,
       taken,
-      nextEffectOrdinal()
+      nextEffectOrdinal(),
+      lifecycle
     )
     flatFsms.update(reference, record)
     fsmResults.update(expressionIds.get(next), record -> "next")
     fsmResults.update(expressionIds.get(taken), record -> "taken")
-    privateFsmStorage += declarationIds.get(storage)
-    semanticOrigin.captureExpression(module.handle, reference.index, record, Vector(storage))
+    lifecycle.foreach: value =>
+      fsmResults.update(expressionIds.get(value.entered), record -> "entered")
+      fsmResults.update(expressionIds.get(value.exited), record -> "exited")
+    record.privateStorage.foreach(value => privateFsmStorage += declarationIds.get(value))
+    semanticOrigin.captureExpression(
+      module.handle,
+      reference.index,
+      record,
+      record.privateStorage ++ record.controlInputs
+    )
     openFsms += record
     val builder = new FsmBuilder(definition, initial, encoding, illegalState, record)
     try
@@ -1446,7 +1473,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val record = requireFsm(builder)
     val view = flatFsmStateView(builder, entering)
     val matches = DigitalEnumContract.isOneOf(view.value, Vector(state), record.evidence)
-    markFsmObservation(record, SequentialRuntime.and(flatFsmTaken(builder), matches), future = true)
+    val event = record.lifecycle.map(value => if entering then value.entered else value.exited)
+      .getOrElse(flatFsmTaken(builder))
+    markFsmObservation(record, SequentialRuntime.and(event, matches), future = true)
 
   def flatFsmCompleted[S](builder: FsmBuilder[S]): Expr[Bool] =
     val record = requireFsm(builder)
@@ -1457,7 +1486,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       operation = Some(FlatFsmRuntime.CompletedOperation)
     )
     val _ = captureExpression(membership)
-    markFsmObservation(record, SequentialRuntime.and(current.valid, membership), future = false)
+    val completed = SequentialRuntime.and(current.valid, membership)
+    val result = if record.lifecycle.nonEmpty then
+      SequentialRuntime.and(completed, flatFsmStatus(builder).value.isOneOf(FsmStatus.Completed))
+    else completed
+    markFsmObservation(record, result, future = false)
+
+  def flatFsmStatus[S](builder: FsmBuilder[S]): DecodedEnum[Expr[EnumValue[FsmStatus]]] =
+    val record = requireFsm(builder)
+    val lifecycle =
+      record.lifecycle.getOrElse(FlatFsmRuntime.fail("ordinary machine has no lifecycle"))
+    val storage = bindCollectionValue(lifecycle.storage, activeValueRegion, currentModule.handle)
+      .asInstanceOf[Expr[Bits]]
+    val decoded = decodeEnum(storage, EnumType[FsmStatus](), FsmStatus.Dormant)
+    DecodedEnum(
+      markFsmObservation(record, decoded.value, future = false),
+      markFsmObservation(record, decoded.valid, future = false)
+    )
 
   def captureEnumSwitch[S](
       selector: Expr[EnumValue[S]],
@@ -1571,7 +1616,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ,
         pathOf(record.nextLocal).get,
         pathOf(record.taken).get,
-        record.sourceOrdinal
+        record.sourceOrdinal,
+        record.lifecycle.map(value =>
+          KernelFlatFsmControl(
+            pathOf(value.storage).get,
+            pathOf(value.control.restart).get,
+            pathOf(value.control.cancel).get,
+            pathOf(value.control.enable).get,
+            pathOf(value.entered).get,
+            pathOf(value.exited).get
+          )
+        )
       )
   .toVector
 
@@ -2677,12 +2732,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val guardPairs: Vector[(ExpressionRef, Expr[?])] =
       behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
         flatFsms.valuesIterator.flatMap(record =>
-          record.transitions.map(value => record.reference -> value.guard)
+          (record.controlInputs ++ record.transitions.map(_.guard)).map(value =>
+            record.reference -> value
+          )
         ).toVector ++
         enumSwitches.valuesIterator.map(record => record.root -> record.selector).toVector
     val guardsByRoot = guardPairs.groupMap(_._1)(_._2)
     flatFsms.valuesIterator.foreach(record =>
-      roots.update(declarationIds.get(record.storage), Left(record.reference))
+      record.privateStorage.foreach(value =>
+        roots.update(declarationIds.get(value), Left(record.reference))
+      )
     )
     val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
     val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
@@ -4155,7 +4214,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       localDomainCandidate(record.owner, record.domain, path(record))
         .map(domain => domainPath(domainRef(domain))).orElse:
           val members = record.declarations.iterator.flatMap(reference =>
-            localDeclarationDomain(records(reference.module).declarations(reference.index), resolved)
+            localDeclarationDomain(
+              records(reference.module).declarations(reference.index),
+              resolved
+            )
           ).toSet
           Option.when(members.size == 1)(members.head)
     areas.toVector.map: record =>
@@ -4351,7 +4413,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val digitalStorage =
       Set(KernelSignalKind.Wire, KernelSignalKind.Register, KernelSignalKind.Memory).contains(kind)
-    resolvedType.foreach(validateShapeType(
+    val deferredInstanceType = resolvedType.exists:
+      case value: KernelInstanceDataType[?] =>
+        !value.finalized && instanceSelectionStack.nonEmpty &&
+        Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind)
+      case _ => false
+    resolvedType.filterNot(_ => deferredInstanceType).foreach(validateShapeType(
       _,
       module.handle,
       cardinality = kind == KernelSignalKind.Variable || digitalStorage,
@@ -4382,7 +4449,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(storageType, Vector(depth))))
         validateShapeType(shaped, module.handle, cardinality = true, storageContext = true)
     value match
-      case array: InterfaceArray[?, ?] =>
+      case array: InterfaceArray[?, ?] if !array.boundary =>
         val shaped =
           new KernelDataType[Data](KernelTypeDescriptor("Vec", Vector(Bool, Vector(array.count))))
         validateShapeType(shaped, module.handle, cardinality = true)
@@ -4499,9 +4566,25 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val instanceInterfacePorts =
     mutable.LinkedHashMap.empty[DeclarationRef, (InstanceRecord, DeclarationRef)]
 
+  private val instanceInterfaceDimensions =
+    mutable.LinkedHashMap.empty[DeclarationRef, Vector[Dimension]]
+
   def instanceInterfacePort[I <: Interface, R <: RoleKind](
       value: InterfacePort[I, R]
   ): InterfacePort[I, R] =
+    instanceInterfaceEndpoint(value, KernelSignalKind.InterfacePort)
+      .asInstanceOf[InterfacePort[I, R]]
+
+  def instanceInterfaceArray[I <: Interface, R <: RoleKind](
+      value: InterfaceArray[I, R]
+  ): InterfaceArray[I, R] =
+    instanceInterfaceEndpoint(value, KernelSignalKind.InterfaceArray)
+      .asInstanceOf[InterfaceArray[I, R]]
+
+  private def instanceInterfaceEndpoint(
+      value: InterfaceEndpoint,
+      kind: KernelSignalKind
+  ): InterfaceEndpoint =
     val selected = instanceSelectionStack.lastOption.getOrElse(
       fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires an exact Instance selector")
     )
@@ -4511,9 +4594,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       fail("NODAL-HIERARCHY-058-INTERFACE", "selector requires an actual declared child Interface")
     )
     val declaration = records(port.module).declarations(port.index)
-    if port.module != instance.child || declaration.kind != KernelSignalKind.InterfacePort ||
-      value.origin.nonEmpty || value.boundary || activeValueRegion.nonEmpty ||
-      activeGeneratedRegion.nonEmpty
+    val view = value match
+      case endpoint: InterfacePort[?, ?] => endpoint.origin.nonEmpty
+      case _: InterfaceArray[?, ?] => false
+    if port.module != instance.child || declaration.kind != kind || view || value.boundary ||
+      activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty
     then
       fail(
         "NODAL-HIERARCHY-058-INTERFACE",
@@ -4528,23 +4613,34 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       fail("NODAL-HIERARCHY-058-INTERFACE", "child Interface requires concrete digital data leaves")
     instanceInterfacePorts.iterator.collectFirst:
       case (reference, (existing, target)) if (existing eq instance) && target == port =>
-        records(reference.module).declarations(reference.index).value.asInstanceOf[InterfacePort[
-          I,
-          R
-        ]]
+        records(
+          reference.module
+        ).declarations(reference.index).value.asInstanceOf[InterfaceEndpoint]
     .getOrElse:
       val name = s"instance_${instance.ordinal}_interface_${port.index}"
-      val proxy = new InterfacePort(
-        value.definition,
-        value.role,
-        name,
-        value.domain,
-        exported = false,
-        boundary = true
-      )
+      val proxy = value match
+        case array: InterfaceArray[?, ?] =>
+          new InterfaceArray(
+            array.definition,
+            array.role,
+            array.formalCount,
+            name,
+            array.domain,
+            exported = false,
+            boundary = true
+          )
+        case endpoint: InterfacePort[?, ?] =>
+          new InterfacePort(
+            endpoint.definition,
+            endpoint.role,
+            name,
+            endpoint.domain,
+            exported = false,
+            boundary = true
+          )
       registerDeclaration(
         proxy,
-        KernelSignalKind.InterfacePort,
+        kind,
         None,
         Some(name),
         None,
@@ -4558,6 +4654,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
       instanceInterfacePorts(reference) = instance -> port
       proxy
+
+  private def interfaceDimensions(declaration: DeclarationRecord): Vector[Dimension] =
+    declaration.value match
+      case array: InterfaceArray[?, ?] =>
+        if array.boundary then
+          instanceInterfaceDimensions.getOrElse(
+            declaration.reference,
+            fail(
+              "NODAL-HIERARCHY-058-INTERFACE",
+              "projected InterfaceArray dimensions remain unresolved"
+            )
+          )
+        else Vector(array.formalCount)
+      case _ => Vector.empty
 
   private def instanceInterfaceDomain(reference: DeclarationRef): Option[DomainRef] =
     instanceInterfacePorts.get(reference).map: (_, port) =>
@@ -4597,8 +4707,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .getOrElse:
       val kind = if declaration.kind == KernelSignalKind.Input then KernelSignalKind.InstanceInput
       else KernelSignalKind.InstanceOutput
-      val proxy =
-        new Signal(value.dataType, kind, Some(s"instance_${instance.ordinal}_port_${port.index}"))
+      val proxy = new Signal(
+        new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(value.dataType)),
+        kind,
+        Some(s"instance_${instance.ordinal}_port_${port.index}")
+      )
       val reference = declarationIds.get(proxy)
       val owner = records(reference.module)
       owner.declarations.update(
@@ -4613,6 +4726,91 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     instanceSelectionStack += instance
     try body
     finally instanceSelectionStack.remove(instanceSelectionStack.size - 1)
+
+  private def materializeInstanceDigitalTypes(
+      queries: StructuralParameterBinding.InstanceQueries
+  ): Unit =
+    instanceDigitalPorts.foreach: (reference, boundary) =>
+      val (instance, port) = boundary
+      val declaration = records(reference.module).declarations(reference.index)
+      val deferred = declaration.dataType.collect { case value: KernelInstanceDataType[?] =>
+        value
+      }.getOrElse(fail("NODAL-HIERARCHY-057-001", "instance port lost its deferred type view"))
+      val owner = modulePath(reference.module)
+      val key = owner -> instancePath(reference.module, instance.ordinal)
+      val (_, occurrence, _) = queries.declaration(owner, key._2, declarationPath(port))
+      val query = queries.query(owner, key._2)
+      val dimensions = mutable.ArrayBuffer.empty[Int]
+      var examined = 0
+      def transform(
+          descriptor: KernelTypeDescriptor,
+          dimension: Any => Dimension,
+          depth: Int
+      ): KernelTypeDescriptor =
+        examined += 1
+        if depth > 128 || examined > 65536 then
+          fail("NODAL-HIERARCHY-057-001", "instance digital type exceeds structural budget")
+        descriptor.kind match
+          case "Bits" | "UInt" | "SInt" =>
+            if descriptor.arguments.size != 1 then
+              fail("NODAL-HIERARCHY-057-001", "instance scalar width is malformed")
+            descriptor.copy(arguments = Vector(dimension(descriptor.arguments.head)))
+          case "Vec" => descriptor.arguments match
+              case Vector(element: DataType[?], counts: Seq[?]) =>
+                descriptor.copy(arguments =
+                  Vector(
+                    CandidateRuntime.dataTypeFromDescriptor(
+                      transform(CandidateRuntime.typeDescriptor(element), dimension, depth + 1)
+                    ),
+                    counts.toVector.map(dimension)
+                  )
+                )
+              case _ => fail("NODAL-HIERARCHY-057-001", "instance vector type is malformed")
+          case "Struct" => descriptor.arguments match
+              case Vector(name: String, fields: Seq[?]) =>
+                descriptor.copy(arguments =
+                  Vector(
+                    name,
+                    fields.toVector.map:
+                      case field: StructField[?] => StructField(
+                          field.name,
+                          CandidateRuntime.dataTypeFromDescriptor(
+                            transform(
+                              CandidateRuntime.typeDescriptor(field.dataType),
+                              dimension,
+                              depth + 1
+                            )
+                          )
+                        )
+                      case _ =>
+                        fail("NODAL-HIERARCHY-057-001", "instance struct field is malformed")
+                  )
+                )
+              case _ => fail("NODAL-HIERARCHY-057-001", "instance struct type is malformed")
+          case _ => descriptor
+      val _ = transform(
+        deferred.formal,
+        value =>
+          val id = query.resolve(occurrence.childModule, renderShapeDimension(value, port.module))
+          query.positive(id)
+          dimensions += id
+          1
+        ,
+        0
+      )
+      val previousModules = moduleStack.toVector
+      moduleStack.clear()
+      moduleStack += records(reference.module)
+      try
+        val actual = materializeStructuralDimensions(
+          query.exportDimensions(owner, dimensions.toVector)
+        ).iterator
+        examined = 0
+        deferred.seal(transform(deferred.formal, _ => actual.next(), 0))
+        validateShapeType(deferred, reference.module, cardinality = false)
+      finally
+        moduleStack.clear()
+        moduleStack ++= previousModules
 
   def nodeArrayUse[D <: Discipline](value: NodeArray[D]): NodeArray[D] =
     Option(declarationIds.get(value)) match
@@ -8540,39 +8738,130 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             generatedScopeSnapshot(operation.generatedScope)
           )
 
+  private def markInstanceShapeDependencies(instance: InstanceRecord, roots: Iterable[Any]): Unit =
+    val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+    def visit(value: Any): Unit = value match
+      case parameter: Param[?]
+          if Option(visited.put(parameter, java.lang.Boolean.TRUE)).isEmpty =>
+        val reference = Option(declarationIds.get(parameter)).getOrElse(
+          fail("NODAL-SHAPE-043-007", "instance shape dependency has no owned declaration")
+        )
+        markStructuralParameterEffect(reference, "shape")
+        markStructuralParameterEffect(reference, "rank")
+        if reference.module == instance.child then
+          val overrideValue = instance.parameterOverrides.collectFirst:
+            case (target: AnyRef, actual)
+                if Option(declarationIds.get(target)).contains(reference) => actual
+          visit(overrideValue.getOrElse(parameter.default))
+      case expression: KernelExpr[?]
+          if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
+        expression.operands.foreach(visit)
+      case _ => ()
+    roots.foreach(visit)
+
   private def markConservativeBindingDependencies(): Unit =
     operations.foreach: operation =>
       operation.values.foreach:
         case root: InstanceArrayRootRecord =>
-          val instance = records(operation.owner).instances(root.instanceOrdinal)
-          val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
-          def visit(value: Any): Unit = value match
-            case parameter: Param[?]
-                if Option(visited.put(parameter, java.lang.Boolean.TRUE)).isEmpty =>
-              val reference = Option(declarationIds.get(parameter)).getOrElse(
-                fail("NODAL-SHAPE-043-007", "instance shape dependency has no owned declaration")
-              )
-              markStructuralParameterEffect(reference, "shape")
-              markStructuralParameterEffect(reference, "rank")
-              if reference.module == instance.child then
-                val overrideValue = instance.parameterOverrides.collectFirst:
-                  case (target: AnyRef, actual)
-                      if Option(declarationIds.get(target)).contains(reference) => actual
-                visit(overrideValue.getOrElse(parameter.default))
-            case expression: KernelExpr[?]
-                if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty =>
-              expression.operands.foreach(visit)
-            case _ => ()
-          records(
-            root.port.module
-          ).declarations(root.port.index).conservativeDimensions.foreach(visit)
+          markInstanceShapeDependencies(
+            records(operation.owner).instances(root.instanceOrdinal),
+            records(root.port.module).declarations(root.port.index).conservativeDimensions
+          )
+        case _ => ()
+    instanceInterfacePorts.foreach: (_, binding) =>
+      val (instance, port) = binding
+      records(port.module).declarations(port.index).value match
+        case array: InterfaceArray[?, ?] =>
+          markInstanceShapeDependencies(instance, Vector(array.formalCount))
         case _ => ()
 
+  private def materializeInstanceInterfaceDimensions(
+      queries: StructuralParameterBinding.InstanceQueries
+  ): Unit =
+    instanceInterfacePorts.foreach: (reference, binding) =>
+      val (instance, port) = binding
+      val owner = records(reference.module)
+      val declaration = owner.declarations(reference.index)
+      if declaration.kind == KernelSignalKind.InterfaceArray then
+        val graph = try
+          queries.resolveInterfaceDimensions(
+            modulePath(reference.module),
+            instancePath(reference.module, instance.ordinal),
+            declarationPath(port)
+          )
+        catch
+          case error: IllegalArgumentException =>
+            fail("NODAL-HIERARCHY-058-INTERFACE", error.getMessage)
+        val previousModules = moduleStack.toVector
+        moduleStack.clear(); moduleStack += owner
+        try
+          val dimensions = materializeStructuralDimensions(graph)
+          instanceInterfaceDimensions(reference) = dimensions
+          owner.declarations.update(
+            reference.index,
+            declaration.copy(
+              attributes = declaration.attributes :+ ("count" -> dimensions.head)
+            )
+          )
+        finally
+          moduleStack.clear(); moduleStack ++= previousModules
+
+  // The finalized pre-materialization snapshot owns these paths. Cache its lookup once,
+  // shared by conservative, digital-port and Interface dimensions.
+  private var structuralMaterializationValues: Option[Map[String, AnyRef]] = None
+
+  private def materializeStructuralDimensions(
+      graph: StructuralParameterBinding.ResolvedDimensions
+  ): Vector[Dimension] =
+    val ownedValues = structuralMaterializationValues.getOrElse:
+      val values = records.valuesIterator.flatMap(_.declarations.iterator)
+        .map(value => declarationPath(value.reference) -> value.value).toMap ++
+        expressionValues.iterator.map((reference, value) =>
+          expressionPath(reference) -> value
+        ).toMap
+      structuralMaterializationValues = Some(values)
+      values
+    val values = mutable.HashMap.empty[Int, Dimension]
+    def asExpression(value: Dimension): Expr[Integer] = value match
+      case literal: Int => makeLiteral(literal.toLong)
+      case expression: Expr[Integer] => expression
+    def makeLiteral(value: Long): Expr[Integer] =
+      val expression = new KernelExpr[Integer](
+        Vector.empty,
+        Some(KernelTypeDescriptor("Integer")),
+        Some(KernelLiteral("integer", value.toString, KernelTypeDescriptor("Integer"))),
+        Some("integer")
+      )
+      captureExpression(expression)
+      expression
+    def materialize(id: Int): Dimension = values.getOrElseUpdate(
+      id,
+      graph.existing.get(id).flatMap(path =>
+        ownedValues.get(path)
+      ) match
+        case Some(value: Expr[?]) => value.asInstanceOf[Expr[Integer]]
+        case _ =>
+          val node = graph.nodes(id)
+          node.literal match
+            case Some(value) => if value.isValidInt then value.toInt else makeLiteral(value)
+            case None => node.parameter match
+                case Some(path) => ownedValues.getOrElse(
+                    path,
+                    fail("NODAL-SHAPE-043-007", "substituted parent parameter is missing")
+                  )
+                    .asInstanceOf[Expr[Integer]]
+                case None =>
+                  val expression = new KernelExpr[Integer](
+                    node.operands.map(value => asExpression(materialize(value))),
+                    Some(KernelTypeDescriptor("Integer")),
+                    operation = node.operation
+                  )
+                  captureExpression(expression)
+                  expression
+    )
+    graph.dimensions.map(materialize)
+
   private def materializeConservativeIntents(base: ConstructionSnapshot): Unit =
-    val declarations = records.valuesIterator.flatMap(_.declarations.iterator)
-      .map(value => declarationPath(value.reference) -> value.value).toMap
-    val expressions =
-      expressionValues.iterator.map((reference, value) => expressionPath(reference) -> value).toMap
     val captured = operations.toVector
     def inScope[A](operation: Operation)(body: => A): A =
       val previousModules = moduleStack.toVector
@@ -8601,45 +8890,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               )
             catch
               case error: IllegalArgumentException => fail("NODAL-SHAPE-043-007", error.getMessage)
-            val values = mutable.HashMap.empty[Int, Dimension]
-            def asExpression(value: Dimension): Expr[Integer] = value match
-              case literal: Int => makeLiteral(literal.toLong)
-              case expression: Expr[Integer] => expression
-            def makeLiteral(value: Long): Expr[Integer] =
-              val expression = new KernelExpr[Integer](
-                Vector.empty,
-                Some(KernelTypeDescriptor("Integer")),
-                Some(KernelLiteral("integer", value.toString, KernelTypeDescriptor("Integer"))),
-                Some("integer")
-              )
-              captureExpression(expression)
-              expression
-            def materialize(id: Int): Dimension = values.getOrElseUpdate(
-              id,
-              graph.existing.get(id).flatMap(path =>
-                declarations.get(path).orElse(expressions.get(path))
-              ) match
-                case Some(value: Expr[?]) => value.asInstanceOf[Expr[Integer]]
-                case _ =>
-                  val node = graph.nodes(id)
-                  node.literal match
-                    case Some(value) => if value.isValidInt then value.toInt else makeLiteral(value)
-                    case None => node.parameter match
-                        case Some(path) => declarations.getOrElse(
-                            path,
-                            fail("NODAL-SHAPE-043-007", "substituted parent parameter is missing")
-                          )
-                            .asInstanceOf[Expr[Integer]]
-                        case None =>
-                          val expression = new KernelExpr[Integer](
-                            node.operands.map(value => asExpression(materialize(value))),
-                            Some(KernelTypeDescriptor("Integer")),
-                            operation = node.operation
-                          )
-                          captureExpression(expression)
-                          expression
-            )
-            root.dimensions = Some(graph.dimensions.map(materialize))
+            root.dimensions = Some(materializeStructuralDimensions(graph))
         case deferred: DeferredNodeArrayRecord => inScope(operation):
             deferred.projection match
               case Some(projection) => materializeNodeArrayProjection(
@@ -8846,7 +9097,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           declarationPath(declaration.reference),
           declaration.kind.label,
           declarationName(declaration.reference),
-          declaration.dataType.map(renderType(_, module.handle)),
+          declaration.dataType.map: dataType =>
+            val typeOwner = dataType match
+              case deferred: KernelInstanceDataType[?] if !deferred.finalized =>
+                instanceDigitalPorts.get(declaration.reference).map(_._2.module).getOrElse(
+                  fail("NODAL-HIERARCHY-057-001", "deferred type lost its exact child declaration")
+                )
+              case _ => module.handle
+            renderType(dataType, typeOwner)
+          ,
           localDeclarationDomain(declaration, resolved),
           retainedAttributes.map: (name, value) =>
             val rendered =
@@ -8861,6 +9120,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   case None => "none"
                   case _ =>
                     fail("NODAL-DIGITAL-054-010", "register initializer is not a typed expression")
+              else if name == "count" && declaration.kind == KernelSignalKind.InterfaceArray then
+                renderShapeDimension(value, module.handle)
               else renderAny(value, module.handle)
             name -> rendered
           ,
@@ -9650,7 +9911,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         collectionRegions.valuesIterator.flatMap(_.yielded).toVector ++
         structuralArms.valuesIterator.flatMap(_.yielded).toVector ++
         behavioralIfs.valuesIterator.map(_.predicate).toVector ++
-        flatFsms.valuesIterator.flatMap(_.transitions.map(_.guard)).toVector ++
+        flatFsms.valuesIterator.flatMap(record =>
+          record.controlInputs ++ record.transitions.map(_.guard)
+        ).toVector ++
         enumSwitches.valuesIterator.map(_.selector).toVector ++
         Option.when(!stimulusOnly)(
           records.valuesIterator.flatMap(
@@ -9901,7 +10164,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     semanticResult = Some(semanticOrigin.resolve())
     val resolved = resolveDomains()
     markConservativeBindingDependencies()
-    if operations.exists(_.kind == "instance-node-array") then
+    if operations.exists(_.kind == "instance-node-array") || instanceDigitalPorts.nonEmpty ||
+      instanceInterfacePorts.exists((reference, _) =>
+        records(
+          reference.module
+        ).declarations(reference.index).kind == KernelSignalKind.InterfaceArray
+      )
+    then
       val base = ConstructionSnapshot(
         root = modulePath(rootHandle),
         modules = snapshots(resolved),
@@ -9911,6 +10180,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         topology = Vector.empty
       )
       materializeConservativeIntents(base)
+      val boundaryQueries = new StructuralParameterBinding.InstanceQueries(base)
+      materializeInstanceDigitalTypes(boundaryQueries)
+      materializeInstanceInterfaceDimensions(boundaryQueries)
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
@@ -9952,10 +10224,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             declarationPath(declaration.reference),
             modulePath(module.handle),
             localDeclarationDomain(declaration, resolved),
-            declaration.value match
-              case array: InterfaceArray[?, ?] =>
-                Vector(renderShapeDimension(array.count, module.handle))
-              case _ => Vector.empty,
+            interfaceDimensions(declaration).map(renderShapeDimension(_, module.handle)),
             dataType =>
               if !validatedTypes.containsKey(dataType) then
                 validateShapeType(dataType, module.handle, cardinality = true)
@@ -9983,7 +10252,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               KernelInterfaceBoundarySnapshot(
                 instancePath(module.handle, instance.ordinal),
                 declarationPath(port)
-              )
+              ),
+            dataType =>
+              val dimensions = interfaceDimensions(declaration)
+              if dimensions.isEmpty then dataType
+              else Vec(dataType, dimensions*)
           )
         )
       ).toVector,

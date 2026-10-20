@@ -82,6 +82,19 @@ final class AreaBehavioralMember extends Module:
       group.stored := true.B
     output := group.stored
 
+final class AreaGenericMembers extends Module:
+  val groups = List(3, 5).map: value =>
+    new Area:
+      val hostValue = value
+      val stored = wire(Bool)
+      stored := true.B
+  val first = groups(0)
+  val second = groups(1)
+  val output = out(Bool)
+  assert(first.hostValue == 3)
+  assert(second.hostValue == 5)
+  output := first.stored
+
 object AreaPositive:
   def main(args: Array[String]): Unit =
     val _ = args
@@ -108,6 +121,9 @@ object AreaPositive:
     val behavioral = ConstructionKernel.inspect(new AreaBehavioralMember)
     assert(behavioral.areas.size == 1)
     assert(behavioral.digitalAssignments.count(_.kind == "register_next") == 1)
+    val generic = ConstructionKernel.inspect(new AreaGenericMembers)
+    assert(generic.areas.map(_.path.split('.').last).toSet == Set("first", "second"))
+    assert(generic.digitalAssignments.size == 3)
     var previous = Option.empty[PositiveReusableArea]
     ConstructionKernel.capture(new PositiveAreaModule)(module =>
       previous = Some(module.first)

@@ -87,7 +87,8 @@ private[nodal] object DigitalInterfaceContract:
       validateProtocolPayload: DataType[?] => Unit,
       validateBoundarySource: Expr[?] => Unit,
       samePayloadTypes: (DataType[?], DataType[?]) => Boolean,
-      boundary: Option[KernelInterfaceBoundarySnapshot] = None
+      boundary: Option[KernelInterfaceBoundarySnapshot] = None,
+      memberValueType: DataType[?] => DataType[?] = identity
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
 
@@ -382,13 +383,13 @@ private[nodal] object DigitalInterfaceContract:
       owned(value, context.owner)
     val viewLayouts =
       new IdentityHashMap[InterfacePort[?, ?], Vector[ConstructionInterfaceLayout.Leaf]]()
-    def endpointLeaves(endpoint: InterfacePort[?, ?], depth: Int = 0)
+    def portLeaves(endpoint: InterfacePort[?, ?], depth: Int = 0)
         : Vector[ConstructionInterfaceLayout.Leaf] =
       if depth > 128 then fail(1, "interface view nesting exceeds 128")
       if endpoint.origin.isEmpty then layouts.get(endpoint)
       else
         Option(viewLayouts.get(endpoint)).getOrElse:
-          val original = endpointLeaves(endpoint.origin.get, depth + 1)
+          val original = portLeaves(endpoint.origin.get, depth + 1)
           if root(endpoint).boundary then
             fail(3, "child Interface views cannot invert the declared role")
           if endpoint.role.name != "monitor" && original.exists(value =>
@@ -411,6 +412,14 @@ private[nodal] object DigitalInterfaceContract:
           then fail(4, "automatic inversion requires truly complementary actual nested role maps")
           viewLayouts.put(endpoint, viewed)
           viewed
+    def endpointLeaves(endpoint: InterfaceEndpoint): Vector[ConstructionInterfaceLayout.Leaf] =
+      endpoint match
+        case port: InterfacePort[?, ?] => portLeaves(port)
+        case array: InterfaceArray[?, ?] =>
+          val leaves = layouts.get(array)
+          if leaves.exists(_.mode.nonEmpty) then
+            fail(9, "resolved Interface array effects require an explicit physical component projection")
+          leaves
     operations.filter(_.kind == "interface-invert").foreach: operation =>
       operation.values match
         case Vector(original: InterfacePort[?, ?], view: InterfacePort[?, ?]) =>
@@ -486,12 +495,13 @@ private[nodal] object DigitalInterfaceContract:
     val connectivity = operations.filter(value => EffectOperations.contains(value.kind)).flatMap:
       operation =>
         operation.values match
-          case Vector(left: InterfacePort[?, ?], right: InterfacePort[?, ?])
+          case Vector(left: InterfaceEndpoint, right: InterfaceEndpoint)
               if operation.kind == "interface-connect" =>
             val a = declaration(left, operation.owner)
             val b = declaration(right, operation.owner)
             if left.definition.name != right.definition.name || a.domain != b.domain ||
-              a.path == b.path
+              a.path == b.path ||
+              !a.samePayloadTypes(a.memberValueType(Bool), b.memberValueType(Bool))
             then
               fail(
                 5,
@@ -538,7 +548,7 @@ private[nodal] object DigitalInterfaceContract:
                 endpointRole = Some(left.role.name),
                 sourceEndpointRole = Some(right.role.name)
               )
-          case Vector(endpoint: InterfacePort[?, ?], selected: String, value: Expr[?])
+          case Vector(endpoint: InterfaceEndpoint, selected: String, value: Expr[?])
               if operation.kind == "interface-drive" =>
             val context = declaration(endpoint, operation.owner)
             val leaf = endpointLeaves(endpoint).find(_.name == selected).getOrElse(
@@ -561,7 +571,8 @@ private[nodal] object DigitalInterfaceContract:
             val target = s"${context.path}.${leaf.name}"
             if leaf.mode.isEmpty && !driven.add(target) then
               fail(10, "ordinary interface member has multiple drivers")
-            val capturedValue = exactPayload(value, leaf.dataType.get, context)
+            val capturedValue =
+              exactPayload(value, context.memberValueType(leaf.dataType.get), context)
             context.validateBoundarySource(value)
             Vector(effect(
               operation,
@@ -574,7 +585,7 @@ private[nodal] object DigitalInterfaceContract:
               nestedRoles = leaf.nestedRoles,
               endpointRole = Some(endpoint.role.name)
             ))
-          case Vector(endpoint: InterfacePort[?, ?], selected: String)
+          case Vector(endpoint: InterfaceEndpoint, selected: String)
               if operation.kind == "interface-observe" =>
             val context = declaration(endpoint, operation.owner)
             val selectedLeaves = endpointLeaves(endpoint).filter(leaf =>

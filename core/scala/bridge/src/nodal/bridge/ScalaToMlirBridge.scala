@@ -172,6 +172,8 @@ private[nodal] object ScalaToMlirBridge:
       .mapValues(_.map(expression => expression.path -> expression).toMap)
       .toMap
     private val moduleIntegerQuery = new StructuralParameterBinding.Query(snapshot)
+    private val instanceIntegerQueries =
+      new StructuralParameterBinding.InstanceQueries(snapshot, Some(moduleIntegerQuery))
     private var activeIntegerQuery: Option[StructuralParameterBinding.Query] = None
     private var enclosingIntegerQuery: Option[StructuralParameterBinding.Query] = None
     private final case class StaticRegion(
@@ -596,6 +598,14 @@ private[nodal] object ScalaToMlirBridge:
         ))
 
     def render(): String =
+      hierarchy.validatePortTypes: (actual, formal, owner, instance) =>
+        compareDigitalValueType(
+          actual.dataType.get,
+          formal.dataType.get,
+          actual.path,
+          widthFamily = false,
+          instanceContext = Some((owner, instance, formal.path))
+        )
       validate()
       canonicalizeModuleDefinitions()
       val body =
@@ -3978,13 +3988,13 @@ ${indent(body, 2)}
           semanticPath = declaration.path
         )
       )
-      if classification == "structural" then
-        if dataType != "i64" then
-          fail(
-            "NODAL-BRIDGE-043",
-            "structural parameters currently require Integer type",
-            Some(declaration.path)
-          )
+      if classification == "structural" && dataType != "i64" then
+        fail(
+          "NODAL-BRIDGE-043",
+          "structural parameters currently require Integer type",
+          Some(declaration.path)
+        )
+      if dataType == "i64" then
         // A structural predicate can inspect the complete signed-i64 parameter domain.
         // Width/shape/Generate consumers independently demand their required finite envelope;
         // classification alone must not manufacture a range constraint or sample the default.
@@ -3994,24 +4004,24 @@ ${indent(body, 2)}
             case (Some(lower), Some(upper)) =>
               val lo = lower.toLongOption.getOrElse(fail(
                 "NODAL-BRIDGE-043",
-                "structural parameter lower range is not a signed-i64 literal",
+                "Integer parameter lower range is not a signed-i64 literal",
                 Some(declaration.path)
               ))
               val hi = upper.toLongOption.getOrElse(fail(
                 "NODAL-BRIDGE-043",
-                "structural parameter upper range is not a signed-i64 literal",
+                "Integer parameter upper range is not a signed-i64 literal",
                 Some(declaration.path)
               ))
               if lo > hi then
                 fail(
                   "NODAL-BRIDGE-043",
-                  "structural parameter range is unordered",
+                  "Integer parameter range is unordered",
                   Some(declaration.path)
                 )
               Some(lo -> hi)
             case _ => fail(
                 "NODAL-BRIDGE-043",
-                "structural parameter range requires both bounds",
+                "Integer parameter range requires both bounds",
                 Some(declaration.path)
               )
         range.foreach: (lower, upper) =>
@@ -4058,6 +4068,7 @@ ${indent(body, 2)}
             ),
             semanticPath = s"${declaration.path}.range"
           )
+      if classification == "structural" then
         val effects = attributes
           .getOrElse(
             "structural_effects",
@@ -5396,24 +5407,23 @@ ${indent(body, 2)}
           )
         value match
           case "Bool" => ()
-          case WidthType(_, width) if width.toLongOption.exists(_ > 0) => ()
+          case WidthType(_, width) =>
+            val query = integerQuery
+            query.positive(query.resolve(resolveOwningModule(path), width))
           case enumType if enumType.startsWith("Enum(") =>
             val _ = parseType(enumType, path)
           case vector if vector.startsWith("Vec(") =>
             val (element, dimensions) = vecTypeParts(vector, path)
-            if !dimensions.forall(_.toLongOption.exists(_ > 0)) then
-              fail(
-                "NODAL-BRIDGE-057-HIERARCHY",
-                "instance port shape must be finite and fixed",
-                Some(path)
-              )
+            dimensions.foreach: dimension =>
+              val query = integerQuery
+              query.positive(query.resolve(resolveOwningModule(path), dimension))
             visit(element, depth + 1)
           case structure if structure.startsWith("Struct(") =>
             digitalStructParts(structure, path)._2.foreach(field => visit(field._2, depth + 1))
           case _ =>
             fail(
               "NODAL-BRIDGE-057-HIERARCHY",
-              "instance port supports only fixed ordinary digital data",
+              "instance port supports only bounded ordinary digital data",
               Some(path)
             )
       visit(text, 0)
@@ -5513,20 +5523,25 @@ ${indent(body, 2)}
         right: String,
         path: String,
         widthFamily: Boolean,
-        storageContext: Boolean = true
+        storageContext: Boolean = true,
+        instanceContext: Option[(String, KernelInstanceSnapshot, String)] = None
     ): Boolean =
       // Interface boundaries permit Clock/Reset; ordinary values and nested Struct
       // fields retain the existing storage restrictions in the shared type owner.
       val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext)
-      val _ = parseTypeChecked(right, path, 0, Array(65536), storageContext)
+      val rightPath = instanceContext.map(_._3).getOrElse(path)
+      val _ = parseTypeChecked(right, rightPath, 0, Array(65536), storageContext)
       val owner = resolveOwningModule(path)
+      val rightOwner = instanceContext.map(_._2.childModule).getOrElse(owner)
+      val comparisonQuery = instanceContext.map: (parent, instance, _) =>
+        instanceIntegerQueries.query(parent, instance.path)
+      .getOrElse(integerQuery)
       val pending = mutable.ArrayDeque((left, right, 0))
       val visited = mutable.HashSet.empty[(String, String)]
       var equal = true
       def sameDimension(a: String, b: String): Boolean =
         try
-          val query = integerQuery
-          query.resolve(owner, a) == query.resolve(owner, b)
+          comparisonQuery.resolve(owner, a) == comparisonQuery.resolve(rightOwner, b)
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
@@ -5534,25 +5549,25 @@ ${indent(body, 2)}
         val (a, b, depth) = pending.removeLast()
         if depth > 128 || visited.size >= 65536 then
           fail("NODAL-BRIDGE-055", "digital type comparison exceeds structural budget", Some(path))
-        if visited.add(a -> b) && a != b then
+        if visited.add(a -> b) && (a != b || instanceContext.nonEmpty) then
           (a, b) match
             case (WidthType(aKind, aWidth), WidthType(bKind, bWidth)) =>
               equal = aKind == bKind && (widthFamily || sameDimension(aWidth, bWidth))
             case _ if a.startsWith("Vec(") && b.startsWith("Vec(") =>
               val (aElement, aDimensions) = vecTypeParts(a, path)
-              val (bElement, bDimensions) = vecTypeParts(b, path)
+              val (bElement, bDimensions) = vecTypeParts(b, rightPath)
               equal = aDimensions.size == bDimensions.size &&
                 aDimensions.zip(bDimensions).forall((x, y) => sameDimension(x, y))
               pending.append((aElement, bElement, depth + 1))
             case _ if a.startsWith("Struct(") && b.startsWith("Struct(") =>
               val (aName, aFields) = digitalStructParts(a, path)
-              val (bName, bFields) = digitalStructParts(b, path)
+              val (bName, bFields) = digitalStructParts(b, rightPath)
               equal = aName == bName && aFields.map(_._1) == bFields.map(_._1)
               aFields.zip(bFields).foreach: (x, y) =>
                 pending.append((x._2, y._2, depth + 1))
             case _ if a.startsWith("Enum(") && b.startsWith("Enum(") =>
               equal = enumValues.parseType(a, path) == enumValues.parseType(b, path)
-            case _ => equal = false
+            case _ => equal = a == b
       equal
 
     // Inputs are already canonical native types produced by the shared type renderer.

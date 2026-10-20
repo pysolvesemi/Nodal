@@ -115,6 +115,20 @@ private[nodal] object InterfaceMlir:
       endpoint.members.map(value => value.path -> (endpoint, value))
     ).toMap
 
+    private val shapeQuery = new StructuralParameterBinding.Query(snapshot)
+    private val instanceQueries =
+      new StructuralParameterBinding.InstanceQueries(snapshot, Some(shapeQuery))
+    private def sameDimensions(
+        left: KernelInterfaceSnapshot,
+        right: KernelInterfaceSnapshot
+    ): Boolean =
+      try
+        left.dimensions.size == right.dimensions.size &&
+          left.dimensions.zip(right.dimensions).forall((a, b) =>
+            shapeQuery.resolve(left.owner, a) == shapeQuery.resolve(right.owner, b)
+          )
+      catch case _: IllegalArgumentException => false
+
     requireValid(
       endpoints.size == snapshot.interfaceContracts.size,
       "duplicate interface endpoint identity",
@@ -289,7 +303,10 @@ private[nodal] object InterfaceMlir:
           endpoint.roles.nonEmpty &&
           endpoint.roles.map(_.name).distinct.size == endpoint.roles.size &&
           (if declaration.kind == "interface-port" then endpoint.dimensions.isEmpty
-           else endpoint.dimensions.size == 1),
+           else
+             endpoint.dimensions.size == 1 &&
+             declaration.attributes.collect { case ("count", value) => value } ==
+               endpoint.dimensions),
         "interface declaration and complete typed contract disagree",
         endpoint.path
       )
@@ -310,8 +327,8 @@ private[nodal] object InterfaceMlir:
         val childRoles = canonical(child.roles)
         requireValid(
           child.owner == instance.childModule && child.boundary.isEmpty &&
-            childDeclaration.kind == "interface-port" && childDeclaration.generatedScope.isEmpty &&
-            instance.generatedScope.isEmpty && child.dimensions.isEmpty &&
+            childDeclaration.kind == declaration.kind && childDeclaration.generatedScope.isEmpty &&
+            instance.generatedScope.isEmpty &&
             endpoint.identity == child.identity && endpoint.role == child.role &&
             endpointRoles.get(endpoint.role) == childRoles.get(child.role) &&
             endpointRoles.forall((name, role) =>
@@ -324,6 +341,15 @@ private[nodal] object InterfaceMlir:
           "Interface projection changes exact child, selected roles, ABI or actual domain binding",
           endpoint.path
         )
+        if declaration.kind == "interface-array" then
+          try
+            instanceQueries.validateInterfaceDimensions(
+              module.path,
+              instance.path,
+              child.path,
+              endpoint.dimensions
+            )
+          catch case error: IllegalArgumentException => fail(error.getMessage, endpoint.path)
       endpoint.roles.foreach(validateRole(endpoint, _))
       requireValid(
         endpoint.roles.find(_.name == endpoint.role).exists(_.members == endpoint.members),
@@ -493,7 +519,7 @@ private[nodal] object InterfaceMlir:
             )
             requireValid(
               endpoint.identity == other.identity && endpoint.domain == other.domain &&
-                endpoint.dimensions == other.dimensions &&
+                sameDimensions(endpoint, other) &&
                 target.name == source.name && target.dataType == source.dataType &&
                 target.protocol == source.protocol && target.mode == source.mode &&
                 target.nestedInterfaces == source.nestedInterfaces &&
@@ -817,7 +843,10 @@ private[nodal] object InterfaceMlir:
               "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
               "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
               "endpoint" -> quoted(symbol("interface_instance", target.name)),
-              "metadata" -> metadata(sourceMetadata(endpoint.path))
+              "metadata" -> metadata(
+                sourceMetadata(endpoint.path),
+                "dimensions" -> array(endpoint.dimensions.map(quoted))
+              )
             )
           case None =>
             val instance = "@" + quoted(symbol("interface_instance", declaration.name))
@@ -910,7 +939,14 @@ private[nodal] object InterfaceMlir:
             val target = member(effect.target, effect.endpointRole)
             val value = resolve(effect.value.get)
             requireValid(
-              exactPayloadType(effect.value.get, effect.dataType.get, effect.path),
+              exactPayloadType(
+                effect.value.get,
+                if members(effect.target)._1.dimensions.isEmpty then effect.dataType.get
+                else
+                  s"Vec(${effect.dataType.get};${members(effect.target)._1.dimensions.mkString("x")})"
+                ,
+                effect.path
+              ),
               "interface driver value differs from exact member payload",
               effect.path
             )

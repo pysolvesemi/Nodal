@@ -127,7 +127,7 @@ private[nodal] object StructuralParameterBinding:
     domains.values.foreach: value =>
       if value.lower <= 0L || value.upper < value.lower then
         invalid("formal width domain must be positive and ordered")
-    private val rawCaptures =
+    private val rawCaptures: Map[String, String] = enclosing.map(_.rawCaptures).getOrElse(
       (snapshot.digitalCollections.flatMap(value =>
         value.arguments.takeRight(value.captures.size).map(_.path).zip(value.captures)
       ) ++ conditionalArms.flatMap((_, arm) =>
@@ -137,6 +137,7 @@ private[nodal] object StructuralParameterBinding:
           body.arguments.drop(1).map(_.path).zip(body.captures)
         )
       )).toMap
+    )
     captures.foreach: (argument, source) =>
       if !rawCaptures.get(argument).contains(source) || enclosing.isEmpty then
         invalid("Integer capture differs from its actual parent operand")
@@ -325,6 +326,12 @@ private[nodal] object StructuralParameterBinding:
       case _ => None
 
     def exportValues(indices: Vector[Int]): ResolvedDimensions =
+      exportReachable(indices, Map.empty)
+
+    private def exportReachable(
+        indices: Vector[Int],
+        existing: Map[Int, String]
+    ): ResolvedDimensions =
       // Export the reachable graph only. Copying the full query arena for every width binding
       // would make a wide record's context plan quadratic in unrelated static definitions.
       val mapped = mutable.HashMap.empty[Int, Int]
@@ -352,7 +359,13 @@ private[nodal] object StructuralParameterBinding:
         }
       )
       val roots = indices.map(copy(_, 0))
-      ResolvedDimensions(roots, nodes.toVector, Map.empty)
+      ResolvedDimensions(
+        roots,
+        nodes.toVector,
+        existing.iterator.flatMap((original, path) =>
+          mapped.get(original).map(_ -> path)
+        ).toMap
+      )
 
     def importValue(owner: String, value: ResolvedDimensions): Int =
       if value.dimensions.size != 1 || value.nodes.size > 65536 then
@@ -541,19 +554,7 @@ private[nodal] object StructuralParameterBinding:
       ).map(_.path) ++
         snapshot.parameterExpressions.filter(_.owner == owner).map(_.path)).foreach: path =>
         candidate(path).foreach(id => existing.getOrElseUpdate(id, path))
-      ResolvedDimensions(
-        dimensions,
-        facts.toVector.map: fact =>
-          fact.key match
-            case Key.Literal(value) =>
-              IntegerNode(Some(value), None, None, Vector.empty, fact.bounds)
-            case Key.Parameter(path) =>
-              IntegerNode(None, Some(path), None, Vector.empty, fact.bounds)
-            case Key.Apply(operation, operands) =>
-              IntegerNode(None, None, Some(operation), operands, fact.bounds)
-        ,
-        existing.toMap
-      )
+      exportReachable(dimensions, existing.toMap)
 
     def validateOverrides(): Unit = instance.foreach: (_, value) =>
       val child = module(value.childModule)
@@ -599,25 +600,124 @@ private[nodal] object StructuralParameterBinding:
   def defaultInteger(snapshot: ConstructionSnapshot, owner: String, reference: String): Long =
     new Query(snapshot, None).checkedLiteral(owner, reference)
 
+  /** Query-local reuse of immutable snapshot indices and exact occurrence substitutions. */
+  final class InstanceQueries(snapshot: ConstructionSnapshot, sharedQuery: Option[Query] = None):
+    private lazy val shared = sharedQuery.getOrElse(new Query(snapshot))
+    private val modules = snapshot.modules.map(value => value.path -> value).toMap
+    private val occurrences = snapshot.modules.flatMap(module =>
+      module.instances.map(value => (module.path, value.path) -> value)
+    ).toMap
+    private val declarations = snapshot.modules.flatMap(module =>
+      module.declarations.map(value => (module.path, value.path) -> value)
+    ).toMap
+    if occurrences.size != snapshot.modules.map(_.instances.size).sum ||
+      declarations.size != snapshot.modules.map(_.declarations.size).sum
+    then invalid("duplicate boundary occurrence or declaration identity")
+    private val queries = mutable.HashMap.empty[(String, String), Query]
+    def declaration(ownerPath: String, instancePath: String, portPath: String)
+        : (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
+      val owner = modules.getOrElse(ownerPath, invalid("binding owner is missing"))
+      val instance = occurrences.getOrElse(
+        ownerPath -> instancePath,
+        invalid("binding is not owned by the exact immediate instance")
+      )
+      val port = declarations.getOrElse(
+        instance.childModule -> portPath,
+        invalid("binding does not name the declared child port")
+      )
+      (owner, instance, port)
+    def query(ownerPath: String, instancePath: String): Query =
+      queries.getOrElseUpdate(
+        ownerPath -> instancePath, {
+          val instance = occurrences.getOrElse(
+            ownerPath -> instancePath,
+            invalid("binding is not owned by the exact immediate instance")
+          )
+          val result = new Query(snapshot, Some(ownerPath -> instance), enclosing = Some(shared))
+          result.validateOverrides()
+          result
+        }
+      )
+    def resolveInterfaceDimensions(
+        ownerPath: String,
+        instancePath: String,
+        childDeclarationPath: String
+    ): ResolvedDimensions =
+      val (owner, instance, count) =
+        interfaceArray(declaration(ownerPath, instancePath, childDeclarationPath))
+      val context = query(ownerPath, instancePath)
+      val dimension = context.resolve(instance.childModule, count)
+      context.positive(dimension)
+      context.exportDimensions(owner.path, Vector(dimension))
+    def validateInterfaceDimensions(
+        ownerPath: String,
+        instancePath: String,
+        childDeclarationPath: String,
+        actualDimensions: Vector[String]
+    ): Unit =
+      val (owner, instance, count) =
+        interfaceArray(declaration(ownerPath, instancePath, childDeclarationPath))
+      if actualDimensions.size != 1 then invalid("Interface array lost its declared rank")
+      val context = query(ownerPath, instancePath)
+      val expected = context.resolve(instance.childModule, count)
+      val actual = context.resolve(owner.path, actualDimensions.head)
+      context.positive(expected)
+      context.positive(actual)
+      if expected != actual then
+        invalid("Interface array count is not the exact finalized child expression")
+
   private def instancePort(
       snapshot: ConstructionSnapshot,
       ownerPath: String,
       instancePath: String,
       portPath: String
-  ): (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
-    val owner =
-      snapshot.modules.find(_.path == ownerPath).getOrElse(invalid("binding owner is missing"))
-    val instance = owner.instances.find(_.path == instancePath)
-      .getOrElse(invalid("binding is not owned by the exact immediate instance"))
-    val child = snapshot.modules.find(_.path == instance.childModule)
-      .getOrElse(invalid("child definition is missing"))
-    val port = child.declarations.find(_.path == portPath)
-      .getOrElse(invalid("binding does not name the declared child port"))
+  )
+      : (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
+    val (owner, instance, port) =
+      new InstanceQueries(snapshot).declaration(ownerPath, instancePath, portPath)
     if !Set("analog-input", "analog-output", "analog-inout").contains(port.kind) ||
       port.conservativeDimensions.isEmpty
-    then
-      invalid("instance array requires a conservative child boundary declaration")
+    then invalid("instance array requires a conservative child boundary declaration")
     (owner, instance, port)
+
+  private def interfaceArray(
+      boundary: (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot)
+  ): (KernelModuleSnapshot, KernelInstanceSnapshot, String) =
+    val (owner, instance, port) = boundary
+    val counts = port.attributes.collect { case ("count", value) => value }
+    if port.kind != "interface-array" || counts.size != 1 ||
+      port.conservativeDimensions.nonEmpty
+    then invalid("Interface array requires its exact declared count")
+    if port.generatedScope.nonEmpty || instance.generatedScope.nonEmpty then
+      invalid("Interface array requires an explicit generated-family binding")
+    (owner, instance, counts.head)
+
+  /** Finalized count from the exact child declaration, not a caller-supplied shape. */
+  def resolveInterfaceDimensions(
+      snapshot: ConstructionSnapshot,
+      ownerPath: String,
+      instancePath: String,
+      childDeclarationPath: String
+  ): ResolvedDimensions =
+    new InstanceQueries(snapshot).resolveInterfaceDimensions(
+      ownerPath,
+      instancePath,
+      childDeclarationPath
+    )
+
+  def validateInterfaceDimensions(
+      snapshot: ConstructionSnapshot,
+      ownerPath: String,
+      instancePath: String,
+      childDeclarationPath: String,
+      actualDimensions: Vector[String]
+  ): Unit =
+    new InstanceQueries(snapshot).validateInterfaceDimensions(
+      ownerPath,
+      instancePath,
+      childDeclarationPath,
+      actualDimensions
+    )
 
   def resolveDimensions(
       snapshot: ConstructionSnapshot,

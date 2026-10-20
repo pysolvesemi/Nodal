@@ -475,3 +475,32 @@ Complete formal Interface/boundary/actual-type inventory in the canonical
 construction JSON artifact remains an identified serialization follow-up; the
 actual MLIR and independent native checks above retain those facts. This slice
 does not claim that unfinished artifact coverage.
+
+## Checkpoint 8 — canonical boundary artifact coverage
+
+On canonical source checkpoint `d5dc7e84`, the existing
+`ReproducibilityContract` serializer now retains complete Interface formal role
+and member contracts, declaration boundary identity, ordered parent actual
+member types and typed connectivity references. It also retains the existing
+Area inventory and generated family/export/member/scope identities, including
+retained family facts without a digital body. These are conditional additive
+fields in the canonical artifact, not a second registry or a permission source.
+The checkpoint-7 serialization gap above is resolved by this slice.
+
+The focused command in `.work/f58-boundary-artifact/run.sh` selected
+`Increment58BoundaryArtifactTests` and `ReproducibilityContractTests` and executed
+**8/8 groups successfully**. Full Scala/Java source manifests before and after
+match. Mutation checks distinguish boundary, formal role, actual type, member,
+family and scope changes while permitted inventory traversal reorderings retain
+identical artifacts. The configured native reproducibility predecessor executed
+actual MLIR-to-Verilog-A and manifest comparisons, without skipping, using frozen
+`nodalc` hash `3a8ddf17cc4322fd5aca9e59849eb45ed15b19ecaba06e9efe805f6bcd0cb880`
+and `nodal-translate` hash
+`9fcc1704bcae2da890365d238aea291302a1bbad19198b671dbc791b3791261a`.
+Commands, logs and exact tool hashes remain under `.work/f58-boundary-artifact/`.
+
+This is serialization acceptance, not new Interface/generated target acceptance.
+The serializer traverses canonical bounded inventories and preserves meaningful
+member/export order; it neither expands symbolic lane counts nor introduces a
+new hierarchy engine. The current slice does not affect generated Verilog-*.
+All remaining F58 implementation and checklist obligations stay open.

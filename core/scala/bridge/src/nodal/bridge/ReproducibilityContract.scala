@@ -355,6 +355,9 @@ private[nodal] object ReproducibilityContract:
     ))
   )
 
+  private def hasGeneratedDigitalFacts(value: KernelGeneratedRegionSnapshot): Boolean =
+    value.digitalBody.nonEmpty || value.yieldedArea.nonEmpty || value.exports.nonEmpty
+
   private def digitalGraph(snapshot: ConstructionSnapshot): JsonValue = JObject(Vector(
     "expressions" -> array(snapshot.digitalExpressions.sortBy(_.path).map(value =>
       JObject(Vector(
@@ -398,6 +401,13 @@ private[nodal] object ReproducibilityContract:
           "schema_type" -> string(evidence.schemaType),
           "ordinal" -> evidence.ordinal.map(number).getOrElse(JNull),
           "name" -> optionalString(evidence.name)
+        )
+      ) ++ value.generatedMember.toVector.map(member =>
+        "generated_member" -> obj(
+          "family" -> string(member.family),
+          "ordinal" -> string(member.ordinal),
+          "member" -> string(member.member),
+          "access" -> string(member.access)
         )
       ))
     )),
@@ -608,11 +618,10 @@ private[nodal] object ReproducibilityContract:
         "source_ordinal" -> number(value.sourceOrdinal),
         "root" -> string(value.root)
       )
-    ))).toVector ++ Option.when(snapshot.generatedRegions.exists(_.digitalBody.nonEmpty))(
-    "digital_generates" -> array(snapshot.generatedRegions.filter(_.digitalBody.nonEmpty)
+    ))).toVector ++ Option.when(snapshot.generatedRegions.exists(hasGeneratedDigitalFacts))(
+    "digital_generates" -> array(snapshot.generatedRegions.filter(hasGeneratedDigitalFacts)
       .sortBy(_.path).map(value =>
-        val body = value.digitalBody.get
-        obj(
+        JObject(Vector(
           "path" -> string(value.path),
           "owner" -> string(value.owner),
           "parent_region" -> optionalString(value.parent),
@@ -621,17 +630,29 @@ private[nodal] object ReproducibilityContract:
           "upper_exclusive" -> string(value.upperExclusive),
           "step" -> string(value.step),
           "maximum" -> value.maximum.map(number).getOrElse(JNull),
-          "maximum_trip_count" -> number(value.maximumTripCount),
-          "source_ordinal" -> number(body.sourceOrdinal),
-          "captures" -> array(body.captures.map(string)),
-          "arguments" -> array(body.arguments.map(argument =>
-            obj(
-              "path" -> string(argument.path),
-              "data_type" -> string(argument.dataType),
-              "role" -> string(argument.role)
-            )
-          ))
-        )
+          "maximum_trip_count" -> number(value.maximumTripCount)
+        ) ++ value.digitalBody.toVector.flatMap(body =>
+          Vector(
+            "source_ordinal" -> number(body.sourceOrdinal),
+            "captures" -> array(body.captures.map(string)),
+            "arguments" -> array(body.arguments.map(argument =>
+              obj(
+                "path" -> string(argument.path),
+                "data_type" -> string(argument.dataType),
+                "role" -> string(argument.role)
+              )
+            ))
+          )
+        ) ++ value.yieldedArea.toVector.map(path => "yielded_area" -> string(path)) ++
+          Option.when(value.exports.nonEmpty)(
+            "exports" -> array(value.exports.map(exported =>
+              obj(
+                "member" -> string(exported.member),
+                "target" -> string(exported.target),
+                "access" -> string(exported.access)
+              )
+            ))
+          ).toVector)
       ))
   ).toVector ++ Option.when(snapshot.memoryWrites.nonEmpty)(
     "memory_writes" -> array(snapshot.memoryWrites.sortBy(_.path).map(value =>
@@ -981,6 +1002,8 @@ private[nodal] object ReproducibilityContract:
                   "data_type" -> optionalString(declaration.dataType),
                   "domain" -> optionalString(declaration.domain),
                   "attributes" -> attributes(declaration.attributes)
+                ) ++ declaration.interfaceBoundary.toVector.map(boundary =>
+                  "interface_boundary" -> interfaceBoundary(boundary)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
                 ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
@@ -1085,7 +1108,69 @@ private[nodal] object ReproducibilityContract:
           )
       ),
       "waivers" -> waiverInventory(snapshot)
-    ) ++ Option.when(nodeSelections.nonEmpty)(
+    ) ++ Option.when(snapshot.areas.nonEmpty)(
+      "areas" -> array(snapshot.areas.map(area =>
+        JObject(Vector(
+          "path" -> string(area.path),
+          "owner" -> string(area.owner),
+          "parent" -> optionalString(area.parent),
+          "source" -> source(Some(area.source)),
+          "domain" -> optionalString(area.domain),
+          "declarations" -> array(area.declarations.map(string)),
+          "members" -> array(area.members.map(member =>
+            obj(
+              "name" -> string(member.name),
+              "path" -> string(member.path),
+              "target" -> string(member.target)
+            )
+          ))
+        ) ++ generatedScopeFields(area.generatedScope))
+      ))
+    ).toVector ++ Option.when(snapshot.interfaceContracts.nonEmpty)(
+      "interface_contracts" -> array(snapshot.interfaceContracts.sortBy(_.path).map(endpoint =>
+        obj(
+          "path" -> string(endpoint.path),
+          "owner" -> string(endpoint.owner),
+          "identity" -> string(endpoint.identity),
+          "role" -> string(endpoint.role),
+          "domain" -> string(endpoint.domain),
+          "dimensions" -> array(endpoint.dimensions.map(string)),
+          "members" -> array(endpoint.members.map(interfaceMember)),
+          "roles" -> array(endpoint.roles.sortBy(_.name).map(role =>
+            obj(
+              "name" -> string(role.name),
+              "members" -> array(role.members.map(interfaceMember))
+            )
+          )),
+          "boundary" -> endpoint.boundary.map(interfaceBoundary).getOrElse(JNull),
+          "actual_member_types" -> array(endpoint.actualMemberTypes.map((name, dataType) =>
+            obj("name" -> string(name), "data_type" -> string(dataType))
+          ))
+        )
+      ))
+    ).toVector ++ Option.when(snapshot.digitalConnectivity.nonEmpty)(
+      "digital_connectivity" -> array(snapshot.digitalConnectivity.sortBy(_.path).map(effect =>
+        obj(
+          "path" -> string(effect.path),
+          "owner" -> string(effect.owner),
+          "kind" -> string(effect.kind),
+          "target" -> string(effect.target),
+          "source" -> optionalString(effect.source),
+          "value" -> optionalString(effect.value),
+          "enable" -> optionalString(effect.enable),
+          "data_type" -> optionalString(effect.dataType),
+          "member" -> optionalString(effect.member),
+          "role" -> optionalString(effect.role),
+          "source_role" -> optionalString(effect.sourceRole),
+          "access" -> optionalString(effect.access),
+          "source_access" -> optionalString(effect.sourceAccess),
+          "nested_roles" -> interfaceRoles(effect.nestedRoles),
+          "source_nested_roles" -> interfaceRoles(effect.sourceNestedRoles),
+          "endpoint_role" -> optionalString(effect.endpointRole),
+          "source_endpoint_role" -> optionalString(effect.sourceEndpointRole)
+        )
+      ))
+    ).toVector ++ Option.when(nodeSelections.nonEmpty)(
       "node_array_selections" -> array(nodeSelections.map: selection =>
         obj((Vector(
           "path" -> string(selection.path),
@@ -1116,6 +1201,28 @@ private[nodal] object ReproducibilityContract:
       Option.when(snapshot.conservativeArrayBindings.isEmpty &&
         snapshot.instanceArrayRoots.isEmpty &&
         snapshot.parameterExpressions.nonEmpty)(parameterExpressionInventory(snapshot)).toVector)
+
+  private def interfaceBoundary(value: KernelInterfaceBoundarySnapshot): JsonValue =
+    obj("instance" -> string(value.instance), "endpoint" -> string(value.endpoint))
+
+  private def interfaceRoles(values: Vector[(String, String)]): JsonValue =
+    array(values.map((path, role) => obj("path" -> string(path), "role" -> string(role))))
+
+  private def interfaceMember(value: KernelInterfaceMemberSnapshot): JsonValue =
+    obj(
+      "path" -> string(value.path),
+      "name" -> string(value.name),
+      "role" -> string(value.role),
+      "access" -> string(value.access),
+      "data_type" -> string(value.dataType),
+      "protocol" -> string(value.protocol),
+      "mode" -> optionalString(value.mode),
+      "nested_roles" -> interfaceRoles(value.nestedRoles),
+      "nested_interfaces" -> array(value.nestedInterfaces.map((path, identity) =>
+        obj("path" -> string(path), "identity" -> string(identity))
+      )),
+      "analog_attributes" -> attributes(value.analogAttributes)
+    )
 
   private def analogSemantics(snapshot: ConstructionSnapshot): JsonValue =
     val equations = snapshot.analogSemantics.equations.map: equation =>

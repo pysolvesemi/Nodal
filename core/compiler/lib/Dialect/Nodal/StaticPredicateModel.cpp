@@ -3,6 +3,7 @@
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -246,6 +247,45 @@ public:
     return true;
   }
 
+  // Reuse the same bounded Boolean/canonical-comparison owner for lexical
+  // structural assumptions. This proves an ordering, never changes a type domain.
+  FailureOr<bool> impliesOrdering(Value predicate, Operation *use, bool negated,
+                                  const InstantiatedIntegerExpression &left,
+                                  const InstantiatedIntegerExpression &right, bool inclusive) {
+    if (failed(Query(false, &remainingWork).value(predicate, use)))
+      return failure();
+    auto cubes = formula(predicate, use, negated, 0);
+    if (failed(cubes))
+      return failure();
+    if (cubes->empty())
+      return false; // No vacuous permission for an unreachable authored selection.
+    unsigned wanted = inclusive ? 3 : 1;
+    for (const GuardCube &cube : *cubes) {
+      bool proved = false;
+      for (GuardLiteral literal : cube) {
+        if (!consume(remainingWork))
+          return failure();
+        const auto *comparison = predicates.comparison(literal.value);
+        if (!comparison)
+          continue;
+        auto ll = equal(left, comparison->left), rr = equal(right, comparison->right);
+        auto lr = equal(left, comparison->right), rl = equal(right, comparison->left);
+        if (failed(ll) || failed(rr) || failed(lr) || failed(rl))
+          return failure();
+        unsigned mask = outcomes(literal);
+        if (*lr && *rl)
+          mask = ((mask & 1) << 2) | (mask & 2) | ((mask & 4) >> 2);
+        else if (!(*ll && *rr))
+          continue;
+        if ((mask & ~wanted) == 0)
+          proved = true;
+      }
+      if (!proved)
+        return false;
+    }
+    return true;
+  }
+
 private:
   bool boolean(Value value) {
     auto type = value ? llvm::dyn_cast<BitsType>(value.getType()) : BitsType();
@@ -475,6 +515,39 @@ FailureOr<bool> proveBehavioralGuardsDisjoint(Value left, Value right, Operation
   remainingWork -= available - budget;
   return result;
 }
+FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
+                                                const InstantiatedIntegerExpression &right,
+                                                Operation *use, bool inclusive) {
+  if (!use || !left.root || !right.root)
+    return failure();
+  unsigned budget = maximumGuardWork;
+  llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>> pairs;
+  if (failed(chargeIntegerPairs(left.root.get(), right.root.get(), budget, pairs)))
+    return failure();
+  if (proveIntegerExpressionLess(left, right, inclusive))
+    return true;
+  GuardQuery query(budget);
+  unsigned depth = 0;
+  for (Operation *at = use; at && !llvm::isa<ModuleOp>(at); at = at->getParentOp()) {
+    if (++depth > maximumGuardDepth || !consume(budget))
+      return failure();
+    Operation *parent = at->getParentOp();
+    if (!llvm::isa_and_nonnull<StructuralIfOp>(parent))
+      continue;
+    auto header = inspectStructuralIfHeader(parent);
+    if (failed(header))
+      return failure();
+    unsigned arm = at->getParentRegion()->getRegionNumber();
+    if (arm >= 2 || at->getBlock() != header->bodies[arm])
+      return failure();
+    auto result =
+        query.impliesOrdering(parent->getOperand(0), parent, arm == 1, left, right, inclusive);
+    if (failed(result) || *result)
+      return result;
+  }
+  return false;
+}
+
 LogicalResult verifyStaticPredicateOperation(Operation *operation) {
   if (failed(Query(true).operation(operation)))
     return operation->emitOpError("NODAL-DIGITAL-055-013: static predicate requires a closed owned "

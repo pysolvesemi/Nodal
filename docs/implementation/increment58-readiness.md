@@ -987,3 +987,33 @@ For precision, checkpoint18's accepted feedback negative is a parent-local
 read-to-driver cycle on a child-boundary alias. A cycle arising only after
 hierarchy occurrence union is a separate next regression, not implied by that
 accepted result.
+
+## Checkpoint 21 — exact guarded generated-member existence
+
+`StaticPredicateModel` now supplies a bounded lexical Integer-ordering query to
+`ShapeModel.resolveGeneratedOrdinal`. It reuses the existing guard Boolean
+expansion and canonical Integer DAG comparison; no second predicate engine,
+parameter enumeration or global type-bound refinement is introduced. The query
+first uses existing all-legal facts, then checks actual enclosing structural-arm
+predicates and their exact capture provenance. True/false arms, negation,
+conjunction and universally sufficient disjunctions retain the same finite
+work/depth budgets. An unknown alternative is not a proof. This initial query
+proves exact compared DAG orderings, not arbitrary transitive constraint solving.
+
+Native generated member admission can therefore select ordinal zero from a
+zero-inclusive family envelope inside the actual positive-count arm, while
+rejecting the opposite/inclusive-zero guard, a same-envelope foreign parameter
+and an unproven later ordinal. Family/storage scope and capability checks remain
+unchanged; a proof cannot make an escaped handle legal. Original retained bounds,
+physical types and generated templates are never rewritten by the query.
+
+Focused acceptance is **419 cases**: storage 182, assignment guards 34,
+structural-if 73 and shape/iteration 130, all passing. The ten new storage cases
+cover actual guarded existence and causal Boolean/identity failures; accepted
+source manifests match. The complete compiler relink uses a full matching
+native before/after manifest and is copied at
+`.work/f58-guarded-family/n2b/compiler/nodalc`, SHA256
+`fb333d6c71a70ff589bb23d3fed2b470832fda96e30b6895722f3733df75a033`.
+This is native semantic acceptance. The public guarded-family source path and
+its corresponding guarded-existence query are being integrated separately;
+no source or target execution is claimed from these native cases alone.

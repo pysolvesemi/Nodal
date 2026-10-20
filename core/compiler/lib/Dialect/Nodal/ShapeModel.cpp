@@ -4,6 +4,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -473,13 +474,18 @@ FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *fami
   // Reuse the canonical lexical structural proof above. Re-resolving through
   // a module-only query would discard valid enclosing Generate ownership.
   const auto &index = *structural->expression;
-  if (index.bounds.lower < 0)
+  auto nonnegative =
+      proveStructuralIntegerLessAtUse(makeLiteralIntegerExpression(0), index, use, true);
+  if (failed(nonnegative) || !*nonnegative)
     return failure();
   auto displacement = composeIntegerExpression("mul", {index, domain->step});
   auto coordinate = succeeded(displacement)
                         ? composeIntegerExpression("add", {domain->lower, *displacement})
                         : FailureOr<InstantiatedIntegerExpression>(failure());
-  if (failed(coordinate) || !proveIntegerExpressionLess(*coordinate, domain->upperExclusive))
+  if (failed(coordinate))
+    return failure();
+  auto exists = proveStructuralIntegerLessAtUse(*coordinate, domain->upperExclusive, use);
+  if (failed(exists) || !*exists)
     return failure();
   return *coordinate;
 }

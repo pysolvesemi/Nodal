@@ -909,6 +909,80 @@ int main() {
         generatedDomain + replace(capturedFamily, "(%family_lo, %bound, %family_step)",
                                   "(%family_lo, %N, %family_step)"),
         false);
+  // Guarded existence uses the actual enclosing static comparison, without
+  // changing the globally valid zero-inclusive parameter envelope.
+  auto conditionalExistence =
+      replace(capturedFamily, literal("i64", "1", "low"), literal("i64", "0", "low"));
+  conditionalExistence = replace(conditionalExistence, literal("i64", "1", "guardOne"),
+                                 literal("i64", "0", "guardOne"));
+  conditionalExistence =
+      replace(conditionalExistence, "comparison = \"eq\"", "comparison = \"gt\"");
+  check("guarded-existence-actual-positive-count", generatedDomain + conditionalExistence, true);
+  check("guarded-existence-wrong-arm-predicate",
+        generatedDomain +
+            replace(conditionalExistence, "comparison = \"gt\"", "comparison = \"le\""),
+        false);
+  check("guarded-existence-inclusive-zero-does-not-prove-member",
+        generatedDomain +
+            replace(conditionalExistence, "comparison = \"gt\"", "comparison = \"ge\""),
+        false);
+  check("guarded-existence-later-member-still-unproved",
+        generatedDomain + replace(conditionalExistence, selected("0"), selected("1")), false);
+  const std::string structuralStart = "\"nodal.structural_if\"(%familyGuard, %N)";
+  auto negatedExistence =
+      replace(conditionalExistence, "comparison = \"gt\"", "comparison = \"le\"");
+  negatedExistence =
+      replace(negatedExistence, structuralStart,
+              "%negatedGuard = \"nodal.static_logic\"(%familyGuard) <{operator_name = \"not\", "
+              "metadata = {semantic_path = \"Fixture.guard.not\"}}> : "
+              "(!nodal.static_predicate) -> !nodal.static_predicate\n"
+              "\"nodal.structural_if\"(%negatedGuard, %N)");
+  check("guarded-existence-negated-comparison", generatedDomain + negatedExistence, true);
+  auto falseArmExistence =
+      replace(conditionalExistence, "comparison = \"gt\"", "comparison = \"le\"");
+  auto bodyStart = falseArmExistence.find("^bb0(%bound: i64):\n");
+  auto bodyEnd = falseArmExistence.find("\"nodal.structural_yield\"", bodyStart);
+  std::string movedBody = falseArmExistence.substr(bodyStart, bodyEnd - bodyStart);
+  falseArmExistence.erase(bodyStart, bodyEnd - bodyStart);
+  falseArmExistence = replace(falseArmExistence, "array<i32: 1, 1, 0>", "array<i32: 1, 0, 1>");
+  falseArmExistence = replace(falseArmExistence, "}, {\n", "}, {\n" + movedBody);
+  while (falseArmExistence.find("Fixture.guard.then.family") != std::string::npos)
+    falseArmExistence =
+        replace(falseArmExistence, "Fixture.guard.then.family", "Fixture.guard.else.family");
+  check("guarded-existence-actual-false-arm", generatedDomain + falseArmExistence, true);
+  auto booleanExistence = [&](StringRef operation, StringRef secondComparison) {
+    std::string logic =
+        "%otherGuard = \"nodal.static_compare\"(%N, %guardOne) <{comparison = \"" +
+        secondComparison.str() +
+        "\", metadata = {semantic_path = \"Fixture.guard.other\"}}> : "
+        "(i64, i64) -> !nodal.static_predicate\n"
+        "%combinedGuard = \"nodal.static_logic\"(%familyGuard, %otherGuard) "
+        "<{operator_name = \"" +
+        operation.str() +
+        "\", metadata = {semantic_path = \"Fixture.guard.combined\"}}> : "
+        "(!nodal.static_predicate, !nodal.static_predicate) -> !nodal.static_predicate\n"
+        "\"nodal.structural_if\"(%combinedGuard, %N)";
+    return replace(conditionalExistence, structuralStart, logic);
+  };
+  check("guarded-existence-conjunction-fact", generatedDomain + booleanExistence("and", "ge"),
+        true);
+  check("guarded-existence-disjunction-all-alternatives",
+        generatedDomain + booleanExistence("or", "gt"), true);
+  check("guarded-existence-disjunction-unknown-alternative",
+        generatedDomain + booleanExistence("or", "eq"), false);
+  auto foreignParameter = parameter(true, "\"topology\"");
+  for (auto [from, to] : {std::pair<StringRef, StringRef>{"\"N\"", "\"M\""},
+                          {"@N", "@M"},
+                          {"%N", "%M"},
+                          {"%low", "%foreignLow"},
+                          {"%high", "%foreignHigh"}})
+    while (foreignParameter.find(from.str()) != std::string::npos)
+      foreignParameter = replace(foreignParameter, from, to);
+  check("guarded-existence-foreign-parameter-cannot-prove",
+        generatedDomain + foreignParameter +
+            replace(conditionalExistence, "static_compare\"(%N, %guardOne)",
+                    "static_compare\"(%M, %guardOne)"),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

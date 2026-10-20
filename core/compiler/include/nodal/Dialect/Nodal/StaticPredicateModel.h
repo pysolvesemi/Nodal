@@ -20,6 +20,11 @@ mlir::FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(mlir::Val
 /// caller's shared budget; no parameter default or general solver is used.
 mlir::FailureOr<bool> proveBehavioralGuardsDisjoint(mlir::Value left, mlir::Value right,
                                                     mlir::Operation *use, unsigned &remainingWork);
+/// Prove an exact Integer ordering from global facts or actual enclosing static
+/// arm predicates. Bounded and conservative; does not refine retained type bounds.
+mlir::FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
+                                                      const InstantiatedIntegerExpression &right,
+                                                      mlir::Operation *use, bool inclusive = false);
 mlir::LogicalResult verifyStaticPredicateOperation(mlir::Operation *operation);
 } // namespace nodal
 #endif

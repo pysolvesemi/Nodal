@@ -42,11 +42,23 @@ private[nodal] final case class KernelLiteral(
 
 private[nodal] final class KernelExpr[A <: Data](
     val operands: Vector[Any],
-    val resultType: Option[KernelTypeDescriptor] = None,
+    resultType: Option[KernelTypeDescriptor] = None,
     val literal: Option[KernelLiteral] = None,
     val operation: Option[String] = None,
-    val materializationIntent: Option[KernelDigitalIntent] = None
-) extends Expr[A]
+    val materializationIntent: Option[KernelDigitalIntent] = None,
+    val typeIntent: Option[KernelResultTypeIntent] = None
+) extends Expr[A]:
+  // Authored provisional metadata is deliberately not a public field. Final consumers use
+  // this one accessor after the owning construction session seals every pending intent.
+  private val authoredResultType = resultType
+  private var finalizedResultType: Option[KernelTypeDescriptor] = None
+  def typeFinalized: Boolean = typeIntent.isEmpty || finalizedResultType.nonEmpty
+  def resultDescriptor: Option[KernelTypeDescriptor] =
+    finalizedResultType.orElse(authoredResultType)
+  def sealResultType(value: KernelTypeDescriptor): Unit =
+    require(typeIntent.nonEmpty && !typeFinalized, "expression type may be finalized only once")
+    require(literal.isEmpty, "literal expressions cannot carry a deferred result type")
+    finalizedResultType = Some(value)
 
 /** Candidate declaration-time type descriptor. */
 sealed trait DataType[+A <: Data]
@@ -1463,7 +1475,7 @@ private[nodal] object CandidateRuntime:
 
   def expressionDataType(value: Expr[?]): Option[DataType[? <: Data]] = value match
     case expression: KernelExpr[?] =>
-      expression.resultType.map(dataTypeFromDescriptor)
+      expression.resultDescriptor.map(dataTypeFromDescriptor)
     case parameter: Param[?] => expressionDataType(parameter.default)
     case variable: Variable[?] => Some(variable.dataType)
     case register: Register[?] => register.dataType

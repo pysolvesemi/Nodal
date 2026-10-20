@@ -394,7 +394,18 @@ private[nodal] final case class KernelFlatFsmSnapshot(
     transitionTaken: String,
     sourceOrdinal: Int,
     control: Option[KernelFlatFsmControl] = None,
-    composition: Option[KernelFsmCompositionSnapshot] = None
+    composition: Option[KernelFsmCompositionSnapshot] = None,
+    timerStorage: Option[String] = None,
+    timerEdges: Vector[KernelFsmTimerEdge] = Vector.empty,
+    transferEdges: Vector[KernelFsmTransferEdge] = Vector.empty
+)
+private[nodal] final case class KernelFsmTimerEdge(ordinal: Int, cycles: Int, guard: String)
+private[nodal] final case class KernelFsmTransferEdge(
+    ordinal: Int,
+    guard: String,
+    payload: String,
+    valid: String,
+    ready: String
 )
 private[nodal] final case class KernelFsmChildGroup(
     ownerCase: String,

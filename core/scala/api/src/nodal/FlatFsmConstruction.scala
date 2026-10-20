@@ -42,6 +42,9 @@ private[nodal] final class FlatFsmRecord[S](
 ):
   var open = true
   var composition: Option[FlatFsmCompositionRecord] = None
+  var timer: Option[Register[UInt]] = None
+  val timerEdges = mutable.ArrayBuffer.empty[FlatFsmTimerEdge]
+  val transferEdges = mutable.ArrayBuffer.empty[FlatFsmTransferEdge]
   var captureCount = 0
   private var ordinal = 0
   def nextOrdinal(): Int =
@@ -64,7 +67,8 @@ private[nodal] final class FlatFsmRecord[S](
   def controlInputs: Vector[Expr[Bool]] = lifecycle.toVector.flatMap(value =>
     Vector(value.control.restart, value.control.cancel, value.control.enable)
   )
-  def privateStorage: Vector[Register[Bits]] = Vector(storage) ++ lifecycle.map(_.storage)
+  def privateStorage: Vector[Register[? <: Data]] = Vector(storage) ++ lifecycle.map(_.storage) ++
+    timer
   private def stateAndControls: Vector[Any] = privateStorage ++ controlInputs
   lazy val futureSampleDependencies: Vector[Any] = stateAndControls ++ transitions.map(_.guard)
 
@@ -140,4 +144,13 @@ private[nodal] final case class FlatFsmJoinRecord(
     children: Vector[FlatFsmRecord[?]],
     policy: String,
     selection: String
+)
+
+private[nodal] final case class FlatFsmTimerEdge(ordinal: Int, cycles: Int, guard: Expr[Bool])
+private[nodal] final case class FlatFsmTransferEdge(
+    ordinal: Int,
+    guard: Expr[Bool],
+    payload: Expr[?],
+    valid: Expr[Bool],
+    ready: Expr[Bool]
 )

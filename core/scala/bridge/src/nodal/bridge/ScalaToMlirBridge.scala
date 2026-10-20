@@ -305,33 +305,7 @@ private[nodal] object ScalaToMlirBridge:
     private def generatedQuery(
         region: KernelGeneratedRegionSnapshot,
         parent: StructuralParameterBinding.Query
-    ): StructuralParameterBinding.Query =
-      val inputs = Vector(
-        region.lower,
-        region.upperExclusive,
-        region.step
-      ).map(parent.resolve(region.owner, _))
-      val domain = IterationDomain.structural(
-        parent.bounds(inputs(0)),
-        parent.bounds(inputs(1)),
-        parent.bounds(inputs(2)),
-        region.maximum,
-        identicalBounds = inputs(0) == inputs(1) ||
-          (parent.bounds(inputs(0)).lower == parent.bounds(inputs(0)).upper &&
-            parent.bounds(inputs(1)).lower == parent.bounds(inputs(1)).upper &&
-            parent.bounds(inputs(0)).lower >= parent.bounds(inputs(1)).upper)
-      )
-        .fold(problem => fail("NODAL-BRIDGE-055", problem.message, Some(region.path)), identity)
-      val body = region.digitalBody.get
-      new StructuralParameterBinding.Query(
-        snapshot,
-        scope = Some(region.path),
-        enclosing = Some(parent),
-        generatedDomains = Map(region.induction -> domain),
-        captures = body.arguments.drop(1).zip(body.captures).collect {
-          case (argument, capture) if argument.dataType == "Integer" => argument.path -> capture
-        }.toMap
-      )
+    ): StructuralParameterBinding.Query = parent.generatedBody(region)
 
     private def regionalQuery(region: String): StructuralParameterBinding.Query =
       activeIntegerQuery.filter(_.scope.contains(region)).getOrElse {
@@ -1179,7 +1153,10 @@ ${indent(body, 2)}
           boundValues(1),
           boundValues(2),
           region.maximum,
-          identicalBounds = sameStaticInteger(
+          identicalBounds = if region.digitalBody.nonEmpty then
+            val query = region.parent.map(regionalQuery).getOrElse(moduleIntegerQuery)
+            query.resolve(module.path, region.lower) == query.resolve(module.path, region.upperExclusive)
+          else sameStaticInteger(
             module,
             boundIdentity(region.lower),
             boundIdentity(region.upperExclusive),
@@ -2484,13 +2461,13 @@ ${indent(body, 2)}
       // Generate and procedural-loop domains through their first canonical header use.
       val structuralHeaders = snapshot.generatedRegions
         .filter(region => region.owner == module.path && region.digitalBody.nonEmpty)
-        .map(region => region.path -> Vector(region.lower, region.upperExclusive, region.step)) ++
+        .map(region => (region.parent, region.path, Vector(region.lower, region.upperExclusive, region.step))) ++
         snapshot.digitalLoops.filter(loop =>
           loop.owner == module.path && snapshot.structuralIfs.exists(_.owner == module.path)
-        ).map(loop => loop.path -> Vector(loop.lower, loop.upperExclusive, loop.step))
-      val boundIdentities = structuralHeaders.sortBy(_._1).flatMap: (path, bounds) =>
+        ).map(loop => (None, loop.path, Vector(loop.lower, loop.upperExclusive, loop.step)))
+      val boundIdentities = structuralHeaders.sortBy(_._2).flatMap: (region, path, bounds) =>
         bounds.zipWithIndex.collect {
-          case (token, index) if token.toLongOption.nonEmpty => token -> s"$path.bound$index"
+          case (token, index) if token.toLongOption.nonEmpty => (region -> token) -> s"$path.bound$index"
         }
       val literalBoundIdentities = boundIdentities.groupMap(_._1)(_._2).view.mapValues(_.head).toMap
       def renderDigitalStatic(
@@ -2500,11 +2477,11 @@ ${indent(body, 2)}
           purpose: DigitalValueMlir.StaticPurpose
       ): (String, String) =
         val requireTopology = purpose != DigitalValueMlir.StaticPurpose.RuntimeValue
-        if region.isEmpty && path.toLongOption.nonEmpty then
+        if path.toLongOption.nonEmpty then
           val literal = path.toLong
           if literal.toString != path then
             fail("NODAL-BRIDGE-055", "loop bound literal is noncanonical", Some(path))
-          staticValuesFor(None).getOrElseUpdate(
+          staticValuesFor(region).getOrElseUpdate(
             s"literal:$path", {
               val result = allocateShapeStaticValue()
               output += operation(
@@ -2514,7 +2491,7 @@ ${indent(body, 2)}
                 attributes = Vector(
                   "value" -> s"$literal : i64",
                   "spelling" -> quoted(path),
-                  "metadata" -> literalBoundIdentities.get(path).map(identity =>
+                  "metadata" -> literalBoundIdentities.get(region -> path).map(identity =>
                     bridgeMetadata(identity, Vector("use" -> quoted("loop_bound")))
                   ).getOrElse("{use = \"loop_bound\"}")
                 ),

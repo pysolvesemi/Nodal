@@ -218,8 +218,9 @@ private object ConstructionExpressionFacts:
           AnalogDimension.Dimensionless
         case expression: KernelExpr[?]
             if expression.operation.exists(_.startsWith(AnalogUserFunctionRuntime.CallPrefix)) =>
-          expression.resultType.flatMap(_.arguments.headOption).collect { case units: String =>
-            namedAnalogDimension(units)
+          expression.resultDescriptor.flatMap(_.arguments.headOption).collect {
+            case units: String =>
+              namedAnalogDimension(units)
           }.getOrElse(AnalogDimension.Unknown)
         case expression: KernelExpr[?]
             if expression.operation.exists(_.startsWith(AnalogTransferContract.Prefix)) =>
@@ -255,7 +256,7 @@ private object ConstructionExpressionFacts:
             .map(namedAnalogDimension)
             .getOrElse(AnalogDimension.Unknown)
         case expression: KernelExpr[?]
-            if expression.resultType.exists(_.kind == "Bool") =>
+            if expression.resultDescriptor.exists(_.kind == "Bool") =>
           inferBooleanExpressionDimension(expression, visit)
         case expression: KernelExpr[?] =>
           expression.literal match

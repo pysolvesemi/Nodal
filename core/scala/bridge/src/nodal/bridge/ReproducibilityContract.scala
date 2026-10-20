@@ -592,6 +592,30 @@ private[nodal] object ReproducibilityContract:
           "entered" -> string(control.entered),
           "exited" -> string(control.exited)
         )
+      ) ++ Option.when(value.timerEdges.nonEmpty || value.transferEdges.nonEmpty)(
+        "timing" -> obj(
+          "contract" -> string("flat-fsm-v4"),
+          "timer_storage" -> optionalString(value.timerStorage),
+          "actual_timer_bits" -> number(value.timerStorage.size * FsmTimingRuntime.Width),
+          "timer_saturation" -> number(FsmTimingRuntime.Saturation),
+          "expiry" -> string("registered-elapsed >= cycles-1; enabled operational edges"),
+          "timer_edges" -> array(value.timerEdges.map(edge =>
+            obj(
+              "ordinal" -> number(edge.ordinal),
+              "cycles" -> number(edge.cycles),
+              "guard" -> string(edge.guard)
+            )
+          )),
+          "transfer_edges" -> array(value.transferEdges.map(edge =>
+            obj(
+              "ordinal" -> number(edge.ordinal),
+              "guard" -> string(edge.guard),
+              "payload" -> string(edge.payload),
+              "valid" -> string(edge.valid),
+              "ready" -> string(edge.ready)
+            )
+          ))
+        )
       ) ++ value.composition.map(composition =>
         "composition" -> obj(
           "contract" -> string("fsm-composition-v1"),

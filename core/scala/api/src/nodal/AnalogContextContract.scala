@@ -27,7 +27,7 @@ private[nodal] object AnalogContextContract:
       .map(_.stripPrefix(Prefix)).getOrElse(fail(1, "invalid simulator context identity"))
     val value = entry(id)
     if expression.operands.nonEmpty then fail(2, "simulator context query requires zero operands")
-    if expression.resultType != Some(KernelTypeDescriptor("Real")) then
+    if expression.resultDescriptor != Some(KernelTypeDescriptor("Real")) then
       fail(3, "simulator context query requires a Real result")
     if expression.literal.nonEmpty then
       fail(4, "simulator context query cannot carry a constant value")

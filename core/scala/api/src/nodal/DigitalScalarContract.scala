@@ -24,6 +24,7 @@ private[nodal] object DigitalScalarContract:
     DigitalValueContract.fail(number, message)
 
   private def scalarType(value: Expr[?]): KernelTypeDescriptor =
+    DeferredResultType.requireFinal(Vector(value), "digital scalar conversion")
     val descriptor = CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor)
       .getOrElse(fail(5, "digital conversion requires an operand with an exact scalar type"))
     if !Set("Bits", "UInt", "SInt").contains(descriptor.kind) then
@@ -36,7 +37,7 @@ private[nodal] object DigitalScalarContract:
     val bounds = descriptor.arguments.head match
       case width: Int => (width.toLong, width.toLong)
       case width: KernelExpr[?]
-          if width.resultType.contains(KernelTypeDescriptor("Integer")) &&
+          if width.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
             width.literal.exists(literal =>
               literal.kind == "integer" && literal.dataType == KernelTypeDescriptor("Integer")
             ) =>
@@ -77,14 +78,14 @@ private[nodal] object DigitalScalarContract:
             expression.literal match
               case Some(literal)
                   if literal.kind == "integer" && expression.operation.contains("integer") &&
-                    expression.resultType.contains(literal.dataType) &&
+                    expression.resultDescriptor.contains(literal.dataType) &&
                     Set("Bits", "UInt", "SInt").contains(literal.dataType.kind) =>
                 literal.value.toIntOption.map(BigInt(_)).filter(value =>
                   requiredWidth(literal.dataType.kind, value) <= widthBounds(literal.dataType)._1
                 )
               case Some(literal)
                   if literal.kind == "boolean" && expression.operation.contains("boolean") &&
-                    expression.resultType.contains(KernelTypeDescriptor("Bool")) &&
+                    expression.resultDescriptor.contains(KernelTypeDescriptor("Bool")) &&
                     literal.dataType == KernelTypeDescriptor("Bool") =>
                 literal.value match
                   case "true" => Some(BigInt(1))
@@ -108,7 +109,7 @@ private[nodal] object DigitalScalarContract:
                 expression.operands.head match
                   case operand: Expr[?] =>
                     visit(operand, depth + 1).flatMap: constant =>
-                      val descriptor = expression.resultType.getOrElse(
+                      val descriptor = expression.resultDescriptor.getOrElse(
                         fail(5, "digital conversion result lacks its exact scalar type")
                       )
                       expression.operation.get match
@@ -267,7 +268,7 @@ private[nodal] object DigitalScalarContract:
     val value = expression.operands.head.asInstanceOf[Expr[?]]
     val source = scalarType(value)
     val (minimum, maximum) = widthBounds(source)
-    val result = expression.resultType.getOrElse(fail(5, "conversion result type is absent"))
+    val result = expression.resultDescriptor.getOrElse(fail(5, "conversion result type is absent"))
     val operation = expression.operation.getOrElse("")
     val resultBounds = if result.kind == "Real" then (0L, 0L) else widthBounds(result)
     operation match

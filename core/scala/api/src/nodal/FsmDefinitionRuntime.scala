@@ -19,6 +19,17 @@ private[nodal] final case class FsmDefinitionJoin[S](
     destination: S
 ) extends FsmDefinitionCommand[S]
 
+private[nodal] final case class FsmDefinitionTimer[S](
+    cycles: Int,
+    mode: TransitionMode,
+    destination: S
+) extends FsmDefinitionCommand[S]
+private[nodal] final case class FsmDefinitionTransfer[S](
+    slot: FsmTransfer[S],
+    mode: TransitionMode,
+    destination: S
+) extends FsmDefinitionCommand[S]
+
 /** Immutable graph admission and explicit binding adapter. FlatFsm owns all executable semantics.
   */
 private[nodal] object FsmDefinitionRuntime:
@@ -135,6 +146,13 @@ private[nodal] object FsmDefinitionRuntime:
           guards += edge.guard
           edge.action.foreach(actions += _)
           edges += ((source, caseId(edge.destination), edge.mode))
+        case timer: FsmDefinitionTimer[S] =>
+          records += 1
+          edges += ((source, caseId(timer.destination), timer.mode))
+        case transfer: FsmDefinitionTransfer[S] =>
+          records += 1
+          guards += transfer.slot.guard
+          edges += ((source, caseId(transfer.destination), transfer.mode))
         case join: FsmDefinitionJoin[S] =>
           records += 1
           edges += ((source, caseId(join.destination), join.mode))
@@ -143,6 +161,8 @@ private[nodal] object FsmDefinitionRuntime:
           if records > FlatFsmRuntime.MaximumRecords then
             fail("definition transitions/actions exceed 65536 records")
           actions += action.slot
+    if records > FlatFsmRuntime.MaximumRecords then
+      fail("definition transitions/actions exceed 65536 records")
     val children = states.flatMap(_.childSlots)
     val cost = FsmCompositionRuntime.cost(states, records.toInt, children)
     FsmCompositionRuntime.admitStates(owner, states, children)
@@ -269,6 +289,20 @@ private[nodal] object FsmDefinitionRuntime:
                       edge.mode,
                       edge.destination,
                       edge.action.map(actions)
+                    )
+                  case timer: FsmDefinitionTimer[S] =>
+                    ConstructionKernel.flatFsmTimer(
+                      builder,
+                      timer.cycles,
+                      timer.mode,
+                      timer.destination
+                    )
+                  case transfer: FsmDefinitionTransfer[S] =>
+                    ConstructionKernel.flatFsmTransferTransition(
+                      builder,
+                      guards(transfer.slot.guard),
+                      transfer.mode,
+                      transfer.destination
                     )
                   case _: FsmDefinitionJoin[S] =>
                     fail("completion edges require the controlled composition capture owner")

@@ -190,10 +190,11 @@ private[nodal] object DigitalValueMlir:
     ).toMap
     private val machines = snapshot.flatFsms.map(value => value.path -> value).toMap
     private val composition = new FsmCompositionMlir.Plan(snapshot, fail)
+    private val timing = new FsmTimingMlir.Plan(snapshot, fail)
     private def machineInputs(value: KernelFlatFsmSnapshot): Vector[String] =
       Vector(value.storage) ++ value.control.toVector.flatMap(control =>
         Vector(control.storage, control.restart, control.cancel, control.enable)
-      ) ++ value.transitions.map(_.guard)
+      ) ++ value.timerStorage ++ value.transitions.map(_.guard)
     private def machineProjections(value: KernelFlatFsmSnapshot): Vector[(String, String, String)] =
       Vector(
         (value.nextLocal, "flat_fsm_next", s"Bits(${value.localWidth})"),
@@ -207,7 +208,7 @@ private[nodal] object DigitalValueMlir:
         (composition.establishment, FlatFsmRuntime.EstablishmentOperation, "Bool")
       )
     private val privateMachineStorage = snapshot.flatFsms.flatMap(value =>
-      Vector(value.storage) ++ value.control.map(_.storage)
+      Vector(value.storage) ++ value.control.map(_.storage) ++ value.timerStorage
     ).toSet
     private val enumDefinitions =
       snapshot.enumDefinitions.map(value => value.identity -> value).toMap
@@ -852,12 +853,16 @@ private[nodal] object DigitalValueMlir:
       )
       value.yieldedArea.foreach: area =>
         requireValid(
-          value.parent.isEmpty && snapshot.areas.exists(record =>
+          value.parent.forall(parent =>
+            generated.get(parent).exists(enclosing =>
+              enclosing.owner == value.owner && enclosing.yieldedArea.nonEmpty
+            )
+          ) && snapshot.areas.exists(record =>
             record.path == area && record.owner == value.owner &&
               record.generatedScope.contains(KernelGeneratedScope(value.path, value.induction))
           ) && value.exports.size <= 65536 &&
             value.exports.map(_.member).distinct.size == value.exports.size,
-          "generated storage family requires a direct owned Area and unique bounded export keys",
+          "generated storage family requires exact owned family ancestry and unique bounded export keys",
           value.path
         )
         value.declarations.foreach: path =>
@@ -906,6 +911,25 @@ private[nodal] object DigitalValueMlir:
         )
         declarations(exported.target)._2.kind
 
+    private lazy val generatedBodyQueries =
+      mutable.HashMap.empty[String, StructuralParameterBinding.Query]
+    private lazy val activeGeneratedQueries = mutable.HashSet.empty[String]
+    private def generatedBodyQuery(path: String): StructuralParameterBinding.Query =
+      generatedBodyQueries.getOrElseUpdate(
+        path, {
+          requireValid(
+            activeGeneratedQueries.size < 128 && activeGeneratedQueries.add(path),
+            "generated lexical query ancestry contains a cycle or exceeds depth",
+            path
+          )
+          try
+            val region = generated.getOrElse(path, fail("generated query owner is absent", path))
+            val parent = region.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
+            parent.generatedBody(region)
+          finally activeGeneratedQueries.remove(path)
+        }
+      )
+
     private def generatedMemberExport(expression: KernelDigitalExpressionSnapshot)
         : (KernelGeneratedRegionSnapshot, KernelGeneratedAreaExport) =
       val member = expression.generatedMember.get
@@ -938,12 +962,13 @@ private[nodal] object DigitalValueMlir:
           requireVisible(member.ordinal, expression.owner, expression.region, expression.path)
           requireStaticPredicateInput(member.ordinal, expression.owner, topology = true)
       val (header, bounds, selected) = try
+        val query = family.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
         val header = Vector(family.lower, family.upperExclusive, family.step)
-          .map(loopBoundQuery.resolve(family.owner, _))
+          .map(query.resolve(family.owner, _))
         (
           header,
-          header.map(loopBoundQuery.bounds),
-          loopBoundQuery.bounds(loopBoundQuery.resolve(expression.owner, member.ordinal))
+          header.map(query.bounds),
+          query.bounds(query.resolve(expression.owner, member.ordinal))
         )
       catch
         case error: IllegalArgumentException => fail(error.getMessage, expression.path)
@@ -1050,7 +1075,9 @@ private[nodal] object DigitalValueMlir:
         machineResults.size == snapshot.flatFsms.map(value =>
           2 + 2 * value.control.size + value.composition.size
         ).sum &&
-        privateMachineStorage.size == snapshot.flatFsms.map(value => 1 + value.control.size).sum &&
+        privateMachineStorage.size == snapshot.flatFsms.map(value =>
+          1 + value.control.size + value.timerStorage.size
+        ).sum &&
         snapshot.flatFsms.map(_.storage).distinct.size == machines.size &&
         actions.size == snapshot.flatFsms.map(_.actions.size).sum &&
         switchArms.size == snapshot.enumSwitches.map(value => value.arms.size + 1).sum,
@@ -1160,6 +1187,32 @@ private[nodal] object DigitalValueMlir:
             )
           ,
           "controlled FSM status resets to exact Dormant or stays deliberately uninitialized",
+          path
+        )
+      machine.timerStorage.foreach: storage =>
+        requireVisible(storage, machine.owner, None, path)
+        requireValid(
+          declarations.get(storage).exists((owner, value) =>
+            owner == machine.owner && value.kind == "register" && value.generatedScope.isEmpty &&
+              value.dataType.contains("UInt(31)") && (value.domain.contains(machine.domain) ||
+                value.attributes.contains("declared_domain" -> machine.domain))
+          ),
+          "FSM timer must be a distinct actual local UInt31 register in its exact domain",
+          path
+        )
+        validateInitializerPolicy(storage)
+        val initial = DigitalStorageMlir.initializer(declarations(storage)._2)
+        requireValid(
+          if domain.get.resetPolicy.contains("none") then initial.isEmpty
+          else
+            initial.flatMap(expressions.get).exists(value =>
+              value.owner == machine.owner && value.region.isEmpty && value.dataType == "UInt(31)" &&
+                value.operation == "integer" && value.operands.isEmpty && value.literal.contains(
+                  "0"
+                )
+            )
+          ,
+          "FSM timer resets to exact zero or stays deliberately uninitialized",
           path
         )
       machineProjections(machine).foreach: (result, operation, dataType) =>
@@ -1338,6 +1391,7 @@ private[nodal] object DigitalValueMlir:
         value.path
       )
     composition.validate()
+    timing.validate()
     snapshot.enumSwitches.foreach: value =>
       val canonical = enumDefinitions.get(value.enumIdentity).getOrElse(
         fail("enum switch canonical enum is absent", value.path)
@@ -2794,8 +2848,11 @@ private[nodal] object DigitalValueMlir:
           val counts = if machine.actions.isEmpty then "array<i32>"
           else s"array<i32: ${machine.actions.map(_.captures.size).mkString(", ")}>"
           val attributes = dictionary(Vector(
-            "contract_version" -> quoted(if machine.composition.nonEmpty then "flat-fsm-v3"
-            else if machine.control.nonEmpty then "flat-fsm-v2" else "flat-fsm-v1"),
+            "contract_version" -> quoted(
+              if machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty then "flat-fsm-v4"
+              else if machine.composition.nonEmpty then "flat-fsm-v3"
+              else if machine.control.nonEmpty then "flat-fsm-v2" else "flat-fsm-v1"
+            ),
             "machine_id" -> quoted(machine.path),
             "enum_ref" -> enums.reference(machine.enumIdentity, machine.path),
             "domain" -> domainReference(machine.domain),
@@ -2817,7 +2874,19 @@ private[nodal] object DigitalValueMlir:
             "actions" -> actions.mkString("[", ", ", "]"),
             "action_capture_counts" -> counts,
             "metadata" -> effectMetadata(machine.path, machine.sourceOrdinal)
-          ))
+          ) ++ Option.when(machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty)(Vector(
+            "lifecycle_mode" -> quoted(if machine.composition.nonEmpty then "composed"
+            else if machine.control.nonEmpty then "controlled" else "legacy"),
+            "timer_edges" -> machine.timerEdges.map(edge =>
+              dictionary(Vector(
+                "ordinal" -> s"${edge.ordinal} : i64",
+                "cycles" -> s"${edge.cycles} : i64"
+              ))
+            ).mkString("[", ", ", "]"),
+            "transfer_edges" -> machine.transferEdges.map(edge =>
+              dictionary(Vector("ordinal" -> s"${edge.ordinal} : i64"))
+            ).mkString("[", ", ", "]")
+          )).toVector.flatten)
           val resultPaths = machineProjections(machine).map(_._1)
           val resultTypes = Vector(bits) ++ resultPaths.drop(1).map(_ => "!nodal.bits<1>")
           output += s"$result:${resultPaths.size} = ${quoted("nodal.flat_fsm")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
@@ -2832,6 +2901,40 @@ private[nodal] object DigitalValueMlir:
             proofs.update(path, Unknown)
           emittedEffects += machine.path
           active.remove(machine.path)
+
+      def emitTiming(
+          path: String,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): (String, String) =
+        values.getOrElseUpdate(
+          path, {
+            val query = timing.queries(path)
+            requireValid(
+              depth <= 128 && active.add(path),
+              "timing predicate dependency is cyclic",
+              path
+            )
+            val inputs = query.inputs.map(emit(_, depth + 1, None, output, topology = false))
+            val result = s"%fsm_timing_$ordinal"
+            ordinal += 1
+            val attributes = s"{domain = ${domainReference(query.machine.domain)}" +
+              query.cycles.map(value => s", cycles = $value : i64").getOrElse("") +
+              s", metadata = ${metadata(path, false)}}"
+            output += operation(
+              if query.cycles.nonEmpty then "nodal.fsm_elapsed" else "nodal.fsm_transfer",
+              result,
+              "!nodal.bits<1>",
+              inputs,
+              attributes,
+              sourceLocation(path)
+            )
+            heights.update(path, query.inputs.map(heights).maxOption.getOrElse(0) + 1)
+            proofs.update(path, Unknown)
+            active.remove(path)
+            result -> "!nodal.bits<1>"
+          }
+        )
 
       def emitComposition(path: String, depth: Int, output: mutable.ArrayBuffer[String]): Unit =
         if !values.contains(path) then
@@ -3252,6 +3355,7 @@ private[nodal] object DigitalValueMlir:
               result -> "!nodal.static_predicate"
             }
           )
+        else if timing.queries.contains(path) then emitTiming(path, depth + 1, output)
         else if composition.joins.contains(path) || composition.activations.contains(path) then
           emitComposition(path, depth + 1, output)
           values.getOrElse(path, fail("composition result has no actual producer", path))

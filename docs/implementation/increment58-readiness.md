@@ -824,3 +824,56 @@ resolved carriers explicitly. The actual timer-source and target demonstrations
 have also passed on this compiler, but their source/API and maintained runner
 changes are reserved for the next coherent checkpoint. No F58 parent/child box
 is closed by this backend slice.
+
+## Checkpoint 17 — reusable timing source and finalized hierarchy expressions
+
+Public immutable/live `after` and explicit `FsmTransfer`/`awaitTransfer` bindings
+capture the v4 contract from [SequentialState v0.8](../design-gates/NodalSequentialState-DG-v0.8.md).
+An immutable transfer binding retains the actual Stream carrier; each machine
+occurrence captures its own pure predicate after independently rechecking that
+carrier. Reusing a binding never shares predicate ownership or ready drive
+permission. Reports include the actual counter bits and timing/transfer facts;
+the bridge recomputes ownership, thresholds and private storage independently.
+Required-domain timers preserve conditional initialization rather than choosing
+the first child's material reset policy.
+
+Late-bound expression descriptors now carry a once-sealed internal intent rather
+than publishing provisional formal types. The existing construction finalizer
+resolves exact-copy, alias, unchanged-shift, field and complete-equality intents
+in bounded dependency order after hierarchy binding. All internal readers use
+the canonical final descriptor. Operation owners retain their existing semantic
+rules; pending shape-changing inference rejects explicitly instead of guessing.
+This is not a second type-inference engine or permission to use parameter defaults
+as proofs. General pending arithmetic/shape-changing support remains open.
+
+Nested generated Area source uses the actual parent family and existing lexical
+captures, with exact ordinal dependencies placed at their legal dominating owner.
+The source and bridge now agree with checkpoint14's independently bounded nested
+body/local-update profile. External selected-family source views remain the next
+separate slice; outer-induction-dependent bounds and guarded declarations are
+not claimed here.
+
+Focused shared-build acceptance is **92 passing groups** across three matched
+batches: 67 timer/deferred/nested and directly affected expression checks, 23
+lifecycle/composition/required predecessors, and two composed-timer/native-deferred
+checks. Production API/plugin/bridge and test compilation passed. The 67-group
+run was rerun after an executor restart; interrupted runs are not counted.
+Two earlier timer test-fixture inventory/Option mistakes were corrected without
+weakening their assertions. Source manifests match through each accepted batch.
+The maintained deferred-native group gates four actual hierarchy expression
+profiles on checkpoint16's frozen compiler.
+
+Seven actual timing source profiles plus the composed-timer profile pass the
+full native gate. **Five generated-SystemVerilog simulations pass**: three-cycle,
+one-cycle, transfer wait, mixed-reset formal reuse and composed timed children.
+They check dormant/terminal hold, exact elapsed edges, independent state, pause,
+valid-only/ready-only stalls, read-only ready observation, cancel/restart priority,
+registered All completion and occurrence-specific reset. Resetless startup values
+are deliberately not asserted; maximum-threshold saturation is a native-model
+boundary test, not a billion-cycle target run. The composed witness retains
+three executors and eight private registers without Cartesian state expansion.
+Replays and command/input/output/tool receipts are under `.work/f58-timing-source`
+and `.work/f58-timing-target`, using compiler SHA256
+`3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
+Finite elaboration recursion, bounded runtime stacks and the remaining hierarchy,
+resolved/inout and target-generation requirements remain open.

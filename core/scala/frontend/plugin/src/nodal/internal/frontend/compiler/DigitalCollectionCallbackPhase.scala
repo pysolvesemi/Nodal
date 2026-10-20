@@ -136,6 +136,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "flatFsmState",
       "flatFsmTerminal",
       "flatFsmTransition",
+      "flatFsmTimer",
+      "flatFsmTransferTransition",
+      "fsmTransfer",
       "flatFsmAction",
       "flatFsmStateView",
       "flatFsmEvent",
@@ -260,13 +263,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "nodal.FsmState",
       "nodal.FsmFragment",
       "nodal.FsmDef",
-      "nodal.FsmChild"
+      "nodal.FsmChild",
+      "nodal.FsmTransfer"
     ).foreach: name =>
       pureMethods ++= moduleMethods(name, "apply")
     pureMethods ++= methods(
       requiredClass("nodal.FsmState"),
       "on",
       "onWithAction",
+      "after",
+      "awaitTransfer",
       "entry",
       "active",
       "exit",
@@ -278,7 +284,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     )
     pureModules += requiredModule("nodal.TransitionMode")
     pureMethods ++=
-      defaultGetters(methods(requiredClass("nodal.StateBuilder"), "on", "onWithAction"))
+      defaultGetters(methods(
+        requiredClass("nodal.StateBuilder"),
+        "on",
+        "onWithAction",
+        "awaitTransfer"
+      ))
     val arithmetic = moduleMethods("nodal.CandidateApi$package", "+", "-", "*", "/", "unary_-")
     pureMethods = pureMethods ++ arithmetic.filter { symbol =>
       symbol.info.finalResultType.dealias match

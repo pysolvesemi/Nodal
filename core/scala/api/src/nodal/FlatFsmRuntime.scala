@@ -26,7 +26,9 @@ private[nodal] object FlatFsmRuntime:
       JoinOperation,
       RestartOperation,
       CancelOperation,
-      EnableOperation
+      EnableOperation,
+      FsmTimingRuntime.ElapsedOperation,
+      FsmTimingRuntime.TransferOperation
     )
 
   def fail(message: String, code: String = "NODAL-FSM-056-001"): Nothing =

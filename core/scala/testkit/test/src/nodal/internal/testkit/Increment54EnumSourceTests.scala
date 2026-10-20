@@ -207,7 +207,7 @@ object Increment54EnumSourceTests extends TestSuite:
       val literal = expression(enumLiteral(dataType, Run))
       val metadata = literal.operands.last.asInstanceOf[EnumOperationMetadata]
       assert(literal.operation.contains("enum_literal"))
-      assert(literal.resultType.contains(CandidateRuntime.typeDescriptor(dataType)))
+      assert(literal.resultDescriptor.contains(CandidateRuntime.typeDescriptor(dataType)))
       assert(metadata.caseIds == Vector("nodal.internal.testkit.DigitalSourceMode.Run"))
       assert(!literal.operands.exists(_.isInstanceOf[DigitalSourceMode]))
       val bits = rawBits(2)
@@ -217,7 +217,7 @@ object Increment54EnumSourceTests extends TestSuite:
       assert(value.operation.contains("enum_decode"), valid.operation.contains("enum_is_valid"))
       assert(value.operands.head.asInstanceOf[AnyRef] eq bits)
       assert(valid.operands.head.asInstanceOf[AnyRef] eq bits)
-      assert(expression(decoded.value.asBits).resultType.contains(KernelTypeDescriptor(
+      assert(expression(decoded.value.asBits).resultDescriptor.contains(KernelTypeDescriptor(
         "Bits",
         Vector(2)
       )))
@@ -253,7 +253,7 @@ object Increment54EnumSourceTests extends TestSuite:
       val selected =
         expression(selectEnum(selector, 0.U(8))(Stop -> 3.U(8), Idle -> 1.U(8), Run -> 2.U(8)))
       assert(selected.operation.contains("enum_select"))
-      assert(selected.resultType.contains(KernelTypeDescriptor("UInt", Vector(8))))
+      assert(selected.resultDescriptor.contains(KernelTypeDescriptor("UInt", Vector(8))))
       assert(selected.operands.slice(2, 5).map(_.asInstanceOf[KernelExpr[?]].literal.get.value) ==
         Vector("1", "2", "3"))
       assert(failure(selectEnum(selector, 0.U(8))(Idle -> 1.U(8))) == "NODAL-ENUM-054-016")

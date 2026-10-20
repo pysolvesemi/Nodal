@@ -51,7 +51,7 @@ final class DigitalArithmeticSymbolicOverflowSource extends Module:
 
 object Increment55DigitalArithmeticTests extends TestSuite:
   private def kernel(value: Expr[?]): KernelExpr[?] = value.asInstanceOf[KernelExpr[?]]
-  private def width(value: Expr[?]): Any = kernel(value).resultType.get.arguments.head
+  private def width(value: Expr[?]): Any = kernel(value).resultDescriptor.get.arguments.head
   private def exact(value: Expr[?]): BigInt = DigitalScalarContract.knownValue(value).get
   private def failure(body: => Any): String =
     scala.util.Try(body).failed.get.asInstanceOf[ConstructionException].diagnostic.code

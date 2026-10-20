@@ -125,7 +125,10 @@ private[nodal] object DigitalInterfaceContract:
     val expression = new KernelExpr[A](
       Vector(endpoint),
       resultType = Some(CandidateRuntime.typeDescriptor(resultType)),
-      operation = Some(operation)
+      operation = Some(operation),
+      typeIntent = DeferredResultType.intent(Vector(endpoint)):
+        if operation == "digital_net_enable_view" then KernelTypeDescriptor("Bool")
+        else CandidateRuntime.typeDescriptor(endpoint.dataType)
     )
     ConstructionKernel.expression(expression)
     expression
@@ -182,7 +185,7 @@ private[nodal] object DigitalInterfaceContract:
           pathOf(endpoint).getOrElse(fail(7, "resolved-net expression has no endpoint identity"))
         val expected = if operation == "digital_net_enable_view" then KernelTypeDescriptor("Bool")
         else CandidateRuntime.typeDescriptor(endpoint.dataType)
-        if !expression.resultType.contains(expected) || expression.literal.nonEmpty then
+        if !expression.resultDescriptor.contains(expected) || expression.literal.nonEmpty then
           fail(8, "resolved-net expression has an incorrect exact result type")
         if operation != "digital_net_read" then
           val selected = drivers.getOrElse(representative(path), Vector.empty)

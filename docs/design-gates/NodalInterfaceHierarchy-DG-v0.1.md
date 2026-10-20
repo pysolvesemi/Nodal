@@ -266,3 +266,58 @@ projection, cross-boundary split transport and resolved target profiles remain
 required. Native NetRead admission alone does not establish those public APIs or
 HDL emission. Focused results and checkpoint acceptance remain in the readiness
 record.
+
+## Shared deferred expression type prerequisite
+
+Boundary type substitution precedes a bounded finalization walk over the existing
+captured expression DAG. An internal result-type intent retains exact operands
+and delegates inference to the existing operation owner. `KernelExpr` no longer
+exposes its authored provisional constructor descriptor as a field. Its canonical
+accessor reflects the once-sealed final descriptor; construction and digital
+snapshot publication reject unfinalized intent. The finalizer checks actual
+module ownership, dependency membership, acyclicity and represented node/edge
+budgets without creating another expression registry or replaying source bodies.
+
+The first implementation supports exact type-copy paths, resolved read intent,
+alias/name/keep, complement, unchanged-width shifts, Struct field selection, and
+bitwise/select operations with retained final exact equality checks. Final types
+reuse the same already-sealed boundary descriptors and parameter identity proof.
+Equal bounds/defaults do not satisfy bitwise or selection type identity. The
+bridge/native owners still independently check the published exact types.
+
+Shape-changing pending expressions, scalar conversions and lexical region
+materialization currently reject explicitly until their existing inference and
+scope obligations are integrated with this same lifecycle. These are interim
+required follow-ons, not a completed symbolic hierarchy or standalone inout
+claim. The prerequisite itself allocates neither a resolved net nor a physical
+port and does not establish target support for any resolution profile.
+
+## Standalone resolved boundary identity
+
+A standalone `DigitalInout` projection uses `nodal.net_boundary`, an alias of one
+actual immediate child's direct typed `resolved_net`, not another declaration.
+The existing Interface/resolved model validates a bounded child declaration
+inventory once per imported definition, rejects ambiguous names and repeated
+projections, and preserves the original mode, resolution profile and placement.
+The shared contextual digital type comparator proves the exact instance-bound
+element type. A parent's default value, nominal type spelling or metadata cannot
+supply that proof. Local and imported declarations share one resolution-policy
+validator.
+
+The existing topology result represents standalone declarations and boundaries
+with their actual operations, exact instance/declaration relation, an empty
+Interface member path, and an already existing component Value. The existing
+occurrence composer joins these facts without allocating replacement nets or a
+second graph. Standalone declarations currently have no semantic domain
+constraint field; boundary metadata cannot invent one. Actual driver-domain
+provenance remains the existing occurrence-qualified dependency proof. Resolved
+Interface member constraints remain intact when those components are joined.
+
+This native seam does not by itself establish the public selector or emission.
+The source carrier must use the shared once-sealed boundary descriptor lifecycle,
+preserve that exact relation in snapshots and reproducibility artifacts, and
+render the alias operation. New boundary-joined split transport still rejects
+explicitly without relaxing local unique-driver checks. Full split transport,
+typed Interface member reads, generated carriers and supported-profile target
+emission remain required continuations. New operations remain target-unsupported
+until the target owner supplies the corresponding physical proof.

@@ -60,7 +60,7 @@ object Increment54DigitalConversionTests extends TestSuite:
       )
       values.foreach: (value, operation, width) =>
         assert(kernel(value).operation.contains(operation))
-        assert(kernel(value).resultType.contains(KernelTypeDescriptor("UInt", Vector(width))))
+        assert(kernel(value).resultDescriptor.contains(KernelTypeDescriptor("UInt", Vector(width))))
         assert(kernel(value).operands == Vector(source))
         assert(kernel(value).literal.isEmpty)
       assert(failure(source.extend(7)) == "NODAL-DIGITAL-054-007")
@@ -72,15 +72,18 @@ object Increment54DigitalConversionTests extends TestSuite:
       val source = 255.U(8)
       val numeric = source.toSigned
       val reinterpreted = source.reinterpretSigned
-      assert(kernel(numeric).resultType.contains(KernelTypeDescriptor("SInt", Vector(9))))
-      assert(kernel(reinterpreted).resultType.contains(KernelTypeDescriptor("SInt", Vector(8))))
+      assert(kernel(numeric).resultDescriptor.contains(KernelTypeDescriptor("SInt", Vector(9))))
+      assert(kernel(reinterpreted).resultDescriptor.contains(KernelTypeDescriptor(
+        "SInt",
+        Vector(8)
+      )))
       assert(kernel(numeric).operation.contains("digital_to_signed"))
       assert(kernel(reinterpreted).operation.contains("digital_reinterpret_signed"))
-      assert(kernel(numeric.toUnsigned).resultType.contains(KernelTypeDescriptor(
+      assert(kernel(numeric.toUnsigned).resultDescriptor.contains(KernelTypeDescriptor(
         "UInt",
         Vector(9)
       )))
-      assert(kernel(127.S(8).toUnsigned).resultType.contains(KernelTypeDescriptor(
+      assert(kernel(127.S(8).toUnsigned).resultDescriptor.contains(KernelTypeDescriptor(
         "UInt",
         Vector(8)
       )))
@@ -93,10 +96,10 @@ object Increment54DigitalConversionTests extends TestSuite:
       assert(kernel(4.S(4).wrap(2).toUnsigned).operation.contains("digital_to_unsigned"))
       assert(failure(4.S(4).truncate(3).toUnsigned) == "NODAL-DIGITAL-054-008")
       assert(failure((-4).S(4).saturate(2).toUnsigned) == "NODAL-DIGITAL-054-008")
-      assert(kernel((-4).S(4).resizeChecked(3)).resultType
+      assert(kernel((-4).S(4).resizeChecked(3)).resultDescriptor
         .contains(KernelTypeDescriptor("SInt", Vector(3))))
       assert(failure((-4).S(4).resizeChecked(2)) == "NODAL-DIGITAL-054-008")
-      assert(kernel(0.U(1).extend(Int.MaxValue)).resultType
+      assert(kernel(0.U(1).extend(Int.MaxValue)).resultDescriptor
         .contains(KernelTypeDescriptor("UInt", Vector(Int.MaxValue))))
 
     test("checked narrowing and sign changes never use runtime values or parameter defaults"):
@@ -109,17 +112,17 @@ object Increment54DigitalConversionTests extends TestSuite:
 
     test("symbolic literals and conversions preserve the actual width expression"):
       val captured = ConstructionKernel.capture(new DigitalConversionWidthsSource): module =>
-        assert(kernel(module.positive).resultType
+        assert(kernel(module.positive).resultDescriptor
           .contains(KernelTypeDescriptor("UInt", Vector(module.width))))
-        assert(kernel(module.negative).resultType
+        assert(kernel(module.negative).resultDescriptor
           .contains(KernelTypeDescriptor("SInt", Vector(module.width))))
-        val signedWidth = kernel(module.signed).resultType.get.arguments.head
+        val signedWidth = kernel(module.signed).resultDescriptor.get.arguments.head
           .asInstanceOf[KernelExpr[Integer]]
         assert(signedWidth.operation.contains("analog_add"))
         assert(signedWidth.operands.head == module.width)
-        assert(kernel(module.reinterpreted).resultType
+        assert(kernel(module.reinterpreted).resultDescriptor
           .contains(KernelTypeDescriptor("SInt", Vector(module.width))))
-        assert(kernel(module.checked).resultType
+        assert(kernel(module.checked).resultDescriptor
           .contains(KernelTypeDescriptor("UInt", Vector(3))))
         Vector(module.signed, module.positive, module.negative)
       assert(captured.snapshot.modules.nonEmpty)
@@ -137,8 +140,8 @@ object Increment54DigitalConversionTests extends TestSuite:
       assert(failure(true.B.resizeChecked(8)) == "NODAL-DIGITAL-054-005")
       assert(failure(CandidateRuntime.expr[UInt]("opaque").resizeChecked(8)) ==
         "NODAL-DIGITAL-054-005")
-      assert(kernel(1.S(8.integer)).resultType.exists(_.kind == "SInt"))
-      assert(kernel(1.U(8.integer)).resultType.exists(_.kind == "UInt"))
+      assert(kernel(1.S(8.integer)).resultDescriptor.exists(_.kind == "SInt"))
+      assert(kernel(1.U(8.integer)).resultDescriptor.exists(_.kind == "UInt"))
 
     test("explicit numeric Real conversion permits rounding but rejects unproved overflow"):
       val captured = ConstructionKernel.inspect(new DigitalRealSignalSource(54))

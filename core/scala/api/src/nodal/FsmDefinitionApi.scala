@@ -103,6 +103,15 @@ final class FsmState[S] private[nodal] (
       to: S
   ): FsmState[S] = FsmCompositionRuntime.join(this, "all", Some(child), mode, to)
 
+  def after(cycles: Int, mode: TransitionMode = TransitionMode.Exclusive)(to: S): FsmState[S] =
+    FsmTimingRuntime.after(this, cycles, mode, to)
+
+  def awaitTransfer(
+      slot: FsmTransfer[S],
+      mode: TransitionMode = TransitionMode.Exclusive
+  )(to: S): FsmState[S] =
+    FsmTimingRuntime.transfer(this, slot, mode, to)
+
   def terminal(): FsmState[S] =
     if isTerminal then FsmDefinitionRuntime.fail("state repeats terminal declaration")
     new FsmState(value, commands, true, childSlots)

@@ -60,42 +60,47 @@ private[nodal] object DigitalAggregateContract:
       operation: String,
       result: KernelTypeDescriptor,
       operands: Vector[Expr[?]],
-      metadata: StructOperationMetadata
+      metadata: StructOperationMetadata,
+      typeIntent: Option[KernelResultTypeIntent] = None
   ): Expr[A] =
     val value = new KernelExpr[A](
       operands :+ metadata,
       resultType = Some(result),
-      operation = Some(operation)
+      operation = Some(operation),
+      typeIntent = typeIntent
     )
     ConstructionKernel.expression(value)
     value
 
   def get[A <: Data](value: Expr[Struct], member: StructMember[A]): Expr[A] =
-    val actual = descriptor(value)
-    val declared = fields(actual)
-    if !DigitalEnumContract.sameWidthFamily(
-        CandidateRuntime.typeDescriptor(member.schema),
-        actual
-      ) ||
-      member.ordinal < 0 || member.ordinal >= declared.size ||
-      declared(member.ordinal).name != member.declaration.name
-    then fail("field handle does not belong to the receiver's exact semantic width family")
-    DigitalCombinationalContract.validateValueType(
-      CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType)
-    )
-    // The actual receiver, not the handle's original width, determines the complete result.
+    def result: KernelTypeDescriptor =
+      val actual = descriptor(value)
+      val declared = fields(actual)
+      if !DigitalEnumContract.sameWidthFamily(
+          CandidateRuntime.typeDescriptor(member.schema),
+          actual
+        ) ||
+        member.ordinal < 0 || member.ordinal >= declared.size ||
+        declared(member.ordinal).name != member.declaration.name
+      then fail("field handle does not belong to the receiver's exact semantic width family")
+      val selected = CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType)
+      DigitalCombinationalContract.validateValueType(selected)
+      selected
+    // Actual receiver type is authoritative, including a once-finalized hierarchy substitution.
     emit(
       "digital_struct_get",
-      CandidateRuntime.typeDescriptor(declared(member.ordinal).dataType),
+      result,
       Vector(value),
       StructOperationMetadata(
         member.schema,
         Some(member.ordinal),
         Some(member.declaration.name)
-      )
+      ),
+      DeferredResultType.intent(Vector(value))(result)
     )
 
   def make(schema: DataType[Struct], bindings: Vector[StructBinding[? <: Data]]): Expr[Struct] =
+    DeferredResultType.requireFinal(bindings.map(_.expression), "Struct construction")
     val base = CandidateRuntime.typeDescriptor(schema)
     val declared = fields(base)
     if bindings.size != declared.size then fail("Struct value requires every field exactly once")

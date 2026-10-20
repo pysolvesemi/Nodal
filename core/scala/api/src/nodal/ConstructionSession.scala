@@ -246,17 +246,57 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     streamTransaction("Stream"):
       ownedStreamValue(payload, "Stream payload")
       ownedStreamValue(valid, "Stream valid", bool = true)
-      val result = new Stream(payload, valid, newStreamReady())
-      val reference = declarationIds.get(result.readyWire)
-      val module = records(reference.module)
-      val declaration = module.declarations(reference.index)
-      module.declarations.update(
-        reference.index,
-        declaration.copy(attributes =
-          declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
-        )
+      registerStream(payload, valid, newStreamReady())
+
+  private def registerStream[A <: Data](
+      payload: Expr[A],
+      valid: Expr[Bool],
+      ready: Signal[Bool]
+  ): Stream[A] =
+    val reference = declarationIds.get(ready)
+    val module = records(reference.module)
+    val declaration = module.declarations(reference.index)
+    module.declarations(reference.index) = declaration.copy(attributes =
+      declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
+    )
+    new Stream(payload, valid, ready)
+
+  /** Read-only transfer observation shares the existing carrier/ready declaration owner. */
+  def fsmTransfer[A <: Data](carrier: Stream[A]): Expr[Bool] =
+    streamTransaction("FSM transfer wait"):
+      if carrier == null then
+        FsmDefinitionRuntime.fail("transfer binding requires an actual Stream")
+      ownedStreamValue(carrier.payload, "Stream payload")
+      ownedStreamValue(carrier.valid, "Stream valid", bool = true)
+      ownedStreamValue(carrier.ready, "Stream ready", bool = true)
+      val tuple = fsmTransferTuple(carrier.valid, carrier.ready)
+      if valueReference(tuple) != valueReference(carrier.payload) then
+        FsmDefinitionRuntime.fail("transfer binding differs from its actual Stream carrier")
+      // A binding retains explicit operands, never a captured predicate shared by machines.
+      // Every occurrence rechecks these identities and creates its own actual predicate.
+      new KernelExpr[Bool](
+        Vector(carrier.valid, carrier.ready),
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some(FsmTimingRuntime.TransferOperation)
       )
-      result
+
+  private def fsmTransferTuple(valid: Expr[Bool], ready: Expr[Bool]): Expr[?] =
+    val reference = Option(
+      declarationIds.get(ready)
+    ).getOrElse(FsmDefinitionRuntime.fail("transfer ready requires its actual Stream wire"))
+    if reference.module != currentModule.handle then
+      FsmDefinitionRuntime.fail("transfer carrier belongs to another Module")
+    val attributes = records(reference.module).declarations(reference.index).attributes
+    val payload = attributes.collectFirst { case ("stream_payload", value: Expr[?]) => value }
+    val actualValid = attributes.collectFirst { case ("stream_valid", value: Expr[?]) => value }
+    if payload.isEmpty || !actualValid.exists(value =>
+        valueReference(value) == valueReference(valid)
+      ) || !attributes.exists(_._1 == "stream_ready_default")
+    then
+      FsmDefinitionRuntime.fail(
+        "transfer predicate requires its exact existing Stream valid/ready pair"
+      )
+    payload.get
 
   def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
     streamTransaction("Stream.accept"):
@@ -353,7 +393,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       record.results.foreach((reference, _) => executableCrossings.update(reference, record))
       crossingStateBits += stateBits
       acceptStream(input, sourceReady)
-      new Stream(payload, valid, ready)
+      registerStream(payload, valid, ready)
 
   def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
     executableCrossing(bit, to, stages, "sync")
@@ -1142,6 +1182,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val openFsms = mutable.ArrayBuffer.empty[FlatFsmRecord[?]]
   private var compositionObservationRoot: Option[ExpressionRef] = None
   private val privateFsmStorage = mutable.HashSet.empty[DeclarationRef]
+  private var timerStateBits = 0
   private def contextualFsmInitializer(declaration: DeclarationRecord): Boolean =
     privateFsmStorage(declaration.reference) &&
       declaration.attributes.contains("initializer_policy" -> "if_reset") &&
@@ -1475,6 +1516,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         edge.destination,
                         edge.action.map(actions)
                       )
+                    case timer: FsmDefinitionTimer[T] =>
+                      captureFlatFsmTimer(stateBuilder, timer.cycles, timer.mode, timer.destination)
+                    case transfer: FsmDefinitionTransfer[T] =>
+                      captureFlatFsmTransferTransition(
+                        stateBuilder,
+                        guards(transfer.slot.guard),
+                        transfer.mode,
+                        transfer.destination
+                      )
                     case action: FsmDefinitionAction[T] =>
                       captureFlatFsmAction(stateBuilder, action.phase, actions(action.slot))
                     case join: FsmDefinitionJoin[T] =>
@@ -1680,6 +1730,72 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     body.foreach(callback =>
       captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
     )
+
+  def captureFlatFsmTimer[S](
+      builder: StateBuilder[S],
+      cycles: Int,
+      mode: TransitionMode,
+      to: S
+  ): Unit = fsmTransaction:
+    FsmTimingRuntime.cycles(cycles)
+    val record = requireFsmState(builder)
+    val storage = record.timer.getOrElse {
+      if timerStateBits.toLong + FsmTimingRuntime.Width > FsmTimingRuntime.MaximumStateBits then
+        FsmDefinitionRuntime.fail("FSM timer state exceeds 65536 actual bits")
+      val value = if record.domain.resetPolicy.contains(ResetPolicy.None) then
+        Reg.uninitialized(UInt(FsmTimingRuntime.Width))
+      else Reg(0.U(FsmTimingRuntime.Width))
+      val reference = declarationIds.get(value)
+      val domainReference = domainRef(record.domain)
+      if records(
+          domainReference.module
+        ).domains(domainReference.index).kind == KernelDomainKind.Required
+      then
+        val module = records(reference.module)
+        val declaration = module.declarations(reference.index)
+        module.declarations(reference.index) = declaration.copy(attributes =
+          declaration.attributes :+ ("initializer_policy" -> "if_reset")
+        )
+      record.timer = Some(value)
+      timerStateBits += FsmTimingRuntime.Width
+      privateFsmStorage += reference
+      value
+    }
+    val result = new KernelExpr[Bool](
+      Vector(storage),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(FsmTimingRuntime.ElapsedOperation)
+    )
+    val _ = captureExpression(result)
+    captureFlatFsmTransition(builder, result, mode, to, None)
+    record.timerEdges += FlatFsmTimerEdge(record.transitions.last.ordinal, cycles, result)
+
+  def captureFlatFsmTransferTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S
+  ): Unit = fsmTransaction:
+    val record = requireFsmState(builder)
+    val expression = condition match
+      case value: KernelExpr[?]
+          if value.operation.contains(
+            FsmTimingRuntime.TransferOperation
+          ) && value.operands.size == 2 => value
+      case _ =>
+        FsmDefinitionRuntime.fail("transfer edge requires an explicit actual Stream binding")
+    val valid = expression.operands(0).asInstanceOf[Expr[Bool]]
+    val ready = expression.operands(1).asInstanceOf[Expr[Bool]]
+    val payload = fsmTransferTuple(valid, ready)
+    val predicate = new KernelExpr[Bool](
+      Vector(valid, ready),
+      resultType = Some(KernelTypeDescriptor("Bool")),
+      operation = Some(FsmTimingRuntime.TransferOperation)
+    )
+    val _ = captureExpression(predicate)
+    captureFlatFsmTransition(builder, predicate, mode, to, None)
+    record.transferEdges +=
+      FlatFsmTransferEdge(record.transitions.last.ordinal, predicate, payload, valid, ready)
 
   private def flatFsmLocal[S](builder: FsmBuilder[S], next: Boolean): Expr[Bits] =
     val record = requireFsmObservation(builder)
@@ -1921,6 +2037,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             value.cost.records,
             value.cost.depth,
             value.completionPossible
+          )
+        ),
+        record.timer.map(value => pathOf(value).get),
+        record.timerEdges.toVector.map(value =>
+          KernelFsmTimerEdge(value.ordinal, value.cycles, pathOf(value.guard).get)
+        ),
+        record.transferEdges.toVector.map(value =>
+          KernelFsmTransferEdge(
+            value.ordinal,
+            pathOf(value.guard).get,
+            pathOf(value.payload).get,
+            pathOf(value.valid).get,
+            pathOf(value.ready).get
           )
         )
       )
@@ -2533,10 +2662,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val generatedAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           (analogStack.nonEmpty || AnalogProceduralConstruction.generatedProcedureActive ||
-            expression.resultType.exists(_.kind == "Real"))
+            expression.resultDescriptor.exists(_.kind == "Real"))
       val knownArgument = retained.exists(collectionArguments.contains) &&
         operation == DigitalCollectionContract.Argument
-      val staticInteger = expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+      val staticInteger = expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
         !knownArgument && (expression.literal.exists(_.kind == "integer") ||
           IterationDomain.staticArithmetic(operation).nonEmpty)
       val knownCollection = retained.exists(collectionRegions.contains) &&
@@ -2567,7 +2696,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           requireLoopEffect(s"unsupported hardware expression '$operation'")
           collectionFailure(s"unsupported iteration expression '$operation'")
         if !staticInteger && !knownArgument then
-          val dataType = expression.resultType.getOrElse(
+          val dataType = expression.resultDescriptor.getOrElse(
             collectionFailure("region body expression requires an exact type")
           )
           try
@@ -2597,7 +2726,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case Some(member) => generatedMemberScope(expression, member)
           case None => if moduleStatic then None else current
         if !knownArgument then
-          expression.resultType.foreach(bindCollectionType(_, destination, currentModule.handle))
+          expression.resultDescriptor.foreach(bindCollectionType(
+            _,
+            destination,
+            currentModule.handle
+          ))
         val runtimeOperands =
           if Set("shape_index", "shape_view", "shape_slice").contains(operation) then
             expression.operands.take(1)
@@ -2617,7 +2750,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       result
     val region = new DigitalValueRegionRecord(
       reference,
-      None,
+      if header.generated.exists(_.areaFamily) then activeValueRegion else None,
       "bounded_loop",
       Vector.empty,
       None,
@@ -2697,7 +2830,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case (reference, region)
             if region.isLoop && !collectionArguments.contains(reference) &&
               expressionValues.get(reference).exists(value =>
-                !value.resultType.exists(dataType =>
+                !value.resultDescriptor.exists(dataType =>
                   Set("Integer", "Real").contains(dataType.kind)
                 ) &&
                   (DigitalValueConstruction.isDigitalValue(value) || shapeIndices.contains(
@@ -3536,14 +3669,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                           if eventSampling.nonEmpty && (expression.operation.contains(
                               "memory_read"
                             ) ||
-                              !expression.resultType.exists(dataType =>
+                              !expression.resultDescriptor.exists(dataType =>
                                 DigitalCombinationalContract.isValueTypeKind(dataType) ||
                                   dataType.kind == "Integer"
                               ))
                           then
                             eventFailure("event capture has analog or unsupported value provenance")
                           if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
-                            !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                            !expression.resultDescriptor.contains(
+                              KernelTypeDescriptor("Integer")
+                            ) &&
                             !expressionRef.exists(reference =>
                               shapeIndices.contains(reference) || shapeViews.contains(reference) ||
                                 collectionArguments.contains(reference)
@@ -4116,7 +4251,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val arguments =
         argumentTypes.map((dataType, role) => newCollectionArgument(region, dataType, role))
       arguments.foreach(argument =>
-        bindCollectionType(argument.resultType.get, Some(region), module.handle)
+        bindCollectionType(argument.resultDescriptor.get, Some(region), module.handle)
       )
       val yielded = bindCollectionValue(body(arguments), Some(region), module.handle)
       DigitalCombinationalContract.validateValueType(DigitalCollectionContract.descriptor(yielded))
@@ -4318,7 +4453,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               actualBody.foreach: (reference, expression) =>
                 validateReductionStructure(reference, expression, module.handle)
                 val descriptor =
-                  expression.resultType.getOrElse(
+                  expression.resultDescriptor.getOrElse(
                     collectionFailure("reduction body type is absent")
                   )
                 if descriptor.kind == "Integer" then
@@ -4400,7 +4535,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       if !nested.arguments.take(expected.size).zip(expected).forall:
           case ((argument, _), (dataType, _)) =>
             DigitalEnumContract.sameType(
-              argument.resultType.get,
+              argument.resultDescriptor.get,
               CandidateRuntime.typeDescriptor(dataType)
             )
       then
@@ -4413,7 +4548,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         nested.seed,
         nested.yielded.get
       )
-      if !DigitalEnumContract.sameType(result, expression.resultType.get) then
+      if !DigitalEnumContract.sameType(result, expression.resultDescriptor.get) then
         collectionFailure("nested collection result type changes in a reachable reduction context")
 
     structuralIfs.get(reference).foreach: conditional =>
@@ -4422,7 +4557,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           arm.yielded.getOrElse(collectionFailure("value conditional lost its reduction yield"))
         if !DigitalEnumContract.sameType(
             DigitalCollectionContract.descriptor(yielded),
-            expression.resultType.get
+            expression.resultDescriptor.get
           )
         then
           collectionFailure("structural alternative ABI changes in a reachable reduction context")
@@ -4786,9 +4921,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def generatedMemberSnapshot(expression: KernelExpr[?])
       : Option[KernelGeneratedMemberSnapshot] =
     generatedMemberRecord(expression).map: record =>
+      val reference = Option(expressionIds.get(expression)).getOrElse(
+        fail("NODAL-AREA-058-OWNER", "generated member snapshot has no captured expression")
+      )
+      val ordinal = record.ordinal match
+        case value: Int => value
+        case value: Expr[Integer] =>
+          bindCollectionValue(
+            value,
+            expressionRegions.get(reference),
+            record.family.owner,
+            create = false
+          ).asInstanceOf[Expr[Integer]]
       KernelGeneratedMemberSnapshot(
         generatedRegionPath(record.family),
-        generatedBound(record.ordinal),
+        generatedBound(ordinal),
         record.members.mkString("."),
         record.access
       )
@@ -5444,6 +5591,63 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       moduleStack.clear()
       moduleStack ++= previousModules
 
+  /** Seal exact result types through the already captured value DAG. There is no second expression
+    * registry and no callback/body replay. Operation owners retain their inference.
+    */
+  private def materializeDeferredResultTypes(): Unit =
+    val state = new java.util.IdentityHashMap[KernelExpr[?], java.lang.Integer]()
+    var work = 0
+    val previousModules = moduleStack.toVector
+    def visit(expression: KernelExpr[?], depth: Int): Unit =
+      if depth > 128 || Option(state.get(expression)).contains(1) then
+        fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph is cyclic or too deep")
+      if !Option(state.get(expression)).contains(2) && expression.typeIntent.nonEmpty then
+        work += 1
+        if work > 65536 then
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph exceeds its finite budget")
+        val reference = Option(expressionIds.get(expression)).getOrElse(
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred expression has no captured owner")
+        )
+        if expressionRegions.contains(reference) then
+          fail(
+            "NODAL-HIERARCHY-058-TYPE",
+            "deferred boundary expressions require direct module scope"
+          )
+        state.put(expression, 1)
+        val intent = expression.typeIntent.get
+        work += expression.operands.size + intent.dependencies.size
+        if work > 65536 then
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred result type edges exceed their finite budget")
+        val operands = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
+        expression.operands.foreach(value => operands.put(value.asInstanceOf[AnyRef], true))
+        if intent.dependencies.isEmpty || intent.dependencies.exists(dependency =>
+            !operands.containsKey(dependency.asInstanceOf[AnyRef])
+          )
+        then fail("NODAL-HIERARCHY-058-TYPE", "type intent lost its exact operand dependency")
+        intent.dependencies.foreach: dependency =>
+          if !digitalOwnerOf(dependency).contains(modulePath(reference.module)) then
+            fail("NODAL-HIERARCHY-058-TYPE", "type intent operand belongs to another module")
+          dependency match
+            case value: KernelExpr[?] => visit(value, depth + 1)
+            case _ => ()
+        DeferredResultType.requireFinal(intent.dependencies, "result type materialization")
+        moduleStack.clear()
+        moduleStack += records(reference.module)
+        val actual = intent.resolve()
+        validateShapeType(
+          CandidateRuntime.dataTypeFromDescriptor(actual),
+          reference.module,
+          cardinality = true
+        )
+        expression.sealResultType(actual)
+        state.put(expression, 2)
+    try expressionValues.valuesIterator.toVector.foreach(visit(_, 0))
+    finally
+      moduleStack.clear()
+      moduleStack ++= previousModules
+    if expressionValues.valuesIterator.exists(!_.typeFinalized) then
+      fail("NODAL-HIERARCHY-058-TYPE", "unresolved result type cannot leave construction")
+
   private def materializeInstanceDigitalTypes(
       queries: StructuralParameterBinding.InstanceQueries
   ): Unit =
@@ -5679,7 +5883,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         value.owner == currentModule.handle && value.induction == reference
       )
         .getOrElse(fail("NODAL-SHAPE-043-006", "generated index escaped its active owning scope"))
-      if expression.resultType != Some(
+      if expression.resultDescriptor != Some(
           KernelTypeDescriptor("Integer")
         ) || expression.operands.nonEmpty
       then
@@ -6597,6 +6801,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      value match
+        case expression: KernelExpr[?] if expression.typeIntent.isEmpty =>
+          DeferredResultType.requireFinal(expression.operands, "expression construction")
+        case _ => ()
       if activeEventProcess.nonEmpty then
         value match
           case expression: KernelExpr[?] =>
@@ -6615,9 +6823,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 DigitalCollectionContract.Operation,
                 DigitalCollectionContract.Argument
               )(operation) ||
-              (expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+              (expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
                 IterationDomain.staticArithmetic(operation).nonEmpty)
-            if !pure || !expression.resultType.exists(dataType =>
+            if !pure || !expression.resultDescriptor.exists(dataType =>
                 DigitalCombinationalContract.isValueTypeKind(dataType) || dataType.kind == "Integer"
               )
             then eventFailure(s"unsupported hardware expression '$operation' in event process")
@@ -6627,7 +6835,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case _ => validateFsmObservations(structuralOperands)
       if reductionProofBuilding then
         value match
-          case expression: KernelExpr[?] if expression.resultType.exists(_.kind == "Integer") => ()
+          case expression: KernelExpr[?]
+              if expression.resultDescriptor.exists(_.kind == "Integer") => ()
           case _ =>
             collectionFailure("reduction proof may construct only temporary static expressions")
       val scope = if reductionProofBuilding then None
@@ -6655,7 +6864,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       value match
         case expression: KernelExpr[?]
             if scope.nonEmpty &&
-              expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+              expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
               !collectionArguments.contains(reference) && loopAffine(expression).exists(value =>
                 scope.exists(_.isLoop) || value._1.loop.get.generated.isEmpty
               ) =>
@@ -7505,7 +7714,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val reference = Option(expressionIds.get(expression)).getOrElse(
           invalid("structural predicate Integer has no captured identity")
         )
-        if reference.module != owner || expression.resultType != Some(
+        if reference.module != owner || expression.resultDescriptor != Some(
             KernelTypeDescriptor("Integer")
           )
         then
@@ -7589,7 +7798,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "compound hdlRange expression escapes its owning Module",
           Some(expressionPath(reference))
         )
-      if !expression.resultType.contains(KernelTypeDescriptor("Integer")) then
+      if !expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) then
         invalid("hdlRange expression must have Integer type", Some(expressionPath(reference)))
       cache.get(reference) match
         case Some(result) => result
@@ -7611,7 +7820,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 val (region, _) = collectionArguments(reference)
                 region.captures.valuesIterator.find(_._2 eq expression) match
                   case Some((source, _))
-                      if expression.resultType.contains(KernelTypeDescriptor("Integer")) =>
+                      if expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) =>
                     apply(source.asInstanceOf[Expr[Integer]])
                   case _ => invalid("unadmitted collection Integer formal")
               case None if expression.literal.nonEmpty => literalBound(expression)
@@ -7720,7 +7929,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val literal = expression.literal
         .filter(value =>
           value.kind == "integer" && value.dataType == KernelTypeDescriptor("Integer") &&
-            expression.resultType.contains(KernelTypeDescriptor("Integer"))
+            expression.resultDescriptor.contains(KernelTypeDescriptor("Integer"))
         )
         .flatMap(value =>
           if signed64Literals then value.value.toLongOption
@@ -7850,6 +8059,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     requireNoCollectionEffect("structural generation")
     if activeLoop.exists(_.loop.get.generated.isEmpty) then
       collectionFailure("nested effectful iteration is outside the bounded loop profile")
+    if areaFamily && activeValueRegion.exists(parent =>
+        !parent.loop.exists(_.generated.exists(_.areaFamily))
+      )
+    then
+      fail(
+        "NODAL-AREA-058-OWNER",
+        "generated Area family requires a direct Module or actual generated body in this profile"
+      )
     val module = currentModule
     val analysis = new StructuralBoundAnalysis(module.handle)
     val lowerBound = analysis(lower)
@@ -7883,6 +8100,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       markStructuralParameter
     )
 
+    def captureBound(value: Int | Expr[Integer]): Int | Expr[Integer] = value match
+      case literal: Int => literal
+      case expression: Expr[Integer] =>
+        if areaFamily then
+          bindCollectionValue(expression, activeValueRegion, module.handle)
+            .asInstanceOf[Expr[Integer]]
+        else expression
+    val capturedLower = captureBound(lower)
+    val capturedUpper = captureBound(upperExclusive)
+    val capturedStep = captureBound(step)
+
     val induction = new KernelExpr[Integer](
       Vector.empty,
       resultType = Some(KernelTypeDescriptor("Integer")),
@@ -7899,9 +8127,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       module.generatedRegions.size,
       parentOrdinal,
       inductionReference,
-      lower,
-      upperExclusive,
-      step,
+      capturedLower,
+      capturedUpper,
+      capturedStep,
       maximum,
       envelope,
       areaFamily
@@ -7912,14 +8140,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       generatedRegionPath(record) -> expressionPath(record.induction),
       record
     )
-    val digitalRegion = Option.when(activeLoop.isEmpty && analogStack.isEmpty)(
+    val nestedAreaFamily = areaFamily && activeLoop.exists(_.loop.exists(
+      _.generated.exists(_.areaFamily)
+    ))
+    val digitalRegion = Option.when(
+      (activeLoop.isEmpty || nestedAreaFamily) && analogStack.isEmpty
+    )(
       newLoopRegion(DigitalLoopHeader(
-        lower,
-        upperExclusive,
-        step,
+        capturedLower,
+        capturedUpper,
+        capturedStep,
         maximum,
         envelope,
-        nextEffectOrdinal(),
+        (if areaFamily then activeValueRegion else None).map: parent =>
+          val ordinal = parent.assignmentCount
+          parent.assignmentCount += 1
+          ordinal
+        .getOrElse(nextEffectOrdinal()),
         Some(record)
       ))
     )
@@ -9811,6 +10048,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   case None => "none"
                   case _ =>
                     fail("NODAL-DIGITAL-054-010", "register initializer is not a typed expression")
+              else if Set("stream_payload", "stream_valid")(name) then
+                value match
+                  case expression: Expr[?] => pathOf(expression).getOrElse(
+                      fail(
+                        "NODAL-STREAM-057-001",
+                        "Stream carrier lost its actual captured identity"
+                      )
+                    )
+                  case _ => fail("NODAL-STREAM-057-001", "Stream carrier is not a typed expression")
               else if name == "count" && declaration.kind == KernelSignalKind.InterfaceArray then
                 renderShapeDimension(value, module.handle)
               else renderAny(value, module.handle)
@@ -10716,7 +10962,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val predicateRoots = (staticPredicates.valuesIterator.flatMap(_.operands) ++
       allValueRegions.flatMap(_.captures.valuesIterator.map(_._1))).collect {
       case value: KernelExpr[?]
-          if value.resultType.contains(KernelTypeDescriptor("Integer")) &&
+          if value.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
             !runtimeSequentialInteger(value) => value
     }.toVector
     val loopStaticRoots = (loopRegions.valuesIterator.filter(retainedLoops).flatMap(region =>
@@ -10729,7 +10975,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     ) ++ expressionValues.iterator.collect:
       case (reference, value)
           if expressionRegions.get(reference).exists(retainedLoops) &&
-            value.resultType.contains(KernelTypeDescriptor("Integer")) => value
+            value.resultDescriptor.contains(KernelTypeDescriptor("Integer")) => value
     ).toVector
     val loopStaticReferences = (loopStaticRoots ++ predicateRoots).iterator.collect {
       case expression: KernelExpr[?] if expressionIds.containsKey(expression) =>
@@ -10883,6 +11129,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val boundaryQueries = new StructuralParameterBinding.InstanceQueries(base)
       materializeInstanceDigitalTypes(boundaryQueries)
       materializeInstanceInterfaceDimensions(boundaryQueries)
+    materializeDeferredResultTypes()
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)
     val sourceByPath = semantic.sourceMap.map(entry => entry.semanticPath -> entry.source).toMap

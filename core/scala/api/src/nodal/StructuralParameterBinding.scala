@@ -174,6 +174,27 @@ private[nodal] object StructuralParameterBinding:
       unique(value._2.parameterBindings, "parameter override")
     ).getOrElse(Map.empty)
 
+    /** Enter one actual generated body using its canonical parent bounds and capture edges. */
+    def generatedBody(region: KernelGeneratedRegionSnapshot): Query =
+      if scope != region.parent || !snapshot.generatedRegions.exists(_ eq region) ||
+        region.digitalBody.isEmpty
+      then invalid("Generate Integer context requires its actual lexical parent and body")
+      val inputs = Vector(region.lower, region.upperExclusive, region.step)
+        .map(resolve(region.owner, _))
+      val limits = inputs.map(bounds)
+      val domain = IterationDomain.structural(
+        limits(0), limits(1), limits(2), region.maximum,
+        identicalBounds = inputs(0) == inputs(1) ||
+          (limits(0).lower == limits(0).upper && limits(1).lower == limits(1).upper &&
+            limits(0).lower >= limits(1).upper)
+      ).fold(problem => invalid(problem.message), identity)
+      val body = region.digitalBody.get
+      new Query(snapshot, scope = Some(region.path), enclosing = Some(this),
+        generatedDomains = Map(region.induction -> domain),
+        captures = body.arguments.drop(1).zip(body.captures).collect {
+          case (argument, capture) if argument.dataType == "Integer" => argument.path -> capture
+        }.toMap)
+
     private def unique[A](values: Vector[(String, A)], role: String): Map[String, A] =
       if values.map(_._1).distinct.size != values.size then invalid(s"duplicate $role identity")
       values.toMap

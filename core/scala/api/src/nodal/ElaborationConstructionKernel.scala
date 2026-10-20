@@ -412,6 +412,20 @@ private[nodal] object ConstructionKernel:
     body.foreach(checkedFsmAction)
     flatFsmSession.captureFlatFsmTransition(builder, condition, mode, to, body)
 
+  def fsmTransfer[A <: Data](carrier: Stream[A]): Expr[Bool] =
+    flatFsmSession.fsmTransfer(carrier)
+
+  def flatFsmTimer[S](builder: StateBuilder[S], cycles: Int, mode: TransitionMode, to: S): Unit =
+    flatFsmSession.captureFlatFsmTimer(builder, cycles, mode, to)
+
+  def flatFsmTransferTransition[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      to: S
+  ): Unit =
+    flatFsmSession.captureFlatFsmTransferTransition(builder, condition, mode, to)
+
   def flatFsmStateView[S](builder: FsmBuilder[S], next: Boolean): DecodedEnum[Expr[EnumValue[S]]] =
     flatFsmSession.flatFsmStateView(builder, next)
 

@@ -25,7 +25,7 @@ object Increment54DigitalLiteralTests extends TestSuite:
         )
       do
         val expression = value.S(width).asInstanceOf[KernelExpr[SInt]]
-        assert(expression.resultType.contains(KernelTypeDescriptor("SInt", Vector(width))))
+        assert(expression.resultDescriptor.contains(KernelTypeDescriptor("SInt", Vector(width))))
         assert(expression.literal.exists(_.value == value.toString))
         assert(expression.operation.contains("integer"))
 
@@ -33,7 +33,7 @@ object Increment54DigitalLiteralTests extends TestSuite:
       for (value, width) <- Vector((0, 1), (1, 1), (255, 8), (Int.MaxValue, 31)) do
         val expression = value.U(width).asInstanceOf[KernelExpr[UInt]]
         assert(expression.literal.exists(_.value == value.toString))
-        assert(expression.resultType.contains(KernelTypeDescriptor("UInt", Vector(width))))
+        assert(expression.resultDescriptor.contains(KernelTypeDescriptor("UInt", Vector(width))))
 
     test("invalid widths and overflowing signed or unsigned values reject"):
       assert(failure(0.S(0)) == "NODAL-DIGITAL-054-001")

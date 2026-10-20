@@ -175,6 +175,12 @@ private[nodal] object FsmCompositionRuntime:
             atom(edge.action.map(_.name).getOrElse(""))
           case action: FsmDefinitionAction[S] =>
             atom("action"); atom(action.phase); atom(action.slot.name)
+          case timer: FsmDefinitionTimer[S] =>
+            atom("timer"); atom(timer.cycles.toString); atom(timer.mode.toString);
+            atom(caseId(timer.destination))
+          case transfer: FsmDefinitionTransfer[S] =>
+            atom("transfer"); atom(transfer.slot.guard.name); atom(transfer.mode.toString);
+            atom(caseId(transfer.destination))
           case join: FsmDefinitionJoin[S] =>
             atom("join"); atom(join.policy); atom(join.child.map(_.name).getOrElse(""))
             atom(join.mode.toString); atom(caseId(join.destination))

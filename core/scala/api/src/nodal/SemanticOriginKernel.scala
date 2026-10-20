@@ -171,6 +171,7 @@ private[nodal] final class SemanticOriginBuilder:
     "CompilerApi.scala",
     "FsmDefinitionApi.scala",
     "FsmCompositionApi.scala",
+    "FsmTimingApi.scala",
     "GeneratedAreaApi.scala"
   )
   private val ignoredSourceSegments = Set(

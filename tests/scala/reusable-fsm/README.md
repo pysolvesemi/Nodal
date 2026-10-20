@@ -81,3 +81,29 @@ asserted and cancel clear. The material profile also uses an actual falling
 edge and active-low reset on the second occurrence. No value is asserted for
 resetless private state before its accepted restart, and ordinary uninitialized
 action storage is not expected to acquire an implicit reset.
+
+## Timed and transfer-wait witnesses
+
+`Increment58TimedFsmTests` exercises reusable and live timers, positive threshold
+boundaries, exact read-only Stream carrier bindings, separate private elapsed
+storage, resetless state, contextual initialization and forged bridge rejection.
+`Increment58TimedFsmReplay` exports actual public-source inputs for the focused
+native and target checks. `required-mixed.mlir` retains one formal definition in
+reset-bearing and resetless child occurrences.
+
+The target runner accepts `timed`, `timed-one`, `timed-transfer`, and
+`required-timed` for `timer.mlir`, `one.mlir`, `transfer.mlir`, and
+`required-mixed.mlir`, respectively. Its handwritten observations check elapsed
+cycles, pause, dormant and terminal hold, independent restart, cancel priority,
+read-only ready observation, valid/ready stalls and occurrence-specific reset.
+No resetless startup value is assumed. Maximum-threshold saturation is checked
+in the focused native model rather than simulating billions of target cycles.
+These timing witnesses do not establish finite recursion or bounded call-stack
+acceptance, which remain separate required F58 work.
+
+`Increment58ComposedTimedFsmTests` and its replay retain two timed child
+occurrences under one immutable All-join parent. The `composed-timed` target
+profile checks independent two/three-cycle completion, pause after the first
+child completes, the registered join, cancellation/restart and reset. It retains
+three machine executors and eight actual private registers, not a Cartesian
+product state encoding.

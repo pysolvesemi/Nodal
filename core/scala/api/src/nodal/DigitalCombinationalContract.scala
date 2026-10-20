@@ -49,7 +49,8 @@ private[nodal] object DigitalCombinationalContract:
     val result = descriptor(value)
     if !Set("Bits", "UInt", "SInt").contains(result.kind) then
       fail(1, "digital bit-vector operation requires Bits, UInt or SInt")
-    val _ = DigitalScalarContract.widthBounds(result)
+    if !DeferredResultType.pending(value) then
+      val _ = DigitalScalarContract.widthBounds(result)
     result
 
   private def width(value: KernelTypeDescriptor): Dimension = value.arguments.head match
@@ -80,6 +81,20 @@ private[nodal] object DigitalCombinationalContract:
     ConstructionKernel.expression(expression)
     expression
 
+  private def emitDeferred[A <: Data](
+      operation: String,
+      operands: Vector[Expr[?]]
+  )(result: => KernelTypeDescriptor): Expr[A] =
+    val initial = result
+    val expression = new KernelExpr[A](
+      operands,
+      resultType = Some(initial),
+      operation = Some(operation),
+      typeIntent = DeferredResultType.intent(operands)(result)
+    )
+    ConstructionKernel.expression(expression)
+    expression
+
   private def numericPair(
       left: Expr[?],
       right: Expr[?]
@@ -91,6 +106,7 @@ private[nodal] object DigitalCombinationalContract:
     (a, b)
 
   def arithmetic[A <: Data](operation: String, left: Expr[?], right: Expr[?]): Expr[A] =
+    DeferredResultType.requireFinal(Vector(left, right), "shape-changing digital arithmetic")
     val (a, b) = numericPair(left, right)
     val resultWidth = operation match
       case "digital_add" | "digital_sub" =>
@@ -108,12 +124,14 @@ private[nodal] object DigitalCombinationalContract:
     emit(operation, KernelTypeDescriptor(kind, Vector(resultWidth)), left, right)
 
   def negate(value: Expr[?]): Expr[SInt] =
+    DeferredResultType.requireFinal(Vector(value), "shape-changing digital negation")
     val source = scalar(value)
     if !Set("UInt", "SInt").contains(source.kind) then
       fail(1, "numeric negation requires UInt or SInt")
     emit("digital_neg", KernelTypeDescriptor("SInt", Vector(addWidths(width(source), 1))), value)
 
   def compare(operation: String, left: Expr[?], right: Expr[?]): Expr[Bool] =
+    DeferredResultType.requireFinal(Vector(left, right), "digital comparison")
     val a = scalar(left)
     val b = scalar(right)
     if !Set("digital_eq", "digital_ne", "digital_lt", "digital_le", "digital_gt", "digital_ge")
@@ -129,18 +147,23 @@ private[nodal] object DigitalCombinationalContract:
     emit(operation, KernelTypeDescriptor("Bool"), left, right)
 
   def bitwise[A <: Data](operation: String, left: Expr[A], right: Expr[A]): Expr[A] =
-    val a = scalar(left)
-    val b = scalar(right)
-    if !Set("digital_and", "digital_or", "digital_xor").contains(operation) then
-      fail(1, "unsupported digital bitwise operation")
-    if !DigitalEnumContract.sameType(a, b) then
-      fail(3, "bitwise operands require identical exact kinds and widths")
-    emit(operation, a, left, right)
+    def result: KernelTypeDescriptor =
+      val a = scalar(left)
+      val b = scalar(right)
+      if !Set("digital_and", "digital_or", "digital_xor").contains(operation) then
+        fail(1, "unsupported digital bitwise operation")
+      val pending = DeferredResultType.pending(left) || DeferredResultType.pending(right)
+      val same = if pending then DigitalEnumContract.sameWidthFamily(a, b)
+      else DigitalEnumContract.sameType(a, b)
+      if !same then fail(3, "bitwise operands require identical exact kinds and widths")
+      a
+    emitDeferred(operation, Vector(left, right))(result)
 
   def complement[A <: Data](value: Expr[A]): Expr[A] =
-    emit("digital_not", scalar(value), value)
+    emitDeferred("digital_not", Vector(value))(scalar(value))
 
   def concatenate(left: Expr[?], right: Expr[?]): Expr[Bits] =
+    DeferredResultType.requireFinal(Vector(left, right), "shape-changing concatenation")
     val a = scalar(left)
     val b = scalar(right)
     emit(
@@ -154,6 +177,7 @@ private[nodal] object DigitalCombinationalContract:
     CandidateRuntime.literalUInt(value, math.max(1, BigInt(value).bitLength))
 
   def extract(value: Expr[?], lower: Int, upperExclusive: Int): Expr[Bits] =
+    DeferredResultType.requireFinal(Vector(value), "width-bounded extraction")
     val source = scalar(value)
     if lower < 0 || upperExclusive <= lower ||
       upperExclusive.toLong > DigitalScalarContract.widthBounds(source)._1
@@ -168,14 +192,19 @@ private[nodal] object DigitalCombinationalContract:
     )
 
   def shift[A <: Data](operation: String, value: Expr[A], amount: Int): Expr[A] =
-    val source = scalar(value)
     if amount < 0 then fail(4, "digital shift amount must be nonnegative")
-    val result = operation match
-      case "digital_shl" if amount != 0 =>
-        source.copy(arguments = Vector(addWidths(width(source), amount)))
-      case "digital_shl" | "digital_shr" | "digital_logical_shr" => source
-      case _ => fail(1, "unsupported digital shift operation")
-    emit(operation, result, value, staticOperand(amount))
+    if !Set("digital_shl", "digital_shr", "digital_logical_shr").contains(operation) then
+      fail(1, "unsupported digital shift operation")
+    if operation == "digital_shl" && amount != 0 then
+      DeferredResultType.requireFinal(Vector(value), "shape-changing left shift")
+      val source = scalar(value)
+      emit(
+        operation,
+        source.copy(arguments = Vector(addWidths(width(source), amount))),
+        value,
+        staticOperand(amount)
+      )
+    else emitDeferred(operation, Vector(value, staticOperand(amount)))(scalar(value))
 
   /** Shared root capability profile for computed combinational values. Aggregate storage validation
     * remains with the existing complete-type owner.
@@ -189,13 +218,18 @@ private[nodal] object DigitalCombinationalContract:
     DigitalEnumContract.validateSelectionResult(result)
 
   def select[A <: Data](condition: Expr[Bool], whenTrue: Expr[A], whenFalse: Expr[A]): Expr[A] =
-    if descriptor(condition) != KernelTypeDescriptor("Bool") then
-      fail(1, "digital selection requires a Bool predicate")
-    val result = descriptor(whenTrue)
-    validateValueType(result)
-    if !DigitalEnumContract.sameType(result, descriptor(whenFalse)) then
-      fail(3, "digital selection branches require identical complete types")
-    emit("digital_select", result, condition, whenTrue, whenFalse)
+    def result: KernelTypeDescriptor =
+      if descriptor(condition) != KernelTypeDescriptor("Bool") then
+        fail(1, "digital selection requires a Bool predicate")
+      val selected = descriptor(whenTrue)
+      validateValueType(selected)
+      val other = descriptor(whenFalse)
+      val pending = DeferredResultType.pending(whenTrue) || DeferredResultType.pending(whenFalse)
+      val same = if pending then DigitalEnumContract.sameWidthFamily(selected, other)
+      else DigitalEnumContract.sameType(selected, other)
+      if !same then fail(3, "digital selection branches require identical complete types")
+      selected
+    emitDeferred("digital_select", Vector(condition, whenTrue, whenFalse))(result)
 
   /** A bounded proof used by checked conversions and exact-divisor arithmetic. Values remain DAG
     * nodes: successful constant reasoning never substitutes parameter defaults or erases
@@ -221,7 +255,7 @@ private[nodal] object DigitalCombinationalContract:
       def bits(value: BigInt, width: Int): BigInt = value & ((BigInt(1) << width) - 1)
       def decoded(value: BigInt, width: Int): BigInt =
         val encoded = bits(value, width)
-        if expression.resultType.exists(_.kind == "SInt") && encoded.testBit(width - 1) then
+        if expression.resultDescriptor.exists(_.kind == "SInt") && encoded.testBit(width - 1) then
           encoded - (BigInt(1) << width)
         else encoded
       val result = operation match

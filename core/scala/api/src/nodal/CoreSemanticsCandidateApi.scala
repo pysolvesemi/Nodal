@@ -289,10 +289,16 @@ final class FsmBuilder[S] private[nodal] (
     ConstructionKernel.flatFsmState(this, value, body)
   def parallel(name: String)(body: => Unit): Unit =
     val _ = (name, () => body)
-    FlatFsmRuntime.unsupported()
+    FlatFsmRuntime.fail(
+      "dynamic parallel callbacks are unsupported; use immutable FsmChild slots, FsmState.children, explicit child bindings and completion joins",
+      "NODAL-FSM-058-DYNAMIC"
+    )
   def submachine(name: String, definition: FsmDefinition[S]): Unit =
     val _ = (name, definition)
-    FlatFsmRuntime.unsupported()
+    FlatFsmRuntime.fail(
+      "live FsmDefinition submachines omit immutable graphs and bindings; use FsmChild with FsmDef, FsmState.children and explicit FsmBindings",
+      "NODAL-FSM-058-DYNAMIC"
+    )
   def boundedCallStack(depth: Int): Unit =
     val _ = depth
     FlatFsmRuntime.unsupported()
@@ -332,8 +338,17 @@ final class StateBuilder[S] private[nodal] (
     val _ = (condition, mode, to)
     FlatFsmRuntime.unchecked(() => body)
   def after(cycles: Int)(to: S): Unit =
-    val _ = (cycles, to)
-    FlatFsmRuntime.unsupported()
+    ConstructionKernel.flatFsmTimer(this, cycles, TransitionMode.Exclusive, to)
+  def awaitTransfer[A <: Data](
+      carrier: Stream[A],
+      mode: TransitionMode = TransitionMode.Exclusive
+  )(to: S): Unit =
+    ConstructionKernel.flatFsmTransferTransition(
+      this,
+      ConstructionKernel.fsmTransfer(carrier),
+      mode,
+      to
+    )
   def terminal(): Unit = ConstructionKernel.flatFsmTerminal(this)
 
 def fsm[S](

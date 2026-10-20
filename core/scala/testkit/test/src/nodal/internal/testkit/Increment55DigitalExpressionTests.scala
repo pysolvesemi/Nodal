@@ -93,8 +93,8 @@ final class DigitalExpressionAggregateSelectSource extends Module:
 
 object Increment55DigitalExpressionTests extends TestSuite:
   private def kernel(value: Expr[?]): KernelExpr[?] = value.asInstanceOf[KernelExpr[?]]
-  private def kind(value: Expr[?]): String = kernel(value).resultType.get.kind
-  private def width(value: Expr[?]): Any = kernel(value).resultType.get.arguments.head
+  private def kind(value: Expr[?]): String = kernel(value).resultDescriptor.get.kind
+  private def width(value: Expr[?]): Any = kernel(value).resultDescriptor.get.arguments.head
   private def failure(body: => Any): String =
     scala.util.Try(body).failed.get.asInstanceOf[ConstructionException].diagnostic.code
 
@@ -122,7 +122,7 @@ object Increment55DigitalExpressionTests extends TestSuite:
 
     test("symbolic widths retain signed64 bounds beyond the concrete Int carrier"):
       val captured = ConstructionKernel.capture(new DigitalExpressionWideSymbolicSource): module =>
-        val bounds = DigitalScalarContract.widthBounds(kernel(module.result).resultType.get)
+        val bounds = DigitalScalarContract.widthBounds(kernel(module.result).resultDescriptor.get)
         assert(bounds == (Int.MaxValue.toLong, Int.MaxValue.toLong + 1))
         Vector(module.result)
       assert(captured.snapshot.parameterExpressions.exists(_.operation == "static_integer_max"))

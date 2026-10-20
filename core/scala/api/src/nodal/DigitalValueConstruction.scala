@@ -133,13 +133,15 @@ private[nodal] object DigitalValueConstruction:
           else expression.operands
           operands.foreach:
             case operand: KernelExpr[?]
-                if !operand.resultType.contains(KernelTypeDescriptor("Integer")) =>
+                if !operand.resultDescriptor.contains(KernelTypeDescriptor("Integer")) =>
               pending.append((operand, depth + 1))
             case _ => ()
 
     val snapshots = expressions.collect:
       case (expression, path, owner, handle)
           if reachable.containsKey(expression) && !argumentPaths.contains(path) =>
+        if !expression.typeFinalized then
+          fail("unresolved result type cannot be published in a digital value snapshot")
         val completion = expression.operands.collect { case value: FlatFsmCompletionMetadata =>
           value
         }

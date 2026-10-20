@@ -92,7 +92,7 @@ private[nodal] object FlatFsmGraphContract:
       if depth > 128 then fail("guard proof exceeds lexical depth")
       val (operation, operands) = value match
         case expression: KernelExpr[?] =>
-          if expression.resultType.contains(KernelTypeDescriptor("Bool")) &&
+          if expression.resultDescriptor.contains(KernelTypeDescriptor("Bool")) &&
             expression.literal.nonEmpty
           then
             val truth = expression.literal.get.value match

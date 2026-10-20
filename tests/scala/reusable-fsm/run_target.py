@@ -207,14 +207,149 @@ endmodule
 """
 
 
+def timed_bench(top: str, profile: str) -> str:
+    transfer = profile == "timed-transfer"
+    cycles = 1 if profile == "timed-one" else 3
+    sequence = """
+ inputValid=1; inputReady=0; tick; check(0,0,1,1);
+ inputValid=0; inputReady=1; tick; check(0,0,1,1);
+ inputValid=1; enable=0; tick; check(0,0,1,1);
+ enable=1; tick; check(1,1,2,2);
+""" if transfer else f"""
+ repeat({cycles - 1}) begin tick; check(0,0,1,1); end
+ tick; check(1,1,2,2);
+"""
+    return f"""module tb;
+reg clock=0,reset=1,restartA=0,restartB=0,cancel=0,enable=0;
+reg [7:0] inputData=0;
+reg inputValid=0,inputReady=0;
+wire stateA,stateB,observedReady;
+wire [1:0] statusA,statusB;
+{top} dut(.clock(clock),.reset(reset),.restartA(restartA),.restartB(restartB),
+ .cancel(cancel),.enable(enable),.inputData(inputData),.inputValid(inputValid),
+ .inputReady(inputReady),.stateA(stateA),.stateB(stateB),.statusA(statusA),
+ .statusB(statusB),.observedReady(observedReady));
+task tick; reg [5:0] saved; begin
+ #2; clock=1; #1; saved={{stateA,stateB,statusA,statusB}}; clock=0; #1;
+ if({{stateA,stateB,statusA,statusB}} !== saved) $fatal(1,"timing wrong edge");
+ if(observedReady !== inputReady) $fatal(1,"wait acquired or changed ready ownership");
+end endtask
+task check(input a,b,input [1:0] sa,sb); begin
+ if(stateA !== a || stateB !== b || statusA !== sa || statusB !== sb)
+  $fatal(1,"timing mismatch state=%d,%d status=%d,%d",stateA,stateB,statusA,statusB);
+end endtask
+initial begin
+ tick; check(0,0,0,0); reset=0;
+ enable=1; repeat(4) begin tick; check(0,0,0,0); end
+ restartA=1; restartB=1; enable=0; tick; check(0,0,1,1);
+ restartA=0; restartB=0; repeat(4) begin tick; check(0,0,1,1); end
+ enable=1;
+ {sequence}
+ repeat(3) begin tick; check(1,1,2,2); end
+ restartA=1; enable=0; tick; check(0,1,1,2);
+ restartA=0; tick; check(0,1,1,2);
+ cancel=1; restartA=1; tick; check(0,1,3,2);
+ cancel=0; tick; check(0,1,1,2);
+ restartA=0; tick; check(0,1,1,2);
+ enable=1;
+ {"" if transfer else f"repeat({cycles - 1}) begin tick; check(0,1,1,2); end"}
+ tick; check(1,1,2,2);
+ reset=1; #1; check(1,1,2,2); tick; check(0,0,0,0);
+ $display("REUSABLE_FSM_TARGET_PASS {profile}"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
+def required_timed_bench(top: str) -> str:
+    return f"""module tb;
+reg clockA=0,resetA=1,clockB=0,resetB=1;
+reg restartA=0,restartB=0,cancelA=0,cancelB=0,enableA=0,enableB=0;
+wire stateA,stateB;
+wire [1:0] statusA,statusB;
+{top} dut(.clockA(clockA),.resetA(resetA),.clockB(clockB),.resetB(resetB),
+ .restartA(restartA),.restartB(restartB),.cancelA(cancelA),.cancelB(cancelB),
+ .enableA(enableA),.enableB(enableB),.stateA(stateA),.stateB(stateB),
+ .statusA(statusA),.statusB(statusB));
+task tickA; begin #2; clockA=1; #1; clockA=0; #1; end endtask
+task tickB; begin #2; clockB=1; #1; clockB=0; #1; end endtask
+task checkA(input state,input [1:0] status); begin
+ if(stateA !== state || statusA !== status) $fatal(1,"formal timer A mismatch");
+end endtask
+task checkB(input state,input [1:0] status); begin
+ if(stateB !== state || statusB !== status) $fatal(1,"formal timer B mismatch");
+end endtask
+initial begin
+ tickA; checkA(0,0); tickB;
+ // No assertion about resetless B before explicit establishment.
+ resetA=0; restartB=1; tickB; checkB(0,1); checkA(0,0);
+ restartB=0; restartA=1; tickA; checkA(0,1); checkB(0,1);
+ restartA=0; enableA=1; enableB=1;
+ tickA; checkA(0,1); checkB(0,1);
+ tickA; checkA(0,1); checkB(0,1);
+ tickA; checkA(1,2); checkB(0,1);
+ tickB; checkB(0,1); enableB=0;
+ repeat(4) begin tickB; checkB(0,1); end
+ enableB=1; tickB; checkB(0,1); tickB; checkB(1,2);
+ resetA=1; #1; checkA(1,2); tickB; checkA(1,2); checkB(1,2);
+ tickA; checkA(0,0); checkB(1,2);
+ resetB=0; tickB; checkB(1,2); resetB=1; tickB; checkB(1,2);
+ restartB=1; enableB=0; tickB; checkB(0,1); checkA(0,0);
+ restartB=0; cancelB=1; tickB; checkB(0,3); checkA(0,0);
+ cancelB=0; restartB=1; tickB; checkB(0,1);
+ restartB=0; enableB=1; tickB; checkB(0,1); tickB; checkB(0,1); tickB; checkB(1,2);
+ $display("REUSABLE_FSM_TARGET_PASS required-timed"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
+def composed_timed_bench(top: str) -> str:
+    return f"""module tb;
+reg clock=0,reset=1,restart=0,cancel=0,enable=0;
+wire [1:0] status,firstStatus,secondStatus;
+wire firstActive,secondActive;
+{top} dut(.clock(clock),.reset(reset),.restart(restart),.cancel(cancel),.enable(enable),
+ .status(status),.firstStatus(firstStatus),.secondStatus(secondStatus),
+ .firstActive(firstActive),.secondActive(secondActive));
+task tick; begin #2; clock=1; #1; clock=0; #1; end endtask
+task check(input [1:0] root,a,b,input active); begin
+ if(status !== root || firstStatus !== a || secondStatus !== b ||
+    firstActive !== active || secondActive !== active)
+  $fatal(1,"composed timer mismatch root=%d children=%d,%d active=%d,%d",
+    status,firstStatus,secondStatus,firstActive,secondActive);
+end endtask
+initial begin
+ tick; check(0,0,0,0); reset=0;
+ restart=1; tick; check(1,1,1,1); restart=0;
+ repeat(3) begin tick; check(1,1,1,1); end
+ enable=1; tick; check(1,1,1,1); tick; check(1,2,1,1);
+ enable=0; repeat(3) begin tick; check(1,2,1,1); end
+ enable=1; tick; check(1,2,2,1); tick; check(2,2,2,0);
+ repeat(2) begin tick; check(2,2,2,0); end
+ restart=1; enable=0; tick; check(1,1,1,1);
+ cancel=1; tick; check(3,3,3,0);
+ cancel=0; tick; check(1,1,1,1); restart=0; enable=1;
+ tick; check(1,1,1,1); tick; check(1,2,1,1);
+ tick; check(1,2,2,1); tick; check(2,2,2,0);
+ reset=1; #1; check(2,2,2,0); tick; check(0,0,0,0);
+ $display("REUSABLE_FSM_TARGET_PASS composed-timed"); $finish;
+end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--profile", choices=(
-        "legacy", "controlled", "terminal",
-        "required", "required-material", "required-forwarded",
-        "composed-all", "composed-any", "composed-priority", "composed-nested",
+        "legacy", "controlled", "terminal", "timed", "timed-one", "timed-transfer",
+        "required", "required-material", "required-forwarded", "required-timed",
+        "composed-all", "composed-any", "composed-priority", "composed-nested", "composed-timed",
     ), default="legacy")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
@@ -284,14 +419,18 @@ def main() -> None:
             raise RuntimeError("required-domain replay must retain real hierarchical instances")
         if "__nodal_required_clock" not in design:
             raise RuntimeError("required-domain replay has no inferred child clock ports")
-        bench = required_bench(top, args.profile)
+        bench = required_timed_bench(top) if args.profile == "required-timed" else required_bench(top, args.profile)
     elif len(modules) != 1:
         raise RuntimeError(f"expected one generated module, got {modules}")
     else:
         top = modules[0]
     manifest["top"] = top
     manifest["modules"] = modules
-    if composed:
+    if args.profile.startswith("timed"):
+        bench = timed_bench(top, args.profile)
+    elif args.profile == "composed-timed":
+        bench = composed_timed_bench(top)
+    elif composed:
         bench = composed_bench(top, args.profile)
     elif args.profile == "controlled":
         bench = controlled_bench(top)

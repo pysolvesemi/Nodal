@@ -856,3 +856,29 @@ under `.work/fifo-target-actual`, `.work/fifo-handshake-predecessor`,
 `.log` files). These are executed waveform checks, not a physical CDC proof.
 Source/API final focused checks and publication remain a separate pending slice;
 this harness checkpoint does not close F57. No CI or broad qualification ran.
+
+### Elastic FIFO source/API checkpoint
+
+Stream now owns actual payload, valid and forward-ready identities. Explicit
+sink acceptance or FIFO attachment owns ready exactly once; unconsumed ready is
+false. Normal physical assignment finalization supplies that default and rejects
+duplicate ownership. Existing pipeline placeholders explicitly reject carriers
+rather than silently dropping their valid/ready semantics. FIFO records retain
+all three sampled inputs and coherent result roles; exact bounds/state budget
+are checked independently in source and bridge.
+
+Source focused checks pass **58/58**: FIFO 12, snapshot handshake 10, Gray/Pulse
+13, level 9 and Interface 14 (configured actual native executable). Frozen actual
+public replays provide all 14 waveform profiles above. An additional actual
+anchored ready-feedback source replay passes native admission. Source sampling
+uses the existing bounded iterative owner with a separate inference cache mode;
+anchored feedback is legal while conflicting and unanchored feedback reject.
+All 12 source files pass formatting and scoped diff checks.
+
+A subsequent native trust-boundary audit confirmed malformed ready-only feedback
+with constant payload could self-certify the source through its own ready-domain
+attribute. That native-only attribution repair is active, with source rejection
+already tested; this source checkpoint does not claim FIFO closure while the
+known malformed-native acceptance remains. Evidence is retained in
+`.work/fifo-source-tests.log`, `.work/fifo-feedback-replay` and the frozen source
+manifest. No CI or broad qualification was run.

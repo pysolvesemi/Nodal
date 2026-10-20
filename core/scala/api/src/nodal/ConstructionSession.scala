@@ -50,9 +50,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       destination: ClockDomain,
       stages: Int,
       kind: String,
+      valid: Option[Expr[Bool]] = None,
+      ready: Option[Expr[Bool]] = None,
+      depth: Option[Int] = None,
+      var results: Vector[(ExpressionRef, String)] = Vector.empty,
       var sourceDomain: Option[String] = None,
       var destinationDomain: Option[String] = None
-  )
+  ):
+    def sourceInputs: Vector[Expr[?]] = Vector(input) ++ valid
+    def sampledInputs: Vector[Expr[?]] = sourceInputs ++ ready
+    def identity(reference: ExpressionRef): ExpressionRef = results.headOption.map(_._1)
+      .getOrElse(reference)
+    def role(reference: ExpressionRef): String = results.find(_._1 == reference).map(_._2)
+      .getOrElse("payload")
   private val executableCrossings = mutable.LinkedHashMap.empty[ExpressionRef, ExecutableCrossing]
   private var crossingStateBits = BigInt(0)
   private val pulseValues = new IdentityHashMap[Expr[Bool], java.lang.Boolean]()
@@ -62,6 +72,160 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   def classifyPulse(value: Expr[Bool]): Unit =
     val _ = pulseValues.put(value, java.lang.Boolean.TRUE)
+
+  private def streamTransaction[A](label: String)(body: => A): A =
+    try
+      closeBehavioralChain()
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then crossingFailure(s"$label requires module-level construction; callbacks are unsupported")
+      body
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, label)
+        scala.util.Failure[Nothing](failure).get
+
+  private def ownedStreamValue(value: Expr[?], label: String, bool: Boolean = false): Unit =
+    val reference = valueReference(value)
+    val owner = reference match
+      case value: DeclarationRef => value.module
+      case value: ExpressionRef => value.module
+    val dataType = CandidateRuntime.expressionDataType(value).getOrElse(
+      crossingFailure(s"$label requires an actual owned digital value")
+    )
+    if owner != currentModule.handle ||
+      (bool && CandidateRuntime.typeDescriptor(dataType) != KernelTypeDescriptor("Bool"))
+    then
+      crossingFailure(
+        s"$label requires an actual owned ${if bool then "Bool" else "digital"} value"
+      )
+
+  private def newStreamReady(): Signal[Bool] =
+    val ready = new Signal(Bool, KernelSignalKind.Wire)
+    val default = false.B
+    val reference = declarationIds.get(ready)
+    val module = records(reference.module)
+    val declaration = module.declarations(reference.index)
+    module.declarations.update(
+      reference.index,
+      declaration.copy(attributes =
+        declaration.attributes :+ ("stream_ready_default" -> default)
+      )
+    )
+    ready
+
+  def stream[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    streamTransaction("Stream"):
+      ownedStreamValue(payload, "Stream payload")
+      ownedStreamValue(valid, "Stream valid", bool = true)
+      val result = new Stream(payload, valid, newStreamReady())
+      val reference = declarationIds.get(result.readyWire)
+      val module = records(reference.module)
+      val declaration = module.declarations(reference.index)
+      module.declarations.update(
+        reference.index,
+        declaration.copy(attributes =
+          declaration.attributes ++ Vector("stream_payload" -> payload, "stream_valid" -> valid)
+        )
+      )
+      result
+
+  def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
+    streamTransaction("Stream.accept"):
+      ownedStreamValue(stream.payload, "Stream payload")
+      ownedStreamValue(stream.valid, "Stream valid", bool = true)
+      ownedStreamValue(stream.readyWire, "Stream ready", bool = true)
+      ownedStreamValue(ready, "Stream sink readiness", bool = true)
+      val reference = declarationIds.get(stream.readyWire)
+      if !records(reference.module).declarations(reference.index).attributes.exists(
+          _._1 == "stream_ready_default"
+        )
+      then crossingFailure("Stream ready requires its actual owned wire")
+      assignSignalSelection(stream.readyWire, ready)
+
+  /** Finalize forward ready references through the ordinary physical assignment owner. There is no
+    * separate connectivity graph: duplicate drivers reject and unattached sinks receive false.
+    */
+  private def finalizeStreamReady(): Unit =
+    val readyDeclarations = records.valuesIterator.flatMap(_.declarations).filter(
+      _.attributes.exists(_._1 == "stream_ready_default")
+    ).map(value => value.reference -> value).toMap
+    val counts = mutable.HashMap.empty[DeclarationRef, Int]
+    operations.iterator.filter(operation =>
+      Set("assignment", "value-connect")(operation.kind) && operation.values.size == 2
+    ).foreach: operation =>
+      operation.values.head match
+        case value: AnyRef =>
+          Option(declarationIds.get(value)).filter(readyDeclarations.contains).foreach: reference =>
+            val count = counts.getOrElse(reference, 0) + 1
+            if count > 1 then crossingFailure("Stream ready has more than one owner")
+            counts.update(reference, count)
+        case _ => ()
+    readyDeclarations.toVector.sortBy((reference, _) =>
+      (reference.module, reference.index)
+    ).foreach: (reference, declaration) =>
+      if !counts.contains(reference) then
+        val default = declaration.attributes.collectFirst:
+          case ("stream_ready_default", value: Expr[?]) => value
+        .get
+        val ordinal = nextDigitalEffectOrdinal.getOrElse(reference.module, 0)
+        nextDigitalEffectOrdinal.update(reference.module, ordinal + 1)
+        val values = Vector(declaration.value, default)
+        operations += Operation(reference.module, "assignment", values, sourceOrdinal = ordinal)
+        semanticOrigin.captureOperation(reference.module, "assignment", values)
+
+  def asyncFifo[A <: Data](input: Stream[A], to: ClockDomain, depth: Int): Stream[A] =
+    streamTransaction("Cdc.fifo"):
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure("Cdc.fifo destination and lexical domain must belong to the active Module")
+      if !ExecutableCrossingContract.validDepth(depth) then
+        crossingFailure("Cdc.fifo depth must be a power of two from 2 through 256")
+      ownedStreamValue(input.payload, "Cdc.fifo payload")
+      ownedStreamValue(input.valid, "Cdc.fifo valid", bool = true)
+      val dataType = CandidateRuntime.expressionDataType(input.payload).get
+      val bits = shapeTypeFootprint(
+        dataType,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true
+      ).getOrElse(crossingFailure("Cdc.fifo requires a finite digital bit pattern"))
+      val stateBits = ExecutableCrossingContract.fifoStateBits(bits, depth)
+      if crossingStateBits + stateBits > ExecutableCrossingContract.MaximumStateBits then
+        crossingFailure("Cdc.fifo generated state exceeds its expansion budget")
+      val ready = newStreamReady()
+      val operands = Vector(input.payload, input.valid, ready)
+      val payload = new KernelExpr[A](
+        operands,
+        resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+        operation = Some("cdc_fifo")
+      )
+      val valid = new KernelExpr[Bool](
+        operands,
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some("cdc_fifo")
+      )
+      val sourceReady = new KernelExpr[Bool](
+        operands,
+        resultType = Some(KernelTypeDescriptor("Bool")),
+        operation = Some("cdc_fifo")
+      )
+      val record = ExecutableCrossing(
+        input.payload,
+        to,
+        2,
+        "fifo",
+        Some(input.valid),
+        Some(ready),
+        Some(depth)
+      )
+      record.results = Vector(payload -> "payload", valid -> "valid", sourceReady -> "ready")
+        .map((value, role) => captureExpression(value).get -> role)
+      record.results.foreach((reference, _) => executableCrossings.update(reference, record))
+      crossingStateBits += stateBits
+      acceptStream(input, sourceReady)
+      new Stream(payload, valid, ready)
 
   def levelSync(bit: Expr[Bool], to: ClockDomain, stages: Int): Expr[Bool] =
     executableCrossing(bit, to, stages, "sync")
@@ -137,7 +301,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         record.stages,
         record.kind,
         ExecutableCrossingContract.contract(record.kind),
-        ExecutableCrossingContract.obligations(record.kind)
+        ExecutableCrossingContract.obligations(record.kind),
+        record.depth,
+        Option.when(
+          record.kind == "fifo"
+        )(expressionPath(record.identity(expressionIds.get(expression)))),
+        record.role(expressionIds.get(expression))
       ))
     else None
 
@@ -2056,14 +2225,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     def behavioralRoot(region: Option[DigitalValueRegionRecord]): Option[ExpressionRef] =
       sequentialRoot(region)
     // One actual dependency traversal serves ordinary samples and strict crossing-source inference.
-    // A verified crossing is a destination-owned cut; its source edge remains in its snapshot.
+    // Verified results cut at their role-owned domain; all sampled edges remain in the record.
     final case class SampleFacts(
         domains: Set[String],
         sources: Set[DeclarationRef | ExpressionRef],
         crossings: Set[ExpressionRef],
         pulseClassified: Boolean = false
     )
-    val sampleCache = mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
+    val sampleCache =
+      mutable.HashMap.empty[(Long, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
     val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
     var fsmControlEdges = 0L
     def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
@@ -2077,9 +2247,44 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         }
       )
     var cachedFacts = 0L
-    def sampleFacts(value: Any, owner: Long, strict: Boolean): SampleFacts =
-      val cache =
-        sampleCache.getOrElseUpdate((owner, strict), new IdentityHashMap[AnyRef, SampleFacts]())
+    def combinedFacts(
+        values: Vector[Expr[?]],
+        owner: Long,
+        strict: Boolean,
+        inferSourceOwnership: Boolean = false
+    ): SampleFacts =
+      val facts = values.map(sampleFacts(_, owner, strict, inferSourceOwnership))
+      SampleFacts(
+        facts.iterator.flatMap(_.domains).toSet,
+        facts.iterator.flatMap(_.sources).toSet,
+        facts.iterator.flatMap(_.crossings).toSet,
+        facts.exists(_.pulseClassified)
+      )
+    def sourceDomain(reference: ExpressionRef, crossing: ExecutableCrossing): String =
+      crossing.sourceDomain.getOrElse:
+        // Infer through source-owned ready results in the same bounded worklist. A real payload
+        // or valid anchor can establish ownership even when valid is fed by this FIFO's ready.
+        val facts = combinedFacts(
+          crossing.sourceInputs,
+          reference.module,
+          strict = true,
+          inferSourceOwnership = true
+        )
+        if facts.domains.size != 1 then
+          crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
+        val result = facts.domains.head
+        crossing.sourceDomain = Some(result)
+        result
+    def sampleFacts(
+        value: Any,
+        owner: Long,
+        strict: Boolean,
+        inferSourceOwnership: Boolean = false
+    ): SampleFacts =
+      val cache = sampleCache.getOrElseUpdate(
+        (owner, strict, inferSourceOwnership),
+        new IdentityHashMap[AnyRef, SampleFacts]()
+      )
       val root = value.asInstanceOf[AnyRef]
       Option(cache.get(root)).getOrElse:
         val pending = mutable.ArrayDeque[Any](value)
@@ -2151,12 +2356,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               expressionRef.flatMap(executableCrossings.get) match
                 case Some(crossing) =>
                   if strict && crossing.kind == "pulse" then pulseClassified = true
-                  crossings += expressionRef.get
-                  sourceRoots += expressionRef.get
-                  domains += resolved.getOrElse(
-                    domainRef(crossing.destination),
-                    crossingFailure("crossing destination has no actual resolved domain")
-                  )
+                  crossings += crossing.identity(expressionRef.get)
+                  sourceRoots += crossing.identity(expressionRef.get)
+                  if crossing.role(expressionRef.get) == "ready" then
+                    if inferSourceOwnership then enqueue(crossing.sourceInputs)
+                    else domains += sourceDomain(expressionRef.get, crossing)
+                  else
+                    domains += resolved.getOrElse(
+                      domainRef(crossing.destination),
+                      crossingFailure("crossing destination has no actual resolved domain")
+                    )
                 case None => reference match
                     case expression: KernelExpr[?] =>
                       if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
@@ -2201,7 +2410,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val firstBoundary = mutable.HashMap.empty[DeclarationRef | ExpressionRef, ExpressionRef]
         var lineageEdges = 0
         facts.crossings.toVector.sortBy(_.index).foreach: boundary =>
-          val roots = sampleFacts(executableCrossings(boundary).input, owner, strict = true).sources
+          val roots = combinedFacts(
+            executableCrossings(boundary).sampledInputs,
+            owner,
+            strict = true
+          ).sources
           roots.foreach: root =>
             lineageEdges += 1
             if lineageEdges > 262144 then
@@ -2259,8 +2472,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           commonResetLineage(reset).view.mapValues(_._1).toMap
         }
       )
-    executableCrossings.foreach: (reference, crossing) =>
-      val facts = sampleFacts(crossing.input, reference.module, strict = true)
+    executableCrossings.iterator.filter((reference, crossing) =>
+      crossing.identity(reference) == reference
+    ).foreach: (reference, crossing) =>
+      val facts = combinedFacts(crossing.sourceInputs, reference.module, strict = true)
       verifyReconvergence(facts, reference.module)
       if crossing.kind != "pulse" && facts.pulseClassified then
         crossingFailure(
@@ -2273,7 +2488,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         domainRef(crossing.destination),
         crossingFailure(s"Cdc.${crossing.kind} destination has no actual resolved domain")
       )
-      val source = sources.head
+      val source = sourceDomain(reference, crossing)
+      crossing.ready.foreach: ready =>
+        val readyFacts = sampleFacts(ready, reference.module, strict = true)
+        if readyFacts.domains.exists(_ != destination) then
+          crossingFailure("Cdc.fifo destination ready must belong to its actual destination domain")
+        verifyReconvergence(readyFacts, reference.module)
       if source == destination then
         crossingFailure(s"Cdc.${crossing.kind} requires distinct source and destination domains")
       if !domainsByPath.get(source).exists(_.reference.module == reference.module) ||
@@ -2290,6 +2510,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
       crossing.sourceDomain = Some(source)
       crossing.destinationDomain = Some(destination)
+    records.valuesIterator.flatMap(_.declarations).foreach: declaration =>
+      val values = declaration.attributes.collect:
+        case ("stream_payload" | "stream_valid", value: Expr[?]) => value
+      if values.nonEmpty then
+        val facts = combinedFacts(values, declaration.reference.module, strict = true)
+        if facts.domains.size != 1 then
+          crossingFailure("Stream payload and valid require exactly one known source domain")
+        verifyReconvergence(facts, declaration.reference.module)
+        val readyFacts = sampleFacts(declaration.value, declaration.reference.module, strict = true)
+        if readyFacts.domains.exists(_ != facts.domains.head) then
+          crossingFailure("Stream ready must belong to its actual carrier domain")
+        verifyReconvergence(readyFacts, declaration.reference.module)
     operations.zipWithIndex.foreach: (operation, index) =>
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
@@ -8329,6 +8561,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         s"captured constructor failure invalidated this transaction: ${failure.getClass.getName}",
         Some(site)
       )
+    finalizeStreamReady()
     val rootHandle = moduleHandle(root)
     if moduleStack.size != 1 || moduleStack.last.handle != rootHandle then
       fail("NODAL-LIFECYCLE-017", "construction closed with an unattached child Module")

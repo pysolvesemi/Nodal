@@ -194,6 +194,25 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(throw new IllegalStateException("Cdc.handshake requires active construction"))
       .executableCrossing(value, to, 2, "handshake")
 
+  def stream[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    active.getOrElse(throw new IllegalStateException("Stream requires active construction"))
+      .stream(payload, valid)
+
+  def acceptStream[A <: Data](stream: Stream[A], ready: Expr[Bool]): Unit =
+    active.getOrElse(throw new IllegalStateException("Stream.accept requires active construction"))
+      .acceptStream(stream, ready)
+
+  def asyncFifo[A <: Data](stream: Stream[A], to: ClockDomain, depth: Int): Stream[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.fifo requires active construction"))
+      .asyncFifo(stream, to, depth)
+
+  def unsupportedStreamConsumer(name: String): Nothing =
+    val failure = new IllegalStateException(
+      s"NODAL-PIPELINE-059-UNSUPPORTED: $name has no executable elastic Stream contract"
+    )
+    poisonConstructor(failure, name)
+    throw failure
+
   def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
     active.getOrElse(throw new IllegalStateException("Rdc.sync requires active construction"))
       .resetSync(reset, to, stages)

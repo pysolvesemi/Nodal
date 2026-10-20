@@ -384,6 +384,9 @@ private[nodal] object ReproducibilityContract:
           "source_domain" -> string(crossing.sourceDomain),
           "destination_domain" -> string(crossing.destinationDomain),
           "stages" -> number(crossing.stages),
+          "depth" -> crossing.depth.map(number).getOrElse(JNull),
+          "identity" -> optionalString(crossing.identity),
+          "result_role" -> string(crossing.resultRole),
           "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
         )
       ) ++ value.memory.toVector.map(port =>
@@ -739,6 +742,9 @@ private[nodal] object ReproducibilityContract:
           "source_domain" -> string(crossing.sourceDomain),
           "destination_domain" -> string(crossing.destinationDomain),
           "stages" -> number(crossing.stages),
+          "depth" -> crossing.depth.map(number).getOrElse(JNull),
+          "identity" -> optionalString(crossing.identity),
+          "result_role" -> string(crossing.resultRole),
           "obligations" -> obj(crossing.obligations.map((name, value) => name -> string(value))*)
         )
     val originEntries = snapshot.origins

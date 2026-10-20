@@ -1240,35 +1240,44 @@ private[nodal] object DigitalValueMlir:
         expression.path
       )
       expression.crossing.foreach: crossing =>
-        requireValid(
-          expression.region.isEmpty && expression.operands.size == 1 &&
-            expression.dataType == expressionType(expression.operands.head) &&
-            (ExecutableCrossingContract.bitPatternPayload(
-              crossing.kind
-            ) || expression.dataType == "Bool") &&
-            ExecutableCrossingContract.Kinds(crossing.kind) &&
-            expression.operation == "cdc_" + crossing.kind &&
-            crossing.contract == ExecutableCrossingContract.contract(crossing.kind) &&
-            crossing.obligations.size == ExecutableCrossingContract.obligations(
-              crossing.kind
-            ).size &&
-            crossing.obligations.toMap == ExecutableCrossingContract.obligations(
-              crossing.kind
-            ).toMap &&
-            ExecutableCrossingContract.validStages(crossing.kind, crossing.stages) &&
-            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
-            expression.caseIds.isEmpty && expression.structure.isEmpty &&
-            expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
-            crossing.sourceDomain != crossing.destinationDomain &&
-            Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
-              modules(expression.owner).domains.exists(value =>
-                value.path == domain && value.kind != "required"
-              )
-            ),
-          "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
-          expression.path
-        )
-        if ExecutableCrossingContract.commonResetEpoch(crossing.kind) then
+        if crossing.kind == "fifo" then
+          requireValid(
+            expression.operation == "cdc_fifo",
+            "FIFO results require the owned FIFO operation",
+            expression.path
+          )
+        else
+          requireValid(
+            expression.region.isEmpty && expression.operands.size == 1 &&
+              expression.dataType == expressionType(expression.operands.head) &&
+              (ExecutableCrossingContract.bitPatternPayload(
+                crossing.kind
+              ) || expression.dataType == "Bool") &&
+              ExecutableCrossingContract.Kinds(crossing.kind) &&
+              expression.operation == "cdc_" + crossing.kind &&
+              crossing.contract == ExecutableCrossingContract.contract(crossing.kind) &&
+              crossing.obligations.size == ExecutableCrossingContract.obligations(
+                crossing.kind
+              ).size &&
+              crossing.obligations.toMap == ExecutableCrossingContract.obligations(
+                crossing.kind
+              ).toMap &&
+              ExecutableCrossingContract.validStages(crossing.kind, crossing.stages) &&
+              crossing.depth.isEmpty && crossing.identity.isEmpty && crossing.resultRole == "payload" &&
+              expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+              expression.caseIds.isEmpty && expression.structure.isEmpty &&
+              expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
+              crossing.sourceDomain != crossing.destinationDomain &&
+              Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
+                modules(expression.owner).domains.exists(value =>
+                  value.path == domain && value.kind != "required"
+                )
+              ),
+            "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
+            expression.path
+          )
+        if crossing.kind != "fifo" && ExecutableCrossingContract.commonResetEpoch(crossing.kind)
+        then
           val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
           requireValid(
             source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
@@ -1335,6 +1344,62 @@ private[nodal] object DigitalValueMlir:
         )
       expression.operands.foreach: operand =>
         requireVisible(operand, expression.owner, expression.region, expression.path)
+
+    // The source exposes three ordinary expression identities, but the native boundary is
+    // one operation. Validate the complete group once rather than treating its control
+    // results as unrelated payload crossings.
+    private val fifoResults = snapshot.digitalExpressions.filter(_.operation == "cdc_fifo")
+      .groupBy(expression =>
+        expression.crossing.flatMap(_.identity).getOrElse(
+          fail("FIFO results require one stable boundary identity", expression.path)
+        )
+      ).map: (identity, results) =>
+        requireValid(
+          results.size == 3 && results.flatMap(_.crossing.map(_.resultRole)).sorted ==
+            Vector("payload", "ready", "valid"),
+          "FIFO requires exactly one payload, valid and ready result",
+          identity
+        )
+        val ordered = Vector("payload", "valid", "ready").map(role =>
+          results.find(_.crossing.exists(_.resultRole == role)).get
+        )
+        val payload = ordered.head
+        val crossing = payload.crossing.get
+        requireValid(
+          payload.path == identity && payload.operands.size == 3 &&
+            payload.dataType == expressionType(payload.operands.head) &&
+            payload.operands.drop(1).forall(expressionType(_) == "Bool") &&
+            ordered.drop(1).forall(_.dataType == "Bool") &&
+            results.forall(result =>
+              result.owner == payload.owner && result.region.isEmpty &&
+                result.operands == payload.operands && result.literal.isEmpty &&
+                result.enumIdentity.isEmpty && result.caseIds.isEmpty &&
+                result.structure.isEmpty && result.materializationIntent.isEmpty &&
+                result.memory.isEmpty && result.reset.isEmpty &&
+                result.crossing.exists(_.copy(resultRole = "payload") == crossing)
+            ) &&
+            crossing.kind == "fifo" &&
+            crossing.contract == ExecutableCrossingContract.contract("fifo") &&
+            crossing.obligations.size == ExecutableCrossingContract.obligations("fifo").size &&
+            crossing.obligations.toMap == ExecutableCrossingContract.obligations("fifo").toMap &&
+            crossing.depth.exists(ExecutableCrossingContract.validDepth) &&
+            ExecutableCrossingContract.validStages("fifo", crossing.stages) &&
+            crossing.sourceDomain != crossing.destinationDomain &&
+            Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
+              modules(payload.owner).domains.exists(value =>
+                value.path == domain && value.kind != "required"
+              )
+            ),
+          "FIFO requires coherent typed results, exact operands, closed obligations, bounded depth and actual endpoints",
+          identity
+        )
+        val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
+        requireValid(
+          source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
+          "fifo requires common nonempty physical reset roots and polarities with safe release",
+          identity
+        )
+        identity -> ordered
 
     requireValid(
       snapshot.digitalCollections.size <= 65536 &&
@@ -2615,6 +2680,61 @@ private[nodal] object DigitalValueMlir:
         output += s"${quoted("nodal.generate")}(${header.map(_._1).mkString(", ")}) <$attributes> " +
           s"({\n$block\n}) : (${header.map(_._2).mkString(", ")}) -> ()${sourceLocation(region.path)}"
 
+      def emitFifo(
+          identity: String,
+          depth: Int,
+          output: mutable.ArrayBuffer[String]
+      ): Unit =
+        if !values.contains(identity) then
+          requireValid(
+            depth <= 128 && active.add(identity),
+            "FIFO actual dependency graph contains a cycle or exceeds depth limit",
+            identity
+          )
+          val results = fifoResults(identity)
+          val payload = results.head
+          val crossing = payload.crossing.get
+          results.foreach(result => prepareType(result.dataType, result.path, None, output))
+          val operands = payload.operands.map(emit(_, depth + 1, None, output))
+          val resultTypes = results.map(result => computedType(result.dataType, result.path))
+          requireValid(
+            operands.zip(payload.operands).forall((value, input) =>
+              value._2 == nativeType(expressionType(input), input)
+            ) &&
+              operands.map(_._2) == resultTypes &&
+              exactValueType(payload.dataType, expressionType(payload.operands.head), identity),
+            "FIFO requires the exact complete payload type and Bool control operands/results",
+            identity
+          )
+          crossingStateBits += ExecutableCrossingContract.fifoStateBits(
+            bitPatternWidth(payload.dataType, identity),
+            crossing.depth.get
+          )
+          requireValid(
+            crossingStateBits <= ExecutableCrossingContract.MaximumStateBits,
+            "crossing state exceeds its expansion budget",
+            identity
+          )
+          val result = s"%async_fifo_$ordinal"
+          ordinal += 1
+          val obligations = crossing.obligations.map((name, value) =>
+            s"$name = ${quoted(value)}"
+          ).mkString("obligations = {", ", ", "}, ")
+          val attributes =
+            s"{kind = ${quoted(crossing.kind)}, contract = ${quoted(crossing.contract)}, " +
+              s"depth = ${crossing.depth.get} : i64, source_domain = ${domainReference(crossing.sourceDomain)}, " +
+              s"destination_domain = ${domainReference(crossing.destinationDomain)}, " +
+              obligations + s"metadata = ${metadata(identity, false)}}"
+          output += s"$result:3 = ${quoted("nodal.async_fifo")}(${operands.map(_._1).mkString(", ")}) <$attributes>" +
+            s" : (${operands.map(_._2).mkString(", ")}) -> (${resultTypes.mkString(", ")})${sourceLocation(identity)}"
+          val height = payload.operands.map(heights).max + 1
+          results.zip(resultTypes).zipWithIndex.foreach: (value, index) =>
+            val (expression, dataType) = value
+            values.update(expression.path, s"$result#$index" -> dataType)
+            heights.update(expression.path, height)
+            proofs.update(expression.path, Unknown)
+          active.remove(identity)
+
       def emit(
           path: String,
           depth: Int,
@@ -2663,6 +2783,14 @@ private[nodal] object DigitalValueMlir:
         else if machineResults.contains(path) then
           emitMachine(machineResults(path), depth + 1, output)
           values.getOrElse(path, fail("flat FSM result has no actual producer", path))
+        else if expressions.get(path).exists(_.operation == "cdc_fifo") then
+          emitFifo(expressions(path).crossing.get.identity.get, depth, output)
+          requireValid(
+            depth + heights(path) <= 128,
+            "digital expression graph exceeds depth limit",
+            path
+          )
+          values.getOrElse(path, fail("FIFO result has no actual producer", path))
         else if conditionals.contains(path) then
           emitConditional(conditionals(path), depth, output).getOrElse(
             fail("statement structural if cannot be used as a value", path)

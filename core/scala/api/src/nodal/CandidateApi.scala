@@ -671,11 +671,25 @@ object Pulse:
     ConstructionKernel.classifyPulse(value)
     new Pulse(value)
 
-/** Minimal stream carrier used only to freeze the asynchronous-FIFO crossing shape. */
-final class Stream[A <: Data] private[nodal] (val payload: Expr[A])
+/** Elastic carrier. Transfer occurs only when valid and ready are both asserted at its domain edge.
+  * Payload and valid must remain stable while stalled; reading payload is not consumption.
+  */
+final class Stream[A <: Data] private[nodal] (
+    val payload: Expr[A],
+    val valid: Expr[Bool],
+    private[nodal] val readyWire: Signal[Bool]
+):
+  def ready: Expr[Bool] = readyWire
+
+  /** Attach the unique sink. An unattached carrier is not ready. */
+  def accept(ready: Expr[Bool]): Unit = ConstructionKernel.acceptStream(this, ready)
 
 object Stream:
-  def apply[A <: Data](payload: Expr[A]): Stream[A] = new Stream(payload)
+  /** Continuously offers the payload, subject to the same stall-stability contract. */
+  def apply[A <: Data](payload: Expr[A]): Stream[A] = apply(payload, true.B)
+
+  def apply[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
+    ConstructionKernel.stream(payload, valid)
 
 final case class CdcWaiver(
     id: String,
@@ -713,9 +727,7 @@ object Cdc:
       stream: Stream[A],
       to: ClockDomain,
       depth: Int = 4
-  ): Stream[A] =
-    CandidateRuntime.statement(to, depth)
-    stream
+  ): Stream[A] = ConstructionKernel.asyncFifo(stream, to, depth)
 
   def waive[A <: Data](
       value: Expr[A],

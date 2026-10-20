@@ -148,7 +148,10 @@ private[nodal] final case class KernelExecutableCrossingSnapshot(
     stages: Int,
     kind: String,
     contract: String,
-    obligations: Vector[(String, String)]
+    obligations: Vector[(String, String)],
+    depth: Option[Int] = None,
+    identity: Option[String] = None,
+    resultRole: String = "payload"
 )
 
 /** Exact declaration association. Address/type proofs remain attached to actual operands. */

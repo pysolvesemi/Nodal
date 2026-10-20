@@ -147,6 +147,8 @@ private[nodal] object ScalaToMlirBridge:
     )
     private val physicalControls = new PhysicalControlMlir.Resolver(snapshot)
     private val clockControls = new ClockMlir.Resolver(snapshot, physicalControls)
+    private val clockRelationships = new ClockRelationshipMlir.Plan(snapshot, clockControls)
+    clockControls.validateRelationships(clockRelationships.permitsSampling)
     private val ownedClockModules =
       snapshot.digitalExpressions.filter(_.clock.nonEmpty).map(_.owner).toSet
     private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues, clockControls)
@@ -2671,7 +2673,7 @@ ${indent(body, 2)}
             bridgeMetadata(expression.path, Vector.empty),
             location(expression.path)
           ),
-        interfaceValues.roots(module) ++ sequential.roots,
+        interfaceValues.roots(module) ++ sequential.roots ++ clockRelationships.roots(module.path),
         path =>
           "@" + quoted(stableLocalSymbol(
             "domain",
@@ -2764,6 +2766,14 @@ ${indent(body, 2)}
       body ++= digital.lines
       values ++= digital.values
       body ++= sequential.render(
+        values.toMap,
+        stableLocalSymbol,
+        path => bridgeMetadata(path, Vector.empty),
+        location
+      )
+
+      body ++= clockRelationships.render(
+        module,
         values.toMap,
         stableLocalSymbol,
         path => bridgeMetadata(path, Vector.empty),

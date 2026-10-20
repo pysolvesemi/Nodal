@@ -343,6 +343,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def clockIdentity(value: Expr[Clock], owner: Long, depth: Int = 0)
       : Either[(DeclarationRef, Long), ExpressionRef] =
     if depth > 128 then clockFailure("clock graph exceeds depth budget")
+    if !CandidateRuntime.expressionDataType(value).exists(dataType =>
+        CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Clock")
+      )
+    then
+      clockFailure("clock proof requires exact scalar Clock capability, never a cast control")
     val reference = assignmentReference(value)
     reference match
       case expression: ExpressionRef if clockRecords.contains(expression) =>
@@ -485,6 +490,99 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     record.destination = Some(result)
     result
+
+  def generatedDomain(
+      name: String,
+      clock: Expr[Clock],
+      from: ClockDomain,
+      relation: ClockRelation,
+      reset: Expr[Reset]
+  ): ClockDomain = clockTransaction:
+    if !stimulusOnly then
+      val owner = currentModule.handle
+      if domainRef(from).module != owner || from.clock.isEmpty then
+        behavioralFailure(
+          "relationship parent requires one actual owned domain",
+          ClockRelationshipModel.Code
+        )
+      val source = clockIdentity(from.clock.get, owner)
+      val destination = clockIdentity(clock, owner)
+      relation match
+        case ClockRelation.Same
+            if source != destination && (source.isRight || destination.isRight) =>
+          behavioralFailure(
+            "distinct owned gate/mux producers cannot become Same",
+            ClockRelationshipModel.Code
+          )
+        case ClockRelation.Ratio(multiply, divide, phase) =>
+          if multiply <= 0 || divide <= 0 || !java.lang.Double.isFinite(phase.degrees) then
+            behavioralFailure(
+              "ratio requires positive int32 factors and finite phase",
+              ClockRelationshipModel.Code
+            )
+        case _ => ()
+    new ClockDomain(
+      name,
+      reset,
+      KernelDomainKind.Generated,
+      relation = Some(relation),
+      clock = Some(clock),
+      parent = Some(from),
+      executableRelationship = !stimulusOnly
+    )
+
+  private def relationshipSnapshot(domain: DomainRecord): Option[KernelClockRelationshipSnapshot] =
+    Option.when(domain.domain.executableRelationship):
+      val actual = domain.domain
+      val parent = actual.parent.get
+      val owner = domain.reference.module
+      val structural =
+        clockIdentity(parent.clock.get, owner) == clockIdentity(actual.clock.get, owner)
+      val kind = actual.relation.get match
+        case ClockRelation.Same => "same"
+        case other => relationName(other)
+      val proof = ClockRelationshipModel.proof(kind, structural)
+      val ratio = actual.relation.collect { case value: ClockRelation.Ratio => value }
+      KernelClockRelationshipSnapshot(
+        domainPath(domain.reference) + ".relationship",
+        domainPath(domainRef(parent)),
+        domainPath(domain.reference),
+        domainSourcePath(parent.clock.get),
+        domainSourcePath(actual.clock.get),
+        kind,
+        ClockRelationshipModel.Contract,
+        proof,
+        ClockRelationshipModel.obligations(kind, proof),
+        ratio.map(_.multiply),
+        ratio.map(_.divide),
+        ratio.map(value => java.lang.Double.toString(value.phase.degrees)),
+        actual.relation.collect { case ClockRelation.Synchronous(phaseKnown) => phaseKnown }
+      )
+
+  private def relationshipIndex(): ClockRelationshipModel.Index =
+    val actual = if stimulusOnly then Vector.empty
+    else
+      records.valuesIterator.flatMap(_.domains).filter(_.domain.clock.nonEmpty).toVector
+    val endpoints = actual.map: record =>
+      val domain = record.domain
+      val identity = clockIdentity(domain.clock.get, record.reference.module)
+      val physical = identity match
+        case Left((reference, offset)) => "physical:" + declarationPath(reference) + ":" + offset
+        case Right(reference) => "derived:" + expressionPath(reference)
+      ClockRelationshipModel.Endpoint(
+        domainPath(record.reference),
+        modulePath(record.reference.module),
+        domainSourcePath(domain.clock.get),
+        physical,
+        identity.isLeft,
+        inheritedClockEdge(domain).map(clockEdgeName).getOrElse("unknown"),
+        domain.frequency.map(value => java.lang.Double.toString(value.hertz))
+      )
+    new ClockRelationshipModel.Index(
+      endpoints,
+      actual.flatMap(relationshipSnapshot),
+      (message, path) => fail(ClockRelationshipModel.Code, message, Some(path))
+    )
 
   def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
       : ClockDomain =
@@ -2371,6 +2469,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       resolved: Map[DomainRef, String],
       interfaces: DigitalInterfaceContract.Capture
   ): Unit =
+    val relationships = relationshipIndex()
     val roots = mutable.HashMap.empty[DeclarationRef, Either[ExpressionRef, Int]]
     val guardPairs: Vector[(ExpressionRef, Expr[?])] =
       behavioralIfs.valuesIterator.map(value => value.root -> value.predicate).toVector ++
@@ -2641,7 +2740,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             firstBoundary.update(root, boundary)
     def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
       val facts = sampleFacts(value, owner, strict = false)
-      if facts.domains.exists(_ != targetDomain) then
+      if facts.domains.exists(source => !relationships.permitsSampling(source, targetDomain)) then
         behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
       verifyReconvergence(facts, owner)
     val sampleGroups = mutable.HashMap.empty[Any, mutable.HashSet[ExpressionRef]]
@@ -2685,7 +2784,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         then clockFailure("clock control has mixed or unresolved source provenance")
         if facts.domains.nonEmpty then
           val domain = facts.domains.head
-          if clock.kind == "gate" && domain != domainPath(domainRef(clock.parents.head)) then
+          if clock.kind == "gate" && !relationships.permitsSampling(
+              domain,
+              domainPath(domainRef(clock.parents.head))
+            )
+          then
             clockFailure("gate control must belong to its actual parent domain")
           kinds += "domain"
           domains += Some(domain)
@@ -7785,7 +7888,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               else "async"
             )
           ),
-          metadata.sortBy(_._1)
+          metadata.sortBy(_._1),
+          relationshipSnapshot(domain)
         )
       val declarations = module.declarations.toVector.map: declaration =>
         val retainedAttributes = declaration.attributes ++

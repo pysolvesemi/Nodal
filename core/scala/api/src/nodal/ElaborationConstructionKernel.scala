@@ -232,6 +232,24 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(throw new IllegalStateException("ClockMux requires active construction"))
       .clockMux(select, domains, name)
 
+  def generatedDomain(
+      name: String,
+      clock: Expr[Clock],
+      from: ClockDomain,
+      relation: ClockRelation,
+      reset: Expr[Reset]
+  ): ClockDomain =
+    active match
+      case Some(session) => session.generatedDomain(name, clock, from, relation, reset)
+      case None => new ClockDomain(
+          name,
+          reset,
+          KernelDomainKind.Generated,
+          relation = Some(relation),
+          clock = Some(clock),
+          parent = Some(from)
+        )
+
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

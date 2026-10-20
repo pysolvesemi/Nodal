@@ -1125,3 +1125,45 @@ controls. Source checks and actual Scala waveform acceptance remain pending at
 this checkpoint. DG v0.8 separately records the required concrete hierarchy proof
 and formal requirement-capability seam. All coarse F57 items remain open; no CI
 or broad qualification ran.
+
+### Relationship source and actual flat target checkpoint
+
+ConstructionSession now uses the shared bounded relationship permission index for
+ordinary sampling and Same gate controls. Physical/derived ClockMlir identity,
+ResetMlir receiving-clock proof and explicit CDC/protocol endpoint identity remain
+separate. Immutable relationship snapshots retain actual operands, typed fields,
+proof classification and obligations; the bridge independently resolves those
+operands. The shared clock identity owner also rejects Reset/Bool values forged
+as Clock before bridge emission.
+
+Focused source checks pass **75/75**: relationship32, owned-clock13, reset19 and
+DomainStimulus11. Log: `.work/relationship-source-tests3.log`. The exact11-file
+source manifest is `.work/relationship-source-checkpoint.sha256`; final replay
+success is `.work/relationship-source-replay4.log` with12 actual source IR profiles
+under `.work/relationship-source-replay`.
+
+Maintained `tests/scala/clock-relationships/run_target.py` passes all **7 legal
+Same waveform profiles** and **5 category target/comment checks**, using the
+immutable relationship compiler recorded above. Both edges/reset polarities,
+structural identity, distinct external inputs, transitive Same and shaped inputs
+retain independent clock/reset/state owners. Matching active edges coexist with
+different inactive duty phases. Each waveform observes31 active edges,22 operating
+samples and2 reset assertions; nonshaped mixed/nested expressions produce11 high
+and11 low samples rather than a vacuous constant conjunction.
+
+Actual generated SystemVerilog, VCDs, command logs, source/tool/target hashes and
+manifest are under `.work/relationship-target`. No emitted HDL was rewritten and
+no substitute DUT was used. Category comments preserve exact typed assumptions;
+these checks do not certify the external Same/timing/exclusion assumptions at
+runtime. No relationship hardware or state is invented.
+
+Direct target predecessors pass separately on the same immutable compiler:
+owned clocks **36/36** and scalar/shaped reset release **12/12**, with logs and
+manifests under `.work/relationship-{owned-clock,reset}-predecessor`. Repeated
+relationship replay is byte-identical. Source predecessor checks found two stale
+Sync-mode handshake/FIFO fixtures claiming100MHz and20MHz for the same physical
+clock; exact alias consistency correctly rejects those contradictory claims.
+Their fixture repair and rerun remain pending, without weakening the verifier.
+Hierarchy, observed-output reconvergence, waivers, low-level events, representative
+scale and final integration remain required F57 work. No coarse checklist closes
+from this checkpoint, and no CI or broad qualification ran.

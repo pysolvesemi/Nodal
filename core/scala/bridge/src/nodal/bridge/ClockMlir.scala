@@ -97,8 +97,6 @@ private[nodal] object ClockMlir:
             then fail("clock controls require exact Bool and provenance category", path)
             source.foreach: actual =>
               val _ = domain(actual, owner)
-              if gate && actual != c.parents.head then
-                fail("gate control domain differs from parent", path)
           Resolved(Identity.Derived(path), None)
 
     // Domain topology is independently preflighted, including unused and resetless declarations.
@@ -119,6 +117,15 @@ private[nodal] object ClockMlir:
       e.clock.nonEmpty || OwnedClockContract.Operations(e.operation)
     )
       .foreach(e => resolve(e.path, e.owner))
+
+    /** Permission is checked after identity construction, avoiding a relationship/producer cycle.
+      */
+    def validateRelationships(permitsSampling: (String, String) => Boolean): Unit =
+      expressions.valuesIterator.filter(_.clock.exists(_.kind == "gate")).foreach: expression =>
+        val clock = expression.clock.get
+        clock.controlDomains.flatten.foreach: source =>
+          if !permitsSampling(source, clock.parents.head) then
+            fail("gate control domain differs from parent or verified Same class", expression.path)
 
     def validateResets(facts: ResetMlir.Facts): Unit =
       val consumers = domains.valuesIterator.flatMap: (owner, d) =>

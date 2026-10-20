@@ -54,7 +54,25 @@ private[nodal] final case class KernelDomainSnapshot(
     binding: Option[String],
     edge: Option[String] = None,
     resetPolicy: Option[String] = None,
-    attributes: Vector[(String, String)] = Vector.empty
+    attributes: Vector[(String, String)] = Vector.empty,
+    relationship: Option[KernelClockRelationshipSnapshot] = None
+)
+
+/** Closed executable relationship; descriptor attributes alone confer no permission. */
+private[nodal] final case class KernelClockRelationshipSnapshot(
+    path: String,
+    source: String,
+    destination: String,
+    sourceClock: String,
+    destinationClock: String,
+    kind: String,
+    contract: String,
+    proof: String,
+    obligations: Vector[(String, String)],
+    multiply: Option[Int] = None,
+    divide: Option[Int] = None,
+    phase: Option[String] = None,
+    phaseKnown: Option[Boolean] = None
 )
 
 private[nodal] final case class KernelDeclarationSnapshot(

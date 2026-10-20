@@ -400,7 +400,8 @@ final class ClockDomain private[nodal] (
     private[nodal] val relation: Option[ClockRelation] = None,
     private[nodal] val frequency: Option[Frequency] = None,
     private[nodal] val clock: Option[Expr[Clock]] = None,
-    private[nodal] val parent: Option[ClockDomain] = None
+    private[nodal] val parent: Option[ClockDomain] = None,
+    private[nodal] val executableRelationship: Boolean = false
 ):
   CandidateRuntime.registerDomain(this, kind)
 
@@ -466,14 +467,7 @@ object ClockDomain:
       reset: Expr[Reset]
   ): ClockDomain =
     CandidateRuntime.metadata(clock, from, relation)
-    new ClockDomain(
-      name,
-      reset,
-      KernelDomainKind.Generated,
-      relation = Some(relation),
-      clock = Some(clock),
-      parent = Some(from)
-    )
+    ConstructionKernel.generatedDomain(name, clock, from, relation, reset)
 
 /** Child-instance handle with typed selector-based overrides and domain bindings. */
 final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):

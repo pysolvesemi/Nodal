@@ -1466,3 +1466,22 @@ identity. The three-file focused correction passes **21/21** checks: waiver sour
 `.work/owned-waiver-names-tests.log`. This corrects reporting, not the actual
 hardware/provenance contract. Fresh combined acceptance and source-to-target
 replay remain pending alongside the separate global frequency repair and events.
+
+### Global physical-frequency consistency repair
+
+The existing relationship owner now applies its same bounded physical-frequency
+comparison during global index construction as well as read-only boundary intent
+queries. Opposite-edge aliases of one producer can no longer carry contradictory
+frequencies inferred through distinct timing components. Compatible frequencies
+with an independent 90-degree phase remain valid without inventing Same permission
+or a duty-cycle relation. Native union representatives are compressed once after
+joins, keeping subsequent immutable queries bounded without adding a second graph.
+
+The four-file repair passes **171/171 native relationship** and **67/67 waiver
+model** cases. Source relationship **46/46** passes within the final **58/58**
+waiver/reproducibility/relationship selection. Causal conflicting and compatible
+counterpart regressions exercise the global owner, not only the waiver query.
+Hashes and native logs: `.work/waiver-relation-global-fix/`; source log:
+`.work/owned-waiver-source-final-tests.log`. The known global frequency gap is
+resolved. Fresh eleven-witness source emission also passed; final native/HDL
+replay and event execution remain open. No CI or broad qualification ran.

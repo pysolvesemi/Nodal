@@ -350,11 +350,27 @@ private[nodal] object ClockRelationshipModel:
 
     // One producer record retains independent coordinate witnesses, at most one per
     // timing component (the two active-edge groups for a valid physical clock).
-    // Query-only evaluation preserves global admission and keeps conflicts explicit.
+    // The same bounded comparison serves global consistency and read-only queries.
     private val frequencySources = endpoints.filter(e => absolute.contains(components(e.path)))
       .groupBy(e => (e.owner, e.identity)).view.mapValues(values =>
         values.groupBy(e => components(e.path)).values.map(_.minBy(_.path).path).toVector.sorted
       ).toMap
+
+    private def frequency(identity: (String, String)): Option[Rational] =
+      var known: Option[Rational] = None
+      frequencySources.getOrElse(identity, Vector.empty).foreach: path =>
+        val value = a.one / (absolute(components(path)) * periods(path))
+        if known.exists(_ != value) then
+          fail(
+            "physical clock has inconsistent independently inferred frequencies",
+            activePath
+          )
+        known = Some(value)
+      known
+    frequencySources.toVector.sortBy(_._1).foreach: (identity, witnesses) =>
+      if witnesses.size > 1 then
+        activePath = witnesses.last
+        val _ = frequency(identity)
 
     /** Check a boundary rationale against independent facts. This neither joins components nor
       * records claims: even a successful Same rationale is not ordinary sampling permission.
@@ -380,20 +396,8 @@ private[nodal] object ClockRelationshipModel:
         then fail("intent endpoints require exact ownership and valid active edges", activePath)
         if intent.kind == "same" && left.edge != right.edge then
           fail("Same boundary intent contradicts different active edges", activePath)
-        def frequency(endpoint: Endpoint): Option[Rational] =
-          var known: Option[Rational] = None
-          frequencySources.getOrElse((endpoint.owner, endpoint.identity), Vector.empty).foreach:
-            path =>
-              val value = a.one / (absolute(components(path)) * periods(path))
-              if known.exists(_ != value) then
-                fail(
-                  "physical clock has inconsistent independently inferred frequencies",
-                  activePath
-                )
-              known = Some(value)
-          known
-        val sourceFrequency = frequency(left)
-        val destinationFrequency = frequency(right)
+        val sourceFrequency = frequency((left.owner, left.identity))
+        val destinationFrequency = frequency((right.owner, right.identity))
         val known =
           pairKinds.get(pair(claims.representative(source), claims.representative(destination)))
         def has(kind: String): Boolean = known.exists(_.contains(kind))

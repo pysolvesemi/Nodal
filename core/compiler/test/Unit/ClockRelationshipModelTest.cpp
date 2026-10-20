@@ -604,9 +604,12 @@ int main() {
   auto conflictingOpposite =
       inferredOpposite + replace(domain("y", "", "100.0"), "rising", "falling") + port("clky") +
       binding("y", "clky") + replace(ratio("y", "b", 3, 1), "%clkb", "%clka");
-  test.intent("opposite-edge-conflicting-independent-frequency-not-first-match",
-              conflictingOpposite, "kind = \"unknown\"", false, "b", "c",
-              "inconsistent independently inferred frequencies");
+  test.check("global-opposite-edge-compatible-frequency-without-duty-inference",
+             replace(conflictingOpposite, "multiply = 3 : i32, divide = 1 : i32, phase = \"0.0\"",
+                     "multiply = 2 : i32, divide = 1 : i32, phase = \"90.0\""));
+  test.check("global-opposite-edge-conflicting-independent-frequency-not-first-match",
+             conflictingOpposite, false, false, false,
+             "inconsistent independently inferred frequencies");
   std::string huge;
   for (unsigned i = 0; i != 140; ++i) {
     std::string name = "n" + std::to_string(i);

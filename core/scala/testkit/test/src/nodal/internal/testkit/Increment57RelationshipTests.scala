@@ -678,7 +678,7 @@ object Increment57RelationshipTests extends TestSuite:
         destination = "c"
       )
     test(
-      "boundary physical frequency witnesses include inferred opposite-edge facts without first-match selection"
+      "global physical frequency consistency checks inferred opposite-edge facts without first-match selection"
     ):
       val nodes = Vector(
         endpoint("x", frequency = Some("100.0")),
@@ -694,12 +694,24 @@ object Increment57RelationshipTests extends TestSuite:
         source = "b",
         destination = "c"
       )
-      val contradictory =
-        index(nodes, Vector(relation("x", "a", "ratio", 2, 1), relation("y", "b", "ratio", 3, 1)))
-      checkIntent(
-        contradictory,
-        ClockRelationshipModel.intent(ClockRelation.Unknown),
-        valid = false,
-        source = "b",
-        destination = "c"
+      val compatible = index(
+        nodes,
+        Vector(
+          relation("x", "a", "ratio", 2, 1),
+          relation("y", "b", "ratio", 2, 1, "90.0")
+        )
+      )
+      assert(!compatible.permitsSampling("a", "b"))
+      val contradictory = scala.util.Try(index(
+        nodes,
+        Vector(
+          relation("x", "a", "ratio", 2, 1),
+          relation("y", "b", "ratio", 3, 1)
+        )
+      ))
+      assert(
+        contradictory.isFailure,
+        contradictory.failed.get.getMessage.contains(
+          "inconsistent independently inferred frequencies"
+        )
       )

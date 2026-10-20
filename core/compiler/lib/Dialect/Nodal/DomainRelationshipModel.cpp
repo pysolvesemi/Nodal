@@ -416,6 +416,31 @@ struct DomainRelationshipIndex {
   std::map<Producer, SmallVector<unsigned, 2>> frequencySources;
 };
 
+namespace {
+FailureOr<std::optional<Rational>> physicalFrequency(const DomainRelationshipIndex &index,
+                                                     unsigned node, Operation *diagnostic) {
+  std::optional<Rational> result;
+  auto sources = index.frequencySources.find(index.producers[node]);
+  if (sources == index.frequencySources.end())
+    return result;
+  for (unsigned source : sources->second) {
+    const auto &root = index.componentFrequency[index.timing.representative(source)];
+    auto value = multiply(*root, index.coordinates[source].period.inverse());
+    if (!value) {
+      (void)reject(diagnostic, "physical frequency comparison exceeds 4096-bit arithmetic bound");
+      return failure();
+    }
+    if (result && !(*result == *value)) {
+      (void)reject(diagnostic,
+                   "physical clock has inconsistent independently inferred frequencies");
+      return failure();
+    }
+    result = *value;
+  }
+  return result;
+}
+} // namespace
+
 LogicalResult verifyBoundaryRelationIntentFields(DictionaryAttr intent, Operation *diagnostic) {
   return success(succeeded(inspectFields(intent, diagnostic)));
 }
@@ -538,6 +563,14 @@ LogicalResult DomainModel::verifyRelationshipIndex(bool endpointFacts) const {
         return na < nb;
       return path(a.operation) < path(b.operation);
     });
+  // All joins are complete. Flatten once so later immutable fact queries do
+  // not repeat long union chains or mutate component representatives.
+  for (unsigned i = 0; i != count; ++i) {
+    (void)index.same.root(i);
+    (void)timing.root(i);
+    (void)synchronous.root(i);
+    (void)physical.root(i);
+  }
   index.coordinates.resize(count);
   auto &coordinates = index.coordinates;
   for (unsigned root = 0; root != count; ++root) {
@@ -602,6 +635,16 @@ LogicalResult DomainModel::verifyRelationshipIndex(bool endpointFacts) const {
         }))
       sources.push_back(i);
   }
+  // Diagnose in stable domain order, not physical-operation pointer order.
+  for (unsigned i = 0; i != count; ++i) {
+    auto found = index.frequencySources.find(index.producers[i]);
+    if (found == index.frequencySources.end())
+      continue;
+    const auto &sources = found->second;
+    if (sources.size() > 1 && sources.front() == i &&
+        failed(physicalFrequency(index, i, domainList[sources.back()])))
+      return failure();
+  }
   auto &claims = index.claims;
   for (const auto &header : headers) {
     unsigned a = index.domains.lookup(header.source), b = index.domains.lookup(header.destination);
@@ -648,30 +691,8 @@ LogicalResult verifyBoundaryFacts(const DomainRelationshipIndex &left, unsigned 
     if (found != left.claims.end())
       known = &found->second;
   }
-  auto frequency = [&](const DomainRelationshipIndex &index,
-                       unsigned node) -> FailureOr<std::optional<Rational>> {
-    std::optional<Rational> result;
-    auto sources = index.frequencySources.find(index.producers[node]);
-    if (sources == index.frequencySources.end())
-      return result;
-    for (unsigned source : sources->second) {
-      const auto &root = index.componentFrequency[index.timing.representative(source)];
-      auto value = multiply(*root, index.coordinates[source].period.inverse());
-      if (!value) {
-        (void)reject(diagnostic, "boundary frequency comparison exceeds 4096-bit arithmetic bound");
-        return failure();
-      }
-      if (result && !(*result == *value)) {
-        (void)reject(diagnostic,
-                     "physical clock has inconsistent independently inferred frequencies");
-        return failure();
-      }
-      result = *value;
-    }
-    return result;
-  };
-  auto sourceFrequency = frequency(left, source),
-       destinationFrequency = frequency(right, destination);
+  auto sourceFrequency = physicalFrequency(left, source, diagnostic),
+       destinationFrequency = physicalFrequency(right, destination, diagnostic);
   if (failed(sourceFrequency) || failed(destinationFrequency))
     return failure();
   bool exact = intent.kind == "same" || intent.kind == "ratio";
@@ -722,7 +743,7 @@ LogicalResult verifyBoundaryFacts(const DomainRelationshipIndex &left, unsigned 
       auto expected = multiply(**destinationFrequency, exact ? intent.period : Rational(1));
       if (!expected)
         return reject(diagnostic,
-                      "boundary frequency comparison exceeds 4096-bit arithmetic bound");
+                      "physical frequency comparison exceeds 4096-bit arithmetic bound");
       if (!(**sourceFrequency == *expected))
         return reject(diagnostic, "boundary intent contradicts independently known frequencies");
     }

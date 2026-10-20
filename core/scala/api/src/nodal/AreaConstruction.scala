@@ -25,14 +25,28 @@ private[nodal] final case class AreaMemberRecord(value: Any, access: String)
 private[nodal] final case class KernelGeneratedAreaExport(
     member: String,
     target: String,
-    access: String
+    access: String,
+    kind: String = "storage"
+)
+
+private[nodal] final case class KernelGeneratedFamilySelection(
+    family: String,
+    ordinal: String,
+    member: String
+)
+
+private[nodal] final case class GeneratedFamilySelectionRecord(
+    family: GeneratedRegionRecord,
+    ordinal: Int | Expr[Integer],
+    members: Vector[String]
 )
 
 private[nodal] final case class KernelGeneratedMemberSnapshot(
     family: String,
     ordinal: String,
     member: String,
-    access: String
+    access: String,
+    selectionPrefix: Vector[KernelGeneratedFamilySelection] = Vector.empty
 )
 
 private[nodal] final case class GeneratedAreaMemberRecord(
@@ -40,7 +54,8 @@ private[nodal] final case class GeneratedAreaMemberRecord(
     ordinal: Int | Expr[Integer],
     members: Vector[String],
     target: DeclarationRef,
-    access: String
+    access: String,
+    selectionPrefix: Vector[GeneratedFamilySelectionRecord] = Vector.empty
 )
 
 /** Owned solely by ConstructionSession, alongside its declaration and instance records. */

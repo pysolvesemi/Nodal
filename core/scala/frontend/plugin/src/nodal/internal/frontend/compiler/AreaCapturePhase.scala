@@ -69,7 +69,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
                 else
                   cls.addAnnotation(Annotation(
                     schemaClass,
-                    List(number(2)),
+                    List(number(3)),
                     definition.span
                   ))
               case reference: RefTree
@@ -89,8 +89,15 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
     val bases =
       cls.info.baseClasses.filter(value => value != areaClass && value.derivesFrom(areaClass))
     bases.forall: base =>
+      val declaresFamily = base.info.decls.toList.exists: member =>
+        !member.isOneOf(Private | Protected) &&
+          member.info.finalResultType.widen.dealias.derivesFrom(requiredClass(
+            "nodal.GeneratedAreas"
+          ))
       val valid = base.getAnnotation(schemaClass).exists: annotation =>
-        annotation.argumentConstant(0).exists(value => Set(1, 2)(value.value))
+        annotation.argumentConstant(0).exists(value =>
+          if declaresFamily then value.value == 3 else Set(1, 2, 3)(value.value)
+        )
       if !valid then
         fail(
           "MISSING",
@@ -154,6 +161,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
       "nodal.Instance",
       "nodal.Module",
       "nodal.Area",
+      "nodal.GeneratedAreas",
       "nodal.ClockDomain",
       "nodal.InterfacePort",
       "nodal.InterfaceArray",
@@ -221,6 +229,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
             then "read_write"
             else if valueType.derivesFrom(requiredClass("nodal.Expr")) then "read_only"
             else if valueType.derivesFrom(areaClass) then "area"
+            else if valueType.derivesFrom(requiredClass("nodal.GeneratedAreas")) then "family"
             else if hardware(valueType) then "symbol" else "host"
           val captured = runtime("capturedMember").appliedToType(field.tpt.tpe).appliedToArgs(List(
             This(cls.asClass),

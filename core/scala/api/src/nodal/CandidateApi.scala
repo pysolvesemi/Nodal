@@ -516,6 +516,8 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
       result match
         case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
         case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
+        case endpoint: DigitalInout[?, ?] =>
+          ConstructionKernel.instanceDigitalInout(endpoint).asInstanceOf[A]
         case array: InterfaceArray[?, ?] =>
           ConstructionKernel.instanceInterfaceArray(array).asInstanceOf[A]
         case port: InterfacePort[?, ?] =>

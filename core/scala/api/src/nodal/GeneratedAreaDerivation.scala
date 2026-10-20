@@ -3,10 +3,10 @@ package nodal
 import scala.quoted.{Expr as QuotedExpr, *}
 
 private[nodal] object GeneratedAreaDerivation:
-  def member[A <: Area: Type](
-      value: QuotedExpr[GeneratedAreaRef[A]],
-      name: QuotedExpr[String]
-  )(using Quotes): QuotedExpr[Any] =
+  private def declared[A <: Area: Type](name: QuotedExpr[String])(using
+      Quotes
+  )
+      : quotes.reflect.TypeRepr =
     import quotes.reflect.*
     val selected = name.valueOrAbort
     def reject(message: String): Nothing = report.errorAndAbort("NODAL-AREA-058-MEMBER: " + message)
@@ -24,18 +24,45 @@ private[nodal] object GeneratedAreaDerivation:
               symbol.flags.is(Flags.Mutable) || symbol.flags.is(Flags.Lazy)
             then reject("generated members must be accessible immutable eager vals")
             Some(owner.memberType(symbol))
-    val result = field(TypeRepr.of[A]).getOrElse(reject("no such declared member: " + selected))
+    field(TypeRepr.of[A]).getOrElse(reject("no such declared member: " + selected))
       .widenTermRefByName.dealias
-    result.asType match
-      case '[member] =>
-        if result <:< TypeRepr.of[Area] then
-          '{ GeneratedAreaRuntime.nested[member & Area]($value, $name) }
-        else if result <:< TypeRepr.of[Expr[Data]] then
-          val kind =
-            if result.baseType(Symbol.requiredClass("nodal.Register")).typeArgs.nonEmpty then
-              "register"
-            else if result.baseType(Symbol.requiredClass("nodal.Signal")).typeArgs.nonEmpty then
-              "signal"
-            else "read_only"
-          '{ GeneratedAreaRuntime.member[member]($value, $name, ${ QuotedExpr(kind) }) }
-        else reject("generated member is not a hardware value or nested Area")
+
+  def member[A <: Area: Type](
+      value: QuotedExpr[GeneratedAreaRef[A]],
+      name: QuotedExpr[String]
+  )(using Quotes): QuotedExpr[Any] =
+    import quotes.reflect.*
+    val result = declared[A](name)
+    result.baseType(Symbol.requiredClass("nodal.GeneratedAreas")).typeArgs match
+      case element :: Nil => element.asType match
+          case '[child] => '{ GeneratedAreaRuntime.family[child & Area]($value, $name) }
+      case _ => result.asType match
+          case '[member] =>
+            if result <:< TypeRepr.of[Area] then
+              '{ GeneratedAreaRuntime.nested[member & Area]($value, $name) }
+            else if result <:< TypeRepr.of[Expr[Data]] then
+              val kind =
+                if result.baseType(Symbol.requiredClass("nodal.Register")).typeArgs.nonEmpty then
+                  "register"
+                else if result.baseType(Symbol.requiredClass("nodal.Signal")).typeArgs.nonEmpty then
+                  "signal"
+                else "read_only"
+              '{ GeneratedAreaRuntime.member[member]($value, $name, ${ QuotedExpr(kind) }) }
+            else
+              report.errorAndAbort(
+                "NODAL-AREA-058-MEMBER: generated member is not a hardware value, family or nested Area"
+              )
+
+  def familyAt[A <: Area: Type](
+      value: QuotedExpr[GeneratedAreaRef[A]],
+      name: QuotedExpr[String],
+      ordinal: QuotedExpr[Int | Expr[Integer]]
+  )(using Quotes): QuotedExpr[Any] =
+    import quotes.reflect.*
+    declared[A](name).baseType(Symbol.requiredClass("nodal.GeneratedAreas")).typeArgs match
+      case element :: Nil => element.asType match
+          case '[child] =>
+            '{ GeneratedAreaRuntime.family[child & Area]($value, $name).apply($ordinal) }
+      case _ => report.errorAndAbort(
+          "NODAL-AREA-058-MEMBER: only an exact eager GeneratedAreas member can be applied"
+        )

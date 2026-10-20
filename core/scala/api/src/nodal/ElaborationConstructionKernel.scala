@@ -162,6 +162,9 @@ private[nodal] object ConstructionKernel:
   ): GeneratedAreaRef[A] =
     areaSession.generatedAreaNested(value, name)
 
+  def generatedAreaFamily[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
+    areaSession.generatedAreaFamily(value, name)
+
   def generatedAreaMember(value: GeneratedAreaRef[?], name: String, kind: String): Any =
     areaSession.generatedAreaMember(value, name, kind)
 
@@ -614,6 +617,12 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
     ).instanceDigitalPort(value)
+
+  def instanceDigitalInout[A <: Bits, M <: DriveMode](value: DigitalInout[A, M])
+      : DigitalInout[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceDigitalInout(value)
 
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(

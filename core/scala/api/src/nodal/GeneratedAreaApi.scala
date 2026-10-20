@@ -21,7 +21,8 @@ extension (range: HdlRange)
 
 /** One typed generated family, never an eagerly constructed Scala collection of lanes. */
 final class GeneratedAreas[A <: Area] private[nodal] (
-    private[nodal] val generatedRegion: GeneratedRegionRecord
+    private[nodal] val generatedRegion: GeneratedRegionRecord,
+    private[nodal] val selectionPrefix: Vector[GeneratedFamilySelectionRecord] = Vector.empty
 ):
   def apply(ordinal: Int | Expr[Integer]): GeneratedAreaRef[A] =
     ConstructionKernel.generatedAreaReference(this, ordinal)
@@ -34,11 +35,15 @@ final class GeneratedAreaRef[A <: Area] private[nodal] (
 ) extends Dynamic:
   transparent inline def selectDynamic(inline name: String): Any =
     ${ GeneratedAreaDerivation.member[A]('this, 'name) }
+  transparent inline def applyDynamic(inline name: String)(ordinal: Int | Expr[Integer]): Any =
+    ${ GeneratedAreaDerivation.familyAt[A]('this, 'name, 'ordinal) }
 
 private[nodal] object GeneratedAreaRuntime:
   val MemberOperation = "generated_member"
   def nested[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreaRef[A] =
     ConstructionKernel.generatedAreaNested(value, name)
+  def family[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
+    ConstructionKernel.generatedAreaFamily(value, name)
   def member[A](value: GeneratedAreaRef[?], name: String, kind: String): A =
     ConstructionKernel.generatedAreaMember(value, name, kind).asInstanceOf[A]
   def bind[A <: Area](name: String, priority: Int, value: GeneratedAreas[A]): GeneratedAreas[A] =

@@ -222,3 +222,60 @@ the typed reference supports saved aliases and helpers without a representative
 Area. Construction work is independent of lane cardinality; export traversal and
 structural proof have explicit finite budgets. No per-lane cloning, warning
 suppression, duplicate ownership engine, CI or full qualification is introduced.
+
+## Selected nested family views (N1b bounded extension)
+
+The approved selected-family extension reuses `GeneratedAreas[A]` as an immutable
+view of one actual nested template plus an ordered outer selection prefix.
+`GeneratedAreaRef` adds only the narrow transparent source adapter:
+
+```scala
+transparent inline def applyDynamic(inline name: String)(ordinal: Int | Expr[Integer]): Any
+```
+
+It admits an exact literal eager `GeneratedAreas` member with its declared element
+type, allowing `outer(0).inner(1).stored`. Saved family views, named/refined members,
+ordinary nested Area paths and separate producer/helper JARs use the same path.
+No member getter, reflection, representative lane or per-value construction is
+introduced. The runtime rechecks every original family, direct actual nested
+export, ordinal and continuous prefix. Bare inner handles cannot escape their
+lexical scope, and selected views cannot be re-exported as original families.
+
+Area capture version3 adds the closed family member mode. Private/protected and
+host fields remain excluded; a public typed alias can expose the same actual
+private family. Imported classes or bases with public family fields require
+version3; older ordinary v1/v2 profiles retain their existing admission. Missing
+family metadata never becomes export authority merely from the runtime object.
+
+The existing export/member transport gains an optional closed `kind = "family"`.
+Absent kind remains storage. A family export has read access and consumes the
+exact actual directly nested Generate SSA handle. A family member projection
+consumes the checked dominating family handle and its static ordinal, returns the
+existing non-Data generated-family type, and retains the exact actual producer
+chain. Native derives each coordinate through its existing GeneratedDomain owner.
+The terminal storage projection retains its independent exact read/wire/register
+capability, payload, domain and physical storage root. Read-only family selection
+is not authority to write selected storage.
+
+Source snapshots reuse the existing ordered export inventory and add an ordered
+prefix of actual family, exact ordinal use and member key to the existing terminal
+member snapshot. Every ordinal is rebound through the existing lexical capture
+owner. The bridge proves the first handle and all ordinal dependencies dominate
+the selected projection; isolated callbacks capture only the resulting typed Data,
+never the family capability. The native storage/shape owner independently resolves
+the bounded actual SSA chain, with no name lookup or duplicate occurrence registry.
+
+This extension covers independently bounded positive-step families. The existing
+approved positive-step rule is retained: descending source ranges reject in the
+canonical IterationDomain owner, rather than being remapped or sampled. Guarded
+family declarations, guard-dependent existence, outer-induction-dependent inner
+bounds, generated Instance/Interface carriers, ordinal-aware external writes and
+actual selected-family target lowering remain explicit required subsequent work.
+The source/bridge/native default gate evidence does not establish these profiles
+or target resource/waveform acceptance.
+
+The representation grows with authored family templates, exports and selected
+paths, never with lane count. Prefix validation and immutable append are bounded
+by the existing 128-depth and 65536-inventory limits; straightforward repeated
+prefix validation can be quadratic in authored depth. No unmeasured performance
+improvement or universal target scale is claimed.

@@ -877,8 +877,16 @@ private[nodal] object DigitalValueMlir:
         value.exports.foreach: exported =>
           requireValid(
             exported.member.split("\\.", -1).forall(_.matches("[A-Za-z_][A-Za-z0-9_]*")) &&
-              generatedDeclarationOwners.get(exported.target).exists(_.path == value.path) &&
-              Set("read_only", "read_write")(exported.access),
+              (if exported.kind == "storage" then
+                 generatedDeclarationOwners.get(exported.target).exists(_.path == value.path) &&
+                 Set("read_only", "read_write")(exported.access)
+               else if exported.kind == "family" then
+                 exported.access == "read_only" && generated.get(exported.target).exists(target =>
+                   target.yieldedArea.nonEmpty && target.owner == value.owner && target.parent.contains(
+                     value.path
+                   )
+                 )
+               else false),
             "generated export requires a canonical key, exact direct storage and attested access",
             value.path
           )
@@ -940,48 +948,85 @@ private[nodal] object DigitalValueMlir:
       val exported = generatedExports.get(member.family -> member.member)
         .getOrElse(fail("generated member has no actual export", expression.path))
       requireValid(
-        family.yieldedArea.nonEmpty && family.owner == expression.owner &&
-          family.parent == expression.region &&
+        member.selectionPrefix.size < 128,
+        "generated family projection chain exceeds depth",
+        expression.path
+      )
+      def ordinalValid(selectedFamily: KernelGeneratedRegionSnapshot, ordinal: String): Unit =
+        ordinal.toLongOption match
+          case Some(value) => requireValid(
+              ordinal == value.toString,
+              "generated ordinal literal must be canonical signed i64",
+              expression.path
+            )
+          case None =>
+            requireVisible(ordinal, expression.owner, expression.region, expression.path)
+            requireStaticPredicateInput(ordinal, expression.owner, topology = true)
+        val (header, bounds, selected) = try
+          val headerQuery = selectedFamily.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
+          val ordinalQuery = expression.region.map(generatedBodyQuery).getOrElse(loopBoundQuery)
+          val header =
+            Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
+              .map(headerQuery.resolve(selectedFamily.owner, _))
+          (
+            header,
+            header.map(headerQuery.bounds),
+            ordinalQuery.bounds(ordinalQuery.resolve(expression.owner, ordinal))
+          )
+        catch
+          case error: IllegalArgumentException => fail(error.getMessage, expression.path)
+        val domain = IterationDomain.structural(
+          bounds(0),
+          bounds(1),
+          bounds(2),
+          selectedFamily.maximum,
+          identicalBounds = header(0) == header(1)
+        )
+          .fold(problem => fail(problem.message, expression.path), identity)
+        IterationDomain.verifyOrdinal(domain, selected)
+          .fold(problem => fail(problem.message, expression.path), identity)
+      var expected = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
+      val root =
+        generated.getOrElse(expected, fail("selected family root is absent", expression.path))
+      requireValid(
+        root.parent == expression.region,
+        "selected family root escaped handle-definition scope",
+        expression.path
+      )
+      member.selectionPrefix.foreach: selection =>
+        requireValid(
+          selection.family == expected,
+          "selected family chain is discontinuous",
+          expression.path
+        )
+        val parent =
+          generated.getOrElse(selection.family, fail("selected family is absent", expression.path))
+        val next = generatedExports.get(selection.family -> selection.member).getOrElse(
+          fail("selected family member has no exact export", expression.path)
+        )
+        requireValid(
+          parent.owner == expression.owner && next.kind == "family" &&
+            next.access == "read_only" && generated.get(next.target).exists(child =>
+              child.owner == expression.owner && child.parent.contains(parent.path)
+            ),
+          "selected family must follow an exact directly nested family export",
+          expression.path
+        )
+        ordinalValid(parent, selection.ordinal)
+        expected = next.target
+      requireValid(
+        expected == family.path && exported.kind == "storage" &&
+          family.yieldedArea.nonEmpty && family.owner == expression.owner &&
           expression.dataType == declarations(exported.target)._2.dataType.get &&
           expression.literal.isEmpty && expression.enumIdentity.isEmpty && expression.caseIds.isEmpty &&
           expression.structure.isEmpty && expression.materializationIntent.isEmpty &&
           expression.memory.isEmpty && expression.crossing.isEmpty && expression.waiver.isEmpty &&
-          expression.reset.isEmpty && expression.clock.isEmpty &&
-          expression.operands.isEmpty,
-        "generated projection requires its exact export type and handle-definition scope",
+          expression.reset.isEmpty && expression.clock.isEmpty && expression.operands.isEmpty,
+        "generated projection requires its exact export type and selected family chain",
         expression.path
       )
       val _ = generatedAccess(exported, member.access)
-      member.ordinal.toLongOption match
-        case Some(value) => requireValid(
-            member.ordinal == value.toString,
-            "generated ordinal literal must be canonical signed i64",
-            expression.path
-          )
-        case None =>
-          requireVisible(member.ordinal, expression.owner, expression.region, expression.path)
-          requireStaticPredicateInput(member.ordinal, expression.owner, topology = true)
-      val (header, bounds, selected) = try
-        val query = family.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
-        val header = Vector(family.lower, family.upperExclusive, family.step)
-          .map(query.resolve(family.owner, _))
-        (
-          header,
-          header.map(query.bounds),
-          query.bounds(query.resolve(expression.owner, member.ordinal))
-        )
-      catch
-        case error: IllegalArgumentException => fail(error.getMessage, expression.path)
-      val domain = IterationDomain.structural(
-        bounds(0),
-        bounds(1),
-        bounds(2),
-        family.maximum,
-        identicalBounds = header(0) == header(1)
-      )
-        .fold(problem => fail(problem.message, expression.path), identity)
-      IterationDomain.verifyOrdinal(domain, selected)
-        .fold(problem => fail(problem.message, expression.path), identity)
+      ordinalValid(family, member.ordinal)
       family -> exported
 
     private def assignmentRoot(
@@ -3216,11 +3261,18 @@ private[nodal] object DigitalValueMlir:
             region.declarations.foreach(path => emit(path, depth + 1, Some(region.path), local))
             emitScope(region.path, depth + 1, local)
             region.exports.foreach: exported =>
-              val value = emit(exported.target, depth + 1, Some(region.path), local)
+              val value = if exported.kind == "family" then
+                values.getOrElse(
+                  exported.target,
+                  fail("family export must follow its exact nested Generate producer", region.path)
+                )
+              else emit(exported.target, depth + 1, Some(region.path), local)
               val access = generatedAccess(exported, exported.access)
               val identity = s"${region.path}.export.${exported.member}"
+              val kind =
+                if exported.kind == "family" then "kind = " + quoted("family") + ", " else ""
               val attributes =
-                s"member = ${quoted(exported.member)}, access = ${quoted(access)}, " +
+                kind + s"member = ${quoted(exported.member)}, access = ${quoted(access)}, " +
                   s"metadata = ${metadata(identity, false)}"
               local += s"${quoted("nodal.generated_export")}(${value._1}) <{$attributes}> : (${value._2}) -> ()${sourceLocation(exported.target)}"
           }
@@ -3474,10 +3526,38 @@ private[nodal] object DigitalValueMlir:
                   if expression.generatedMember.nonEmpty then
                     val member = expression.generatedMember.get
                     val (family, exported) = generatedMemberExport(expression)
-                    val handle = values.getOrElse(
-                      family.path,
+                    val root =
+                      member.selectionPrefix.headOption.map(_.family).getOrElse(family.path)
+                    var handle = values.getOrElse(
+                      root,
                       fail("generated member must follow its actual family producer", path)
                     )
+                    val familyOperations = member.selectionPrefix.zipWithIndex.map:
+                      (selection, index) =>
+                        val selected = if selection.ordinal.toLongOption.nonEmpty then
+                          staticValue(selection.ordinal, region, output, StaticPurpose.Structural)
+                        else emit(selection.ordinal, depth + 1, region, output)
+                        requireValid(
+                          handle._2 == "!nodal.generated_family" && selected._2 == "i64",
+                          "selected family requires exact family and static ordinal operands",
+                          path
+                        )
+                        val selectedResult = s"%selected_family_$ordinal"
+                        ordinal += 1
+                        val identity = s"$path.family$index"
+                        val attributes =
+                          s"{kind = ${quoted("family")}, member = ${quoted(selection.member)}, " +
+                            s"access = ${quoted("read")}, metadata = ${metadata(identity, false)}}"
+                        val text = operation(
+                          "nodal.generated_member",
+                          selectedResult,
+                          "!nodal.generated_family",
+                          Vector(handle, selected),
+                          attributes,
+                          sourceLocation(path)
+                        )
+                        handle = selectedResult -> "!nodal.generated_family"
+                        text
                     val selected = if member.ordinal.toLongOption.nonEmpty then
                       staticValue(member.ordinal, region, output, StaticPurpose.Structural)
                     else emit(member.ordinal, depth + 1, region, output)
@@ -3489,14 +3569,14 @@ private[nodal] object DigitalValueMlir:
                     val attributes = s"{member = ${quoted(member.member)}, " +
                       s"access = ${quoted(generatedAccess(exported, member.access))}, metadata = ${metadata(path, false)}}"
                     (
-                      Vector(operation(
+                      familyOperations :+ operation(
                         "nodal.generated_member",
                         result,
                         dataType,
                         Vector(handle, selected),
                         attributes,
                         sourceLocation(path)
-                      )),
+                      ),
                       height,
                       Unknown
                     )

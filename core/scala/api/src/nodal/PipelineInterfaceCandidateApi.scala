@@ -406,19 +406,21 @@ final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val mode: DriveMode.Value[M],
     val placement: InoutPlacement,
     val profile: ResolutionProfile,
-    val name: String
+    val name: String,
+    private[nodal] val boundary: Boolean = false
 ):
-  CandidateRuntime.declare(
-    this,
-    KernelSignalKind.DigitalInout,
-    dataType = Some(dataType),
-    explicitName = Some(name),
-    attributes = Vector(
-      "mode" -> mode.name,
-      "placement" -> placement,
-      "profile" -> profile
+  if !boundary then
+    CandidateRuntime.declare(
+      this,
+      KernelSignalKind.DigitalInout,
+      dataType = Some(dataType),
+      explicitName = Some(name),
+      attributes = Vector(
+        "mode" -> mode.name,
+        "placement" -> placement,
+        "profile" -> profile
+      )
     )
-  )
 
   def read: Expr[A] = DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
 

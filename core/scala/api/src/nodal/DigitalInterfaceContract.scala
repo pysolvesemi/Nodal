@@ -153,7 +153,8 @@ private[nodal] object DigitalInterfaceContract:
       expressions: Vector[(KernelExpr[?], String)],
       captured: Capture,
       pathOf: Any => Option[String],
-      ownerOf: Any => Option[String]
+      ownerOf: Any => Option[String],
+      resolvedBoundaries: Vector[(String, String)] = Vector.empty
   ): Unit =
     val parents = mutable.HashMap.empty[String, String]
     def representative(path: String): String =
@@ -171,6 +172,11 @@ private[nodal] object DigitalInterfaceContract:
       val right =
         representative(connection.source.getOrElse(fail(11, "pass-through lost its source")))
       if left != right then parents.update(right, left)
+    // Retain strict local driver counting; a joined component needs the still-open
+    // closed-root data/enable transport, never a guessed imported driver.
+    val joined = resolvedBoundaries.flatMap((parent, child) =>
+      Vector(representative(parent), representative(child))
+    ).toSet
     val drivers = captured.connectivity.filter(value =>
       Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(value.kind)
     ).groupBy(value => representative(value.target))
@@ -193,6 +199,8 @@ private[nodal] object DigitalInterfaceContract:
             fail(12, "split requires an authored conditional driver; no write value is available")
           if selected.size != 1 then
             fail(12, "split is ambiguous because the resolved net has multiple conditional drivers")
+          if joined(representative(path)) then
+            fail(12, "split on a child-boundary-joined component requires global driver transport")
 
   def capture(
       declarations: Vector[Declaration],

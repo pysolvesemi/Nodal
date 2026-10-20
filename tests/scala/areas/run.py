@@ -133,8 +133,12 @@ def main() -> None:
     runtime("generated-separate-runtime", "nodal.GeneratedReuseProbe",
             [generated_producer_jar, generated_factory_jar, generated_consumer],
             "GENERATED_AREA_SEPARATE_JAR_PASS")
+    runtime("generated-nested-separate-runtime", "nodal.GeneratedNestedReuseProbe",
+            [generated_producer_jar, generated_factory_jar, generated_consumer],
+            "GENERATED_NESTED_AREA_SEPARATE_JAR_PASS")
     generated_negatives = {
         "MemberTypes": "NODAL-AREA-058-MEMBER",
+        "NestedMemberTypes": "NODAL-AREA-058-MEMBER",
         "CapabilityCast": "NODAL-SEQUENTIAL-056-UNAVAILABLE",
         "HostMutation": "NODAL-ITERATION-CALLBACK-MUTABLE",
         "MixedWhen": "NODAL-COLLECTION-CALLBACK-EFFECT",
@@ -149,6 +153,8 @@ def main() -> None:
             raise RuntimeError("both generated readonly and datatype casts must reject")
         if name == "MemberTypes" and "9 errors found" not in output:
             raise RuntimeError("all nine generated member type/capability negatives must reject")
+        if name == "NestedMemberTypes" and "5 errors found" not in output:
+            raise RuntimeError("all five nested family type/capability negatives must reject")
         if name == "MixedWhen" and (
                 "NODAL-ITERATION-CALLBACK-EFFECT" not in output or "2 errors found" not in output):
             raise RuntimeError("both pure collection and procedural loop guards must reject")

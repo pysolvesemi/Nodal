@@ -148,3 +148,42 @@ object Increment58BoundaryArtifactTests extends TestSuite:
       assert(canonical(retained.copy(generatedRegions =
         retained.generatedRegions.map(_.copy(yieldedArea = None, exports = Vector.empty))
       )) != artifact)
+
+    test(
+      "selected nested families retain ordered exact selection frames and conditional export kind"
+    ):
+      val snapshot =
+        ConstructionKernel.inspect(new nodal_external.Increment58SelectedTripleFamilySource)
+      val original = canonical(snapshot)
+      val compact = original.replaceAll("\\s", "")
+      val families = snapshot.generatedRegions.flatMap(_.exports).count(_.kind == "family")
+      assert(families > 0)
+      assert(compact.sliding("\"kind\":\"family\"".length).count(_ == "\"kind\":\"family\"") ==
+        families)
+      assert(!compact.contains("\"kind\":\"storage\""))
+      val expression =
+        snapshot.digitalExpressions.find(_.generatedMember.exists(_.selectionPrefix.size == 2)).get
+      val member = expression.generatedMember.get
+      val frames = member.selectionPrefix.map(frame =>
+        s"{\"family\":\"${frame.family}\",\"member\":\"${frame.member}\",\"ordinal\":\"${frame.ordinal}\"}"
+      ).mkString(",")
+      assert(compact.contains(s"\"selection_prefix\":[$frames]"))
+      val reversed = snapshot.copy(digitalExpressions =
+        snapshot.digitalExpressions.map(value =>
+          if value.path == expression.path then
+            value.copy(generatedMember =
+              Some(member.copy(selectionPrefix = member.selectionPrefix.reverse))
+            )
+          else value
+        )
+      )
+      assert(canonical(reversed) != original)
+      val storageOnly = snapshot.copy(generatedRegions =
+        snapshot.generatedRegions.map(region =>
+          region.copy(exports = region.exports.map(_.copy(kind = "storage")))
+        )
+      )
+      assert(canonical(storageOnly) != original)
+      assert(!canonical(
+        ConstructionKernel.inspect(new Increment58GeneratedAreaScaleSource)
+      ).contains("\"selection_prefix\""))

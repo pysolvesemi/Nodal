@@ -90,7 +90,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     generatedScope: Option[KernelGeneratedScope] = None,
     resolvedDomain: Option[String] = None,
     instancePort: Option[KernelInstancePortSnapshot] = None,
-    interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None
+    interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    resolvedBoundary: Option[KernelInterfaceBoundarySnapshot] = None
 )
 
 private[nodal] final case class KernelInstancePortSnapshot(
@@ -513,7 +514,8 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     mode: String,
     placement: String,
     profile: String,
-    operations: Vector[String]
+    operations: Vector[String],
+    boundary: Option[KernelInterfaceBoundarySnapshot] = None
 )
 
 private[nodal] final case class KernelTopologyEdge(

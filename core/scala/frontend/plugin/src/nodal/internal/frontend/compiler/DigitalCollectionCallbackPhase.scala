@@ -189,7 +189,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         moduleMethods("nodal.DigitalAggregateApi$package", "field", "value", "member") ++
         areaMemberMethods ++
         methods(requiredClass("nodal.GeneratedAreas"), "apply") ++
-        moduleMethods("nodal.GeneratedAreaRuntime", "member", "nested") ++
+        moduleMethods("nodal.GeneratedAreaRuntime", "member", "nested", "family") ++
         methods(requiredClass("nodal.StructMember"), "bind") ++
         methods(
           owner,

@@ -403,12 +403,20 @@ private[nodal] object ReproducibilityContract:
           "name" -> optionalString(evidence.name)
         )
       ) ++ value.generatedMember.toVector.map(member =>
-        "generated_member" -> obj(
+        "generated_member" -> obj((Vector(
           "family" -> string(member.family),
           "ordinal" -> string(member.ordinal),
           "member" -> string(member.member),
           "access" -> string(member.access)
-        )
+        ) ++ Option.when(member.selectionPrefix.nonEmpty)(
+          "selection_prefix" -> array(member.selectionPrefix.map(frame =>
+            obj(
+              "family" -> string(frame.family),
+              "ordinal" -> string(frame.ordinal),
+              "member" -> string(frame.member)
+            )
+          ))
+        ).toVector)*)
       ))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
@@ -709,11 +717,13 @@ private[nodal] object ReproducibilityContract:
         ) ++ value.yieldedArea.toVector.map(path => "yielded_area" -> string(path)) ++
           Option.when(value.exports.nonEmpty)(
             "exports" -> array(value.exports.map(exported =>
-              obj(
+              obj((Vector(
                 "member" -> string(exported.member),
                 "target" -> string(exported.target),
                 "access" -> string(exported.access)
-              )
+              ) ++ Option.when(
+                exported.kind != "storage"
+              )("kind" -> string(exported.kind)).toVector)*)
             ))
           ).toVector)
       ))
@@ -1067,6 +1077,8 @@ private[nodal] object ReproducibilityContract:
                   "attributes" -> attributes(declaration.attributes)
                 ) ++ declaration.interfaceBoundary.toVector.map(boundary =>
                   "interface_boundary" -> interfaceBoundary(boundary)
+                ) ++ declaration.resolvedBoundary.toVector.map(boundary =>
+                  "resolved_boundary" -> interfaceBoundary(boundary)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
                 ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
@@ -1096,14 +1108,14 @@ private[nodal] object ReproducibilityContract:
       ),
       "resolved_nets" -> array(
         snapshot.resolvedNets.sortBy(_.path).map: net =>
-          obj(
+          obj((Vector(
             "path" -> string(net.path),
             "data_type" -> string(net.dataType),
             "mode" -> string(net.mode),
             "placement" -> string(net.placement),
             "profile" -> string(net.profile),
             "operations" -> array(net.operations.sorted.map(string))
-          )
+          ) ++ net.boundary.toVector.map(boundary => "boundary" -> interfaceBoundary(boundary)))*)
       ),
       "topology" -> array(
         snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map: edge =>

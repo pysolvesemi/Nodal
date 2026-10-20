@@ -393,17 +393,37 @@ private[nodal] object InterfaceMlir:
       )
 
     snapshot.resolvedNets.foreach: net =>
-      val (_, declaration) =
+      val (module, declaration) =
         declarations.getOrElse(net.path, fail("resolved net has no declaration", net.path))
       val fields = declaration.attributes.toMap
       requireValid(
         declaration.kind == "digital-inout" && declaration.generatedScope.isEmpty &&
+          declaration.resolvedBoundary == net.boundary && declaration.interfaceBoundary.isEmpty &&
           declaration.dataType.contains(net.dataType) && fields.get("mode").contains(net.mode) &&
           fields.get("placement").contains(net.placement) &&
           fields.get("profile").contains(net.profile),
         "resolved-net declaration and typed contract disagree",
         net.path
       )
+      net.boundary.foreach: boundary =>
+        val instance = module.instances.find(_.path == boundary.instance).getOrElse(
+          fail("resolved projection lost its exact immediate child instance", net.path)
+        )
+        val child = nets.getOrElse(
+          boundary.endpoint,
+          fail("resolved projection lost its actual child net", net.path)
+        )
+        val (childModule, childDeclaration) = declarations(child.path)
+        requireValid(
+          childModule.path == instance.childModule && child.boundary.isEmpty &&
+            childDeclaration.kind == "digital-inout" && childDeclaration.generatedScope.isEmpty &&
+            instance.generatedScope.isEmpty && declaration.domain.isEmpty &&
+            net.mode == child.mode && net.placement == child.placement &&
+            net.profile == child.profile &&
+            instanceType(net.dataType, child.dataType, net.path, instance, child.path),
+          "resolved projection changes exact child, mode, profile, placement or finalized element type",
+          net.path
+        )
       val _ = mode(net.mode, net.path)
       val selectedPlacement = placement(net.placement, net.path)
       val selectedProfile = profile(net.profile, net.path)
@@ -412,6 +432,15 @@ private[nodal] object InterfaceMlir:
         "internal net exceeds portable-boundary capabilities",
         net.path
       )
+
+    private val projectedNets = snapshot.resolvedNets.flatMap(net =>
+      net.boundary.map(boundary => (boundary.instance, boundary.endpoint))
+    )
+    requireValid(
+      projectedNets.distinct.size == projectedNets.size,
+      "repeated resolved projection must reuse its existing physical identity",
+      snapshot.root
+    )
 
     private val definitions: Vector[Definition] =
       val entries = mutable.LinkedHashMap.empty[(String, String), mutable.LinkedHashMap[
@@ -658,6 +687,11 @@ private[nodal] object InterfaceMlir:
       val left = component(effect.target)
       val right = component(effect.source.get)
       if left != right then netComponents.update(left, right)
+    private val boundaryNetComponents = snapshot.resolvedNets.flatMap(net =>
+      net.boundary.toVector.flatMap(boundary =>
+        Vector(component(net.path), component(boundary.endpoint))
+      )
+    ).toSet
     private val drivers = snapshot.digitalConnectivity.filter(effect =>
       Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(effect.kind)
     ).groupBy(effect => component(effect.target))
@@ -692,6 +726,11 @@ private[nodal] object InterfaceMlir:
         "split projection requires exactly one actual conditional value driver",
         expression.path
       )
+      requireValid(
+        !boundaryNetComponents(component(endpoint.path)),
+        "split on a child-boundary-joined component requires global driver transport",
+        expression.path
+      )
 
     def roots(module: KernelModuleSnapshot): Vector[String] =
       (module.declarations.filter(_.kind == "digital-inout").map(_.path) ++
@@ -715,23 +754,30 @@ private[nodal] object InterfaceMlir:
         result: String,
         resultType: String,
         sourceMetadata: String,
-        sourceLocation: String
+        sourceLocation: String,
+        symbol: (String, String) => String
     ): Vector[String] =
       val selected = nets.getOrElse(
         declaration.path,
         fail("net declaration lost its typed contract", declaration.path)
       )
+      val identity = selected.boundary match
+        case Some(boundary) => Vector(
+            "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
+            "endpoint" -> quoted(declarations(boundary.endpoint)._2.name)
+          )
+        case None => Vector("name" -> quoted(declaration.name))
       Vector(operation(
-        "nodal.resolved_net",
+        if selected.boundary.nonEmpty then "nodal.net_boundary" else "nodal.resolved_net",
         Vector(result -> resultType),
         Vector.empty,
         sourceLocation,
-        "name" -> quoted(declaration.name),
-        "metadata" -> metadata(
-          sourceMetadata,
-          "placement" -> quoted(placement(selected.placement, selected.path)),
-          "profile" -> quoted(profile(selected.profile, selected.path))
-        )
+        (identity :+
+          ("metadata" -> metadata(
+            sourceMetadata,
+            "placement" -> quoted(placement(selected.placement, selected.path)),
+            "profile" -> quoted(profile(selected.profile, selected.path))
+          )))*
       ))
 
     def renderValue(

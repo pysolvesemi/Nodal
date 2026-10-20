@@ -1155,13 +1155,17 @@ ${indent(body, 2)}
           region.maximum,
           identicalBounds = if region.digitalBody.nonEmpty then
             val query = region.parent.map(regionalQuery).getOrElse(moduleIntegerQuery)
-            query.resolve(module.path, region.lower) == query.resolve(module.path, region.upperExclusive)
-          else sameStaticInteger(
-            module,
-            boundIdentity(region.lower),
-            boundIdentity(region.upperExclusive),
-            region.path
-          )
+            query.resolve(
+              module.path,
+              region.lower
+            ) == query.resolve(module.path, region.upperExclusive)
+          else
+            sameStaticInteger(
+              module,
+              boundIdentity(region.lower),
+              boundIdentity(region.upperExclusive),
+              region.path
+            )
         )
           .fold(problem => fail("NODAL-BRIDGE-043", problem.message, Some(region.path)), identity)
         if envelope.maximumTripCount != region.maximumTripCount then
@@ -2461,13 +2465,16 @@ ${indent(body, 2)}
       // Generate and procedural-loop domains through their first canonical header use.
       val structuralHeaders = snapshot.generatedRegions
         .filter(region => region.owner == module.path && region.digitalBody.nonEmpty)
-        .map(region => (region.parent, region.path, Vector(region.lower, region.upperExclusive, region.step))) ++
+        .map(region =>
+          (region.parent, region.path, Vector(region.lower, region.upperExclusive, region.step))
+        ) ++
         snapshot.digitalLoops.filter(loop =>
           loop.owner == module.path && snapshot.structuralIfs.exists(_.owner == module.path)
         ).map(loop => (None, loop.path, Vector(loop.lower, loop.upperExclusive, loop.step)))
       val boundIdentities = structuralHeaders.sortBy(_._2).flatMap: (region, path, bounds) =>
         bounds.zipWithIndex.collect {
-          case (token, index) if token.toLongOption.nonEmpty => (region -> token) -> s"$path.bound$index"
+          case (token, index) if token.toLongOption.nonEmpty =>
+            (region -> token) -> s"$path.bound$index"
         }
       val literalBoundIdentities = boundIdentities.groupMap(_._1)(_._2).view.mapValues(_.head).toMap
       def renderDigitalStatic(
@@ -5352,7 +5359,8 @@ ${indent(body, 2)}
             result,
             dataType,
             bridgeMetadata(declaration.path, Vector.empty),
-            location(declaration.path)
+            location(declaration.path),
+            stableLocalSymbol
           )
         case "wire" | "register" =>
           val module = modulesByPath(resolveOwningModule(declaration.path))

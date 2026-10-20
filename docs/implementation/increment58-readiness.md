@@ -877,3 +877,37 @@ and `.work/f58-timing-target`, using compiler SHA256
 `3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
 Finite elaboration recursion, bounded runtime stacks and the remaining hierarchy,
 resolved/inout and target-generation requirements remain open.
+
+## Checkpoint 18 — selected family source views and standalone net boundaries
+
+Generated Area collections retain typed, ordered selection prefixes through the
+existing source capture, bridge and artifact owners. A family-valued member is
+an exact read-only structural view of its direct nested family, not a runtime
+payload, new family registry or cloned lane. Terminal storage retains its own
+capabilities. Schema3 records family fields; storage-only schema2 producers remain
+compatible, while old producers cannot invent family metadata. Named helpers,
+grouped aliases, three-level selection and separate compilation use the same
+checked path. External selected writes and target lowering of nested views remain
+open, as do guarded declarations and induction-dependent bounds.
+
+The public standalone inout selector now reuses the exact child endpoint through
+a single canonical boundary carrier. Late formal element types seal after actual
+instance binding; ordinary local nets still validate immediately. Reads, pure
+expressions, conditional drivers and pass-through retain exact resolution policy,
+placement, contextual element identity and topology. Bridge validation independently
+checks the child relation; it emits a boundary alias rather than another physical
+net. Joined-component split transport and resolved/inout target support remain
+explicitly unfinished, not silently approximated.
+
+Focused shared source acceptance is **39/39 groups**: selected families 7, nested
+families 7, generated predecessors 14, standalone inout 5, actual native inout 1,
+and artifacts 5. The native group gates five actual source modes and rejects a
+cross-boundary combinational feedback cycle. The initial retry was interrupted
+during compilation and is not counted; the recovered run uses the unchanged
+source manifest. The earlier forged-parent negatives now fail at the stronger
+exact-direct-export check, so only their diagnostic assertions were updated.
+Five maintained selected-family replays also pass the full native gate on frozen
+compiler SHA256 `3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff2`.
+Commands, hashes and manifests are under `.work/f58-selected-standalone-source`;
+the separate-JAR Area harness also passed its selected-family positive and typed
+negative fixtures. No F58 parent or remaining required behavior is closed here.

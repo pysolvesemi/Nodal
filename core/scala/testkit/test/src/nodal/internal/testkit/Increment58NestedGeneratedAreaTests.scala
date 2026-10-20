@@ -13,7 +13,9 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
     val inner = snapshot.generatedRegions.find(_.parent.nonEmpty).get
     assert(inner.parent.contains(outer.path))
     assert(outer.digitalBody.nonEmpty && inner.digitalBody.nonEmpty)
-    assert(outer.declarations.isEmpty && outer.exports.isEmpty)
+    assert(outer.declarations.isEmpty)
+    assert(outer.exports ==
+      Vector(KernelGeneratedAreaExport("inner", inner.path, "read_only", "family")))
     assert(inner.declarations.size == 1 && inner.exports.map(_.member) == Vector("stored"))
     val member = snapshot.digitalExpressions.find(_.generatedMember.nonEmpty).get
     assert(member.region.contains(outer.path))
@@ -34,7 +36,7 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
       val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
       assert(text.linesIterator.count(_.contains("\"nodal.generate\"(")) == 2)
       assert(text.linesIterator.count(_.contains("\"nodal.digital_storage\"(")) == 1)
-      assert(text.linesIterator.count(_.contains("\"nodal.generated_export\"(")) == 1)
+      assert(text.linesIterator.count(_.contains("\"nodal.generated_export\"(")) == 2)
       assert(text.linesIterator.count(_.contains("\"nodal.generated_member\"(")) == 1)
       assert(text.contains(pair._1.path + ".bound0") && text.contains(pair._2.path + ".bound0"))
     test("independent symbolic inner bound uses its actual outer static capture"):
@@ -110,7 +112,7 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
             if value.path == inner.path then value.copy(parent = None) else value
           )
         ),
-        "scope"
+        "generated export requires a canonical key, exact direct storage and attested access"
       )
       bridgeRejected(
         snapshot.copy(generatedRegions =
@@ -118,7 +120,7 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
             if value.path == inner.path then value.copy(parent = Some(inner.path)) else value
           )
         ),
-        "cycle"
+        "generated export requires a canonical key, exact direct storage and attested access"
       )
       bridgeRejected(
         snapshot.copy(digitalExpressions =

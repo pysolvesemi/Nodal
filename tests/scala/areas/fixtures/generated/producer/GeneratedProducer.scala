@@ -15,3 +15,10 @@ class BaseLane(initial: Expr[UInt]) extends Area:
 final class ReusableLane(initial: Expr[UInt]) extends BaseLane(initial):
   val nested = new Area:
     val flag = Reg(false.B)
+
+final class ReusableOuter extends Area:
+  private val hiddenFamily =
+    for j <- hdlRange(1, 9, 2) yield
+      val _ = j
+      new ReusableLane(0.U(8))
+  val inner = hiddenFamily

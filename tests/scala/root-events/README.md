@@ -3,10 +3,13 @@
 `nodal.internal.testkit.Increment57EventSourceExport` emits actual public Scala
 event fixtures through the production construction/snapshot/bridge path.
 The frozen `contracts.clockreset.positive.LowLevelEventFixture` remains unchanged.
-`run_target.py` consumes the four supported flat witnesses, invokes the current
-Nodal compiler and pinned CIRCT exporter, then simulates the actual generated
-SystemVerilog with Icarus. Handwritten code is limited to the testbench, never a
-replacement DUT.
+`run_target.py` consumes the four supported flat witnesses and runs the current
+Nodal compiler's default semantic gate on each actual source replay before any
+target normalization or lowering. This retains the integration regression for
+independently verified root-event boundaries with absent domains, rather than
+allowing normalization to hide those declarations. It then invokes the pinned
+CIRCT exporter and simulates the actual generated SystemVerilog with Icarus.
+Handwritten code is limited to the testbench, never a replacement DUT.
 
 The focused cases check:
 
@@ -45,8 +48,12 @@ transactional preservation when verification or the narrower target profile
 rejects an input. Native event ownership, capture and isolation rejection tests
 live in `EventModelTest.cpp`, rather than duplicating the semantic owner here.
 
-Bounded pure collection maps remain valid in the source/native event graph.
-The existing flat finite CIRCT profile has no collection-region lowering, so
-such a target request rejects transactionally with its existing flat-operation
-diagnostic. This is not a generated-HDL claim for map callbacks. There is no
-event-specific collection compiler or replacement handwritten RTL.
+Bounded pure collection maps and folds remain valid in the source/native event
+graph, including unused lane/seed operands and dead pure captures. The existing
+flat finite CIRCT profile has no collection-region lowering, so those target
+requests reject transactionally with its existing flat-operation diagnostic.
+A source alias/index path may encounter an earlier unsupported target operation;
+retain that actual source-located diagnostic rather than rewriting the source
+to reach the collection refusal. This is not a generated-HDL claim for collection
+callbacks. There is no event-specific collection compiler or replacement
+handwritten RTL.

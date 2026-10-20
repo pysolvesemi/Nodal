@@ -115,9 +115,15 @@ def main() -> None:
         source = args.input / f"{name}.mlir"
         if not source.is_file() or '"nodal.event_process"' not in source.read_text():
             parser.error(f"missing actual Scala event replay: {source}")
+        gated = args.out / f"{name}.gated.mlir"
         circt = args.out / f"{name}.circt.mlir"
         sv = args.out / f"{name}.sv"
-        run(name + "-lower", [str(args.nodalc), str(source), "--nodal-sequential-to-circt",
+        # Gate the actual source replay before target normalization can remove
+        # declarations or operands. This exercises ordinary semantic admission,
+        # including the independently verified root-event @none boundaries.
+        run(name + "-gate", [str(args.nodalc), str(source), "--nodal-gate-default",
+                            "--mlir-print-debuginfo", "-o", str(gated)])
+        run(name + "-lower", [str(args.nodalc), str(gated), "--nodal-sequential-to-circt",
                              "--mlir-print-debuginfo", "-o", str(circt)])
         run(name + "-export", [str(args.firtool), str(circt), "--format=mlir", "--verilog",
                               "--verify-each", "--disable-all-randomization", "-o", str(sv)])

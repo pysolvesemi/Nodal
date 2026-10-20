@@ -1,6 +1,9 @@
 # Increment 57 readiness and implementation
 
-Status: implementation in progress; all F-057 checklist children remain open.
+Status: selected implementation and focused local validation accepted locally.
+F-057.A–F are complete locally; F-057.G and the increment parent remain open for
+blocked publication and verified integration. Earlier checkpoint status below is
+historical and superseded by the final local acceptance section.
 Base: `16530a5b0630b709dcc500d2512fa276c755faab`, the verified F56 documentation
 closure after PR152. Branch: `increment/57-clock-reset-crossings`.
 
@@ -1702,13 +1705,161 @@ including unused input/seed/shape-alias boundaries, while exact runtime capture
 inventories remain unchanged. Source capture and bridge independently enforce
 fixed 1..4096-bit sampled payloads; unused finite inputs retain canonical bounds.
 
-The frozen three-file correction passes **66/66 focused Scala groups**:
+The frozen three-file correction passes **60/60 focused Scala groups**:
 Increment57EventSourceTests 9, Increment57EventCollectionSourceTests 3,
 Increment55DigitalCollectionTests 11, Increment56SequentialCaptureTests 20,
-Increment57LevelCrossingTests 9, Increment57WaiverSourceTests 8 and
-nodal.AnalogEventReviewTests 6. Mill exited 0 in
+Increment57LevelCrossingTests 9 and Increment57WaiverSourceTests 8.
+The earlier local checkpoint reported 66 by including an analog selector that
+matched no tests; this corrects that count rather than claiming an unexecuted
+selection passed. The correctly qualified
+`nodal.internal.testkit.AnalogEventReviewTests` then separately passed **6/6**
+with Mill exit 0 in `.work/event-collection-sampler-analog-final.log`. Thus the
+final result is 60 focused groups plus 6 separately executed analog groups.
+The initial Mill selection exited 0 in
 `.work/event-collection-sampler-tests-final.log`; exact source hashes are in
 `.work/event-collection-sampler-source-frozen.sha256`. Formatting and diff checks
 pass. This supersedes the earlier constant-map overcapture gap. Actual regenerated
 source/native/HDL integration is the final pending event check, not inferred from
 the source test result alone.
+
+### Final event integration result
+
+Both required parity repairs are complete. Three direct-Java source export mains
+exited 0 and emitted all 11 actual witnesses; the original five are byte-identical
+to their earlier source export. Against the frozen `2f41c1a3` compiler above,
+all **11/11 raw-source default semantic gates** pass. An additional actual-source
+causal replay passes **20/20** (one baseline and 19 malformed mutations), retaining
+authored Scala locations and emitting no output for rejection. The maintained
+runner now gates actual source before target lowering, so normalization cannot
+hide the event-domain boundary regression.
+
+All **four required actual SystemVerilog/Icarus profiles** pass: original frozen
+Bool, rising and falling UInt8 pairs, and whole Vec(Bool, 4). Six unsupported
+collection/profile target requests reject with source locations and byte-identical
+before/after-failure IR, creating no target file. Five reject at the existing
+flat collection boundary; the shape-alias witness correctly encounters the
+existing fixed-width const_literal target restriction first. This is truthful
+transactional refusal, not collection HDL support. Final source, target and
+causal manifests are retained under `.work/f57-event-replay-source-final/`,
+`.work/f57-event-final-closure/` and `.work/event-domain-gate-causal-final/results/`.
+
+The final compiler also re-admits both representative 64-domain/waiver and nested
+relationship scale inputs through the default gate: 303 ms and 478 ms respectively
+in this local replay (`.work/f57-scale-native-closure/results.json`). Those inputs
+retain the previously recorded source determinism checks. Earlier category
+results remain scoped historical evidence, not newly rerun broad suites.
+## Final local selected-scope acceptance and integration handoff
+
+This is local prototype implementation acceptance, not publication or integration.
+F-057.A–F and the implementation/validation children are supported by the focused
+category evidence above and the final event integration below. F-057.G and the
+increment parent remain open until the retained local commits are published and
+PR153 is verified squash-merged into dev with `[skip ci]`. Publication remains
+blocked pending the requested approval for the focused native test registration;
+no CI or broad qualification was run.
+
+### Architecture and representative scale review
+
+The final production paths retain one authoritative dependency representation per
+language boundary. ConstructionSession owns captured source assignments, effects
+and provenance; the bridge serializes independently checked identities; native
+AssignmentQuery owns actual SSA/writer dependencies and event state cuts. Domain,
+reset, clock, crossing, hierarchy and waiver verification consume those canonical
+facts rather than accepting metadata as safety evidence. Independent native
+verification remains a trust-boundary requirement, not a redundant source check.
+The event-domain pass reuses the same assignment proof and admits absence of a
+domain only for verified finite root inputs and exact tracked event outputs.
+Ordinary sampling, driver checks and Clock/Reset capability checks remain active.
+
+The final collection repair follows the existing yielded-body/region-argument
+semantics instead of visiting unused runtime operands or introducing a second
+collection compiler. Required whole-state, type, graph and capture budgets are
+checked before expansion. Process grouping, direct symbol maps and bounded graph
+walks preserve deterministic source identity without merging independent state.
+Representative 64-domain/waiver and nested-relationship checks, earlier 128-instance
+crossing profiles, hierarchy sibling/depth cases and event 8/32-process checks are
+recorded above. These observations justify the bounded prototype design; they are
+not a universal asymptotic or performance guarantee. Very large authored modules
+remain subject to explicit limits, and future consumer-driven optimization belongs
+in the canonical owners rather than category-specific caches or bypasses.
+
+### Actual generated SystemVerilog demonstration
+
+The original LowLevelEventFixture in
+`examples/clockResetApi/src/contracts/clockreset/positive/AnalogEventSeparationFixtures.scala`
+executes unchanged:
+
+```scala
+lowlevel.process(trigger.rising):
+  observed := true.B
+```
+
+The actual pinned CIRCT/firtool output for its frozen replay contains:
+
+```systemverilog
+reg __nodal_event_0_observed;
+always_ff @(posedge trigger)
+  __nodal_event_0_observed <= 1'h1;
+assign observed = __nodal_event_0_observed;
+```
+
+This is a root-local digital event register with unspecified startup, not an
+inferred ClockDomain, reset or analog solver process. The maintained
+`tests/scala/root-events/run_target.py` command runs the real default semantic gate,
+normalization, Nodal-to-CIRCT lowering, official CIRCT/firtool and Icarus against
+actual source-generated inputs. Its README documents the exact tool arguments.
+The final command was:
+
+```sh
+python3 tests/scala/root-events/run_target.py \
+  --input .work/f57-event-replay-source-final \
+  --out .work/f57-event-final-closure/hdl \
+  --nodalc .work/f57-event-domain-final-checkpoint/nodalc \
+  --firtool .work/circt-toolchain/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog \
+  --vvp .work/tools/iverilog/bin/vvp
+```
+
+The actual excerpt is `.work/f57-event-final-closure/hdl/frozen.sv`.
+All four final source/SystemVerilog hashes match their preceding passing replay;
+the added semantic gate changes admission coverage, not the generated hardware.
+The companion rising/falling two-output and aggregate profiles check simultaneous
+pre-event updates, inactive-edge hold and payload-only hold. Actual generated
+output, commands and hashes are retained in the final local replay directory.
+Pure collection regions remain source/native-supported with transactional target
+rejection at the pre-existing target boundary; general hierarchy lowering remains
+F58-owned. No handcrafted DUT or initialization was substituted.
+## Focused downstream handoff and output review
+
+The maintained target runners in `tests/scala/` retain actual source-to-native-to-
+SystemVerilog witnesses for `level-crossings`, `reset-release`,
+`gray-pulse-crossings`, `snapshot-handshakes`, `async-fifos`, `owned-clocks`,
+`clock-relationships`, `owned-waivers` and `root-events`. Their scoped results are recorded above; later consumer parents
+are not completed by these tests.
+
+- F65/F66: retain independent level chains; both reset edges/polarities and
+  asynchronous assertion/synchronous release; Gray transitions and pulse spacing
+  assertion negatives; handshake snapshot/coalescing and FIFO stalls/wrap/reset;
+  gate/mux safe-switching; explicit Same clock/reset ownership; stateless waiver
+  X/Z identity; and root event startup/hold/simultaneous updates.
+  The existing actual CIRCT/SystemVerilog/Icarus observations are prototype
+  digital evidence, not electrical, metastability or external setup/hold proof.
+- F67: use those same source/IR witnesses for later synthesis/equivalence checking.
+  Preserve independent synchronizer/release/state instances, gate/mux physical
+  ownership, FIFO memory/state and pointer semantics, and event old-state updates.
+  Waivers must remain identity transport with authored obligations, never acquire
+  a synchronizer or inferred safety proof. No synthesis/equivalence campaign was
+  executed for this handoff.
+- F72: retain exact domain/reset/event boundaries and externally imposed timing
+  assumptions when embedding these digital structures in AMS. Digital event
+  escape is not analog event composition or an analog solver contract. Existing
+  analog event regressions remain a compatibility check, not an executed new
+  AMS backend.
+
+The output review keeps stateful primitives independent and stateless waivers
+state-free. Existing canonical ABI and target expression/backedge infrastructure
+own materialization. No speculative optimization pass is required: merging
+independent synchronizers, dropping source obligations or making reset/event
+startup deterministic would violate the selected semantics. Hierarchy native
+proof is supported; general hierarchical HDL lowering remains explicitly owned by
+F58 and rejects transactionally here rather than producing partial output.

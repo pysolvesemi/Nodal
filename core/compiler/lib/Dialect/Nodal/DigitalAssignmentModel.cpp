@@ -1,4 +1,3 @@
-#include "nodal/Dialect/Nodal/EventModel.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
@@ -9,6 +8,7 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EnumSwitchModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
@@ -102,6 +102,12 @@ public:
         auto access = resolveStaticShapeProjection(node.value, node.use);
         Operation *root = succeeded(access) ? access->root.getDefiningOp() : nullptr;
         boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
+        if (isa_and_nonnull<MemberAccessOp>(root) && hasDigitalInterfaceContract(root)) {
+          auto reference = root->getAttrOfType<FlatSymbolRefAttr>("instance");
+          Operation *endpoint =
+              reference ? SymbolTable::lookupSymbolIn(root->getParentOp(), reference) : nullptr;
+          boundary = isa_and_nonnull<InterfaceBoundaryOp>(endpoint);
+        }
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
                               crossing, index, endpoint.role, 0, boundary, waiver,
@@ -1015,7 +1021,8 @@ LogicalResult AssignmentQuery::verify() {
       auto found = writers.find(port);
       if (found == writers.end() || found->second.size() != 1 ||
           text(writes[found->second.front()].operation, "kind") != "event_update")
-        return reject(event.operation, "each declared event output requires exactly one event update");
+        return reject(event.operation,
+                      "each declared event output requires exactly one event update");
     }
   // Written externally observable outputs are final whole-value reads. Merely
   // declaring an output remains a capability fixture, without an execution duty.
@@ -1114,6 +1121,9 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
     DenseMap<Value, unsigned> values;
     DenseMap<Operation *, unsigned> ports;
     DenseMap<std::pair<Operation *, Operation *>, unsigned> instancePorts;
+    std::map<std::pair<Operation *, std::string>, unsigned> interfaceMembers;
+    std::map<std::tuple<Operation *, Operation *, std::string>, unsigned> instanceInterfaces;
+    DenseMap<Operation *, DigitalInterfaceMember> interfaceFacts;
   };
   DenseMap<Operation *, unsigned> indexes;
   SmallVector<LocalGraph, 0> definitions;
@@ -1160,6 +1170,26 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
           return failure();
         local.instancePorts.try_emplace(std::make_pair(boundary->instance, boundary->port), node);
       }
+    }
+    for (unsigned i = 0; i < local.graph.nodes.size(); ++i) {
+      Value value = local.graph.nodes[i].value;
+      Operation *op = value ? value.getDefiningOp() : nullptr;
+      if (!isa_and_nonnull<MemberAccessOp>(op) || !hasDigitalInterfaceContract(op))
+        continue;
+      auto known = local.interfaceFacts.find(op);
+      if (known == local.interfaceFacts.end()) {
+        auto inspected = inspectDigitalInterfaceMember(op);
+        if (failed(inspected))
+          return reject(op, "hierarchy Interface member lost its exact endpoint declaration");
+        known = local.interfaceFacts.try_emplace(op, *inspected).first;
+      }
+      const auto *member = &known->second;
+      if (member->instance)
+        local.instanceInterfaces.try_emplace(
+            std::make_tuple(member->instance, member->endpoint, member->path.getValue().str()), i);
+      else
+        local.interfaceMembers.try_emplace(
+            std::make_pair(member->endpoint, member->path.getValue().str()), i);
     }
     indexes.try_emplace(context.module, definitions.size());
     definitions.push_back(std::move(local));
@@ -1226,6 +1256,44 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
       continue;
     auto access = resolveStaticShapeProjection(node.value, node.use);
     Operation *op = succeeded(access) ? access->root.getDefiningOp() : nullptr;
+    if (isa_and_nonnull<MemberAccessOp>(op) && hasDigitalInterfaceContract(op)) {
+      const auto &context = hierarchy->occurrences()[node.occurrence];
+      const auto &facts = definitions[indexes.lookup(context.module)].interfaceFacts;
+      auto known = facts.find(op);
+      if (known == facts.end())
+        return reject(op, "hierarchy Interface edge lost its exact member identity");
+      const auto *member = &known->second;
+      std::optional<unsigned> target;
+      if (member->instance && member->access.getValue() == "out") {
+        auto child = hierarchy->childOccurrence(node.occurrence, member->instance);
+        if (failed(child))
+          return reject(op, "child Interface output has no actual occurrence");
+        const auto &childGraph = definitions[indexes.lookup(member->module)];
+        auto found =
+            childGraph.interfaceMembers.find({member->endpoint, member->path.getValue().str()});
+        if (found == childGraph.interfaceMembers.end() ||
+            childGraph.graph.nodes[found->second].dependencies.empty())
+          return reject(op,
+                        "child Interface output must retain its actual driver, not a domain label");
+        target = offsets[*child] + found->second;
+      } else if (!member->instance && context.instance && member->access.getValue() == "in") {
+        const auto &parent = hierarchy->occurrences()[context.parent];
+        const auto &parentGraph = definitions[indexes.lookup(parent.module)];
+        auto found = parentGraph.instanceInterfaces.find(
+            {context.instance, member->endpoint, member->path.getValue().str()});
+        if (found == parentGraph.instanceInterfaces.end() ||
+            parentGraph.graph.nodes[found->second].dependencies.empty())
+          return reject(op, "used child Interface input needs an actual parent-owned connection");
+        target = offsets[context.parent] + found->second;
+      }
+      if (target) {
+        if (++edges > limits.maximumEdges)
+          return reject(op, "hierarchy Interface edges exceed the finite graph budget");
+        node.dependencies.push_back(*target);
+        node.hierarchyBoundary = true;
+      }
+      continue;
+    }
     if (!isa_and_nonnull<PortValueOp, InstancePortOp>(op))
       continue;
     const auto &context = hierarchy->occurrences()[node.occurrence];

@@ -331,22 +331,48 @@ int main() {
     ++failures;
     llvm::errs() << "FAIL target-precondition\n";
   } else {
-    const std::string before = print(target->getOperation());
     PassManager manager(&context);
     manager.addPass(nodal::createSequentialToCIRCTPass());
-    if (succeeded(manager.run(*target)) || print(target->getOperation()) != before ||
-        !StringRef(diagnostics).contains("Foundation 58")) {
+    if (failed(manager.run(*target)) ||
+        !StringRef(print(target->getOperation())).contains("hw.instance") ||
+        StringRef(print(target->getOperation())).contains("__nodal_src_clock") ||
+        !StringRef(print(target->getOperation())).contains("__nodal_dst_clock")) {
       ++failures;
-      llvm::errs() << "FAIL transactional-target-rejection\n" << diagnostics;
+      llvm::errs() << "FAIL concrete-hierarchy-target-emission\n" << diagnostics;
     }
     ++count;
     diagnostics.clear();
+    auto generic = parseSourceString<mlir::ModuleOp>(fixture(), ParserConfig(&context, false));
     PassManager normalization(&context);
     normalization.addPass(nodal::createNormalizeSequentialPass());
-    if (succeeded(normalization.run(*target)) || print(target->getOperation()) != before ||
-        !StringRef(diagnostics).contains("Foundation 58")) {
+    if (!generic || failed(normalization.run(*generic)) || failed(verify(*generic))) {
       ++failures;
-      llvm::errs() << "FAIL transactional-normalization-rejection\n" << diagnostics;
+      llvm::errs() << "FAIL generic-hierarchy-normalization\n" << diagnostics;
+    }
+  }
+  // Source edge is a proof fact, not a physical input to a level synchronizer.
+  // Changing it across occurrences must not split an otherwise shared body.
+  {
+    std::string input = fixture(true, false, false, false, false, false);
+    input = replace(input, domain("a"),
+                    replace(domain("c"), "edge = \"rising\"", "edge = \"falling\"") +
+                        port("z", "input", "c") + domain("a"));
+    input = replace(input, instance("right"), instance("right", "c", "b", "z"));
+    auto unusedSourceEdge = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    ++count;
+    diagnostics.clear();
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = unusedSourceEdge && succeeded(manager.run(*unusedSourceEdge));
+    if (ok) {
+      auto output = print(unusedSourceEdge->getOperation());
+      ok = !StringRef(output).contains("__domain_") &&
+           !StringRef(output).contains("__nodal_src_clock") &&
+           StringRef(output).contains("__nodal_dst_clock");
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL level-source-material-does-not-split-target\n" << diagnostics;
     }
   }
   // A raw child SSA handle must not become an alternative to instance_port.

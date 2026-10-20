@@ -123,13 +123,178 @@ void correlate(Operation *target, Operation *source) {
     target->setAttr("nodal.source_path", StringAttr::get(source->getContext(), sourcePath(source)));
 }
 
+/// Target-only reusable module inventory. Semantic facts remain in the checked
+/// occurrence model; no Nodal definitions or physical binding records are cloned.
+struct DomainPortPlan {
+  Attribute requirement;
+  bool clock = false;
+  bool reset = false;
+  StringAttr edge, policy, polarity;
+  std::string clockName, resetName;
+};
+struct ModuleVariantPlan {
+  nodal::ModuleOp source;
+  unsigned occurrence = 0;
+  std::string signature, name;
+  SmallVector<DomainPortPlan> domains;
+  llvm::DenseMap<Operation *, unsigned> children;
+  circt::hw::HWModuleOp target;
+};
+struct HierarchyTargetPlan {
+  std::shared_ptr<HierarchyModel> proof;
+  SmallVector<ModuleVariantPlan> variants;
+  SmallVector<unsigned> occurrenceVariants;
+
+  LogicalResult build(mlir::ModuleOp input) {
+    auto checked = HierarchyModel::create(input);
+    if (failed(checked) || failed((*checked)->verifyBindings()))
+      return failure();
+    proof = *checked;
+    auto occurrences = proof->occurrences();
+    occurrenceVariants.resize(occurrences.size());
+    llvm::DenseMap<Operation *, llvm::StringMap<unsigned>> variantLookup;
+    llvm::DenseMap<Operation *, SmallVector<unsigned>> variantsBySource;
+    // Children precede parents. This inventories represented occurrences only;
+    // generated families remain a later explicitly rejected profile.
+    for (unsigned cursor = occurrences.size(); cursor; --cursor) {
+      unsigned index = cursor - 1;
+      const auto &context = occurrences[index];
+      ModuleVariantPlan candidate;
+      candidate.source = cast<nodal::ModuleOp>(context.module);
+      candidate.occurrence = index;
+      DomainModel local(context.module);
+      llvm::DenseMap<Attribute, std::pair<bool, bool>> demands;
+      llvm::DenseMap<std::pair<Attribute, Attribute>, Operation *> actualBindings;
+      for (Operation &op : context.module->getRegion(0).front())
+        if (isa<InstanceDomainBindingOp>(op))
+          actualBindings.try_emplace(
+              std::make_pair(op.getAttr("instance"), op.getAttr("requirement")), &op);
+      auto demand = [&](Attribute domain, bool reset) {
+        if (!local.unresolvedRequirement(domain))
+          return;
+        auto &entry = demands[domain];
+        entry.first = true;
+        entry.second |= reset;
+      };
+      for (Operation &op : context.module->getRegion(0).front()) {
+        if (isa<RequirementClockOp, RequirementResetOp>(op)) {
+          if (llvm::any_of(op.getResult(0).getUsers(),
+                           [](Operation *use) { return !isa<InstanceDomainBindingOp>(use); }))
+            demand(op.getAttr("requirement"), isa<RequirementResetOp>(op));
+        } else if (isa<CrossingOp, AsyncFifoOp>(op)) {
+          auto crossing = inspectExecutableCrossing(&op, *proof, index);
+          if (failed(crossing))
+            return failure();
+          // Endpoint provenance remains fully checked, but only actual state
+          // and monitor inputs belong to the target ABI/material signature.
+          // Level chains do not sample the source clock; Gray destination
+          // payload stages intentionally have no fabricated reset value.
+          if (crossing->kind != CrossingKind::Level)
+            demand(op.getAttr("source_domain"), true);
+          demand(op.getAttr("destination_domain"), crossing->kind != CrossingKind::Gray);
+        } else if (isa<InstanceOp>(op)) {
+          auto child = proof->childOccurrence(index, &op);
+          if (failed(child))
+            return reject(&op, "target instance lacks a verified occurrence");
+          unsigned variant = occurrenceVariants[*child];
+          candidate.children.try_emplace(&op, variant);
+          for (const auto &port : variants[variant].domains) {
+            Operation *binding = actualBindings.lookup(
+                {FlatSymbolRefAttr::get(input.getContext(), text(&op, "sym_name")),
+                 port.requirement});
+            if (!binding)
+              return reject(&op, "inferred child domain port lacks its exact actual binding");
+            demand(binding->getAttr("actual"), port.reset);
+          }
+        }
+      }
+      for (Operation &op : context.module->getRegion(0).front()) {
+        if (!isa<DomainRequirementOp>(op))
+          continue;
+        auto reference = FlatSymbolRefAttr::get(input.getContext(), text(&op, "sym_name"));
+        auto found = demands.find(reference);
+        if (found == demands.end())
+          continue;
+        auto binding = proof->resolveBinding(index, reference);
+        if (failed(binding))
+          return reject(&op, "inferred domain port requires actual occurrence semantics");
+        DomainPortPlan port;
+        port.requirement = reference;
+        port.clock = found->second.first;
+        port.reset = found->second.second && binding->reset.has_value();
+        port.edge = binding->domain.declaration->getAttrOfType<StringAttr>("edge");
+        port.policy = binding->domain.declaration->getAttrOfType<StringAttr>("reset_policy");
+        port.polarity = binding->resetPolarity;
+        candidate.signature += text(&op, "sym_name").str() + ":" + port.edge.getValue().str() +
+                               ":" + (port.reset ? port.policy.getValue().str() : "none") + ":" +
+                               (port.reset ? port.polarity.getValue().str() : "") + ";";
+        candidate.domains.push_back(std::move(port));
+      }
+      auto inserted =
+          variantLookup[context.module].try_emplace(candidate.signature, variants.size());
+      unsigned selected = inserted.first->second;
+      if (inserted.second) {
+        variantsBySource[context.module].push_back(selected);
+        variants.push_back(std::move(candidate));
+      } else if (variants[selected].children != candidate.children) {
+        // The same material substitution must select the same child variants.
+        // Never silently reuse a parent with a differing nested implementation.
+        return reject(context.module, "materially equal parent contexts disagree on child "
+                                      "variants; target profile cannot merge them");
+      }
+      occurrenceVariants[index] = selected;
+    }
+    llvm::StringSet<> moduleNames;
+    for (Operation &op : input.getBody()->getOperations())
+      if (auto name = op.getAttrOfType<StringAttr>("sym_name"))
+        moduleNames.insert(name.getValue());
+    SmallVector<unsigned> ordinals(variants.size());
+    for (auto &entry : variantsBySource) {
+      llvm::sort(entry.second, [&](unsigned a, unsigned b) {
+        return variants[a].signature < variants[b].signature;
+      });
+      for (auto [ordinal, index] : llvm::enumerate(entry.second))
+        ordinals[index] = ordinal;
+    }
+    for (auto [index, variant] : llvm::enumerate(variants)) {
+      variant.name = text(variant.source, "sym_name").str();
+      if (variantsBySource[variant.source].size() > 1) {
+        std::string base = variant.name + "__domain_" + std::to_string(ordinals[index]);
+        variant.name = base;
+        for (unsigned collision = 0; !moduleNames.insert(variant.name).second;)
+          variant.name = base + "_" + std::to_string(++collision);
+      }
+      llvm::StringSet<> names;
+      for (Operation &op : variant.source.getBody().front())
+        for (StringRef key : {"sym_name", "name"})
+          if (auto name = op.getAttrOfType<StringAttr>(key))
+            names.insert(name.getValue());
+      auto reserve = [&](std::string base) {
+        std::string name = base;
+        for (unsigned collision = 0; !names.insert(name).second;)
+          name = base + "_" + std::to_string(++collision);
+        return name;
+      };
+      for (auto &port : variant.domains) {
+        auto name = cast<FlatSymbolRefAttr>(port.requirement).getValue();
+        port.clockName = reserve("__nodal_" + name.str() + "_clock");
+        if (port.reset)
+          port.resetName = reserve("__nodal_" + name.str() + "_reset");
+      }
+    }
+    return success();
+  }
+};
+
 /// Only the target representation lives here. Priority, graph cuts, physical
 /// driver ownership, enum ABI and materialization decisions stay with their
 /// existing independently verified Nodal owners.
 class ModuleLowering {
 public:
-  ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost)
-      : source(source), builder(builder), cost(cost), domains(source) {}
+  ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost,
+                 HierarchyTargetPlan *hierarchy = nullptr, ModuleVariantPlan *variant = nullptr)
+      : source(source), builder(builder), cost(cost), domains(source), hierarchy(hierarchy),
+        variant(variant) {}
 
   LogicalResult preflight() {
     if (failed(domains.verifyRelationships()) || failed(planControlProjections()))
@@ -144,8 +309,8 @@ public:
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
         if (aggregate &&
-            !isa<PortValueOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp, EventProcessOp>(
-                op) &&
+            !isa<PortValueOp, InstancePortOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp,
+                 EventProcessOp>(op) &&
             !(isa<DigitalExprOp>(op) && (text(&op, "operator_name") == "digital_alias" ||
                                          text(&op, "operator_name") == "digital_select")))
           return reject(
@@ -187,6 +352,29 @@ public:
         portValues[port].push_back(op.getResult(0));
         if (text(port, "direction") == "output")
           seeds.emplace_back(op.getResult(0), &op);
+      } else if (isa<InstancePortOp>(op)) {
+        auto boundary = inspectInstancePort(&op);
+        if (!hierarchy || failed(boundary))
+          return reject(&op, "digital instance boundary requires its checked hierarchy plan");
+        instancePortValues[{boundary->instance, boundary->port}].push_back(op.getResult(0));
+        if (text(&op, "direction") == "input")
+          seeds.emplace_back(op.getResult(0), &op);
+      } else if (isa<InstanceOp>(op)) {
+        if (!variant || !variant->children.count(&op) ||
+            !op.getAttrOfType<DictionaryAttr>("parameter_bindings").empty())
+          return reject(&op, "first hierarchy target profile requires concrete unparameterized "
+                             "instances");
+        instances.push_back(&op);
+      } else if (isa<InstanceDomainBindingOp>(op)) {
+        if (!hierarchy)
+          return reject(&op, "instance domain operands require contextual hierarchy admission");
+        auto reference = op.getAttrOfType<FlatSymbolRefAttr>("instance");
+        auto *instance = SymbolTable::lookupSymbolIn(source, reference);
+        instanceBindings.try_emplace(std::make_pair(instance, op.getAttr("requirement")), &op);
+      } else if (isa<RequirementClockOp, RequirementResetOp>(op)) {
+        if (!hierarchy)
+          return reject(&op, "formal domain projection requires contextual hierarchy admission");
+        expansion = 0;
       } else if (isa<DomainOp>(op)) {
         // Unused descriptors remain descriptors. Executable bindings and every
         // stateful consumer are independently verified before this transaction.
@@ -212,7 +400,9 @@ public:
         expansion = isa<ResetSyncOp>(op) ? 3 * op.getAttrOfType<IntegerAttr>("stages").getInt() + 5
                                          : 2 * op.getNumOperands() + 2;
       } else if (isa<CrossingOp, AsyncFifoOp>(op)) {
-        auto crossing = inspectExecutableCrossing(&op, domains);
+        auto crossing = hierarchy
+                            ? inspectExecutableCrossing(&op, *hierarchy->proof, variant->occurrence)
+                            : inspectExecutableCrossing(&op, domains);
         if (failed(crossing))
           return failure();
         // The canonical model verifies type, endpoints, source sampling and
@@ -307,6 +497,16 @@ public:
     for (Operation *port : ports)
       if (text(port, "direction") == "output" && portValues[port].empty())
         return reject(port, "output has no actual value/driver; no output is invented");
+    for (Operation *instance : instances) {
+      const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+      for (Operation &op : child.source->getRegion(0).front())
+        if (isa<PortOp>(op) && text(&op, "direction") == "input" &&
+            !instancePortValues.count({instance, &op}))
+          return reject(instance, "target instance input requires an explicit typed connection");
+      for (const auto &port : child.domains)
+        if (!instanceBindings.count({instance, port.requirement}))
+          return reject(instance, "target inferred control requires its exact actual binding");
+    }
     // Values are read at the final module boundary, never at their own producer
     // operation (which would violate the shared lexical SSA-use contract).
     for (auto &seed : seeds)
@@ -347,6 +547,12 @@ public:
     llvm::StringSet<> targetNames;
     for (Operation *port : ports)
       targetNames.insert(text(port, "sym_name"));
+    if (variant)
+      for (const auto &port : variant->domains) {
+        targetNames.insert(port.clockName);
+        if (port.reset)
+          targetNames.insert(port.resetName);
+      }
     for (Operation &op : source.getBody().front())
       if (isa<DigitalStorageOp>(op) && !targetNames.insert(text(&op, "name")).second)
         return reject(&op, "target storage name collides with an existing port/storage name");
@@ -506,10 +712,37 @@ public:
       info.attrs = builder.getDictionaryAttr(attributes);
       targetPorts.push_back(info);
     }
+    if (variant)
+      for (const auto &port : variant->domains) {
+        auto add = [&](StringRef name, bool reset) {
+          circt::hw::PortInfo info;
+          info.name = builder.getStringAttr(name);
+          info.type = reset ? Type(builder.getI1Type())
+                            : Type(circt::seq::ClockType::get(builder.getContext()));
+          info.dir = circt::hw::ModulePort::Input;
+          info.argNum = inputIndex++;
+          info.loc = source.getLoc();
+          info.attrs = builder.getDictionaryAttr(
+              {builder.getNamedAttr("nodal.domain_requirement", port.requirement),
+               builder.getNamedAttr("nodal.inferred_control",
+                                    builder.getStringAttr(reset ? "reset" : "clock"))});
+          targetPorts.push_back(info);
+        };
+        add(port.clockName, false);
+        if (port.reset)
+          add(port.resetName, true);
+      }
     builder.setInsertionPoint(source);
-    auto target = circt::hw::HWModuleOp::create(builder, source.getLoc(),
-                                                source->getAttrOfType<StringAttr>("sym_name"),
-                                                circt::hw::ModulePortInfo(targetPorts));
+    auto target =
+        circt::hw::HWModuleOp::create(builder, source.getLoc(),
+                                      variant ? builder.getStringAttr(variant->name)
+                                              : source->getAttrOfType<StringAttr>("sym_name"),
+                                      circt::hw::ModulePortInfo(targetPorts));
+    if (variant) {
+      variant->target = target;
+      target->setAttr("nodal.definition", source->getAttr("sym_name"));
+      target->setAttr("nodal.domain_variant", builder.getStringAttr(variant->signature));
+    }
     correlate(target, source);
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
@@ -535,6 +768,12 @@ public:
         values[value] = body->getArgument(inputIndex);
       ++inputIndex;
     }
+    if (variant)
+      for (const auto &port : variant->domains) {
+        Value clock = body->getArgument(inputIndex++);
+        Value reset = port.reset ? body->getArgument(inputIndex++) : Value();
+        domainInputs.try_emplace(port.requirement, std::make_pair(clock, reset));
+      }
     // A projection is a statically proved reference into its actual input pin,
     // not a runtime array operation. Install scalar mappings before any reset
     // producers, synchronizer stages, assertions or registers consume them.
@@ -558,8 +797,8 @@ public:
     // by a raw pin or reject a legitimate state-to-clock dependency.
     SmallVector<std::pair<Value, circt::Backedge>> producerEdges;
     for (Operation &op : source.getBody().front()) {
-      if (isa<PortValueOp>(op) || controlProjections.contains(&op) ||
-          controlSelectors.contains(&op))
+      if (isa<PortValueOp, RequirementClockOp, RequirementResetOp>(op) ||
+          controlProjections.contains(&op) || controlSelectors.contains(&op))
         continue;
       for (Value original : op.getResults()) {
         if (aliases.count(original))
@@ -569,6 +808,27 @@ public:
         producerEdges.emplace_back(original, edge);
       }
     }
+    // Formal projections map to this definition's inferred inputs, never to
+    // parent SSA. Locally bound aliases use their actual existing producer.
+    for (Operation &op : source.getBody().front())
+      if (isa<RequirementClockOp, RequirementResetOp>(op)) {
+        Attribute reference = op.getAttr("requirement");
+        auto found = domainInputs.find(reference);
+        Value actual;
+        if (found != domainInputs.end())
+          actual = isa<RequirementResetOp>(op) ? found->second.second : found->second.first;
+        else if (auto binding = domains.resolveBinding(reference); succeeded(binding)) {
+          unsigned operand = isa<RequirementResetOp>(op) ? 1 : 0;
+          if ((*binding)->getNumOperands() > operand)
+            actual = values.lookup((*binding)->getOperand(operand));
+        }
+        if (!actual && llvm::any_of(op.getResult(0).getUsers(), [](Operation *use) {
+              return !isa<InstanceDomainBindingOp>(use);
+            }))
+          return reject(&op, "used formal capability has no target-local input");
+        if (actual)
+          values[op.getResult(0)] = actual;
+      }
     SmallVector<std::pair<Value, circt::Backedge>> connectionEdges;
     // Install graph cuts first. No combinational value can accidentally become
     // state: all these references are resolved before the candidate verifies.
@@ -581,6 +841,41 @@ public:
       auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
+    }
+    for (Operation *instance : instances) {
+      const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+      if (!child.target)
+        return reject(instance, "target child definition was not materialized before its parent");
+      SmallVector<Value> inputs;
+      for (Operation &port : child.source->getRegion(0).front())
+        if (isa<PortOp>(port) && text(&port, "direction") == "input") {
+          auto &references = instancePortValues.find({instance, &port})->second;
+          inputs.push_back(values.lookup(references.front()));
+        }
+      for (const auto &port : child.domains) {
+        Operation *binding = instanceBindings.lookup({instance, port.requirement});
+        inputs.push_back(values.lookup(binding->getOperand(0)));
+        if (port.reset)
+          inputs.push_back(values.lookup(binding->getOperand(1)));
+      }
+      if (llvm::any_of(inputs, [](Value value) { return !value; }))
+        return reject(instance, "target instance actual input did not map");
+      auto targetInstance = circt::hw::InstanceOp::create(
+          builder, instance->getLoc(), child.target,
+          instance->getAttrOfType<StringAttr>("sym_name"), ArrayRef<Value>(inputs),
+          builder.getArrayAttr({}),
+          circt::hw::InnerSymAttr::get(instance->getAttrOfType<StringAttr>("sym_name")));
+      correlate(targetInstance, instance);
+      targetInstance->setAttr("nodal.domain_bindings", instance->getAttr("domain_bindings"));
+      unsigned result = 0;
+      for (Operation &port : child.source->getRegion(0).front())
+        if (isa<PortOp>(port) && text(&port, "direction") == "output") {
+          auto references = instancePortValues.find({instance, &port});
+          if (references != instancePortValues.end())
+            for (Value reference : references->second)
+              values[reference] = targetInstance.getResult(result);
+          ++result;
+        }
     }
     SmallVector<std::pair<Value, circt::Backedge>> eventEdges;
     for (const auto &event : events) {
@@ -685,11 +980,11 @@ public:
         backedges.abandon();
         return reject(update, "physical clock was not mapped to a module input");
       }
-      if (text(update, "edge") == "falling")
+      if (updateSemantics(update, "edge") == "falling")
         clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
       auto edge = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
       Operation *state;
-      StringRef policy = text(update, "reset_policy");
+      StringRef policy = updateSemantics(update, "reset_policy");
       if (policy == "async" || policy == "async_assert_sync_release") {
         Value rawReset = values.lookup(update->getOperand(3));
         if (!rawReset)
@@ -710,7 +1005,8 @@ public:
     SmallVector<std::pair<Value, circt::Backedge>> crossingEdges;
     for (const auto &crossing : crossings) {
       Operation *op = crossing.operation;
-      auto destination = crossingControls(crossing.destinationDomain, crossing.destinationBinding);
+      auto destination = crossingControls(op, op->getAttr("destination_domain"),
+                                          crossing.kind != CrossingKind::Gray);
       if (failed(destination)) {
         backedges.abandon();
         return reject(op, "crossing destination physical clock/reset did not map");
@@ -726,7 +1022,7 @@ public:
         if (crossing.kind == CrossingKind::Level)
           continue;
       }
-      auto sourceControl = crossingControls(crossing.sourceDomain, crossing.sourceBinding);
+      auto sourceControl = crossingControls(op, op->getAttr("source_domain"));
       if (failed(sourceControl)) {
         backedges.abandon();
         return reject(op, "crossing source physical clock/reset did not map");
@@ -891,8 +1187,8 @@ public:
       if (!op.getNumResults() || controlProjections.contains(&op) ||
           controlSelectors.contains(&op) || named(&op, "nodal.clock_gate") ||
           named(&op, "nodal.clock_mux") ||
-          isa<DigitalStorageOp, PortValueOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
-              ResetCombineOp>(op))
+          isa<DigitalStorageOp, PortValueOp, InstancePortOp, RequirementClockOp, RequirementResetOp,
+              CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -980,7 +1276,7 @@ public:
       edge.setValue(values.lookup(update->getOperand(4)));
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
-      if (text(update, "reset_policy") == "sync") {
+      if (updateSemantics(update, "reset_policy") == "sync") {
         Value reset = resetActive(values.lookup(update->getOperand(3)), update);
         next = mux(update, reset, values.lookup(update->getOperand(4)), next);
       }
@@ -1013,7 +1309,6 @@ public:
     body->getTerminator()->setOperands(outputs);
     if (failed(backedges.clearOrEmitError()))
       return failure();
-    source.erase();
     return success();
   }
 
@@ -1288,23 +1583,67 @@ private:
     bool asynchronous = false;
     bool falling = false;
   };
-  FailureOr<CrossingControls> crossingControls(Operation *domain, Operation *binding) {
+  FailureOr<ContextualBinding> bindingFacts(Attribute reference) const {
+    if (hierarchy)
+      return hierarchy->proof->resolveBinding(variant->occurrence, reference);
+    auto binding = domains.resolveBinding(reference);
+    auto domain = domains.resolveDomain(reference);
+    if (failed(binding) || failed(domain))
+      return failure();
+    ContextualBinding result{{0, *domain},
+                             *binding,
+                             {0, (*binding)->getOperand(0), *binding},
+                             std::nullopt,
+                             (*binding)->getAttrOfType<StringAttr>("reset_polarity")};
+    if ((*binding)->getNumOperands() == 2)
+      result.reset = ContextualValue{0, (*binding)->getOperand(1), *binding};
+    return result;
+  }
+  StringRef updateSemantics(Operation *update, StringRef key) const {
+    if (auto authored = update->getAttrOfType<StringAttr>(key))
+      return authored.getValue();
+    if (key == "reset_policy" && update->getNumOperands() == 3)
+      return "none";
+    auto facts = bindingFacts(update->getAttr("domain"));
+    assert(succeeded(facts) && "mandatory occurrence proof established update binding");
+    return key == "reset_polarity" ? facts->resetPolarity.getValue()
+                                   : text(facts->domain.declaration, key);
+  }
+  FailureOr<CrossingControls> crossingControls(Operation *at, Attribute reference,
+                                               bool resetNeeded = true) {
+    auto facts = bindingFacts(reference);
+    if (failed(facts))
+      return failure();
+    Operation *domain = facts->domain.declaration;
     CrossingControls result;
-    result.clock = values.lookup(binding->getOperand(0));
+    auto inferred = domainInputs.find(reference);
+    if (inferred != domainInputs.end()) {
+      result.clock = inferred->second.first;
+      result.reset = inferred->second.second;
+    } else {
+      auto binding = domains.resolveBinding(reference);
+      if (failed(binding))
+        return failure();
+      result.clock = values.lookup((*binding)->getOperand(0));
+      if ((*binding)->getNumOperands() == 2)
+        result.reset = values.lookup((*binding)->getOperand(1));
+    }
     if (!result.clock)
       return failure();
-    result.assertionClock =
-        circt::seq::FromClockOp::create(builder, binding->getLoc(), result.clock);
+    result.assertionClock = circt::seq::FromClockOp::create(builder, at->getLoc(), result.clock);
     result.falling = text(domain, "edge") == "falling";
     if (result.falling)
-      result.clock = circt::seq::ClockInverterOp::create(builder, binding->getLoc(), result.clock);
+      result.clock = circt::seq::ClockInverterOp::create(builder, at->getLoc(), result.clock);
     StringRef policy = text(domain, "reset_policy");
-    result.asynchronous = policy == "async" || policy == "async_assert_sync_release";
-    if (policy != "none") {
-      result.reset = values.lookup(binding->getOperand(1));
+    result.asynchronous =
+        resetNeeded && (policy == "async" || policy == "async_assert_sync_release");
+    if (!resetNeeded)
+      result.reset = {};
+    else if (policy != "none") {
       if (!result.reset)
         return failure();
-      result.reset = resetActive(result.reset, binding);
+      if (facts->resetPolarity.getValue() == "active_low")
+        result.reset = invert(at, result.reset);
     }
     return result;
   }
@@ -1579,7 +1918,9 @@ private:
                 {value, constant(at, bits, llvm::APInt::getAllOnes(bits))});
   }
   Value resetActive(Value value, Operation *at) {
-    return text(at, "reset_polarity") == "active_low" ? invert(at, value) : value;
+    StringRef polarity = isa<SequentialUpdateOp>(at) ? updateSemantics(at, "reset_polarity")
+                                                     : text(at, "reset_polarity");
+    return polarity == "active_low" ? invert(at, value) : value;
   }
   Value resize(Operation *at, Value value, unsigned bits, bool sign) {
     unsigned old = cast<IntegerType>(value.getType()).getWidth();
@@ -1726,6 +2067,12 @@ private:
   OpBuilder &builder;
   uint64_t &cost;
   DomainModel domains;
+  HierarchyTargetPlan *hierarchy = nullptr;
+  ModuleVariantPlan *variant = nullptr;
+  llvm::DenseMap<Attribute, std::pair<Value, Value>> domainInputs;
+  SmallVector<Operation *> instances;
+  llvm::DenseMap<std::pair<Operation *, Operation *>, SmallVector<Value>> instancePortValues;
+  llvm::DenseMap<std::pair<Operation *, Attribute>, Operation *> instanceBindings;
   SmallVector<ExecutableCrossing, 0> crossings;
   SmallVector<ExecutableEventProcess, 0> events;
   llvm::DenseMap<Operation *, Value> eventUpdates;
@@ -1779,12 +2126,10 @@ public:
       return;
     }
     bool hierarchy = false;
-    input.walk([&](nodal::ModuleOp module) { hierarchy |= hasLocalHierarchyObligations(module); });
-    if (hierarchy) {
-      (void)reject(input, "hierarchy target lowering requires Foundation 58");
-      signalPassFailure();
-      return;
-    }
+    input.walk([&](Operation *op) {
+      hierarchy |=
+          isa<InstanceOp>(op) || (isa<nodal::ModuleOp>(op) && hasLocalHierarchyObligations(op));
+    });
     OwningOpRef<mlir::ModuleOp> candidate = cast<mlir::ModuleOp>(input->clone());
     SmallVector<nodal::ModuleOp> owners;
     SmallVector<Operation *> enums;
@@ -1806,21 +2151,47 @@ public:
       // actual SSA uses, so recompute canonical target requirements on the private
       // candidate instead of accepting the old report as a semantic proof.
       owner->removeAttr(reportKey);
-      if (failed(normalizeSequentialModel(owner))) {
+      if (failed(normalizeSequentialCandidate(owner))) {
         signalPassFailure();
         return;
       }
     }
+    if (failed(verify(*candidate))) {
+      signalPassFailure();
+      return;
+    }
     OpBuilder builder(input.getContext());
-    uint64_t cost = 2 * owners.size();
     SmallVector<std::unique_ptr<ModuleLowering>> lowerings;
-    for (auto owner : owners) {
-      auto lowering = std::make_unique<ModuleLowering>(owner, builder, cost);
-      if (failed(lowering->preflight())) {
+    std::optional<HierarchyTargetPlan> hierarchyPlan;
+    if (hierarchy) {
+      hierarchyPlan.emplace();
+      if (failed(hierarchyPlan->build(*candidate))) {
         signalPassFailure();
         return;
       }
+    }
+    uint64_t cost = 2 * (hierarchyPlan ? hierarchyPlan->variants.size() : owners.size());
+    auto preflight = [&](nodal::ModuleOp owner, ModuleVariantPlan *variant) {
+      auto lowering = std::make_unique<ModuleLowering>(
+          owner, builder, cost, hierarchyPlan ? &*hierarchyPlan : nullptr, variant);
+      if (failed(lowering->preflight())) {
+        return failure();
+      }
       lowerings.push_back(std::move(lowering));
+      return success();
+    };
+    if (hierarchyPlan) {
+      for (auto &variant : hierarchyPlan->variants)
+        if (failed(preflight(variant.source, &variant))) {
+          signalPassFailure();
+          return;
+        }
+    } else {
+      for (auto owner : owners)
+        if (failed(preflight(owner, nullptr))) {
+          signalPassFailure();
+          return;
+        }
     }
     SmallVector<Attribute> abi;
     for (Operation *definition : enums) {
@@ -1855,6 +2226,10 @@ public:
         signalPassFailure();
         return;
       }
+    // All target users now reference emitted HW definitions. Unselected
+    // well-formed templates were verified but are not executable root evidence.
+    for (auto owner : owners)
+      owner.erase();
     for (Operation *definition : enums)
       definition->erase();
     if (!abi.empty())

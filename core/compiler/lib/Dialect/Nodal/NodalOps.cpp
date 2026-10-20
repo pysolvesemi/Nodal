@@ -4311,6 +4311,9 @@ LogicalResult nodal::AnalogEquationOp::verify() {
 }
 
 // F54 finite typed Interface and resolved-net contract.
+LogicalResult nodal::InterfaceBoundaryOp::verify() {
+  return verifyDigitalInterfaceOperation(getOperation());
+}
 LogicalResult nodal::InterfaceConnectOp::verify() {
   return verifyDigitalInterfaceOperation(getOperation());
 }

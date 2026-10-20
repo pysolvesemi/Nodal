@@ -78,12 +78,21 @@ mlir::LogicalResult verifySequentialAssertion(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialSelect(mlir::Operation *operation);
 mlir::LogicalResult verifySequentialUpdate(mlir::Operation *operation);
 /// F19 and unbound F54 descriptor-only intent remains non-executable. Actual
-/// local bindings opt ordinary register declarations/updates into this model.
+/// local bindings or mandatory closed-root hierarchy occurrences admit ordinary
+/// register declarations/updates into this model.
 mlir::LogicalResult verifySequentialModel(mlir::Operation *module,
                                           SequentialModelLimits limits = {});
 /// Rewrite real owned priority regions to real SSA selections and clocked
-/// updates. Verify and build on a detached clone before committing any mutation.
+/// updates. Local formal requirements retain local projection operands and no
+/// material edge/reset fields; mandatory closed-root occurrence proof discharges
+/// those semantics. Verify a detached whole-root clone before committing.
 mlir::LogicalResult normalizeSequentialModel(mlir::Operation *module,
                                              SequentialModelLimits limits = {});
+/// Internal transaction composition: normalize one definition in a caller-owned
+/// private whole-root candidate without cloning or committing. The caller must
+/// discard the candidate on failure and verify the entire root after all
+/// definitions are normalized, before publishing any result.
+mlir::LogicalResult normalizeSequentialCandidate(mlir::Operation *module,
+                                                 SequentialModelLimits limits = {});
 } // namespace nodal
 #endif

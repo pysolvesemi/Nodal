@@ -3,6 +3,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -42,7 +43,7 @@ bool newOperation(Operation *operation) {
   return named(operation, "nodal.interface_connect") || named(operation, "nodal.interface_drive") ||
          named(operation, "nodal.interface_observe") || named(operation, "nodal.net_release") ||
          named(operation, "nodal.net_drive_level") || named(operation, "nodal.net_pass_through") ||
-         named(operation, "nodal.net_split");
+         named(operation, "nodal.net_split") || named(operation, "nodal.interface_boundary");
 }
 bool oldOperation(Operation *operation) {
   return llvm::isa<InterfaceOp, InterfaceRoleOp, InterfaceMemberOp, InterfaceInstanceOp,
@@ -114,6 +115,8 @@ struct Instance {
   Role *role = nullptr;
   FlatSymbolRefAttr domain;
   std::string dimensions;
+  Operation *childInstance = nullptr;
+  Operation *childEndpoint = nullptr;
 };
 struct Access {
   Instance *instance = nullptr;
@@ -138,6 +141,7 @@ private:
   LogicalResult definition(Operation *operation);
   LogicalResult nestedDefinitions(Definition &definition);
   LogicalResult instance(Operation *operation);
+  LogicalResult boundary(Operation *operation);
   LogicalResult access(Operation *operation);
   LogicalResult abi(Operation *operation);
   LogicalResult net(Operation *operation);
@@ -157,7 +161,11 @@ private:
   unsigned work = 0;
   std::map<Operation *, std::unique_ptr<Definition>> definitions;
   llvm::StringMap<Definition *> semanticDefinitions;
+  llvm::StringMap<llvm::StringMap<const Role *>> semanticRoles;
   std::map<Operation *, Instance> instances;
+  std::map<Operation *, std::unique_ptr<Model>> childDefinitions;
+  std::set<std::pair<Operation *, Operation *>> boundaryIdentities;
+  std::set<Operation *> comparedDefinitions;
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
   SmallVector<Net> nets;
@@ -408,6 +416,9 @@ LogicalResult Model::definition(Operation *operation) {
   }
   if (!semanticDefinitions.try_emplace(result->semanticIdentity, result.get()).second)
     return reject(operation, "one module cannot redeclare an Interface semantic identity");
+  auto &canonicalRoles = semanticRoles[result->semanticIdentity];
+  for (const auto &role : result->roles)
+    canonicalRoles.try_emplace(role.getKey(), &role.second);
   definitions.emplace(operation, std::move(result));
   return success();
 }
@@ -537,6 +548,95 @@ LogicalResult Model::instance(Operation *operation) {
   return success();
 }
 
+LogicalResult Model::boundary(Operation *operation) {
+  if (failed(ownership(operation)) || failed(arity(operation, 0, 0)))
+    return failure();
+  auto boundary = inspectDigitalInterfaceBoundary(operation);
+  if (failed(boundary))
+    return failure();
+  if (!boundaryIdentities.emplace(boundary->instance, boundary->endpoint).second)
+    return reject(operation,
+                  "duplicate child Interface projection must reuse its physical identity");
+  auto &child = childDefinitions[boundary->module];
+  if (!child) {
+    child = std::make_unique<Model>(boundary->module);
+    // Import only canonical declarations. Never recurse through child projections
+    // or duplicate its driver graph; the hierarchy occurrence graph owns edges.
+    for (Operation &op : boundary->module->getRegion(0).front())
+      if (llvm::isa<InterfaceOp>(op) && marked(&op) && failed(child->definition(&op)))
+        return failure();
+    for (auto &[unused, definition] : child->definitions)
+      if (failed(child->nestedDefinitions(*definition)))
+        return failure();
+  }
+  if (!child->instances.count(boundary->endpoint) && failed(child->instance(boundary->endpoint)))
+    return failure();
+  const Instance &original = child->instances.find(boundary->endpoint)->second;
+  // A semantic label is not an ABI proof. Compare each imported definition once
+  // against the local canonical definition, including unaccessed members and
+  // any identically named role maps; disjoint selected roles remain additive.
+  for (const auto &[unused, imported] : child->definitions) {
+    if (!comparedDefinitions.insert(imported->operation).second)
+      continue;
+    auto found = semanticDefinitions.find(imported->semanticIdentity);
+    if (found == semanticDefinitions.end()) {
+      semanticDefinitions.try_emplace(imported->semanticIdentity, imported.get());
+    } else {
+      const Definition &local = *found->second;
+      if (local.members.size() != imported->members.size())
+        return reject(operation,
+                      "child Interface semantic identity changes its complete member set");
+      for (const auto &member : imported->members) {
+        if (++work > digitalTypeMaximumNodes)
+          return reject(operation, "Interface boundary comparison exceeds its structural budget");
+        auto known = local.members.find(member.getKey());
+        if (known == local.members.end() || known->second.type != member.second.type ||
+            known->second.protocol != member.second.protocol ||
+            known->second.analogMetadata != member.second.analogMetadata ||
+            known->second.analogReferences != member.second.analogReferences)
+          return reject(operation,
+                        "child Interface semantic identity changes its complete member ABI");
+      }
+    }
+    // This validation cache accumulates disjoint imported roles without granting
+    // those roles to any endpoint definition. Later siblings must agree even if
+    // the first local/imported definition did not declare their shared role.
+    auto &canonicalRoles = semanticRoles[imported->semanticIdentity];
+    for (const auto &role : imported->roles) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(operation, "Interface boundary roles exceed their structural budget");
+      auto [known, inserted] = canonicalRoles.try_emplace(role.getKey(), &role.second);
+      if (inserted)
+        continue;
+      if (known->second->entries.size() != role.second.entries.size())
+        return reject(operation, "child Interface changes an identically named complete role");
+      for (const auto &entry : role.second.entries) {
+        auto selected = known->second->entries.find(entry.getKey());
+        if (++work > digitalTypeMaximumNodes || selected == known->second->entries.end() ||
+            selected->second.dictionary != entry.second.dictionary)
+          return reject(operation, "child Interface changes an identically named role map");
+      }
+    }
+  }
+  if (!original.dimensions.empty())
+    return reject(operation,
+                  "child Interface arrays require explicit structural index substitution");
+  for (auto &entry : original.definition->members)
+    if (analog(entry.second.protocol) || entry.second.protocol == "resolved" ||
+        isDigitalControlBoundaryType(entry.second.type) ||
+        failed(inferDigitalBitPatternFixedBits(entry.second.type, boundary->module)))
+      return reject(operation,
+                    "child Interface projection currently requires concrete digital data leaves");
+  instances.emplace(operation, Instance{operation,
+                                        original.definition,
+                                        original.role,
+                                        boundary->domain,
+                                        {},
+                                        boundary->instance,
+                                        boundary->endpoint});
+  return success();
+}
+
 LogicalResult Model::access(Operation *operation) {
   if (failed(ownership(operation)) || failed(arity(operation, 0, 1)))
     return failure();
@@ -555,6 +655,9 @@ LogicalResult Model::access(Operation *operation) {
   auto member = instance.definition->members.find(path);
   if (role == instance.definition->roles.end() || member == instance.definition->members.end())
     return reject(operation, "member access must resolve its exact path and actual selected role");
+  if (instance.childInstance && &role->second != instance.role)
+    return reject(operation,
+                  "child Interface projection cannot elevate or invert its declared role");
   if (&role->second != instance.role && selected != "monitor") {
     for (auto &item : instance.definition->members) {
       StringRef original = instance.role->entries.find(item.getKey())->second.access;
@@ -707,7 +810,8 @@ LogicalResult Model::effect(Operation *operation) {
   StringRef permission = left.entry->access;
   bool resolved = left.member->protocol == "resolved";
   if (drive) {
-    if (permission != "out" && permission != "drive")
+    if (left.instance->childInstance ? permission != "in"
+                                     : permission != "out" && permission != "drive")
       return reject(operation, "actual Interface role does not permit driving this member");
     Type expected = operation->getOperand(0).getType();
     if (resolved) {
@@ -781,8 +885,11 @@ LogicalResult Model::effect(Operation *operation) {
   Access &right = rightFound->second;
   if (failed(localValue(operation->getOperand(1), operation)))
     return failure();
-  if (left.instance == right.instance || left.instance->definition != right.instance->definition ||
-      left.path != right.path || left.instance->domain != right.instance->domain ||
+  if (left.instance == right.instance ||
+      left.instance->definition->semanticIdentity != right.instance->definition->semanticIdentity ||
+      left.member->protocol != right.member->protocol ||
+      left.entry->nestedInterfaces != right.entry->nestedInterfaces || left.path != right.path ||
+      left.instance->domain != right.instance->domain ||
       left.instance->dimensions != right.instance->dimensions ||
       operation->getOperand(0).getType() != operation->getOperand(1).getType())
     return reject(
@@ -800,10 +907,15 @@ LogicalResult Model::effect(Operation *operation) {
     unite(*first, *second);
     return success();
   }
-  if (!((permission == "in" && other == "out") || (permission == "out" && other == "in")))
-    return reject(operation,
-                  "ordinary Interface connection requires complementary actual role access");
-  return addOrdinaryDriver(permission == "in" ? left : right, operation);
+  bool leftBoundary = left.instance->childInstance, rightBoundary = right.instance->childInstance;
+  bool forwarding = leftBoundary != rightBoundary;
+  if (forwarding
+          ? permission != other || (permission != "in" && permission != "out")
+          : !((permission == "in" && other == "out") || (permission == "out" && other == "in")))
+    return reject(operation, "Interface connection requires exact boundary-facing directions");
+  bool leftSink =
+      forwarding ? (leftBoundary ? permission == "in" : permission == "out") : permission == "in";
+  return addOrdinaryDriver(leftSink ? left : right, operation);
 }
 
 LogicalResult Model::resolvedEffect(Operation *operation) {
@@ -960,6 +1072,9 @@ LogicalResult Model::verify() {
     if (llvm::isa<InterfaceInstanceOp>(operation) && marked(&operation))
       if (failed(instance(&operation)))
         return failure();
+  for (Operation &operation : operations)
+    if (llvm::isa<InterfaceBoundaryOp>(operation) && failed(boundary(&operation)))
+      return failure();
   for (Operation &operation : operations) {
     if (llvm::isa<MemberAccessOp>(operation) && marked(&operation)) {
       if (failed(access(&operation)))
@@ -1001,7 +1116,8 @@ LogicalResult Model::verify() {
                           "legacy resolved operation cannot consume a fully typed capability");
       continue;
     }
-    if (llvm::isa<InterfaceOp, InterfaceInstanceOp, MemberAccessOp, ResolvedNetOp>(operation))
+    if (llvm::isa<InterfaceOp, InterfaceInstanceOp, InterfaceBoundaryOp, MemberAccessOp,
+                  ResolvedNetOp>(operation))
       continue;
     if (llvm::isa<InterfaceAbiOp>(operation)) {
       if (failed(abi(&operation)))
@@ -1017,8 +1133,8 @@ LogicalResult Model::verify() {
         return failure();
     }
   }
-  for (auto &[operation, unused] : instances)
-    if (!seenAbi.contains(operation))
+  for (auto &[operation, instance] : instances)
+    if (!instance.childInstance && !seenAbi.contains(operation))
       return reject(operation,
                     "fully typed Interface instance requires its exact structural ABI projection");
   for (auto &item : driverIdentities) {
@@ -1099,7 +1215,8 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
     Value source = operation->getOperand(1);
     if (named(operation, "nodal.interface_connect")) {
       const Access &left = accesses.find(operation->getOperand(0))->second;
-      source = operation->getOperand(left.entry->access == "in" ? 1 : 0);
+      source = operation->getOperand(
+          key == std::make_pair(left.instance->operation, left.path.str()) ? 1 : 0);
     }
     add(known->second).sources.emplace_back(source, operation);
   }
@@ -1152,7 +1269,10 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
     // additional observations; distinct concrete endpoints are not one group.
     std::map<std::tuple<Operation *, bool, std::string>, unsigned> protocolGroups;
     for (const auto &entry : collected) {
-      if (entry.sources.empty())
+      auto projected = accesses.find(entry.value);
+      if (entry.sources.empty() &&
+          (projected == accesses.end() || !projected->second.instance->childInstance ||
+           projected->second.entry->access != "out"))
         continue;
       auto net = netIndices.find(entry.value);
       if (net != netIndices.end()) {
@@ -1187,6 +1307,90 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
 }
 
 } // namespace
+
+FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *operation) {
+  if (!llvm::isa_and_nonnull<InterfaceBoundaryOp>(operation) || failed(version(operation)) ||
+      failed(arity(operation, 0, 0)) || !identity(symbol(operation)) ||
+      !identity(text(metadata(operation), "semantic_path"))) {
+    (void)reject(operation, "Interface boundary requires a typed parent-owned semantic identity");
+    return failure();
+  }
+  auto child = resolveHierarchyInstance(operation, operation->getAttr("instance"));
+  if (failed(child))
+    return failure();
+  StringRef name = text(operation, "endpoint");
+  Operation *endpoint = identity(name) ? SymbolTable::lookupSymbolIn(child->module, name) : nullptr;
+  if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) || !marked(endpoint) ||
+      endpoint->getParentOp() != child->module) {
+    (void)reject(operation,
+                 "Interface boundary requires its exact immediate child's direct endpoint");
+    return failure();
+  }
+  auto requirement = metadata(endpoint).getAs<FlatSymbolRefAttr>("domain");
+  Operation *required =
+      requirement ? SymbolTable::lookupSymbolIn(child->module, requirement) : nullptr;
+  if (!llvm::isa_and_nonnull<DomainRequirementOp>(required)) {
+    (void)reject(operation,
+                 "child Interface domain requires an actual instance requirement binding");
+    return failure();
+  }
+  Operation *binding = nullptr;
+  for (Operation &candidate : operation->getParentOp()->getRegion(0).front()) {
+    if (!llvm::isa<InstanceDomainBindingOp>(candidate) ||
+        candidate.getAttr("instance") != operation->getAttr("instance") ||
+        candidate.getAttr("requirement") != requirement)
+      continue;
+    if (binding || failed(verifyInstanceDomainBinding(&candidate))) {
+      (void)reject(operation, "child Interface domain requires one exact executable binding");
+      return failure();
+    }
+    binding = &candidate;
+  }
+  if (!binding) {
+    (void)reject(operation, "child Interface domain has no executable actual binding");
+    return failure();
+  }
+  return DigitalInterfaceBoundary{child->instance, child->module, endpoint,
+                                  binding->getAttrOfType<FlatSymbolRefAttr>("actual")};
+}
+
+FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(Operation *operation) {
+  if (!llvm::isa_and_nonnull<MemberAccessOp>(operation) || !marked(operation))
+    return failure();
+  auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+  Operation *endpoint =
+      reference ? SymbolTable::lookupSymbolIn(operation->getParentOp(), reference) : nullptr;
+  Operation *instance = nullptr, *owner = operation->getParentOp();
+  if (llvm::isa_and_nonnull<InterfaceBoundaryOp>(endpoint)) {
+    auto boundary = inspectDigitalInterfaceBoundary(endpoint);
+    if (failed(boundary))
+      return failure();
+    endpoint = boundary->endpoint;
+    instance = boundary->instance;
+    owner = boundary->module;
+  }
+  if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) || !marked(endpoint))
+    return failure();
+  auto definitionRef = endpoint->getAttrOfType<FlatSymbolRefAttr>("definition");
+  Operation *definition =
+      definitionRef ? SymbolTable::lookupSymbolIn(owner, definitionRef) : nullptr;
+  // Occurrence substitution follows the actual endpoint, including monitor aliases.
+  StringRef selected = text(endpoint, "role");
+  auto path = operation->getAttrOfType<StringAttr>("path");
+  if (!llvm::isa_and_nonnull<InterfaceOp>(definition) || !path)
+    return failure();
+  Operation *role = SymbolTable::lookupSymbolIn(definition, selected);
+  auto entries = role ? metadata(role).getAs<ArrayAttr>("access") : ArrayAttr();
+  if (!entries)
+    return failure();
+  for (Attribute entry : entries) {
+    auto value = llvm::dyn_cast<DictionaryAttr>(entry);
+    if (text(value, "path") == path.getValue())
+      return DigitalInterfaceMember{endpoint, instance, owner, path,
+                                    value.getAs<StringAttr>("access")};
+  }
+  return failure();
+}
 
 bool hasDigitalInterfaceContract(Operation *operation) {
   if (marked(operation) || newOperation(operation))

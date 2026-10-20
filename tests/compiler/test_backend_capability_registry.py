@@ -86,6 +86,28 @@ LEGACY_CATALOG = {
 }
 
 
+# F55/F56 additions are excluded only from the immutable F47-era digest, just
+# as F54 additions already were. The frozen historical digest is unchanged.
+F55_F56_DIGITAL_OPERATIONS = {
+    "nodal." + name for name in """
+    behavioral_if behavioral_predicate collection collection_yield enum_switch
+    flat_fsm hardware_loop_end iteration_index local_domain_binding memory_read
+    memory_write memory_write_effect reset_asserted sequential_assert sequential_select
+    sequential_update static_compare static_logic structural_if structural_yield
+    """.split()
+}
+
+# F57 source forms were already executable but omitted from the catalog. Their
+# analog-target admission stays as conservative as existing digital assignments.
+F57_DIGITAL_OPERATIONS = {
+    "nodal." + name for name in """
+    async_fifo clock_gate clock_mux clock_relationship event_process
+    instance_domain_binding instance_port requirement_clock requirement_reset
+    reset_boundary reset_combine reset_sync waiver
+    """.split()
+}
+F58_INTERFACE_OPERATIONS = {"nodal.interface_boundary"}
+
 class BackendCapabilityRegistryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -114,10 +136,22 @@ class BackendCapabilityRegistryTests(unittest.TestCase):
         # Frozen F47 value identity, including every historical observation field.
         historical = copy.deepcopy(self.inventory)
         historical["operations"] = [entry for entry in historical["operations"]
-                                    if entry["operation"] not in F54_DIGITAL_OPERATIONS]
+                                    if entry["operation"] not in (F54_DIGITAL_OPERATIONS | F55_F56_DIGITAL_OPERATIONS |
+                                        F57_DIGITAL_OPERATIONS | F58_INTERFACE_OPERATIONS)]
         serialized = json.dumps(historical, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(serialized).hexdigest(),
                          "aeb2b8c8246dbe6e06432de8ff543d2024e565cbe97824eec4a05260250048ca")
+
+    def test_f57_forms_keep_conservative_analog_target_admission(self) -> None:
+        for operation in F57_DIGITAL_OPERATIONS:
+            self.assertEqual(self.operations[operation], {
+                "operation": operation, "feature": "digital-behavior",
+                "domain": "digital", "admission": "unsupported"})
+
+    def test_interface_projection_does_not_claim_target_lowering(self) -> None:
+        self.assertEqual(self.operations["nodal.interface_boundary"], {
+            "operation": "nodal.interface_boundary", "feature": "unlowered-shared-forms",
+            "domain": "neutral", "admission": "unsupported"})
 
     def test_f54_typed_operations_do_not_claim_analog_target_support(self) -> None:
         for operation in F54_DIGITAL_OPERATIONS:

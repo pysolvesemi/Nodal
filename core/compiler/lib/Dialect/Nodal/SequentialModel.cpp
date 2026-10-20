@@ -305,21 +305,46 @@ LogicalResult verifySequentialUpdate(Operation *op) {
   const DomainModel domains(op);
   Operation *reg = root->getDefiningOp();
   Operation *binding = domains.findLocalBinding(reg->getAttr("domain"));
-  if (!binding || failed(verifyLocalDomainBinding(binding)) ||
-      failed(checkRegister(reg, *domains.resolveDomain(binding->getAttr("domain")))))
-    return reject(op, "clocked update requires a verified physical local binding");
-  Operation *domain = *domains.resolveDomain(binding->getAttr("domain"));
   bool initialized = reg->getNumOperands() == 1;
-  if (op->getAttr("domain") != reg->getAttr("domain") || text(op, "edge") != text(domain, "edge") ||
-      text(op, "reset_polarity") != text(binding, "reset_polarity") ||
-      text(op, "reset_policy") !=
-          (initialized ? text(domain, "reset_policy") : StringRef("none")) ||
-      op->getOperand(2) != binding->getOperand(0) ||
+  if (op->getAttr("domain") != reg->getAttr("domain") ||
       op->getNumOperands() != (initialized ? 5u : 3u) ||
-      (initialized &&
-       (op->getOperand(3) != binding->getOperand(1) || op->getOperand(4) != reg->getOperand(0))))
+      (initialized && op->getOperand(4) != reg->getOperand(0)))
     return reject(
         op, "clock/reset/reset-value fields must exactly match their owned domain and register");
+  if (binding) {
+    if (failed(verifyLocalDomainBinding(binding)) ||
+        failed(checkRegister(reg, *domains.resolveDomain(binding->getAttr("domain")))))
+      return reject(op, "clocked update requires a verified physical local binding");
+    Operation *domain = *domains.resolveDomain(binding->getAttr("domain"));
+    if (text(op, "edge") != text(domain, "edge") ||
+        text(op, "reset_polarity") != text(binding, "reset_polarity") ||
+        text(op, "reset_policy") !=
+            (initialized ? text(domain, "reset_policy") : StringRef("none")) ||
+        op->getOperand(2) != binding->getOperand(0) ||
+        (initialized && op->getOperand(3) != binding->getOperand(1)))
+      return reject(
+          op, "clock/reset/reset-value fields must exactly match their owned domain and register");
+  } else {
+    // A reusable definition retains local formal operands. Material semantics
+    // are deliberately absent and must be discharged for every root occurrence.
+    if (!domains.unresolvedRequirement(reg->getAttr("domain")) ||
+        !hasLocalHierarchyObligations(op->getParentOp()) || op->hasAttr("edge") ||
+        op->hasAttr("reset_policy") || op->hasAttr("reset_polarity") ||
+        failed(verifyDigitalStorageOperation(reg)))
+      return reject(op, "formal clocked update requires an unresolved local requirement and no "
+                        "guessed material clock/reset fields");
+    auto projection = [&](Value value, bool reset) {
+      Operation *producer = value.getDefiningOp();
+      return producer &&
+             (reset ? isa<RequirementResetOp>(producer) : isa<RequirementClockOp>(producer)) &&
+             producer->getAttr("requirement") == reg->getAttr("domain") &&
+             producer->getParentOp() == op->getParentOp() &&
+             succeeded(verifyRequirementProjection(producer));
+    };
+    if (!projection(op->getOperand(2), false) ||
+        (initialized && !projection(op->getOperand(3), true)))
+      return reject(op, "formal clocked update must use its exact local requirement projections");
+  }
   if (!equivalentDigitalStorageTypes(root->getType(), op->getOperand(1).getType(),
                                      op->getParentOp()))
     return reject(op, "clocked next state must retain the exact recursive state type");
@@ -852,8 +877,7 @@ struct Model {
             return reject(&op, "FSM actions must update registers in their actual owning domain");
           if (!domains.findLocalBinding(reg->getAttr("domain")) &&
               !(hasLocalHierarchyObligations(module) &&
-                domains.unresolvedRequirement(reg->getAttr("domain")) &&
-                !llvm::isa<SequentialUpdateOp>(op))) {
+                domains.unresolvedRequirement(reg->getAttr("domain")))) {
             if (scope.root || llvm::isa<SequentialUpdateOp>(op))
               return reject(
                   &op, "behavioral register update requires an actual local clock/reset binding");
@@ -889,7 +913,9 @@ public:
     for (Operation &op : model.module->getRegion(0).front())
       if (llvm::isa<BehavioralIfOp, MemoryWriteOp>(op) ||
           (llvm::isa<DigitalAssignOp>(op) && text(&op, "kind") == "register_next" &&
-           model.domains.findLocalBinding(op.getOperand(0).getDefiningOp()->getAttr("domain"))))
+           (model.domains.findLocalBinding(op.getOperand(0).getDefiningOp()->getAttr("domain")) ||
+            model.domains.unresolvedRequirement(
+                op.getOperand(0).getDefiningOp()->getAttr("domain")))))
         roots.push_back(&op);
     llvm::DenseSet<Value> emitted;
     struct Pending {
@@ -958,19 +984,29 @@ private:
   LogicalResult update(Value state, Value next, Operation *root) {
     Operation *reg = state.getDefiningOp();
     Operation *binding = model.domains.findLocalBinding(reg->getAttr("domain"));
-    Operation *domain = *model.domains.resolveDomain(binding->getAttr("domain"));
     if (failed(charge(reg)))
       return failure();
     OperationState op(root ? root->getLoc() : reg->getLoc(), "nodal.sequential_update");
-    op.addOperands({state, next, binding->getOperand(0)});
-    if (reg->getNumOperands())
-      op.addOperands({binding->getOperand(1), reg->getOperand(0)});
     op.addAttribute("domain", reg->getAttr("domain"));
-    op.addAttribute("edge", domain->getAttr("edge"));
-    op.addAttribute("reset_policy",
-                    builder.getStringAttr(reg->getNumOperands() ? text(domain, "reset_policy")
-                                                                : StringRef("none")));
-    op.addAttribute("reset_polarity", binding->getAttr("reset_polarity"));
+    if (binding) {
+      Operation *domain = *model.domains.resolveDomain(binding->getAttr("domain"));
+      op.addOperands({state, next, binding->getOperand(0)});
+      if (reg->getNumOperands())
+        op.addOperands({binding->getOperand(1), reg->getOperand(0)});
+      op.addAttribute("edge", domain->getAttr("edge"));
+      op.addAttribute("reset_policy",
+                      builder.getStringAttr(reg->getNumOperands() ? text(domain, "reset_policy")
+                                                                  : StringRef("none")));
+      op.addAttribute("reset_polarity", binding->getAttr("reset_polarity"));
+    } else {
+      Value clock = formalCapability(reg, false);
+      Value reset = reg->getNumOperands() ? formalCapability(reg, true) : Value();
+      if (!clock || (reg->getNumOperands() && !reset))
+        return failure();
+      op.addOperands({state, next, clock});
+      if (reg->getNumOperands())
+        op.addOperands({reset, reg->getOperand(0)});
+    }
     std::string identity =
         root && canonical(path(root))
             ? path(root).str()
@@ -982,6 +1018,27 @@ private:
                  (text(model.module, "sym_name") + "." + text(reg, "name") + ".clocked").str()));
     builder.create(op);
     return success();
+  }
+  Value formalCapability(Operation *reg, bool reset) {
+    auto requirement = reg->getAttrOfType<FlatSymbolRefAttr>("domain");
+    for (Operation &candidate : model.module->getRegion(0).front())
+      if ((reset ? isa<RequirementResetOp>(candidate) : isa<RequirementClockOp>(candidate)) &&
+          candidate.getAttr("requirement") == requirement)
+        return candidate.getResult(0);
+    if (!model.domains.unresolvedRequirement(requirement) || failed(charge(reg)))
+      return {};
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&model.module->getRegion(0).front());
+    OperationState projection(reg->getLoc(),
+                              reset ? "nodal.requirement_reset" : "nodal.requirement_clock");
+    projection.addTypes(
+        ControlCapabilityType::get(builder.getContext(), reset ? "reset" : "clock"));
+    projection.addAttribute("requirement", requirement);
+    projection.addAttribute("metadata",
+                            metadata(reg, (text(model.module, "sym_name") + "." +
+                                           requirement.getValue() + (reset ? ".reset" : ".clock"))
+                                              .str()));
+    return builder.create(projection)->getResult(0);
   }
   Value guardLiteral(Operation *op) {
     if (failed(charge(op)))
@@ -1136,33 +1193,32 @@ collectHierarchySequentialSamples(Operation *module, SequentialModelLimits limit
     return failure();
   return std::move(model.samples);
 }
-LogicalResult normalizeSequentialModel(Operation *module, SequentialModelLimits limits) {
-  // Contextual proof does not specialize a shared definition. Keep generic intent
-  // until Foundation 58 can lower each occurrence without choosing one binding.
-  if (hasLocalHierarchyObligations(module))
-    return reject(module, "hierarchy sequential normalization requires Foundation 58");
+LogicalResult normalizeSequentialCandidate(Operation *module, SequentialModelLimits limits) {
+  // Generic updates retain formal operands and omit material semantics. The
+  // mandatory whole-root verifier still proves every actual occurrence below.
   if (failed(verifySequentialModel(module, limits)))
     return failure();
   MemoryModelLimits memoryLimits;
   memoryLimits.maximumOperations = limits.maximumOperations;
   if (failed(preflightMemoryNormalization(module, memoryLimits)))
     return failure(); // Never repair forged order or expand over-budget raw ports.
+  unsigned generated = 0;
+  if (failed(expandFlatFSMModel(module, generated, limits.maximumNormalizedOperations)) ||
+      failed(expandEnumSwitchModel(module, generated, limits.maximumNormalizedOperations)))
+    return failure();
+  limits.maximumNormalizedOperations -= generated;
+  Model model{module, limits};
+  return success(succeeded(model.verify()) && succeeded(Normalizer(model).run()));
+}
+LogicalResult normalizeSequentialModel(Operation *module, SequentialModelLimits limits) {
   Operation *root = module;
   while (root->getParentOp())
     root = root->getParentOp();
   IRMapping mapping;
   Operation *copy = root->clone(mapping);
   Operation *candidate = mapping.lookupOrDefault(module);
-  unsigned generated = 0;
   bool valid =
-      succeeded(expandFlatFSMModel(candidate, generated, limits.maximumNormalizedOperations)) &&
-      succeeded(expandEnumSwitchModel(candidate, generated, limits.maximumNormalizedOperations));
-  if (valid) {
-    limits.maximumNormalizedOperations -= generated;
-    Model model{candidate, limits};
-    valid =
-        succeeded(model.verify()) && succeeded(Normalizer(model).run()) && succeeded(verify(copy));
-  }
+      succeeded(normalizeSequentialCandidate(candidate, limits)) && succeeded(verify(copy));
   if (valid)
     module->getRegion(0).takeBody(candidate->getRegion(0));
   copy->destroy();

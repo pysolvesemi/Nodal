@@ -683,6 +683,14 @@ target_link_libraries(nodal-sequential-circt-unit-tests PRIVATE
 add_test(NAME nodal.native.sequential-circt-unit COMMAND nodal-sequential-circt-unit-tests)
 set_tests_properties(nodal.native.sequential-circt-unit PROPERTIES TIMEOUT 60)
 
+add_executable(nodal-hierarchy-circt-unit-tests HierarchyCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-hierarchy-circt-unit-tests)
+target_link_libraries(nodal-hierarchy-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTSeq
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.hierarchy-circt-unit COMMAND nodal-hierarchy-circt-unit-tests)
+set_tests_properties(nodal.native.hierarchy-circt-unit PROPERTIES TIMEOUT 60)
+
 add_executable(nodal-memory-model-unit-tests MemoryModelTest.cpp)
 llvm_update_compile_flags(nodal-memory-model-unit-tests)
 target_link_libraries(nodal-memory-model-unit-tests PRIVATE

@@ -41,20 +41,25 @@ Operation *local(Operation *module, Attribute reference) {
   return result && result->getParentOp() == module ? result : nullptr;
 }
 FailureOr<InstancePort> child(Operation *op) {
-  Operation *module = op->getParentOp();
-  auto *instance = local(module, op->getAttr("instance"));
-  if (!isa_and_nonnull<ModuleOp>(module) || !isa_and_nonnull<InstanceOp>(instance) ||
-      instance->getParentOp() != module)
+  auto resolved = resolveHierarchyInstance(op, op->getAttr("instance"));
+  if (failed(resolved))
     return failure();
-  auto *definition = local(module->getParentOp(), instance->getAttr("module"));
-  if (!isa_and_nonnull<ModuleOp>(definition))
-    return failure();
-  return InstancePort{instance, definition, nullptr};
+  return InstancePort{resolved->instance, resolved->module, nullptr};
 }
 bool hierarchyOperation(Operation *op) {
   return isa<RequirementClockOp, RequirementResetOp, InstanceDomainBindingOp, InstancePortOp>(op);
 }
 } // namespace
+FailureOr<HierarchyInstance> resolveHierarchyInstance(Operation *use, Attribute reference) {
+  Operation *module = use ? use->getParentOp() : nullptr;
+  auto *instance = local(module, reference);
+  if (!isa_and_nonnull<ModuleOp>(module) || !isa_and_nonnull<InstanceOp>(instance))
+    return failure();
+  auto *definition = local(module->getParentOp(), instance->getAttr("module"));
+  if (!isa_and_nonnull<ModuleOp>(definition))
+    return failure();
+  return HierarchyInstance{instance, definition};
+}
 LogicalResult verifyRequirementProjection(Operation *op) {
   bool clock = isa_and_nonnull<RequirementClockOp>(op);
   if ((!clock && !isa_and_nonnull<RequirementResetOp>(op)) ||

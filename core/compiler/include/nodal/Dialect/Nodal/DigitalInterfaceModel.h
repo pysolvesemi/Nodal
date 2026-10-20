@@ -8,6 +8,25 @@
 #include "llvm/ADT/SmallVector.h"
 
 namespace nodal {
+/// Original endpoint facts, never copied role/access claims from a projection.
+struct DigitalInterfaceBoundary {
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *module = nullptr;
+  mlir::Operation *endpoint = nullptr;
+  mlir::FlatSymbolRefAttr domain;
+};
+mlir::FailureOr<DigitalInterfaceBoundary>
+inspectDigitalInterfaceBoundary(mlir::Operation *operation);
+/// Exact local/boundary leaf identity for occurrence-graph substitution.
+struct DigitalInterfaceMember {
+  mlir::Operation *endpoint = nullptr;
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *module = nullptr;
+  mlir::StringAttr path;
+  mlir::StringAttr access;
+};
+mlir::FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(mlir::Operation *operation);
+
 /// A version marker selects the fully typed contract. Legacy F19 declarations
 /// remain readable, but cannot supply capabilities to typed consumers.
 bool hasDigitalInterfaceContract(mlir::Operation *operation);

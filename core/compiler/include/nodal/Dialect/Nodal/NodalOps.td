@@ -307,6 +307,15 @@ def Nodal_InterfaceInstanceOp : Nodal_Op<"interface_instance",
   let hasVerifier = 1;
 }
 
+// F58: a projection of an actual immediate-child endpoint, not another Interface instance.
+def Nodal_InterfaceBoundaryOp : Nodal_Op<"interface_boundary",
+    [HasParent<"ModuleOp">, Symbol]> {
+  let summary = "Parent-owned projection of one exact child Interface endpoint";
+  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$instance,
+    StrAttr:$endpoint, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_MemberAccessOp : Nodal_Op<"member_access"> {
   let summary = "Typed access to one logical Interface member path";
   let arguments = (ins
@@ -2000,7 +2009,8 @@ def Nodal_SequentialUpdateOp : Nodal_Op<"sequential_update", [HasParent<"ModuleO
   let summary = "Normalized clocked next state; reset dominates next-state enable";
   let arguments = (ins AnyType:$target, AnyType:$next, AnyType:$clock,
     Variadic<AnyType>:$reset_and_initial, FlatSymbolRefAttr:$domain,
-    StrAttr:$edge, StrAttr:$reset_policy, StrAttr:$reset_polarity,
+    OptionalAttr<StrAttr>:$edge, OptionalAttr<StrAttr>:$reset_policy,
+    OptionalAttr<StrAttr>:$reset_polarity,
     StrAttr:$root_id, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }

@@ -67,6 +67,15 @@ private:
 };
 bool hasLocalHierarchyObligations(mlir::Operation *module);
 
+/// Exact immediate-child definition lookup, shared by typed boundary owners.
+/// This grants no member access, direction, domain or connectivity permission.
+struct HierarchyInstance {
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *module = nullptr;
+};
+mlir::FailureOr<HierarchyInstance> resolveHierarchyInstance(mlir::Operation *use,
+                                                            mlir::Attribute reference);
+
 /// Exact immediate-child boundary; the reference result remains parent-owned.
 struct InstancePort {
   mlir::Operation *instance;

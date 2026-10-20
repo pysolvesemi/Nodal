@@ -246,6 +246,158 @@ std::string print(Operation *operation) {
   operation->print(stream);
   return result;
 }
+std::string hierarchyDomain(StringRef name) {
+  std::string n = name.str(), clock = "!nodal.capability<\"clock\">";
+  return replace(domain(name), "reset_policy = \"sync\"", "reset_policy = \"none\"") +
+         port("clock_" + n, clock, "input", name) + "\"nodal.local_domain_binding\"(%clock_" + n +
+         ") <{domain = @" + n + ", reset_polarity = \"active_high\", metadata = {}}> : (" + clock +
+         ") -> ()\n";
+}
+std::string hierarchyRequirement(StringRef name) {
+  return "\"nodal.domain_requirement\"() <{sym_name = \"" + name.str() +
+         "\", metadata = {}}> : () -> ()\n%" + name.str() +
+         "_clock = \"nodal.requirement_clock\"() <{requirement = @" + name.str() +
+         ", metadata = {}}> : () -> !nodal.capability<\"clock\">\n";
+}
+std::string hierarchyBinding(StringRef required, StringRef actual) {
+  return "\"nodal.instance_domain_binding\"(%clock_" + actual.str() +
+         ") <{instance = @child, requirement = @" + required.str() + ", actual = @" + actual.str() +
+         ", origin = \"named\", metadata = {}}> : (!nodal.capability<\"clock\">) -> ()\n";
+}
+std::string hierarchyBoundary() {
+  return "\"nodal.interface_boundary\"() <{sym_name = \"projected\", instance = @child, "
+         "endpoint = \"exported\", metadata = {" +
+         tag + ", semantic_path = \"Top.projected\"}}> : () -> ()\n";
+}
+std::string hierarchyFixture(bool forged = false, bool input = false) {
+  const std::string selected = input ? "sink" : "source", permission = input ? "in" : "out";
+  std::string top =
+      hierarchyDomain("a") + hierarchyDomain("b") + port("input", boolean, "input", "a") +
+      definition(boolean) + instance("top", selected, permission, boolean, "", "b") +
+      "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, "
+      "parameter_bindings = {}, domain_bindings = {src = @a, dst = @b}, "
+      "metadata = {}}> : () -> ()\n" +
+      hierarchyBinding("src", "a") + hierarchyBinding("dst", "b") +
+      "%child_in = \"nodal.instance_port\"() <{instance = @child, port = \"input\", "
+      "direction = \"input\", metadata = {}}> : () -> " +
+      boolean + "\n" +
+      "\"nodal.digital_assign\"(%child_in, %input) <{kind = \"continuous\", metadata = {}}> : (" +
+      boolean + ", " + boolean + ") -> ()\n" + hierarchyBoundary() +
+      member("projected", "projected", boolean) + member("top", "top", boolean) +
+      connect("top", "projected", boolean);
+  if (!input)
+    top += "%q = \"nodal.digital_storage\"() <{name = \"q\", kind = \"register\", domain = @b, "
+           "metadata = {}}> : () -> " +
+           boolean +
+           "\n\"nodal.digital_assign\"(%q, %projected) <{kind = \"register_next\", metadata = {}}> "
+           ": (" +
+           boolean + ", " + boolean + ") -> ()\n";
+  std::string child = hierarchyRequirement("src") + hierarchyRequirement("dst") +
+                      port("input", boolean, "input", "src") + definition(boolean) +
+                      instance("exported", selected, permission, boolean, "", "dst") +
+                      member("exported", "exported", boolean);
+  if (input)
+    child += observe("exported", boolean);
+  else {
+    child +=
+        "%synced = \"nodal.crossing\"(%input) <{source_domain = @src, destination_domain = @dst, "
+        "kind = \"sync\", contract = \"level_v1\", stages = 2 : i64, metadata = "
+        "{semantic_path = \"Child.sync\"}}> : (" +
+        boolean + ") -> " + boolean + "\n";
+    child += drive("exported", forged ? "input" : "synced", boolean);
+  }
+  auto module = [](StringRef name, const std::string &body) {
+    return "\"nodal.module\"() <{sym_name = \"" + name.str() + "\", metadata = {}}> ({\n" + body +
+           "}) : () -> ()\n";
+  };
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", top) +
+         module("Child", child) + "}\n";
+}
+std::string hiddenDefinition(StringRef hiddenType = boolean, bool changedRole = false) {
+  std::string result = definition(boolean);
+  for (auto pair :
+       {std::pair{"source", "out"}, std::pair{"sink", "in"}, std::pair{"monitor", "observe"}}) {
+    auto original = entry("data", pair.second, pair.first);
+    auto hidden =
+        entry("hidden", changedRole && StringRef(pair.first) == "source" ? "in" : pair.second,
+              pair.first);
+    result = replace(result, "access = [" + original + "]",
+                     "access = [" + original + ", " + hidden + "]");
+  }
+  return replace(
+      result, "}) : () -> ()",
+      "\"nodal.interface_member\"() <{sym_name = \"hidden\", type = " + hiddenType.str() +
+          ", protocol = \"plain\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" +
+          tag + "}}> : () -> ()\n}) : () -> ()");
+}
+std::string hiddenInstance(StringRef name, StringRef clock, StringRef hiddenType = boolean,
+                           bool changedRole = false) {
+  auto result = instance(name, "source", "out", boolean, "", clock);
+  return replace(result, "nested_interfaces = []}], metadata",
+                 "nested_interfaces = []}, {path = \"hidden\", type = " + hiddenType.str() +
+                     ", role = \"source\", access = \"" + (changedRole ? "in" : "out") +
+                     "\", nested_roles = [], nested_interfaces = []}], metadata");
+}
+std::string hiddenFixture(StringRef childType = boolean, bool changedRole = false) {
+  auto source = replace(hierarchyFixture(), definition(boolean), hiddenDefinition());
+  source = replace(source, definition(boolean), hiddenDefinition(childType, changedRole));
+  source = replace(source, instance("top", "source", "out", boolean, "", "b"),
+                   hiddenInstance("top", "b"));
+  return replace(source, instance("exported", "source", "out", boolean, "", "dst"),
+                 hiddenInstance("exported", "dst", childType, changedRole));
+}
+std::string siblingHiddenFixture(bool mismatch) {
+  auto source = hiddenFixture();
+  source = replace(source, hiddenDefinition(), "");
+  source = replace(source, hiddenInstance("top", "b"), "");
+  source = replace(source, member("top", "top", boolean), "");
+  source = replace(source, connect("top", "projected", boolean), "");
+  std::string extra =
+      "\"nodal.instance\"() <{sym_name = \"other\", module = @Other, parameter_bindings = {}, "
+      "domain_bindings = {src = @a, dst = @b}, metadata = {}}> : () -> ()\n" +
+      replace(hierarchyBinding("src", "a"), "instance = @child", "instance = @other") +
+      replace(hierarchyBinding("dst", "b"), "instance = @child", "instance = @other") +
+      "%other_in = \"nodal.instance_port\"() <{instance = @other, port = \"input\", "
+      "direction = \"input\", metadata = {}}> : () -> " +
+      boolean + "\n" +
+      "\"nodal.digital_assign\"(%other_in, %input) <{kind = \"continuous\", metadata = {}}> : (" +
+      boolean + ", " + boolean + ") -> ()\n" +
+      replace(replace(hierarchyBoundary(), "sym_name = \"projected\"",
+                      "sym_name = \"other_projection\""),
+              "instance = @child", "instance = @other");
+  source = replace(source, hierarchyBoundary(), hierarchyBoundary() + extra);
+  const std::string childStart = "\"nodal.module\"() <{sym_name = \"Child\"";
+  auto offset = source.find(childStart);
+  auto copied = source.substr(offset, source.size() - offset - 2);
+  copied = replace(copied, "sym_name = \"Child\"", "sym_name = \"Other\"");
+  copied = replace(copied, "semantic_path = \"Child.sync\"", "semantic_path = \"Other.sync\"");
+  if (mismatch) {
+    copied = replace(copied, hiddenDefinition(), hiddenDefinition(bits));
+    copied =
+        replace(copied, hiddenInstance("exported", "dst"), hiddenInstance("exported", "dst", bits));
+  }
+  return source.substr(0, source.size() - 2) + copied + "}\n";
+}
+std::string importedRoleDefinition(bool mismatch) {
+  auto source = hiddenDefinition();
+  const std::string oldRoles = "roles = [\"source\", \"sink\", \"monitor\"]";
+  const std::string newRoles = "roles = [\"source\", \"sink\", \"monitor\", \"audit\"]";
+  source = replace(replace(source, oldRoles, newRoles), oldRoles, newRoles);
+  return replace(source, "}) : () -> ()",
+                 "\"nodal.interface_role\"() <{sym_name = \"audit\", kind = \"explicit\", "
+                 "metadata = {" +
+                     tag + ", access = [" + entry("data", "out", "audit") + ", " +
+                     entry("hidden", mismatch ? "in" : "out", "audit") +
+                     "]}}> : () -> ()\n}) : () -> ()");
+}
+std::string siblingRoleFixture(bool mismatch) {
+  auto source = siblingHiddenFixture(false);
+  source = replace(source, hiddenDefinition(), importedRoleDefinition(false));
+  source = replace(source, hiddenDefinition(), importedRoleDefinition(mismatch));
+  // The first canonical definition does not contain audit. Both siblings do,
+  // so comparing only against that first definition misses their disagreement.
+  return replace(source, hierarchyDomain("a"), hierarchyDomain("a") + hiddenDefinition());
+}
 } // namespace
 
 int main() {
@@ -767,6 +919,56 @@ int main() {
              false);
   standalone("standalone-net-split-acyclic",
              net() + driver() + resolvedValues + netDrive() + split(), true);
+  auto hierarchy = [&](StringRef name, const std::string &source, bool expected) {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool valid = parsed && succeeded(verify(parsed->getOperation()));
+    bool passed = valid == expected;
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  hierarchy("child-output-actual-crossing", hierarchyFixture(), true);
+  hierarchy("child-input-forwarding", hierarchyFixture(false, true), true);
+  hierarchy("child-output-domain-label-does-not-hide-source", hierarchyFixture(true), false);
+  hierarchy("undriven-child-output-rejected",
+            replace(hierarchyFixture(), drive("exported", "synced", boolean), ""), false);
+  hierarchy("undriven-child-input-rejected",
+            replace(hierarchyFixture(false, true), connect("top", "projected", boolean), ""),
+            false);
+  hierarchy("complete-hidden-member-ABI-match", hiddenFixture(), true);
+  hierarchy("sibling-only-complete-ABI-match", siblingHiddenFixture(false), true);
+  hierarchy("sibling-only-hidden-ABI-mismatch", siblingHiddenFixture(true), false);
+  hierarchy("sibling-imported-extra-role-match", siblingRoleFixture(false), true);
+  hierarchy("sibling-imported-extra-role-mismatch", siblingRoleFixture(true), false);
+  if (diagnosticText.find("identically named role map") == std::string::npos) {
+    ++failures;
+    llvm::errs() << "DIGITAL_INTERFACE_MODEL_FAIL sibling-extra-role-causal-control\n";
+  }
+  hierarchy("unaccessed-child-member-type-mismatch", hiddenFixture(bits), false);
+  hierarchy("unaccessed-child-role-map-mismatch", hiddenFixture(boolean, true), false);
+  hierarchy("missing-child-endpoint",
+            replace(hierarchyFixture(), "endpoint = \"exported\"", "endpoint = \"absent\""), false);
+  hierarchy(
+      "wrong-child-instance",
+      replace(hierarchyFixture(), "instance = @child, endpoint", "instance = @absent, endpoint"),
+      false);
+  hierarchy("duplicate-projection-physical-identity",
+            replace(hierarchyFixture(), hierarchyBoundary(),
+                    hierarchyBoundary() + replace(hierarchyBoundary(), "sym_name = \"projected\"",
+                                                  "sym_name = \"duplicate\"")),
+            false);
+  hierarchy("output-write-rejected",
+            replace(hierarchyFixture(), connect("top", "projected", boolean),
+                    drive("projected", "input", boolean)),
+            false);
+  hierarchy("declared-role-view-rejected",
+            replace(hierarchyFixture(), member("projected", "projected", boolean),
+                    member("projected", "projected", boolean, "sink")),
+            false);
   llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

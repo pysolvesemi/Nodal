@@ -165,3 +165,60 @@ generated waveform is under `.work/f58-statecharts/target-staged/`.
 Nested/parallel lifecycle, typed completion/cancellation, timers/protocols,
 structural recursion, bounded runtime stacks and dedicated composition
 report/proof metadata remain required work, not implemented by this checkpoint.
+
+## Checkpoint 2: native hierarchy execution and exact Interface boundaries
+
+The [hierarchy execution contract](../design-gates/NodalHierarchyExecution-DG-v0.1.md)
+retains exact formal clock/reset operands through normalization and emits real
+reusable target modules and instances. Only demanded capabilities become input
+ports; material edge/reset differences select deterministic variants, while
+different physical clocks alone do not duplicate definitions. Normalization
+uses one transactional root candidate rather than cloning the root per module.
+Indexed variant/binding lookup and existing occurrence/operation budgets bound
+the represented work.
+
+Native `interface_boundary` independently resolves an exact immediate-child
+endpoint and its full typed definition. It preserves selected roles, actual
+binding provenance and real parent/child data dependencies. Imported definition
+consistency includes sibling-only roles, even when the parent definition never
+declared that role. This checkpoint contains native ingress and proof, not
+Interface target emission or the corresponding source projection API.
+
+Focused native acceptance passed 513 cases across seven suites: Interface model
+168, Interface round-trip 25, sequential model 71, sequential CIRCT 145,
+hierarchy CIRCT 13, hierarchy controls 27 and hierarchy model 64. This includes
+causal extra-role forgery rejection, minimal crossing controls, unused-source-edge
+definition sharing, formal operand/attribute forgeries, transactional unsupported
+symbolic target requests and a 32-instance shared-definition scale witness.
+
+The frozen compiler SHA-256 is
+`2125c01fdc146894cf5e4a2e9a58dfc52b9f56b6590022268a728a5442eacbe7`.
+Its pre/post native source manifests match exactly; the manifest digest is
+`c1aefc68552879a51882f8c8edb028ea54f51a3f0e1c1be74af1f47dad7da1db`.
+Build and test records remain under `.work/f58-native-checkpoint/`.
+
+Five maintained actual public-source examples pass default gating, CIRCT and
+SystemVerilog export, then generated-DUT Icarus simulation: shared independent
+clocks/state, nested forwarding, opposite edge/reset-polarity variants,
+resetless state and inherited asynchronous-assert/two-edge reset release through
+two child levels. Nine retained F57 source cases also pass gating, lowering and
+SystemVerilog export. These nine are export checks, not nine additional waveform
+claims. The four source-structure tests and five-case exporter also passed a
+strict standalone compile/run against checkpoint 1's isolated source artifacts,
+without the ongoing Area/Interface source changes; all five emitted input hashes
+match the simulated inputs. Reproduction is in `tests/scala/domain-hierarchy/`; receipts are under
+`.work/f58-hierarchy-target-checkpoint/` and
+`.work/f58-hierarchy-predecessor-checkpoint/`.
+
+The affected backend catalog generator also passes `--check`, with 49 focused
+registry tests passing. Exact canonical `615aad8` inputs reproduced its 13
+missing F57 operation entries before repair. Those forms now retain conservative
+digital/unsupported analog-target admission; the new Interface projection is
+explicitly unsupported by those targets. Generated native and Scala registries
+were regenerated together. The historical F47 digest assertion remains unchanged,
+with later additive inventories excluded explicitly rather than replacing it.
+
+Symbolic parameters/shapes, generated hierarchy families, complete boundary
+layout adapters, Interface arrays/resolved/conservative topology and actual
+Interface target emission remain required F58 work. No checklist child closes
+from this finite concrete digital checkpoint.

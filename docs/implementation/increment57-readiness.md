@@ -1333,3 +1333,33 @@ logs are under `.work/interface-observations-held`. The immutable compiler is
 Source admission, actual Scala replay and assignment-location repair remain
 pending in their separate checkpoint. Waivers, events and final F57 integration
 remain required; no CI, broad qualification or coarse checklist closure occurred.
+
+### Source observations and authored assignment locations
+
+The Interface capture owner now exposes canonical actual-expression observation
+groups, following directed ordinary connections without merging fanout consumers
+and canonicalizing only true resolved aliases. The existing source sampler
+consumes these groups and separate ordinary written outputs, retaining selectors
+and shared causal region controls. No endpoint annotation is treated as data
+ownership proof, and no second CDC graph was introduced.
+
+Authored digital assignments now capture their existing semantic source span and
+transport it through assignment snapshots. Fallback is restricted to actual
+synthesized Stream-ready defaults and uses the real owned target/value span.
+The frozen five-file slice passes **59 focused source checks**, including 16 new
+observation groups, directly affected predecessors and three assignment-location
+checks; three additional filtered SemanticOrigin predecessors pass separately.
+One intermediate test used the wrong relative fixture path under Mill; correcting
+that lookup retained the exact authored-line assertion, and all three mapping
+checks then passed. Logs and exact hashes are under
+`.work/source-interface-observations`, including `frozen5.sha256`.
+
+Actual replay against the immutable native observation compiler passes **14/14**
+expectations: twelve legal source witnesses and two source-derived shared-source
+mutations rejecting with `NODAL-CDC-057-002` (protocol payload/valid and output
+selector). Results are `native-replay-results.json` in that directory. Output
+mutation diagnostics retain the actual output declaration, and digital assignment
+IR retains the authored assignment spans. The protocol mutation currently reports
+an unknown member-access location; a narrow truthful endpoint-declaration source
+fallback remains open before full source-mapped acceptance. Waiver/event work and
+final F57 integration remain required; no CI or broad qualification ran.

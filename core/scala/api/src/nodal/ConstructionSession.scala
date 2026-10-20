@@ -2488,6 +2488,49 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       roots.update(declarationIds.get(record.storage), Left(record.reference))
     )
     val checkedGuards = mutable.HashSet.empty[(ExpressionRef, Long, String)]
+    val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
+    var fsmControlEdges = 0L
+    def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
+      fsmControlCache.getOrElseUpdate(
+        header, {
+          val values = flatFsms(header.machine).actionSampleDependencies(header)
+          fsmControlEdges += values.size
+          if fsmControlEdges > 262144 then
+            crossingFailure("FSM causal sample controls exceed their edge budget")
+          values
+        }
+      )
+    val causalControlCache = mutable.HashMap.empty[ExpressionRef, Vector[Any]]
+    var causalControlEdges = 0L
+    def causalControls(region: Option[DigitalValueRegionRecord]): Vector[Any] =
+      region.map: root =>
+        causalControlCache.getOrElseUpdate(
+          root.reference, {
+            val values = mutable.ArrayBuffer.empty[Any]
+            var current = region
+            var depth = 0
+            while current.nonEmpty do
+              depth += 1
+              if depth > 128 then crossingFailure("causal sample guards exceed their depth budget")
+              current.get.structuralArm.foreach(header =>
+                values += structuralIfs(header.conditional).predicate
+              )
+              current.get.behavioralArm.foreach(header =>
+                values += behavioralIfs(header.conditional).predicate
+              )
+              current.get.switchArm.foreach(header =>
+                values += enumSwitches(header.switch).selector
+              )
+              current.get.fsmAction.foreach(header => values ++= fsmControls(header))
+              current = current.get.parent
+            causalControlEdges += values.size
+            if causalControlEdges > 262144 then
+              crossingFailure("cached causal sample controls exceed their edge budget")
+            values.toVector
+          }
+        )
+      .getOrElse(Vector.empty)
+    val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
     operations.iterator.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
@@ -2495,9 +2538,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val target =
         digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
       if records(target.module).declarations(target.index).kind != KernelSignalKind.Register then
+        continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
+        val declaration = records(target.module).declarations(target.index)
+        // A projected target carries its actual selectors; revisiting the root is cut by the
+        // shared sampler's identity worklist, not by an annotation or a synthetic source.
+        val selection =
+          Option.when(operation.values.head.asInstanceOf[AnyRef] ne declaration.value)(
+            operation.values.head
+          ).toVector
         continuousDrivers.update(
           target,
-          continuousDrivers.getOrElse(target, Vector.empty) :+ operation.values(1)
+          continuousDrivers.getOrElse(target, Vector.empty) ++ Vector(operation.values(1)) ++
+            selection ++ causalControls(operation.digitalRegion)
         )
     val parentInputReferences = instanceDigitalPorts.iterator.collect {
       case (proxy, (_, port))
@@ -2508,7 +2560,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     instanceDigitalPorts.keysIterator.filter(reference =>
       records(reference.module).declarations(reference.index).kind == KernelSignalKind.InstanceInput
     ).foreach: reference =>
-      if continuousDrivers.getOrElse(reference, Vector.empty).size != 1 then
+      if continuousWriteCounts.getOrElse(reference, 0) != 1 then
         fail(
           "NODAL-HIERARCHY-057-001",
           "child digital input requires exactly one parent driver",
@@ -2560,18 +2612,6 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val sampleCache =
       mutable.HashMap.empty[(Long, Boolean, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
-    val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
-    var fsmControlEdges = 0L
-    def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
-      fsmControlCache.getOrElseUpdate(
-        header, {
-          val values = flatFsms(header.machine).actionSampleDependencies(header)
-          fsmControlEdges += values.size
-          if fsmControlEdges > 262144 then
-            crossingFailure("FSM causal sample controls exceed their edge budget")
-          values
-        }
-      )
     var cachedFacts = 0L
     def combinedFacts(
         values: Vector[Expr[?]],
@@ -2843,17 +2883,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if crossings.size > 65536 then
           crossingFailure("causal sample lineage exceeds its node budget")
       values.foreach(include)
-      var current = region
-      var depth = 0
-      while current.nonEmpty do
-        depth += 1
-        if depth > 128 then crossingFailure("causal sample guards exceed their depth budget")
-        current.get.behavioralArm.foreach(header =>
-          include(behavioralIfs(header.conditional).predicate)
-        )
-        current.get.switchArm.foreach(header => include(enumSwitches(header.switch).selector))
-        current.get.fsmAction.foreach(header => fsmControls(header).foreach(include))
-        current = current.get.parent
+      causalControls(region).foreach(include)
       verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet))
     clockRecords.foreach: (reference, clock) =>
       val kinds = Vector.newBuilder[String]
@@ -2956,6 +2986,24 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if readyFacts.domains.exists(_ != facts.domains.head) then
           crossingFailure("Stream ready must belong to its actual carrier domain")
         verifyReconvergence(readyFacts)
+    // Boundary observations are actual driver cones, not samples authorized by declared domains.
+    // Each ordinary output remains independent; the Interface owner alone supplies protocol groups.
+    records.valuesIterator.flatMap(_.declarations).filter(declaration =>
+      declaration.kind == KernelSignalKind.Output &&
+        continuousWriteCounts.getOrElse(declaration.reference, 0) > 0
+    ).foreach: declaration =>
+      verifyReconvergence(sampleFacts(
+        declaration.value,
+        declaration.reference.module,
+        strict = false
+      ))
+    val ownersByPath = records.keysIterator.map(owner => modulePath(owner) -> owner).toMap
+    interfaces.observationGroups.foreach: group =>
+      val owner = ownersByPath.getOrElse(
+        group.owner,
+        crossingFailure("Interface observation lost its actual construction owner")
+      )
+      verifyReconvergence(combinedFacts(group.values, owner, strict = false))
     operations.zipWithIndex.foreach: (operation, index) =>
       if operation.kind == "assignment" && operation.values.size == 2 then
         val target =
@@ -7347,7 +7395,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         kind,
         values.toVector,
         if effectRegion.nonEmpty then None else activeGeneratedRegion,
-        if memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty) then
+        if digitalAssignment || memoryWrite || (structuralTopology && activeGeneratedRegion.nonEmpty)
+        then
           semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
@@ -8837,9 +8886,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
     operation("assignment", left, right)
 
-  private def digitalAssignmentSnapshots(
+  private def digitalAssignmentRecords(
       resolved: Map[DomainRef, String]
-  ): Vector[KernelDigitalAssignmentSnapshot] =
+  ): Vector[(KernelDigitalAssignmentSnapshot, Operation)] =
     val ordinals = mutable.HashMap.empty[Long, Int]
     operations.toVector.filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind)
@@ -8883,7 +8932,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous",
         operation.digitalRegion.map(value => expressionPath(value.reference)),
         operation.sourceOrdinal
-      )
+      ) -> operation
 
   private def digitalOwnerOf(value: Any): Option[String] = value match
     case reference: AnyRef =>
@@ -9309,6 +9358,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     verifySequentialAssignments(resolved, interfaceCapture)
     val digitalCapture = digitalValueSnapshots(interfaceCapture)
     val modules = snapshots(resolved)
+    val assignmentRecords = digitalAssignmentRecords(resolved)
+    val assignmentSources = assignmentRecords.flatMap: (assignment, record) =>
+      val syntheticDefault =
+        Option(declarationIds.get(record.values.head.asInstanceOf[AnyRef])).exists: reference =>
+          records(reference.module).declarations(reference.index).attributes.exists:
+            case ("stream_ready_default", value: Expr[?]) =>
+              value eq record.values(1).asInstanceOf[AnyRef]
+            case _ => false
+      val source = record.source.orElse(
+        Option.when(syntheticDefault)(
+          sourceByPath.get(assignment.target).orElse(sourceByPath.get(assignment.value))
+        ).flatten
+      )
+      source.map(SourceMapEntry(assignment.path, _))
     val hierarchyBindingSources = selectedRequirementBindings.iterator.flatMap:
       case (requirement, (_, origin, owner, ordinal)) =>
         val instance = records(owner).instances(ordinal)
@@ -9323,7 +9386,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     .toVector
     val snapshot = ConstructionSnapshot(
       emitQuality = options.quality,
-      digitalAssignments = digitalAssignmentSnapshots(resolved),
+      digitalAssignments = assignmentRecords.map(_._1),
       memoryWrites = memoryWriteRecords.map(_._1),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
@@ -9362,7 +9425,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ hierarchyBindingSources ++ memoryWriteRecords.flatMap(
+        (semantic.sourceMap ++ hierarchyBindingSources ++ assignmentSources ++ memoryWriteRecords.flatMap(
           (write, record) =>
             record.source.map(SourceMapEntry(write.path, _))
         ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(

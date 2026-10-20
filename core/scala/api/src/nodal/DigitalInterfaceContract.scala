@@ -86,12 +86,19 @@ private[nodal] object DigitalInterfaceContract:
       samePayloadTypes: (DataType[?], DataType[?]) => Boolean
   )
   final case class Operation(kind: String, values: Vector[Any], owner: String)
+
+  /** One coherent externally observable value, rooted only in actual local drivers. The endpoint's
+    * declared domain is deliberately not a proof of its contents.
+    */
+  final case class ObservationGroup(path: String, owner: String, values: Vector[Expr[?]])
+
   final case class Capture(
       interfaces: Vector[KernelInterfaceSnapshot],
       connectivity: Vector[KernelDigitalConnectivitySnapshot],
       abi: Vector[InterfaceAbiEntry],
       dataTypes: Vector[DataType[?]],
-      valueRoots: Vector[Expr[?]]
+      valueRoots: Vector[Expr[?]],
+      observationGroups: Vector[ObservationGroup]
   )
 
   def fail(number: Int, message: String): Nothing =
@@ -197,7 +204,8 @@ private[nodal] object DigitalInterfaceContract:
       captured.flatMap(_.connectivity),
       captured.flatMap(_.abi),
       captured.flatMap(_.dataTypes),
-      captured.flatMap(_.valueRoots)
+      captured.flatMap(_.valueRoots),
+      captured.flatMap(_.observationGroups)
     )
 
   private def captureOwner(
@@ -647,5 +655,117 @@ private[nodal] object DigitalInterfaceContract:
       connectivity,
       abi.sortBy(_.logicalPath),
       declarationTypes.toVector,
-      valueRoots
+      valueRoots,
+      observations(declarations, interfaces, connectivity, valueRoots, pathOf)
     )
+
+  /** Resolve digital connectivity once in its existing typed owner. Ordinary connections are
+    * directed dependencies; only resolved physical aliases are unioned. The sampler consumes these
+    * actual expressions rather than parsing member names or trusting endpoint domains.
+    */
+  private def observations(
+      declarations: Vector[Declaration],
+      interfaces: Vector[KernelInterfaceSnapshot],
+      connectivity: Vector[KernelDigitalConnectivitySnapshot],
+      valueRoots: Vector[Expr[?]],
+      pathOf: Any => Option[String]
+  ): Vector[ObservationGroup] =
+    val members = interfaces.flatMap(_.members).filter(member =>
+      Set("plain", "valid", "stream", "resolved").contains(member.protocol)
+    )
+    val nets = declarations.filter(_.value.isInstanceOf[DigitalInout[?, ?]])
+    val paths = (members.map(_.path) ++ nets.map(_.path)).distinct.sorted
+    if paths.size > 65536 || connectivity.size > 262144 then
+      fail(1, "digital observation graph exceeds its bounded node or edge budget")
+    val indices = paths.zipWithIndex.toMap
+    val parents = Array.tabulate(paths.size)(identity)
+    val sizes = Array.fill(paths.size)(1)
+    val names = Array.tabulate(paths.size)(identity)
+    def representative(index: Int): Int =
+      var root = index
+      while parents(root) != root do root = parents(root)
+      var current = index
+      while parents(current) != current do
+        val next = parents(current)
+        parents(current) = root
+        current = next
+      root
+    def alias(left: String, right: String): Unit =
+      val a = representative(indices(left))
+      val b = representative(indices(right))
+      if a != b then
+        val (root, child) = if sizes(a) > sizes(b) || sizes(a) == sizes(b) && a < b then
+          (a, b)
+        else (b, a)
+        parents(child) = root
+        sizes(root) += sizes(child)
+        names(root) = math.min(names(root), names(child))
+    val resolved = members.filter(_.protocol == "resolved").map(_.path).toSet ++ nets.map(_.path)
+    connectivity.foreach: edge =>
+      if edge.kind == "inout-pass-through" ||
+        edge.kind == "interface-connect" && resolved.contains(edge.target)
+      then alias(edge.target, edge.source.get)
+    def canonical(path: String): String = paths(names(representative(indices(path))))
+    val expressions = valueRoots.map(value =>
+      pathOf(value).getOrElse(fail(7, "digital driver has no actual captured identity")) -> value
+    ).toMap
+    val direct = mutable.HashMap.empty[String, mutable.ArrayBuffer[Expr[?]]]
+    val sources = mutable.HashMap.empty[String, String]
+    var dependencyEdges = 0
+    connectivity.foreach: edge =>
+      val target = canonical(edge.target)
+      val values = (edge.value.toVector ++ edge.enable.toVector).map(path =>
+        expressions.getOrElse(path, fail(7, "digital dependency has no actual captured value"))
+      )
+      dependencyEdges += values.size
+      if dependencyEdges > 262144 then fail(1, "digital driver edges exceed their budget")
+      if values.nonEmpty then direct.getOrElseUpdate(target, mutable.ArrayBuffer.empty) ++= values
+      if edge.kind == "interface-connect" && !resolved.contains(edge.target) then
+        val other = canonical(edge.source.get)
+        val (sink, source) = if edge.access.contains("in") then (target, other) else (other, target)
+        sources.update(sink, source)
+    val cache = mutable.HashMap.empty[String, Vector[Expr[?]]]
+    def dependencies(path: String): Vector[Expr[?]] =
+      var current = canonical(path)
+      val pending = mutable.ArrayBuffer.empty[String]
+      val visited = mutable.HashSet.empty[String]
+      while !cache.contains(current) && sources.contains(current) do
+        if !visited.add(current) then
+          fail(11, "ordinary interface connection has a dependency cycle")
+        pending += current
+        current = sources(current)
+      val result =
+        cache.getOrElseUpdate(current, direct.get(current).map(_.toVector).getOrElse(Vector.empty))
+      pending.foreach(path => cache.update(path, result))
+      result
+    val groups = mutable.LinkedHashMap.empty[(String, String), mutable.ArrayBuffer[Expr[?]]]
+    var observationEdges = 0
+    def observe(owner: String, group: String, paths: Vector[String]): Unit =
+      val values = paths.flatMap(dependencies)
+      observationEdges += values.size
+      if observationEdges > 262144 then fail(1, "digital observation edges exceed their budget")
+      if values.nonEmpty then
+        groups.getOrElseUpdate(owner -> group, mutable.ArrayBuffer.empty) ++= values
+    val observedResolved = mutable.HashSet.empty[String]
+    def observeResolved(owner: String, path: String): Unit =
+      val group = canonical(path)
+      if observedResolved.add(group) then observe(owner, group, Vector(path))
+    interfaces.foreach: endpoint =>
+      val forward = mutable.LinkedHashMap.empty[String, mutable.ArrayBuffer[String]]
+      endpoint.members.filter(member => indices.contains(member.path)).foreach: member =>
+        if Set("valid", "stream").contains(member.protocol) && !member.name.endsWith(".ready") then
+          // These suffixes come from the typed protocol expansion, never an authored label.
+          val group = member.path.substring(0, member.path.lastIndexOf('.'))
+          forward.getOrElseUpdate(group, mutable.ArrayBuffer.empty) += member.path
+        else if member.protocol == "resolved" then
+          observeResolved(endpoint.owner, member.path)
+        else observe(endpoint.owner, member.path, Vector(member.path))
+      forward.foreach((group, members) => observe(endpoint.owner, group, members.toVector))
+    nets.foreach(net => observeResolved(net.owner, net.path))
+    groups.toVector.sortBy(_._1).map: (key, values) =>
+      val seen = new IdentityHashMap[Expr[?], java.lang.Boolean]()
+      ObservationGroup(
+        key._2,
+        key._1,
+        values.iterator.filter(value => seen.put(value, true) == null).toVector
+      )

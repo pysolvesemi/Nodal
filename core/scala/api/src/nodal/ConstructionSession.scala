@@ -314,6 +314,73 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ))
     else None
 
+  private final case class ExecutableWaiver(
+      input: Expr[?],
+      destination: ClockDomain,
+      id: String,
+      reason: String,
+      relation: ClockRelationshipModel.RelationIntent,
+      var sourceEndpoint: Option[DomainRef] = None
+  )
+  private val executableWaivers = mutable.LinkedHashMap.empty[ExpressionRef, ExecutableWaiver]
+  private val waiverIds = mutable.HashSet.empty[(Long, String)]
+
+  def waive[A <: Data](input: Expr[A], to: ClockDomain, waiver: CdcWaiver): Expr[A] =
+    streamTransaction("Cdc.waive"):
+      val owner = currentModule.handle
+      if domainRef(to).module != owner || currentDomain.exists(domainRef(_).module != owner) then
+        crossingFailure("Cdc.waive destination and lexical domain must belong to the active Module")
+      if waiver == null || waiver.relation == null then
+        crossingFailure("Cdc.waive requires an actual typed waiver and relation")
+      ExecutableWaiverContract.validateText(waiver.id, waiver.reason, crossingFailure)
+      val relation = ClockRelationshipModel.intent(waiver.relation)
+      ClockRelationshipModel.verifyBoundaryIntentFields(relation, crossingFailure)
+      if !waiverIds.add(owner -> waiver.id) then
+        crossingFailure("Cdc.waive id must be unique among authored waivers in one Module")
+      ownedStreamValue(input, "Cdc.waive payload")
+      val dataType = CandidateRuntime.expressionDataType(input).get
+      val bits = shapeTypeFootprint(
+        dataType,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(crossingFailure("Cdc.waive requires a fixed whole digital bit pattern"))
+      if bits > ExecutableWaiverContract.MaximumPayloadBits then
+        crossingFailure("Cdc.waive fixed whole payload must contain 1 through 4096 bits")
+      val result = new KernelExpr[A](
+        Vector(input),
+        resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
+        operation = Some(ExecutableWaiverContract.Operation)
+      )
+      val captured = captureExpression(result).get
+      executableWaivers.update(
+        captured,
+        ExecutableWaiver(input, to, waiver.id, waiver.reason, relation)
+      )
+      result
+
+  private def executableWaiverSnapshot(expression: KernelExpr[?])
+      : Option[KernelExecutableWaiverSnapshot] =
+    Option.when(expression.operation.contains(ExecutableWaiverContract.Operation)):
+      val record = executableWaivers.getOrElse(
+        expressionIds.get(expression),
+        crossingFailure("waiver requires its actual owned construction record")
+      )
+      val source = record.sourceEndpoint.getOrElse(
+        crossingFailure("waiver source lost its exact local endpoint identity")
+      )
+      KernelExecutableWaiverSnapshot(
+        domainPath(source),
+        domainPath(domainRef(record.destination)),
+        record.id,
+        record.reason,
+        record.relation,
+        ExecutableWaiverContract.Contract,
+        ExecutableWaiverContract.Obligations
+      )
+
   private final case class ClockRecord(
       kind: String,
       parents: Vector[ClockDomain],
@@ -542,11 +609,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val owner = domain.reference.module
       val structural =
         clockIdentity(parent.clock.get, owner) == clockIdentity(actual.clock.get, owner)
-      val kind = actual.relation.get match
-        case ClockRelation.Same => "same"
-        case other => relationName(other)
+      val intent = ClockRelationshipModel.intent(actual.relation.get)
+      val kind = intent.kind
       val proof = ClockRelationshipModel.proof(kind, structural)
-      val ratio = actual.relation.collect { case value: ClockRelation.Ratio => value }
       KernelClockRelationshipSnapshot(
         domainPath(domain.reference) + ".relationship",
         domainPath(domainRef(parent)),
@@ -557,10 +622,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ClockRelationshipModel.Contract,
         proof,
         ClockRelationshipModel.obligations(kind, proof),
-        ratio.map(_.multiply),
-        ratio.map(_.divide),
-        ratio.map(value => java.lang.Double.toString(value.phase.degrees)),
-        actual.relation.collect { case ClockRelation.Synchronous(phaseKnown) => phaseKnown }
+        intent.multiply,
+        intent.divide,
+        intent.phase,
+        intent.phaseKnown
       )
 
   private def relationshipIndex(): ClockRelationshipModel.Index =
@@ -2608,7 +2673,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         crossings: Set[ExpressionRef],
         pulseClassified: Boolean = false,
         externalSources: Set[DeclarationRef] = Set.empty,
-        localEndpoints: Set[DomainRef] = Set.empty
+        localEndpoints: Set[DomainRef] = Set.empty,
+        waivers: Set[ExpressionRef] = Set.empty
     )
     val sampleCache =
       mutable.HashMap.empty[(Long, Boolean, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
@@ -2625,7 +2691,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         facts.iterator.flatMap(_.sources).toSet,
         facts.iterator.flatMap(_.crossings).toSet,
         facts.exists(_.pulseClassified),
-        localEndpoints = facts.iterator.flatMap(_.localEndpoints).toSet
+        localEndpoints = facts.iterator.flatMap(_.localEndpoints).toSet,
+        waivers = facts.iterator.flatMap(_.waivers).toSet
       )
     def exactSourceEndpoint(facts: SampleFacts, owner: Long, actual: String): DomainRef =
       // Physical sampling facts and authored local endpoint identity are separate. In particular,
@@ -2667,16 +2734,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
       val root = value.asInstanceOf[AnyRef]
       Option(cache.get(root)).getOrElse:
-        val pending = mutable.ArrayDeque((value, owner))
+        val pending = mutable.ArrayDeque((value, owner, true))
         var activeOwner = owner
+        var activeDomainVisible = true
         var edges = 0
-        def enqueue(values: IterableOnce[Any], context: Long = activeOwner): Unit =
+        def enqueue(
+            values: IterableOnce[Any],
+            context: Long = activeOwner,
+            domainVisible: Boolean = activeDomainVisible
+        ): Unit =
           values.iterator.foreach: next =>
             edges += 1
             if edges > 262144 then
               behavioralFailure("sequential dependency edges exceed their budget")
-            pending.append((next, context))
-        val visited = mutable.HashMap.empty[Long, IdentityHashMap[AnyRef, java.lang.Boolean]]
+            pending.append((next, context, domainVisible))
+        val visited =
+          mutable.HashMap.empty[(Long, Boolean), IdentityHashMap[AnyRef, java.lang.Boolean]]
         val domains = mutable.HashSet.empty[String]
         val localEndpoints = mutable.HashSet.empty[DomainRef]
         def retainEndpoint(initial: DomainRef): Unit =
@@ -2686,7 +2759,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             depth += 1
             if depth > 128 then crossingFailure("source endpoint forwarding exceeds depth budget")
             endpoint = selectedRequirementBindings(endpoint)._1
-          if endpoint.module == owner then localEndpoints += endpoint
+          if endpoint.module == owner && activeDomainVisible then localEndpoints += endpoint
         def retainDeclarationEndpoint(declaration: DeclarationRecord): Unit =
           localDeclarationDomain(declaration, resolved).foreach(path =>
             retainEndpoint(domainsByPath(path).reference)
@@ -2694,13 +2767,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val externalSources = mutable.HashSet.empty[DeclarationRef]
         val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
         val crossings = mutable.HashSet.empty[ExpressionRef]
+        val waivers = mutable.HashSet.empty[ExpressionRef]
         var count = 0
         var pulseClassified = false
         while pending.nonEmpty do
-          val (current, context) = pending.removeLast()
+          val (current, context, domainVisible) = pending.removeLast()
           activeOwner = context
+          activeDomainVisible = domainVisible
           val seen =
-            visited.getOrElseUpdate(context, new IdentityHashMap[AnyRef, java.lang.Boolean]())
+            visited.getOrElseUpdate(
+              (context, domainVisible),
+              new IdentityHashMap[AnyRef, java.lang.Boolean]()
+            )
           current match
             case reference: AnyRef
                 if Option(seen.put(reference, java.lang.Boolean.TRUE)).isEmpty =>
@@ -2756,7 +2834,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         KernelSignalKind.DigitalInout
                       )(declaration.kind)
                     then crossingFailure("wire/output dependency has no actual driver")
-                    domains ++= sourceDomain
+                    if activeDomainVisible then domains ++= sourceDomain
                     if sourceDomain.nonEmpty then retainDeclarationEndpoint(declaration)
                     val externalControl = allowExternalControl && sourceDomain.isEmpty &&
                       declaration.kind == KernelSignalKind.Input && declaration.dataType.exists(t =>
@@ -2782,51 +2860,70 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       enqueue(machine.futureSampleDependencies)
                 fsmResults.get(expressionRef).foreach: (machine, _) =>
                   enqueue(machine.futureSampleDependencies)
-              expressionRef.flatMap(executableCrossings.get) match
-                case Some(crossing) =>
-                  if strict && crossing.kind == "pulse" then pulseClassified = true
-                  crossings += crossing.identity(expressionRef.get)
-                  sourceRoots += crossing.identity(expressionRef.get)
-                  if crossing.role(expressionRef.get) == "ready" then
-                    if inferSourceOwnership then enqueue(crossing.sourceInputs)
-                    else
-                      domains += sourceDomain(expressionRef.get, crossing)
-                      crossing.sourceEndpoint.foreach(retainEndpoint)
-                  else
-                    retainEndpoint(domainRef(crossing.destination))
-                    domains += resolved.getOrElse(
-                      domainRef(crossing.destination),
-                      crossingFailure("crossing destination has no actual resolved domain")
-                    )
-                case None => reference match
-                    case expression: KernelExpr[?] =>
-                      if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
-                        !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
-                        !expressionRef.exists(reference =>
-                          shapeIndices.contains(reference) || shapeViews.contains(reference)
+              expressionRef.flatMap(executableWaivers.get) match
+                case Some(waiver) =>
+                  waivers += expressionRef.get
+                  retainEndpoint(domainRef(waiver.destination))
+                  val destination = resolved.getOrElse(
+                    domainRef(waiver.destination),
+                    crossingFailure("waiver destination has no actual resolved domain")
+                  )
+                  if activeDomainVisible then domains += destination
+                  // Only permission traversal cuts here. The real input still carries every
+                  // physical crossing/source/Pulse fact and remains a combinational dependency.
+                  enqueue(Vector(waiver.input), domainVisible = false)
+                case None =>
+                  expressionRef.flatMap(executableCrossings.get) match
+                    case Some(crossing) =>
+                      if strict && crossing.kind == "pulse" then pulseClassified = true
+                      crossings += crossing.identity(expressionRef.get)
+                      sourceRoots += crossing.identity(expressionRef.get)
+                      if crossing.role(expressionRef.get) == "ready" then
+                        if inferSourceOwnership then enqueue(crossing.sourceInputs)
+                        else
+                          if activeDomainVisible then
+                            domains += sourceDomain(expressionRef.get, crossing)
+                          crossing.sourceEndpoint.foreach(retainEndpoint)
+                      else
+                        retainEndpoint(domainRef(crossing.destination))
+                        val destination = resolved.getOrElse(
+                          domainRef(crossing.destination),
+                          crossingFailure("crossing destination has no actual resolved domain")
                         )
-                      then crossingFailure("input dependency has unsupported source provenance")
-                      if expression.operation.contains("memory_read") then
-                        sourceRoots += expressionRef.get
-                        val ports = expression.operands.collect { case port: MemoryPortCapture =>
-                          port
-                        }
-                        // Synchronous reads cut address provenance; asynchronous reads retain it.
-                        // Every address also has its independent memory-domain sample below.
-                        if ports.exists(_.memory.readLatency == 0) then enqueue(expression.operands)
-                        else enqueue(ports)
-                      else enqueue(expression.operands)
-                    case memory: MemoryPortCapture =>
-                      val declaration = memoryDeclaration(memory.memory, activeOwner)
-                      declarationDomain(declaration, resolved) match
-                        case Some(domain) =>
-                          domains += domain
-                          retainDeclarationEndpoint(declaration)
-                        case None => crossingFailure("memory input has no resolved source domain")
-                    case predicate: StaticPredicate => enqueue(predicate.operands)
-                    case _: Expr[?] if strict && declarationRef.isEmpty && expressionRef.isEmpty =>
-                      crossingFailure("input dependency has no actual captured owner")
-                    case _ => ()
+                        if activeDomainVisible then domains += destination
+                    case None => reference match
+                        case expression: KernelExpr[?] =>
+                          if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
+                            !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                            !expressionRef.exists(reference =>
+                              shapeIndices.contains(reference) || shapeViews.contains(reference)
+                            )
+                          then crossingFailure("input dependency has unsupported source provenance")
+                          if expression.operation.contains("memory_read") then
+                            sourceRoots += expressionRef.get
+                            val ports = expression.operands.collect {
+                              case port: MemoryPortCapture =>
+                                port
+                            }
+                            // Synchronous reads cut address provenance; asynchronous reads retain it.
+                            // Every address also has its independent memory-domain sample below.
+                            if ports.exists(_.memory.readLatency == 0) then
+                              enqueue(expression.operands)
+                            else enqueue(ports)
+                          else enqueue(expression.operands)
+                        case memory: MemoryPortCapture =>
+                          val declaration = memoryDeclaration(memory.memory, activeOwner)
+                          declarationDomain(declaration, resolved) match
+                            case Some(domain) =>
+                              if activeDomainVisible then domains += domain
+                              retainDeclarationEndpoint(declaration)
+                            case None =>
+                              crossingFailure("memory input has no resolved source domain")
+                        case predicate: StaticPredicate => enqueue(predicate.operands)
+                        case _: Expr[?]
+                            if strict && declarationRef.isEmpty && expressionRef.isEmpty =>
+                          crossingFailure("input dependency has no actual captured owner")
+                        case _ => ()
             case _ => ()
         val result = SampleFacts(
           domains.toSet,
@@ -2834,24 +2931,48 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           crossings.toSet,
           pulseClassified,
           externalSources.toSet,
-          localEndpoints.toSet
+          localEndpoints.toSet,
+          waivers.toSet
         )
         cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size +
-          result.localEndpoints.size
+          result.localEndpoints.size + result.waivers.size
         if cachedFacts > 262144 then
           crossingFailure("cached sample facts exceed their bounded graph budget")
         cache.put(root, result)
         result
+    val lineageRootCache = mutable.HashMap.empty[ExpressionRef, Set[DeclarationRef | ExpressionRef]]
+    var lineageWork = 0L
+    def lineageRoots(boundary: ExpressionRef): Set[DeclarationRef | ExpressionRef] =
+      lineageRootCache.getOrElseUpdate(
+        boundary, {
+          val roots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
+          val pending = mutable.ArrayDeque.empty[DeclarationRef | ExpressionRef]
+          def include(crossing: ExpressionRef): Unit =
+            combinedFacts(
+              executableCrossings(crossing).sampledInputs,
+              crossing.module,
+              strict = true
+            )
+              .sources.foreach(pending.append)
+          include(boundary)
+          while pending.nonEmpty do
+            val root = pending.removeLast()
+            lineageWork += 1
+            if lineageWork > 262144 then crossingFailure("crossing lineage exceeds its edge budget")
+            if roots.add(root) then
+              root match
+                case reference: ExpressionRef if executableCrossings.contains(reference) =>
+                  include(reference)
+                case _ => ()
+          roots.toSet
+        }
+      )
     def verifyReconvergence(facts: SampleFacts): Unit =
       if facts.crossings.size > 1 then
         val firstBoundary = mutable.HashMap.empty[DeclarationRef | ExpressionRef, ExpressionRef]
         var lineageEdges = 0
         facts.crossings.toVector.sortBy(_.index).foreach: boundary =>
-          val roots = combinedFacts(
-            executableCrossings(boundary).sampledInputs,
-            boundary.module,
-            strict = true
-          ).sources
+          val roots = lineageRoots(boundary)
           roots.foreach: root =>
             lineageEdges += 1
             if lineageEdges > 262144 then
@@ -2917,6 +3038,25 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           clockFailure("clock control requires one owned external Bool boundary or actual domain")
       clock.controlKinds = kinds.result()
       clock.controlDomains = domains.result()
+    executableWaivers.foreach: (reference, waiver) =>
+      val facts = sampleFacts(waiver.input, reference.module, strict = true)
+      if facts.waivers(reference) then
+        crossingFailure("Cdc.waive participates in a combinational dependency cycle")
+      verifyReconvergence(facts)
+      if facts.domains.size != 1 then
+        crossingFailure("Cdc.waive input must have exactly one known source domain")
+      val source = facts.domains.head
+      val destination = resolved.getOrElse(
+        domainRef(waiver.destination),
+        crossingFailure("Cdc.waive destination has no actual resolved domain")
+      )
+      waiver.sourceEndpoint = Some(exactSourceEndpoint(facts, reference.module, source))
+      relationships.verifyBoundaryIntent(
+        source,
+        destination,
+        waiver.relation,
+        expressionPath(reference)
+      )
     val commonResetLineage = new ResetLineageQuery
     val commonResetRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
     def resetEpochRoots(path: String, kind: String): Map[(DeclarationRef, Long), ResetPolarity] =
@@ -4508,7 +4648,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       owner: Long,
       cardinality: Boolean,
       storageContext: Boolean,
-      bitPatternOnly: Boolean = false
+      bitPatternOnly: Boolean = false,
+      fixedBitPattern: Boolean = false
   ): Option[BigInt] =
     val active = new java.util.IdentityHashMap[DataType[?], java.lang.Boolean]()
     var remaining = 65536
@@ -4542,7 +4683,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
         descriptor.kind match
           case "Bits" | "UInt" | "SInt" =>
-            Some(BigInt(digitalWidthBound(descriptor, owner).bounds.upper))
+            val bounds = digitalWidthBound(descriptor, owner).bounds
+            if fixedBitPattern && bounds.lower != bounds.upper then
+              crossingFailure("Cdc.waive requires a fixed whole digital bit pattern")
+            Some(BigInt(bounds.upper))
           case "Bool" => Some(BigInt(1))
           case "Integer" | "Real" => if field then Some(BigInt(64)) else None
           case "Struct" =>
@@ -4583,7 +4727,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               new StructuralBoundAnalysis(owner, "NODAL-SHAPE-043-001", "Vec dimension")
             visit(element, depth + 1, field).map: bits =>
               checkedFootprint(dimensions.foldLeft(bits)((total, dimension) =>
-                total * BigInt(analysis(dimension).bounds.upper)
+                val bounds = analysis(dimension).bounds
+                if fixedBitPattern && bounds.lower != bounds.upper then
+                  crossingFailure("Cdc.waive requires a fixed whole digital bit pattern")
+                total * BigInt(bounds.upper)
               ))
           case "Enum" =>
             descriptor.arguments match
@@ -5196,6 +5343,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.operation.contains(ExecutableWaiverContract.Operation) =>
+      crossingFailure("waivers require the owned Cdc.waive entrypoint")
     case expression: KernelExpr[?]
         if expression.operation.exists(Set("reset_boundary", "rdc_sync", "reset_combine")) =>
       resetFailure("reset producers require owned reset construction entrypoints")
@@ -8410,31 +8560,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         region = expressionRegions.get(view.reference).map(value => expressionPath(value.reference))
       )
 
-  private def relationName(relation: ClockRelation): String =
-    relationAttributes(relation).collectFirst:
-      case ("clock_relation", value) => value
-    .getOrElse("unknown")
-
   private def waiverSnapshots(
       sourceMap: Vector[SourceMapEntry]
   ): Vector[KernelWaiverSnapshot] =
     val sourceByPath = sourceMap.map(entry => entry.semanticPath -> entry.source).toMap
-    expressionValues.toVector.flatMap:
-      case (reference, expression) =>
-        expression.operands.collectFirst:
-          case waiver: CdcWaiver =>
-            val path = expressionPath(reference)
-            KernelWaiverSnapshot(
-              "cdc",
-              waiver.id,
-              waiver.reason,
-              relationName(waiver.relation),
-              path,
-              expression.operands.headOption.flatMap(pathOf),
-              expression.operands.collectFirst:
-                case domain: ClockDomain => domainPath(domainRef(domain)),
-              sourceByPath.get(path)
-            )
+    executableWaivers.toVector.map: (reference, waiver) =>
+      val path = expressionPath(reference)
+      KernelWaiverSnapshot(
+        "cdc",
+        waiver.id,
+        waiver.reason,
+        waiver.relation.kind,
+        path,
+        pathOf(waiver.input),
+        Some(domainPath(domainRef(waiver.destination))),
+        sourceByPath.get(path)
+      )
     .sortBy(waiver => (waiver.semanticPath, waiver.id))
 
   private def continuousOperatorSnapshots(
@@ -9022,6 +9163,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       collectionArguments.keysIterator.map(expressionPath).toSet,
       memoryReadSnapshot,
       executableCrossingSnapshot,
+      executableWaiverSnapshot,
       resetSnapshot,
       clockSnapshot
     )

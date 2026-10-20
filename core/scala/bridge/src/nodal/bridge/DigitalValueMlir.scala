@@ -30,7 +30,9 @@ private[nodal] object DigitalValueMlir:
     val escaped = value.flatMap:
       case '\\' => "\\\\"
       case '"' => "\\\""
-      case character if character.isControl => f"\\${character.toInt & 0xff}%02X"
+      case character if character.isControl =>
+        character.toString.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          .map(byte => f"\\${byte & 0xff}%02X").mkString
       case character => character.toString
     s"\"$escaped\""
 
@@ -54,7 +56,8 @@ private[nodal] object DigitalValueMlir:
       snapshot: ConstructionSnapshot,
       enums: EnumMlir.Plan,
       clocks: ClockMlir.Resolver,
-      hierarchy: HierarchyMlir.Plan
+      hierarchy: HierarchyMlir.Plan,
+      relationships: ClockRelationshipMlir.Plan
   ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
@@ -1223,6 +1226,7 @@ private[nodal] object DigitalValueMlir:
       "duplicate or excessive digital expression identities",
       snapshot.root
     )
+    val waiverIds = mutable.HashSet.empty[(String, String)]
     snapshot.digitalExpressions.foreach: expression =>
       DigitalMaterializationMlir.validate(expression)
       requireValid(
@@ -1247,6 +1251,49 @@ private[nodal] object DigitalValueMlir:
         "only owned crossings carry an executable crossing contract",
         expression.path
       )
+      requireValid(
+        (expression.operation == ExecutableWaiverContract.Operation) == expression.waiver.nonEmpty,
+        "only owned waivers carry an executable waiver contract",
+        expression.path
+      )
+      expression.waiver.foreach: waiver =>
+        requireValid(
+          expression.region.isEmpty && expression.operands.size == 1 &&
+            expression.dataType == expressionType(expression.operands.head) &&
+            waiver.contract == ExecutableWaiverContract.Contract &&
+            waiver.obligations.size == ExecutableWaiverContract.Obligations.size &&
+            waiver.obligations.toMap == ExecutableWaiverContract.Obligations.toMap &&
+            expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
+            expression.caseIds.isEmpty && expression.structure.isEmpty &&
+            expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
+            expression.crossing.isEmpty && expression.reset.isEmpty && expression.clock.isEmpty &&
+            Vector(waiver.sourceDomain, waiver.destinationDomain).forall(domain =>
+              modules(expression.owner).domains.exists(_.path == domain)
+            ),
+          "waiver requires exact owned payload, closed obligations and local actual endpoint references",
+          expression.path
+        )
+        ExecutableWaiverContract.validateText(
+          waiver.id,
+          waiver.reason,
+          message => fail(message, expression.path)
+        )
+        requireValid(
+          waiverIds.add(expression.owner -> waiver.id),
+          "waiver id must be unique in its authored module",
+          expression.path
+        )
+        ClockRelationshipModel.verifyBoundaryIntentFields(
+          waiver.relation,
+          message => fail(message, expression.path)
+        )
+        if !Vector(waiver.sourceDomain, waiver.destinationDomain).exists(hierarchy.formal) then
+          relationships.verifyBoundaryIntent(
+            waiver.sourceDomain,
+            waiver.destinationDomain,
+            waiver.relation,
+            expression.path
+          )
       expression.crossing.foreach: crossing =>
         if crossing.kind == "fifo" then
           requireValid(
@@ -2108,7 +2155,7 @@ private[nodal] object DigitalValueMlir:
         renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
     ): Rendered =
       var crossingStateBits = BigInt(0)
-      def bitPatternWidth(text: String, path: String): BigInt =
+      def bitPatternWidth(text: String, path: String, fixed: Boolean = false): BigInt =
         var remaining = 65536
         def visit(value: String, depth: Int): BigInt =
           remaining -= 1
@@ -2126,10 +2173,23 @@ private[nodal] object DigitalValueMlir:
           else if value.startsWith("Vec(") then
             val (element, dimensions) = vectorType(value, path)
             dimensions.foldLeft(visit(element, depth + 1))((total, dimension) =>
-              total * loopBoundQuery.bounds(loopBoundQuery.resolve(module.path, dimension)).upper
+              val bounds = loopBoundQuery.bounds(loopBoundQuery.resolve(module.path, dimension))
+              requireValid(
+                !fixed || bounds.lower == bounds.upper,
+                "waiver requires fixed whole payload extent",
+                path
+              )
+              total * bounds.upper
             )
           else
-            scalarType(value, path).map(info => BigInt(info.upper)).getOrElse(
+            scalarType(value, path).map(info => {
+              requireValid(
+                !fixed || info.lower == info.upper,
+                "waiver requires fixed whole payload width",
+                path
+              )
+              BigInt(info.upper)
+            }).getOrElse(
               fail(
                 "crossing requires finite Bool, bit-vector, Enum or Vec/Struct bit patterns",
                 path
@@ -2969,6 +3029,49 @@ private[nodal] object DigitalValueMlir:
                       )),
                       height,
                       Unknown
+                    )
+                  else if expression.operation == ExecutableWaiverContract.Operation then
+                    val waiver = expression.waiver.get
+                    requireValid(
+                      operands.map(_._2) == Vector(dataType) &&
+                        exactValueType(
+                          expression.dataType,
+                          expressionType(expression.operands.head),
+                          path
+                        ) &&
+                        bitPatternWidth(
+                          expression.dataType,
+                          path,
+                          fixed = true
+                        ) <= ExecutableWaiverContract.MaximumPayloadBits,
+                      "waiver requires the exact complete fixed whole input/result native type of 1 through 4096 bits",
+                      path
+                    )
+                    val relation = waiver.relation
+                    val fields = Vector("kind = " + quoted(relation.kind)) ++
+                      relation.multiply.map(value => s"multiply = $value : i32") ++
+                      relation.divide.map(value => s"divide = $value : i32") ++
+                      relation.phase.map(value => "phase = " + quoted(value)) ++
+                      relation.phaseKnown.map(value => "phase_known = " + value.toString)
+                    val obligations = waiver.obligations.map((name, value) =>
+                      s"$name = ${quoted(value)}"
+                    ).mkString("{", ", ", "}")
+                    val attributes =
+                      s"{contract = ${quoted(waiver.contract)}, source_domain = ${domainReference(waiver.sourceDomain)}, " +
+                        s"destination_domain = ${domainReference(waiver.destinationDomain)}, id = ${quoted(waiver.id)}, " +
+                        s"reason = ${quoted(waiver.reason)}, relation = {${fields.mkString(", ")}}, " +
+                        s"obligations = $obligations, metadata = ${metadata(path, false)}}"
+                    (
+                      Vector(operation(
+                        "nodal.waiver",
+                        result,
+                        dataType,
+                        operands,
+                        attributes,
+                        sourceLocation(path)
+                      )),
+                      height,
+                      proofs.getOrElse(expression.operands.head, Unknown)
                     )
                   else if ExecutableCrossingContract.Operations(expression.operation) then
                     val crossing = expression.crossing.get

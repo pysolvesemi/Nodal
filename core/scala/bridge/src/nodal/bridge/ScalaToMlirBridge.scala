@@ -153,7 +153,7 @@ private[nodal] object ScalaToMlirBridge:
     private val ownedClockModules =
       snapshot.digitalExpressions.filter(_.clock.nonEmpty).map(_.owner).toSet
     private val digitalValues =
-      new DigitalValueMlir.Plan(snapshot, enumValues, clockControls, hierarchy)
+      new DigitalValueMlir.Plan(snapshot, enumValues, clockControls, hierarchy, clockRelationships)
     private val interfaceValues = new InterfaceMlir.Plan(snapshot)
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>

@@ -729,7 +729,7 @@ object Cdc:
       value: Expr[A],
       to: ClockDomain,
       waiver: CdcWaiver
-  ): Expr[A] = CandidateRuntime.expr(value, to, waiver)
+  ): Expr[A] = ConstructionKernel.waive(value, to, waiver)
 
 object Rdc:
   /** Domain-construction form: the receiving generated domain supplies the destination. */

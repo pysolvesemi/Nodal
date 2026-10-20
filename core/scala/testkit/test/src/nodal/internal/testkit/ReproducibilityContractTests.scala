@@ -37,12 +37,12 @@ final class ReproducibilityDomainFixture extends Module:
       CdcWaiver(
         id = "fixture-cdc-waiver",
         reason = "exercise deterministic waiver inventory",
-        relation = ClockRelation.Asynchronous
+        relation = ClockRelation.Same
       )
     )
     val resetSynchronized = Rdc.sync(core.reset, core)
-    output := synchronized
-    // Waivers retain descriptor inventory here; this does not claim executable waiver support.
+    output := waived
+    // The owned stateless boundary also retains deterministic report inventory.
     CandidateRuntime.statement(waived, resetSynchronized)
 
 object ReproducibilityContractTests extends TestSuite:
@@ -203,7 +203,7 @@ object ReproducibilityContractTests extends TestSuite:
       assert(crossingEntries > 0)
       assert(report.contains("\"id\": \"fixture-cdc-waiver\""))
       assert(report.contains("\"reason\": \"exercise deterministic waiver inventory\""))
-      assert(report.contains("\"relation\": \"asynchronous\""))
+      assert(report.contains("\"relation\": \"same\""))
       assert(report.contains("core"))
       assert(!report.contains("nodal-scala-mlir-"))
 

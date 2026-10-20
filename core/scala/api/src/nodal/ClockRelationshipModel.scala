@@ -32,6 +32,34 @@ private[nodal] object ClockRelationshipModel:
       frequency: Option[String]
   )
 
+  /** Closed boundary rationale, not a graph edge, proof or sampling capability. */
+  final case class RelationIntent(
+      kind: String,
+      multiply: Option[Int] = None,
+      divide: Option[Int] = None,
+      phase: Option[String] = None,
+      phaseKnown: Option[Boolean] = None
+  )
+
+  def intent(relation: ClockRelation): RelationIntent = relation match
+    case ClockRelation.Same => RelationIntent("same")
+    case ClockRelation.Ratio(multiply, divide, phase) =>
+      RelationIntent(
+        "ratio",
+        Some(multiply),
+        Some(divide),
+        Some(java.lang.Double.toString(phase.degrees))
+      )
+    case ClockRelation.Synchronous(phaseKnown) =>
+      RelationIntent("synchronous", phaseKnown = Some(phaseKnown))
+    case ClockRelation.MutuallyExclusive => RelationIntent("mutually_exclusive")
+    case ClockRelation.Asynchronous => RelationIntent("asynchronous")
+    case ClockRelation.Unknown => RelationIntent("unknown")
+
+  def verifyBoundaryIntentFields(intent: RelationIntent, reject: String => Nothing): Unit =
+    val arithmetic = new Arithmetic(reject)
+    val _ = arithmetic.normalize(intent)
+
   private[nodal] final class Arithmetic(fail: String => Nothing):
     private val bits = 4096
     private val maximum = (BigInt(1) << bits) - 1
@@ -93,13 +121,42 @@ private[nodal] object ClockRelationshipModel:
       if scale >= 0 then checked(unscaled, BigInt(10).pow(scale))
       else checked(product(unscaled, BigInt(10).pow(-scale)), 1)
 
+    final case class NormalizedIntent(period: Rational, phase: Rational)
+    def normalize(intent: RelationIntent): NormalizedIntent =
+      if !Kinds(intent.kind) ||
+        intent.multiply.nonEmpty !=
+          (intent.kind == "ratio") ||
+          intent.divide.nonEmpty !=
+          (intent.kind == "ratio") ||
+          intent.phase.nonEmpty !=
+          (intent.kind == "ratio") ||
+          intent.phaseKnown.nonEmpty !=
+          (intent.kind == "synchronous")
+      then fail("relationship requires its exact closed kind-specific fields")
+      if intent.kind != "ratio" then NormalizedIntent(one, zero)
+      else
+        if intent.multiply.get <= 0 || intent.divide.get <= 0 then
+          fail("ratio requires positive int32 multiply and divide")
+        val period = integer(intent.divide.get) / integer(intent.multiply.get)
+        val value = intent.phase.get
+        if value.length > 1400 then fail("phase exceeds its bounded decimal ingress")
+        val double = value.toDoubleOption.filter(java.lang.Double.isFinite).getOrElse(fail(
+          "phase requires finite canonical Double decimal"
+        ))
+        if java.lang.Double.toString(double) != value then
+          fail("phase requires canonical Double decimal spelling")
+        NormalizedIntent(period, (decimal(value) / integer(360)).modulo(one))
+
   /** Path-compressed union index, reused for distinct permission and consistency equivalences. */
   private final class Components(paths: Iterable[String]):
     private val parent = mutable.Map.from(paths.iterator.map(p => p -> p))
     private val rank = mutable.Map.from(paths.iterator.map(p => p -> 0))
-    def root(path: String): String =
+    def representative(path: String): String =
       var current = path
       while parent(current) != current do current = parent(current)
+      current
+    def root(path: String): String =
+      val current = representative(path)
       var entry = path
       while parent(entry) != entry do
         val next = parent(entry)
@@ -160,19 +217,17 @@ private[nodal] object ClockRelationshipModel:
       val source = endpoint(relation.source, relation)
       val destination = endpoint(relation.destination, relation)
       val structural = source.identity == destination.identity
+      val normalized = a.normalize(RelationIntent(
+        relation.kind,
+        relation.multiply,
+        relation.divide,
+        relation.phase,
+        relation.phaseKnown
+      ))
       if source.owner != destination.owner ||
         source.edge != destination.edge || !Set("rising", "falling")(source.edge) ||
-        !Kinds(relation.kind) || relation.contract != Contract ||
-        relation.proof != proof(relation.kind, structural) ||
-        relation.obligations != obligations(relation.kind, relation.proof) ||
-        relation.multiply.nonEmpty !=
-          (relation.kind == "ratio") ||
-          relation.divide.nonEmpty !=
-          (relation.kind == "ratio") ||
-          relation.phase.nonEmpty !=
-          (relation.kind == "ratio") ||
-          relation.phaseKnown.nonEmpty !=
-          (relation.kind == "synchronous")
+        relation.contract != Contract || relation.proof != proof(relation.kind, structural) ||
+        relation.obligations != obligations(relation.kind, relation.proof)
       then
         fail(
           "relationship requires exact owned clock operands, fields, proof and obligations",
@@ -183,22 +238,13 @@ private[nodal] object ClockRelationshipModel:
           fail("distinct gate or mux producers cannot acquire Same from metadata", relation.path)
         union(source.path, destination.path)
       if relation.kind == "same" || relation.kind == "ratio" then
-        val ratio = if relation.kind == "same" then a.one
-        else
-          if relation.multiply.get <= 0 || relation.divide.get <= 0 then
-            fail("ratio requires positive int32 multiply and divide", relation.path)
-          a.integer(relation.divide.get) / a.integer(relation.multiply.get)
-        val phase = if relation.kind == "same" then a.zero
-        else
-          val value = relation.phase.get
-          val double = value.toDoubleOption.filter(java.lang.Double.isFinite).getOrElse(fail(
-            "phase requires finite canonical Double decimal",
-            relation.path
-          ))
-          if java.lang.Double.toString(double) != value then
-            fail("phase requires canonical Double decimal spelling", relation.path)
-          (a.decimal(value) / a.integer(360)).modulo(a.one)
-        constraints += Constraint(source.path, destination.path, ratio, phase, relation.path)
+        constraints += Constraint(
+          source.path,
+          destination.path,
+          normalized.period,
+          normalized.phase,
+          relation.path
+        )
     // Exact physical aliases are zero-phase timing constraints, not an implicit Same declaration.
     endpoints.groupBy(e => (e.owner, e.identity, e.edge)).values.foreach: aliases =>
       val ordered = aliases.sortBy(_.path)
@@ -297,3 +343,107 @@ private[nodal] object ClockRelationshipModel:
           "contradictory relationship claims on one physical clock pair",
           kinds.values.toVector.sortBy(_.path).head.path
         )
+
+    private val asynchronousPairs = relations.filter(_.kind == "asynchronous").map(r =>
+      pair(timing.representative(r.source), timing.representative(r.destination))
+    ).toSet
+
+    // One producer record retains independent coordinate witnesses, at most one per
+    // timing component (the two active-edge groups for a valid physical clock).
+    // Query-only evaluation preserves global admission and keeps conflicts explicit.
+    private val frequencySources = endpoints.filter(e => absolute.contains(components(e.path)))
+      .groupBy(e => (e.owner, e.identity)).view.mapValues(values =>
+        values.groupBy(e => components(e.path)).values.map(_.minBy(_.path).path).toVector.sorted
+      ).toMap
+
+    /** Check a boundary rationale against independent facts. This neither joins components nor
+      * records claims: even a successful Same rationale is not ordinary sampling permission.
+      */
+    def verifyBoundaryIntent(
+        source: String,
+        destination: String,
+        intent: RelationIntent,
+        diagnosticPath: String
+    ): Unit =
+      val previousPath = activePath
+      activePath = diagnosticPath
+      try
+        val normalized = a.normalize(intent)
+        val left =
+          nodes.getOrElse(source, fail("intent source is not an actual owned domain", activePath))
+        val right = nodes.getOrElse(
+          destination,
+          fail("intent destination is not an actual owned domain", activePath)
+        )
+        if left.owner != right.owner || !Set("rising", "falling")(left.edge) ||
+          !Set("rising", "falling")(right.edge)
+        then fail("intent endpoints require exact ownership and valid active edges", activePath)
+        if intent.kind == "same" && left.edge != right.edge then
+          fail("Same boundary intent contradicts different active edges", activePath)
+        def frequency(endpoint: Endpoint): Option[Rational] =
+          var known: Option[Rational] = None
+          frequencySources.getOrElse((endpoint.owner, endpoint.identity), Vector.empty).foreach:
+            path =>
+              val value = a.one / (absolute(components(path)) * periods(path))
+              if known.exists(_ != value) then
+                fail(
+                  "physical clock has inconsistent independently inferred frequencies",
+                  activePath
+                )
+              known = Some(value)
+          known
+        val sourceFrequency = frequency(left)
+        val destinationFrequency = frequency(right)
+        val known =
+          pairKinds.get(pair(claims.representative(source), claims.representative(destination)))
+        def has(kind: String): Boolean = known.exists(_.contains(kind))
+        if Set("same", "ratio", "synchronous")(intent.kind) &&
+          asynchronousPairs(pair(timing.representative(source), timing.representative(destination)))
+        then
+          fail(
+            "boundary intent contradicts independently known asynchronous classification",
+            activePath
+          )
+        if intent.kind == "same" && has("mutually_exclusive") then
+          fail("Same boundary intent contradicts independently known exclusion", activePath)
+        if intent.kind == "asynchronous" &&
+          (left.identity == right.identity ||
+            timing.representative(source) == timing.representative(destination))
+        then
+          fail(
+            "asynchronous boundary intent contradicts independently known timing or Same",
+            activePath
+          )
+        if intent.kind == "mutually_exclusive" &&
+          (same.representative(source) == same.representative(destination) ||
+            left.identity == right.identity)
+        then fail("exclusive boundary intent contradicts physical identity or Same", activePath)
+        if intent.kind == "synchronous" then
+          known.flatMap(_.get("synchronous")).foreach: prior =>
+            if prior.phaseKnown != intent.phaseKnown then
+              fail(
+                "boundary intent contradicts independently known synchronous phase knowledge",
+                activePath
+              )
+        if intent.kind == "same" || intent.kind == "ratio" then
+          if left.identity == right.identity && normalized.period != a.one then
+            fail("boundary intent contradicts the frequency of one physical clock", activePath)
+          if components(source) == components(destination) then
+            val expected = periods(source) * normalized.period
+            if periods(destination) != expected ||
+              !(offsets(destination) - offsets(source) - expected * normalized.phase).modulo(
+                expected
+              ).isZero
+            then
+              fail(
+                "boundary intent contradicts independently known exact period or phase",
+                activePath
+              )
+          else
+            for
+              sourceKnown <- sourceFrequency
+              destinationKnown <- destinationFrequency
+            do
+              if sourceKnown != destinationKnown * normalized.period then
+                fail("boundary intent contradicts independently known frequencies", activePath)
+      finally activePath = previousPath

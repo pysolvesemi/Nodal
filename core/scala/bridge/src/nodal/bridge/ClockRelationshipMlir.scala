@@ -73,6 +73,12 @@ private[nodal] object ClockRelationshipMlir:
     private val index = new ClockRelationshipModel.Index(endpoints, relationships, fail)
     def permitsSampling(source: String, destination: String): Boolean =
       index.permitsSampling(source, destination)
+    def verifyBoundaryIntent(
+        source: String,
+        destination: String,
+        intent: ClockRelationshipModel.RelationIntent,
+        path: String
+    ): Unit = index.verifyBoundaryIntent(source, destination, intent, path)
     def roots(module: String): Vector[String] =
       relationships.filter(r => byPath(r.destination).owner == module)
         .flatMap(r => Vector(r.sourceClock, r.destinationClock)).distinct

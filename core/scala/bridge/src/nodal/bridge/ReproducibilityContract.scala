@@ -377,6 +377,8 @@ private[nodal] object ReproducibilityContract:
           "stages" -> number(reset.stages),
           "inputs" -> array(reset.inputs.map(string))
         )
+      ) ++ value.waiver.toVector.map(waiver =>
+        "waiver" -> obj(waiverFields(waiver)*)
       ) ++ value.crossing.toVector.map(crossing =>
         "crossing" -> obj(
           "kind" -> string(crossing.kind),
@@ -729,7 +731,31 @@ private[nodal] object ReproducibilityContract:
         )
     array(entries)
 
+  private def waiverFields(waiver: KernelExecutableWaiverSnapshot): Vector[(String, JsonValue)] =
+    Vector(
+      "contract" -> string(waiver.contract),
+      "id" -> string(waiver.id),
+      "reason" -> string(waiver.reason),
+      "source_domain" -> string(waiver.sourceDomain),
+      "destination_domain" -> string(waiver.destinationDomain),
+      "relation" -> obj(
+        "kind" -> string(waiver.relation.kind),
+        "multiply" -> waiver.relation.multiply.map(number).getOrElse(JNull),
+        "divide" -> waiver.relation.divide.map(number).getOrElse(JNull),
+        "phase" -> optionalString(waiver.relation.phase),
+        "phase_known" -> waiver.relation.phaseKnown.map(bool).getOrElse(JNull)
+      ),
+      "obligations" -> obj(waiver.obligations.map((name, value) => name -> string(value))*)
+    )
+
   private def crossingReport(snapshot: ConstructionSnapshot): JsonValue =
+    val executableWaivers = snapshot.digitalExpressions.filter(_.waiver.nonEmpty).sortBy(_.path)
+      .map: expression =>
+        obj((Vector(
+          "record_kind" -> string("executable_waiver"),
+          "semantic_path" -> string(expression.path),
+          "source_value" -> string(expression.operands.head)
+        ) ++ waiverFields(expression.waiver.get))*)
     val executableEntries = snapshot.digitalExpressions.filter(_.crossing.nonEmpty).sortBy(_.path)
       .map: expression =>
         val crossing = expression.crossing.get
@@ -790,7 +816,9 @@ private[nodal] object ReproducibilityContract:
           "name" -> string(entry.name),
           "origin" -> string(entry.origin)
         )
-    array(executableEntries ++ originEntries ++ waiverEntries ++ generatedEntries)
+    array(
+      executableEntries ++ executableWaivers ++ originEntries ++ waiverEntries ++ generatedEntries
+    )
 
   /** Artifact projection of the authoritative snapshot graph; these fields are provenance, never an
     * additional binding or shape proof owner.

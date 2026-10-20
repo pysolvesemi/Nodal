@@ -21,6 +21,7 @@ private[nodal] object DigitalValueConstruction:
           operation == StructuralIfRuntime.Operation ||
           operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
           ExecutableCrossingContract.Operations(operation) ||
+          operation == ExecutableWaiverContract.Operation ||
           OwnedClockContract.Operations(operation) ||
           Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) ||
           FlatFsmRuntime.Operations(operation))
@@ -37,6 +38,7 @@ private[nodal] object DigitalValueConstruction:
       argumentPaths: Set[String],
       memoryPort: KernelExpr[?] => Option[KernelMemoryPortSnapshot],
       crossing: KernelExpr[?] => Option[KernelExecutableCrossingSnapshot],
+      waiver: KernelExpr[?] => Option[KernelExecutableWaiverSnapshot],
       reset: KernelExpr[?] => Option[KernelResetSnapshot],
       clock: KernelExpr[?] => Option[KernelClockSnapshot]
   ): (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
@@ -102,6 +104,7 @@ private[nodal] object DigitalValueConstruction:
               operation == StructuralIfRuntime.Operation ||
               operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
               ExecutableCrossingContract.Operations(operation) ||
+              operation == ExecutableWaiverContract.Operation ||
               OwnedClockContract.Operations(operation) ||
               (Set("reset_boundary", "rdc_sync", "reset_combine").contains(operation) &&
                 reset(expression).nonEmpty) ||
@@ -216,6 +219,7 @@ private[nodal] object DigitalValueConstruction:
           ),
           memory = memoryPort(expression),
           crossing = crossing(expression),
+          waiver = waiver(expression),
           reset = reset(expression),
           clock = clock(expression)
         )

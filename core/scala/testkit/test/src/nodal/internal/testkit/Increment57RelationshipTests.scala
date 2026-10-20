@@ -198,6 +198,28 @@ object Increment57RelationshipTests extends TestSuite:
       relations,
       (message, path) => throw new IllegalArgumentException(path + ": " + message)
     )
+  private def checkIntent(
+      model: ClockRelationshipModel.Index,
+      intent: ClockRelationshipModel.RelationIntent,
+      valid: Boolean = true,
+      source: String = "a",
+      destination: String = "b"
+  ): Unit =
+    val names = Vector("a", "b", "c", "alias")
+    def permission = names.flatMap(a => names.map(b => model.permitsSampling(a, b)))
+    def timing = scala.util.Try(model.verifyBoundaryIntent(
+      "a",
+      "b",
+      ClockRelationshipModel.intent(ClockRelation.Asynchronous),
+      "probe"
+    )).isSuccess
+    val before = permission
+    val timingBefore = timing
+    val result =
+      scala.util.Try(model.verifyBoundaryIntent(source, destination, intent, "waiver.intent"))
+    assert(result.isSuccess == valid, permission == before, timing == timingBefore)
+    if result.isFailure then assert(result.failed.get.getMessage.startsWith("waiver.intent:"))
+
   val tests = Tests:
     test("external Same has closed actual operands and active stream obligation"):
       val s = capture()
@@ -450,3 +472,234 @@ object Increment57RelationshipTests extends TestSuite:
         val result =
           scala.util.Try(ConstructionKernel.inspect(new RelationshipForgedClockSource(resetCast)))
         assert(result.isFailure, result.failed.get.getMessage.contains("exact scalar Clock"))
+    test("boundary intents remain read only for all six categories without independent proof"):
+      val nodes = Vector(endpoint("a"), endpoint("b"), endpoint("c"))
+      val model = index(nodes, Vector.empty)
+      for relation <- ClockRelation.Same +: categories do
+        checkIntent(model, ClockRelationshipModel.intent(relation))
+      assert(!model.permitsSampling("a", "b"))
+    test("boundary field admission shares canonical kind and bounded arithmetic validation"):
+      val ratio = ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg))
+      ClockRelationshipModel.verifyBoundaryIntentFields(
+        ratio,
+        message => throw new IllegalArgumentException(message)
+      )
+      val malformed = Vector(
+        ratio.copy(kind = "other"),
+        ratio.copy(multiply = None),
+        ratio.copy(multiply = Some(0)),
+        ratio.copy(divide = Some(-1)),
+        ratio.copy(phase = Some("90.00")),
+        ratio.copy(phase = Some("NaN")),
+        ratio.copy(phaseKnown = Some(true)),
+        ClockRelationshipModel.RelationIntent("same", multiply = Some(1)),
+        ClockRelationshipModel.RelationIntent("synchronous")
+      )
+      val model = index(Vector(endpoint("a"), endpoint("b")), Vector.empty)
+      malformed.foreach: intent =>
+        assert(scala.util.Try(ClockRelationshipModel.verifyBoundaryIntentFields(
+          intent,
+          message => throw new IllegalArgumentException(message)
+        )).isFailure)
+        checkIntent(model, intent, valid = false)
+      checkIntent(model, ratio)
+    test("boundary Same and Ratio compare independent exact period and phase"):
+      val nodes = Vector(endpoint("a"), endpoint("b"))
+      val model = index(nodes, Vector(relation("a", "b", "ratio", 2, 1, "90.0")))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(4, 2, 450.deg)))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Same), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1)), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg)))
+    test("boundary independent frequencies constrain period but never invent relative phase"):
+      val nodes =
+        Vector(endpoint("a", frequency = Some("100.0")), endpoint("b", frequency = Some("200.0")))
+      val model = index(nodes, Vector.empty)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg)))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Same), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(3, 1)), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Asynchronous))
+    test("boundary independent frequency constraints include established timing components"):
+      val nodes = Vector(
+        endpoint("a", frequency = Some("100.0")),
+        endpoint("b"),
+        endpoint("c", frequency = Some("400.0"))
+      )
+      val model = index(nodes, Vector(relation("a", "b", "ratio", 2, 1)))
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg)),
+        source = "b",
+        destination = "c"
+      )
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Same),
+        valid = false,
+        source = "b",
+        destination = "c"
+      )
+    test("boundary timing intent cannot contradict normalized asynchronous classification"):
+      val nodes = Vector(endpoint("a"), endpoint("b"), endpoint("c"))
+      val model = index(nodes, Vector(relation("a", "b"), relation("b", "c", "asynchronous")))
+      for relation <-
+          Vector(ClockRelation.Same, ClockRelation.Ratio(1, 1), ClockRelation.Synchronous(true))
+      do
+        checkIntent(
+          model,
+          ClockRelationshipModel.intent(relation),
+          valid = false,
+          destination = "c"
+        )
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Unknown), destination = "c")
+    test("boundary exclusion and physical or Same identity retain their independent facts"):
+      val nodes = Vector(endpoint("a"), endpoint("b"), endpoint("alias", "a"))
+      val same = index(nodes, Vector(relation("a", "b")))
+      checkIntent(
+        same,
+        ClockRelationshipModel.intent(ClockRelation.MutuallyExclusive),
+        valid = false
+      )
+      checkIntent(
+        same,
+        ClockRelationshipModel.intent(ClockRelation.MutuallyExclusive),
+        valid = false,
+        destination = "alias"
+      )
+      checkIntent(
+        same,
+        ClockRelationshipModel.intent(ClockRelation.Ratio(1, 1, 90.deg)),
+        valid = false,
+        destination = "alias"
+      )
+      checkIntent(same, ClockRelationshipModel.intent(ClockRelation.Unknown))
+      val exclusive = index(nodes, Vector(relation("a", "b", "mutually_exclusive")))
+      checkIntent(exclusive, ClockRelationshipModel.intent(ClockRelation.Same), valid = false)
+      checkIntent(exclusive, ClockRelationshipModel.intent(ClockRelation.Ratio(1, 1)))
+    test("boundary synchronous phase knowledge preserves existing global compatibility"):
+      val nodes = Vector(endpoint("a"), endpoint("b"), endpoint("c"))
+      val model = index(
+        nodes,
+        Vector(
+          relation("a", "b", "synchronous", phaseKnown = true),
+          relation("b", "c", "synchronous")
+        )
+      )
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Synchronous(false)),
+        valid = false
+      )
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Asynchronous),
+        valid = false,
+        destination = "c"
+      )
+      val ratio = index(nodes, Vector(relation("a", "b", "ratio", 2, 1)))
+      checkIntent(ratio, ClockRelationshipModel.intent(ClockRelation.Synchronous(false)))
+    test("boundary opposite edges retain correlation and frequency without inferring duty phase"):
+      val nodes = Vector(
+        endpoint("a"),
+        endpoint("b", "a").copy(edge = "falling"),
+        endpoint("c").copy(edge = "falling")
+      )
+      val model = index(nodes, Vector.empty)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Unknown))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Same), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Asynchronous), valid = false)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(1, 1, 90.deg)))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1)), valid = false)
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Asynchronous),
+        destination = "c"
+      )
+    test("boundary Same rationale never merges distinct derived producers"):
+      val nodes = Vector(endpoint("a").copy(external = false), endpoint("b").copy(external = false))
+      val model = index(nodes, Vector.empty)
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Same))
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Asynchronous))
+      assert(scala.util.Try(index(nodes, Vector(relation("a", "b")))).isFailure)
+    test("boundary foreign malformed and missing endpoints reject without mutating permissions"):
+      val nodes = Vector(
+        endpoint("a"),
+        endpoint("b"),
+        endpoint("foreign").copy(owner = "other"),
+        endpoint("bad").copy(edge = "invalid")
+      )
+      val model = index(nodes, Vector.empty)
+      for target <- Vector("foreign", "bad", "missing") do
+        checkIntent(
+          model,
+          ClockRelationshipModel.intent(ClockRelation.Unknown),
+          valid = false,
+          destination = target
+        )
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Same))
+    test("boundary timing connectivity normalizes independent asynchronous exclusions"):
+      val nodes = Vector(endpoint("a"), endpoint("b"), endpoint("c"))
+      val model =
+        index(nodes, Vector(relation("a", "b", "ratio", 2, 1), relation("b", "c", "asynchronous")))
+      for relation <-
+          Vector(ClockRelation.Same, ClockRelation.Ratio(1, 1), ClockRelation.Synchronous(true))
+      do
+        checkIntent(
+          model,
+          ClockRelationshipModel.intent(relation),
+          valid = false,
+          destination = "c"
+        )
+      checkIntent(model, ClockRelationshipModel.intent(ClockRelation.Unknown), destination = "c")
+    test("boundary unannotated opposite-edge alias retains independently known physical frequency"):
+      val nodes = Vector(
+        endpoint("a", frequency = Some("100.0")),
+        endpoint("b", "a").copy(edge = "falling"),
+        endpoint("c", frequency = Some("200.0"))
+      )
+      val model = index(nodes, Vector.empty)
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg)),
+        source = "b",
+        destination = "c"
+      )
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Same),
+        valid = false,
+        source = "b",
+        destination = "c"
+      )
+      checkIntent(
+        model,
+        ClockRelationshipModel.intent(ClockRelation.Ratio(1, 1)),
+        valid = false,
+        source = "b",
+        destination = "c"
+      )
+    test(
+      "boundary physical frequency witnesses include inferred opposite-edge facts without first-match selection"
+    ):
+      val nodes = Vector(
+        endpoint("x", frequency = Some("100.0")),
+        endpoint("a", "osc"),
+        endpoint("b", "osc").copy(edge = "falling"),
+        endpoint("y", frequency = Some("100.0")).copy(edge = "falling"),
+        endpoint("c", frequency = Some("400.0"))
+      )
+      val consistent = index(nodes, Vector(relation("x", "a", "ratio", 2, 1)))
+      checkIntent(
+        consistent,
+        ClockRelationshipModel.intent(ClockRelation.Ratio(2, 1, 90.deg)),
+        source = "b",
+        destination = "c"
+      )
+      val contradictory =
+        index(nodes, Vector(relation("x", "a", "ratio", 2, 1), relation("y", "b", "ratio", 3, 1)))
+      checkIntent(
+        contradictory,
+        ClockRelationshipModel.intent(ClockRelation.Unknown),
+        valid = false,
+        source = "b",
+        destination = "c"
+      )

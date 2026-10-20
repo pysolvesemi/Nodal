@@ -194,6 +194,10 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(throw new IllegalStateException("Cdc.handshake requires active construction"))
       .executableCrossing(value, to, 2, "handshake")
 
+  def waive[A <: Data](value: Expr[A], to: ClockDomain, waiver: CdcWaiver): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.waive requires active construction"))
+      .waive(value, to, waiver)
+
   def stream[A <: Data](payload: Expr[A], valid: Expr[Bool]): Stream[A] =
     active.getOrElse(throw new IllegalStateException("Stream requires active construction"))
       .stream(payload, valid)

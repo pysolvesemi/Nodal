@@ -171,7 +171,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     memory: Option[KernelMemoryPortSnapshot] = None,
     crossing: Option[KernelExecutableCrossingSnapshot] = None,
     reset: Option[KernelResetSnapshot] = None,
-    clock: Option[KernelClockSnapshot] = None
+    clock: Option[KernelClockSnapshot] = None,
+    waiver: Option[KernelExecutableWaiverSnapshot] = None
 )
 
 private[nodal] final case class KernelClockSnapshot(
@@ -207,6 +208,17 @@ private[nodal] final case class KernelExecutableCrossingSnapshot(
     depth: Option[Int] = None,
     identity: Option[String] = None,
     resultRole: String = "payload"
+)
+
+/** Immutable stateless boundary contract; its expression owns the one actual payload operand. */
+private[nodal] final case class KernelExecutableWaiverSnapshot(
+    sourceDomain: String,
+    destinationDomain: String,
+    id: String,
+    reason: String,
+    relation: ClockRelationshipModel.RelationIntent,
+    contract: String,
+    obligations: Vector[(String, String)]
 )
 
 /** Exact declaration association. Address/type proofs remain attached to actual operands. */

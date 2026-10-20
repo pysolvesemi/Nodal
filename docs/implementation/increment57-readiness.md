@@ -1384,3 +1384,38 @@ coverage and alternate-parameter identity rejection remain, and the original
 unconnected child is an explicit negative. No parameter-default equality or F58
 boundary capability was invented. Scoped hierarchy/observation source-location
 gaps are resolved; waivers, events and final F57 integration remain open.
+
+### Owned waiver source and bridge checkpoint
+
+The existing Cdc.waive spelling now captures a distinct owned stateless record,
+exact fixed-whole payload ABI, actual source/destination and authored local
+endpoint identity, bounded UTF-8 ID/reason, typed relation and explicit retained
+obligations. Report descriptors derive from these records, not the reverse.
+The bridge independently resolves real operands and exact fields/types/owners;
+mandatory native proof remains the independent actual attribution/occurrence
+boundary rather than a duplicate bridge CDC engine.
+
+The existing relationship owner provides a read-only typed intent query. It uses
+independent physical identity, frequency, timing, phase and exclusion facts without
+inserting an edge or granting ordinary sampling permission. Opposite active edges
+never become Same, and frequency correlation does not invent phase. Source
+sampling separates destination permission from retained physical lineage, preserving
+upstream crossing identities, Pulse classification and actual combinational
+operands. Waiver reference bookkeeping detects feedback through the exception
+without turning valid projected-write/Interface aliases into invented cycles.
+
+The frozen fourteen-file source/model/bridge slice passes **57/57** focused checks:
+seven waiver source/bridge groups, 46 relationship groups (including fourteen new
+intent groups), and four reproducibility groups. The prior report fixture's
+contradictory self-Asynchronous rationale is retained as a negative; its legal
+executable counterpart uses Same. Exact files/hashes are
+`.work/owned-waiver-source-checkpoint.{paths,sha256}` and the log is
+`.work/owned-waiver-source-tests1.log`. Eleven actual source IR witnesses were
+emitted under `.work/owned-waiver-source`; native/target execution and directly
+affected sampler predecessors remain pending, not claimed from source compilation.
+
+A demonstrated global relationship gap remains separately tracked: frequencies
+derived in distinct opposite-edge timing components for one physical producer
+must be checked consistently. The boundary query rejects that conflict; a focused
+shared-owner global repair is still required before final F57 acceptance. Event
+execution and final integration also remain open. No CI or broad qualification ran.

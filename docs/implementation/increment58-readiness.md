@@ -736,3 +736,42 @@ not claim its acceptance. Logs, commands and hashes remain adjacent to the froze
 compiler. Outer-dependent domains, guarded family declarations, external selected
 family chains, generated symbols and actual retained target loops remain required
 continuation. No F58 checklist completion is inferred.
+
+## Checkpoint 15 — ordinary Interface target boundary adapters
+
+The existing target logical-port plan now consumes complete ordinary digital
+Interface endpoints as well as Port declarations. Exact endpoint/member identity
+and selected-role direction determine pins, not the first monitor/member view.
+Existing Interface dependency facts supply drive/connect aliases; complete
+contracts are borrowed once per original definition, while per-material-variant
+pin emission stays separate. Symbolic outer arrays and nested Struct/Vec payloads
+reuse the named-field split/join and inverse maps, parameter DAG and collision-safe
+names. Missing/undriven outputs, untyped legacy endpoints and unsupported locally
+driven declared inputs fail transactionally rather than disappearing from output.
+
+The matched final compiler passes **202/202** target cases: symbolic/Interface 31,
+sequential 149 and hierarchy 22. Twelve new Interface cases include complete
+unaccessed inventories, first-monitor-view direction, exact symbolic payloads,
+name collisions, malformed payload maps and unsupported-profile diagnostics.
+The frozen compiler `.work/f58-interface-target/final/nodalc` has SHA256
+`0a34866460df1e4ac0ee20c1622fe3e212ca2ade5e0c101d4703add814313202`;
+production/test manifests match before/after. Earlier fixture errors and the
+exact diagnostic mismatch are retained, not treated as successful acceptance.
+
+All **11 actual-source waveform profiles** pass on this compiler: four fresh
+maintained Interface array/payload early/late exports, both aggregate profiles and
+five concrete hierarchy predecessors. Each Interface/aggregate profile exercises
+two parameter configurations. The Interface benches observe independent payload,
+valid and array fields plus actual child input pins. Gate/lowering/firtool/Icarus
+commands and input/output/tool hashes are retained under
+`.work/f58-interface-target/maintained-waveform-final`,
+`aggregate-predecessors-final` and `concrete-predecessors-final`. The additive
+maintained exporter was strictly compiled against checkpoint-13 shared classes;
+its four outputs match those actual existing public-source fixtures exactly.
+
+This is ordinary digital Interface target support, not resolved/inout/conservative
+or control Interface target support, general generated loops, portable-Verilog
+qualification or completion of fixed-Struct CDC inverse adaptation. Those required
+continuations and pinned generate-consumer limitations remain explicit in the
+existing gates. Markdown, Python syntax and diff checks pass; no F58 completion
+box changes.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Execute actual Scala-exported F58 hierarchy through Nodal, CIRCT and Icarus.
 
-Only the testbench is handwritten. The DUT is always generated from the maintained
-Increment58HierarchyTargetReplay public-source fixtures.
+Only the testbench is handwritten. The DUT is always generated from the selected
+maintained Scala source replay, including hierarchy, aggregate and Interface fixtures.
 """
 from __future__ import annotations
 
@@ -17,6 +17,110 @@ import subprocess
 PROFILES = ("shared", "nested", "material", "resetless", "inherited-release")
 AGGREGATE_PROFILES = ("aggregate-early", "aggregate-late")
 SYMBOLIC_PROFILES = ("scalar-early", "scalar-late", "vector-early", "vector-late")
+INTERFACE_PROFILES = ("interface-array-early", "interface-array-late",
+                      "interface-payload-early", "interface-payload-late")
+GENERIC_PROFILES = SYMBOLIC_PROFILES + AGGREGATE_PROFILES + INTERFACE_PROFILES
+NAMED_PROFILES = AGGREGATE_PROFILES + tuple(p for p in INTERFACE_PROFILES if "payload" in p)
+
+
+
+def interface_bench(profile: str, top: str) -> str:
+    instances = []
+    for name, parameter, count in (("wide", 4, 3), ("narrow", 2, 1)):
+        bits = parameter + 1
+        if profile.startswith("interface-array"):
+            instances.append(f"""
+reg [{bits - 1}:0] {name}_data = 0;
+wire [{bits - 1}:0] {name}_out;
+{top} #(.p({parameter})) {name}(
+ .core_clock(1'b0), .core_reset(1'b0), .input_0({name}_data),
+ .wrong({parameter}'b1), .output__m_4_data({name}_out));
+task check_{name}; begin
+ #1;
+ if ({name}_out !== {name}_data ||
+     {name}.child_instance.incoming__m_4_data !== {name}_data)
+   $fatal(1, "{profile}: {name} exact array member/child input mismatch");
+end endtask
+integer {name}_i;
+initial begin
+ if ($bits({name}.output__m_4_data) != {bits} ||
+     $bits({name}.child_instance.incoming__m_4_data) != {bits})
+   $fatal(1, "{profile}: finalized array parameter collapsed");
+ check_{name};
+ for ({name}_i=0; {name}_i<{bits}; {name}_i={name}_i+1) begin
+   {name}_data=1 << {name}_i; check_{name};
+ end
+ {name}_data='1; check_{name};
+ {name}_data='x; check_{name};
+ {name}_data=0; check_{name};
+end
+""")
+            continue
+        instances.append(f"""
+reg [{bits - 1}:0] {name}_tag = 0;
+reg [{2 * bits - 1}:0] {name}_lanes = 0;
+reg {name}_valid = 0;
+reg [{count * bits - 1}:0] {name}_array_tag = 0;
+reg [{2 * count * bits - 1}:0] {name}_array_lanes = 0;
+reg [{count - 1}:0] {name}_array_valid = 0;
+wire [{bits - 1}:0] {name}_tag_out;
+wire [{2 * bits - 1}:0] {name}_lanes_out;
+wire {name}_valid_out;
+wire [{count * bits - 1}:0] {name}_array_tag_out;
+wire [{2 * count * bits - 1}:0] {name}_array_lanes_out;
+wire [{count - 1}:0] {name}_array_valid_out;
+{top} #(.p({parameter}), .n({count}), .other(3)) {name}(
+ .core_clock(1'b0), .data__f_3_tag({name}_tag), .data__f_5_lanes({name}_lanes),
+ .valid({name}_valid), .wrong__f_3_tag(4'h9), .wrong__f_5_lanes(8'h36),
+ .arrayData__f_3_tag({name}_array_tag), .arrayData__f_5_lanes({name}_array_lanes),
+ .arrayValid({name}_array_valid),
+ .output__m_7_request_5_valid({name}_valid_out),
+ .output__m_7_request_7_payload__f_3_tag({name}_tag_out),
+ .output__m_7_request_7_payload__f_5_lanes({name}_lanes_out),
+ .array__m_7_request_5_valid({name}_array_valid_out),
+ .array__m_7_request_7_payload__f_3_tag({name}_array_tag_out),
+ .array__m_7_request_7_payload__f_5_lanes({name}_array_lanes_out));
+task check_{name}; begin
+ #1;
+ if ({{{name}_tag_out,{name}_lanes_out,{name}_valid_out,
+       {name}_array_tag_out,{name}_array_lanes_out,{name}_array_valid_out}} !==
+     {{{name}_tag,{name}_lanes,{name}_valid,
+       {name}_array_tag,{name}_array_lanes,{name}_array_valid}})
+   $fatal(1, "{profile}: {name} distinct Interface member/field mismatch");
+ if ({name}.child_instance.incoming__m_7_request_5_valid !== {name}_valid ||
+     {name}.child_instance.incoming__m_7_request_7_payload__f_3_tag !== {name}_tag ||
+     {name}.child_instance.incoming__m_7_request_7_payload__f_5_lanes !== {name}_lanes)
+   $fatal(1, "{profile}: {name} exact child input direction/field mismatch");
+end endtask
+integer {name}_i;
+initial begin
+ if ($bits({name}.array__m_7_request_7_payload__f_5_lanes) != {2 * count * bits} ||
+     $bits({name}.output__m_7_request_7_payload__f_3_tag) != {bits} ||
+     $bits({name}.child_instance.incoming__m_7_request_7_payload__f_5_lanes) != {2 * bits})
+   $fatal(1, "{profile}: generic Interface payload dimensions collapsed");
+ check_{name};
+ {name}_tag='1; check_{name};
+ {name}_lanes='h2d; check_{name};
+ {name}_valid=1; check_{name};
+ for ({name}_i=0; {name}_i<{count}; {name}_i={name}_i+1) begin
+   {name}_array_tag[{name}_i*{bits} +: {bits}]={name}_i+2; check_{name};
+   {name}_array_valid[{name}_i]=1; check_{name};
+ end
+ for ({name}_i=0; {name}_i<{2 * count}; {name}_i={name}_i+1) begin
+   {name}_array_lanes[{name}_i*{bits} +: {bits}]={name}_i+5; check_{name};
+ end
+ {name}_valid=0; check_{name};
+ {name}_tag='x; check_{name};
+ {name}_tag=0; {name}_lanes=~{name}_lanes; check_{name};
+ {name}_array_lanes=~{name}_array_lanes; check_{name};
+ {name}_array_valid=0; check_{name};
+end
+""")
+    return "module tb;\n" + "\n".join(instances) + f"""
+initial begin #100; $display("HIERARCHY_TARGET_PASS {profile}"); $finish; end
+initial begin #1000; $fatal(1,"timeout"); end
+endmodule
+"""
 
 
 def aggregate_bench(profile: str, top: str) -> str:
@@ -80,6 +184,8 @@ endmodule
 
 
 def bench(profile: str, top: str) -> str:
+    if profile in INTERFACE_PROFILES:
+        return interface_bench(profile, top)
     if profile in AGGREGATE_PROFILES:
         return aggregate_bench(profile, top)
     if profile in SYMBOLIC_PROFILES:
@@ -194,7 +300,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--case", choices=PROFILES + SYMBOLIC_PROFILES + AGGREGATE_PROFILES, action="append")
+    parser.add_argument("--case", choices=PROFILES + GENERIC_PROFILES, action="append")
     args = parser.parse_args()
     if ".work" not in args.out.resolve().parts:
         parser.error("generated artifacts must remain under ignored .work")
@@ -237,34 +343,53 @@ def main() -> None:
         top = root.group(1) or root.group(2)
         if not re.fullmatch(r"[A-Za-z_]\w*", top):
             raise RuntimeError(f"{profile}: testbench requires a legal exported top identifier")
+        source_fixture = None
+        if profile in INTERFACE_PROFILES:
+            array = profile.startswith("interface-array")
+            expected_top = "HierarchyArrayParent" if array else "HierarchyPayloadParent"
+            source_fixture = ("Increment58InterfaceArrayTests.scala" if array else
+                              "Increment58InterfacePayloadSource.scala")
+            if top != expected_top or source_fixture not in text or '"nodal.interface_boundary"' not in text:
+                raise RuntimeError(f"{profile}: expected exact maintained Interface source replay")
         gated = args.out / f"{profile}.gated.mlir"
         circt = args.out / f"{profile}.circt.mlir"
         sv = args.out / f"{profile}.sv"
         run(profile + "-gate", [str(args.nodalc), str(source), "--nodal-gate-default",
                                "--mlir-print-debuginfo", "-o", str(gated)])
         lowering = ("--nodal-sequential-to-circt=boundary-abi=named-fields"
-                    if profile in AGGREGATE_PROFILES else "--nodal-sequential-to-circt")
+                    if profile in NAMED_PROFILES else "--nodal-sequential-to-circt")
         run(profile + "-lower", [str(args.nodalc), str(gated), lowering,
                                 "--mlir-print-debuginfo", "-o", str(circt)])
         run(profile + "-export", [str(args.firtool), str(circt), "--format=mlir", "--verilog",
                                  "--verify-each", "--disable-all-randomization", "-o", str(sv)])
         design = sv.read_text()
         modules = re.findall(r"^module[ \t]+([A-Za-z_]\w*)\b", design, re.MULTILINE)
-        expected_count = 2 if profile == "shared" or profile in SYMBOLIC_PROFILES + AGGREGATE_PROFILES else 3
+        expected_count = 2 if profile == "shared" or profile in GENERIC_PROFILES else 3
         if top not in modules or len(modules) != expected_count:
             raise RuntimeError(f"{profile}: expected {expected_count} real reusable modules, "
                                f"including {top}; got {modules}")
         if not re.search(r"\bhw\.instance\b", circt.read_text()):
             raise RuntimeError(f"{profile}: no real hierarchical target instances")
-        if profile not in SYMBOLIC_PROFILES + AGGREGATE_PROFILES and "__nodal_required_clock" not in design:
+        if profile not in GENERIC_PROFILES and "__nodal_required_clock" not in design:
             raise RuntimeError(f"{profile}: inferred child requirement clock port missing")
-        if profile in SYMBOLIC_PROFILES + AGGREGATE_PROFILES and not re.search(r"\bparameter\b", design):
+        if profile in GENERIC_PROFILES and not re.search(r"\bparameter\b", design):
             raise RuntimeError(f"{profile}: generic target parameters missing")
         if profile in AGGREGATE_PROFILES:
             for marker in ('named-leaf-vectors', 'row-major-zero-element-lsb',
                            'field_depth = 1', 'field_depth = 2'):
                 if marker not in design:
                     raise RuntimeError(f"{profile}: missing inverse ABI map {marker}")
+        if profile in INTERFACE_PROFILES:
+            lowered = circt.read_text()
+            for marker in ('nodal.boundary_map', 'selected_role = "producer"',
+                           'selected_role = "consumer"', 'access = "out"', 'access = "in"'):
+                if marker not in lowered:
+                    raise RuntimeError(f"{profile}: missing canonical Interface direction/ABI fact {marker}")
+            if "payload" in profile:
+                for marker in ('named-leaf-vectors', 'field_depth = 0', 'field_depth = 1',
+                               'request.valid', 'request.payload'):
+                    if marker not in lowered:
+                        raise RuntimeError(f"{profile}: missing separate member/shape mapping {marker}")
         tb = args.out / f"{profile}.tb.sv"
         tb.write_text(bench(profile, top))
         executable = args.out / f"{profile}.vvp"
@@ -275,8 +400,9 @@ def main() -> None:
             raise RuntimeError(f"{profile}: simulation did not reach its success assertion")
         manifest["cases"].append({
             "name": profile,
-            "boundary_abi": "named-fields" if profile in AGGREGATE_PROFILES else "legacy-packed",
+            "boundary_abi": "named-fields" if profile in NAMED_PROFILES else "legacy-packed",
             "top": top,
+            "source_fixture": source_fixture,
             "modules": modules,
             "input_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "gated_sha256": hashlib.sha256(gated.read_bytes()).hexdigest(),

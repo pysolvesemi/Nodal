@@ -145,6 +145,25 @@ member mapping, waveform behavior and nested/generated-instance occurrence suppo
 remain open. Probe commands, pinned hashes and results are retained under
 `.work/f58-generate-target-probe/`.
 
+### Symbolic packed slicing and pinned consumer limitation
+
+The CIRCT 1.154.0 probe also covers symbolic packed captures and per-lane output
+slices around that real helper-instance loop. Its native
+`sv.indexed_part_select_inout` verifier/exporter does not support the required
+symbolic `hw.int` carrier in this pinned build; a generic operation spelling
+reaches a verifier assertion. A fixed-width carrier probe passes, but replacing
+symbolic widths by defaults or maximum bounds is not a permitted workaround.
+
+A narrow target-owned adapter probe instead uses a typed `sv.verbatim.expr` with
+a fixed compiler format, SSA carrier and index operands, and a verified literal
+slice width. Its format contains no authored names, source expression strings or
+unverified metadata. It preserves the actual loop induction and exact inout slice,
+and the unmodified emitted helper/loop SystemVerilog passes firtool and Slang.
+This is primitive feasibility, not implemented Nodal generated lowering or a
+waveform result. Icarus 12 still rejects the legal named outer generate end label;
+no emitted SystemVerilog rewrite or handwritten DUT substitutes for that missing
+consumer. Actual generated behavior and a capable waveform consumer remain open.
+
 ## Qualified public lane witness and staged evidence
 
 The maintained public [lane witnesses](../../core/scala/testkit/test/src/nodal_external/Increment58GeneratedLaneRegisters.scala)
@@ -167,8 +186,14 @@ compiler SHA-256
 They cover the original lane composition, ordinary Module/Area structural updates,
 readonly selection, guarded nested callback captures, and both exact lane witnesses.
 Commands and outputs remain under `.work/f58-generated-areas/maintained-third/`.
-This isolated evidence does not substitute for the pending matched shared-source
-suite, actual emitted target structure or waveform behavior.
+Subsequently, the actual shared-source `Increment58GeneratedAreaTests` passed all
+14 groups, and the maintained six-case replay from those shared classes passed
+the full default native gate with compiler
+`ef01aec403d9c0db760c7efa90ae71f22ad8c352ab4144a726dca29d7fc2460d`.
+The source/compiler hashes and all six exit statuses are recorded under
+`.work/f58-generated-areas/shared-checkpoint/receipt.json`; the exact Bits symbolic
+and concrete-three input hashes are unchanged. Neither admission result claims
+actual emitted target structure or waveform behavior.
 
 `preserveConstantLoops=true` is required but is not yet an implemented target
 option. The target owner will implement that option and the concrete-bound

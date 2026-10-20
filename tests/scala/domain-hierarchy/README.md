@@ -69,3 +69,26 @@ complete input/output bit patterns. It requires exactly two reusable module
 bodies and real hierarchical instances. This is a whole-value scalar/packed-Vec
 witness, not generated Area, symbolic operation, Struct adapter or Interface
 target qualification.
+
+## Ordinary Interface boundaries
+
+`Increment58InterfaceTargetReplay` exports four opt-in cases:
+`interface-array-early`, `interface-array-late`, `interface-payload-early` and
+`interface-payload-late`. The actual constructors are `HierarchyArrayParent` in
+`Increment58InterfaceArrayTests.scala` and the external `HierarchyPayloadParent`
+in `Increment58InterfacePayloadSource.scala`. Early/late orders the exact child
+parameter overrides around projection, without modifying the source semantics.
+
+Use the same replay command with that class, then invoke this runner with the four
+explicit `--case` arguments. Array cases keep the legacy packed scalar-Vec ABI;
+payload cases explicitly request `boundary-abi=named-fields`. The runner records
+that choice and input/compiler/output hashes, requires two real reusable modules,
+and checks retained selected roles, directions and inverse shape metadata.
+
+Each generated root is instantiated at two legal parameter settings. Independent
+valid, tag, payload-lane and outer-array patterns check member separation and
+four-state forwarding; separate observations of the actual child's input pins
+check the boundary-facing direction rather than accepting symmetric output
+pass-through alone. Only the testbench is handwritten. These witnesses do not
+claim resolved/inout, analog/control Interface, generated-loop or fixed-Struct CDC
+support under the named-field profile.

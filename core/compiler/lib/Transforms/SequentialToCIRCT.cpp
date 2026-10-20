@@ -15,6 +15,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/CrossingModel.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
@@ -134,19 +135,41 @@ struct DomainPortPlan {
   StringAttr edge, policy, polarity;
   std::string clockName, resetName;
 };
+// One target-local port inventory, shared by ordinary ports, Interface leaves,
+// instances and later generated-template adapters. Keys retain exact declarations;
+// the canonical semantic models still own types, roles and driver provenance.
+using LogicalPortKey = std::pair<Operation *, Attribute>;
+using InstanceLogicalPortKey = std::pair<Operation *, LogicalPortKey>;
+struct LogicalPortPlan {
+  LogicalPortKey key;
+  Type originalType, targetType;
+  StringAttr name;
+  bool input = false;
+  DictionaryAttr interfaceContract;
+  SmallVector<Value> references;
+  SmallVector<StringAttr> pins;
+};
+struct LogicalPortSignature {
+  LogicalPortKey key;
+  bool input;
+  unsigned pins;
+};
 struct ModuleVariantPlan {
   nodal::ModuleOp source;
   unsigned occurrence = 0;
   std::string signature, name;
   SmallVector<DomainPortPlan> domains;
   llvm::DenseMap<Operation *, unsigned> children;
-  llvm::DenseMap<Operation *, unsigned> portLeafCounts;
+  SmallVector<LogicalPortSignature, 0> ports;
   circt::hw::HWModuleOp target;
 };
 struct HierarchyTargetPlan {
   std::shared_ptr<HierarchyModel> proof;
   SmallVector<ModuleVariantPlan> variants;
   SmallVector<unsigned> occurrenceVariants;
+  // Borrowed endpoint facts are collected once per original definition, even
+  // when material clock/reset variants emit separate physical module bodies.
+  llvm::DenseMap<Operation *, std::unique_ptr<SmallVector<DigitalInterfaceEndpoint>>> interfaces;
 
   LogicalResult build(mlir::ModuleOp input) {
     auto checked = HierarchyModel::create(input);
@@ -309,7 +332,7 @@ public:
 
   LogicalResult preflight() {
     if (failed(domains.verifyRelationships()) || failed(planControlProjections()) ||
-        failed(planParameters()))
+        failed(planParameters()) || failed(planInterfaces()))
       return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
@@ -323,7 +346,8 @@ public:
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
         if (aggregate &&
-            !isa<PortValueOp, InstancePortOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp,
+            !isa<PortValueOp, InstancePortOp, MemberAccessOp, InterfaceDriveOp, InterfaceConnectOp,
+                 InterfaceObserveOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp,
                  EventProcessOp>(op) &&
             !(isa<DigitalExprOp>(op) &&
               (text(&op, "operator_name") == "digital_alias" ||
@@ -355,7 +379,9 @@ public:
             return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
                 targetValueType(type));
           });
-      if (symbolic && !isa<PortValueOp, InstancePortOp, DigitalAssignOp>(op) &&
+      if (symbolic &&
+          !isa<PortValueOp, InstancePortOp, MemberAccessOp, InterfaceDriveOp, InterfaceConnectOp,
+               InterfaceObserveOp, DigitalAssignOp>(op) &&
           !(isa<DigitalStorageOp>(op) && text(&op, "kind") == "wire") &&
           !(isa<DigitalExprOp>(op) &&
             llvm::is_contained(
@@ -398,11 +424,30 @@ public:
         auto boundary = inspectInstancePort(&op);
         if (!hierarchy || failed(boundary))
           return reject(&op, "digital instance boundary requires its checked hierarchy plan");
-        instancePortValues[{boundary->instance, boundary->port}].push_back(op.getResult(0));
+        instancePortValues[{boundary->instance, {boundary->port, Attribute()}}].push_back(
+            op.getResult(0));
         if (auto type = dyn_cast<circt::hw::StructType>(targetValueType(op.getResult(0).getType())))
           expansion += 2 * type.getElements().size();
         if (text(&op, "direction") == "input")
           seeds.emplace_back(op.getResult(0), &op);
+      } else if (isa<MemberAccessOp>(op)) {
+        auto reference = op.getAttrOfType<FlatSymbolRefAttr>("instance");
+        Operation *endpoint = reference ? SymbolTable::lookupSymbolIn(source, reference) : nullptr;
+        auto found = interfaceEndpoints.find(endpoint);
+        if (found == interfaceEndpoints.end())
+          return reject(&op, "Interface access requires its complete checked endpoint");
+        const auto &facts = endpoints[found->second];
+        auto path = op.getAttrOfType<StringAttr>("path");
+        LogicalPortKey key{facts.declaration, path};
+        if (facts.instance)
+          instancePortValues[{facts.instance, key}].push_back(op.getResult(0));
+        else
+          interfacePortValues[key].push_back(op.getResult(0));
+        interfaceValues.insert(op.getResult(0));
+        seeds.emplace_back(op.getResult(0), &op);
+      } else if (isa<InterfaceDriveOp, InterfaceConnectOp, InterfaceObserveOp>(op)) {
+        // The existing dependency graph owns sink orientation and exact drivers.
+        expansion = 0;
       } else if (isa<InstanceOp>(op)) {
         if (!variant || !variant->children.count(&op))
           return reject(&op, "hierarchy target requires an exact verified child variant");
@@ -553,14 +598,15 @@ public:
     for (Operation *reg : registers)
       if (!updates.count(reg->getResult(0)))
         return reject(reg, "declaration-only register lacks an executable physical binding/update");
-    for (Operation *port : ports)
-      if (text(port, "direction") == "output" && portValues[port].empty())
-        return reject(port, "output has no actual value/driver; no output is invented");
+    if (failed(planLogicalPorts()))
+      return failure();
+    for (const auto &port : logicalPorts)
+      if (!port.input && port.references.empty())
+        return reject(port.key.first, "output has no actual value/driver; no output is invented");
     for (Operation *instance : instances) {
       const auto &child = hierarchy->variants[variant->children.lookup(instance)];
-      for (Operation &op : child.source->getRegion(0).front())
-        if (isa<PortOp>(op) && text(&op, "direction") == "input" &&
-            !instancePortValues.count({instance, &op}))
+      for (const auto &port : child.ports)
+        if (port.input && !instancePortValues.count({instance, port.key}))
           return reject(instance, "target instance input requires an explicit typed connection");
       for (const auto &port : child.domains)
         if (!instanceBindings.count({instance, port.requirement}))
@@ -589,6 +635,15 @@ public:
     // of mutable driver facts or reimplementing physical overlap/coverage.
     for (unsigned i = 0; i < seeds.size(); ++i) {
       const auto &root = graph->nodes[graph->roots[i]];
+      if (interfaceValues.contains(seeds[i].first)) {
+        if (root.dependencies.empty())
+          continue; // Exact local input/child output, mapped from its physical pin below.
+        if (root.dependencies.size() != 1 || !graph->nodes[root.dependencies.front()].value)
+          return reject(seeds[i].first.getDefiningOp(),
+                        "ordinary Interface requires one canonical value driver");
+        aliases.try_emplace(seeds[i].first, graph->nodes[root.dependencies.front()].value);
+        continue;
+      }
       if (root.eventProcess)
         continue; // A verified event output reads persistent old state, not its writer.
       if (root.dependencies.size() != 1)
@@ -604,8 +659,32 @@ public:
       aliases.try_emplace(seeds[i].first, value);
     }
     llvm::StringSet<> targetNames;
-    for (Operation *port : ports)
-      targetNames.insert(text(port, "sym_name"));
+    for (const auto &port : logicalPorts)
+      if (!port.interfaceContract && !targetNames.insert(port.name.getValue()).second)
+        return reject(port.key.first, "authored target port names collide");
+    for (auto &port : logicalPorts)
+      if (port.interfaceContract) {
+        std::string base = port.name.getValue().str(), name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        port.name = builder.getStringAttr(name);
+      }
+    for (const auto &port : logicalPorts)
+      if (port.input && port.interfaceContract && !port.references.empty() &&
+          aliases.count(port.references.front()))
+        return reject(port.key.first, "ordinary Interface input pin cannot have a local driver");
+    for (const auto &port : logicalPorts)
+      if (!port.input && !aliases.count(port.references.front()) &&
+          !eventUpdates.count(port.key.first))
+        return reject(port.key.first, "output has no canonical driver; no output is invented");
+    for (Operation *instance : instances) {
+      const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+      for (const auto &port : child.ports)
+        if (port.input &&
+            !aliases.count(instancePortValues.find({instance, port.key})->second.front()))
+          return reject(instance, "target instance input has no canonical driver");
+    }
     if (variant)
       for (const auto &port : variant->domains) {
         if (port.clock)
@@ -632,26 +711,26 @@ public:
         materializations.try_emplace(text(decision, "path"), decision);
       }
     }
-    for (Operation *port : ports) {
-      SmallVector<StringAttr> names;
-      if (auto type = dyn_cast<circt::hw::StructType>(portTypes.lookup(port))) {
+    for (auto &port : logicalPorts) {
+      if (auto type = dyn_cast<circt::hw::StructType>(port.targetType)) {
         if (type.getElements().size() > (maximumGeneratedOperations - cost) / 4)
-          return reject(port, "named boundary adapters exceed finite target expansion budget");
+          return reject(port.key.first,
+                        "named boundary adapters exceed finite target expansion budget");
         cost += 4 * type.getElements().size();
         for (const auto &field : type.getElements()) {
-          std::string base = text(port, "sym_name").str() + "__" + field.name.getValue().str();
+          std::string base = port.name.getValue().str() + "__" + field.name.getValue().str();
           std::string name = base;
           unsigned collision = 0;
           while (!targetNames.insert(name).second)
             name = base + "_" + std::to_string(++collision);
-          names.push_back(builder.getStringAttr(name));
+          port.pins.push_back(builder.getStringAttr(name));
         }
       } else
-        names.push_back(port->getAttrOfType<StringAttr>("sym_name"));
-      if (variant)
-        variant->portLeafCounts.try_emplace(port, names.size());
-      physicalPortNames.try_emplace(port, std::move(names));
+        port.pins.push_back(port.name);
     }
+    if (variant)
+      for (const auto &port : logicalPorts)
+        variant->ports.push_back({port.key, port.input, unsigned(port.pins.size())});
     // Reserve generated names after every authored exact name is known.
     // Symbols keep even identical-source chains distinct through target CSE.
     for (const auto &event : events) {
@@ -775,30 +854,27 @@ public:
   LogicalResult lower() {
     SmallVector<circt::hw::PortInfo> targetPorts;
     unsigned inputIndex = 0, outputIndex = 0;
-    for (Operation *port : ports) {
-      Type logicalType = portTypes.lookup(port);
+    for (const auto &port : logicalPorts) {
       SmallVector<Type> types;
-      if (auto structure = dyn_cast<circt::hw::StructType>(logicalType))
+      if (auto structure = dyn_cast<circt::hw::StructType>(port.targetType))
         for (const auto &field : structure.getElements())
           types.push_back(field.type);
       else
-        types.push_back(logicalType);
+        types.push_back(port.targetType);
       for (auto [index, type] : llvm::enumerate(types)) {
         circt::hw::PortInfo info;
-        info.name = physicalPortNames.find(port)->second[index];
+        info.name = port.pins[index];
         info.type = type;
-        bool input = text(port, "direction") == "input";
-        info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
-        info.argNum = input ? inputIndex++ : outputIndex++;
-        info.loc = port->getLoc();
+        info.dir = port.input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
+        info.argNum = port.input ? inputIndex++ : outputIndex++;
+        info.loc = port.key.first->getLoc();
         NamedAttrList attributes;
-        if (!sourcePath(port).empty())
-          attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port)));
-        Type originalType = port->getAttrOfType<TypeAttr>("type").getValue();
-        if (aggregatePayload(originalType) && !isa<circt::hw::StructType>(logicalType))
-          attributes.set("nodal.packed_abi", packedLayout(originalType));
-        if (isa<circt::hw::StructType>(logicalType)) {
-          attributes.set("nodal.logical_port", port->getAttr("sym_name"));
+        if (!sourcePath(port.key.first).empty())
+          attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port.key.first)));
+        if (aggregatePayload(port.originalType) && !isa<circt::hw::StructType>(port.targetType))
+          attributes.set("nodal.packed_abi", packedLayout(port.originalType));
+        if (port.interfaceContract || isa<circt::hw::StructType>(port.targetType)) {
+          attributes.set("nodal.logical_port", port.name);
           attributes.set("nodal.logical_leaf", builder.getI32IntegerAttr(index));
         }
         info.attrs = builder.getDictionaryAttr(attributes);
@@ -838,46 +914,47 @@ public:
       target->setAttr("nodal.domain_variant", builder.getStringAttr(variant->signature));
     }
     SmallVector<Attribute> boundaryMap;
-    for (Operation *port : ports)
-      if (isa<circt::hw::StructType>(portTypes.lookup(port))) {
-        SmallVector<Attribute> pins;
-        for (StringAttr pin : physicalPortNames.find(port)->second)
-          pins.push_back(pin);
-        boundaryMap.push_back(builder.getDictionaryAttr(
-            {builder.getNamedAttr("logical_port", port->getAttr("sym_name")),
-             builder.getNamedAttr("direction", port->getAttr("direction")),
-             builder.getNamedAttr("physical_pins", builder.getArrayAttr(pins)),
-             builder.getNamedAttr(
-                 "layout", packedLayout(port->getAttrOfType<TypeAttr>("type").getValue()))}));
+    for (const auto &port : logicalPorts)
+      if (port.interfaceContract || isa<circt::hw::StructType>(port.targetType)) {
+        SmallVector<Attribute> pins(port.pins.begin(), port.pins.end());
+        NamedAttrList entry;
+        entry.set("logical_port", port.name);
+        entry.set("direction", builder.getStringAttr(port.input ? "input" : "output"));
+        entry.set("physical_pins", builder.getArrayAttr(pins));
+        if (aggregatePayload(port.originalType))
+          entry.set("layout", packedLayout(port.originalType));
+        if (port.interfaceContract)
+          entry.set("interface", port.interfaceContract);
+        boundaryMap.push_back(builder.getDictionaryAttr(entry));
       }
     if (!boundaryMap.empty())
       target->setAttr("nodal.boundary_map", builder.getArrayAttr(boundaryMap));
     correlate(target, source);
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
-    for (Operation *port : ports) {
-      Type type = port->getAttrOfType<TypeAttr>("type").getValue();
-      if (!aggregatePayload(type))
+    for (const auto &port : logicalPorts) {
+      if (!aggregatePayload(port.originalType))
         continue;
       std::string contract;
       llvm::raw_string_ostream stream(contract);
-      stream << "// NODAL packed ABI: " << text(port, "sym_name")
-             << "; layout=recursive-row-major-fields-lsb-first; " << packedLayout(type);
-      auto comment =
-          circt::sv::VerbatimOp::create(builder, port->getLoc(), builder.getStringAttr(contract),
-                                        ValueRange{}, builder.getArrayAttr({}));
-      correlate(comment, port);
+      stream << "// NODAL packed ABI: " << port.name.getValue()
+             << "; layout=recursive-row-major-fields-lsb-first; "
+             << packedLayout(port.originalType);
+      auto comment = circt::sv::VerbatimOp::create(builder, port.key.first->getLoc(),
+                                                   builder.getStringAttr(contract), ValueRange{},
+                                                   builder.getArrayAttr({}));
+      correlate(comment, port.key.first);
     }
     circt::BackedgeBuilder backedges(builder, source.getLoc());
     inputIndex = 0;
-    for (Operation *port : ports) {
-      if (text(port, "direction") != "input")
+    for (const auto &port : logicalPorts) {
+      if (!port.input)
         continue;
       SmallVector<Value> leaves;
-      for (unsigned index = 0; index < physicalPortNames.find(port)->second.size(); ++index)
+      for (unsigned index = 0; index < port.pins.size(); ++index)
         leaves.push_back(body->getArgument(inputIndex++));
-      Value joined = joinBoundary(port, portTypes.lookup(port), leaves);
-      for (Value value : portValues[port])
+      Value joined = joinBoundary(port.key.first, port.targetType, leaves);
+      for (Value value : port.references)
         values[value] = joined;
     }
     if (variant)
@@ -911,6 +988,7 @@ public:
     for (Operation &op : source.getBody().front()) {
       if (staticOperations.contains(&op) ||
           isa<PortValueOp, RequirementClockOp, RequirementResetOp>(op) ||
+          (isa<MemberAccessOp>(op) && values.count(op.getResult(0))) ||
           controlProjections.contains(&op) || controlSelectors.contains(&op))
         continue;
       for (Value original : op.getResults()) {
@@ -960,9 +1038,9 @@ public:
       if (!child.target)
         return reject(instance, "target child definition was not materialized before its parent");
       SmallVector<Value> inputs;
-      for (Operation &port : child.source->getRegion(0).front())
-        if (isa<PortOp>(port) && text(&port, "direction") == "input") {
-          auto &references = instancePortValues.find({instance, &port})->second;
+      for (const auto &port : child.ports)
+        if (port.input) {
+          auto &references = instancePortValues.find({instance, port.key})->second;
           auto leaves = splitBoundary(instance, values.lookup(references.front()));
           llvm::append_range(inputs, leaves);
         }
@@ -983,19 +1061,16 @@ public:
       correlate(targetInstance, instance);
       targetInstance->setAttr("nodal.domain_bindings", instance->getAttr("domain_bindings"));
       unsigned result = 0;
-      for (Operation &port : child.source->getRegion(0).front())
-        if (isa<PortOp>(port) && text(&port, "direction") == "output") {
-          auto references = instancePortValues.find({instance, &port});
+      for (const auto &port : child.ports)
+        if (!port.input) {
+          auto references = instancePortValues.find({instance, port.key});
           if (references == instancePortValues.end()) {
-            result += child.portLeafCounts.lookup(&port);
-            continue; // A real output may be intentionally unobserved.
+            result += port.pins;
+            continue; // A real complete output may intentionally be unobserved.
           }
           Type actualType = targetValueType(references->second.front().getType());
-          unsigned count = isa<circt::hw::StructType>(actualType)
-                               ? cast<circt::hw::StructType>(actualType).getElements().size()
-                               : 1;
           SmallVector<Value> leaves;
-          for (unsigned index = 0; index < count; ++index)
+          for (unsigned index = 0; index < port.pins; ++index)
             leaves.push_back(targetInstance.getResult(result++));
           Value joined = joinBoundary(instance, actualType, leaves);
           for (Value reference : references->second)
@@ -1312,8 +1387,9 @@ public:
       if (!op.getNumResults() || staticOperations.contains(&op) ||
           controlProjections.contains(&op) || controlSelectors.contains(&op) ||
           named(&op, "nodal.clock_gate") || named(&op, "nodal.clock_mux") ||
-          isa<DigitalStorageOp, PortValueOp, InstancePortOp, RequirementClockOp, RequirementResetOp,
-              CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op))
+          isa<DigitalStorageOp, PortValueOp, InstancePortOp, MemberAccessOp, RequirementClockOp,
+              RequirementResetOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
+              ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -1428,9 +1504,9 @@ public:
       correlate(assertion, &op);
     }
     SmallVector<Value> outputs;
-    for (Operation *port : ports)
-      if (text(port, "direction") == "output") {
-        auto leaves = splitBoundary(port, values.lookup(portValues[port].front()));
+    for (const auto &port : logicalPorts)
+      if (!port.input) {
+        auto leaves = splitBoundary(port.key.first, values.lookup(port.references.front()));
         llvm::append_range(outputs, leaves);
       }
     body->getTerminator()->setOperands(outputs);
@@ -1440,6 +1516,118 @@ public:
   }
 
 private:
+  LogicalResult planInterfaces() {
+    bool hasEndpoints = false;
+    for (Operation &op : source.getBody().front()) {
+      if (isa<InterfaceOp, InterfaceInstanceOp, InterfaceBoundaryOp, InterfaceAbiOp>(op))
+        staticOperations.insert(&op);
+      if (isa<InterfaceInstanceOp, InterfaceBoundaryOp>(op)) {
+        if (!hasDigitalInterfaceContract(&op))
+          return reject(&op, "target requires fully typed Interface endpoint contracts");
+        hasEndpoints = true;
+      }
+    }
+    if (!hasEndpoints)
+      return success();
+    if (hierarchy) {
+      auto found = hierarchy->interfaces.find(source);
+      if (found == hierarchy->interfaces.end()) {
+        auto collected = std::make_unique<SmallVector<DigitalInterfaceEndpoint>>();
+        if (failed(collectDigitalInterfaceEndpoints(source, *collected)))
+          return failure();
+        found = hierarchy->interfaces.try_emplace(source, std::move(collected)).first;
+      }
+      endpoints = *found->second;
+    } else {
+      if (failed(collectDigitalInterfaceEndpoints(source, localEndpoints)))
+        return failure();
+      endpoints = localEndpoints;
+    }
+    for (auto [index, endpoint] : llvm::enumerate(endpoints)) {
+      interfaceEndpoints.try_emplace(endpoint.operation, index);
+      for (const auto &leaf : endpoint.leaves) {
+        if (!llvm::is_contained(ArrayRef<StringRef>{"in", "out"}, leaf.access.getValue()) ||
+            !llvm::is_contained(ArrayRef<StringRef>{"plain", "valid", "stream"},
+                                leaf.protocol.getValue()) ||
+            isa<ResolvedType>(leaf.type) || isDigitalControlBoundaryType(leaf.type) ||
+            (leaf.analogMetadata && !leaf.analogMetadata.empty()) ||
+            (leaf.analogReferences && !leaf.analogReferences.empty()))
+          return reject(endpoint.operation,
+                        "Interface target requires ordinary digital in/out leaves; resolved, "
+                        "analog, control and monitor endpoints need an explicit physical profile");
+        if (cost >= maximumGeneratedOperations)
+          return reject(endpoint.operation, "complete Interface inventory exceeds target budget");
+        ++cost;
+      }
+    }
+    for (Operation &op : source.getBody().front())
+      if (isa<InterfaceInstanceOp, InterfaceBoundaryOp>(op) && !interfaceEndpoints.count(&op))
+        return reject(&op,
+                      "typed Interface endpoint is absent from its complete checked inventory");
+    return success();
+  }
+  LogicalResult planLogicalPorts() {
+    for (Operation &op : source.getBody().front()) {
+      if (isa<PortOp>(op)) {
+        LogicalPortPlan port;
+        port.key = {&op, Attribute()};
+        port.originalType = op.getAttrOfType<TypeAttr>("type").getValue();
+        port.targetType = portTypes.lookup(&op);
+        port.name = op.getAttrOfType<StringAttr>("sym_name");
+        port.input = text(&op, "direction") == "input";
+        port.references = portValues[&op];
+        logicalPorts.push_back(std::move(port));
+        continue;
+      }
+      if (!isa<InterfaceInstanceOp>(op))
+        continue;
+      const auto &endpoint = endpoints[interfaceEndpoints.lookup(&op)];
+      std::string dimensions;
+      for (Attribute attr : endpoint.dimensions) {
+        if (!dimensions.empty())
+          dimensions += ',';
+        dimensions += cast<StringAttr>(attr).getValue();
+      }
+      for (const auto &leaf : endpoint.leaves) {
+        LogicalPortPlan port;
+        port.key = {endpoint.declaration, leaf.path};
+        port.originalType =
+            dimensions.empty()
+                ? leaf.type
+                : Type(nodal::ShapedType::get(source.getContext(), dimensions, leaf.type));
+        port.targetType = targetValueType(port.originalType);
+        if (!port.targetType)
+          return reject(&op, "Interface payload requires supported bounded digital boundary type; "
+                             "symbolic Struct requires boundary-abi=named-fields");
+        port.input = leaf.access.getValue() == "in";
+        port.references = interfacePortValues[port.key];
+        std::string name = text(&op, "sym_name").str() + "__m";
+        SmallVector<StringRef> segments;
+        leaf.path.getValue().split(segments, '.');
+        for (StringRef segment : segments)
+          name += "_" + std::to_string(segment.size()) + "_" + segment.str();
+        port.name = builder.getStringAttr(name);
+        std::string originalType;
+        llvm::raw_string_ostream stream(originalType);
+        stream << leaf.type;
+        NamedAttrList contract;
+        contract.set("endpoint", op.getAttr("sym_name"));
+        contract.set("definition", endpoint.semanticIdentity);
+        contract.set("selected_role", endpoint.selectedRole->getAttr("sym_name"));
+        contract.set("member", leaf.path);
+        contract.set("protocol", leaf.protocol);
+        contract.set("role", leaf.role);
+        contract.set("access", leaf.access);
+        contract.set("nested_roles", leaf.nestedRoles);
+        contract.set("nested_interfaces", leaf.nestedInterfaces);
+        contract.set("dimensions", endpoint.dimensions);
+        contract.set("payload_type", builder.getStringAttr(originalType));
+        port.interfaceContract = builder.getDictionaryAttr(contract);
+        logicalPorts.push_back(std::move(port));
+      }
+    }
+    return success();
+  }
   TypedAttr parameterNode(const std::shared_ptr<const InstantiatedIntegerNode> &node,
                           unsigned depth = 0) {
     if (!node || depth > digitalTypeMaximumDepth)
@@ -2555,7 +2743,13 @@ private:
   llvm::DenseMap<Operation *, ArrayAttr> targetInstanceParameters;
   llvm::DenseMap<Attribute, std::pair<Value, Value>> domainInputs;
   SmallVector<Operation *> instances;
-  llvm::DenseMap<std::pair<Operation *, Operation *>, SmallVector<Value>> instancePortValues;
+  llvm::DenseMap<InstanceLogicalPortKey, SmallVector<Value>> instancePortValues;
+  SmallVector<LogicalPortPlan> logicalPorts;
+  SmallVector<DigitalInterfaceEndpoint> localEndpoints;
+  ArrayRef<DigitalInterfaceEndpoint> endpoints;
+  llvm::DenseMap<Operation *, unsigned> interfaceEndpoints;
+  llvm::DenseMap<LogicalPortKey, SmallVector<Value>> interfacePortValues;
+  llvm::DenseSet<Value> interfaceValues;
   llvm::DenseMap<std::pair<Operation *, Attribute>, Operation *> instanceBindings;
   SmallVector<ExecutableCrossing, 0> crossings;
   SmallVector<ExecutableEventProcess, 0> events;
@@ -2570,7 +2764,6 @@ private:
   llvm::DenseMap<Type, Type> packedTypes;
   llvm::DenseMap<Type, HierarchyBoundaryType> boundaryViews;
   llvm::DenseMap<Type, llvm::StringMap<unsigned>> targetFieldIndices;
-  llvm::DenseMap<Operation *, SmallVector<StringAttr>> physicalPortNames;
   llvm::DenseMap<Type, DictionaryAttr> packedLayouts;
   llvm::DenseSet<Operation *> controlProjections, controlSelectors;
   SmallVector<std::pair<Value, PhysicalControl>> physicalControls;

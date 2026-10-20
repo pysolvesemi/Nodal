@@ -150,6 +150,100 @@ std::string fieldGet(StringRef result, StringRef input, StringRef schema, String
          "\", metadata = {semantic_path = \"Child." + result.str() + "\"}}> : (" + schema.str() +
          ") -> " + type.str() + "\n";
 }
+std::string interfaceDefinition(StringRef type) {
+  const std::string version = "interface_abi_version = 1 : i64";
+  std::string body;
+  for (auto [name, direction] :
+       {std::pair{"source", "out"}, {"sink", "in"}, {"monitor", "observe"}})
+    body += "\"nodal.interface_role\"() <{sym_name = \"" + std::string(name) +
+            "\", kind = \"explicit\", metadata = {" + version +
+            ", access = [{path = \"data\", access = \"" + direction + "\", leaf_role = \"" + name +
+            "\", nested_roles = [], nested_interfaces = []}]}}> : () -> ()\n";
+  body += "\"nodal.interface_member\"() <{sym_name = \"data\", type = " + type.str() +
+          ", protocol = \"plain\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" +
+          version + "}}> : () -> ()\n";
+  return "\"nodal.interface\"() <{sym_name = \"Bus\", metadata = {" + version +
+         ", semantic_identity = \"pkg.Bus\"}}> ({" + body + "}) : () -> ()\n";
+}
+std::string interfaceEndpoint(StringRef name, StringRef role, StringRef dimensions = "",
+                              StringRef type = "!nodal.digital<\"uint\", \"Q\">") {
+  std::string access = role == "source" ? "out" : role == "sink" ? "in" : "observe";
+  return "\"nodal.interface_instance\"() <{sym_name = \"" + name.str() +
+         "\", definition = @Bus, role = \"" + role.str() +
+         "\", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = [" +
+         dimensions.str() + "], semantic_path = \"Fixture." + name.str() + "\"}}> : () -> ()\n" +
+         "\"nodal.interface_abi\"() <{logical_path = \"Fixture." + name.str() +
+         "\", layout_policy = \"structural\", members = [{path = \"data\", type = " + type.str() +
+         ", role = \"" + role.str() + "\", access = \"" + access +
+         "\", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : "
+         "i64, instance = @" +
+         name.str() + "}}> : () -> ()\n";
+}
+std::string interfaceMember(StringRef value, StringRef endpoint, StringRef type,
+                            StringRef view = "") {
+  return "%" + value.str() + " = \"nodal.member_access\"() <{instance = @" + endpoint.str() +
+         ", path = \"data\", metadata = {interface_abi_version = 1 : i64" +
+         (view.empty() ? "" : ", role = \"" + view.str() + "\"") + "}}> : () -> " + type.str() +
+         "\n";
+}
+std::string interfaceConnect(StringRef left, StringRef right, StringRef type) {
+  return "\"nodal.interface_connect\"(%" + left.str() + ", %" + right.str() +
+         ") <{metadata = {interface_abi_version = 1 : i64}}> : (" + type.str() + ", " + type.str() +
+         ") -> ()\n";
+}
+std::string interfaceDrive(StringRef output, StringRef input, StringRef type) {
+  return "\"nodal.interface_drive\"(%" + output.str() + ", %" + input.str() +
+         ") <{metadata = {interface_abi_version = 1 : i64}}> : (" + type.str() + ", " + type.str() +
+         ") -> ()\n";
+}
+std::string interfaceBoundary(StringRef name, StringRef endpoint, StringRef type,
+                              StringRef dimensions = "") {
+  return "\"nodal.interface_boundary\"() <{sym_name = \"" + name.str() +
+         "\", instance = @u, endpoint = \"" + endpoint.str() +
+         "\", metadata = {interface_abi_version = 1 : i64, dimensions = [" + dimensions.str() +
+         "], actual_types = [{path = \"data\", type = " + type.str() +
+         "}], semantic_path = \"Parent." + name.str() + "\"}}> : () -> ()\n";
+}
+std::string interfaceFixture(bool arrays = false, bool aggregate = false) {
+  std::string formalPayload = aggregate ? structure("W", "N") : digital("W");
+  std::string actualPayload = aggregate ? structure("Q", "P") : digital("Q");
+  std::string formal = arrays ? shape("N", formalPayload) : formalPayload;
+  std::string actual = arrays ? shape("P", actualPayload) : actualPayload;
+  std::string child =
+      parameter("N") + parameter("W") +
+      "\"nodal.domain_requirement\"() <{sym_name = \"clock\", metadata = {}}> : () -> ()\n" +
+      interfaceDefinition(formalPayload) +
+      interfaceEndpoint("incoming", "sink", arrays ? "\"N\"" : "", formalPayload) +
+      interfaceEndpoint("outgoing", "source", arrays ? "\"N\"" : "", formalPayload) +
+      interfaceMember("incoming", "incoming", formal) +
+      interfaceMember("outgoing", "outgoing", formal) +
+      interfaceDrive("outgoing", "incoming", formal);
+  std::string parent =
+      parameter("P") + parameter("Q") +
+      "\"nodal.domain\"() <{sym_name = \"clock\", edge = \"rising\", reset_policy = \"none\", "
+      "metadata = {}}> : () -> ()\n" +
+      replace(port("clockPin", "input", "!nodal.capability<\"clock\">"), "domain = @none",
+              "domain = @clock") +
+      "\"nodal.local_domain_binding\"(%clockPin) <{domain = @clock, reset_polarity = "
+      "\"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">) -> ()\n" +
+      interfaceDefinition(actualPayload) +
+      interfaceEndpoint("incoming", "sink", arrays ? "\"P\"" : "", actualPayload) +
+      interfaceEndpoint("outgoing", "source", arrays ? "\"P\"" : "", actualPayload) +
+      replace(instance("u"), "domain_bindings = {}", "domain_bindings = {clock = @clock}") +
+      override("N", "P") + override("W", "Q") +
+      "\"nodal.instance_domain_binding\"(%clockPin) <{instance = @u, requirement = @clock, actual "
+      "= @clock, origin = \"named\", metadata = {}}> : (!nodal.capability<\"clock\">) -> ()\n" +
+      interfaceBoundary("childInput", "incoming", actualPayload, arrays ? "\"P\"" : "") +
+      interfaceBoundary("childOutput", "outgoing", actualPayload, arrays ? "\"P\"" : "") +
+      interfaceMember("incoming", "incoming", actual) +
+      interfaceMember("outgoing", "outgoing", actual) +
+      interfaceMember("childInput", "childInput", actual) +
+      interfaceMember("childOutput", "childOutput", actual) +
+      interfaceConnect("incoming", "childInput", actual) +
+      interfaceConnect("outgoing", "childOutput", actual);
+  return "module attributes {nodal.root.module = @Parent} {" + module("Parent", parent) +
+         module("Child", child) + "}";
+}
 } // namespace
 int main() {
   DialectRegistry registry;
@@ -415,6 +509,113 @@ int main() {
              false);
   checkNamed("sibling-private-dimension-owner-does-not-launder-abi",
              replaceAll(aggregateFixture(), structure("Q", "P"), structure("P", "Q")), false);
+  auto checkInterface = [&](StringRef name, std::string input, bool expected, bool named = false,
+                            unsigned rootInputs = 2, StringRef diagnostic = "NODAL-CIRCT-056-001") {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    if (!parsed) {
+      report(name, false);
+      return;
+    }
+    auto before = print(parsed->getOperation());
+    PassManager pm(&context);
+    auto pass = nodal::createSequentialToCIRCTPass();
+    bool configured = !named || succeeded(pass->initializeOptions("boundary-abi=named-fields",
+                                                                  [&](const Twine &error) {
+                                                                    diagnostics += error.str();
+                                                                    return failure();
+                                                                  }));
+    pm.addPass(std::move(pass));
+    bool actual = configured && succeeded(pm.run(*parsed));
+    bool good = actual == expected;
+    if (!actual)
+      good &= before == print(parsed->getOperation()) &&
+              diagnostics.find(diagnostic.str()) != std::string::npos;
+    else {
+      unsigned modules = 0, instances = 0;
+      parsed->walk([&](circt::hw::HWModuleOp op) {
+        ++modules;
+        auto map = op->getAttrOfType<ArrayAttr>("nodal.boundary_map");
+        good &= map && map.size() >= 2;
+        if (map)
+          for (Attribute raw : map) {
+            auto contract = cast<DictionaryAttr>(raw).getAs<DictionaryAttr>("interface");
+            good &= contract && contract.getAs<StringAttr>("member").getValue() == "data" &&
+                    contract.getAs<StringAttr>("definition").getValue() == "pkg.Bus" &&
+                    contract.getAs<StringAttr>("access").getValue() != "observe";
+          }
+      });
+      parsed->walk([&](circt::hw::InstanceOp op) {
+        ++instances;
+        good &= op.getModuleName() == "Child" && op.getNumOperands() == (named ? 4u : 1u) &&
+                op.getNumResults() == (named ? 4u : 1u);
+      });
+      auto parent =
+          dyn_cast_or_null<circt::hw::HWModuleOp>(SymbolTable::lookupSymbolIn(*parsed, "Parent"));
+      good &= parent && parent.getBodyBlock()->getNumArguments() == rootInputs && modules == 2 &&
+              instances == 1 && succeeded(verify(*parsed));
+      auto output = print(parsed->getOperation());
+      good &= output.find("incoming__m_4_data") != std::string::npos &&
+              output.find("outgoing__m_4_data") != std::string::npos &&
+              output.find("nodal.interface") == std::string::npos;
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(output, ParserConfig(&context, false));
+      good &= roundtrip && succeeded(verify(*roundtrip));
+    }
+    report(name, good);
+  };
+  checkInterface("interface-scalar-role-directed-real-child", interfaceFixture(), true);
+  checkInterface("interface-symbolic-array-preserves-outer-dimension", interfaceFixture(true),
+                 true);
+  checkInterface("interface-struct-payload-uses-shared-named-adapter",
+                 interfaceFixture(false, true), true, true, 5);
+  auto scalarInterface = interfaceFixture();
+  checkInterface("interface-first-monitor-view-keeps-declared-pin-direction",
+                 replace(scalarInterface, interfaceMember("incoming", "incoming", digital("Q")),
+                         interfaceMember("monitor", "incoming", digital("Q"), "monitor") +
+                             interfaceMember("incoming", "incoming", digital("Q"))),
+                 true);
+  checkInterface(
+      "interface-complete-unaccessed-input-remains-a-pin",
+      replace(scalarInterface, interfaceEndpoint("incoming", "sink"),
+              interfaceEndpoint("unused", "sink") + interfaceEndpoint("incoming", "sink")),
+      true, false, 3);
+  checkInterface("interface-derived-pin-name-does-not-collide-with-authored-port",
+                 replace(scalarInterface, interfaceEndpoint("incoming", "sink"),
+                         port("incoming__m_4_data", "input", "!nodal.bits<1>") +
+                             interfaceEndpoint("incoming", "sink")),
+                 true, false, 3);
+  checkInterface(
+      "interface-complete-unaccessed-output-is-not-invented",
+      replace(scalarInterface, interfaceEndpoint("outgoing", "source"),
+              interfaceEndpoint("unused", "source") + interfaceEndpoint("outgoing", "source")),
+      false);
+  checkInterface(
+      "interface-declared-monitor-endpoint-requires-physical-profile",
+      replace(scalarInterface, interfaceEndpoint("incoming", "sink"),
+              interfaceEndpoint("unused", "monitor") + interfaceEndpoint("incoming", "sink")),
+      false, false, 2, "Interface target requires ordinary digital in/out leaves");
+  checkInterface("interface-symbolic-struct-does-not-implicitly-select-pin-abi",
+                 interfaceFixture(false, true), false, false, 2,
+                 "result requires fixed scalar/packed width");
+  checkInterface("interface-exact-payload-map-forgery-keeps-original-module",
+                 replace(scalarInterface,
+                         "actual_types = [{path = \"data\", type = " + digital("Q"),
+                         "actual_types = [{path = \"data\", type = " + digital("P")),
+                 false, false, 2, "Interface actual member type differs");
+  auto legacy = replaceAll(interfaceDefinition("!nodal.bits<8>"), "interface_abi_version = 1 : i64",
+                           "legacy = true");
+  legacy += "\"nodal.interface_instance\"() <{sym_name = \"old\", definition = @Bus, "
+            "role = \"sink\", metadata = {}}> : () -> ()\n";
+  checkInterface("legacy-untyped-interface-endpoint-is-not-dropped-or-dereferenced",
+                 "module {" + module("Parent", legacy) + "}", false, false, 2,
+                 "target requires fully typed Interface endpoint contracts");
+  checkInterface("locally-driven-declared-input-does-not-discard-external-pin",
+                 replace(scalarInterface, interfaceConnect("outgoing", "childOutput", digital("Q")),
+                         interfaceConnect("outgoing", "childOutput", digital("Q")) +
+                             interfaceEndpoint("feedback", "sink") +
+                             interfaceMember("feedback", "feedback", digital("Q")) +
+                             interfaceConnect("outgoing", "feedback", digital("Q"))),
+                 false, false, 2, "ordinary Interface input pin cannot have a local driver");
   llvm::outs() << "SYMBOLIC_HIERARCHY_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;
 }

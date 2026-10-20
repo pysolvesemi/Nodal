@@ -303,3 +303,34 @@ The named-field Port/Struct slice has focused acceptance recorded in
 11. Interface adapters, generated target loops and complete fixed-Struct CDC
 inverse adaptation remain open; primitive backend probes are not acceptance of
 those production paths.
+
+### Ordinary Interface consumer of the shared target plan
+
+The bounded target extends the same logical-port inventory used by `PortOp` and
+real child instances to complete ordinary Interface endpoints. A key is the exact
+endpoint declaration plus complete member path, not a physical name or the first
+member-access view. Selected-role directions remain unchanged; immediate-child
+orientation is applied only at the instance connection. Monitor aliases therefore
+do not redefine an input as an output. All unaccessed inputs still have pins;
+unaccessed or undriven outputs fail instead of acquiring invented values. Because
+current Interface instances have no private/internal endpoint discriminator, a
+locally driven declared input is an explicitly unsupported physical profile.
+
+`collectDigitalInterfaceEndpoints` supplies the complete borrowed contract once;
+existing assignment-dependency roots supply canonical connect/drive aliases.
+There is no second driver graph, Interface registry or target emitter. Child
+formal payload and outer dimension tokens remain child-owned. Parent SSA values
+use their independently checked actual type, and local endpoint dimensions wrap
+the payload without merging away its nested Vec/Struct dimension groups.
+The shared named-field split/join adapters, parameter DAG, operation budget and
+collision-safe physical naming apply to ordinary ports and Interface leaves alike.
+The module-level inverse map also retains definition, selected/nested roles,
+member path, access, protocol and original outer dimensions once per logical port.
+
+The initial physical profile is ordinary digital `in`/`out` members, including
+whole symbolic arrays and Struct/Vec payloads. Resolved nets, standalone inout,
+analog/conservative terminals, control Interfaces and declared monitor endpoints
+still reject transactionally. The fixed-Struct CDC adapter gap under explicit
+`boundary-abi=named-fields` remains unchanged. Generated helpers must consume this
+same port plan rather than introduce a parallel boundary engine; generated loops
+and their pinned-consumer limitations remain in the generated Area gate.

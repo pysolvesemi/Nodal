@@ -996,3 +996,46 @@ control evidence. No copied transitive provenance sets or whole-pipeline
 linearity claim is introduced. Per-operation verifiers may still rebuild local
 domain/dependency views. Model/state limits and causal checks do not close the
 remaining F57 representative-scale requirement. No CI or broad qualification ran.
+
+### Owned clock target and waveform checkpoint
+
+The target emits distinct gate/mux clocks, independent release chains and the
+bounded serialized mux controller. Gate state is a genuinely uninitialized
+inactive-phase latch; mux sampler/controller/request/enable/acknowledgement
+state uses real common assertion and independent local release. Generated checks
+retain control knownness, reset-epoch and source-located obligations. Parent
+clocks, active edges, named derived clocks and actual branch enables survive
+export. There is no ordinary combinational mux masquerading as glitchless.
+
+Focused target structure passes **171/171** (26 new clock cases plus 145 existing
+CIRCT cases). Final maintained actual Scala waveform evidence passes **36/36**
+across 12 profiles: 12 legal and 24 genuine emitted-assertion failures after
+verified injection points. Both edges/polarities, resetless gate startup, shaped
+parents, nested gates/muxes, active/inactive-phase control changes, stalled
+controller/branch clocks and selection reversal during WAIT_ON are exercised.
+Every mux legal witness records 47/30 parent pulses and one protected reset-time
+cut. No-overlap/full-pulse monitors include same-timestamp glitches; the sole mux
+truncation exclusion is known coordinated reset assertion, never normal handover.
+
+The production export pipeline must run official CIRCT `lower-seq-to-sv` with
+register randomization disabled before firtool. This materializes the real gate
+latch instead of firtool's default external EICG wrapper; neither a handwritten
+replacement cell nor edited emitted HDL is used. The exact commands are retained
+in `tests/scala/owned-clocks/README.md` and the harness. A resetless gate witness
+explicitly establishes an inactive input phase rather than relying on time-zero
+Verilog scheduling to initialize an unspecified latch.
+
+Final evidence: `.work/owned-clock-target-final/manifest.json` and per-command
+logs/hash files. The immutable compiler `.work/owned-clock-target-checkpoint/nodalc`
+has SHA-256
+`ec02885b173375cbd010718bf884d2199f1bc0040f4542bcd96e4c3b3e7650c4`.
+Model logs are exactly `.work/owned-clock-final-clock-model.log`,
+`-domain-model.log`, `-reset-model.log`, `-sequential-model.log`,
+`-crossing-model.log` and `-sequential-circt.log` under that same prefix.
+
+Two additional source predecessor repairs remain pending: a stale descriptor
+expectation must assert the now-supported shaped binding, and FSM expansion
+revealed an effective reset producer emitted after its consuming FSM. The bridge
+must fix ordering, not relax native SSA ownership. These prevent final selected
+clock acceptance until resolved, despite the passing target matrix. No CI or
+broad qualification ran; all coarse F57 items remain open.

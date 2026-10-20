@@ -13,6 +13,7 @@
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
@@ -184,6 +185,14 @@ public:
         // stateful consumer are independently verified before this transaction.
       } else if (isa<DomainRequirementOp, DomainBindOp, LocalDomainBindingOp>(op)) {
         // Verified provenance only; actual values already carry the connection.
+      } else if (named(&op, "nodal.clock_gate") || named(&op, "nodal.clock_mux")) {
+        if (failed(inspectOwnedClock(&op, domains)))
+          return failure();
+        clocks.push_back(&op);
+        // Closed fixed implementation: one uninitialized gate latch, or 22 mux
+        // control/release bits. Output-domain release is a separately charged
+        // authored reset_sync. Include monitors and correlation comments.
+        expansion = named(&op, "nodal.clock_mux") ? 192 : 16;
       } else if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
         if (failed(verifyResetProducer(&op)))
           return failure();
@@ -259,6 +268,11 @@ public:
         expansion = code == "enum_is_one_of" || code == "enum_is_valid" ? 3 * tests + 2 : 3;
       } else
         return reject(&op, "operation is outside the finite scalar CIRCT profile");
+      // Producer references are temporary graph operations too. Charge their
+      // exact result count before creating any backedges, in addition to the
+      // persistent target expansion. Alias results are conservatively included.
+      if (!structural && !isa<PortValueOp>(op))
+        expansion += op.getNumResults();
       if (expansion > maximumGeneratedOperations - cost)
         return reject(&op, "target expansion exceeds 262144 operations before allocation");
       cost += expansion;
@@ -366,6 +380,43 @@ public:
       }
       crossingNames.try_emplace(crossing.operation, std::move(names));
     }
+    for (Operation *clock : clocks) {
+      SmallVector<StringRef> roles;
+      if (named(clock, "nodal.clock_gate"))
+        roles = {"gate", "output"};
+      else
+        roles = {"select_0",
+                 "select_1",
+                 "controller",
+                 "selected",
+                 "branch0_request_0",
+                 "branch0_request_1",
+                 "branch0_enable",
+                 "branch1_request_0",
+                 "branch1_request_1",
+                 "branch1_enable",
+                 "branch0_ack_0",
+                 "branch0_ack_1",
+                 "branch1_ack_0",
+                 "branch1_ack_1",
+                 "controller_release_0",
+                 "controller_release_1",
+                 "branch0_release_0",
+                 "branch0_release_1",
+                 "branch1_release_0",
+                 "branch1_release_1",
+                 "output"};
+      auto &names = clockNames[clock];
+      for (StringRef role : roles) {
+        std::string base =
+            "__nodal_clock_" + std::to_string(clockNames.size() - 1) + "_" + role.str();
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        names.try_emplace(role, builder.getStringAttr(name));
+      }
+    }
     for (Operation *reset : resets) {
       if (!isa<ResetSyncOp>(reset))
         continue;
@@ -450,8 +501,37 @@ public:
       }
       values[original] = bit;
     }
-    // Reset producers precede consumers in the authored SSA graph. Lower them
-    // before state allocation so no derived release is replaced by the raw pin.
+    // Clock/reset/state graphs interleave: a gate may consume register or CDC
+    // output, and a release chain may consume that gate. Install every actual
+    // result reference before consumers, then resolve the independently checked
+    // dependency graph. A phase ordering must never replace a derived control
+    // by a raw pin or reject a legitimate state-to-clock dependency.
+    SmallVector<std::pair<Value, circt::Backedge>> producerEdges;
+    for (Operation &op : source.getBody().front()) {
+      if (isa<PortValueOp>(op) || controlProjections.contains(&op) ||
+          controlSelectors.contains(&op))
+        continue;
+      for (Value original : op.getResults()) {
+        if (aliases.count(original))
+          continue;
+        auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
+        values[original] = edge;
+        producerEdges.emplace_back(original, edge);
+      }
+    }
+    SmallVector<std::pair<Value, circt::Backedge>> connectionEdges;
+    // Install graph cuts first. No combinational value can accidentally become
+    // state: all these references are resolved before the candidate verifies.
+    for (Operation &op : source.getBody().front()) {
+      if (!op.getNumResults())
+        continue;
+      Value original = op.getResult(0);
+      if (!aliases.count(original))
+        continue;
+      auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
+      values[original] = edge;
+      connectionEdges.emplace_back(original, edge);
+    }
     for (Operation *op : resets) {
       if (isa<ResetBoundaryOp>(op)) {
         Value raw = values.lookup(op->getOperand(0));
@@ -499,19 +579,6 @@ public:
         }
         values[op->getResult(0)] = resetActive(previous, op);
       }
-    }
-    SmallVector<std::pair<Value, circt::Backedge>> connectionEdges;
-    // Install graph cuts first. No combinational value can accidentally become
-    // state: all these references are resolved before the candidate verifies.
-    for (Operation &op : source.getBody().front()) {
-      if (!op.getNumResults())
-        continue;
-      Value original = op.getResult(0);
-      if (!aliases.count(original))
-        continue;
-      auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
-      values[original] = edge;
-      connectionEdges.emplace_back(original, edge);
     }
     SmallVector<std::pair<Operation *, circt::Backedge>> stateEdges, resetValueEdges;
     for (Operation *reg : registers) {
@@ -680,9 +747,18 @@ public:
                         "after a spacing/width violation.");
       }
     }
+    for (Operation *op : clocks) {
+      Value result = lowerClock(op, backedges);
+      if (!result) {
+        backedges.abandon();
+        return failure();
+      }
+      values[op->getResult(0)] = result;
+    }
     for (Operation &op : source.getBody().front()) {
       if (!op.getNumResults() || controlProjections.contains(&op) ||
-          controlSelectors.contains(&op) ||
+          controlSelectors.contains(&op) || named(&op, "nodal.clock_gate") ||
+          named(&op, "nodal.clock_mux") ||
           isa<DigitalStorageOp, PortValueOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
               ResetCombineOp>(op))
         continue;
@@ -769,6 +845,14 @@ public:
         next = mux(update, reset, values.lookup(update->getOperand(4)), next);
       }
       edge.setValue(next);
+    }
+    for (auto &[original, edge] : producerEdges) {
+      Value result = values.lookup(original);
+      if (!result || result == Value(edge)) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "actual producer did not resolve its target value");
+      }
+      edge.setValue(result);
     }
     for (Operation &op : source.getBody().front()) {
       if (!named(&op, "nodal.sequential_assert"))
@@ -865,6 +949,196 @@ private:
       layout.set("kind", builder.getStringAttr("scalar"));
     auto result = builder.getDictionaryAttr(layout);
     packedLayouts.try_emplace(type, result);
+    return result;
+  }
+  void correlateClock(Operation *target, Operation *op, StringRef role) {
+    correlate(target, op);
+    target->setAttr("nodal.clock", op->getAttr("metadata"));
+    target->setAttr("nodal.clock_contract", op->getAttr("contract"));
+    target->setAttr("nodal.clock_domain", op->getAttr("domain"));
+    target->setAttr("nodal.clock_parents", op->getAttr("parent_domains"));
+    target->setAttr("nodal.clock_obligations", op->getAttr("obligations"));
+    target->setAttr("nodal.clock_role", builder.getStringAttr(role));
+  }
+  std::string clockSourceComment(Operation *op) {
+    std::string path = sourcePath(op).str();
+    for (char &character : path)
+      if (character == '\n' || character == '\r')
+        character = ' ';
+      else if (character == '{')
+        character = '(';
+      else if (character == '}')
+        character = ')';
+    return "// NODAL owned clock " + path + ": ";
+  }
+  void clockComment(Operation *op, StringRef contract) {
+    std::string detail;
+    llvm::raw_string_ostream stream(detail);
+    stream << clockSourceComment(op) << contract << "; domain=" << op->getAttr("domain")
+           << "; parents=" << op->getAttr("parent_domains") << "; edge=" << text(op, "edge")
+           << "; obligations=" << op->getAttr("obligations");
+    auto comment =
+        circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(detail),
+                                      ValueRange{}, builder.getArrayAttr({}));
+    correlateClock(comment, op, "contract");
+  }
+  void clockAssertion(Operation *op, Value clock, Value reset, Value known, StringRef role,
+                      bool falling = false) {
+    // Immediate, four-state assertions also execute with Icarus. Unknown reset
+    // never hides an unknown control: only a known asserted local reset skips.
+    std::string check =
+        clockSourceComment(op) + role.str() + " known-state check\n" + "always @(" +
+        (falling ? "negedge" : "posedge") + " {{0}}) begin\n" + "  if (({{1}}) !== 1'b1) begin\n" +
+        "    assert ((^({{2}})) !== 1'bx) else $fatal(1, \"NODAL-CLOCK-057: " + role.str() +
+        " requires known controls and an established reset epoch\");\n  end\nend";
+    auto assertion =
+        circt::sv::VerbatimOp::create(builder, op->getLoc(), builder.getStringAttr(check),
+                                      ValueRange{clock, reset, known}, builder.getArrayAttr({}));
+    correlateClock(assertion, op, role);
+    assertion->setAttr("nodal.clock_check", op->getAttr("contract"));
+  }
+  Value clockState(Operation *op, StringRef role, Value input, Value clock, Value reset,
+                   uint64_t resetValue = 0) {
+    StringAttr name = clockNames.find(op)->second.lookup(role);
+    auto state = circt::seq::FirRegOp::create(
+        builder, op->getLoc(), input, clock, name, reset,
+        constant(op, cast<IntegerType>(input.getType()).getWidth(), resetValue),
+        circt::hw::InnerSymAttr::get(name), true);
+    correlateClock(state, op, role);
+    return state.getResult();
+  }
+  Value lowerClock(Operation *op, circt::BackedgeBuilder &backedges) {
+    bool falling = text(op, "edge") == "falling";
+    Value first = values.lookup(op->getOperand(0));
+    Value firstBit = circt::seq::FromClockOp::create(builder, op->getLoc(), first);
+    if (falling)
+      first = circt::seq::ClockInverterOp::create(builder, op->getLoc(), first);
+    if (named(op, "nodal.clock_gate")) {
+      auto gate = circt::seq::ClockGateOp::create(
+          builder, op->getLoc(), first, values.lookup(op->getOperand(1)),
+          values.lookup(op->getOperand(2)),
+          circt::hw::InnerSymAttr::get(clockNames.find(op)->second.lookup("gate")));
+      correlateClock(gate, op, "gate");
+      Value result = gate.getResult();
+      if (falling) {
+        result = circt::seq::ClockInverterOp::create(builder, op->getLoc(), result);
+        correlateClock(result.getDefiningOp(), op, "physical_output");
+      }
+      Value reset = constant(op, 1, 0);
+      auto binding = domains.resolveClockBinding(op->getAttrOfType<ArrayAttr>("parent_domains")[0]);
+      if (failed(binding))
+        return {};
+      if ((*binding)->getNumOperands() == 2)
+        reset = resetActive(values.lookup((*binding)->getOperand(1)), *binding);
+      Value controls = make(op, "comb.concat", builder.getIntegerType(2),
+                            {values.lookup(op->getOperand(1)), values.lookup(op->getOperand(2))});
+      clockAssertion(op, firstBit, reset, controls, "gate enable/testEnable", falling);
+      clockComment(op,
+                   "gate_v1: transparent during the inactive parent phase; enable OR testEnable; "
+                   "no invented latch initialization; startup known after a complete inactive "
+                   "phase with known controls; inactive_phase_aperture is an environment "
+                   "setup/hold obligation, not a metastability proof");
+      Value bit = circt::seq::FromClockOp::create(builder, op->getLoc(), result);
+      StringAttr outputName = clockNames.find(op)->second.lookup("output");
+      auto wire =
+          circt::hw::WireOp::create(builder, op->getLoc(), bit, circt::StringAttrOrRef(outputName),
+                                    circt::hw::InnerSymAttr::get(outputName));
+      correlateClock(wire, op, "observable_output");
+      return circt::seq::ToClockOp::create(builder, op->getLoc(), wire.getResult());
+    }
+    Value second = values.lookup(op->getOperand(1));
+    if (falling)
+      second = circt::seq::ClockInverterOp::create(builder, op->getLoc(), second);
+    Value active0 = circt::seq::FromClockOp::create(builder, op->getLoc(), first);
+    Value active1 = circt::seq::FromClockOp::create(builder, op->getLoc(), second);
+    Value inactive0 = circt::seq::ClockInverterOp::create(builder, op->getLoc(), first);
+    Value inactive1 = circt::seq::ClockInverterOp::create(builder, op->getLoc(), second);
+    Value assertion =
+        resetActive(values.lookup(op->getOperand(3)), op->getOperand(3).getDefiningOp());
+    auto release = [&](StringRef prefix, Value clock) {
+      Value stage0 =
+          clockState(op, prefix.str() + "_release_0", constant(op, 1, 0), clock, assertion, 1);
+      Value stage1 = clockState(op, prefix.str() + "_release_1", stage0, clock, assertion, 1);
+      return std::make_pair(stage0, stage1);
+    };
+    auto controllerRelease = release("controller", first);
+    auto branch0Release = release("branch0", inactive0);
+    auto branch1Release = release("branch1", inactive1);
+    Value controllerReset = controllerRelease.second;
+    Value selected0 =
+        clockState(op, "select_0", values.lookup(op->getOperand(2)), first, controllerReset);
+    Value selected1 = clockState(op, "select_1", selected0, first, controllerReset);
+    auto controllerNext = backedges.get(builder.getIntegerType(3), op->getLoc());
+    auto selectedNext = backedges.get(builder.getI1Type(), op->getLoc());
+    Value controller = clockState(op, "controller", controllerNext, first, controllerReset);
+    Value selected = clockState(op, "selected", selectedNext, first, controllerReset);
+    // Exact five-state encoding. After two initial samples, WaitOff consumes
+    // the second stage only on the following edge (old-state semantics).
+    enum : uint64_t { Init0, Init1, WaitOff, WaitOn, Run };
+    auto inState = [&](uint64_t state) {
+      return compare(op, "digital_eq", controller, constant(op, 3, state), false);
+    };
+    Value initializing0 = inState(Init0), initializing1 = inState(Init1);
+    Value waitingOff = inState(WaitOff), waitingOn = inState(WaitOn), running = inState(Run);
+    Value requesting = make(op, "comb.or", builder.getI1Type(), {waitingOn, running});
+    Value request0 = make(op, "comb.and", builder.getI1Type(), {requesting, invert(op, selected)});
+    Value request1 = make(op, "comb.and", builder.getI1Type(), {requesting, selected});
+    auto branch = [&](StringRef prefix, Value request, Value clock,
+                      std::pair<Value, Value> localRelease, Value active) {
+      Value reset = localRelease.second;
+      Value sync0 = clockState(op, prefix.str() + "_request_0", request, clock, reset);
+      Value sync1 = clockState(op, prefix.str() + "_request_1", sync0, clock, reset);
+      Value enabled = clockState(op, prefix.str() + "_enable", sync1, clock, reset);
+      Value known = make(op, "comb.concat", builder.getIntegerType(6),
+                         {localRelease.first, reset, request, sync0, sync1, enabled});
+      clockAssertion(op, active, reset, known, prefix.str() + " inactive-edge controls", true);
+      return enabled;
+    };
+    Value enabled0 = branch("branch0", request0, inactive0, branch0Release, active0);
+    Value enabled1 = branch("branch1", request1, inactive1, branch1Release, active1);
+    Value ack00 = clockState(op, "branch0_ack_0", enabled0, first, controllerReset);
+    Value ack01 = clockState(op, "branch0_ack_1", ack00, first, controllerReset);
+    Value ack10 = clockState(op, "branch1_ack_0", enabled1, first, controllerReset);
+    Value ack11 = clockState(op, "branch1_ack_1", ack10, first, controllerReset);
+    Value bothOff = invert(op, make(op, "comb.or", builder.getI1Type(), {ack01, ack11}));
+    Value actualOn = mux(op, selected, ack11, ack01);
+    Value changed = compare(op, "digital_ne", selected1, selected, false);
+    Value start = make(op, "comb.and", builder.getI1Type(), {waitingOff, bothOff});
+    selectedNext.setValue(mux(op, start, selected1, selected));
+    Value next = mux(op, changed, constant(op, 3, WaitOff), controller);
+    next = mux(op, running, next, controller);
+    next = mux(op, waitingOn, mux(op, actualOn, constant(op, 3, Run), controller), next);
+    next = mux(op, waitingOff, mux(op, bothOff, constant(op, 3, WaitOn), controller), next);
+    next = mux(op, initializing1, constant(op, 3, WaitOff), next);
+    next = mux(op, initializing0, constant(op, 3, Init1), next);
+    controllerNext.setValue(next);
+    Value known = make(op, "comb.concat", builder.getIntegerType(13),
+                       {controllerRelease.first, controllerReset, values.lookup(op->getOperand(2)),
+                        selected0, selected1, controller, selected, ack00, ack01, ack10, ack11});
+    clockAssertion(op, active0, controllerReset, known, "mux controller active-edge controls");
+    Value output0 = make(op, "comb.and", builder.getI1Type(), {active0, enabled0});
+    Value output1 = make(op, "comb.and", builder.getI1Type(), {active1, enabled1});
+    Value output = make(op, "comb.or", builder.getI1Type(), {output0, output1});
+    if (falling)
+      output = invert(op, output);
+    StringAttr outputName = clockNames.find(op)->second.lookup("output");
+    auto wire =
+        circt::hw::WireOp::create(builder, op->getLoc(), output, circt::StringAttrOrRef(outputName),
+                                  circt::hw::InnerSymAttr::get(outputName));
+    correlateClock(wire, op, "observable_output");
+    Value result = circt::seq::ToClockOp::create(builder, op->getLoc(), wire.getResult());
+    correlateClock(result.getDefiningOp(), op, "physical_output");
+    clockComment(op, "glitchless_mux_v1: serialized_break_before_make; selector level_coalescing; "
+                     "first parent ungated active-edge controller; two selector samples before "
+                     "first request; each branch request sync2 then actual-enable inactive-edge "
+                     "register; returned actual-enable ack2; WAIT_ON cannot cancel before on "
+                     "acknowledgement; WAIT_OFF waits for both off acknowledgements; 22 internal "
+                     "state bits, three independent two-stage local releases, no invented "
+                     "initialization; output reset_sync remains independent; pulse_integrity="
+                     "except_reset_assertion because common assertion may truncate a pulse while "
+                     "all consumers are held reset; normal operation preserves complete pulses; "
+                     "liveness requires controller and relevant branch inactive edges; physical "
+                     "control timing and common assertion duration remain environment obligations");
     return result;
   }
   struct CrossingControls {
@@ -1277,7 +1551,8 @@ private:
   uint64_t &cost;
   DomainModel domains;
   SmallVector<ExecutableCrossing, 0> crossings;
-  SmallVector<Operation *> resets;
+  SmallVector<Operation *> resets, clocks;
+  llvm::DenseMap<Operation *, llvm::StringMap<StringAttr>> clockNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;

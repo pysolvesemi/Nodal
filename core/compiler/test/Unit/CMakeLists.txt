@@ -710,3 +710,11 @@ target_link_libraries(nodal-reset-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.reset-model-unit COMMAND nodal-reset-model-unit-tests)
 set_tests_properties(nodal.native.reset-model-unit PROPERTIES TIMEOUT 30)
+
+add_executable(nodal-clock-circt-unit-tests ClockCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-clock-circt-unit-tests)
+target_link_libraries(nodal-clock-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.clock-circt-unit COMMAND nodal-clock-circt-unit-tests)
+set_tests_properties(nodal.native.clock-circt-unit PROPERTIES TIMEOUT 60)

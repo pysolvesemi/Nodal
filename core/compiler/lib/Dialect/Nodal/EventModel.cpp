@@ -5,6 +5,7 @@
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
@@ -130,6 +131,41 @@ FailureOr<ExecutableEventProcess> inspectEventProcess(Operation *op) {
     }
   }
   return result;
+}
+FailureOr<SmallVector<Operation *, 4>> collectVerifiedEventDomainlessPorts(Operation *module) {
+  SmallVector<Operation *, 4> ports;
+  SmallVector<ExecutableEventProcess, 2> events;
+  for (Operation &op : module->getRegion(0).front()) {
+    if (!isa<EventProcessOp>(op))
+      continue;
+    auto event = inspectEventProcess(&op);
+    if (failed(event))
+      return failure();
+    events.push_back(std::move(*event));
+  }
+  if (events.empty())
+    return ports;
+  // Reuse the canonical writer and dependency proof, including root ownership,
+  // exact captures, state cuts and input-driver rejection. A descriptor or an
+  // otherwise malformed event must not relax the standalone domain verifier.
+  if (failed(analyzeDigitalAssignmentDependencies(module, {})))
+    return failure();
+  for (const auto &event : events)
+    llvm::append_range(ports, event.storagePorts);
+  for (Operation &op : module->getRegion(0).front()) {
+    if (!isa<PortOp>(op) || text(&op, "direction") != "input" || !unannotated(&op, module))
+      continue;
+    auto type = op.getAttrOfType<TypeAttr>("type");
+    if (!type || !isDigitalCombinationalValueType(type.getValue(), module))
+      continue;
+    // Unobserved inputs do not allocate event state or acquire a sampling
+    // contract. Keep the existing finite type proof, not the sampled-state
+    // 4096-bit fixed ABI restriction enforced by inspectEventProcess.
+    auto bits = inferDigitalBitPatternMaximumBits(type.getValue(), &op);
+    if (succeeded(bits) && *bits >= 1)
+      ports.push_back(&op);
+  }
+  return ports;
 }
 LogicalResult verifyEventRootOwnership(Operation *module) {
   auto outer = dyn_cast_or_null<mlir::ModuleOp>(module->getParentOp());

@@ -1665,3 +1665,26 @@ trigger followed by a positive-edge register for falling events; waveform
 assertions remain unchanged. Final replay against the trigger-isolation repair
 and regenerated source inputs is still pending, as is the source constant-map
 sampling correction. No final event/F57 acceptance is claimed by this checkpoint.
+
+### Event boundary integration repair
+
+The default, fast and standalone domain passes now reuse the canonical event
+assignment proof before accepting absent domains on finite unannotated inputs of
+an actual event-bearing application root and its exact tracked storage outputs.
+This implements the v0.10 boundary clarification; it does not grant ordinary
+sampling permission, treat metadata as proof, or exempt arbitrary outputs,
+other modules, Clock or Reset. Unused finite inputs retain canonical maximum-width
+limits; actual sampled inputs/storage retain fixed 1..4096-bit limits.
+
+The four-file native checkpoint passes **48/48 semantic/domain cases**, including
+causal source-located failures and transactional preservation, plus **65/65 event
+model**, **32/32 domain model** and **71/71 sequential model** cases. The semantic
+selection checks default, fast and standalone domain verification with prior
+operation verification disabled, so malformed event records cannot depend on an
+earlier pass to prevent an exception. The unused 8192-bit input positive does not
+relax the sampled-state limit. Commands, source hashes and logs are retained in
+`.work/f57-event-domain-final-checkpoint/` and
+`.work/event-domain-gate-final-*.log`. The frozen compiler SHA256 is
+`2f41c1a3bf25dd2b0cf97273f0b2f031261ea35b6388e1fd5e660509c514508e`.
+Formatting and focused diff checks pass. Final actual-source/default-gate/HDL
+integration remains pending at this checkpoint; no final event acceptance yet.

@@ -26,5 +26,10 @@ mlir::LogicalResult verifyEventUpdate(mlir::Operation *operation);
 /// AssignmentQuery graph. Event state cuts retain their distinct provenance.
 mlir::LogicalResult verifyEventSourceDependencies(mlir::Operation *module,
                                                   const DigitalDependencyGraph &graph);
+/// Domain absence is valid for finite input boundaries of an independently
+/// verified event-bearing application root, and its exact tracked outputs.
+/// This does not assign event provenance or authorize ordinary domain sampling.
+mlir::FailureOr<llvm::SmallVector<mlir::Operation *, 4>>
+collectVerifiedEventDomainlessPorts(mlir::Operation *module);
 } // namespace nodal
 #endif

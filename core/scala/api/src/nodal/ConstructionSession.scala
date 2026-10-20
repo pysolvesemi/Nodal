@@ -45,6 +45,120 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     noiseOperators.find(value => references.contains(value._1)).foreach: value =>
       reject(value._1, "NODAL-ANALOG-039-001", s"noise effect '${value._2}'")
 
+  // The construction session is the sole mutable event/process owner. Event storage is still
+  // an actual output declaration and uses the ordinary assignment/dependency inventories.
+  private val eventProcesses = mutable.ArrayBuffer.empty[DigitalEventProcessRecord]
+  private val eventStorage = mutable.HashMap.empty[DeclarationRef, DigitalEventProcessRecord]
+  private var activeEventProcess: Option[DigitalEventProcessRecord] = None
+  private val eventStateBits = mutable.HashMap.empty[Long, BigInt]
+
+  private def eventFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-EVENT-057-001")
+
+  private def eventProcessPath(process: DigitalEventProcessRecord): String =
+    s"${modulePath(process.owner)}.event_process_${process.ordinal}"
+
+  private def eventInput(value: Expr[?], owner: Long, bool: Boolean): DeclarationRef =
+    val reference = Option(declarationIds.get(value)).getOrElse(
+      eventFailure("event input requires an actual root input boundary, not a computed alias")
+    )
+    val declaration = records(reference.module).declarations(reference.index)
+    if reference.module != owner || records(owner).parentAtConstruction.nonEmpty ||
+      declaration.kind != KernelSignalKind.Input || declaration.domainCandidate.nonEmpty ||
+      !declaration.dataType.exists(dataType =>
+        if bool then CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Bool")
+        else DigitalCombinationalContract.isValueTypeKind(CandidateRuntime.typeDescriptor(dataType))
+      )
+    then eventFailure("event input requires an unannotated root-owned digital input boundary")
+    reference
+
+  def digitalEvent(trigger: Expr[Bool], edge: Edge): Event =
+    if activeEventProcess.nonEmpty then eventFailure("nested event construction is unsupported")
+    if edge != Edge.Rising && edge != Edge.Falling then
+      eventFailure("digital events require one rising or falling edge")
+    val _ = eventInput(trigger, currentModule.handle, bool = true)
+    new Event(digitalDefinition = Some(KernelDigitalEventDefinition(trigger, edge)))
+
+  def digitalEventProcess(event: Event, body: () => Unit): Unit =
+    DigitalEventCallback.requireChecked(body)
+    if activeEventProcess.nonEmpty || currentDomain.nonEmpty || activeValueRegion.nonEmpty ||
+      activeGeneratedRegion.nonEmpty || analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then eventFailure("event process requires direct root construction without nested scopes")
+    val module = currentModule
+    val definition = event.digitalDefinition.getOrElse(
+      eventFailure("digital event process requires an owned actual edge definition")
+    )
+    val _ = eventInput(definition.trigger, module.handle, bool = true)
+    if eventProcesses.size >= DigitalEventContract.MaximumNodes then
+      eventFailure("event process inventory exceeds 65536 nodes")
+    val process = new DigitalEventProcessRecord(
+      module.handle,
+      eventProcesses.size,
+      definition,
+      semanticOrigin.captureSemanticSource()
+    )
+    eventProcesses += process
+    activeEventProcess = Some(process)
+    try
+      ConstructionKernel.waveformForbidden(body())
+      if process.targets.isEmpty then eventFailure("event process must update a tracked output")
+    catch
+      case failure: Throwable =>
+        poisonConstructor(failure, "digital event process")
+        scala.util.Failure[Nothing](failure).get
+    finally activeEventProcess = None
+
+  private def captureEventAssignment(values: Vector[Any]): Unit =
+    activeEventProcess.foreach: process =>
+      if values.size != 2 then eventFailure("event update requires one target and value")
+      val target = Option(declarationIds.get(values.head.asInstanceOf[AnyRef])).getOrElse(
+        eventFailure("event update requires one whole output; projected writes are unsupported")
+      )
+      val declaration = records(target.module).declarations(target.index)
+      if target.module != process.owner || declaration.kind != KernelSignalKind.Output ||
+        declaration.domainCandidate.nonEmpty || activeValueRegion.nonEmpty ||
+        activeGeneratedRegion.nonEmpty
+      then eventFailure("event update requires one unannotated whole root output")
+      if eventStorage.contains(target) then
+        eventFailure("event output has more than one writer or update")
+      val bits = shapeTypeFootprint(
+        declaration.dataType.getOrElse(eventFailure("event output has no actual type")),
+        target.module,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(eventFailure("event output requires a fixed whole digital bit pattern"))
+      if bits < 1 || bits > DigitalEventContract.MaximumPayloadBits then
+        eventFailure("event output fixed whole payload must contain 1 through 4096 bits")
+      val total = eventStateBits.getOrElse(target.module, BigInt(0)) + bits
+      if total > DigitalEventContract.MaximumModuleStateBits then
+        eventFailure("module event state exceeds 262144 bits")
+      eventStateBits.update(target.module, total)
+      val source = values(1) match
+        case expression: Expr[?] => expression
+        case _ => eventFailure("event update requires an actual digital expression")
+      if !CandidateRuntime.expressionDataType(source).exists(dataType =>
+          DigitalEnumContract.sameType(
+            CandidateRuntime.typeDescriptor(declaration.dataType.get),
+            CandidateRuntime.typeDescriptor(dataType)
+          )
+        )
+      then eventFailure("event update requires exactly matching recursive types")
+      eventStorage.update(target, process)
+      process.targets += target
+
+  private def eventProcessSnapshots: Vector[KernelEventProcessSnapshot] =
+    eventProcesses.toVector.map: process =>
+      KernelEventProcessSnapshot(
+        eventProcessPath(process),
+        modulePath(process.owner),
+        pathOf(process.definition.trigger).getOrElse(eventFailure("event trigger lost identity")),
+        if process.definition.edge == Edge.Rising then "rising" else "falling",
+        process.targets.toVector.map(declarationPath),
+        process.externalCaptures.map(declarationPath)
+      )
+
   private final case class ExecutableCrossing(
       input: Expr[?],
       destination: ClockDomain,
@@ -72,6 +186,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     behavioralFailure(message, "NODAL-CDC-057-001")
 
   def classifyPulse(value: Expr[Bool]): Unit =
+    if activeEventProcess.nonEmpty then
+      eventFailure("Pulse classification is unsupported in event body")
     val _ = pulseValues.put(value, java.lang.Boolean.TRUE)
 
   private def streamTransaction[A](label: String)(body: => A): A =
@@ -346,7 +462,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         storageContext = true,
         bitPatternOnly = true,
         fixedBitPattern = true
-      ).getOrElse(crossingFailure("Cdc.waive requires a fixed whole digital bit pattern"))
+      ).getOrElse(crossingFailure("consumer requires a fixed whole digital bit pattern"))
       if bits > ExecutableWaiverContract.MaximumPayloadBits then
         crossingFailure("Cdc.waive fixed whole payload must contain 1 through 4096 bits")
       val result = new KernelExpr[A](
@@ -1635,6 +1751,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
 
   private def requireNoCollectionEffect(role: String, assignment: Boolean = false): Unit =
+    if activeEventProcess.nonEmpty && !assignment then
+      eventFailure(s"$role is not permitted inside a digital event process")
     collectionStack.reverseIterator.find(region =>
       !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
@@ -2595,6 +2713,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           }
         )
       .getOrElse(Vector.empty)
+    val eventTriggerReferences = eventProcesses.iterator.map(process =>
+      declarationIds.get(process.definition.trigger)
+    ).toSet
     val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
     operations.iterator.filter(operation =>
@@ -2602,7 +2723,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     ).foreach: operation =>
       val target =
         digitalAssignmentRoot(operation.values.head, operation.owner, allowRootRegister = true)
-      if records(target.module).declarations(target.index).kind != KernelSignalKind.Register then
+      if operation.eventProcess.isEmpty &&
+        records(target.module).declarations(target.index).kind != KernelSignalKind.Register
+      then
         continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
         val declaration = records(target.module).declarations(target.index)
         // A projected target carries its actual selectors; revisiting the root is cut by the
@@ -2674,10 +2797,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         pulseClassified: Boolean = false,
         externalSources: Set[DeclarationRef] = Set.empty,
         localEndpoints: Set[DomainRef] = Set.empty,
-        waivers: Set[ExpressionRef] = Set.empty
+        waivers: Set[ExpressionRef] = Set.empty,
+        events: Set[DigitalEventProcessRecord] = Set.empty
     )
     val sampleCache =
-      mutable.HashMap.empty[(Long, Boolean, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
+      mutable.HashMap.empty[
+        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord]),
+        IdentityHashMap[AnyRef, SampleFacts]
+      ]
     var cachedFacts = 0L
     def combinedFacts(
         values: Vector[Expr[?]],
@@ -2692,7 +2819,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         facts.iterator.flatMap(_.crossings).toSet,
         facts.exists(_.pulseClassified),
         localEndpoints = facts.iterator.flatMap(_.localEndpoints).toSet,
-        waivers = facts.iterator.flatMap(_.waivers).toSet
+        waivers = facts.iterator.flatMap(_.waivers).toSet,
+        events = facts.iterator.flatMap(_.events).toSet
       )
     def exactSourceEndpoint(facts: SampleFacts, owner: Long, actual: String): DomainRef =
       // Physical sampling facts and authored local endpoint identity are separate. In particular,
@@ -2726,10 +2854,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         owner: Long,
         strict: Boolean,
         inferSourceOwnership: Boolean = false,
-        allowExternalControl: Boolean = false
+        allowExternalControl: Boolean = false,
+        eventSampling: Option[DigitalEventProcessRecord] = None
     ): SampleFacts =
       val cache = sampleCache.getOrElseUpdate(
-        (owner, strict, inferSourceOwnership, allowExternalControl),
+        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling),
         new IdentityHashMap[AnyRef, SampleFacts]()
       )
       val root = value.asInstanceOf[AnyRef]
@@ -2768,6 +2897,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
         val crossings = mutable.HashSet.empty[ExpressionRef]
         val waivers = mutable.HashSet.empty[ExpressionRef]
+        val events = mutable.HashSet.empty[DigitalEventProcessRecord]
         var count = 0
         var pulseClassified = false
         while pending.nonEmpty do
@@ -2793,8 +2923,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 if declarationRef.module != activeOwner then
                   behavioralFailure("sequential dependency belongs to another module")
                 val declaration = records(activeOwner).declarations(declarationRef.index)
+                if allowExternalControl && eventTriggerReferences(declarationRef) then
+                  eventFailure("event trigger cannot control an ordinary owned clock")
                 val drivers = continuousDrivers.getOrElse(declarationRef, Vector.empty)
+                if eventSampling.nonEmpty && (declarationRef.module != owner ||
+                    declaration.domainCandidate.nonEmpty ||
+                    Set(
+                      KernelSignalKind.Register,
+                      KernelSignalKind.Memory,
+                      KernelSignalKind.InstanceInput,
+                      KernelSignalKind.InstanceOutput,
+                      KernelSignalKind.DigitalInout
+                    )(declaration.kind))
+                then
+                  eventFailure(
+                    "event capture has clocked, foreign or unsupported storage provenance"
+                  )
                 instanceDigitalPorts.get(declarationRef) match
+                  case _ if eventStorage.contains(declarationRef) =>
+                    val process = eventStorage(declarationRef)
+                    events += process
+                    if strict && !eventSampling.contains(process) then
+                      eventFailure(
+                        "event-owned state cannot be sampled by another process or ordinary domain"
+                      )
+                    sourceRoots += declarationRef
                   case Some((_, port)) if declaration.kind == KernelSignalKind.InstanceOutput =>
                     enqueue(
                       Vector(records(port.module).declarations(port.index).value),
@@ -2840,8 +2993,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       declaration.kind == KernelSignalKind.Input && declaration.dataType.exists(t =>
                         CandidateRuntime.typeDescriptor(t) == KernelTypeDescriptor("Bool")
                       )
-                    if externalControl then externalSources += declarationRef
-                    if sourceDomain.isEmpty && !externalControl &&
+                    val eventExternal = eventSampling.nonEmpty && sourceDomain.isEmpty &&
+                      declaration.kind == KernelSignalKind.Input && drivers.isEmpty
+                    if eventExternal then
+                      val _ =
+                        eventInput(declaration.value.asInstanceOf[Expr[?]], owner, bool = false)
+                    if externalControl || eventExternal then externalSources += declarationRef
+                    if sourceDomain.isEmpty && !externalControl && !eventExternal &&
                       (declaration.kind == KernelSignalKind.Register ||
                         (strict && drivers.isEmpty && declaration.kind != KernelSignalKind.Parameter))
                     then crossingFailure("input dependency has unknown or unresolved source domain")
@@ -2860,6 +3018,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       enqueue(machine.futureSampleDependencies)
                 fsmResults.get(expressionRef).foreach: (machine, _) =>
                   enqueue(machine.futureSampleDependencies)
+              if eventSampling.nonEmpty && expressionRef.exists(reference =>
+                  executableWaivers.contains(reference) || executableCrossings.contains(
+                    reference
+                  ) ||
+                    resetRecords.containsKey(expressionValues(reference)) || clockRecords.contains(
+                      reference
+                    ) ||
+                    fsmResults.contains(reference)
+                )
+              then
+                eventFailure(
+                  "event capture cannot contain clock/reset/crossing/waiver/FSM provenance"
+                )
               expressionRef.flatMap(executableWaivers.get) match
                 case Some(waiver) =>
                   waivers += expressionRef.get
@@ -2893,6 +3064,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         if activeDomainVisible then domains += destination
                     case None => reference match
                         case expression: KernelExpr[?] =>
+                          if eventSampling.nonEmpty && (expression.operation.contains(
+                              "memory_read"
+                            ) ||
+                              !expression.resultType.exists(dataType =>
+                                DigitalCombinationalContract.isValueTypeKind(dataType) ||
+                                  dataType.kind == "Integer"
+                              ))
+                          then
+                            eventFailure("event capture has analog or unsupported value provenance")
                           if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
                             !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
                             !expressionRef.exists(reference =>
@@ -2932,14 +3112,39 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           pulseClassified,
           externalSources.toSet,
           localEndpoints.toSet,
-          waivers.toSet
+          waivers.toSet,
+          events.toSet
         )
         cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size +
-          result.localEndpoints.size + result.waivers.size
+          result.localEndpoints.size + result.waivers.size + result.events.size
         if cachedFacts > 262144 then
           crossingFailure("cached sample facts exceed their bounded graph budget")
         cache.put(root, result)
         result
+    val updatesByEventProcess = operations.iterator.filter(_.eventProcess.nonEmpty).toVector
+      .groupBy(_.eventProcess.get)
+    eventProcesses.foreach: process =>
+      if records(process.owner).parentAtConstruction.nonEmpty then
+        eventFailure("event-bearing module must be the actual selected root")
+      val trigger = eventInput(process.definition.trigger, process.owner, bool = true)
+      if continuousWriteCounts.getOrElse(trigger, 0) != 0 || eventStorage.contains(trigger) then
+        eventFailure("event trigger must not have an internal driver or event owner")
+      process.targets.foreach: target =>
+        if continuousWriteCounts.getOrElse(target, 0) != 0 then
+          eventFailure("event output has both continuous and event writers")
+      val captures = mutable.HashSet.empty[DeclarationRef]
+      updatesByEventProcess.getOrElse(process, Vector.empty).foreach: update =>
+        val facts = sampleFacts(
+          update.values(1),
+          process.owner,
+          strict = true,
+          eventSampling = Some(process)
+        )
+        captures ++= facts.externalSources
+        if captures.size > DigitalEventContract.MaximumCaptures then
+          eventFailure("event external capture inventory exceeds 4096 inputs")
+      process.externalCaptures =
+        captures.toVector.sortBy(reference => (reference.module, reference.index))
     val lineageRootCache = mutable.HashMap.empty[ExpressionRef, Set[DeclarationRef | ExpressionRef]]
     var lineageWork = 0L
     def lineageRoots(boundary: ExpressionRef): Set[DeclarationRef | ExpressionRef] =
@@ -2986,6 +3191,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             firstBoundary.update(root, boundary)
     def dependencies(value: Any, owner: Long, targetDomain: String): Unit =
       val facts = sampleFacts(value, owner, strict = false)
+      if facts.events.nonEmpty then
+        eventFailure("ordinary sequential sampling cannot consume event-owned state")
       if facts.domains.exists(source => !relationships.permitsSampling(source, targetDomain)) then
         behavioralFailure("register update crosses an unrelated domain", "NODAL-CDC-001")
       verifyReconvergence(facts)
@@ -4685,7 +4892,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case "Bits" | "UInt" | "SInt" =>
             val bounds = digitalWidthBound(descriptor, owner).bounds
             if fixedBitPattern && bounds.lower != bounds.upper then
-              crossingFailure("Cdc.waive requires a fixed whole digital bit pattern")
+              crossingFailure("consumer requires a fixed whole digital bit pattern")
             Some(BigInt(bounds.upper))
           case "Bool" => Some(BigInt(1))
           case "Integer" | "Real" => if field then Some(BigInt(64)) else None
@@ -4729,7 +4936,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               checkedFootprint(dimensions.foldLeft(bits)((total, dimension) =>
                 val bounds = analysis(dimension).bounds
                 if fixedBitPattern && bounds.lower != bounds.upper then
-                  crossingFailure("Cdc.waive requires a fixed whole digital bit pattern")
+                  crossingFailure("consumer requires a fixed whole digital bit pattern")
                 total * BigInt(bounds.upper)
               ))
           case "Enum" =>
@@ -5291,6 +5498,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       scopeOverride: Option[Option[DigitalValueRegionRecord]] = None
   ): Option[ExpressionRef] =
     moduleStack.lastOption.map: module =>
+      if activeEventProcess.nonEmpty then
+        value match
+          case expression: KernelExpr[?] =>
+            val operation = expression.operation.getOrElse("")
+            val pure = expression.literal.nonEmpty ||
+              operation.startsWith(DigitalEnumContract.Prefix) ||
+              DigitalScalarContract.Operations(operation) ||
+              operation == DigitalMaterializationContract.Operation ||
+              DigitalCombinationalContract.Operations(operation) ||
+              DigitalAggregateContract.Operations(operation) ||
+              DigitalCombinationalContract.ReachableBooleanOperations(operation) ||
+              Set(
+                "shape_index",
+                "shape_view",
+                "shape_slice",
+                DigitalCollectionContract.Operation,
+                DigitalCollectionContract.Argument
+              )(operation) ||
+              (expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
+                IterationDomain.staticArithmetic(operation).nonEmpty)
+            if !pure || !expression.resultType.exists(dataType =>
+                DigitalCombinationalContract.isValueTypeKind(dataType) || dataType.kind == "Integer"
+              )
+            then eventFailure(s"unsupported hardware expression '$operation' in event process")
+          case _ => eventFailure("non-value hardware construction is unsupported in event process")
       val observation = value match
         case expression: KernelExpr[?] => validateFsmObservations(expression.operands)
         case _ => validateFsmObservations(structuralOperands)
@@ -7433,6 +7665,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           DigitalCombinationalContract.isValueTypeKind(dataType) ||
             (activeBehavioral.nonEmpty && Set("Integer", "Real")(dataType.kind))
         )
+    if activeEventProcess.nonEmpty then
+      if !digitalAssignment then
+        eventFailure(s"hardware '$kind' effect is unsupported in an event process")
+      captureEventAssignment(values)
+    else if digitalAssignment && eventStorage.nonEmpty && values.nonEmpty then
+      val target =
+        digitalAssignmentRoot(values.head, currentModule.handle, allowRootRegister = true)
+      if eventStorage.contains(target) then
+        eventFailure("event output also has a continuous writer")
     val memoryWrite = permitMemory && kind == "memory-write" && values.size == 5 &&
       values.headOption.exists(
         _.isInstanceOf[Mem[?]]
@@ -7509,7 +7750,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "instance-node-array",
       "deferred-node-array"
     ).contains(kind)
-    if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty then
+    if !generatedAnalogContribution && !structuralTopology && effectRegion.isEmpty &&
+      activeEventProcess.isEmpty
+    then
       requireNoGeneratedEffect(s"generated '$kind' effect")
     if kind == "assignment" || kind == "analog-assignment" then
       analogSemanticContext.foreach: context =>
@@ -7550,7 +7793,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           semanticOrigin.captureSemanticSource()
         else None,
         effectRegion,
-        sourceOrdinal
+        sourceOrdinal,
+        activeEventProcess
       )
       operations += captured
       moduleStack.lastOption.foreach(module =>
@@ -8997,7 +9241,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   def assignSignalSelection(left: Expr[?], right: Expr[?]): Unit =
     requireNoCollectionEffect("digital selection assignment", assignment = true)
-    if activeLoop.isEmpty then requireNoGeneratedEffect("digital selection assignment")
+    if activeLoop.isEmpty && activeEventProcess.isEmpty then
+      requireNoGeneratedEffect("digital selection assignment")
     validateCollectionDependencies(Vector(left, right))
     val owner = currentModule.handle
     val _ = digitalAssignmentRoot(left, owner, allowRootRegister = false)
@@ -9070,9 +9315,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "NODAL-DIGITAL-054-010",
           "digital assignment value has no captured identity"
         )),
-        if declaration.kind == KernelSignalKind.Register then "register_next" else "continuous",
+        if operation.eventProcess.nonEmpty then "event_update"
+        else if declaration.kind == KernelSignalKind.Register then "register_next"
+        else "continuous",
         operation.digitalRegion.map(value => expressionPath(value.reference)),
-        operation.sourceOrdinal
+        operation.sourceOrdinal,
+        operation.eventProcess.map(eventProcessPath)
       ) -> operation
 
   private def digitalOwnerOf(value: Any): Option[String] = value match
@@ -9536,6 +9784,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val snapshot = ConstructionSnapshot(
       emitQuality = options.quality,
       digitalAssignments = assignmentRecords.map(_._1),
+      eventProcesses = eventProcessSnapshots,
       memoryWrites = memoryWriteRecords.map(_._1),
       interfaceContracts = interfaceCapture.interfaces,
       digitalConnectivity = interfaceCapture.connectivity,
@@ -9574,7 +9823,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ hierarchyBindingSources ++ assignmentSources ++ interfaceMemberSources ++ memoryWriteRecords.flatMap(
+        (semantic.sourceMap ++ eventProcesses.flatMap(process =>
+          process.source.map(SourceMapEntry(eventProcessPath(process), _))
+        ) ++ hierarchyBindingSources ++ assignmentSources ++ interfaceMemberSources ++ memoryWriteRecords.flatMap(
           (write, record) =>
             record.source.map(SourceMapEntry(write.path, _))
         ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(

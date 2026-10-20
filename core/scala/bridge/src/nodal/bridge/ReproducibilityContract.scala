@@ -402,7 +402,7 @@ private[nodal] object ReproducibilityContract:
       ))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
-      obj(
+      JObject(Vector(
         "path" -> string(value.path),
         "owner" -> string(value.owner),
         "target" -> string(value.target),
@@ -410,7 +410,7 @@ private[nodal] object ReproducibilityContract:
         "kind" -> string(value.kind),
         "region" -> optionalString(value.region),
         "source_ordinal" -> number(value.sourceOrdinal)
-      )
+      ) ++ value.eventProcess.map(path => "event_process" -> string(path)).toVector)
     )),
     "loops" ->
       array(snapshot.digitalLoops.sortBy(value => (value.owner, value.sourceOrdinal)).map(value =>
@@ -573,6 +573,17 @@ private[nodal] object ReproducibilityContract:
             "source_ordinal" -> number(action.sourceOrdinal)
           )
         ))
+      )
+    ))).toVector ++ Option.when(snapshot.eventProcesses.nonEmpty)("event_processes" ->
+    array(snapshot.eventProcesses.sortBy(_.path).map(value =>
+      obj(
+        "path" -> string(value.path),
+        "owner" -> string(value.owner),
+        "trigger" -> string(value.trigger),
+        "edge" -> string(value.edge),
+        "contract" -> string("root_event_v1"),
+        "storage_targets" -> array(value.storageTargets.map(string)),
+        "external_captures" -> array(value.externalCaptures.map(string))
       )
     ))).toVector ++ Option.when(snapshot.enumSwitches.nonEmpty)("enum_switches" ->
     array(snapshot.enumSwitches.sortBy(_.path).map(value =>

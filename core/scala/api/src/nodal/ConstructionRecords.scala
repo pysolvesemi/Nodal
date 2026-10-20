@@ -267,7 +267,19 @@ private[nodal] final case class KernelDigitalAssignmentSnapshot(
     value: String,
     kind: String,
     region: Option[String] = None,
-    sourceOrdinal: Int = 0
+    sourceOrdinal: Int = 0,
+    eventProcess: Option[String] = None
+)
+
+private[nodal] final case class KernelDigitalEventDefinition(trigger: Expr[Bool], edge: Edge)
+
+private[nodal] final case class KernelEventProcessSnapshot(
+    path: String,
+    owner: String,
+    trigger: String,
+    edge: String,
+    storageTargets: Vector[String],
+    externalCaptures: Vector[String]
 )
 
 private[nodal] final case class KernelDigitalLoopSnapshot(
@@ -586,6 +598,7 @@ private[nodal] final case class ConstructionSnapshot(
     interfaceContracts: Vector[KernelInterfaceSnapshot] = Vector.empty,
     digitalConnectivity: Vector[KernelDigitalConnectivitySnapshot] = Vector.empty,
     digitalAssignments: Vector[KernelDigitalAssignmentSnapshot] = Vector.empty,
+    eventProcesses: Vector[KernelEventProcessSnapshot] = Vector.empty,
     memoryWrites: Vector[KernelMemoryWriteSnapshot] = Vector.empty,
     digitalCollections: Vector[KernelDigitalCollectionSnapshot] = Vector.empty,
     digitalLoops: Vector[KernelDigitalLoopSnapshot] = Vector.empty,
@@ -765,8 +778,18 @@ private final case class Operation(
     generatedScope: Option[GeneratedRegionRecord] = None,
     source: Option[SourceSpan] = None,
     digitalRegion: Option[DigitalValueRegionRecord] = None,
-    sourceOrdinal: Int = 0
+    sourceOrdinal: Int = 0,
+    eventProcess: Option[DigitalEventProcessRecord] = None
 )
+
+private final class DigitalEventProcessRecord(
+    val owner: Long,
+    val ordinal: Int,
+    val definition: KernelDigitalEventDefinition,
+    val source: Option[SourceSpan]
+):
+  val targets: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
+  var externalCaptures: Vector[DeclarationRef] = Vector.empty
 
 /** Closed lexical ownership shared by collections, loops, Generate and conditional arms. */
 private enum DigitalRegionKind:

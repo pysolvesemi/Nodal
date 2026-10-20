@@ -565,6 +565,18 @@ private[nodal] object ConstructionKernel:
     case Some(session) => session.withDomain(domain)(body)
     case None => body
 
+  def digitalEvent(trigger: Expr[Bool], edge: Edge): Event = active match
+    case Some(session) => session.digitalEvent(trigger, edge)
+    case None => new Event(digitalDefinition = Some(KernelDigitalEventDefinition(trigger, edge)))
+
+  def digitalEventProcess(event: Event, body: () => Unit): Unit = active match
+    case Some(session) => session.digitalEventProcess(event, body)
+    case None =>
+      scala.util.Failure[Nothing](new ConstructionException(KernelDiagnostic(
+        "NODAL-EVENT-057-001",
+        "digital event process requires an active construction transaction"
+      ))).get
+
   def block[A](body: => A): A = body
 
   def analogBlock[A](body: => A): A = active match

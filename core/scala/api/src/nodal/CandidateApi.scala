@@ -766,7 +766,8 @@ object ClockMux:
 
 /** Typed event handle. Analog composition is distinct from Boolean short-circuit logic. */
 final class Event private[nodal] (
-    private[nodal] val analogDefinition: Option[KernelAnalogEventDefinition] = None
+    private[nodal] val analogDefinition: Option[KernelAnalogEventDefinition] = None,
+    private[nodal] val digitalDefinition: Option[KernelDigitalEventDefinition] = None
 ):
   infix def or(other: Event): Event = AnalogProceduralConstruction.composeEvents(this, other)
   def ||(other: Event): Event = this or other
@@ -1983,17 +1984,36 @@ private[nodal] object CandidateRuntime:
       ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
   def digitalEventBlock(event: Event, body: => Unit): Unit =
-    AnalogProceduralConstruction.requireDigitalEventContext()
-    block(event, body)
+    checkedEventBlock(event, () => body, allowAnalog = false)
+
+  /** The typed plugin supplies only the digital control certificate. Analog on retains its owner.
+    */
+  def checkedEventBlock(event: Event, body: () => Unit, allowAnalog: Boolean): Unit =
+    if event.analogDefinition.nonEmpty then
+      if allowAnalog then AnalogProceduralConstruction.eventControl(event)(body())
+      else AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
+    else
+      AnalogProceduralConstruction.requireDigitalEventContext()
+      AnalogProceduralConstruction.requireContinuousContext("digital event process")
+      DigitalEventCallback.requireChecked(body)
+      ConstructionKernel.digitalEventProcess(event, body)
 
   def block(event: Event, body: => Unit): Unit =
-    if event.analogDefinition.nonEmpty then
-      AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
-    AnalogProceduralConstruction.requireContinuousContext("digital event process")
-    ConstructionKernel.operation("event-block", event)
-    AnalogProceduralConstruction.lexicalScope:
-      ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
+    if event.digitalDefinition.nonEmpty then digitalEventBlock(event, body)
+    else
+      if event.analogDefinition.nonEmpty then
+        AnalogEventRuntime.fail(1, "analog events cannot control a digital low-level process")
+      // Legacy analog conditionals use an inert condition handle, not an executable edge.
+      AnalogProceduralConstruction.requireContinuousContext("digital event process")
+      ConstructionKernel.operation("event-block", event)
+      AnalogProceduralConstruction.lexicalScope:
+        ConstructionKernel.waveformForbidden(ConstructionKernel.block(body))
 
-  def event(values: Any*): Event =
-    ConstructionKernel.operation("event", values*)
-    new Event()
+  def event(values: Any*): Event = values.toVector match
+    case Vector(trigger: Expr[?], edge: Edge) if edge == Edge.Rising || edge == Edge.Falling =>
+      AnalogProceduralConstruction.requireDigitalEventContext()
+      ConstructionKernel.digitalEvent(trigger.asInstanceOf[Expr[Bool]], edge)
+    case _ =>
+      // Legacy analog conditionals and candidate named events are not digital edge authority.
+      ConstructionKernel.operation("event", values*)
+      new Event()

@@ -1575,3 +1575,65 @@ their earlier scoped evidence. Actual native admission of the new emitted scale
 witnesses remains pending; the companion `Increment57ScaleReplay` preserves the
 real bridge inputs for that check. Final F57 scale/architecture acceptance remains
 open until the integration review, not inferred from these two tests alone.
+
+### Tracked root-event source and bridge checkpoint
+
+The existing Event API now retains immutable actual trigger/edge identity. Digital
+on/process dispatch requires a private checked original-body control certificate;
+actual analog on remains unchanged. The existing compiler whole-unit inventory
+retains source control before Scala erasure, inspecting closed local helpers and
+pure finite-data callbacks. Missing certificates, authored choosing control/loops,
+opaque by-name/callable bodies and unknown singleton initialization fail closed.
+The existing compatible Pure singleton proof handles imported initialization and
+native enum scaffolding only; the event body is not relabeled Pure or Sequential.
+Scalar elaboration bookkeeping remains allowed. A caught rejection poisons capture.
+The historical double-writer digital-on example is an explicit negative, with a
+separate-output counterpart preserving both edges and host calls == 2.
+
+ConstructionSession owns process/state registration and extends its existing
+assignment/sampling traversal. Event state cuts retain process provenance through
+aliases/waivers, allowing only same-process pre-event reads; ordinary domain or
+other-process sampling rejects. There is no fabricated ClockDomain/reset/init.
+The shared finite ABI and bounded dependency graph are reused, with explicit
+whole output 1..4096 bits, module event state 262144 bits and process external
+capture inventory 4096 inputs. Existing traversal limits remain 65536 nodes,
+262144 edges and type depth 128. Inventory is graph-based, not bit/lane expanded;
+update grouping and target maps avoid repeated full scans per assignment.
+The bridge independently checks exact root ports/updates/captures, emits @none
+only for that verified boundary set, and carries exact source/process identity
+into root_event_v1/event_update using existing expression/writer owners.
+Reproducibility manifests add event records only when present.
+
+Mill testkit.test adds examples.clockResetApi solely to execute the original
+LowLevelEventFixture unchanged. The separately compiled uninstrumented singleton
+negative lives in testkit's ordinary producer, so its unknown first-use initializer
+cannot exploit a getter to hide authored choosing hardware control.
+
+Focused source/bridge tests pass **9/9** and analog compatibility **6/6** in
+.work/event-source-tests5.log. The source suite covers exact positive/negative
+state/capture boundaries, same-process old-state updates, actual original fixture,
+pure maps and enum literals, compiler-certificate regressions, malformed bridge
+association and deterministic independent 8/32-process growth. The boundary group
+completed in 4,601 ms in this local run; that is not a universal performance claim.
+Read-only source certificate architecture review found and resolved by-name,
+singleton and enum seams; no remaining concrete reviewed finding.
+
+Actual five-file Scala export is .work/f57-event-replay; a separate direct-Java
+resolved-classpath export exited 0 and matched all five files byte-for-byte in
+.work/f57-event-replay-verified. Mill runMain returned a wrapper subprocess failure
+after writing them, so that invocation is not reported as passing. Mandatory
+four-case native/HDL replay and the pure-map existing target-boundary check are
+owned separately; source admission alone is not an HDL claim. No CI or broad
+qualification ran. Source manifest/hashes and direct predecessor outcomes are in
+.work/event-source-checkpoint/ and .work/event-source-predecessors.log.
+
+Direct predecessors pass **48/48**: finite collection 11, sequential capture 20,
+level crossing 9 and waiver source 8 (.work/event-source-predecessors.log).
+
+Known required parity gap discovered after the scoped source run: a pure map with
+a constant yielded body is overcaptured by the shared Scala sample traversal,
+which currently visits all bound collection inputs rather than only actual
+used lane/yield roots. Native exact-capture equality correctly rejects that
+extra header input. This checkpoint preserves tested source progress only and
+does not claim root-event acceptance. The focused shared collection sampler
+repair and constant-map regression remain required before acceptance.

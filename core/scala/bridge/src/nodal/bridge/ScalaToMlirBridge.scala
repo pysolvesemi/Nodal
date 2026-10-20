@@ -2623,6 +2623,8 @@ ${indent(body, 2)}
               digitalValues.expressionType(assignment.value),
               assignment.path
             )
+          ,
+          assignment.eventProcess
         )
       def withDigitalLoopContext(loop: KernelDigitalLoopSnapshot, action: () => Unit): Unit =
         val previous = activeIntegerQuery
@@ -3860,7 +3862,8 @@ ${indent(body, 2)}
           vecTypeParts(value, declaration.path)._1 == "Clock"
         case _ => false
       val domainAttribute =
-        if declaration.domain.isEmpty && declaration.kind == "input" &&
+        if digitalValues.eventPort(declaration.path) then Vector("domain" -> "@none")
+        else if declaration.domain.isEmpty && declaration.kind == "input" &&
           declaration.dataType.contains("Bool") && ownedClockModules(module.path)
         then Vector("domain" -> "@none")
         else if clockInput && declaration.domain.isEmpty && module.domains.size > 1 then

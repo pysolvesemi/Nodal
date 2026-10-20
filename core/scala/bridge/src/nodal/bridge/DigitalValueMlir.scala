@@ -64,6 +64,66 @@ private[nodal] object DigitalValueMlir:
       module.declarations.map(value => value.path -> (module.path, value))
     ).toMap
     private val expressions = snapshot.digitalExpressions.map(value => value.path -> value).toMap
+    private val eventProcesses = snapshot.eventProcesses.map(value => value.path -> value).toMap
+    private val assignmentsByEventProcess =
+      snapshot.digitalAssignments.filter(_.eventProcess.nonEmpty)
+        .groupBy(_.eventProcess.get)
+    private val assignmentTargetCounts =
+      snapshot.digitalAssignments.groupMapReduce(_.target)(_ => 1)(_ + _)
+    private val eventTargetSets = snapshot.eventProcesses.map(value =>
+      value.path -> value.storageTargets.toSet
+    ).toMap
+    private val eventPorts = snapshot.eventProcesses.flatMap(value =>
+      Vector(value.trigger) ++ value.storageTargets ++ value.externalCaptures
+    ).toSet
+    def eventPort(path: String): Boolean = eventPorts(path)
+
+    requireValid(
+      snapshot.eventProcesses.size == eventProcesses.size && eventProcesses.size <= DigitalEventContract.MaximumNodes,
+      "event process identities must be unique and bounded",
+      snapshot.root
+    )
+    snapshot.eventProcesses.foreach: process =>
+      requireValid(
+        process.owner == snapshot.root && modules.contains(process.owner) &&
+          process.path.startsWith(process.owner + ".") &&
+          Set("rising", "falling")(process.edge) && process.storageTargets.nonEmpty &&
+          process.storageTargets.distinct == process.storageTargets &&
+          process.externalCaptures.distinct == process.externalCaptures &&
+          process.externalCaptures.size <= DigitalEventContract.MaximumCaptures,
+        "event process requires the actual root, one edge and unique bounded operand inventories",
+        process.path
+      )
+      def boundary(path: String, kind: String, bool: Boolean = false): Unit =
+        val declaration = declarations.get(path).filter(_._1 == process.owner).map(_._2)
+          .getOrElse(fail("event operand requires an actual owned boundary declaration", path))
+        requireValid(
+          declaration.kind == kind && declaration.domain.isEmpty &&
+            declaration.resolvedDomain.isEmpty && declaration.generatedScope.isEmpty &&
+            (!bool || declaration.dataType.contains("Bool")),
+          "event operand requires an unannotated exact root boundary",
+          path
+        )
+      boundary(process.trigger, "input", bool = true)
+      process.storageTargets.foreach(boundary(_, "output"))
+      process.externalCaptures.foreach(boundary(_, "input"))
+      val updates = assignmentsByEventProcess.getOrElse(process.path, Vector.empty)
+      requireValid(
+        updates.map(_.target).sorted == process.storageTargets.sorted &&
+          updates.forall(value =>
+            value.owner == process.owner && value.region.isEmpty &&
+              value.kind == "event_update"
+          ),
+        "event process storage inventory must match its exact unconditional updates",
+        process.path
+      )
+      process.storageTargets.foreach: target =>
+        requireValid(
+          assignmentTargetCounts.getOrElse(target, 0) == 1,
+          "event storage must have exactly one event writer and no continuous writer",
+          target
+        )
+
     private val byOwner = snapshot.digitalExpressions.groupBy(_.owner)
     private val collections = snapshot.digitalCollections.map(value => value.path -> value).toMap
     private val loops = snapshot.digitalLoops.map(value => value.path -> value).toMap
@@ -1113,7 +1173,17 @@ private[nodal] object DigitalValueMlir:
       ).map(_._2).getOrElse(
         fail("digital assignment target requires an owned declaration", assignment.path)
       )
+      requireValid(
+        (assignment.kind == "event_update") == assignment.eventProcess.nonEmpty &&
+          assignment.eventProcess.forall(eventProcesses.contains),
+        "event update requires its exact process reference and ordinary assignments cannot carry one",
+        assignment.path
+      )
       val valid = assignment.kind match
+        case "event_update" => target.kind == "output" && assignment.region.isEmpty &&
+          assignment.target == target.path && assignment.eventProcess.exists(path =>
+            eventTargetSets(path)(target.path)
+          )
         case "continuous" => Set("wire", "output", "instance-input").contains(target.kind) &&
           !assignment.region.exists(hasBehavioralAncestor)
         case "register_next" => target.kind == "register" &&
@@ -3546,6 +3616,22 @@ private[nodal] object DigitalValueMlir:
       if moduleChoices.isEmpty && !snapshot.flatFsms.exists(_.owner == module.path) &&
         !switchesByRegion.contains(module.path -> None)
       then emitModuleRoots()
+      // Port values are the canonical storage operands. Materialize all process headers before
+      // updates; native target lowering supplies the pre-event state cuts/backedges.
+      snapshot.eventProcesses.filter(_.owner == module.path).sortBy(_.path).foreach: process =>
+        val trigger = emit(process.trigger, 0, None, lines)
+        val targets = process.storageTargets.map(emit(_, 0, None, lines))
+        val captures = process.externalCaptures.map(emit(_, 0, None, lines))
+        val operands = Vector(trigger) ++ targets ++ captures
+        val obligations = DigitalEventContract.Obligations.map((key, value) =>
+          s"$key = ${quoted(value)}"
+        ).mkString("{", ", ", "}")
+        val attributes = s"sym_name = ${quoted(process.path)}, edge = ${quoted(process.edge)}, " +
+          s"contract = ${quoted(DigitalEventContract.Contract)}, obligations = $obligations, " +
+          s"operandSegmentSizes = array<i32: 1, ${targets.size}, ${captures.size}>, " +
+          s"metadata = ${metadata(process.path, false)}"
+        lines += s"${quoted("nodal.event_process")}(${operands.map(_._1).mkString(", ")}) <{$attributes}> : " +
+          s"(${operands.map(_._2).mkString(", ")}) -> ()${sourceLocation(process.path)}"
       def emitModuleAssignment(assignment: KernelDigitalAssignmentSnapshot): Unit =
         val target = emit(assignment.target, 0, None, lines)
         val value = emit(assignment.value, 0, None, lines)

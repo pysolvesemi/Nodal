@@ -25,6 +25,7 @@
 #include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -141,7 +142,8 @@ public:
       if (!structural) {
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
-        if (aggregate && !isa<PortValueOp, CrossingOp, AsyncFifoOp, DigitalAssignOp>(op) &&
+        if (aggregate &&
+            !isa<PortValueOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp>(op) &&
             !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
           return reject(
               &op, "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
@@ -220,6 +222,10 @@ public:
                     : crossing->kind == CrossingKind::Pulse     ? 64
                     : crossing->kind == CrossingKind::Gray      ? 2 * crossing->stages + 32
                                                                 : 3 * crossing->stages + 8;
+      } else if (isa<WaiverOp>(op)) {
+        if (failed(inspectExecutableWaiver(&op, domains)))
+          return failure();
+        expansion = 2; // One retained obligation and at most one identity wire; no state.
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -1514,6 +1520,42 @@ private:
     return enumCodes.find(op->getAttr("enum_ref"))->second.byId.lookup(id);
   }
   Value lowerValue(Operation *op, ArrayRef<Value> inputs) {
+    if (isa<WaiverOp>(op)) {
+      // Escape the serialized authored record byte-for-byte into one ASCII line.
+      // No newline, Unicode separator, comment terminator or Verbatim placeholder
+      // can become target syntax. The original typed record remains attached.
+      std::string authored;
+      llvm::raw_string_ostream stream(authored);
+      stream << op->getAttrDictionary();
+      std::string escaped;
+      constexpr char hex[] = "0123456789ABCDEF";
+      for (unsigned char c : authored) {
+        if (c < 32 || c >= 127 || c == '{' || c == '}' || c == '\\' || c == '/') {
+          escaped += "\\x";
+          escaped += hex[c >> 4];
+          escaped += hex[c & 15];
+        } else
+          escaped += c;
+      }
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(),
+          builder.getStringAttr("// NODAL stateless waiver: " + escaped +
+                                "; user physical responsibility; no synchronization, delivery or "
+                                "physical certification"),
+          ValueRange{}, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.waiver", op->getAttrDictionary());
+      StringRef occurrence = sourcePath(source);
+      if (occurrence.empty())
+        occurrence = text(source, "sym_name");
+      comment->setAttr(
+          "nodal.waiver_identity",
+          builder.getDictionaryAttr(
+              {builder.getNamedAttr("occurrence", builder.getStringAttr(occurrence)),
+               builder.getNamedAttr("semantic_path", builder.getStringAttr(sourcePath(op))),
+               builder.getNamedAttr("id", op->getAttr("id"))}));
+      return inputs[0];
+    }
     unsigned bits = width(op->getResult(0).getType());
     if (isa<ConstantOp, ConstLiteralOp>(op)) {
       auto attr = op->getAttrOfType<IntegerAttr>("value");

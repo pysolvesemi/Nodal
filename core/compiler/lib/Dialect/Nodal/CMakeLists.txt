@@ -20,6 +20,7 @@ add_mlir_dialect_library(NodalDialect
   PhysicalControlModel.cpp
   ResetModel.cpp
   CrossingModel.cpp
+  WaiverModel.cpp
   MemoryModel.cpp
   SequentialModel.cpp
   FlatFSMModel.cpp

@@ -4,6 +4,7 @@
 #include "mlir/Parser/Parser.h"
 #include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
@@ -140,6 +141,90 @@ struct Harness {
     if (!ok) {
       ++failures;
       llvm::errs() << "FAIL " << name << '\n' << diagnostic;
+    }
+  }
+  void intent(StringRef name, StringRef body, StringRef fields, bool valid = true,
+              StringRef source = "a", StringRef destination = "b", StringRef expected = "") {
+    diagnostic.clear();
+    auto owner = parseSourceString<mlir::ModuleOp>(
+        "module attributes {test_intent = {" + fields.str() +
+            "}} { \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" + body.str() +
+            "}) : () -> () }",
+        ParserConfig(&context, false));
+    bool ok = !!owner;
+    if (owner) {
+      Operation *module = &owner->getBody()->front();
+      auto fields = owner->getOperation()->getAttrOfType<DictionaryAttr>("test_intent");
+      nodal::DomainModel domains(module);
+      auto asynchronous = DictionaryAttr::get(
+          &context, {NamedAttribute(StringAttr::get(&context, "kind"),
+                                    StringAttr::get(&context, "asynchronous"))});
+      bool timingBefore =
+          succeeded(domains.verifyBoundaryRelationIntent(ref("a"), ref("b"), asynchronous, module));
+      SmallVector<bool> permission;
+      for (StringRef from : {"a", "b", "c"})
+        for (StringRef to : {"a", "b", "c"})
+          permission.push_back(domains.allowsDirectSampling(ref(from), ref(to)));
+      auto before = print(module);
+      diagnostic.clear();
+      bool result = succeeded(
+          domains.verifyBoundaryRelationIntent(ref(source), ref(destination), fields, module));
+      ok &= result == valid && print(module) == before;
+      ok &= expected.empty() || StringRef(diagnostic).contains(expected);
+      unsigned cursor = 0;
+      for (StringRef from : {"a", "b", "c"})
+        for (StringRef to : {"a", "b", "c"})
+          ok &= domains.allowsDirectSampling(ref(from), ref(to)) == permission[cursor++];
+      ok &= succeeded(domains.verifyBoundaryRelationIntent(ref("a"), ref("b"), asynchronous,
+                                                           module)) == timingBefore;
+      ok &= print(module) == before;
+    }
+    ++cases;
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL intent-" << name << '\n' << diagnostic;
+    }
+  }
+  void contextual(StringRef name, StringRef topBody, StringRef childBody, StringRef fields,
+                  bool valid = true, StringRef destination = "b") {
+    diagnostic.clear();
+    std::string requirement =
+        "\"nodal.domain_requirement\"() <{sym_name = \"req\", metadata = {}}> : () -> ()\n";
+    std::string instance =
+        "\"nodal.instance\"() <{sym_name = \"child\", module = @Child, parameter_bindings = {}, "
+        "domain_bindings = {req = @a}, metadata = {}}> : () -> ()\n"
+        "\"nodal.instance_domain_binding\"(%clka) <{instance = @child, requirement = @req, actual "
+        "= @a, origin = \"named\", metadata = {}}> : (" +
+        clockType + ") -> ()\n";
+    auto owner = parseSourceString<mlir::ModuleOp>(
+        "module attributes {nodal.root.module = @Top, test_intent = {" + fields.str() +
+            "}} { \"nodal.module\"() <{sym_name = \"Top\", metadata = {}}> ({\n" + topBody.str() +
+            instance +
+            "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
+            requirement + childBody.str() + "}) : () -> () }",
+        ParserConfig(&context, false));
+    bool ok = !!owner;
+    if (owner) {
+      std::string before = print(owner->getOperation());
+      auto hierarchy = nodal::HierarchyModel::create(owner->getOperation());
+      ok &= succeeded(hierarchy);
+      if (succeeded(hierarchy)) {
+        auto fields = owner->getOperation()->getAttrOfType<DictionaryAttr>("test_intent");
+        Operation *child = (*hierarchy)->occurrences()[1].module;
+        bool result = succeeded(nodal::verifyBoundaryRelationIntent(ref("req"), ref(destination),
+                                                                    fields, child, **hierarchy, 1));
+        ok &= result == valid;
+        auto a = (*hierarchy)->resolveDomain(1, ref("req"));
+        auto b = (*hierarchy)->resolveDomain(1, ref(destination));
+        if (succeeded(a) && succeeded(b))
+          ok &= !(*hierarchy)->allowsDirectSampling(*a, *b);
+      }
+      ok &= print(owner->getOperation()) == before;
+    }
+    ++cases;
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL contextual-intent-" << name << '\n' << diagnostic;
     }
   }
 };
@@ -390,6 +475,138 @@ int main() {
   test.check("same-physical-opposite-edges-frequency-still-consistent",
              opposite + replace(structural(relation("a", "a")), "%clka, %clka", "%clka, %clka"),
              false);
+
+  const std::string sameIntent = "kind = \"same\"";
+  const std::string ratioIntent =
+      "kind = \"ratio\", multiply = 2 : i32, divide = 1 : i32, phase = \"90.0\"";
+  const std::string identityIntent =
+      "kind = \"ratio\", multiply = 1 : i32, divide = 1 : i32, phase = \"0.0\"";
+  const std::string syncIntent = "kind = \"synchronous\", phase_known = true";
+  for (StringRef kind :
+       {"same", "ratio", "synchronous", "mutually_exclusive", "asynchronous", "unknown"}) {
+    std::string fields = kind == "ratio"         ? ratioIntent
+                         : kind == "synchronous" ? syncIntent
+                                                 : "kind = \"" + kind.str() + "\"";
+    test.intent((kind + "-absent-proof-no-new-permission-or-timing").str(), base, fields);
+  }
+  test.intent("same-versus-known-frequency", frequencies, sameIntent, false, "a", "b",
+              "frequencies");
+  test.intent("ratio-independent-frequency-does-not-infer-phase", frequencies, ratioIntent);
+  test.intent("ratio-independent-frequency-conflict", frequencies,
+              replace(ratioIntent, "2 : i32", "3 : i32"), false);
+  test.intent("ratio-known-phase-consistent", base + ratio("a", "b", 2, 1, "90.0"), ratioIntent);
+  test.intent("ratio-known-phase-conflict", base + ratio("a", "b", 2, 1, "0.0"), ratioIntent,
+              false);
+  test.intent("same-known-ratio-conflict", base + ratio("a", "b", 2, 1), sameIntent, false);
+  test.intent("same-known-phase-conflict", base + ratio("a", "b", 1, 1, "90.0"), sameIntent, false);
+  test.intent("same-known-exclusion", base + relation("a", "b", "mutually_exclusive"), sameIntent,
+              false);
+  for (const auto &fields : {sameIntent, ratioIntent, syncIntent})
+    test.intent("timing-intent-known-asynchronous", base + relation("a", "b", "asynchronous"),
+                fields, false);
+  test.intent("normalized-asynchronous-through-Same",
+              base + same + relation("b", "c", "asynchronous"), ratioIntent, false, "a", "c");
+  test.intent("synchronous-conflicting-phase-knowledge",
+              base + relation("a", "b", "synchronous", "phase_known = false, "), syncIntent, false);
+  test.intent("synchronous-false-preserves-global-ratio-compatibility",
+              base + ratio("a", "b", 2, 1), replace(syncIntent, "true", "false"));
+  test.intent("asynchronous-transitive-timing",
+              base + relation("a", "c", "synchronous", "phase_known = true, ") +
+                  relation("c", "b", "synchronous", "phase_known = false, "),
+              "kind = \"asynchronous\"", false);
+  test.intent("exclusive-Same", base + same, "kind = \"mutually_exclusive\"", false);
+  test.intent("exclusive-physical-alias", aliases, "kind = \"mutually_exclusive\"", false);
+  test.intent("unknown-does-not-erase-Same", base + same, "kind = \"unknown\"");
+  test.intent("unknown-does-not-erase-asynchronous", base + relation("a", "b", "asynchronous"),
+              "kind = \"unknown\"");
+  test.intent("physical-alias-ratio", aliases, identityIntent);
+  test.intent("physical-alias-nonzero-phase", aliases, replace(identityIntent, "0.0", "90.0"),
+              false);
+  test.intent("gate-Same-boundary-not-global-producer-merge", base + gate, sameIntent, true, "a",
+              "g");
+  auto oppositeAliases = replace(aliases, "sym_name = \"b\", edge = \"rising\"",
+                                 "sym_name = \"b\", edge = \"falling\"");
+  auto oppositeInputs =
+      replace(base, "sym_name = \"b\", edge = \"rising\"", "sym_name = \"b\", edge = \"falling\"");
+  test.intent("opposite-edges-unknown", oppositeAliases, "kind = \"unknown\"");
+  test.intent("opposite-edges-Same", oppositeAliases, sameIntent, false);
+  test.intent("opposite-edges-do-not-infer-phase", oppositeAliases,
+              replace(identityIntent, "0.0", "90.0"));
+  test.intent("opposite-edges-same-producer-frequency", oppositeAliases, ratioIntent, false);
+  test.intent("opposite-edges-known-correlation", oppositeAliases, "kind = \"asynchronous\"",
+              false);
+  test.intent("opposite-edges-independent-producers", oppositeInputs, "kind = \"asynchronous\"");
+  test.intent("foreign-source", base, sameIntent, false, "missing");
+  test.intent("unbound-endpoint", replace(base, binding("b", "clkb"), ""), sameIntent, false);
+  for (const auto &fields :
+       {std::string("kind = \"other\""), sameIntent + ", phase_known = true",
+        sameIntent + ", extra = true", replace(ratioIntent, "2 : i32", "0 : i32"),
+        replace(ratioIntent, "2 : i32", "2 : i64"), replace(ratioIntent, "90.0", "90.00"),
+        replace(syncIntent, "true", "\"true\""), std::string("kind = \"ratio\"")})
+    test.intent("closed-fields", base, fields, false);
+  for (const auto &fields : {sameIntent, ratioIntent, syncIntent})
+    test.intent("normalized-asynchronous-through-timing",
+                base + ratio("a", "b", 2, 1) + relation("b", "c", "asynchronous"), fields, false,
+                "a", "c");
+  const auto parentFrequency = domain("a", "", "100.0") + port("clka") + binding("a", "clka");
+  const auto childFrequency = domain("b", "", "200.0") + port("clkb") + binding("b", "clkb");
+  test.contextual("independent-occurrence-frequencies-no-phase-proof", parentFrequency,
+                  childFrequency, ratioIntent);
+  test.contextual("independent-occurrence-frequency-conflict", parentFrequency, childFrequency,
+                  sameIntent, false);
+  test.contextual("independent-occurrence-asynchronous", parentFrequency, childFrequency,
+                  "kind = \"asynchronous\"");
+  test.contextual("independent-occurrence-unknown", parentFrequency, childFrequency,
+                  "kind = \"unknown\"");
+  test.contextual("independent-occurrence-equal-frequency-no-phase-proof", parentFrequency,
+                  replace(childFrequency, "200.0", "100.0"),
+                  replace(identityIntent, "0.0", "90.0"));
+  test.contextual("opposite-edges-frequency-not-duty", parentFrequency,
+                  replace(childFrequency, "rising", "falling"), ratioIntent);
+  test.contextual("opposite-edges-Same", parentFrequency,
+                  replace(childFrequency, "rising", "falling"), sameIntent, false);
+  const auto shadowed = domain("a") + port("clka") + binding("a", "clka");
+  test.contextual("lexical-clock-domain-names-not-identity", parentFrequency, shadowed,
+                  "kind = \"asynchronous\"", true, "a");
+  test.contextual("missing-occurrence-endpoint", parentFrequency, childFrequency,
+                  "kind = \"unknown\"", false, "missing");
+  const auto inferredParent = domain("a") + domain("c", "", "100.0") + port("clka") + port("clkc") +
+                              binding("a", "clka") + binding("c", "clkc") +
+                              replace(ratio("c", "a", 2, 1), "Fixture.", "Top.");
+  test.contextual("independent-occurrence-frequency-through-existing-relationship", inferredParent,
+                  replace(childFrequency, "200.0", "400.0"), ratioIntent);
+  test.contextual("independent-occurrence-inferred-frequency-conflict", inferredParent,
+                  replace(childFrequency, "200.0", "400.0"), sameIntent, false);
+  auto oppositeFrequency =
+      replace(oppositeAliases,
+              "sym_name = \"a\", edge = \"rising\", reset_policy = \"none\", metadata = {}",
+              "sym_name = \"a\", edge = \"rising\", reset_policy = \"none\", metadata = "
+              "{frequency_hz = \"100.0\"}");
+  oppositeFrequency =
+      replace(oppositeFrequency,
+              "sym_name = \"c\", edge = \"rising\", reset_policy = \"none\", metadata = {}",
+              "sym_name = \"c\", edge = \"rising\", reset_policy = \"none\", metadata = "
+              "{frequency_hz = \"200.0\"}");
+  test.intent("unannotated-opposite-edge-known-frequency", oppositeFrequency, ratioIntent, true,
+              "b", "c");
+  test.intent("unannotated-opposite-edge-frequency-conflict", oppositeFrequency, identityIntent,
+              false, "b", "c", "frequencies");
+  auto inferredOpposite = oppositeAliases + domain("x", "", "100.0") + port("clkx") +
+                          binding("x", "clkx") + ratio("x", "a", 2, 1);
+  inferredOpposite =
+      replace(inferredOpposite,
+              "sym_name = \"c\", edge = \"rising\", reset_policy = \"none\", metadata = {}",
+              "sym_name = \"c\", edge = \"rising\", reset_policy = \"none\", metadata = "
+              "{frequency_hz = \"400.0\"}");
+  test.intent("opposite-edge-inferred-frequency", inferredOpposite, ratioIntent, true, "b", "c");
+  test.intent("opposite-edge-inferred-frequency-conflict", inferredOpposite, identityIntent, false,
+              "b", "c", "frequencies");
+  auto conflictingOpposite =
+      inferredOpposite + replace(domain("y", "", "100.0"), "rising", "falling") + port("clky") +
+      binding("y", "clky") + replace(ratio("y", "b", 3, 1), "%clkb", "%clka");
+  test.intent("opposite-edge-conflicting-independent-frequency-not-first-match",
+              conflictingOpposite, "kind = \"unknown\"", false, "b", "c",
+              "inconsistent independently inferred frequencies");
   std::string huge;
   for (unsigned i = 0; i != 140; ++i) {
     std::string name = "n" + std::to_string(i);

@@ -16,6 +16,7 @@
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -87,6 +88,11 @@ public:
       auto endpoint =
           crossing ? crossings[index].results[llvm::cast<OpResult>(node.value).getResultNumber()]
                    : DigitalCrossingResult{interfaceDomains.lookup(node.value), {}};
+      Operation *waiver = node.value ? node.value.getDefiningOp() : nullptr;
+      if (!waiverIndexes.count(waiver))
+        waiver = nullptr;
+      if (waiver)
+        endpoint.domain = waiver->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
       bool boundary = false;
       if (node.value) {
         auto access = resolveStaticShapeProjection(node.value, node.use);
@@ -94,19 +100,23 @@ public:
         boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
-                              crossing, index, endpoint.role, 0, boundary});
+                              crossing, index, endpoint.role, 0, boundary, waiver});
     }
     result.crossings = std::move(crossings);
+    result.waivers = std::move(waivers);
     result.observations = std::move(observations);
     SequentialModelLimits sampleLimits;
     sampleLimits.maximumOperations = limits.maximumNodes;
-    if (failed(verifyCrossingSourceDependencies(module, result, sampleLimits)))
+    if (failed(verifyCrossingSourceDependencies(module, result, sampleLimits)) ||
+        failed(verifyWaiverSourceDependencies(module, result, sampleLimits)))
       return failure();
     return result;
   }
 
 private:
   llvm::DenseMap<Operation *, unsigned> crossingIndexes;
+  llvm::DenseMap<Operation *, unsigned> waiverIndexes;
+  SmallVector<DigitalWaiverDependency> waivers;
   SmallVector<DigitalCrossingDependency> crossings;
   SmallVector<DigitalObservationGroup> observations;
   llvm::DenseMap<std::pair<Operation *, Operation *>, Operation *> instancePortOwners;
@@ -700,6 +710,12 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     // A synchronization chain is an actual state cut, not a domainless alias.
     return success();
   }
+  if (llvm::isa<WaiverOp>(definition)) {
+    if (!waiverIndexes.count(definition))
+      return reject(definition, "waiver requires its independently verified owned contract");
+    // Unlike a synchronizer, this alias never cuts combinational cycle/driver proof.
+    return depend(node, definition->getOperand(0), definition);
+  }
   if (llvm::isa<CrossingOp, AsyncFifoOp>(definition)) {
     if (!crossingIndexes.count(definition))
       return reject(definition, "descriptor crossing cannot authorize an executable graph cut");
@@ -850,7 +866,7 @@ LogicalResult AssignmentQuery::verify() {
     unsigned depth;
   };
   const DomainModel domains(module);
-  llvm::StringSet<> crossingIdentities;
+  llvm::StringSet<> crossingIdentities, waiverIds, waiverIdentities;
   uint64_t crossingStateBits = 0;
   SmallVector<Scope, 8> scopes{{&module->getRegion(0).front(), nullptr, 0}};
   for (unsigned cursor = 0; cursor < scopes.size(); ++cursor) {
@@ -882,6 +898,18 @@ LogicalResult AssignmentQuery::verify() {
           crossing.results.push_back({result.domain, result.role});
         crossingIndexes.try_emplace(&operation, crossings.size());
         crossings.push_back(std::move(crossing));
+      } else if (llvm::isa<WaiverOp>(operation)) {
+        auto header = inspectExecutableWaiver(&operation, domains);
+        if (failed(header))
+          return failure();
+        if (!waiverIds.insert(header->id).second ||
+            !waiverIdentities.insert(header->identity).second)
+          return reject(&operation, "authored waivers require unique IDs and semantic identities");
+        auto root = valueNode(operation.getOperand(0), &operation);
+        if (failed(root))
+          return failure();
+        waiverIndexes.try_emplace(&operation, waivers.size());
+        waivers.push_back({&operation, *root});
       } else if (llvm::isa<DigitalAssignOp>(operation)) {
         if (failed(collect(&operation, scope.iteration, ordinal++)))
           return failure();
@@ -1112,6 +1140,11 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
         sample.root += offset;
       graph.crossings.push_back(std::move(crossing));
     }
+    for (auto waiver : local.graph.waivers) {
+      waiver.occurrence = occurrence;
+      waiver.root += offset;
+      graph.waivers.push_back(waiver);
+    }
     for (const auto &observation : local.graph.observations) {
       DigitalObservationGroup group;
       group.use = observation.use;
@@ -1196,7 +1229,8 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
   SequentialModelLimits sampleLimits;
   sampleLimits.maximumOperations = limits.maximumNodes;
   Operation *root = hierarchy->occurrences().front().module;
-  if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)))
+  if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)) ||
+      failed(verifyWaiverSourceDependencies(root, graph, sampleLimits)))
     return failure();
   return verifySequentialSampleDependencies(root, samples, graph, sampleRoots, sampleLimits);
 }

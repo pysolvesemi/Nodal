@@ -1419,3 +1419,38 @@ derived in distinct opposite-edge timing components for one physical producer
 must be checked consistently. The boundary query rejects that conflict; a focused
 shared-owner global repair is still required before final F57 acceptance. Event
 execution and final integration also remain open. No CI or broad qualification ran.
+
+### Owned native waiver and stateless target checkpoint
+
+Native WaiverModel independently verifies the closed stateless operation, real
+payload/type and actual endpoint bindings, bounded UTF-8 text/uniqueness, typed
+relation intent and occurrence context. The shared assignment graph retains the
+payload dependency for driver/cycle proof. Only domain permission stops at the
+verified destination; physical lineage and Pulse checks continue without inventing
+a waiver source or synchronizer identity. Existing reconvergence now follows
+retained upstream crossing sample roots transitively, without changing physical
+state cuts. Resetless endpoints remain legal; no common reset epoch is invented.
+
+The frozen twenty-file native/query/target slice passes **67 waiver model**,
+**16 target lowering**, **12 hierarchy waiver**, and **170 relationship/query**
+cases. Direct predecessors pass: crossing 273, observations 25, hierarchy
+47 distinct plus 16 repeats, sequential 71, and sequential CIRCT 145.
+The exact inventory, hashes and logs are in
+`.work/owned-waiver-native-checkpoint.json`. Immutable compiler copy:
+`.work/owned-waiver-native-checkpoint/nodalc`, SHA256
+`2ce5d17aba9e1f18d231b169c39b4473ffe6896d605c8da80621c614297c5322`.
+
+Actual native-generated scalar, aggregate and Struct SystemVerilog each passes
+36 Icarus identity samples with clocks held, including X/Z data, with no invented
+state/reset and safely escaped authored obligations. Evidence is under
+`.work/waiver-native-target`. The maintained runner is
+`tests/scala/owned-waivers/run_target.py`; no emitted HDL was rewritten or substitute
+DUT used. The target preserves occurrence/path/ID contract identity and does not
+certify physical safety, delivery or electrical assumptions.
+
+The separate source sampler predecessor selection also passes **64/64** unchanged:
+level 9, Gray/Pulse 13, handshake 10, FIFO 12, hierarchy 9, Interface observations 7,
+and assignment source 4 (`.work/owned-waiver-source-predecessors.log`). Actual Scala
+target replay and truthful stateless source naming are being finalized separately.
+The known global opposite-edge frequency consistency repair remains required,
+along with events/final integration. No CI or broad qualification ran.

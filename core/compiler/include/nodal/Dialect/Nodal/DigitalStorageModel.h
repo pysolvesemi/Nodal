@@ -44,7 +44,7 @@ struct DigitalDependencyNode {
   mlir::Value value;
   mlir::Operation *use;
   llvm::SmallVector<unsigned, 2> dependencies;
-  /// Verified Interface source constraint or exact crossing-result domain, when any.
+  /// Verified Interface source constraint, crossing result or waiver permission domain.
   mlir::FlatSymbolRefAttr sourceDomain;
   /// Exact coherent stateful boundary identity and inventory index. Sampled
   /// roots are provenance, NOT combinational dependencies or domainless cuts.
@@ -53,6 +53,9 @@ struct DigitalDependencyNode {
   llvm::StringRef crossingRole;
   unsigned occurrence = 0;
   bool hierarchyBoundary = false;
+  /// Stateless permission boundary only. Physical dependencies and lineage stay
+  /// intact; this operation is never a physical source or synchronizer identity.
+  mlir::Operation *waiver = nullptr;
 };
 struct DigitalCrossingSample {
   unsigned root;
@@ -70,6 +73,11 @@ struct DigitalCrossingDependency {
   llvm::SmallVector<DigitalCrossingResult, 3> results;
   unsigned occurrence = 0;
 };
+struct DigitalWaiverDependency {
+  mlir::Operation *operation = nullptr;
+  unsigned root = 0;
+  unsigned occurrence = 0;
+};
 struct DigitalObservationGroup {
   mlir::Operation *use = nullptr;
   llvm::SmallVector<unsigned, 2> roots;
@@ -78,6 +86,7 @@ struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;
   llvm::SmallVector<unsigned> roots;
   llvm::SmallVector<DigitalCrossingDependency> crossings;
+  llvm::SmallVector<DigitalWaiverDependency> waivers;
   /// Canonical coherent observations, never a module-wide group.
   llvm::SmallVector<DigitalObservationGroup> observations;
   std::shared_ptr<const HierarchyModel> hierarchy;

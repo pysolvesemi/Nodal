@@ -1688,6 +1688,17 @@ def Nodal_CrossingOp : Nodal_Op<"crossing"> {
   let hasVerifier = 1;
 }
 
+// Explicit stateless exception, never a synchronization or state-cut operation.
+def Nodal_WaiverOp : Nodal_Op<"waiver", [HasParent<"ModuleOp">]> {
+  let summary = "Owned stateless value-boundary exception with retained obligations";
+  let arguments = (ins AnyType:$input, FlatSymbolRefAttr:$source_domain,
+    FlatSymbolRefAttr:$destination_domain, StrAttr:$contract, StrAttr:$id,
+    StrAttr:$reason, DictionaryAttr:$relation, DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+
 def Nodal_AsyncFifoOp : Nodal_Op<"async_fifo"> {
   let summary = "Owned elastic asynchronous ready/valid FIFO";
   let arguments = (ins

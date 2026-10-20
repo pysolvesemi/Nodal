@@ -2,6 +2,7 @@
 #include "nodal/Dialect/Nodal/ClockModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "llvm/ADT/APFloat.h"
@@ -15,6 +16,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -229,15 +231,58 @@ std::optional<Rational> phaseTurns(StringRef spelling) {
     remainder = turns->denominator - remainder;
   return Rational(remainder, turns->denominator);
 }
-struct Header {
-  Operation *operation = nullptr;
-  Operation *source = nullptr;
-  Operation *destination = nullptr;
-  ClockIdentity clocks[2];
+struct RelationFields {
   StringRef kind;
   Rational period{1}; // Pdestination / Psource.
   Rational phase;     // Canonical [0, 1) turns of Pdestination.
   std::optional<bool> phaseKnown;
+};
+FailureOr<RelationFields> inspectFields(DictionaryAttr fields, Operation *diagnostic) {
+  auto bad = [&](StringRef message) -> FailureOr<RelationFields> {
+    (void)reject(diagnostic, message);
+    return failure();
+  };
+  if (!fields)
+    return bad("relationship intent requires its closed typed field dictionary");
+  for (NamedAttribute attribute : fields)
+    if (!llvm::is_contained(
+            ArrayRef<StringRef>{"kind", "multiply", "divide", "phase", "phase_known"},
+            attribute.getName().getValue()))
+      return bad("relationship intent contains an unsupported field");
+  RelationFields result;
+  auto kind = fields.getAs<StringAttr>("kind");
+  result.kind = kind ? kind.getValue() : StringRef();
+  if (!llvm::is_contained(ArrayRef<StringRef>{"same", "ratio", "synchronous", "mutually_exclusive",
+                                              "asynchronous", "unknown"},
+                          result.kind))
+    return bad("unsupported executable relationship kind");
+  bool ratio = result.kind == "ratio", synchronous = result.kind == "synchronous";
+  if ((!ratio && (fields.get("multiply") || fields.get("divide") || fields.get("phase"))) ||
+      (!synchronous && fields.get("phase_known")))
+    return bad("kind-specific relationship fields must be absent for every other kind");
+  if (ratio) {
+    auto m = fields.getAs<IntegerAttr>("multiply"), d = fields.getAs<IntegerAttr>("divide");
+    auto p = fields.getAs<StringAttr>("phase");
+    auto turns = p ? phaseTurns(p.getValue()) : std::optional<Rational>();
+    if (!m || !d || !m.getType().isSignlessInteger(32) || !d.getType().isSignlessInteger(32) ||
+        m.getInt() <= 0 || d.getInt() <= 0 || !turns)
+      return bad("Ratio requires positive signed-32-bit integers and canonical finite exact "
+                 "decimal phase (4096-bit arithmetic bound)");
+    result.period = Rational(integer(d.getInt()), integer(m.getInt()));
+    result.phase = *turns;
+  } else if (synchronous) {
+    auto known = fields.getAs<BoolAttr>("phase_known");
+    if (!known)
+      return bad("Synchronous requires exact boolean phase_known");
+    result.phaseKnown = known.getValue();
+  }
+  return result;
+}
+struct Header : RelationFields {
+  Operation *operation = nullptr;
+  Operation *source = nullptr;
+  Operation *destination = nullptr;
+  ClockIdentity clocks[2];
 };
 FailureOr<Header> inspect(Operation *op, const DomainModel &domains) {
   auto bad = [&](StringRef message) -> FailureOr<Header> {
@@ -263,11 +308,14 @@ FailureOr<Header> inspect(Operation *op, const DomainModel &domains) {
     return bad("relationship requires its closed contract and owned semantic identity");
   Header result;
   result.operation = op;
-  result.kind = text(op, "kind");
-  if (!llvm::is_contained(ArrayRef<StringRef>{"same", "ratio", "synchronous", "mutually_exclusive",
-                                              "asynchronous", "unknown"},
-                          result.kind))
-    return bad("unsupported executable relationship kind");
+  SmallVector<NamedAttribute> fieldAttributes;
+  for (StringRef name : {"kind", "multiply", "divide", "phase", "phase_known"})
+    if (auto value = op->getAttr(name))
+      fieldAttributes.emplace_back(StringAttr::get(op->getContext(), name), value);
+  auto fields = inspectFields(DictionaryAttr::get(op->getContext(), fieldAttributes), op);
+  if (failed(fields))
+    return failure();
+  static_cast<RelationFields &>(result) = *fields;
   for (unsigned i = 0; i != 2; ++i) {
     Attribute reference = op->getAttr(i ? "destination" : "source");
     auto domain = domains.resolveDomain(reference);
@@ -282,10 +330,6 @@ FailureOr<Header> inspect(Operation *op, const DomainModel &domains) {
   }
   if (result.source->getAttr("edge") != result.destination->getAttr("edge"))
     return bad("relationship endpoints require matching active-edge polarity");
-  bool ratio = result.kind == "ratio", synchronous = result.kind == "synchronous";
-  if ((!ratio && (op->hasAttr("multiply") || op->hasAttr("divide") || op->hasAttr("phase"))) ||
-      (!synchronous && op->hasAttr("phase_known")))
-    return bad("kind-specific relationship fields must be absent for every other kind");
   StringRef proof = text(op, "proof");
   auto obligations = op->getAttrOfType<DictionaryAttr>("obligations");
   auto obligation = [&](StringRef key, StringRef expected) {
@@ -301,25 +345,12 @@ FailureOr<Header> inspect(Operation *op, const DomainModel &domains) {
                      !result.clocks[1].physical || !obligation("active_edges", "identical_stream")))
       return bad("Same requires exact structural identity or two external inputs and their "
                  "identical active-edge environment contract; derived metadata is not proof");
-  } else if (ratio) {
-    auto m = op->getAttrOfType<IntegerAttr>("multiply");
-    auto d = op->getAttrOfType<IntegerAttr>("divide");
-    auto p = op->getAttrOfType<StringAttr>("phase");
-    auto turns = p ? phaseTurns(p.getValue()) : std::optional<Rational>();
-    if (!m || !d || !m.getType().isSignlessInteger(32) || !d.getType().isSignlessInteger(32) ||
-        m.getInt() <= 0 || d.getInt() <= 0 || !turns || proof != "timing_contract" ||
-        !obligation("timing", "exact_relative_period_phase"))
-      return bad(
-          "Ratio requires positive signed-32-bit integers, canonical finite exact decimal phase "
-          "and its timing obligation (4096-bit arithmetic bound)");
-    result.period = Rational(integer(d.getInt()), integer(m.getInt()));
-    result.phase = *turns;
-  } else if (synchronous) {
-    auto known = op->getAttrOfType<BoolAttr>("phase_known");
-    if (!known || proof != "timing_contract" ||
-        !obligation("timing", "synchronous_phase_knowledge_retained"))
-      return bad("Synchronous requires exact phase_known and retained timing knowledge");
-    result.phaseKnown = known.getValue();
+  } else if (result.kind == "ratio") {
+    if (proof != "timing_contract" || !obligation("timing", "exact_relative_period_phase"))
+      return bad("Ratio requires its retained timing obligation");
+  } else if (result.kind == "synchronous") {
+    if (proof != "timing_contract" || !obligation("timing", "synchronous_phase_knowledge_retained"))
+      return bad("Synchronous requires its retained timing knowledge");
   } else if (result.kind == "mutually_exclusive") {
     if (proof != "operating_mode_contract" ||
         !obligation("exclusion", "never_simultaneously_enabled"))
@@ -334,10 +365,13 @@ struct UnionFind {
   explicit UnionFind(unsigned count = 0) : parents(count) {
     std::iota(parents.begin(), parents.end(), 0);
   }
+  unsigned representative(unsigned id) const {
+    while (parents[id] != id)
+      id = parents[id];
+    return id;
+  }
   unsigned root(unsigned id) {
-    unsigned top = id;
-    while (parents[top] != top)
-      top = parents[top];
+    unsigned top = representative(id);
     while (id != top) {
       unsigned next = parents[id];
       parents[id] = top;
@@ -360,17 +394,40 @@ struct TimingEdge {
 } // namespace
 
 struct DomainRelationshipIndex {
-  bool valid = false;
+  struct Coordinate {
+    Rational period{1}, offset;
+    bool assigned = false;
+  };
+  struct PairClaims {
+    std::optional<bool> phaseKnown;
+    bool exclusive = false;
+  };
+  bool valid = false, complete = false;
   llvm::DenseMap<Operation *, unsigned> domains;
-  UnionFind same;
+  UnionFind same, timing, synchronous, physical;
+  std::vector<Coordinate> coordinates;
+  std::vector<std::optional<Rational>> componentFrequency;
+  std::map<std::pair<unsigned, unsigned>, PairClaims> claims;
+  std::set<std::pair<unsigned, unsigned>> asynchronousPairs;
+  using Producer = std::pair<Operation *, std::string>;
+  std::vector<Producer> producers;
+  // Independent coordinate witnesses, one per producer timing component.
+  // A valid physical producer has at most its rising/falling edge components.
+  std::map<Producer, SmallVector<unsigned, 2>> frequencySources;
 };
+
+LogicalResult verifyBoundaryRelationIntentFields(DictionaryAttr intent, Operation *diagnostic) {
+  return success(succeeded(inspectFields(intent, diagnostic)));
+}
 
 LogicalResult verifyClockRelationship(Operation *op) {
   return success(succeeded(inspect(op, DomainModel(op))));
 }
 
-LogicalResult DomainModel::verifyRelationships() const {
-  if (relationships)
+LogicalResult DomainModel::verifyRelationships() const { return verifyRelationshipIndex(false); }
+
+LogicalResult DomainModel::verifyRelationshipIndex(bool endpointFacts) const {
+  if (relationships && (!endpointFacts || relationships->complete || !relationships->valid))
     return success(relationships->valid);
   relationships = std::make_shared<DomainRelationshipIndex>();
   auto &index = *relationships;
@@ -386,7 +443,7 @@ LogicalResult DomainModel::verifyRelationships() const {
     else if (isa<DomainOp>(op))
       domainList.push_back(&op);
   }
-  if (records.empty()) {
+  if (records.empty() && !endpointFacts) {
     index.valid = true;
     return success();
   }
@@ -397,12 +454,16 @@ LogicalResult DomainModel::verifyRelationships() const {
   llvm::sort(records, [](Operation *a, Operation *b) { return path(a) < path(b); });
   unsigned count = domainList.size();
   index.same = UnionFind(count);
-  UnionFind timing(count), synchronous(count), physical(count);
+  index.timing = UnionFind(count);
+  index.synchronous = UnionFind(count);
+  index.physical = UnionFind(count);
+  auto &timing = index.timing, &synchronous = index.synchronous, &physical = index.physical;
   for (unsigned i = 0; i != count; ++i)
     index.domains.try_emplace(domainList[i], i);
   SmallVector<TimingEdge> edges;
   std::map<std::tuple<Operation *, std::string, std::string>, unsigned> identities;
   std::vector<std::optional<Rational>> frequencies(count);
+  index.producers.resize(count);
   std::map<std::pair<Operation *, std::string>, Rational> physicalFrequencies;
   for (unsigned i = 0; i != count; ++i) {
     Operation *domain = domainList[i];
@@ -418,6 +479,7 @@ LogicalResult DomainModel::verifyRelationships() const {
       return failure();
     Operation *owner = clock->physical ? clock->physical->port : clock->producer;
     std::string key = clock->physical ? clock->physical->scalarKey : "";
+    index.producers[i] = {owner, key};
     auto inserted =
         identities.try_emplace(std::make_tuple(owner, key, text(domain, "edge").str()), i);
     if (!inserted.second) {
@@ -476,11 +538,8 @@ LogicalResult DomainModel::verifyRelationships() const {
         return na < nb;
       return path(a.operation) < path(b.operation);
     });
-  struct Coordinate {
-    Rational period{1}, offset;
-    bool assigned = false;
-  };
-  std::vector<Coordinate> coordinates(count);
+  index.coordinates.resize(count);
+  auto &coordinates = index.coordinates;
   for (unsigned root = 0; root != count; ++root) {
     if (coordinates[root].assigned)
       continue;
@@ -520,7 +579,8 @@ LogicalResult DomainModel::verifyRelationships() const {
     if (!(*expectedPeriod == b.period) || !turns->denominator.isOne())
       return reject(edge.operation, "inconsistent exact ratio/phase path, physical alias or cycle");
   }
-  std::vector<std::optional<Rational>> componentFrequency(count);
+  index.componentFrequency.resize(count);
+  auto &componentFrequency = index.componentFrequency;
   for (unsigned i = 0; i != count; ++i) {
     if (!frequencies[i])
       continue;
@@ -533,14 +593,25 @@ LogicalResult DomainModel::verifyRelationships() const {
                     "supplied frequency contradicts exact clock relationships or aliases");
     componentFrequency[root] = *rootFrequency;
   }
-  struct PairClaims {
-    std::optional<bool> phaseKnown;
-  };
-  std::map<std::pair<unsigned, unsigned>, PairClaims> claims;
+  for (unsigned i = 0; i != count; ++i) {
+    if (!componentFrequency[timing.representative(i)] || !index.producers[i].first)
+      continue;
+    auto &sources = index.frequencySources[index.producers[i]];
+    if (llvm::none_of(sources, [&](unsigned known) {
+          return timing.representative(known) == timing.representative(i);
+        }))
+      sources.push_back(i);
+  }
+  auto &claims = index.claims;
   for (const auto &header : headers) {
     unsigned a = index.domains.lookup(header.source), b = index.domains.lookup(header.destination);
     unsigned pa = physical.root(a), pb = physical.root(b);
     auto &pair = claims[{std::min(pa, pb), std::max(pa, pb)}];
+    if (header.kind == "asynchronous") {
+      unsigned sa = synchronous.representative(a), sb = synchronous.representative(b);
+      index.asynchronousPairs.insert({std::min(sa, sb), std::max(sa, sb)});
+    }
+    pair.exclusive |= header.kind == "mutually_exclusive";
     if (header.kind == "asynchronous" && synchronous.root(a) == synchronous.root(b))
       return reject(header.operation, "Asynchronous contradicts known synchronous or Same timing");
     if (header.kind == "mutually_exclusive") {
@@ -553,8 +624,177 @@ LogicalResult DomainModel::verifyRelationships() const {
       pair.phaseKnown = header.phaseKnown;
     }
   }
+  index.complete = true;
   index.valid = true;
   return success();
+}
+
+namespace {
+// Both admission and boundary queries use the same bounded exact coordinates.
+// A query reads representatives without path compression and records no claims.
+LogicalResult verifyBoundaryFacts(const DomainRelationshipIndex &left, unsigned source,
+                                  const DomainRelationshipIndex &right, unsigned destination,
+                                  const RelationFields &intent, bool sameProducer, bool sameEdge,
+                                  Operation *diagnostic) {
+  bool local = &left == &right;
+  bool identical = sameProducer && sameEdge;
+  if (intent.kind == "same" && !sameEdge)
+    return reject(diagnostic, "Same boundary intent contradicts different active edges");
+  const DomainRelationshipIndex::PairClaims *known = nullptr;
+  if (local) {
+    unsigned a = left.physical.representative(source),
+             b = left.physical.representative(destination);
+    auto found = left.claims.find({std::min(a, b), std::max(a, b)});
+    if (found != left.claims.end())
+      known = &found->second;
+  }
+  auto frequency = [&](const DomainRelationshipIndex &index,
+                       unsigned node) -> FailureOr<std::optional<Rational>> {
+    std::optional<Rational> result;
+    auto sources = index.frequencySources.find(index.producers[node]);
+    if (sources == index.frequencySources.end())
+      return result;
+    for (unsigned source : sources->second) {
+      const auto &root = index.componentFrequency[index.timing.representative(source)];
+      auto value = multiply(*root, index.coordinates[source].period.inverse());
+      if (!value) {
+        (void)reject(diagnostic, "boundary frequency comparison exceeds 4096-bit arithmetic bound");
+        return failure();
+      }
+      if (result && !(*result == *value)) {
+        (void)reject(diagnostic,
+                     "physical clock has inconsistent independently inferred frequencies");
+        return failure();
+      }
+      result = *value;
+    }
+    return result;
+  };
+  auto sourceFrequency = frequency(left, source),
+       destinationFrequency = frequency(right, destination);
+  if (failed(sourceFrequency) || failed(destinationFrequency))
+    return failure();
+  bool exact = intent.kind == "same" || intent.kind == "ratio";
+  if ((exact || intent.kind == "synchronous") && local) {
+    unsigned a = left.synchronous.representative(source),
+             b = left.synchronous.representative(destination);
+    if (left.asynchronousPairs.count({std::min(a, b), std::max(a, b)}))
+      return reject(diagnostic,
+                    "boundary intent contradicts independently known asynchronous classification");
+  }
+  if (intent.kind == "same" && known && known->exclusive)
+    return reject(diagnostic, "Same boundary intent contradicts independently known exclusion");
+  if (intent.kind == "asynchronous" &&
+      (sameProducer || (local && left.synchronous.representative(source) ==
+                                     left.synchronous.representative(destination))))
+    return reject(diagnostic,
+                  "asynchronous boundary intent contradicts independently known timing or Same");
+  if (intent.kind == "mutually_exclusive" &&
+      (sameProducer ||
+       (local &&
+        (left.same.representative(source) == left.same.representative(destination) ||
+         left.physical.representative(source) == left.physical.representative(destination)))))
+    return reject(diagnostic, "exclusive boundary intent contradicts physical identity or Same");
+  if (intent.kind == "synchronous" && known && known->phaseKnown &&
+      known->phaseKnown != intent.phaseKnown)
+    return reject(diagnostic,
+                  "boundary intent contradicts independently known synchronous phase knowledge");
+  if (exact && sameProducer && !(intent.period == Rational(1)))
+    return reject(diagnostic, "boundary intent contradicts the frequency of one physical clock");
+  if (exact && identical && !intent.phase.numerator.isZero())
+    return reject(diagnostic, "boundary intent contradicts exact physical clock phase");
+  if (exact && local &&
+      left.timing.representative(source) == left.timing.representative(destination)) {
+    const auto &a = left.coordinates[source], &b = left.coordinates[destination];
+    auto expected = multiply(a.period, intent.period);
+    auto delta = expected ? multiply(*expected, intent.phase) : std::optional<Rational>();
+    auto offset = delta ? add(a.offset, *delta) : std::optional<Rational>();
+    auto residual = offset ? add(b.offset, offset->negated()) : std::optional<Rational>();
+    auto turns =
+        residual && expected ? multiply(*residual, expected->inverse()) : std::optional<Rational>();
+    if (!expected || !turns)
+      return reject(diagnostic, "boundary intent exceeds 4096-bit exact arithmetic bound");
+    if (!(*expected == b.period) || !turns->denominator.isOne())
+      return reject(diagnostic,
+                    "boundary intent contradicts independently known exact period or phase");
+  } else if (exact || sameProducer) {
+    if (*sourceFrequency && *destinationFrequency) {
+      auto expected = multiply(**destinationFrequency, exact ? intent.period : Rational(1));
+      if (!expected)
+        return reject(diagnostic,
+                      "boundary frequency comparison exceeds 4096-bit arithmetic bound");
+      if (!(**sourceFrequency == *expected))
+        return reject(diagnostic, "boundary intent contradicts independently known frequencies");
+    }
+  }
+  return success();
+}
+} // namespace
+
+LogicalResult DomainModel::verifyBoundaryRelationIntent(Attribute source, Attribute destination,
+                                                        DictionaryAttr intent,
+                                                        Operation *diagnostic) const {
+  auto fields = inspectFields(intent, diagnostic);
+  if (failed(fields))
+    return failure();
+  auto a = resolveDomain(source), b = resolveDomain(destination);
+  auto sourceBinding = resolveClockBinding(source),
+       destinationBinding = resolveClockBinding(destination);
+  if (failed(a) || failed(b) || failed(sourceBinding) || failed(destinationBinding))
+    return reject(diagnostic, "boundary intent requires exact owned bound domain endpoints");
+  auto sourceClock = resolveClock((*sourceBinding)->getOperand(0), *sourceBinding);
+  auto destinationClock = resolveClock((*destinationBinding)->getOperand(0), *destinationBinding);
+  if (failed(sourceClock) || failed(destinationClock))
+    return reject(diagnostic, "boundary intent requires independently resolved Clock identity");
+  if (failed(verifyRelationshipIndex(true)))
+    return failure();
+  auto left = relationships->domains.find(*a), right = relationships->domains.find(*b);
+  if (left == relationships->domains.end() || right == relationships->domains.end())
+    return reject(diagnostic,
+                  "boundary intent endpoints are absent from the owned relationship index");
+  return verifyBoundaryFacts(*relationships, left->second, *relationships, right->second, *fields,
+                             *sourceClock == *destinationClock,
+                             (*a)->getAttr("edge") == (*b)->getAttr("edge"), diagnostic);
+}
+
+LogicalResult verifyBoundaryRelationIntent(Attribute source, Attribute destination,
+                                           DictionaryAttr intent, Operation *diagnostic,
+                                           const HierarchyModel &hierarchy, unsigned occurrence) {
+  auto a = hierarchy.resolveDomain(occurrence, source),
+       b = hierarchy.resolveDomain(occurrence, destination);
+  auto leftBinding = hierarchy.resolveBinding(occurrence, source),
+       rightBinding = hierarchy.resolveBinding(occurrence, destination);
+  if (failed(a) || failed(b) || failed(leftBinding) || failed(rightBinding))
+    return reject(diagnostic,
+                  "boundary intent requires exact occurrence-owned bound domain endpoints");
+  auto reference = [](Operation *op) {
+    return FlatSymbolRefAttr::get(op->getContext(), text(op, "sym_name"));
+  };
+  DomainModel left(hierarchy.occurrences()[a->occurrence].module);
+  if (a->occurrence == b->occurrence)
+    return left.verifyBoundaryRelationIntent(reference(a->declaration), reference(b->declaration),
+                                             intent, diagnostic);
+  auto fields = inspectFields(intent, diagnostic);
+  if (failed(fields))
+    return failure();
+  auto leftClock = resolveClock(leftBinding->clock, hierarchy),
+       rightClock = resolveClock(rightBinding->clock, hierarchy);
+  if (failed(leftClock) || failed(rightClock))
+    return reject(diagnostic,
+                  "boundary intent requires independently resolved contextual Clock identity");
+  DomainModel right(hierarchy.occurrences()[b->occurrence].module);
+  if (failed(left.verifyRelationshipIndex(true)) || failed(right.verifyRelationshipIndex(true)))
+    return failure();
+  auto li = left.relationships->domains.find(a->declaration),
+       ri = right.relationships->domains.find(b->declaration);
+  if (li == left.relationships->domains.end() || ri == right.relationships->domains.end())
+    return reject(
+        diagnostic,
+        "boundary intent endpoints are absent from their occurrence relationship indices");
+  return verifyBoundaryFacts(*left.relationships, li->second, *right.relationships, ri->second,
+                             *fields, *leftClock == *rightClock,
+                             a->declaration->getAttr("edge") == b->declaration->getAttr("edge"),
+                             diagnostic);
 }
 
 bool DomainModel::allowsDirectSampling(Attribute reference, Attribute expected) const {

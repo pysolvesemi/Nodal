@@ -341,7 +341,8 @@ SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) 
   if (node.hierarchyBoundary)
     return {};
   if (node.sourceDomain)
-    return {node.sourceDomain, true, node.value ? node.value.getDefiningOp() : nullptr};
+    return {node.sourceDomain, true,
+            !node.waiver && node.value ? node.value.getDefiningOp() : nullptr};
   if (!node.value)
     return {};
   if (auto *reset = node.value.getDefiningOp(); llvm::isa_and_nonnull<ResetAssertedOp>(reset))
@@ -435,6 +436,12 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
                 "reconverge in one sample");
         }
         pending.append(node.dependencies.begin(), node.dependencies.end());
+        // Stateful samples are provenance edges, never combinational edges.
+        // Retain original roots through upstream chains (and stateless aliases)
+        // without changing their domain-permission or physical cycle cuts.
+        if (node.crossing)
+          for (const auto &sample : graph.crossings[node.crossingIndex].samples)
+            pending.push_back(sample.root);
       }
     }
   }
@@ -523,6 +530,25 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
              .insert({roots[i], {sample.occurrence, sample.domain}})
              .second)
       continue;
+    // Permission and classification are distinct traversals of the same graph.
+    // A stateless waiver changes one boundary permission, never Pulse lineage.
+    if (sample.rejectPulseSources) {
+      llvm::DenseSet<unsigned> provenanceVisited;
+      SmallVector<unsigned, 8> provenance{roots[i]};
+      while (!provenance.empty()) {
+        unsigned id = provenance.pop_back_val();
+        if (!provenanceVisited.insert(id).second)
+          continue;
+        if (id >= graph.nodes.size() || ++work > limits.maximumOperations)
+          return reject(sample.use, "crossing classification proof exceeds finite graph budget");
+        const auto &node = graph.nodes[id];
+        if (node.crossing && text(node.crossing, "kind") == "pulse")
+          return sample.use->emitOpError(
+              "NODAL-CDC-003: Pulse-classified crossing result cannot be "
+              "relabeled as a non-pulse crossing");
+        provenance.append(node.dependencies.begin(), node.dependencies.end());
+      }
+    }
     llvm::DenseSet<unsigned> strictVisited;
     bool attributed = false, unresolved = false;
     SmallVector<unsigned, 8> pending{roots[i]};
@@ -537,9 +563,6 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
       if (++work > limits.maximumOperations)
         return reject(sample.use, "sequential dependency proof exceeds finite operation budget");
       const auto &node = graph.nodes[id];
-      if (sample.rejectPulseSources && node.crossing && text(node.crossing, "kind") == "pulse")
-        return sample.use->emitOpError("NODAL-CDC-003: Pulse-classified crossing result cannot be "
-                                       "relabeled as a non-pulse crossing");
       if (!graph.hierarchy && node.hierarchyBoundary) {
         unresolved = true;
         continue; // Exact instance output is an explicit closed-root obligation.
@@ -604,7 +627,10 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
           attributed |= !unannotated;
         }
       }
-      pending.append(node.dependencies.begin(), node.dependencies.end());
+      // Waivers cut only ordinary domain permission. The physical graph retains
+      // the operand edge for classification, reconvergence, cycles and drivers.
+      if (!node.waiver)
+        pending.append(node.dependencies.begin(), node.dependencies.end());
     }
     if (sample.requireAttributedGroup) {
       if (!sample.group || !sample.requireAttributedSource)

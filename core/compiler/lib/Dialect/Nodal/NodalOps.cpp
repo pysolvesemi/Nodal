@@ -40,6 +40,7 @@
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Dialect/Nodal/TimeWaveform.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 #include "nodal/Support/BackendCapabilityRegistry.h"
 
 #include "llvm/ADT/APInt.h"
@@ -4086,6 +4087,7 @@ LogicalResult nodal::BridgeOp::verify() {
 LogicalResult nodal::ClockGateOp::verify() { return verifyClockProducer(getOperation()); }
 LogicalResult nodal::ClockMuxOp::verify() { return verifyClockProducer(getOperation()); }
 LogicalResult nodal::CrossingOp::verify() { return verifyCrossingOperation(getOperation()); }
+LogicalResult nodal::WaiverOp::verify() { return verifyWaiverOperation(getOperation()); }
 LogicalResult nodal::AsyncFifoOp::verify() { return verifyCrossingOperation(getOperation()); }
 
 LogicalResult nodal::StateOwnerOp::verify() {

@@ -11,6 +11,7 @@
 
 namespace nodal {
 struct DomainRelationshipIndex;
+class HierarchyModel;
 /// Read-only index of one module's actual domain and physical binding records.
 /// Existing IR symbols remain authoritative. Rebuild this view after changing
 /// domain declarations or bindings; no facts are persisted into IR or a registry.
@@ -39,6 +40,12 @@ public:
   /// Closed executable relationships, physical aliases, exact period/phase and
   /// frequency consistency. Legacy descriptors never enter this proof index.
   mlir::LogicalResult verifyRelationships() const;
+  /// Boundary rationale only: compare independent facts, never create a graph
+  /// edge, ordinary sampling permission or a physical producer equivalence.
+  mlir::LogicalResult verifyBoundaryRelationIntent(mlir::Attribute source,
+                                                   mlir::Attribute destination,
+                                                   mlir::DictionaryAttr intent,
+                                                   mlir::Operation *diagnostic) const;
   /// Descriptor/executable opt-in lookup only, NOT a physical capability proof.
   /// Retains the first authored record so the module verifier can diagnose a
   /// duplicate at its original location. Use resolveBinding for a verified query.
@@ -47,6 +54,10 @@ public:
   mlir::Operation *findUniqueLocalBinding(mlir::Attribute actualReference) const;
 
 private:
+  mlir::LogicalResult verifyRelationshipIndex(bool endpointFacts) const;
+  friend mlir::LogicalResult verifyBoundaryRelationIntent(mlir::Attribute, mlir::Attribute,
+                                                          mlir::DictionaryAttr, mlir::Operation *,
+                                                          const HierarchyModel &, unsigned);
   struct Binding {
     mlir::Operation *first = nullptr;
     bool duplicate = false;
@@ -56,6 +67,16 @@ private:
   llvm::DenseMap<mlir::Attribute, Binding> requirements;
   llvm::DenseMap<mlir::Attribute, Binding> physicalBindings;
 };
+
+/// Shared closed field/arithmetic admission, without endpoint or graph claims.
+mlir::LogicalResult verifyBoundaryRelationIntentFields(mlir::DictionaryAttr intent,
+                                                       mlir::Operation *diagnostic);
+/// Resolve concrete occurrences first; cross-occurrence comparison uses only
+/// contextual physical identity and independent frequency, never lexical aliases.
+mlir::LogicalResult
+verifyBoundaryRelationIntent(mlir::Attribute source, mlir::Attribute destination,
+                             mlir::DictionaryAttr intent, mlir::Operation *diagnostic,
+                             const HierarchyModel &hierarchy, unsigned occurrence);
 
 /// Independent physical producer validation, including exact owned input ports,
 /// explicit edge, policy and polarity. Preserves the F56 diagnostic contract.

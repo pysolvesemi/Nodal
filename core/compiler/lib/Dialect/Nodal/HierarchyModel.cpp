@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ResetModel.h"
+#include "nodal/Dialect/Nodal/WaiverModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -416,6 +417,9 @@ LogicalResult HierarchyModel::verifyBindings() const {
       } else if (isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) {
         if (failed(inspectExecutableCrossing(&op, *this, index)))
           return failure();
+      } else if (isa<WaiverOp>(op)) {
+        if (failed(inspectExecutableWaiver(&op, *this, index)))
+          return failure();
       } else if (isa<LocalDomainBindingOp>(op)) {
         auto actual = resolveBinding(index, op.getAttr("domain"));
         if (failed(actual) || failed(verifyContextualResetForBinding(*actual, *this)))
@@ -485,7 +489,7 @@ LogicalResult verifyHierarchyModule(Operation *module) {
   bool hierarchy = false, instances = false, executable = false;
   auto status = outer->walk([&](Operation *op) {
     instances |= isa<InstanceOp>(op);
-    executable |= isa<LocalDomainBindingOp, SequentialUpdateOp>(op) ||
+    executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp>(op) ||
                   (isa<CrossingOp, AsyncFifoOp>(op) && op->hasAttr("contract"));
     if (!hierarchyOperation(op))
       return WalkResult::advance();

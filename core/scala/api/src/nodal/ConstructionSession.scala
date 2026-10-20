@@ -9,7 +9,7 @@ import scala.collection.mutable
 /** One mutable transaction. JVM identity is used only for transient lookup; stable paths use
   * hierarchy, explicit names, and deterministic local ordinals.
   */
-private final class ConstructionSession(val options: EmitOptions):
+private final class ConstructionSession(val options: EmitOptions, stimulusOnly: Boolean = false):
   import ConstructionExpressionFacts.{disciplineDimension, waveformContinuity, waveformStatic}
 
   def inferAnalogDimension(value: Any): AnalogDimension =
@@ -116,6 +116,194 @@ private final class ConstructionSession(val options: EmitOptions):
         record.stages
       ))
     else None
+
+  private final case class ResetRecord(
+      kind: String,
+      inputs: Vector[Expr[Reset]],
+      polarity: ResetPolarity,
+      release: String,
+      var destination: Option[ClockDomain],
+      stages: Int
+  )
+  private val resetRecords = new IdentityHashMap[Expr[Reset], ResetRecord]()
+  private val resetBoundaries = new IdentityHashMap[Expr[Reset], Expr[Reset]]()
+  private val effectiveResets = new IdentityHashMap[ClockDomain, Expr[Reset]]()
+  private var resetState = 0L
+  private def resetFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-RDC-057-001")
+
+  private def resetScope(): Unit =
+    closeBehavioralChain()
+    if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+      analogStack.nonEmpty || analogSemanticContext.nonEmpty
+    then resetFailure("reset structures require direct module-level construction")
+
+  private def actualReset(value: Expr[Reset]): Expr[Reset] =
+    Option(resetBoundaries.get(value)).getOrElse(value)
+
+  private def resetRecord(value: Expr[Reset]): ResetRecord =
+    resetRecords.get(actualReset(value)) match
+      case null =>
+        resetFailure("reset requires an actual owned producer or declared reset boundary")
+      case result => result
+
+  private def makeReset(record: ResetRecord, operation: String): Expr[Reset] =
+    val result = new KernelExpr[Reset](
+      record.inputs ++ Option.when(operation == "rdc_sync")(record.stages).toVector,
+      resultType = Some(KernelTypeDescriptor("Reset")),
+      operation = Some(operation)
+    )
+    val _ = captureExpression(result)
+    resetRecords.put(result, record)
+    result
+
+  def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
+    if stimulusOnly then
+      val result = new KernelExpr[Reset](
+        Vector(reset) ++ to.toVector ++ Vector(stages),
+        resultType = Some(KernelTypeDescriptor("Reset")),
+        operation = Some("rdc_sync")
+      )
+      val _ = captureExpression(result)
+      result
+    else
+      try
+        resetScope()
+        if stages < 2 || stages > 32 then
+          resetFailure("reset synchronizer stages must be 2 through 32")
+        if resetState + stages > 262144 then
+          resetFailure("reset synchronization expansion budget exceeded")
+        val input = actualReset(reset)
+        val producer = resetRecord(input)
+        val owner = valueReference(input) match
+          case value: DeclarationRef => value.module
+          case value: ExpressionRef => value.module
+        if owner != currentModule.handle || to.exists(domainRef(_).module != owner) then
+          resetFailure("reset synchronizer endpoints must belong to the active module")
+        resetState += stages
+        makeReset(
+          ResetRecord("sync", Vector(input), producer.polarity, "sync", to, stages),
+          "rdc_sync"
+        )
+      catch
+        case error: Throwable =>
+          poisonConstructor(error, "reset synchronization")
+          throw error
+
+  def resetCombine(resets: Vector[Expr[Reset]]): Expr[Reset] =
+    try
+      resetScope()
+      if resets.isEmpty || resets.size > 32 then
+        resetFailure("reset composition requires 1 through 32 inputs")
+      val inputs = resets.map(actualReset)
+      inputs.foreach: value =>
+        val owner = valueReference(value) match
+          case v: DeclarationRef => v.module
+          case v: ExpressionRef => v.module
+        if owner != currentModule.handle then
+          resetFailure("composition requires owned reset producers")
+      var work = 0L
+      def lineage(value: Expr[Reset], depth: Int): Map[Expr[Reset], (ResetPolarity, Expr[Reset])] =
+        work += 1
+        if depth > 128 || work > 524288 then resetFailure("reset ancestry budget exceeded")
+        val node = resetRecord(value)
+        if node.kind == "boundary" then Map(node.inputs.head -> (node.polarity, value))
+        else
+          val result = scala.collection.mutable.Map.empty[Expr[Reset], (ResetPolarity, Expr[Reset])]
+          node.inputs.foreach(input =>
+            lineage(input, depth + 1).foreach { (root, fact) =>
+              work += 1
+              if work > 524288 then resetFailure("reset ancestry budget exceeded")
+              result.get(root).foreach(previous =>
+                if previous != fact then resetFailure("independent reset releases reconverge")
+              )
+              result(root) = fact
+            }
+          )
+          if node.kind == "sync" then
+            result.iterator.map((root, fact) => root -> (fact._1, value)).toMap
+          else result.toMap
+      val seen = scala.collection.mutable.Map.empty[Expr[Reset], (ResetPolarity, Expr[Reset])]
+      inputs.foreach(input =>
+        lineage(input, 0).foreach { (root, fact) =>
+          seen.get(root).foreach(previous =>
+            if previous != fact then resetFailure("independent reset releases reconverge")
+          )
+          seen(root) = fact
+        }
+      )
+      makeReset(
+        ResetRecord("combine", inputs, ResetPolarity.ActiveHigh, "raw", None, 0),
+        "reset_combine"
+      )
+    catch
+      case error: Throwable =>
+        poisonConstructor(error, "reset composition")
+        throw error
+
+  private def installDomainReset(domain: ClockDomain, kind: KernelDomainKind): Unit =
+    if !stimulusOnly && kind != KernelDomainKind.Required && domain.clock.nonEmpty then
+      domain.resetPolicy match
+        case Some(ResetPolicy.None) => ()
+        case Some(policy) =>
+          val polarity = domain.resetPolarity.getOrElse(resetFailure("reset polarity is required"))
+          val known = Option(resetRecords.get(domain.reset)).orElse(
+            Option(resetBoundaries.get(domain.reset)).map(resetRecords.get)
+          )
+          known.foreach(record =>
+            if record.polarity != polarity then
+              resetFailure("physical reset has contradictory polarities")
+          )
+          val input = if known.nonEmpty then actualReset(domain.reset)
+          else
+            val release = policy match
+              case ResetPolicy.Sync => "sync"
+              case ResetPolicy.AsyncExternalRelease => "external"
+              case _ => "raw"
+            val boundary = makeReset(
+              ResetRecord(
+                "boundary",
+                Vector(domain.reset),
+                polarity,
+                release,
+                Option.when(release != "raw")(domain),
+                0
+              ),
+              "reset_boundary"
+            )
+            resetBoundaries.put(domain.reset, boundary)
+            boundary
+          val result = policy match
+            case ResetPolicy.AsyncAssertSyncRelease(stages) =>
+              resetSync(input, Some(domain), stages)
+            case _ => input
+          effectiveResets.put(domain, result)
+        case None =>
+          val reset = actualReset(domain.reset)
+          def bind(value: Expr[Reset], depth: Int): Unit =
+            if depth > 128 then resetFailure("reset producer ancestry exceeds depth budget")
+            val node = resetRecord(value)
+            if node.kind == "sync" && node.destination.isEmpty then node.destination = Some(domain)
+            if node.kind != "boundary" then node.inputs.foreach(bind(_, depth + 1))
+          bind(reset, 0)
+          effectiveResets.put(domain, reset)
+
+  private def resetSnapshot(expression: KernelExpr[?]): Option[KernelResetSnapshot] =
+    Option(resetRecords.get(expression.asInstanceOf[Expr[Reset]])).map: record =>
+      val inputs = record.inputs.map(domainSourcePath)
+      val clock = if record.kind == "sync" then
+        Vector(record.destination.flatMap(_.clock).map(domainSourcePath).getOrElse(
+          resetFailure("construction-form reset synchronizer has no receiving domain")
+        ))
+      else Vector.empty
+      KernelResetSnapshot(
+        record.kind,
+        resetPolarityName(record.polarity),
+        record.release,
+        record.destination.map(value => domainPath(domainRef(value))),
+        record.stages,
+        inputs ++ clock
+      )
 
   private val userFunctions = new AnalogUserFunctionRuntime.Registry
   private var nextModule: Long = 0L
@@ -2076,20 +2264,33 @@ private final class ConstructionSession(val options: EmitOptions):
             )
         capability(domain.domain.clock.get, "Clock")
         if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
-          capability(domain.domain.reset, "Reset")
-        if domain.kind != KernelDomainKind.Bound && domain.kind != KernelDomainKind.External then
-          behavioralFailure(
-            "generated and inherited clock execution requires its later domain profile"
+          val effective = Option(effectiveResets.get(domain.domain)).getOrElse(
+            behavioralFailure("executable reset requires an owned reset producer")
           )
+          var work = 0
+          def checkReset(value: Expr[Reset], depth: Int): Unit =
+            work += 1
+            if depth > 128 || work > 524288 then
+              behavioralFailure("reset capability graph exceeds budget")
+            val producer = resetRecord(value)
+            if producer.kind == "boundary" then capability(producer.inputs.head, "Reset")
+            else producer.inputs.foreach(checkReset(_, depth + 1))
+          checkReset(effective, 0)
+        if !Set(
+            KernelDomainKind.Bound,
+            KernelDomainKind.External,
+            KernelDomainKind.Generated
+          ).contains(domain.kind)
+        then
+          behavioralFailure("executable register requires a resolved physical domain")
         domain.domain.resetPolicy match
-          case Some(_: ResetPolicy.AsyncAssertSyncRelease) =>
-            behavioralFailure("async-assert/sync-release requires actual release synchronization")
           case Some(ResetPolicy.None) =>
             if declaration.attributes.exists:
                 case ("initial", Some(_: Expr[?])) => true
                 case _ => false
             then behavioralFailure("resetless register cannot have a reset initializer")
-          case Some(ResetPolicy.Sync) | Some(ResetPolicy.Async) => ()
+          case Some(_) => ()
+          case None if effectiveResets.containsKey(domain.domain) => ()
           case _ => behavioralFailure("executable register requires an explicit reset policy")
 
   private def staticPredicateSnapshots(): Vector[KernelStaticPredicateSnapshot] =
@@ -2654,6 +2855,7 @@ private final class ConstructionSession(val options: EmitOptions):
         module.declarations.update(source.index, declaration.copy(domainCandidate = Some(domain)))
       domain.clock.foreach(boundary(_, "Clock"))
       if !domain.resetPolicy.contains(ResetPolicy.None) then boundary(domain.reset, "Reset")
+    installDomainReset(domain, kind)
     semanticOrigin.captureDomain(module.handle, reference.index, domain, domain.name, kind.label)
 
   private def requireGeneratedDeclarationScope(reference: DeclarationRef): Unit =
@@ -4036,6 +4238,9 @@ private final class ConstructionSession(val options: EmitOptions):
       reference
 
   def registerExpression(value: AnyRef): Unit = value match
+    case expression: KernelExpr[?]
+        if expression.operation.exists(Set("reset_boundary", "rdc_sync", "reset_combine")) =>
+      resetFailure("reset producers require owned reset construction entrypoints")
     case expression: KernelExpr[?] if expression.operation.contains("cdc_sync") =>
       crossingFailure("level crossings require the owned Cdc.sync entrypoint")
     case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
@@ -6568,7 +6773,13 @@ private final class ConstructionSession(val options: EmitOptions):
           capabilitySourceRoot(value).contains(declaration.reference)
         )
       )
-      if actual.size == 1 then resolved.get(actual.head.reference) else None
+      if actual.size == 1 then resolved.get(actual.head.reference)
+      else if declaration.dataType.exists(value =>
+          CandidateRuntime.typeDescriptor(value).kind == "Reset"
+        )
+      then
+        actual.headOption.flatMap(value => resolved.get(value.reference))
+      else None
     case None => None
 
   private def attribute(
@@ -6814,6 +7025,10 @@ private final class ConstructionSession(val options: EmitOptions):
       else None
     edges.sortBy((edge, _) => (edge.owner, edge.kind, edge.left, edge.right, edge.path))
 
+  private def inheritedClockEdge(domain: ClockDomain, depth: Int = 0): Option[ClockEdge] =
+    if depth > 128 then resetFailure("clock parent ancestry exceeds depth budget")
+    domain.edge.orElse(domain.parent.flatMap(inheritedClockEdge(_, depth + 1)))
+
   private def clockEdgeName(edge: ClockEdge): String = edge match
     case ClockEdge.Rising => "rising"
     case ClockEdge.Falling => "falling"
@@ -6821,7 +7036,7 @@ private final class ConstructionSession(val options: EmitOptions):
   private def resetPolicyName(policy: ResetPolicy): String = policy match
     case ResetPolicy.None => "none"
     case ResetPolicy.Sync => "sync"
-    case ResetPolicy.Async => "async"
+    case ResetPolicy.Async | ResetPolicy.AsyncExternalRelease => "async"
     case _: ResetPolicy.AsyncAssertSyncRelease => "async_assert_sync_release"
 
   private def resetPolicyAttributes(
@@ -6867,7 +7082,9 @@ private final class ConstructionSession(val options: EmitOptions):
         val policyAttributes =
           domain.domain.resetPolicy.toVector.flatMap(resetPolicyAttributes)
         val metadata =
-          domain.domain.resetPolarity
+          domain.domain.resetPolarity.orElse(Option(effectiveResets.get(domain.domain)).map(value =>
+            resetRecord(value).polarity
+          ))
             .map(value => Vector("reset_polarity" -> resetPolarityName(value)))
             .getOrElse(Vector.empty) ++
             domain.domain.relation
@@ -6881,14 +7098,23 @@ private final class ConstructionSession(val options: EmitOptions):
               "clock_parent" -> domainPath(domainRef(value))
             ) ++
             domain.domain.clock.toVector.map(value => "clock_source" -> domainSourcePath(value)) ++
-            Vector("reset_source" -> domainSourcePath(domain.domain.reset))
+            Vector("reset_source" -> domainSourcePath(domain.domain.reset)) ++
+            Option(effectiveResets.get(domain.domain)).toVector.map(value =>
+              "effective_reset_source" -> domainSourcePath(value)
+            )
         KernelDomainSnapshot(
           domainPath(domain.reference),
           domainName(domain.reference),
           domain.kind.label,
           if domain.kind == KernelDomainKind.Required then resolved.get(domain.reference) else None,
-          domain.domain.edge.map(clockEdgeName),
-          domain.domain.resetPolicy.map(resetPolicyName),
+          inheritedClockEdge(domain.domain).map(clockEdgeName),
+          domain.domain.resetPolicy.map(resetPolicyName).orElse(
+            Option(effectiveResets.get(domain.domain)).map(value =>
+              if resetRecord(value).kind == "boundary" && resetRecord(value).release == "sync" then
+                "sync"
+              else "async"
+            )
+          ),
           metadata.sortBy(_._1)
         )
       val declarations = module.declarations.toVector.map: declaration =>
@@ -7703,7 +7929,8 @@ private final class ConstructionSession(val options: EmitOptions):
       ,
       collectionArguments.keysIterator.map(expressionPath).toSet,
       memoryReadSnapshot,
-      levelCrossingSnapshot
+      levelCrossingSnapshot,
+      resetSnapshot
     )
 
   private def parameterExpressionSnapshots(

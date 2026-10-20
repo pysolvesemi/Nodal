@@ -157,11 +157,14 @@ object DomainHarness:
       "stimulus harness cannot contain topology, generated logic, interfaces, or parameter bindings"
     )
     val selectedPaths = captured.references.map(_.path).toSet
+    val externalBoundaries = snapshot.modules.flatMap(_.domains).filter(_.kind == "external")
+      .flatMap(_.attributes.collect { case ("clock_source" | "reset_source", path) => path }).toSet
     require(
       snapshot.modules.flatMap(_.declarations).forall(declaration =>
         declaration.kind == "input" &&
           declaration.dataType.exists(Set("Clock", "Reset").contains) &&
-          selectedPaths.contains(declaration.path) && declaration.conservativeDimensions.isEmpty &&
+          (selectedPaths.contains(declaration.path) || externalBoundaries(declaration.path)) &&
+          declaration.conservativeDimensions.isEmpty &&
           declaration.attributes.isEmpty
       ),
       "stimulus harness admits only Clock/Reset input declarations used by the selected domain closure"
@@ -176,7 +179,7 @@ object DomainHarness:
       select: M => Seq[ClockDomain]
   ): Either[SimulationError, DomainHarness] = checked("SIM-DOMAIN-CAPTURE"):
     var selectedCount = 0
-    val captured = ConstructionKernel.capture(top): module =>
+    val captured = ConstructionKernel.captureStimulus(top): module =>
       val selected = select(module).iterator.take(33).toVector
       require(selected.nonEmpty && selected.size <= 32, "select between one and 32 domains")
       require(selected.distinct.size == selected.size, "duplicate selected domain")
@@ -240,6 +243,9 @@ object DomainHarness:
       else
         reference.operation match
           case Some("external_reset") => (path, None)
+          case Some("reset_boundary") => reference.operands match
+              case Vector(KernelSelectedOperand.Reference(source)) => resetFacts(source, domain)
+              case _ => DomainHarness.reject("unsupported reset boundary source")
           case Some("rdc_sync") =>
             val (source, stages) = reference.operands match
               case Vector(
@@ -571,7 +577,7 @@ private object DomainWaveforms:
       )
       val (policyAssertion, policyRelease) = drive.domain.resetPolicy match
         case ResetPolicy.Sync => (clock.sampled(assertion, 1), clock.sampled(release, 1))
-        case ResetPolicy.Async => (assertion, release)
+        case ResetPolicy.Async | ResetPolicy.AsyncExternalRelease => (assertion, release)
         case ResetPolicy.AsyncAssertSyncRelease(stages) =>
           (assertion, clock.sampled(release, stages))
         case ResetPolicy.None => DomainHarness.reject("reset policy None")

@@ -1890,7 +1890,16 @@ ${indent(body, 2)}
               "edge" -> quoted(edge),
               "reset_policy" -> quoted(resetPolicy),
               "metadata" -> metadata
-            ),
+            ) ++ domain.attributes.collect { case ("clock_parent", parent) =>
+              val actual = module.domains.find(_.path == parent).getOrElse(
+                fail(
+                  "NODAL-BRIDGE-057-RESET",
+                  "generated parent must be an exact owned domain",
+                  Some(domain.path)
+                )
+              )
+              "parent" -> symbolReference(localDomains(actual.name))
+            },
             semanticPath = domain.path
           )
 
@@ -2616,10 +2625,11 @@ ${indent(body, 2)}
 
       val sequential = new SequentialMlir.Plan(
         module,
-        declaration => localDomainName(module, declaration),
-        digitalValues.accessedMemories(module.path),
         snapshot.digitalExpressions.filter(_.owner == module.path).flatMap(_.crossing)
-          .flatMap(value => Vector(value.sourceDomain, value.destinationDomain)).toSet
+          .flatMap(value => Vector(value.sourceDomain, value.destinationDomain)).toSet,
+        snapshot.digitalExpressions.filter(value =>
+          value.owner == module.path && value.reset.nonEmpty
+        ).map(_.path).toSet
       )
       val digital = digitalValues.renderModule(
         module,
@@ -3786,25 +3796,29 @@ ${indent(body, 2)}
             Some(declaration.path)
           )
         )
-      val domainName = localDomainName(module, declaration)
-      val domainSymbol = localDomains.getOrElse(
-        domainName,
-        stableLocalSymbol("domain", domainName)
-      )
+      val domainAttribute =
+        if declaration.kind == "input" && declaration.dataType.contains("Clock") &&
+          declaration.domain.isEmpty && module.domains.size > 1
+        then Vector.empty
+        else
+          val domainName = localDomainName(module, declaration)
+          Vector("domain" -> symbolReference(localDomains.getOrElse(
+            domainName,
+            stableLocalSymbol("domain", domainName)
+          )))
       operation(
         "nodal.port",
         attributes = Vector(
           "sym_name" -> quoted(stableLocalSymbol("port", declaration.name)),
           "type" -> dataType,
           "direction" -> quoted(declaration.kind),
-          "domain" -> symbolReference(domainSymbol),
           "metadata" -> bridgeMetadata(
             declaration.path,
             Vector(
               "resolved_domain" -> optionalString(declaration.domain)
             )
           )
-        ),
+        ) ++ domainAttribute,
         semanticPath = declaration.path
       )
 

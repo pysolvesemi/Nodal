@@ -1207,6 +1207,8 @@ private[nodal] object DigitalValueMlir:
         then
           requireVisible(input, expression.owner, expression.region, expression.path)
 
+    ResetMlir.validate(snapshot)
+
     requireValid(
       snapshot.digitalExpressions.size <= 65536 &&
         expressions.size == snapshot.digitalExpressions.size,
@@ -1253,6 +1255,48 @@ private[nodal] object DigitalValueMlir:
             ),
           "level crossing requires one module-owned Bool input, distinct actual endpoints and 2..32 stages",
           expression.path
+        )
+      requireValid(
+        Set(
+          "reset_boundary",
+          "rdc_sync",
+          "reset_combine"
+        ).contains(expression.operation) == expression.reset.nonEmpty,
+        "reset producers require one exact typed reset contract",
+        expression.path
+      )
+      expression.reset.foreach: reset =>
+        requireValid(
+          expression.region.isEmpty && expression.dataType == "Reset" &&
+            expression.literal.isEmpty && expression.crossing.isEmpty && expression.memory.isEmpty &&
+            expression.enumIdentity.isEmpty && expression.structure.isEmpty && expression.materializationIntent.isEmpty &&
+            reset.inputs == expression.operands && Set(
+              "active_high",
+              "active_low"
+            ).contains(reset.polarity),
+          "invalid owned reset producer facts",
+          expression.path
+        )
+        val expected = reset.kind match
+          case "boundary" => Vector("Reset")
+          case "sync" => Vector("Reset", "Clock")
+          case "combine" => Vector.fill(expression.operands.size)("Reset")
+          case _ => fail("unknown reset producer", expression.path)
+        requireValid(
+          expression.operands.map(expressionType) == expected && expected.nonEmpty &&
+            (reset.kind != "combine" || expected.size <= 32) &&
+            (reset.kind != "sync" || reset.stages >= 2 && reset.stages <= 32 && reset.destination.nonEmpty),
+          "reset operands, stages or destination are invalid",
+          expression.path
+        )
+        reset.destination.foreach(domain =>
+          requireValid(
+            modules(expression.owner).domains.exists(value =>
+              value.path == domain && value.kind != "required"
+            ),
+            "reset destination is not an exact owned domain",
+            expression.path
+          )
         )
       expression.memory.foreach: port =>
         requireValid(
@@ -2633,7 +2677,10 @@ private[nodal] object DigitalValueMlir:
                 prepareType(value.schemaType, path, region, output)
               )
               val payloadType =
-                if expressions.get(path).exists(_.operation != "shape_reference") then
+                if expressions.get(path).exists(e =>
+                    e.operation != "shape_reference" && e.reset.isEmpty
+                  )
+                then
                   computedType(sourceType, path)
                 else nativeType(sourceType, path)
               val dataType = declarations.get(path).map(value =>
@@ -2663,7 +2710,36 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.operation == "cdc_sync" then
+                  if expression.reset.nonEmpty then
+                    val reset = expression.reset.get
+                    val attrs = Vector(
+                      s"reset_polarity = ${quoted(reset.polarity)}",
+                      s"metadata = ${metadata(path, false)}"
+                    ) ++
+                      (reset.kind match
+                        case "boundary" => Vector(
+                            s"release = ${quoted(reset.release)}"
+                          ) ++ reset.destination.toVector.map(value =>
+                            s"release_domain = ${domainReference(value)}"
+                          )
+                        case "sync" => Vector(
+                            s"destination_domain = ${domainReference(reset.destination.get)}",
+                            s"stages = ${reset.stages} : i64"
+                          )
+                        case _ => Vector.empty)
+                    (
+                      Vector(operation(
+                        "nodal.reset_" + reset.kind,
+                        result,
+                        dataType,
+                        operands,
+                        "{" + attrs.mkString(", ") + "}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.operation == "cdc_sync" then
                     val crossing = expression.crossing.get
                     requireValid(
                       dataType == "!nodal.bits<1>" && operands.map(_._2) == Vector(dataType),

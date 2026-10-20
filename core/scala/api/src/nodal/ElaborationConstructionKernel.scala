@@ -12,17 +12,24 @@ private[nodal] object ConstructionKernel:
 
   private def elaborate[M <: Module](
       top: => M,
-      options: EmitOptions
+      options: EmitOptions,
+      stimulusOnly: Boolean = false
   )(select: M => Vector[AnyRef]): KernelSelectedCapture =
     ConstructorCaptureRuntime.withSession:
       AnalogProceduralConstruction.withSession:
-        val session = new ConstructionSession(options)
+        val session = new ConstructionSession(options, stimulusOnly)
         var result: Option[KernelSelectedCapture] = None
         ScopedValue.where(Current, session).run(
           new Runnable:
             override def run(): Unit =
               val root = top
               val selected = select(root)
+              if stimulusOnly && session.operationKinds.exists(_ != "metadata") then
+                failConstructor(
+                  "SIM-DOMAIN-CAPTURE",
+                  "stimulus harness cannot contain executable source effects",
+                  "stimulus"
+                )
               val (emission, snapshot) = session.finish(root)
               result = Some(KernelSelectedCapture(
                 emission,
@@ -48,6 +55,10 @@ private[nodal] object ConstructionKernel:
       top: => M,
       options: EmitOptions = EmitOptions()
   )(select: M => Vector[AnyRef]): KernelSelectedCapture = elaborate(top, options)(select)
+
+  /** Internal descriptor-only capture; never executable reset evidence. */
+  def captureStimulus[M <: Module](top: => M)(select: M => Vector[AnyRef]): KernelSelectedCapture =
+    elaborate(top, EmitOptions(), stimulusOnly = true)(select)
 
   def failConstructor(code: String, message: String, site: String): Nothing =
     scala.util.Failure[Nothing](
@@ -170,6 +181,16 @@ private[nodal] object ConstructionKernel:
     case None => scala.util.Failure[Nothing](new IllegalStateException(
         "NODAL-CDC-057-001: Cdc.sync requires an active Module and lexical ClockDomain"
       )).get
+
+  def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
+    active.getOrElse(throw new IllegalStateException("Rdc.sync requires active construction"))
+      .resetSync(reset, to, stages)
+
+  def resetCombine(resets: Vector[Expr[Reset]]): Expr[Reset] =
+    active.getOrElse(
+      throw new IllegalStateException("ResetController requires active construction")
+    )
+      .resetCombine(resets)
 
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))

@@ -368,6 +368,15 @@ private[nodal] object ReproducibilityContract:
         "case_ids" -> array(value.caseIds.map(string)),
         "region" -> optionalString(value.region),
         "intent" -> value.materializationIntent.map(intentJson).getOrElse(JNull)
+      ) ++ value.reset.toVector.map(reset =>
+        "reset" -> obj(
+          "kind" -> string(reset.kind),
+          "polarity" -> string(reset.polarity),
+          "release" -> string(reset.release),
+          "destination" -> optionalString(reset.destination),
+          "stages" -> number(reset.stages),
+          "inputs" -> array(reset.inputs.map(string))
+        )
       ) ++ value.crossing.toVector.map(crossing =>
         "crossing" -> obj(
           "contract" -> string("level_v1"),

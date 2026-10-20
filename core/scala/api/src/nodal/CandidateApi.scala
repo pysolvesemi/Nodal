@@ -370,6 +370,9 @@ object ResetPolicy:
   case object None extends ResetPolicy
   case object Sync extends ResetPolicy
   case object Async extends ResetPolicy
+
+  /** External provider promises assertion and release safe for the receiving clock and edge. */
+  case object AsyncExternalRelease extends ResetPolicy
   final case class AsyncAssertSyncRelease(stages: Int = 2) extends ResetPolicy
 
 sealed trait ClockRelation
@@ -713,7 +716,7 @@ object Cdc:
 object Rdc:
   /** Domain-construction form: the receiving generated domain supplies the destination. */
   def sync(reset: Expr[Reset], stages: Int): Expr[Reset] =
-    CandidateRuntime.resetExpr("rdc_sync", reset, stages)
+    ConstructionKernel.resetSync(reset, None, stages)
 
   /** Existing-domain transfer form: the destination is explicit. */
   def sync(
@@ -721,10 +724,10 @@ object Rdc:
       to: ClockDomain,
       stages: Int = 2
   ): Expr[Reset] =
-    CandidateRuntime.resetExpr("rdc_sync", reset, to, stages)
+    ConstructionKernel.resetSync(reset, Some(to), stages)
 
 object ResetController:
-  def combine(resets: Expr[Reset]*): Expr[Reset] = CandidateRuntime.expr(resets)
+  def combine(resets: Expr[Reset]*): Expr[Reset] = ConstructionKernel.resetCombine(resets.toVector)
 
 object ClockGate:
   def apply(

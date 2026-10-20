@@ -367,3 +367,78 @@ its selected predecessor run has seven unresolved failures, including required
 shaped-clock work and a repeated-child definition-identity regression. Its
 initial seven end-to-end waveform witnesses pass but are not a substitute for
 closing those source failures. All F57 checklist children remain open.
+
+## Reset source checkpoint (reconstructed, 2026-10-20)
+
+Source construction now records actual reset producer inputs and independent
+effective domain resets while preserving public declared reset identity. The
+bridge independently checks bounded ownership/lineage and exact receiving
+clock/edge before emitting typed native producers. The additive
+`AsyncExternalRelease` policy retains an explicit provider obligation; raw Async
+is not silently upgraded, including domains without state. Pending construction
+synchronizers bind recursively to their receiving generated domain.
+
+The internal stimulus-only capture path retains descriptor semantics without
+allocating executable reset proof. It preserves the unchanged zero-stage and
+implicit-cascade stimulus negatives. Exact declared external boundary inputs may
+remain unused in a selected stimulus closure, but arbitrary ports and executable
+effects are not thereby admitted. Production emission still requires actual
+proof and bindings. Owned bare input Clock ports preserve explicit aliases
+without inventing an arbitrary domain owner.
+
+Initial fresh focused results: **13 reset source/bridge cases and all 11 unchanged
+DomainStimulus cases pass**. Source/API/bridge/simulation production compilation
+passes. Seven actual Scala bridge-IR profiles were emitted successfully. The
+source files were then formatted; post-format focused and affected predecessor
+checks are recorded separately below when complete. This checkpoint does not
+claim whole-F57 completion or blanket predecessor acceptance.
+
+```sh
+source .work/tools/env.sh
+export MILL_OUTPUT_DIR="$PWD/.work/reset-source-mill"
+sh .work/cache/mill/download/1.1.7 --no-daemon core.scala.testkit.test.testOnly nodal.internal.testkit.Increment57ResetSourceTests nodal.internal.testkit.DomainStimulusTests
+```
+
+Initial focused log: `.work/reset-source-tests.log`. Architecture review keeps
+mutable reset identity in the existing construction session, uses a narrow
+bridge verifier at the trust boundary and reuses ordinary typed digital emission.
+No duplicate domain registry or fixture-specific production recognizer is added.
+
+The final formatted source checkpoint passes **48/48** selected checks: 13 reset,
+11 unchanged DomainStimulus and 24 FlatFSM capture. The latter's existing
+comparison helper now normalizes nested reset input/destination paths, while
+retaining changed-child inequality checks. The previously reported repeated-child
+failure was this incomplete test normalizer, not a production definition-identity
+defect. The actual FlatFSM bridge suite separately passes all 11 cases, including
+identical-definition reuse and changed guard/metadata distinctions.
+
+Final focused log: `.work/reset-source-checkpoint-final.log`. The broader directly
+affected predecessor run executed 130 tests, with 123 passing and seven initial
+failures (`.work/reset-source-predecessors.log`); one of those failures is resolved
+by the final FlatFSM capture run. Remaining changes include intentional old
+unsupported-AASR/raw-Async expectations, one typed-input diagnostic attribution
+fix and required shaped-clock support. They are not marked passed here.
+
+The final seven source replays were regenerated after formatting, and **7/7 real
+target simulations pass** (`.work/reset-target-final.log` and
+`.work/reset-target-final/manifest.json`). Tracked public fixtures and replay are
+`Increment57ResetSource`, `Increment57MixedResetSource` and
+`Increment57ResetReplay`; the reusable runner is
+`tests/scala/reset-release/run_target.py`. It uses current nodalc, pinned firtool
+and Icarus without replacing generated designs. Assertions cover both edges and
+polarities, unspecified pre-assertion startup, immediate assertion/reassertion,
+release latency plus the consumer edge, stopped-parent/live-child operation,
+serial 2+3 release stages, distinct mixed-polarity roots and retained provider
+clock/edge obligation. These selected digital checks are not physical timing or
+metastability qualification.
+
+```sh
+source .work/tools/env.sh
+CP=$(python3 -c 'import json; print(":".join(x.split(":",3)[3] for x in json.load(open(".work/reset-source-mill/core/scala/testkit/test/runClasspath.json"))["value"]))')
+java -cp "$CP" nodal.internal.testkit.Increment57ResetReplay "$PWD/.work/reset-source-ir"
+python3 tests/scala/reset-release/run_target.py --input .work/reset-source-ir --out .work/reset-target-final --nodalc .work/native-build/bin/nodalc --firtool .work/circt-toolchain/bin/firtool --iverilog .work/tools/iverilog/bin/iverilog --vvp .work/tools/iverilog/bin/vvp
+```
+
+Source files are scalafmt-formatted; Python syntax, Markdown and diff checks pass.
+CI is not run. This is a scalar reset source/target checkpoint; required shaped
+execution and remaining F57 features stay open.

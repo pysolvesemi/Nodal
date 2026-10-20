@@ -126,7 +126,17 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     materializationIntent: Option[KernelDigitalIntent] = None,
     structure: Option[KernelStructOperationSnapshot] = None,
     memory: Option[KernelMemoryPortSnapshot] = None,
-    crossing: Option[KernelLevelCrossingSnapshot] = None
+    crossing: Option[KernelLevelCrossingSnapshot] = None,
+    reset: Option[KernelResetSnapshot] = None
+)
+
+private[nodal] final case class KernelResetSnapshot(
+    kind: String,
+    polarity: String,
+    release: String,
+    destination: Option[String],
+    stages: Int,
+    inputs: Vector[String]
 )
 
 /** Executable level contract. Identity and actual input edge belong to the enclosing expression. */

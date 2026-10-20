@@ -599,7 +599,13 @@ object Increment56FlatFsmCaptureTests extends TestSuite:
               path = item.path.stripPrefix(owner + "."),
               owner = "$module",
               operands = item.operands.map(_.stripPrefix(owner + ".")),
-              region = item.region.map(_.stripPrefix(owner + "."))
+              region = item.region.map(_.stripPrefix(owner + ".")),
+              reset = item.reset.map(reset =>
+                reset.copy(
+                  destination = reset.destination.map(_.stripPrefix(owner + ".")),
+                  inputs = reset.inputs.map(_.stripPrefix(owner + "."))
+                )
+              )
             ).toString
           )
       val pure = ConstructionKernel.inspect(new FlatRepeatedPureRoot)

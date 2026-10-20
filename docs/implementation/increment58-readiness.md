@@ -628,3 +628,25 @@ This is a bounded digital Port/Struct SystemVerilog target profile, not portable
 Verilog qualification, complete Interface target support, generated-family loops
 or complete fixed-Struct CDC adaptation. The default ABI and those remaining
 consumers retain their explicit limitations. No F58 completion box is closed.
+
+## Checkpoint 12 — exact nested composition enable forwarding
+
+The actual nested immutable-source replay exposed an overly restrictive native
+activation-use check: a child owning a further composition must forward its exact
+inherited enable to that nested activation. The canonical composition owner now
+permits only its enable result at the nested activation's parent-enable operand,
+with the actual owned child's local/status identity. Full-model admission still
+checks the complete parent future/control tuple, domain and unique topology.
+Arbitrary uses, foreign parents and cancel-as-enable remain rejected.
+
+The optimized composition suite passes **20/20** cases, including three causal
+nested regressions; FlatFSM **81/81** and Sequential **84/84** predecessors pass.
+The frozen compiler `.work/f58-composition-native/nested/nodalc`, SHA256
+`ef01aec403d9c0db760c7efa90ae71f22ad8c352ab4144a726dca29d7fc2460d`,
+also passes all four actual-source All/Any/Priority/nested pipelines through the
+full default gate, CIRCT, firtool and Icarus simulation. Receipts are retained in
+`.work/f58-statecharts/composition/target-final-{all,any,priority,nested}`.
+The source replay and maintained bench remain pending in the next source
+checkpoint; these are matched integration observations, not a claim that this
+native-only commit contains that source. This repair adds no separate executor
+and does not close remaining timer/protocol/recursive-control obligations.

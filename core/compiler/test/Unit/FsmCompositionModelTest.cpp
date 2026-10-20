@@ -11,6 +11,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstring>
 #include <functional>
 using namespace mlir;
 namespace {
@@ -261,6 +262,40 @@ int main() {
           });
           return good;
         });
+  // A composed child forwards only its exact enable into its own activation.
+  auto nested = fixture();
+  auto activationStart = nested.find("%startChild, %cancelChild, %enableChild =");
+  auto activationEnd = nested.find(machine("first"), activationStart);
+  auto nestedActivation = nested.substr(activationStart, activationEnd - activationStart);
+  for (auto pair : {std::make_pair("parent", "first"), std::make_pair("startChild", "startGrand"),
+                    std::make_pair("cancelChild", "cancelGrand"),
+                    std::make_pair("enableChild", "enableGrand")}) {
+    std::size_t position = 0;
+    while ((position = nestedActivation.find(pair.first, position)) != std::string::npos) {
+      nestedActivation.replace(position, std::strlen(pair.first), pair.second);
+      position += std::strlen(pair.second);
+    }
+  }
+  nestedActivation = replace(nestedActivation,
+                             "%enable, %firstLocal, %firstStatus, "
+                             "%secondLocal, %secondStatus",
+                             "%enableChild, %grandLocal, %grandStatus");
+  nestedActivation =
+      replace(nestedActivation, bits(2) + ", " + bits(2) + ", " + bits(2) + ", " + bits(2) + ") ->",
+              bits(2) + ", " + bits(2) + ") ->");
+  auto grand = replace(replace(replace(machine("grand"), "%startChild", "%startGrand"),
+                               "%cancelChild", "%cancelGrand"),
+                       "%enableChild", "%enableGrand");
+  nested = replace(nested, machine("second"),
+                   machine("second") + storage("grandLocal") + storage("grandStatus") +
+                       nestedActivation + grand);
+  check("nested-exact-enable", nested, true);
+  check("nested-cancel-as-enable",
+        replace(nested, "%enableChild, %grandLocal", "%cancelChild, %grandLocal"), false);
+  check("nested-foreign-parent",
+        replace(nested, "\"nodal.fsm_activation\"(%firstLocal",
+                "\"nodal.fsm_activation\"(%secondLocal"),
+        false);
   check("foreign-status",
         replace(fixture(), "%parentLocal, %parentStatus, %firstLocal, %firstStatus",
                 "%parentLocal, %firstStatus, %firstLocal, %firstStatus"),

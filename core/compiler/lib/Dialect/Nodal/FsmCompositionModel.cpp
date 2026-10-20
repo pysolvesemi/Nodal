@@ -184,9 +184,18 @@ private:
           return failure();
         auto child =
             roots.find(use.getOwner()->getNumOperands() ? use.getOwner()->getOperand(0) : Value());
-        if (child == roots.end() || !entry.childSet.contains(child->second) ||
-            use.getOwner() != owners[child->second].graph.header.operation ||
-            use.getOperandNumber() != result + 2)
+        if (child == roots.end() || !entry.childSet.contains(child->second))
+          return reject(op, "activation results only control their actual owned children");
+        const auto &childHeader = owners[child->second].graph.header;
+        bool direct =
+            use.getOwner() == childHeader.operation && use.getOperandNumber() == result + 2;
+        // A child which owns a further composition forwards its exact enable
+        // into that activation. The full model independently verifies the
+        // nested activation's complete parent future/control tuple and domain.
+        bool nestedEnable = result == 2 && activation(use.getOwner()) &&
+                            use.getOperandNumber() == 7 &&
+                            use.getOwner()->getOperand(1) == childHeader.currentStatus();
+        if (!direct && !nestedEnable)
           return reject(op, "activation results only control their actual owned children");
       }
     activations.push_back(std::move(entry));

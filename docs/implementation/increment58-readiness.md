@@ -10,8 +10,9 @@ independently refreshed before branching. The working tree was clean.
 
 The [prototype policy](../../AGENTS.md#prototype-validation-and-merge) applies:
 focused local positive, negative, boundary and affected predecessor checks;
-no CI, full qualification or hourly automation. This is an initial ownership
-and execution decision, not acceptance evidence. All F-058 children remain open.
+no CI, full qualification or hourly automation. The initial ownership and
+execution decisions below are not acceptance evidence; executed checkpoints
+are recorded separately. All F-058 children remain open.
 
 ## Required scope and authoritative owners
 
@@ -105,3 +106,62 @@ analog/conservative topology, resolved-net ownership and actual clock/reset
 provenance remain unchanged. General F159 mixed-effect loop partitioning and
 future F65 internal-array configuration retain their own owners; required F58
 structural hierarchy and boundary layout semantics are not deferred to them.
+
+## Checkpoint 1: immutable definitions and explicit bindings
+
+The [v0.5 sequential-state contract](../design-gates/NodalSequentialState-DG-v0.5.md)
+adds immutable `FsmDef`, fragments, state declarations and typed guard/action
+slots. Explicit instance bindings feed the existing flat-FSM capture, shared
+structural admission, bridge and native execution. This checkpoint does not
+include the concurrently developed Area, interface-boundary or hierarchy-target
+changes. No F-058 checkbox closes.
+
+Focused checks use Scala 3.8.4 and JDK 25.0.2:
+
+- Ten maintained frontend checks passed, including separate producer/consumer
+  JARs, checked action bytecode, dynamic graph capture, typed enum mismatch,
+  mutable/nested action binding, forged runtime, missing-plugin and replacement
+  uninstrumented-producer rejection.
+- Eleven new runtime/bridge/native groups passed. These cover immutable graph
+  data, independent instances, exact/missing/extra/foreign bindings, lexical
+  observations, foreign construction values, bounded lazy sequences, structural
+  admission, exact slot identity, custom encoding and forged native graph input.
+- Actual two-instance public source passed default gating, normalization, CIRCT
+  and SystemVerilog export, then Icarus simulation. The waveform checks independent
+  state, compact/one-hot storage with shared enum ABI, transition-before-entry
+  precedence, active actions, completion/terminal hold, forced illegal-code
+  recovery and synchronous reset.
+
+The native and target checks above were repeated against the frozen F57
+compiler SHA-256
+`2b0121c941d1299927b4e770dd1937d4c6072b7a2efc5bd42273f5f01ede9dcd`,
+so they do not depend on concurrent native F58 edits. The default `Error`
+illegal-state policy exports assertions, which this Icarus build cannot parse;
+simulation uses an explicit `RecoverToInitial` source variant instead of
+removing assertions or rewriting the generated DUT. Maintained reproductions
+are in `tests/scala/reusable-fsm/`; generated artifacts and exact command/hash
+manifests remain under ignored `.work/f58-statecharts/`.
+
+The first affected-predecessor replay passed 38 of 41 tests. Three old F56
+repeated-child fixtures failed F57's actual-parent-input lineage requirement.
+A fresh isolated compile of canonical `9f6d1a5` API/plugin and unchanged
+fixtures reproduced all five underlying failing constructions; those source
+files are identical to canonical `615aad8`. The narrow fixture repair supplies
+the missing parent data connections and preserves every existing assertion.
+This baseline reproduction is retained in
+`.work/f58-statecharts/predecessor-baseline/`; it is not counted as a passing
+regression run.
+
+Final acceptance compiled the exact staged API, integrations, frontend, bridge
+and plugin independently of the other F58 worktree changes, with the original
+constructor-to-callback phase ordering. All 52 focused groups passed:
+F56 capture 24, F56 bridge 12, F57 crossing 5 and F58 reusable definitions 11.
+The ten separate frontend checks and the actual generated waveform also passed
+using those standalone artifacts. The early graph-record budget is checked
+before copying or traversing its transitions. Source hashes, compile commands
+and results are retained under `.work/f58-statecharts/staged-check/`; the
+generated waveform is under `.work/f58-statecharts/target-staged/`.
+
+Nested/parallel lifecycle, typed completion/cancellation, timers/protocols,
+structural recursion, bounded runtime stacks and dedicated composition
+report/proof metadata remain required work, not implemented by this checkpoint.

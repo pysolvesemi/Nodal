@@ -335,12 +335,24 @@ final class FlatRepeatedPureChild extends Module:
   output := (enable && !enable) || (enable && !enable)
 
 final class FlatRepeatedPureRoot extends Module:
+  val enable = in(Bool)
   val left = instance(new FlatRepeatedPureChild)
   val right = instance(new FlatRepeatedPureChild)
+  left(_.enable) := enable
+  right(_.enable) := enable
 
 final class FlatRepeatedMachineRoot(changed: Boolean) extends Module:
+  val enable = in(Bool)
+  val second = in(Bool)
+  val input = in(UInt(8))
   val left = instance(new FlatFsmCaptureSource("plain"))
   val right = instance(new FlatFsmCaptureSource(if changed then "disjoint" else "plain"))
+  left(_.enable) := enable
+  left(_.second) := second
+  left(_.input) := input
+  right(_.enable) := enable
+  right(_.second) := second
+  right(_.input) := input
 
 /** Literal RHS/guards deliberately carry no foreign-domain dependency of their own. */
 final class FlatFsmTargetDomainSource(foreign: Boolean, nesting: String) extends Module:

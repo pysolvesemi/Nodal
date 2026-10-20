@@ -151,6 +151,7 @@ private[nodal] final class SemanticOriginBuilder:
     "StructuralIfRuntime.scala",
     "SequentialRuntime.scala",
     "FlatFsmRuntime.scala",
+    "FsmDefinitionRuntime.scala",
     "SemanticOriginKernel.scala"
   )
   private val apiSourceFiles = Set(
@@ -160,7 +161,8 @@ private[nodal] final class SemanticOriginBuilder:
     "ContinuousTimeCandidateApi.scala",
     "CoreSemanticsCandidateApi.scala",
     "PipelineInterfaceCandidateApi.scala",
-    "CompilerApi.scala"
+    "CompilerApi.scala",
+    "FsmDefinitionApi.scala"
   )
   private val ignoredSourceSegments = Set(
     ".git",

@@ -7,32 +7,48 @@ import scala.collection.mutable
 private[nodal] object FlatFsmGraphContract:
   private final case class Fact(key: String, relation: String, value: BigInt)
 
-  def validate(record: FlatFsmRecord[?], path: Any => Option[String]): Unit =
-    def fail(message: String): Nothing = FlatFsmRuntime.fail(message)
-    val states = record.states.toVector
-    val transitions = record.transitions.toVector
-    if states.map(_.caseId).distinct.size != states.size ||
-      states.map(_.caseId).toSet != record.canonical.caseIds
+  /** Shared structural admission for immutable definitions and actual instance graphs. */
+  def validateStructure(
+      cases: Set[String],
+      initial: String,
+      states: Vector[(String, Boolean)],
+      transitions: Vector[(String, String, TransitionMode)],
+      fail: String => Nothing
+  ): Unit =
+    if states.map(_._1).distinct.size != states.size || states.map(_._1).toSet != cases
     then
       fail("machine must declare every enum state exactly once")
-    if transitions.size.toLong + record.actions.size > FlatFsmRuntime.MaximumRecords then
-      fail("machine transitions/actions exceed 65536 records")
-    val outgoing = transitions.groupBy(_.sourceCase)
-    states.foreach: state =>
-      val edges = outgoing.getOrElse(state.caseId, Vector.empty)
-      if state.terminal && edges.nonEmpty then fail("terminal state has outgoing transitions")
-      if !state.terminal && edges.isEmpty then fail("nonterminal state has no outgoing transition")
-      if edges.map(_.mode).distinct.size > 1 then
+    if !cases(initial) then fail("machine initial state is unknown")
+    val outgoing = transitions.groupBy(_._1)
+    transitions.foreach: (source, destination, _) =>
+      if !cases(source) || !cases(destination) then fail("transition endpoint is unknown")
+    states.foreach: (state, terminal) =>
+      val edges = outgoing.getOrElse(state, Vector.empty)
+      if terminal && edges.nonEmpty then fail("terminal state has outgoing transitions")
+      if !terminal && edges.isEmpty then fail("nonterminal state has no outgoing transition")
+      if edges.map(_._3).distinct.size > 1 then
         fail("one state mixes Exclusive and Priority transitions")
-    val visited = mutable.HashSet(record.initialCase)
-    val pending = mutable.ArrayDeque(record.initialCase)
+    val visited = mutable.HashSet(initial)
+    val pending = mutable.ArrayDeque(initial)
     while pending.nonEmpty do
       outgoing.getOrElse(pending.removeHead(), Vector.empty).foreach: edge =>
-        if !record.canonical.caseIds(edge.destinationCase) then
-          fail("transition destination is unknown")
-        if visited.add(edge.destinationCase) then pending.append(edge.destinationCase)
-    if visited.toSet != record.canonical.caseIds then
+        if visited.add(edge._2) then pending.append(edge._2)
+    if visited.toSet != cases then
       fail("machine contains structurally unreachable states")
+
+  def validate(record: FlatFsmRecord[?], path: Any => Option[String]): Unit =
+    def fail(message: String): Nothing = FlatFsmRuntime.fail(message)
+    if record.transitions.size.toLong + record.actions.size > FlatFsmRuntime.MaximumRecords then
+      fail("machine transitions/actions exceed 65536 records")
+    val transitions = record.transitions.toVector
+    validateStructure(
+      record.canonical.caseIds,
+      record.initialCase,
+      record.states.toVector.map(state => state.caseId -> state.terminal),
+      transitions.map(edge => (edge.sourceCase, edge.destinationCase, edge.mode)),
+      fail
+    )
+    val outgoing = transitions.groupBy(_.sourceCase)
     if record.encoding == FsmEncoding.Gray then
       val codes = record.local.cases.map(value => value.id -> value.code).toMap
       transitions.foreach: edge =>

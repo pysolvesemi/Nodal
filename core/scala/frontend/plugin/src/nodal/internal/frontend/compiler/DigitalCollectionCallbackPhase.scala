@@ -119,6 +119,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     )
     val flatRuntime = requiredModule("nodal.FlatFsmRuntime")
     sequentialModules += flatRuntime
+    val definitionRuntime = requiredModule("nodal.FsmDefinitionRuntime")
+    sequentialModules += definitionRuntime
+    sequentialKernelMethods ++= methods(definitionRuntime, "actionBinding")
     sequentialBranches ++=
       methods(flatRuntime, "action", "transitionAction", "switchCase", "switchEnum")
     flatGraphRuntime = methods(flatRuntime, "switchEnum")
@@ -218,7 +221,36 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
           "exiting",
           "transitionTaken",
           "completed"
+        ) ++
+        methods(
+          requiredClass("nodal.FsmInstance"),
+          "currentState",
+          "nextState",
+          "entering",
+          "exiting",
+          "transitionTaken",
+          "completed"
         )
+    // These factories construct immutable control data only. Runtime predicates/actions enter
+    // through separately checked bindings; none of these methods executes an authored callback.
+    List(
+      "nodal.FsmDefinition",
+      "nodal.FsmGuard",
+      "nodal.FsmAction",
+      "nodal.FsmState",
+      "nodal.FsmFragment",
+      "nodal.FsmDef"
+    ).foreach: name =>
+      pureMethods ++= moduleMethods(name, "apply")
+    pureMethods ++= methods(
+      requiredClass("nodal.FsmState"),
+      "on",
+      "onWithAction",
+      "entry",
+      "active",
+      "exit",
+      "terminal"
+    )
     pureModules += requiredModule("nodal.TransitionMode")
     pureMethods ++=
       defaultGetters(methods(requiredClass("nodal.StateBuilder"), "on", "onWithAction"))
@@ -1319,7 +1351,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     def flatCall(call: flatFsm.Call, depth: Int, graphBoundary: Boolean = false): Boolean =
       if !budget(call.original, depth) then false
-      else if !graphBoundary && (profile != Profile.Sequential || call.graphOnly) then
+      else if !graphBoundary && (profile != Profile.Sequential || call.graphOnly || call.binding)
+      then
         fail(
           "EFFECT",
           "FSM graph construction is unsupported in this callback profile",

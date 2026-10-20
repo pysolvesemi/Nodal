@@ -17,7 +17,9 @@ private[compiler] final class FlatFsmCapture:
       operands: List[Tree],
       bodies: List[Tree],
       graph: Option[Tree],
-      original: Tree
+      original: Tree,
+      runtimeOwner: String = "nodal.FlatFsmRuntime",
+      binding: Boolean = false
   ):
     def graphOnly: Boolean = runtime.isEmpty
 
@@ -45,6 +47,37 @@ private[compiler] final class FlatFsmCapture:
   def call(tree: Tree)(using Context): Option[Call] =
     val (function, types, lists) = source(tree)
     function match
+      case selection: Select if owned(selection.symbol, "nodal.FsmAction", "bind") =>
+        lists match
+          case List(List(body)) =>
+            receiverType(selection.qualifier, "nodal.FsmAction").map(enumType =>
+              Call(
+                "actionBinding",
+                enumType,
+                List(selection.qualifier),
+                List(body),
+                None,
+                tree,
+                "nodal.FsmDefinitionRuntime",
+                binding = true
+              )
+            )
+          case _ => None
+      case selection: Select if owned(selection.symbol, "nodal.FsmGuard", "bind") =>
+        lists match
+          case List(List(value)) =>
+            receiverType(selection.qualifier, "nodal.FsmGuard").map(enumType =>
+              Call(
+                "",
+                enumType,
+                List(selection.qualifier, value),
+                Nil,
+                None,
+                tree,
+                binding = true
+              )
+            )
+          case _ => None
       case selection: Select
           if owned(selection.symbol, "nodal.StateBuilder", "entry", "active", "exit") =>
         lists match
@@ -127,5 +160,5 @@ private[compiler] final class FlatFsmCapture:
       val arguments = if call.runtime == "switchEnum" then
         List(call.operands.head, checked.head, call.graph.get, call.operands(1))
       else call.operands ++ checked
-      ref(requiredMethod("nodal.FlatFsmRuntime." + call.runtime))
+      ref(requiredMethod(call.runtimeOwner + "." + call.runtime))
         .appliedToType(call.enumType).appliedToArgs(arguments).withSpan(call.original.span)

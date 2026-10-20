@@ -3,6 +3,9 @@
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
+
+#include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
 namespace nodal {
@@ -32,8 +35,25 @@ LogicalResult checkPhysical(Value value, Operation *binding, StringRef kind) {
   auto ref = producer->getAttrOfType<FlatSymbolRefAttr>("port");
   Operation *port = ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
   auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+  bool ownedDomain = port && (port->getAttr("domain") == binding->getAttr("domain") ||
+                              (kind == "clock" && !port->getAttr("domain")));
+  if (!ownedDomain && kind == "clock" && port) {
+    auto reference = binding->getAttrOfType<FlatSymbolRefAttr>("domain");
+    Operation *current = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+    llvm::DenseSet<Operation *> seen;
+    for (unsigned depth = 0; current && depth < 128 && seen.insert(current).second; ++depth) {
+      auto parent = current->getAttrOfType<FlatSymbolRefAttr>("parent");
+      if (!parent)
+        break;
+      if (parent == port->getAttr("domain")) {
+        ownedDomain = true;
+        break;
+      }
+      current = SymbolTable::lookupSymbolIn(module, parent);
+    }
+  }
   if (!llvm::isa_and_nonnull<PortOp>(port) || text(port, "direction") != "input" || !type ||
-      type.getValue() != value.getType() || port->getAttr("domain") != binding->getAttr("domain"))
+      type.getValue() != value.getType() || !ownedDomain)
     return reject(binding, "clock/reset producer must match an actual local input port and domain");
   return success();
 }
@@ -98,6 +118,17 @@ FailureOr<Operation *> DomainModel::resolveBinding(Attribute reference) const {
     return failure();
   return binding;
 }
+FailureOr<Operation *> DomainModel::resolveClockBinding(Attribute reference) const {
+  auto domain = resolveDomain(reference);
+  if (failed(domain))
+    return failure();
+  auto actual = FlatSymbolRefAttr::get(module->getContext(), text(*domain, "sym_name"));
+  auto found = physicalBindings.find(actual);
+  if (found == physicalBindings.end() || found->second.duplicate ||
+      failed(verifyLocalDomainClock(found->second.first)))
+    return failure();
+  return found->second.first;
+}
 bool DomainModel::matchesActualDomain(Attribute reference, Attribute expected) const {
   auto domain = resolveDomain(reference);
   return succeeded(domain) &&
@@ -108,7 +139,7 @@ Operation *DomainModel::findLocalBinding(Attribute reference) const {
   return found == physicalBindings.end() ? nullptr : found->second.first;
 }
 
-LogicalResult verifyLocalDomainBinding(Operation *op) {
+LogicalResult verifyLocalDomainClock(Operation *op) {
   if (!llvm::isa_and_nonnull<LocalDomainBindingOp>(op) || !llvm::isa<ModuleOp>(op->getParentOp()) ||
       op->getNumResults() || op->getNumRegions() || op->getNumSuccessors() ||
       op->getNumOperands() < 1 || op->getNumOperands() > 2 ||
@@ -121,7 +152,8 @@ LogicalResult verifyLocalDomainBinding(Operation *op) {
       (text(domain, "edge") != "rising" && text(domain, "edge") != "falling"))
     return reject(op, "executable local domain requires explicit rising/falling edge");
   StringRef policy = text(domain, "reset_policy");
-  if (policy != "none" && policy != "sync" && policy != "async")
+  if (policy != "none" && policy != "sync" && policy != "async" &&
+      policy != "async_assert_sync_release")
     return reject(
         op,
         "reset synchronization requires the explicit F57 implementation; no implicit synchronizer");
@@ -130,6 +162,31 @@ LogicalResult verifyLocalDomainBinding(Operation *op) {
     return reject(op, "physical reset presence and explicit polarity must match domain policy");
   if (failed(checkPhysical(op->getOperand(0), op, "clock")))
     return failure();
-  return op->getNumOperands() == 2 ? checkPhysical(op->getOperand(1), op, "reset") : success();
+  // Validate ancestry even for resetless/no-state consumers. Equal frequency or
+  // a self-only test is insufficient to establish a valid derived-domain DAG.
+  llvm::DenseSet<Operation *> seen;
+  Operation *current = domain;
+  unsigned count = 0;
+  while (current) {
+    if (++count > 128 || !seen.insert(current).second)
+      return reject(op, "generated domain parent cycle or depth bound exceeded");
+    auto parent = current->getAttrOfType<FlatSymbolRefAttr>("parent");
+    if (!parent)
+      break;
+    Operation *next = SymbolTable::lookupSymbolIn(op->getParentOp(), parent);
+    if (!isa_and_nonnull<DomainOp>(next) || next->getParentOp() != op->getParentOp() ||
+        text(next, "edge") != text(current, "edge"))
+      return reject(op, "generated domain requires an exact owned parent and inherited edge");
+    current = next;
+  }
+  return success();
+}
+LogicalResult verifyLocalDomainBinding(Operation *op) {
+  if (failed(verifyLocalDomainClock(op)))
+    return failure();
+  auto reference = op->getAttrOfType<FlatSymbolRefAttr>("domain");
+  auto *domain = SymbolTable::lookupSymbolIn(op->getParentOp(), reference);
+  DomainModel domains(op);
+  return verifyResetForBinding(op, domain, domains);
 }
 } // namespace nodal

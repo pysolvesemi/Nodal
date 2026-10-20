@@ -32,6 +32,7 @@
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/PotentialFlowAccess.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
@@ -2281,9 +2282,12 @@ LogicalResult nodal::PortOp::verify() {
   const llvm::StringRef direction = textAttr(getOperation(), "direction");
   if (!oneOf(direction, {"input", "output", "inout", "terminal"}))
     return emitOpError() << "unsupported port direction '" << direction << "'";
-  if (!getOperation()->getAttrOfType<TypeAttr>("type") ||
-      !getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain"))
-    return emitOpError("requires type and domain");
+  auto type = getOperation()->getAttrOfType<TypeAttr>("type");
+  auto control = type ? dyn_cast<nodal::ControlCapabilityType>(type.getValue())
+                      : nodal::ControlCapabilityType();
+  bool bareClock = direction == "input" && control && control.getKind() == "clock";
+  if (!type || (!getOperation()->getAttrOfType<FlatSymbolRefAttr>("domain") && !bareClock))
+    return emitOpError("requires type and domain unless an owned input Clock");
   return success();
 }
 
@@ -4381,3 +4385,7 @@ LogicalResult nodal::ResetAssertedOp::verify() { return verifyResetAsserted(getO
 LogicalResult nodal::SequentialAssertOp::verify() {
   return verifySequentialAssertion(getOperation());
 }
+
+LogicalResult nodal::ResetBoundaryOp::verify() { return verifyResetProducer(getOperation()); }
+LogicalResult nodal::ResetSyncOp::verify() { return verifyResetProducer(getOperation()); }
+LogicalResult nodal::ResetCombineOp::verify() { return verifyResetProducer(getOperation()); }

@@ -282,3 +282,52 @@ Those later consumers were not executed here. Reset/AASR, typed relationships an
 hierarchy propagation, Gray/pulse/handshake/FIFO, waivers, gate/mux structures and
 the low-level event escape remain required F57 work. All F57 parent/children stay
 open; this is a coherent level foundation checkpoint, not increment completion.
+
+## Reset model checkpoint (reconstructed, 2026-10-20)
+
+The additive [reset execution contract](../design-gates/NodalClockResetExecution-DG-v0.2.md)
+now has a native typed producer model: `reset_boundary`, `reset_sync` and
+`reset_combine`. `ResetModel` checks physical input identity, release lineage,
+polarity, receiving clock/edge, reconvergence and bounded traversal. `DomainModel`
+provides clock-only lookup so reset proof does not recursively depend on itself;
+generated parents retain exact ownership, inherited edge and acyclic ancestry.
+Existing arbitrary foreign-domain clock rejection remains intact. Owned bare
+clock inputs may be explicitly bound, including generated domains and two
+explicit aliases of one physical input. Existing attributed ports may not be
+silently reassigned across unrelated domains; equal frequency is never proof.
+
+Architecture review of this slice: reuse the existing domain index, typed SSA
+scope checks and shared digital dependency owner. Reset proof is separate from
+ordinary data provenance, not a second assignment engine. Each query bounds
+producer depth and retained lineage work; repeated per-operation verification
+can still revisit module records, so this is not a linear-time or performance
+improvement claim. Closed producer attributes and independent ingress validation
+prevent descriptive safety flags from substituting for actual operands.
+
+This is only the native model checkpoint, not target or whole-increment
+acceptance. Source construction/bridge capture, executable target lowering and
+simulation remain separate work; every F57 checklist item remains open. Historical
+results above retain their original scope. Lost unpushed reset results are not
+current evidence. CI and full qualification are not run under prototype policy.
+
+Fresh focused validation for the reconstructed native model: **31 reset cases
+and 25 DomainModel predecessor cases pass**. Cases include explicit provider and
+owned release positives; raw Async without state, forged producer attributes,
+polarity changes, wrong clock/edge, reconvergence, cycles, stage/arity bounds and
+Sync boundary retarget rejection; generated and explicit bare-clock aliases.
+The 12 model/test source files were frozen against SHA256 manifest digest
+`ec250e67dfdb9ea84701803794b96cfff7ff1f47d747a8498705034f9cbdb4e4`
+before this checkpoint. Reproduction (repository root):
+
+```sh
+source .work/tools/env.sh
+cmake --build .work/native-build --target nodal-reset-model-unit-tests nodal-domain-model-unit-tests -j3
+.work/native-build/core/compiler/test/Unit/nodal-reset-model-unit-tests
+.work/native-build/core/compiler/test/Unit/nodal-domain-model-unit-tests
+python3 scripts/check_markdown.py
+git diff --check
+```
+
+Build and focused output are retained under `.work/reset-model-build.log`,
+`.work/reset-model-test.log` and `.work/reset-domain-test.log`. Markdown and diff
+checks pass. These results do not claim the pending source or target slices pass.

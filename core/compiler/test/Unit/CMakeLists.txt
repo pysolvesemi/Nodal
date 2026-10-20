@@ -696,3 +696,10 @@ target_link_libraries(nodal-crossing-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.crossing-model-unit COMMAND nodal-crossing-model-unit-tests)
 set_tests_properties(nodal.native.crossing-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-reset-model-unit-tests ResetModelTest.cpp)
+llvm_update_compile_flags(nodal-reset-model-unit-tests)
+target_link_libraries(nodal-reset-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.reset-model-unit COMMAND nodal-reset-model-unit-tests)
+set_tests_properties(nodal.native.reset-model-unit PROPERTIES TIMEOUT 30)

@@ -672,6 +672,11 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
       return read(node, *access, use);
     }
   }
+  if (llvm::isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(definition)) {
+    // Reset safety is independently validated by the reset producer owner.
+    // A synchronization chain is an actual state cut, not a domainless alias.
+    return success();
+  }
   if (llvm::isa<CrossingOp>(definition)) {
     if (!crossingSourceRoots.count(definition))
       return reject(definition, "descriptor crossing cannot authorize an executable graph cut");

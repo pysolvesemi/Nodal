@@ -196,11 +196,11 @@ int main() {
              "NODAL-SEQUENTIAL-056-001: executable local domain requires explicit rising/falling "
              "edge");
   test.check(
-      "synchronized-reset-policy-is-not-implemented-by-refactor",
+      "synchronized-reset-policy-requires-actual-reset",
       replace(setup, "reset_policy = \"none\"", "reset_policy = \"async_assert_sync_release\""),
       invalidPhysical,
-      "NODAL-SEQUENTIAL-056-001: reset synchronization requires the explicit F57 "
-      "implementation; no implicit synchronizer");
+      "NODAL-SEQUENTIAL-056-001: physical reset presence and explicit polarity must match domain "
+      "policy");
   test.check("physical-reset-presence-remains-required", domain("core", "sync") + physical,
              invalidPhysical,
              "NODAL-SEQUENTIAL-056-001: physical reset presence and explicit polarity must match "

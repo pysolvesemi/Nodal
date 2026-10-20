@@ -39,6 +39,12 @@ incompatible receiving domains rejects. The finite initial stage range is 2–32
 resource bounds apply before allocation. Stage errors and forbidden construction
 effects poison the transaction, including when user code catches the exception.
 
+DomainHarness uses an internal descriptor-only capture entry point to retain
+existing selected-domain stimulus validation, including invalid stage/reference
+negatives. It does not allocate executable typed reset proof. Ordinary inspect,
+capture and emission remain strict; a stimulus snapshot cannot acquire execution
+safety by crossing the bridge without the required actual producers and bindings.
+
 `ResetController.combine` combines actual reset capabilities by asserted OR,
 normalizing their explicit polarities. It is nonempty. Distinct physical roots
 with different polarities may compose, but conflicting interpretations of one
@@ -61,7 +67,10 @@ binding validation and reset proof. ResetModel owns a bounded producer graph;
 source capture and native ingress independently validate it. Native physical-root
 identity includes polarity. Generated-domain parent graphs reject cycles,
 including multi-node cycles and resetless bindings. Same-leaf foreign domain
-paths cannot alias local owned domains.
+paths cannot alias local owned domains. Owned unattributed clock inputs can be
+explicitly bound, including aliases of one physical input. Existing attributed
+clock inputs are reusable only through explicit generated-parent ancestry, not
+through equal frequency or unrelated foreign-domain attribution.
 
 Resolved source snapshots require the actual clock source even without state.
 Missing or malformed operands must reject, not omit an executable binding.

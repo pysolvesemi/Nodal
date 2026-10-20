@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/MemoryModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
@@ -275,6 +276,12 @@ public:
       if (!direction || (direction.getValue() != "input" && direction.getValue() != "output"))
         return success(
             succeeded(reject("Clock/Reset ports require explicit input/output direction")));
+      auto portType = use->getAttrOfType<TypeAttr>("type");
+      auto controlType =
+          portType ? dyn_cast<ControlCapabilityType>(portType.getValue()) : ControlCapabilityType();
+      if (!use->getAttr("domain") && direction.getValue() == "input" && controlType &&
+          controlType.getKind() == "clock")
+        return success();
       auto reference = use->getAttrOfType<FlatSymbolRefAttr>("domain");
       Operation *domain = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
       if (!llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(domain) ||
@@ -282,6 +289,8 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(use))
+      return verifyResetProducer(use);
     if (llvm::isa<LocalDomainBindingOp>(use))
       return verifyLocalDomainBinding(use);
     if (llvm::isa<MemoryWriteEffectOp>(use))

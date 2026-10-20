@@ -95,7 +95,7 @@ def Nodal_PortOp : Nodal_Op<"port", [HasParent<"ModuleOp">, Symbol]> {
     SymbolNameAttr:$sym_name,
     TypeAttr:$type,
     StrAttr:$direction,
-    FlatSymbolRefAttr:$domain,
+    OptionalAttr<FlatSymbolRefAttr>:$domain,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -329,6 +329,7 @@ def Nodal_DomainOp : Nodal_Op<"domain", [HasParent<"ModuleOp">, Symbol]> {
     SymbolNameAttr:$sym_name,
     StrAttr:$edge,
     StrAttr:$reset_policy,
+    OptionalAttr<FlatSymbolRefAttr>:$parent,
     DictionaryAttr:$metadata
   );
   let hasVerifier = 1;
@@ -1923,5 +1924,26 @@ def Nodal_SequentialAssertOp : Nodal_Op<"sequential_assert", [HasParent<"ModuleO
   let summary = "Actual clock sampled property with exact owning domain";
   let arguments = (ins AnyType:$property, AnyType:$clock, FlatSymbolRefAttr:$domain,
     StrAttr:$edge, StrAttr:$root_id, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
+// F57: actual typed reset producers, separate from domain descriptors.
+def Nodal_ResetBoundaryOp : Nodal_Op<"reset_boundary", [HasParent<"ModuleOp">]> {
+  let arguments = (ins AnyType:$input, StrAttr:$reset_polarity, StrAttr:$release,
+    OptionalAttr<FlatSymbolRefAttr>:$release_domain, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ResetSyncOp : Nodal_Op<"reset_sync", [HasParent<"ModuleOp">]> {
+  let arguments = (ins AnyType:$input, AnyType:$clock,
+    FlatSymbolRefAttr:$destination_domain, StrAttr:$reset_polarity,
+    I64Attr:$stages, DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
+  let hasVerifier = 1;
+}
+def Nodal_ResetCombineOp : Nodal_Op<"reset_combine", [HasParent<"ModuleOp">]> {
+  let arguments = (ins Variadic<AnyType>:$inputs, StrAttr:$reset_polarity,
+    DictionaryAttr:$metadata);
+  let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }

@@ -73,9 +73,23 @@ private[nodal] object DigitalValueMlir:
     private val eventTargetSets = snapshot.eventProcesses.map(value =>
       value.path -> value.storageTargets.toSet
     ).toMap
-    private val eventPorts = snapshot.eventProcesses.flatMap(value =>
-      Vector(value.trigger) ++ value.storageTargets ++ value.externalCaptures
-    ).toSet
+    private val eventPorts =
+      val processPorts = snapshot.eventProcesses.flatMap(value =>
+        Vector(value.trigger) ++ value.storageTargets ++ value.externalCaptures
+      ).toSet
+      // @none serializes absence of a domain, not sampling permission. Every actual finite
+      // unannotated input boundary in this verified event-bearing root keeps that absence,
+      // including unused ports and represented collection operands through pure aliases.
+      val rootInputs = if eventProcesses.nonEmpty then
+        declarations.iterator.collect:
+          case (path, (owner, declaration))
+              if owner == snapshot.root && declaration.kind == "input" &&
+                declaration.domain.isEmpty && declaration.resolvedDomain.isEmpty &&
+                declaration.generatedScope.isEmpty && declaration.dataType.exists(finiteType) &&
+                assignmentTargetCounts.getOrElse(path, 0) == 0 => path
+        .toSet
+      else Set.empty[String]
+      processPorts ++ rootInputs
     def eventPort(path: String): Boolean = eventPorts(path)
 
     requireValid(
@@ -2272,6 +2286,16 @@ private[nodal] object DigitalValueMlir:
           )
           result
         visit(text, 0)
+      val eventSamples = snapshot.eventProcesses.iterator.filter(_.owner == module.path)
+        .flatMap(_.externalCaptures).toSet
+      module.declarations.iterator.filter(value => eventPort(value.path)).foreach: declaration =>
+        val fixed = declaration.kind == "output" || eventSamples(declaration.path)
+        val bits = bitPatternWidth(declaration.dataType.get, declaration.path, fixed)
+        requireValid(
+          !fixed || bits <= DigitalEventContract.MaximumPayloadBits,
+          "event sampled input/storage requires a fixed whole payload of 1 through 4096 bits",
+          declaration.path
+        )
       val lines = mutable.ArrayBuffer.empty[String]
       val values = mutable.HashMap.from(initialValues)
       val heights = mutable.HashMap.from(initialValues.keysIterator.map(_ -> 0))

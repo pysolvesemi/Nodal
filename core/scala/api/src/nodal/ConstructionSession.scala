@@ -70,6 +70,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         else DigitalCombinationalContract.isValueTypeKind(CandidateRuntime.typeDescriptor(dataType))
       )
     then eventFailure("event input requires an unannotated root-owned digital input boundary")
+    if !bool then
+      val bits = shapeTypeFootprint(
+        declaration.dataType.get,
+        owner,
+        cardinality = true,
+        storageContext = true,
+        bitPatternOnly = true,
+        fixedBitPattern = true
+      ).getOrElse(eventFailure("event capture requires a fixed whole digital bit pattern"))
+      if bits < 1 || bits > DigitalEventContract.MaximumPayloadBits then
+        eventFailure("event external capture fixed whole payload must contain 1 through 4096 bits")
     reference
 
   def digitalEvent(trigger: Expr[Bool], edge: Edge): Event =
@@ -3008,9 +3019,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 if expressionRef.module != activeOwner then
                   behavioralFailure("sequential expression belongs to another module")
                 collectionArguments.get(expressionRef).foreach: (region, index) =>
-                  region.captures.valuesIterator.find(_._2 eq reference).foreach(value =>
-                    enqueue(Vector(value._1))
-                  )
+                  val captured = region.captures.valuesIterator.find(_._2 eq reference)
+                  captured match
+                    case Some(value) => enqueue(Vector(value._1))
+                    case None if region.regionKind == DigitalRegionKind.Collection =>
+                      val role = region.arguments(index)._2
+                      if DigitalReductionContract.Kinds(region.kind) then
+                        // Width formals are static metadata. A used recurrence value retains
+                        // the complete represented input/seed/capture dependency envelope.
+                        if role == "left" || role == "right" then
+                          enqueue(region.inputs ++ region.seed ++
+                            region.captures.valuesIterator.map(_._1).toVector)
+                      else if region.seed.nonEmpty && index == 0 then
+                        enqueue(region.inputs ++ region.seed ++
+                          region.captures.valuesIterator.map(_._1).toVector)
+                      else
+                        enqueue(Vector(region.inputs(if region.seed.nonEmpty then 0 else index)))
+                    case _ => ()
                   region.fsmAction.foreach: header =>
                     val machine = flatFsms(header.machine)
                     if index == 0 then enqueue(Vector(machine.storage))
@@ -3076,7 +3101,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                           if strict && !DigitalValueConstruction.isDigitalValue(expression) &&
                             !expression.resultType.contains(KernelTypeDescriptor("Integer")) &&
                             !expressionRef.exists(reference =>
-                              shapeIndices.contains(reference) || shapeViews.contains(reference)
+                              shapeIndices.contains(reference) || shapeViews.contains(reference) ||
+                                collectionArguments.contains(reference)
                             )
                           then crossingFailure("input dependency has unsupported source provenance")
                           if expression.operation.contains("memory_read") then
@@ -3090,7 +3116,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                             if ports.exists(_.memory.readLatency == 0) then
                               enqueue(expression.operands)
                             else enqueue(ports)
-                          else enqueue(expression.operands)
+                          else
+                            expressionRef.flatMap(collectionRegions.get) match
+                              case Some(region) =>
+                                // Match the canonical collection graph: only the actual yielded
+                                // body and its used lane/capture arguments are runtime inputs.
+                                enqueue(Vector(region.yielded.getOrElse(
+                                  collectionFailure("sampled collection has no actual yield")
+                                )))
+                              case None => enqueue(expression.operands)
                         case memory: MemoryPortCapture =>
                           val declaration = memoryDeclaration(memory.memory, activeOwner)
                           declarationDomain(declaration, resolved) match

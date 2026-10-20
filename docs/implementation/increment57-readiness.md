@@ -1688,3 +1688,27 @@ relax the sampled-state limit. Commands, source hashes and logs are retained in
 `2f41c1a3bf25dd2b0cf97273f0b2f031261ea35b6388e1fd5e660509c514508e`.
 Formatting and focused diff checks pass. Final actual-source/default-gate/HDL
 integration remains pending at this checkpoint; no final event acceptance yet.
+
+### Event source collection and boundary parity repair
+
+The shared source sampling owner now follows actual collection yields and used
+region arguments, including conservative represented recurrence dependencies,
+rather than sampling every bound but unused operand. Constant maps/folds and dead
+pure captures do not invent external captures; real lane and free-capture inputs
+remain causal. The same rule fixes ordinary domain sampling without allowing an
+actually used foreign-domain lane. No event-specific collection engine was added.
+The bridge preserves absent domains on actual verified finite root inputs,
+including unused input/seed/shape-alias boundaries, while exact runtime capture
+inventories remain unchanged. Source capture and bridge independently enforce
+fixed 1..4096-bit sampled payloads; unused finite inputs retain canonical bounds.
+
+The frozen three-file correction passes **66/66 focused Scala groups**:
+Increment57EventSourceTests 9, Increment57EventCollectionSourceTests 3,
+Increment55DigitalCollectionTests 11, Increment56SequentialCaptureTests 20,
+Increment57LevelCrossingTests 9, Increment57WaiverSourceTests 8 and
+nodal.AnalogEventReviewTests 6. Mill exited 0 in
+`.work/event-collection-sampler-tests-final.log`; exact source hashes are in
+`.work/event-collection-sampler-source-frozen.sha256`. Formatting and diff checks
+pass. This supersedes the earlier constant-map overcapture gap. Actual regenerated
+source/native/HDL integration is the final pending event check, not inferred from
+the source test result alone.

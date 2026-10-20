@@ -20,9 +20,11 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <deque>
 #include <fstream>
 #include <map>
 #include <string>
@@ -403,6 +405,39 @@ std::string executableBody(std::string kind, std::string type, unsigned stages =
             port("otherResult", type, "output") + assign("otherResult", "independent", false, type);
   return body;
 }
+std::string fifoCrossing(std::string type, unsigned depth = 4, std::string name = "sample",
+                         std::string payload = "input", std::string valid = "sourceValid",
+                         std::string ready = "destinationReady") {
+  return "%" + name + ":3 = \"nodal.async_fifo\"(%" + payload + ", %" + valid + ", %" + ready +
+         ") <{source_domain = @source, destination_domain = @core, kind = \"fifo\", "
+         "contract = \"fifo_v1\", depth = " +
+         std::to_string(depth) +
+         " : i64, obligations = {transfer = \"valid_and_ready\", "
+         "stall = \"hold_payload_and_valid\", reset_epoch = \"common_assertion\", "
+         "pointer_skew = \"less_than_launch_period\", "
+         "bundled_data = \"settled_before_read_visibility\"}, " +
+         metadata(name) + "}> : (" + type + ", " + bit + ", " + bit + ") -> (" + type + ", " + bit +
+         ", " + bit + ")\n";
+}
+std::string fifoBody(std::string type = u8, unsigned depth = 4, std::string policy = "sync",
+                     bool independent = false, std::string sourceEdge = "rising",
+                     std::string destinationEdge = "rising", std::string polarity = "active_high") {
+  std::string body =
+      executableSetup(type, policy, sourceEdge, destinationEdge, polarity) +
+      replace(port("sourceValid", bit), "domain = @core", "domain = @source") +
+      port("destinationReady", bit) + fifoCrossing(type, depth) + port("result", type, "output") +
+      assign("result", "sample#0", false, type) + port("resultValid", bit, "output") +
+      assign("resultValid", "sample#1", false, bit) +
+      replace(port("resultReady", bit, "output"), "domain = @core", "domain = @source") +
+      assign("resultReady", "sample#2", false, bit);
+  if (independent)
+    body += fifoCrossing(type, depth, "independent") + port("otherResult", type, "output") +
+            assign("otherResult", "independent#0", false, type) +
+            port("otherValid", bit, "output") + assign("otherValid", "independent#1", false, bit) +
+            replace(port("otherReady", bit, "output"), "domain = @core", "domain = @source") +
+            assign("otherReady", "independent#2", false, bit);
+  return body;
+}
 bool owningClock(Value value, StringRef name, bool falling) {
   if (falling) {
     auto inverter = value.getDefiningOp<circt::seq::ClockInverterOp>();
@@ -720,6 +755,193 @@ bool checkHandshake(mlir::ModuleOp module, unsigned bits, unsigned chains = 1,
   return good && checks == 2 * chains && obligations == chains &&
          print(module).find("seq.initial") == std::string::npos;
 }
+bool checkFifo(mlir::ModuleOp module, unsigned bits, unsigned depth = 4, unsigned chains = 1,
+               bool sourceFalling = false, bool destinationFalling = false,
+               bool activeLow = false) {
+  bool good = true;
+  auto registers = crossingRegisters(module, good);
+  good &= registers.size() == chains;
+  unsigned pointerBits = llvm::Log2_64(depth) + 1, monitorBase = 8 + depth;
+  auto hw = *module.getOps<circt::hw::HWModuleOp>().begin();
+  auto *outputs = hw.getBodyBlock()->getTerminator();
+  for (auto &[path, regs] : registers) {
+    good &= regs.size() == depth + 12;
+    if (regs.size() != depth + 12)
+      continue;
+    unsigned stateBits = 0;
+    auto sourceOwned = [&](unsigned i) { return i < 4 || (i >= 8 && i < monitorBase + 2); };
+    for (unsigned i = 0; i < regs.size(); ++i) {
+      unsigned w = cast<IntegerType>(regs[i].getResult().getType()).getWidth();
+      stateBits += w;
+      good &=
+          w == (i < 8 ? pointerBits : (i == monitorBase + 1 || i == monitorBase + 3 ? 1 : bits));
+      good &= owningClock(regs[i].getClk(), sourceOwned(i) ? "sourceClock" : "clock",
+                          sourceOwned(i) ? sourceFalling : destinationFalling);
+      good &= regs[i]->getAttrOfType<StringAttr>("nodal.crossing_contract").getValue() == "fifo_v1";
+      good &= regs[i]->getAttrOfType<IntegerAttr>("nodal.crossing_depth").getInt() == depth;
+      good &= !regs[i]->hasAttr("nodal.crossing_stages");
+    }
+    good &= stateBits == depth * bits + 8 * pointerBits + 2 * (bits + 1);
+    const char *roles[] = {"source_binary",
+                           "source_gray",
+                           "source_read_gray_0",
+                           "source_read_gray_1",
+                           "destination_binary",
+                           "destination_gray",
+                           "destination_write_gray_0",
+                           "destination_write_gray_1"};
+    for (unsigned i = 0; i < 8; ++i)
+      good &= regs[i]->getAttrOfType<StringAttr>("nodal.crossing_role").getValue() == roles[i];
+    for (unsigned i = 0; i < depth; ++i)
+      good &= regs[8 + i]->getAttrOfType<StringAttr>("nodal.crossing_role").getValue() ==
+              "bank_" + std::to_string(i);
+    if (bits > 64)
+      continue;
+    uint64_t mask = bits == 64 ? ~uint64_t(0) : (uint64_t(1) << bits) - 1;
+    unsigned offset = path == "Fixture.sample" ? 0 : 3;
+    SmallVector<uint64_t> state(regs.size(), 0);
+    for (unsigned i = 8; i < monitorBase; ++i)
+      state[i] = (i * 17) & mask;
+    std::deque<uint64_t> expected;
+    unsigned writes = 0, reads = 0;
+    auto tick = [&](bool sourceEdge, bool destinationEdge, uint64_t payload, bool valid, bool ready,
+                    bool reset = false, bool enforceStalls = true) {
+      std::map<std::string, uint64_t> input{{"reset", activeLow ? !reset : reset},
+                                            {"input", payload},
+                                            {"sourceValid", valid},
+                                            {"destinationReady", ready}};
+      for (unsigned i = 0; i < regs.size(); ++i)
+        input["state:" + regs[i].getNameAttr().getValue().str()] = state[i];
+      bool sourceReady = evaluate(outputs->getOperand(offset + 2), input, 0);
+      bool destinationValid = evaluate(outputs->getOperand(offset + 1), input, 0);
+      uint64_t delivered = evaluate(outputs->getOperand(offset), input, 0);
+      if (reset) {
+        good &= !sourceReady && !destinationValid;
+        expected.clear();
+      }
+      bool write = sourceEdge && valid && sourceReady;
+      bool read = destinationEdge && ready && destinationValid;
+      if (read) {
+        good &= !expected.empty();
+        if (!expected.empty()) {
+          good &= expected.front() == delivered;
+          expected.pop_front();
+        }
+        ++reads;
+      }
+      if (write) {
+        expected.push_back(payload);
+        ++writes;
+      }
+      good &= expected.size() <= depth;
+      auto next = state;
+      for (unsigned i = 0; i < regs.size(); ++i)
+        if (sourceOwned(i) ? sourceEdge : destinationEdge)
+          next[i] = evaluate(regs[i].getInput(), input, 0);
+      // Every accepted binary step changes exactly one registered Gray bit.
+      for (unsigned i : {1u, 5u}) {
+        uint64_t delta = state[i] ^ next[i];
+        if (!reset)
+          good &= delta == 0 || (delta & (delta - 1)) == 0;
+      }
+      module.walk([&](circt::sv::VerbatimOp check) {
+        if (!check->hasAttr("nodal.crossing_check") ||
+            check->getAttrOfType<StringAttr>("nodal.source_path").getValue() != path)
+          return;
+        StringRef message = check->getAttrOfType<StringAttr>("format_string").getValue();
+        bool sourceCheck = message.contains("FIFO source ");
+        if (message.contains("must hold payload") && enforceStalls && !reset &&
+            (sourceCheck ? sourceEdge : destinationEdge))
+          good &= evaluate(check->getOperand(2), input, 0) == 1;
+      });
+      state = std::move(next);
+      return std::pair<bool, bool>(write, read);
+    };
+    tick(true, true, 0, false, false, true);
+    unsigned before = writes;
+    for (unsigned i = 0; i < depth; ++i)
+      tick(true, false, (i + 1) & mask, true, false);
+    good &= writes - before == depth && expected.size() == depth;
+    uint64_t blocked = (depth + 1) & mask;
+    for (unsigned i = 0; i < 3; ++i)
+      good &= !tick(true, false, blocked, true, false).first;
+    // Resume the destination and release the full source only after the real
+    // opposite pointer has traversed both synchronizers. The blocked offer stays stable.
+    for (unsigned i = 0; i < 2; ++i)
+      tick(false, true, blocked, true, false);
+    for (unsigned i = 0; i < depth; ++i)
+      tick(false, true, blocked, true, true);
+    good &= expected.empty() && reads == depth;
+    for (unsigned i = 0; i < 2; ++i)
+      good &= !tick(true, false, blocked, true, true).first;
+    good &= tick(true, false, blocked, true, true).first;
+    // Reset flushes an accepted outstanding item, and false valid/ready samples
+    // must not advance either pointer. Payload contents remain arbitrary.
+    tick(true, true, 0, false, false, true);
+    for (unsigned i = 0; i < 4; ++i)
+      tick(true, true, i & mask, false, false);
+    good &= state[0] == 0 && state[4] == 0 && expected.empty();
+    uint64_t nextPayload = 3 & mask;
+    before = writes;
+    for (unsigned cycle = 0; cycle < 8 * depth + 32; ++cycle) {
+      auto accepted = tick(cycle % 3 != 1, cycle % 5 != 2, nextPayload, true, cycle % 7 >= 2);
+      if (accepted.first)
+        nextPayload = (nextPayload + 1) & mask;
+    }
+    good &= writes - before > 2 * depth; // Repeated wraparound, unequal and simultaneous edges.
+    tick(true, true, 0, false, false, true);
+    // Deliberately falsify each endpoint's next sample and inspect its actual
+    // retained checker. This is not a second software FIFO implementation.
+    for (bool sourceCheck : {true, false}) {
+      std::map<std::string, uint64_t> input{{"reset", activeLow ? 1 : 0},
+                                            {"input", 1 & mask},
+                                            {"sourceValid", 1},
+                                            {"destinationReady", 0}};
+      for (unsigned i = 0; i < regs.size(); ++i)
+        input["state:" + regs[i].getNameAttr().getValue().str()] = state[i];
+      unsigned base = monitorBase + (sourceCheck ? 0 : 2);
+      input["state:" + regs[base].getNameAttr().getValue().str()] = 0;
+      input["state:" + regs[base + 1].getNameAttr().getValue().str()] = 1;
+      module.walk([&](circt::sv::VerbatimOp check) {
+        if (!check->hasAttr("nodal.crossing_check") ||
+            check->getAttrOfType<StringAttr>("nodal.source_path").getValue() != path)
+          return;
+        StringRef message = check->getAttrOfType<StringAttr>("format_string").getValue();
+        if (message.contains(sourceCheck ? "FIFO source must hold" : "FIFO destination must hold"))
+          good &= evaluate(check->getOperand(2), input, 0) == 0;
+      });
+    }
+  }
+  unsigned checks = 0, obligations = 0;
+  module.walk([&](circt::sv::VerbatimOp op) {
+    StringRef message = op->getAttrOfType<StringAttr>("format_string").getValue();
+    obligations += message.contains("transfer=valid_and_ready") &&
+                   message.contains("pointer_skew=less_than_launch_period") &&
+                   message.contains("bundled_data=settled_before_read_visibility") &&
+                   message.contains("no one-sided restart");
+    if (!op->hasAttr("nodal.crossing_check"))
+      return;
+    ++checks;
+    good &= message.contains("if (({{1}}) !== 1'b0)") && message.contains("$fatal");
+    good &= evaluate(op->getOperand(1), {{"reset", activeLow ? 0 : 1}}, 0) == 0;
+    good &= evaluate(op->getOperand(1), {{"reset", activeLow ? 1 : 0}}, 0) == 1;
+    bool sourceCheck = message.contains("FIFO source ");
+    good &= message.contains((sourceCheck ? sourceFalling : destinationFalling) ? "negedge"
+                                                                                : "posedge");
+    if (message.contains("controls require")) {
+      good &= message.contains("assert ((^({{2}})) !== 1'bx)");
+      auto concat = op->getOperand(2).getDefiningOp<circt::comb::ConcatOp>();
+      good &= concat && concat->getNumOperands() == 5;
+      if (concat && concat->getNumOperands() == 5) {
+        auto &regs = registers[op->getAttrOfType<StringAttr>("nodal.source_path").getValue().str()];
+        for (unsigned i = 0; i < 4; ++i)
+          good &= concat->getOperand(i) == regs[i + (sourceCheck ? 0 : 4)].getResult();
+      }
+    }
+  });
+  return good && checks == 4 * chains && obligations == chains &&
+         print(module).find("seq.initial") == std::string::npos;
+}
 // Check the emitted data graph at each pre-edge state, with the actual owning
 // clock and all stage/source identities. Input inversion makes bypass obvious.
 bool checkLevel(mlir::ModuleOp module, unsigned stages, unsigned chains, bool reset = false,
@@ -843,6 +1065,17 @@ int main(int argc, char **argv) {
       std::ofstream(path + ".nodal.mlir") << source;
       std::ofstream(path + ".circt.mlir") << print(*module) << '\n';
     }
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--emit-fifo") {
+    std::string source = wrap(fifoBody());
+    auto module = parseSourceString<mlir::ModuleOp>(source, &context);
+    if (!module || failed(lower(*module))) {
+      llvm::errs() << diagnostics;
+      return 1;
+    }
+    std::ofstream(std::string(argv[2]) + ".nodal.mlir") << source;
+    std::ofstream(std::string(argv[2]) + ".circt.mlir") << print(*module) << '\n';
     return 0;
   }
   unsigned cases = 0, failures = 0;
@@ -1229,6 +1462,119 @@ int main(int argc, char **argv) {
          return good && controls == 6 && payloads == 2 &&
                 print(m).find("seq.initial") == std::string::npos;
        });
+  for (const auto &[bits, depth] :
+       {std::pair<unsigned, unsigned>{1, 2}, {8, 4}, {17, 8}, {8, 256}, {4096, 2}})
+    test("fifo-exact-capacity-wraparound-" + std::to_string(bits) + "-" + std::to_string(depth),
+         fifoBody("!nodal.bits<" + std::to_string(bits) + ">", depth),
+         [&](mlir::ModuleOp m) { return checkFifo(m, bits, depth); });
+  for (bool falling : {false, true})
+    test(falling ? "fifo-low-falling-source" : "fifo-falling-destination",
+         fifoBody(u8, 4, "sync", false, falling ? "falling" : "rising",
+                  falling ? "rising" : "falling", falling ? "active_low" : "active_high"),
+         [&](mlir::ModuleOp m) { return checkFifo(m, 8, 4, 1, falling, !falling, falling); });
+  test("fifo-independent-coherent-identities-cse", fifoBody(u8, 4, "sync", true),
+       [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkFifo(m, 8, 4, 2);
+       });
+  test("fifo-asynchronous-controls-and-stall-markers-only-reset", fifoBody(u8, 4, "async"),
+       [&](mlir::ModuleOp m) {
+         unsigned controls = 0, payloads = 0, stateBits = 0;
+         bool good = true;
+         m.walk([&](circt::seq::FirRegOp reg) {
+           ++controls;
+           unsigned bits = cast<IntegerType>(reg.getResult().getType()).getWidth();
+           stateBits += bits;
+           good &= reg.getIsAsync() && reg.getReset() && reg.getInnerSymAttr() &&
+                   (bits == 3 || bits == 1) && evaluate(reg.getResetValue(), {}, 1) == 0;
+         });
+         m.walk([&](circt::seq::CompRegOp reg) {
+           ++payloads;
+           stateBits += cast<IntegerType>(reg.getResult().getType()).getWidth();
+           good &= reg.getResult().getType().isInteger(8) && !reg.getReset() &&
+                   !reg.getInitialValue() && reg.getInnerSymAttr();
+         });
+         return good && controls == 10 && payloads == 6 && stateBits == 4 * 8 + 8 * 3 + 2 * 9 &&
+                print(m).find("seq.initial") == std::string::npos;
+       });
+  {
+    std::string second =
+        fifoCrossing(u8, 4, "returned", "sample#0", "sample#1", "destinationReady");
+    second = replace(second, "source_domain = @source, destination_domain = @core",
+                     "source_domain = @core, destination_domain = @source");
+    std::string chain =
+        executableSetup(u8, "sync") +
+        replace(port("sourceValid", bit), "domain = @core", "domain = @source") +
+        replace(port("destinationReady", bit), "domain = @core", "domain = @source") +
+        "%betweenReady = \"nodal.digital_storage\"() <{name = \"betweenReady\", "
+        "kind = \"wire\", " +
+        metadata("betweenReady") + "}> : () -> " + bit + "\n" +
+        fifoCrossing(u8, 4, "sample", "input", "sourceValid", "betweenReady") + second +
+        assign("betweenReady", "returned#2", false, bit) +
+        replace(port("result", u8, "output"), "domain = @core", "domain = @source") +
+        assign("result", "returned#0", false, u8) +
+        replace(port("resultValid", bit, "output"), "domain = @core", "domain = @source") +
+        assign("resultValid", "returned#1", false, bit) +
+        replace(port("resultReady", bit, "output"), "domain = @core", "domain = @source") +
+        assign("resultReady", "sample#2", false, bit);
+    test("fifo-chain-forward-ready-and-coherent-results", chain, [&](mlir::ModuleOp m) {
+      SmallVector<circt::seq::CompRegOp> regs;
+      m.walk([&](circt::seq::CompRegOp reg) { regs.push_back(reg); });
+      bool good = regs.size() == 32;
+      SmallVector<uint64_t> state(regs.size(), 0);
+      std::deque<uint64_t> expected;
+      auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
+      auto *outputs = hw.getBodyBlock()->getTerminator();
+      uint64_t payload = 1;
+      unsigned writes = 0, reads = 0;
+      for (unsigned cycle = 0; cycle < 200; ++cycle) {
+        bool reset = cycle == 0, sourceEdge = cycle % 3 != 1, coreEdge = cycle % 4 != 2;
+        bool ready = cycle % 7 >= 2;
+        std::map<std::string, uint64_t> input{
+            {"reset", reset}, {"input", payload}, {"sourceValid", 1}, {"destinationReady", ready}};
+        for (unsigned i = 0; i < regs.size(); ++i)
+          input["state:" + regs[i].getNameAttr().getValue().str()] = state[i];
+        bool write = sourceEdge && evaluate(outputs->getOperand(2), input, 0);
+        bool read = sourceEdge && ready && evaluate(outputs->getOperand(1), input, 0);
+        if (read) {
+          good &= !expected.empty();
+          if (!expected.empty()) {
+            good &= evaluate(outputs->getOperand(0), input, 0) == expected.front();
+            expected.pop_front();
+          }
+          ++reads;
+        }
+        if (write) {
+          expected.push_back(payload);
+          payload = (payload + 1) & 255;
+          ++writes;
+        }
+        auto next = state;
+        for (unsigned i = 0; i < regs.size(); ++i)
+          if (owningClock(regs[i].getClk(), "sourceClock", false) ? sourceEdge : coreEdge)
+            next[i] = evaluate(regs[i].getInput(), input, 0);
+        m.walk([&](circt::sv::VerbatimOp check) {
+          if (!check->hasAttr("nodal.crossing_check"))
+            return;
+          StringRef message = check->getAttrOfType<StringAttr>("format_string").getValue();
+          auto clock = check->getOperand(0).getDefiningOp<circt::seq::FromClockOp>();
+          bool edge =
+              owningClock(clock->getOperand(0), "sourceClock", false) ? sourceEdge : coreEdge;
+          if (!reset && edge && message.contains("must hold payload"))
+            good &= evaluate(check->getOperand(2), input, 0) == 1;
+        });
+        state = std::move(next);
+      }
+      return good && writes > 20 && reads > 20 && expected.size() <= 8 &&
+             print(m).find("unrealized_conversion_cast") == std::string::npos;
+    });
+  }
+  negative("fifo-wide-target-rejection-is-atomic", wrap(fifoBody("!nodal.bits<4097>")),
+           "only fixed scalar");
+  negative("fifo-aggregate-target-rejection-is-atomic",
+           wrap(fifoBody("!nodal.shaped<\"3\", !nodal.bits<2048>>")), "only fixed scalar");
+  negative("fifo-missing-reset-epoch-is-atomic", wrap(fifoBody(u8, 4, "none")), "reset-bearing");
   auto packedABI = [&](mlir::ModuleOp m, unsigned bits) {
     auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
     DictionaryAttr reference;
@@ -1293,6 +1639,12 @@ int main(int argc, char **argv) {
                 cast<DictionaryAttr>(tags[1]).getAs<StringAttr>("name").getValue() == "tag" &&
                 layout.getAs<StringAttr>("source_type").getValue().contains("Frame");
        });
+  test("fifo-fixed-vector-packed-abi", fifoBody("!nodal.shaped<\"2,3\", !nodal.uint<2>>"),
+       [&](mlir::ModuleOp m) { return packedABI(m, 12) && checkFifo(m, 12); });
+  test("fifo-fixed-nested-struct-packed-abi", fifoBody(packedStruct),
+       [&](mlir::ModuleOp m) { return packedABI(m, 20) && checkFifo(m, 20); });
+  test("fifo-fixed-packed-width-boundary", fifoBody("!nodal.shaped<\"2\", !nodal.bits<2048>>", 2),
+       [&](mlir::ModuleOp m) { return packedABI(m, 4096) && checkFifo(m, 4096, 2); });
   test("handshake-fixed-vector-row-major-abi",
        executableBody("handshake", "!nodal.shaped<\"2,3\", !nodal.uint<2>>", 2, "sync"),
        [&](mlir::ModuleOp m) { return packedABI(m, 12) && checkHandshake(m, 12); });

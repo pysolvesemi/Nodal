@@ -139,12 +139,12 @@ public:
       if (!structural) {
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
-        if (aggregate && !isa<PortValueOp, CrossingOp, DigitalAssignOp>(op) &&
+        if (aggregate && !isa<PortValueOp, CrossingOp, AsyncFifoOp, DigitalAssignOp>(op) &&
             !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
-          return reject(&op,
-                        "fixed aggregate target profile supports only whole-value Gray/handshake "
-                        "crossings and direct boundary/alias connections; projections "
-                        "require an explicit packed-offset lowering");
+          return reject(
+              &op, "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
+                   "crossings and direct boundary/alias connections; projections "
+                   "require an explicit packed-offset lowering");
         for (Type type : op.getOperandTypes())
           if (!targetValueType(type))
             return reject(
@@ -190,7 +190,7 @@ public:
         resets.push_back(&op);
         expansion = isa<ResetSyncOp>(op) ? 3 * op.getAttrOfType<IntegerAttr>("stages").getInt() + 5
                                          : 2 * op.getNumOperands() + 2;
-      } else if (isa<CrossingOp>(op)) {
+      } else if (isa<CrossingOp, AsyncFifoOp>(op)) {
         auto crossing = inspectExecutableCrossing(&op, domains);
         if (failed(crossing))
           return failure();
@@ -200,10 +200,11 @@ public:
         // Bounds cover state, reset logic, source-clock runtime monitors and
         // retained obligations. Payload bits were independently bounded by the
         // native model; this profile additionally requires fixed scalar/packed types.
-        expansion = crossing->kind == CrossingKind::Handshake ? 80
-                    : crossing->kind == CrossingKind::Pulse   ? 64
-                    : crossing->kind == CrossingKind::Gray    ? 2 * crossing->stages + 32
-                                                              : 3 * crossing->stages + 8;
+        expansion = crossing->kind == CrossingKind::Fifo        ? 10 * crossing->depth + 192
+                    : crossing->kind == CrossingKind::Handshake ? 80
+                    : crossing->kind == CrossingKind::Pulse     ? 64
+                    : crossing->kind == CrossingKind::Gray      ? 2 * crossing->stages + 32
+                                                                : 3 * crossing->stages + 8;
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -327,7 +328,21 @@ public:
                  "source_request",           "destination_request_0",
                  "destination_request_1",    "destination_acknowledgement",
                  "source_acknowledgement_0", "source_acknowledgement_1"};
-      else {
+      else if (crossing.kind == CrossingKind::Fifo) {
+        roles = {"source_binary",
+                 "source_gray",
+                 "source_read_gray_0",
+                 "source_read_gray_1",
+                 "destination_binary",
+                 "destination_gray",
+                 "destination_write_gray_0",
+                 "destination_write_gray_1"};
+        for (unsigned entry = 0; entry < crossing.depth; ++entry)
+          roles.push_back("bank_" + std::to_string(entry));
+        for (StringRef role : {"source_previous_payload", "source_stalled",
+                               "destination_previous_payload", "destination_stalled"})
+          roles.push_back(role.str());
+      } else {
         for (unsigned stage = 0; stage < crossing.stages; ++stage)
           roles.push_back("stage_" + std::to_string(stage));
         if (crossing.kind == CrossingKind::Gray) {
@@ -338,6 +353,7 @@ public:
       StringRef kind = crossing.kind == CrossingKind::Level   ? "sync"
                        : crossing.kind == CrossingKind::Gray  ? "gray"
                        : crossing.kind == CrossingKind::Pulse ? "pulse"
+                       : crossing.kind == CrossingKind::Fifo  ? "fifo"
                                                               : "handshake";
       for (const std::string &role : roles) {
         std::string base =
@@ -527,7 +543,7 @@ public:
       values[reg->getResult(0)] = state->getResult(0);
       stateEdges.emplace_back(update, edge);
     }
-    SmallVector<std::pair<Operation *, circt::Backedge>> crossingEdges;
+    SmallVector<std::pair<Value, circt::Backedge>> crossingEdges;
     for (const auto &crossing : crossings) {
       Operation *op = crossing.operation;
       auto destination = crossingControls(crossing.destinationDomain, crossing.destinationBinding);
@@ -536,7 +552,7 @@ public:
         return reject(op, "crossing destination physical clock/reset did not map");
       }
       auto input = backedges.get(targetValueType(op->getOperand(0).getType()), op->getLoc());
-      crossingEdges.emplace_back(op, input);
+      crossingEdges.emplace_back(op->getOperand(0), input);
       Value previous = input;
       if (crossing.kind == CrossingKind::Level || crossing.kind == CrossingKind::Gray) {
         for (unsigned stage = 0; stage < crossing.stages; ++stage)
@@ -551,7 +567,14 @@ public:
         backedges.abandon();
         return reject(op, "crossing source physical clock/reset did not map");
       }
-      if (crossing.kind == CrossingKind::Gray) {
+      if (crossing.kind == CrossingKind::Fifo) {
+        auto sourceValid = backedges.get(builder.getI1Type(), op->getLoc());
+        auto destinationReady = backedges.get(builder.getI1Type(), op->getLoc());
+        crossingEdges.emplace_back(op->getOperand(1), sourceValid);
+        crossingEdges.emplace_back(op->getOperand(2), destinationReady);
+        lowerFifo(crossing, input, sourceValid, destinationReady, *sourceControl, *destination,
+                  backedges);
+      } else if (crossing.kind == CrossingKind::Gray) {
         // The payload history has no reset value. In particular, an enum with
         // no zero encoding must not acquire a fabricated source reset state.
         // Only the seen marker resets, and the first real sample seeds history.
@@ -660,7 +683,7 @@ public:
     for (Operation &op : source.getBody().front()) {
       if (!op.getNumResults() || controlProjections.contains(&op) ||
           controlSelectors.contains(&op) ||
-          isa<DigitalStorageOp, PortValueOp, CrossingOp, ResetBoundaryOp, ResetSyncOp,
+          isa<DigitalStorageOp, PortValueOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
               ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
@@ -729,11 +752,11 @@ public:
         pending.pop_back();
       }
     }
-    for (auto &[crossing, edge] : crossingEdges) {
-      Value input = values.lookup(crossing->getOperand(0));
+    for (auto &[original, edge] : crossingEdges) {
+      Value input = values.lookup(original);
       if (!input) {
         backedges.abandon();
-        return reject(crossing, "crossing actual source input did not lower");
+        return reject(original.getDefiningOp(), "crossing actual sampled input did not lower");
       }
       edge.setValue(input);
     }
@@ -890,7 +913,10 @@ private:
     // canonical source contract, every state role and the original source path.
     state->setAttr("nodal.crossing", op->getAttr("metadata"));
     state->setAttr("nodal.crossing_contract", op->getAttr("contract"));
-    state->setAttr("nodal.crossing_stages", op->getAttr("stages"));
+    if (Attribute stages = op->getAttr("stages"))
+      state->setAttr("nodal.crossing_stages", stages);
+    if (Attribute depth = op->getAttr("depth"))
+      state->setAttr("nodal.crossing_depth", depth);
     state->setAttr("nodal.crossing_source_domain", op->getAttr("source_domain"));
     state->setAttr("nodal.crossing_destination_domain", op->getAttr("destination_domain"));
     state->setAttr("nodal.crossing_stage", builder.getI64IntegerAttr(index));
@@ -900,6 +926,127 @@ private:
     if (aggregatePayload(op->getOperand(0).getType()))
       state->setAttr("nodal.packed_abi", packedLayout(op->getOperand(0).getType()));
     return state->getResult(0);
+  }
+  void lowerFifo(const ExecutableCrossing &crossing, Value payload, Value sourceValid,
+                 Value destinationReady, const CrossingControls &sourceControl,
+                 const CrossingControls &destination, circt::BackedgeBuilder &backedges) {
+    Operation *op = crossing.operation;
+    unsigned pointerBits = crossing.pointerBits, addressBits = pointerBits - 1;
+    Type pointerType = builder.getIntegerType(pointerBits);
+    auto writeBinaryNext = backedges.get(pointerType, op->getLoc());
+    auto writeGrayNext = backedges.get(pointerType, op->getLoc());
+    auto readBinaryNext = backedges.get(pointerType, op->getLoc());
+    auto readGrayNext = backedges.get(pointerType, op->getLoc());
+    // All eight pointer-width controls have real local reset. In particular,
+    // registered Gray values, not combinational binary bits, cross the clocks.
+    Value writeBinary = crossingState(crossing, 0, writeBinaryNext, sourceControl, "source_binary");
+    Value writeGray = crossingState(crossing, 1, writeGrayNext, sourceControl, "source_gray");
+    auto readGraySource = backedges.get(pointerType, op->getLoc());
+    Value read0 = crossingState(crossing, 2, readGraySource, sourceControl, "source_read_gray_0");
+    Value read1 = crossingState(crossing, 3, read0, sourceControl, "source_read_gray_1");
+    Value readBinary =
+        crossingState(crossing, 4, readBinaryNext, destination, "destination_binary");
+    Value readGray = crossingState(crossing, 5, readGrayNext, destination, "destination_gray");
+    Value write0 = crossingState(crossing, 6, writeGray, destination, "destination_write_gray_0");
+    Value write1 = crossingState(crossing, 7, write0, destination, "destination_write_gray_1");
+    readGraySource.setValue(readGray);
+    Value fullReadGray = make(op, "comb.xor", pointerType,
+                              {read1, constant(op, pointerBits, uint64_t(3) << (pointerBits - 2))});
+    Value sourceReady = make(op, "comb.and", builder.getI1Type(),
+                             {invert(op, sourceControl.reset),
+                              compare(op, "digital_ne", writeGray, fullReadGray, false)});
+    Value destinationValid =
+        make(op, "comb.and", builder.getI1Type(),
+             {invert(op, destination.reset), compare(op, "digital_ne", readGray, write1, false)});
+    Value writeAccepted = make(op, "comb.and", builder.getI1Type(), {sourceValid, sourceReady});
+    Value readAccepted =
+        make(op, "comb.and", builder.getI1Type(), {destinationValid, destinationReady});
+    auto advance = [&](Value current, Value accepted) {
+      return mux(op, accepted,
+                 make(op, "comb.add", pointerType, {current, constant(op, pointerBits, 1)}),
+                 current);
+    };
+    auto gray = [&](Value binary) {
+      Value high = circt::comb::ExtractOp::create(builder, op->getLoc(), binary, 1, addressBits);
+      Value shifted = make(op, "comb.concat", pointerType, {constant(op, 1, 0), high});
+      return make(op, "comb.xor", pointerType, {binary, shifted});
+    };
+    Value nextWrite = advance(writeBinary, writeAccepted),
+          nextRead = advance(readBinary, readAccepted);
+    writeBinaryNext.setValue(nextWrite);
+    writeGrayNext.setValue(gray(nextWrite));
+    readBinaryNext.setValue(nextRead);
+    readGrayNext.setValue(gray(nextRead));
+    Value writeAddress =
+        circt::comb::ExtractOp::create(builder, op->getLoc(), writeBinary, 0, addressBits);
+    Value readAddress =
+        circt::comb::ExtractOp::create(builder, op->getLoc(), readBinary, 0, addressBits);
+    SmallVector<Value> bank;
+    for (unsigned entry = 0; entry < crossing.depth; ++entry) {
+      auto next = backedges.get(payload.getType(), op->getLoc());
+      Value state = crossingState(crossing, 8 + entry, next, sourceControl,
+                                  "bank_" + std::to_string(entry), false);
+      Value selected =
+          compare(op, "digital_eq", writeAddress, constant(op, addressBits, entry), false);
+      Value enable = make(op, "comb.and", builder.getI1Type(), {writeAccepted, selected});
+      next.setValue(mux(op, enable, payload, state));
+      bank.push_back(state);
+    }
+    // An honest source-clock register bank and balanced combinational read mux,
+    // not a pretend dual-clock memory. Whole payloads stay packed; no per-bit
+    // expansion or fabricated empty/bank initialization is introduced.
+    for (unsigned bit = 0; bank.size() > 1; ++bit) {
+      Value select = circt::comb::ExtractOp::create(builder, op->getLoc(), readAddress, bit, 1);
+      for (unsigned entry = 0; entry < bank.size() / 2; ++entry)
+        bank[entry] = mux(op, select, bank[entry * 2 + 1], bank[entry * 2]);
+      bank.resize(bank.size() / 2);
+    }
+    Value output = bank.front();
+    values[op->getResult(0)] = output;
+    values[op->getResult(1)] = destinationValid;
+    values[op->getResult(2)] = sourceReady;
+    unsigned monitorBase = 8 + crossing.depth;
+    auto monitor = [&](Value sampledPayload, Value valid, Value ready,
+                       const CrossingControls &control, unsigned index, StringRef endpoint) {
+      Value previous = crossingState(crossing, index, sampledPayload, control,
+                                     endpoint.str() + "_previous_payload", false);
+      Value stalled = make(op, "comb.and", builder.getI1Type(), {valid, invert(op, ready)});
+      Value previousStalled =
+          crossingState(crossing, index + 1, stalled, control, endpoint.str() + "_stalled");
+      Value same = compare(op, "digital_eq", sampledPayload, previous, false);
+      Value held = make(op, "comb.and", builder.getI1Type(), {valid, same});
+      Value legal = make(op, "comb.or", builder.getI1Type(), {invert(op, previousStalled), held});
+      crossingAssertion(crossing, control, invert(op, control.reset), legal,
+                        "NODAL FIFO " + endpoint.str() +
+                            " must hold payload and valid while stalled");
+      return previousStalled;
+    };
+    Value sourceStalled =
+        monitor(payload, sourceValid, sourceReady, sourceControl, monitorBase, "source");
+    Value destinationStalled = monitor(output, destinationValid, destinationReady, destination,
+                                       monitorBase + 2, "destination");
+    Value sourceKnown = make(op, "comb.concat", builder.getIntegerType(4 * pointerBits + 1),
+                             {writeBinary, writeGray, read0, read1, sourceStalled});
+    Value destinationKnown = make(op, "comb.concat", builder.getIntegerType(4 * pointerBits + 1),
+                                  {readBinary, readGray, write0, write1, destinationStalled});
+    crossingAssertion(crossing, sourceControl, invert(op, sourceControl.reset), sourceKnown,
+                      "NODAL FIFO source controls require an established common reset epoch",
+                      "(^({{2}})) !== 1'bx");
+    crossingAssertion(crossing, destination, invert(op, destination.reset), destinationKnown,
+                      "NODAL FIFO destination controls require an established common reset epoch",
+                      "(^({{2}})) !== 1'bx");
+    crossingComment(
+        crossing, "FIFO obligations: transfer=valid_and_ready; stall=hold_payload_and_valid; "
+                  "reset_epoch=common_assertion; pointer_skew=less_than_launch_period; "
+                  "bundled_data=settled_before_read_visibility. Exactly depth packed source-clock "
+                  "bank entries; binary/registered-Gray pointers and two-stage opposite-pointer "
+                  "synchronizers. No combinational cross-clock ready/valid path. Payload bank and "
+                  "empty output are unspecified. Physical pointer skew and payload settling are "
+                  "environment timing obligations, not proved by digital monitors. Hold common "
+                  "assertion long enough for both domains to observe reset; no one-sided restart. "
+                  "Known-state startup checks do not universally detect repeated one-sided "
+                  "synchronous resets. Liveness requires both clocks continuing and the receiver "
+                  "eventually accepting.");
   }
   std::string crossingSourceComment(const ExecutableCrossing &crossing) {
     std::string path = sourcePath(crossing.operation).str();
@@ -924,8 +1071,8 @@ private:
                          StringRef predicate = "({{2}}) === 1'b1") {
     // Pinned firtool emits verif.clocked_assert as concurrent SVA, unsupported
     // by Icarus. A clocked immediate assertion preserves the runtime contract
-    // there too. Gray skips unknown seen-sample state deterministically. Pulse
-    // and handshake skip only a known asserted reset: an unknown release chain
+    // there too. Gray skips unknown seen-sample state deterministically. Pulse,
+    // handshake and FIFO skip only a known asserted reset: an unknown release chain
     // cannot hide startup checks. No initial block invents checker state.
     std::string assertion =
         crossingSourceComment(crossing) + message.str() + "\n" + "always @(" +
@@ -1129,7 +1276,7 @@ private:
   OpBuilder &builder;
   uint64_t &cost;
   DomainModel domains;
-  SmallVector<ExecutableCrossing> crossings;
+  SmallVector<ExecutableCrossing, 0> crossings;
   SmallVector<Operation *> resets;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;

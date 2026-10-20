@@ -804,3 +804,24 @@ cases and 198 predecessors (`.work/fifo-crossing-tests.log`). The model and grap
 checkpoint is independently tested; source API, target lowering and actual FIFO
 waveforms remain separate pending checkpoints. No CI or broad qualification was
 run, and no coarse F57 checklist is closed by this partial checkpoint.
+
+### Elastic FIFO target structure checkpoint
+
+CIRCT lowering now emits the bounded uninitialized payload register bank,
+registered binary/Gray pointers, two-stage pointer synchronizers in both
+directions, exact-capacity full/empty logic and both stall monitors. Pointer
+controls and monitor flags reset; bank and payload history do not acquire an
+invented initialized value. Ready/valid are locally reset-masked. Export retains
+source-located fatal checks for both local epoch/control and stall obligations.
+
+Focused native checks pass **730/730**: CrossingModel 266, SequentialCIRCT 145,
+SequentialModel 71, ResetModel 65, DomainGraph 32 and InterfaceModel 151. The
+exported native fixture passes firtool verification with randomization disabled.
+These checks cover target structure, not executed Scala FIFO waveform behavior;
+the maintained actual-target harness is still pending. Source replay fixtures
+are being regenerated after final formatting before runtime evidence is taken.
+
+Architecture review: one shared model owns schema and role mapping; all sampled
+roots retain coherent identity without combinational feedback. Packed bank and
+read selection grow with bounded depth, using a logarithmic read mux rather than
+bitwise graph expansion. No CI, broad qualification or F57 closure is claimed.

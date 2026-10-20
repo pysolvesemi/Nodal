@@ -29,14 +29,18 @@ StringRef text(Operation *operation, StringRef name) {
 }
 
 // A family is a retained lexical template, never one occurrence per lane.
-// Only structural Generate ancestry is admitted here; behavioral/procedural
+// Only structural Generate/if ancestry is admitted here; behavioral/procedural
 // regions cannot manufacture declaration ownership.
 bool ownedFamilyScope(Operation *family) {
   unsigned depth = 0;
   for (Operation *scope = family; scope; scope = scope->getParentOp()) {
     if (llvm::isa<ModuleOp>(scope))
       return true;
-    if (++depth > 128 || !llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 1 ||
+    if (++depth > 128)
+      return false;
+    if (llvm::isa<StructuralIfOp>(scope))
+      continue; // Exact arm ownership is retained by the existing lexical scope verifier.
+    if (!llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 1 ||
         !llvm::isa<GeneratedFamilyType>(scope->getResult(0).getType()))
       return false;
   }

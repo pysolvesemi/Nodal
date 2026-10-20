@@ -128,6 +128,54 @@ std::string conditionalFixture(bool queryOnly = false) {
   return "module attributes {nodal.root.module = @Top} {\n" + owner("Top", top) +
          owner("Child", child) + "}\n";
 }
+std::string generatedFixture(bool symbolic = true, bool choice = true) {
+  std::string parameters = symbolic ? R"mlir(
+    "nodal.parameter"() <{sym_name = "N", type = i64, classification = "structural", variability = "symbolic", default_value = 3 : i64, metadata = {}}> : () -> ()
+    %minimum = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %maximum = "nodal.const_literal"() <{value = 8 : i64, spelling = "8", metadata = {}}> : () -> i64
+    "nodal.parameter_constraint"(%minimum, %maximum) <{parameter = @N, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+    "nodal.parameter_envelope"() <{parameter = @N, effects = ["shape", "topology"], policy = "static_generate", metadata = {}}> : () -> ()
+    %upper = "nodal.const_parameter_ref"() <{parameter = @N, metadata = {}}> : () -> i64
+  )mlir"
+                                    : R"mlir(
+    %upper = "nodal.const_literal"() <{value = 3 : i64, spelling = "3", metadata = {}}> : () -> i64
+  )mlir";
+  std::string body = R"mlir(
+    %zero = "nodal.const_literal"() <{value = false, spelling = "0", metadata = {}}> : () -> !nodal.bits<1>
+    %state = "nodal.digital_storage"(%zero) <{name = "state", kind = "register", domain = @a, metadata = {semantic_path = "Top.family.state"}}> : (!nodal.bits<1>) -> !nodal.bits<1>
+  )mlir";
+  if (choice)
+    body += R"mlir(
+    %predicate = "nodal.static_compare"(%i, %lower) <{comparison = "eq", metadata = {semantic_path = "Top.family.predicate"}}> : (i64, i64) -> !nodal.static_predicate
+    "nodal.structural_if"(%predicate, %state, %input) <{contract_version = "structural-if-v1", region_id = "Top.family.choice", operandSegmentSizes = array<i32: 1, 2, 0>, metadata = {semantic_path = "Top.family.choice"}}> ({
+    ^bb0(%s: !nodal.bits<1>, %v: !nodal.bits<1>):
+      "nodal.digital_assign"(%s, %v) <{kind = "register_next", metadata = {}}> : (!nodal.bits<1>, !nodal.bits<1>) -> ()
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.family.choice.then.yield"}}> : () -> ()
+    }, {
+      "nodal.structural_yield"() <{metadata = {semantic_path = "Top.family.choice.else.yield"}}> : () -> ()
+    }) : (!nodal.static_predicate, !nodal.bits<1>, !nodal.bits<1>) -> ()
+    )mlir";
+  else
+    body += assign("state", "input", "register_next");
+  body += R"mlir(
+    "nodal.generated_export"(%state) <{member = "state", access = "register", metadata = {}}> : (!nodal.bits<1>) -> ()
+  )mlir";
+  std::string family = R"mlir(
+    %lower = "nodal.const_literal"() <{value = 0 : i64, spelling = "0", metadata = {}}> : () -> i64
+    %step = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %family = "nodal.generate"(%lower, %upper, %step) <{induction = "i", induction_path = "Top.family.i", region_id = "Top.family", metadata = {maximum_trip_count = )mlir" +
+                       std::string(symbolic ? "8" : "3") + R"mlir( : i64}}> ({
+    ^bb0(%i: i64):
+  )mlir" + body + R"mlir(
+    }) : (i64, i64, i64) -> !nodal.generated_family
+    %selected = "nodal.generated_member"(%family, %lower) <{member = "state", access = "read", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.bits<1>
+  )mlir";
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         owner("Top", parameters + domain("a") + port("input", "input", "a") +
+                          port("output", "output", "a") + family + assign("output", "selected")) +
+         "}\n";
+}
+
 std::string print(Operation *op) {
   std::string result;
   llvm::raw_string_ostream out(result);
@@ -399,6 +447,70 @@ int main() {
            failed(verify(malformed)) && StringRef(diagnostics).contains("no guessed material"));
     malformed.erase();
   }
+  auto generatedTarget = [&](StringRef name, const std::string &input, bool preserve, bool expected,
+                             StringRef diagnostic = "", int extractOffset = -1) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    bool valid = parsed && succeeded(verify(*parsed));
+    std::string before = parsed ? print(*parsed) : "";
+    PassManager manager(&context);
+    auto pass = nodal::createSequentialToCIRCTPass();
+    valid &= succeeded(pass->initializeOptions(preserve ? "preserve-constant-loops=true" : "",
+                                               [&](const Twine &) { return failure(); }));
+    manager.addPass(std::move(pass));
+    bool lowered = valid && succeeded(manager.run(*parsed));
+    bool correct = valid && lowered == expected;
+    if (lowered) {
+      unsigned modules = 0, instances = 0, loops = 0, registers = 0, leftovers = 0;
+      bool extraction = extractOffset < 0;
+      parsed->walk([&](Operation *op) {
+        if (op->getName().getStringRef() == "comb.extract")
+          if (auto low = op->getAttrOfType<IntegerAttr>("lowBit"))
+            extraction |= low.getInt() == extractOffset;
+        modules += isa<circt::hw::HWModuleOp>(op);
+        instances += isa<circt::hw::InstanceOp>(op);
+        registers += isa<circt::seq::CompRegOp>(op);
+        loops += op->getName().getStringRef() == "sv.generate.for";
+        leftovers += op->getDialect()->getNamespace() == "nodal";
+      });
+      correct &= modules == 2 && instances == 1 && registers == 1 && loops == 1 && !leftovers &&
+                 extraction && succeeded(verify(*parsed));
+      auto text = print(*parsed);
+      correct &= StringRef(text).contains("nodal.generated_template") &&
+                 StringRef(text).contains("nodal.preserve_constant_loops");
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(text, &context);
+      correct &= bool(roundtrip) && succeeded(verify(*roundtrip));
+    } else if (parsed)
+      correct &= before == print(*parsed) && StringRef(diagnostics).contains(diagnostic);
+    report(name, correct);
+  };
+  generatedTarget("symbolic-family-retains-one-parametric-state-template", generatedFixture(),
+                  false, true);
+  generatedTarget("symbolic-family-direct-update-shares-clocked-emitter",
+                  generatedFixture(true, false), false, true);
+  std::string extracted = R"mlir(
+    %wide = "nodal.const_literal"() <{value = 164 : i64, spelling = "164", metadata = {}}> : () -> !nodal.uint<8>
+    %begin = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> !nodal.uint<3>
+    %end = "nodal.const_literal"() <{value = 3 : i64, spelling = "3", metadata = {}}> : () -> !nodal.uint<3>
+    %extracted = "nodal.digital_expr"(%wide, %begin, %end) <{operator_name = "digital_extract", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<3>, !nodal.uint<3>) -> !nodal.bits<1>
+  )mlir" + assign("state", "extracted", "register_next");
+  generatedTarget(
+      "shared-generated-extraction-retains-nonzero-offset",
+      replace(generatedFixture(true, false), assign("state", "input", "register_next"), extracted),
+      false, true, "", 2);
+  generatedTarget("concrete-family-explicit-preservation", generatedFixture(false), true, true);
+  generatedTarget("concrete-family-no-silent-unroll-or-default-preservation",
+                  generatedFixture(false), false, false, "preserve-constant-loops=true");
+  generatedTarget("generated-static-predicate-profile-is-explicit",
+                  replace(generatedFixture(), "comparison = \"eq\"", "comparison = \"lt\""), false,
+                  false, "generated static alternatives require exact supported Integer equality");
+  generatedTarget(
+      "generated-nonunit-stride-does-not-change-lane-layout",
+      replace(replace(generatedFixture(false, false),
+                      "%step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
+                      "%step = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\""),
+              "maximum_trip_count = 3", "maximum_trip_count = 2"),
+      true, false, "zero-based unit-stride family");
   llvm::outs() << count << " hierarchy target cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

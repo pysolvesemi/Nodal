@@ -911,3 +911,43 @@ compiler SHA256 `3480b1de98f6a380c80a446808ff4e3dc2d121826badd6b657d7a970570c6ff
 Commands, hashes and manifests are under `.work/f58-selected-standalone-source`;
 the separate-JAR Area harness also passed its selected-family positive and typed
 negative fixtures. No F58 parent or remaining required behavior is closed here.
+
+## Checkpoint 19 — retained generated register loops and guarded family ownership
+
+The existing CIRCT hierarchy adapter emits one helper module per actual generated
+family template/material profile and a real `sv.generate.for`, not one module or
+body per parameter value. It reuses physical port construction and sequential
+register emission; logical captures and selected outputs retain actual template
+identity. Symbolic loops remain symbolic, while concrete loops can explicitly
+request `preserve-constant-loops=true`. The direct scalar-storage profile admits
+static alternatives, per-lane enable/reset and exact output partitions. Nested
+families, generated module/interface symbols, nonunit-stride adapters, symbolic
+scalar widths and resolved/analog family endpoints remain required continuations.
+
+Native lexical ownership also admits real family declarations and local member
+selection inside exact structural-if arms. Bound captures follow the existing
+region capture and Integer expression owners, retaining the original dependency
+and rejecting raw uncaptured operands or escaped handles/storage. Independently
+valid bounds are supported; predicate-refined existence, induction-dependent
+bounds and public guarded-family source capture are not claimed by this slice.
+
+Focused final target acceptance is **209/209**: hierarchy 29, sequential 149 and
+symbolic 31. Storage **172/172**, structural **73/73**, and the Parameter executable
+also pass. Several new target fixtures initially omitted required canonical
+region/yield identities; those fixtures were repaired rather than weakening
+verification. Final compiler SHA256 is
+`83d54e05ab033664162048cd1071fea8a3b0a09db1c710447355179c0092aa53`;
+pre/post production manifests match.
+
+The maintained generated-Area target runner gates and lowers actual public
+source replays, checks two module bodies and one retained loop/helper instance,
+and simulates unchanged emitted SV at symbolic lane counts 1, 3 and 8 plus
+concrete 3. CIRCT-Slang/arcilator checks independent lane enable/hold/invert/copy,
+reset and output aliases. This is explicitly two-state, not startup-X evidence.
+Invalid count 9 retains its range fatal and is refused by the pinned arcilator;
+it is not reported as a successful simulation. Pinned Icarus rejects the legal
+outer generate end label, so no SV rewriting is used to manufacture acceptance.
+Five actual concrete-hierarchy Icarus predecessor waveforms also pass on this
+same compiler. Receipts are under `.work/f58-generated-target/third` and `fifth`;
+the maintained reproduction contract is [Generated Area target witness](../../tests/scala/areas/TARGET.md).
+No broader target or F58 completion is implied.

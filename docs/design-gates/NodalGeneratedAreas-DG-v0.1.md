@@ -105,64 +105,68 @@ ordinal-aware external writes remain required follow-on F58 work. The first sour
 slice rejects unsupported external writes through selected members rather than
 bypassing the canonical driver owner. No required work is transferred to F159.
 
-## Pinned target execution contract (implementation in progress)
+## Generated target contract (direct fixed-scalar checkpoint)
 
-The installed CIRCT firtool 1.154.0 probe admits `sv.generate` containing an
-actual `sv.generate.for` and `hw.instance`. It emits one parameterized HDL loop,
-not instances cloned for legal values. Installed CIRCT-Slang accepts that output.
-Icarus 12 rejects the legal named outer generate end-label, so this profile uses
-Slang for legal-output admission until a compatible simulator is selected; output
-must not be rewritten to satisfy a consumer. This is a pinned-consumer limitation,
-not a claim of source or target completion.
+The production CIRCT target consumes verified direct, nonempty, zero-based,
+unit-stride families with fixed scalar storage leaves. It emits one reusable
+helper module per actual represented family and material module variant, and one
+real `sv.generate.for` containing its `hw.instance`. It does not enumerate legal
+lane counts, clone bodies for parameter values, create source Modules, or add a
+second hierarchy/domain registry. Helper keys retain actual operation identity;
+source-template budgets and physical target-footprint admission remain separate.
 
-A second probe establishes that nesting a fresh `sv.generate`/`sv.generate.case`
-inside the loop emits illegal nested generate regions, rejected by Slang. The
-bounded target plan therefore uses one reusable helper module per represented
-family template and material domain profile, with static choices at helper-module
-scope. The enclosing real loop instantiates that helper. This is a target adapter,
-not a new source Module, hierarchy occurrence registry or body per lane. Existing
-hierarchy/parameter authorities supply the exact template and finalized context;
-represented-template budgets and target physical-footprint limits remain separate.
+The existing logical-port plan and physical adapters transport actual outer SSA
+captures, including real clock/reset capabilities. Scalar expressions and clocked
+storage use the same emitters as ordinary modules. The canonical normalized
+StructuralIf arms already contain priority, enable and hold behavior: target
+emission only retains their exact equality/inequality elaboration choice using
+`sv.generate.case` at helper-module scope. A single actual register consumes the
+selected next-value wire. No target-inferred missing arm, initial value, reset
+policy or representative-lane domain is substituted.
 
-Helper inputs explicitly transport the actual outer SSA captures and physical
-clock/reset capabilities. A static coordinate parameter transports the canonical
-`lower + ordinal * step` coordinate. The pinned HW instance verifier cannot use a
-`ParamDeclRefAttr` for a generate induction, because it is not a module parameter.
-The successful probe uses a typed `ParamVerbatimAttr` containing only the generated,
-collision-checked target induction identifier associated with the exact loop block
-argument. Authored names, arbitrary expressions and metadata do not enter this
-text carrier. Other arithmetic remains the existing checked parameter DAG with
-signed-i32 target transport admission.
+Direct output buses require ShapeModel's exact complete iteration partition.
+Exports and selected reads retain the actual storage and existing ordinal proof;
+no selected member creates state, an instance or a resolved net. Conditional
+output writes, nested/guarded families, selected family views, generated instances
+and symbols, nonunit strides, symbolic scalar state widths and resolved/analog
+endpoints remain explicitly unsupported by this first target profile.
 
-Exports and selected-member reads must share one physical family storage/wire
-mapping and its canonical ordinal/coordinate proof. No selected member creates
-state, an instance or a new resolved net. Helper/module/port adapters retain the
-original family, declaration and source paths as provenance while target names
-remain implementation detail. Domains and reset policies are resolved from the
-actual occurrence, never a representative lane or sampled parameter default.
-The probes establish primitive feasibility only; Nodal family lowering, inverse
-member mapping, waveform behavior and nested/generated-instance occurrence support
-remain open. Probe commands, pinned hashes and results are retained under
-`.work/f58-generate-target-probe/`.
+The requested concrete-loop preservation behavior is exposed as
+`--nodal-sequential-to-circt=preserve-constant-loops=true`. Eligible concrete
+families remain real HDL loops with that option; without it the bounded profile
+refuses them instead of silently unrolling. Symbolic loops remain parameterized
+independently. `nodal.preserve_constant_loops` and `nodal.boundary_abi` retain the
+chosen target configuration. This does not claim a new Scala configuration API.
 
-### Symbolic packed slicing and pinned consumer limitation
+### Pinned consumers and exact adapters
 
-The CIRCT 1.154.0 probe also covers symbolic packed captures and per-lane output
-slices around that real helper-instance loop. Its native
-`sv.indexed_part_select_inout` verifier/exporter does not support the required
-symbolic `hw.int` carrier in this pinned build; a generic operation spelling
-reaches a verifier assertion. A fixed-width carrier probe passes, but replacing
-symbolic widths by defaults or maximum bounds is not a permitted workaround.
+CIRCT firtool 1.154.0 exports the real helper/loop structure. Icarus 12 rejects its
+legal named outer generate end-label, so the maintained executable witness uses
+CIRCT-Slang and the installed arcilator on the **unchanged emitted SystemVerilog**.
+This is a two-state behavioral check, not startup-X or four-state certification.
+The earlier primitive probes remain historical feasibility evidence under
+`.work/f58-generate-target-probe/`; they are not substituted for production output.
 
-A narrow target-owned adapter probe instead uses a typed `sv.verbatim.expr` with
-a fixed compiler format, SSA carrier and index operands, and a verified literal
-slice width. Its format contains no authored names, source expression strings or
-unverified metadata. It preserves the actual loop induction and exact inout slice,
-and the unmodified emitted helper/loop SystemVerilog passes firtool and Slang.
-This is primitive feasibility, not implemented Nodal generated lowering or a
-waveform result. Icarus 12 still rejects the legal named outer generate end label;
-no emitted SystemVerilog rewrite or handwritten DUT substitutes for that missing
-consumer. Actual generated behavior and a capable waveform consumer remain open.
+The pinned verifier cannot represent a genvar as a module `ParamDeclRefAttr`.
+The helper's index actual is therefore a typed `ParamVerbatimAttr` containing only
+the generated collision-checked induction identifier associated with that exact
+loop block argument. Authored names, arbitrary expressions and metadata never
+enter this text carrier. Other arithmetic uses the existing signed-i32 checked
+parameter DAG, preserving the mathematical-i64 source proof without truncation.
+
+The pinned indexed-part-select operation does not accept symbolic `hw.int`
+carriers. A narrow typed `sv.verbatim.expr` adapter uses only a fixed compiler
+format, actual SSA carrier/index and verified literal scalar stride. In particular,
+output connection selectors retain the actual genvar directly: a `comb.mul`
+runtime wire is not an elaboration constant. No source expression string or
+sampled bound is substituted. This shared adapter preserves the row-major,
+element-zero-at-LSB mapping and the selected-member inverse mapping.
+
+Emitted parameter guards retain canonical range and exclusion constraints.
+For the maintained illegal `LANES=9` override, Slang retains the exact range-check
+`$fatal` as reachable `sim.terminate failure`; pinned arcilator refuses that path
+rather than generating a simulator. The runner checks this exact reason, not any
+arbitrary tool failure, and does not label the negative as a successful simulation.
 
 ## Qualified public lane witness and staged evidence
 
@@ -195,14 +199,22 @@ The source/compiler hashes and all six exit statuses are recorded under
 and concrete-three input hashes are unchanged. Neither admission result claims
 actual emitted target structure or waveform behavior.
 
-`preserveConstantLoops=true` is required but is not yet an implemented target
-option. The target owner will implement that option and the concrete-bound
-preservation witness; symbolic families must remain parameterized independently.
-Production target lowering currently rejects these generated forms. Reset priority,
-enable-low hold, one active driver per lane, flat output mapping, firstLane aliasing
-and illegal-configuration rejection still require actual target validation.
-Guard-dependent existence, nested generated families and structural symbol exports
-remain open; source/bridge rejection is not completion of those requirements.
+The first direct-family production target subsequently passed the maintained
+[Area target runner](../../tests/scala/areas/run_target.py) on compiler SHA-256
+`83d54e05ab033664162048cd1071fea8a3b0a09db1c710447355179c0092aa53`.
+Both exact replays passed the full default gate, target lowering and firtool export.
+Unchanged SV passed Slang/arcilator for symbolic lane counts 1, 3 and 8 and concrete
+3. Actual state-map-derived C++ stimulus checked per-lane enables, old-state hold,
+lane-zero inversion, other-lane copy, reset dominance, flat output and firstLane.
+The same output rejected the out-of-envelope 9-lane simulation for its retained
+range fatal. Exactly one helper and one real loop remain in each emitted design.
+Commands, all tool/input/output hashes and two-state results are recorded under
+`.work/f58-generated-target/third/waveforms/manifest.json`. Five actual concrete
+hierarchy predecessors also passed their existing Icarus waveforms on that compiler,
+including opposite clock edge/reset polarity and resetless state. See
+[consumer instructions](../../tests/scala/areas/TARGET.md) for reproduction and
+limitations. The remaining guarded/nested/generated-symbol target requirements
+remain open; this direct storage checkpoint is not closure of F58.B.2.
 
 ## Focused validation and architecture review
 

@@ -861,6 +861,54 @@ int main() {
         generatedDomain + replace(family("0", "3", "1"), "member = \"stored\"",
                                   "member = \"stored\", kind = \"family\""),
         false);
+  auto guardedFamily = [&](std::string body, StringRef identity = "Fixture.guard") {
+    body = replace(body, "Fixture.family", (identity + ".then.family").str());
+    // Both the Generate region and induction path retain their lexical arm.
+    body = replace(body, "Fixture.family", (identity + ".then.family").str());
+    return parameter(true, "\"topology\"") + literal("i64", "1", "guardOne") +
+           "%familyGuard = \"nodal.static_compare\"(%N, %guardOne) <{comparison = \"eq\", "
+           "metadata = {semantic_path = \"" +
+           identity.str() +
+           "_pred\"}}> "
+           ": (i64, i64) -> !nodal.static_predicate\n" +
+           "\"nodal.structural_if\"(%familyGuard) <{contract_version = \"structural-if-v1\", "
+           "region_id = \"" +
+           identity.str() +
+           "\", operandSegmentSizes = array<i32: 1, 0, 0>, "
+           "metadata = {semantic_path = \"" +
+           identity.str() + "\"}}> ({\n" + body +
+           "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"" + identity.str() +
+           ".then.yield\"}}> : () -> ()\n}, {\n" +
+           "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"" + identity.str() +
+           ".else.yield\"}}> : () -> ()\n}) : (!nodal.static_predicate) -> ()\n";
+  };
+  check("guarded-family-local-declaration-and-selection",
+        generatedDomain + guardedFamily(family("0", "3", "1") + selected("1")), true);
+  check("guarded-family-local-register-update",
+        generatedDomain + guardedFamily(updatedFamily + selected("0")), true);
+  check("guarded-family-ordinal-must-exist",
+        generatedDomain + guardedFamily(family("0", "3", "1") + selected("3")), false);
+  check("guarded-family-handle-cannot-escape-arm",
+        generatedDomain + guardedFamily(family("0", "3", "1")) + selected("0"), false);
+  check("guarded-family-storage-cannot-escape-template",
+        generatedDomain + guardedFamily(family("0", "3", "1") + storage(sint, "copy") +
+                                        assign(sint, sint, "copy", "stored")),
+        false);
+  auto capturedFamily =
+      guardedFamily(replace(family("0", "4", "1"), "(%family_lo, %family_hi, %family_step)",
+                            "(%family_lo, %bound, %family_step)") +
+                    selected("0"));
+  capturedFamily =
+      replace(capturedFamily, "structural_if\"(%familyGuard)", "structural_if\"(%familyGuard, %N)");
+  capturedFamily = replace(capturedFamily, "array<i32: 1, 0, 0>", "array<i32: 1, 1, 0>");
+  capturedFamily = replace(capturedFamily, "}}> ({\n", "}}> ({^bb0(%bound: i64):\n");
+  capturedFamily = replace(capturedFamily, "(!nodal.static_predicate) -> ()",
+                           "(!nodal.static_predicate, i64) -> ()");
+  check("guarded-family-exact-static-bound-capture", generatedDomain + capturedFamily, true);
+  check("guarded-family-raw-module-bound-is-not-a-capture",
+        generatedDomain + replace(capturedFamily, "(%family_lo, %bound, %family_step)",
+                                  "(%family_lo, %N, %family_step)"),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

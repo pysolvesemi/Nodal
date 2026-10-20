@@ -3166,15 +3166,18 @@ LogicalResult nodal::GenerateOp::verify() {
   auto parentGenerate = llvm::dyn_cast_or_null<nodal::GenerateOp>(parent);
   auto parentIdentity =
       parentGenerate ? parentGenerate->getAttrOfType<StringAttr>("region_id") : StringAttr();
+  std::string parentScope = parentIdentity ? parentIdentity.getValue().str() : std::string();
+  if (llvm::isa_and_nonnull<nodal::StructuralIfOp>(parent))
+    parentScope = digitalRegionSemanticPath(getOperation()->getBlock());
   if (regionId) {
-    if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && !parentIdentity)
+    if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && parentScope.empty())
       return emitOpError(
-          "NODAL-ITERATION-043-004: captured generation requires an immediate module or "
-          "captured generate parent");
-    if (parentIdentity && !regionId.getValue().starts_with((parentIdentity.getValue() + ".").str()))
+          "NODAL-ITERATION-043-004: captured generation requires an immediate module, "
+          "captured generate or exact structural arm parent");
+    if (!parentScope.empty() && !regionId.getValue().starts_with(parentScope + "."))
       return emitOpError(
           "NODAL-ITERATION-043-004: nested generated identity escapes its immediate parent");
-  } else if (parentIdentity) {
+  } else if (!parentScope.empty()) {
     return emitOpError(
         "NODAL-ITERATION-043-004: nested captured generation cannot omit ownership identities");
   }

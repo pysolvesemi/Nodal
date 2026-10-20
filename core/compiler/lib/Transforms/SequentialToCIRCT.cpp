@@ -17,6 +17,7 @@
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalMaterializationModel.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
@@ -28,11 +29,13 @@
 #include "nodal/Dialect/Nodal/ResetModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 #include "nodal/Dialect/Nodal/WaiverModel.h"
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -114,7 +117,7 @@ bool scalarOpcode(StringRef op) {
       .Cases({"digital_add", "digital_sub", "digital_mul", "digital_neg"}, true)
       .Cases({"digital_eq", "digital_ne", "digital_lt", "digital_le", "digital_gt", "digital_ge"},
              true)
-      .Cases({"digital_min", "digital_max", "digital_concat"}, true)
+      .Cases({"digital_min", "digital_max", "digital_concat", "digital_extract"}, true)
       .Cases({"digital_extend", "digital_truncate", "digital_wrap", "digital_resize_checked"}, true)
       .Cases({"digital_to_signed", "digital_to_unsigned", "digital_reinterpret_signed",
               "digital_reinterpret_unsigned"},
@@ -326,13 +329,14 @@ class ModuleLowering {
 public:
   ModuleLowering(nodal::ModuleOp source, OpBuilder &builder, uint64_t &cost,
                  HierarchyTargetPlan *hierarchy = nullptr, ModuleVariantPlan *variant = nullptr,
-                 bool namedBoundaryABI = false)
+                 bool namedBoundaryABI = false, bool preserveConstantLoops = false)
       : source(source), builder(builder), cost(cost), domains(source), hierarchy(hierarchy),
-        variant(variant), namedBoundaryABI(namedBoundaryABI) {}
+        variant(variant), namedBoundaryABI(namedBoundaryABI),
+        preserveConstantLoops(preserveConstantLoops) {}
 
   LogicalResult preflight() {
     if (failed(domains.verifyRelationships()) || failed(planControlProjections()) ||
-        failed(planParameters()) || failed(planInterfaces()))
+        failed(planParameters()) || failed(planInterfaces()) || failed(planGeneratedFamilies()))
       return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
@@ -341,7 +345,8 @@ public:
         continue;
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
-      bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op);
+      bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op) ||
+                        generatedMembers.count(&op);
       if (!structural) {
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
@@ -635,6 +640,10 @@ public:
     // of mutable driver facts or reimplementing physical overlap/coverage.
     for (unsigned i = 0; i < seeds.size(); ++i) {
       const auto &root = graph->nodes[graph->roots[i]];
+      if (auto pin = seeds[i].first.getDefiningOp<PortValueOp>())
+        if (generatedOutputPorts.count(
+                SymbolTable::lookupSymbolIn(source, pin->getAttrOfType<FlatSymbolRefAttr>("port"))))
+          continue; // ShapeModel already proved the complete family write partition.
       if (interfaceValues.contains(seeds[i].first)) {
         if (root.dependencies.empty())
           continue; // Exact local input/child output, mapped from its physical pin below.
@@ -676,7 +685,7 @@ public:
         return reject(port.key.first, "ordinary Interface input pin cannot have a local driver");
     for (const auto &port : logicalPorts)
       if (!port.input && !aliases.count(port.references.front()) &&
-          !eventUpdates.count(port.key.first))
+          !eventUpdates.count(port.key.first) && !generatedOutputPorts.count(port.key.first))
         return reject(port.key.first, "output has no canonical driver; no output is invented");
     for (Operation *instance : instances) {
       const auto &child = hierarchy->variants[variant->children.lookup(instance)];
@@ -852,35 +861,12 @@ public:
   }
 
   LogicalResult lower() {
+    for (auto &family : generatedFamilies)
+      if (failed(lowerGeneratedHelper(*family)))
+        return failure();
     SmallVector<circt::hw::PortInfo> targetPorts;
     unsigned inputIndex = 0, outputIndex = 0;
-    for (const auto &port : logicalPorts) {
-      SmallVector<Type> types;
-      if (auto structure = dyn_cast<circt::hw::StructType>(port.targetType))
-        for (const auto &field : structure.getElements())
-          types.push_back(field.type);
-      else
-        types.push_back(port.targetType);
-      for (auto [index, type] : llvm::enumerate(types)) {
-        circt::hw::PortInfo info;
-        info.name = port.pins[index];
-        info.type = type;
-        info.dir = port.input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
-        info.argNum = port.input ? inputIndex++ : outputIndex++;
-        info.loc = port.key.first->getLoc();
-        NamedAttrList attributes;
-        if (!sourcePath(port.key.first).empty())
-          attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port.key.first)));
-        if (aggregatePayload(port.originalType) && !isa<circt::hw::StructType>(port.targetType))
-          attributes.set("nodal.packed_abi", packedLayout(port.originalType));
-        if (port.interfaceContract || isa<circt::hw::StructType>(port.targetType)) {
-          attributes.set("nodal.logical_port", port.name);
-          attributes.set("nodal.logical_leaf", builder.getI32IntegerAttr(index));
-        }
-        info.attrs = builder.getDictionaryAttr(attributes);
-        targetPorts.push_back(info);
-      }
-    }
+    appendPhysicalPorts(logicalPorts, targetPorts, inputIndex, outputIndex);
     if (variant)
       for (const auto &port : variant->domains) {
         auto add = [&](StringRef name, bool reset) {
@@ -1033,6 +1019,10 @@ public:
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
     }
+    if (failed(lowerGeneratedFamilies())) {
+      backedges.abandon();
+      return failure();
+    }
     for (Operation *instance : instances) {
       const auto &child = hierarchy->variants[variant->children.lookup(instance)];
       if (!child.target)
@@ -1180,26 +1170,21 @@ public:
         backedges.abandon();
         return reject(update, "physical clock was not mapped to a module input");
       }
-      if (updateSemantics(update, "edge") == "falling")
-        clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
       auto edge = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
-      Operation *state;
-      StringRef policy = updateSemantics(update, "reset_policy");
-      if (policy == "async" || policy == "async_assert_sync_release") {
-        Value rawReset = updateReset(update);
-        if (!rawReset)
-          return reject(update, "effective reset did not map before consumer");
-        auto initial = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
-        state = circt::seq::FirRegOp::create(
-            builder, reg->getLoc(), Value(edge), clock, reg->getAttrOfType<StringAttr>("name"),
-            resetActive(rawReset, update), Value(initial), circt::hw::InnerSymAttr(), true);
-        resetValueEdges.emplace_back(update, initial);
-      } else {
-        state = circt::seq::CompRegOp::create(builder, reg->getLoc(), Value(edge), clock);
-        state->setAttr("name", reg->getAttr("name"));
+      Value reset, initial;
+      if (updateSemantics(update, "reset_policy") != "none") {
+        reset = updateReset(update);
+        auto initialEdge =
+            backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
+        initial = initialEdge;
+        resetValueEdges.emplace_back(update, initialEdge);
       }
-      correlate(state, reg);
-      values[reg->getResult(0)] = state->getResult(0);
+      Value state = emitClockedStorage(reg, update, edge, clock, reset, initial);
+      if (!state) {
+        backedges.abandon();
+        return failure();
+      }
+      values[reg->getResult(0)] = state;
       stateEdges.emplace_back(update, edge);
     }
     SmallVector<std::pair<Value, circt::Backedge>> crossingEdges;
@@ -1387,9 +1372,9 @@ public:
       if (!op.getNumResults() || staticOperations.contains(&op) ||
           controlProjections.contains(&op) || controlSelectors.contains(&op) ||
           named(&op, "nodal.clock_gate") || named(&op, "nodal.clock_mux") ||
-          isa<DigitalStorageOp, PortValueOp, InstancePortOp, MemberAccessOp, RequirementClockOp,
-              RequirementResetOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp, ResetSyncOp,
-              ResetCombineOp>(op))
+          isa<GeneratedMemberOp, DigitalStorageOp, PortValueOp, InstancePortOp, MemberAccessOp,
+              RequirementClockOp, RequirementResetOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp,
+              ResetSyncOp, ResetCombineOp>(op))
         continue;
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
@@ -1477,10 +1462,6 @@ public:
       edge.setValue(updateInitial(update));
     for (auto &[update, edge] : stateEdges) {
       Value next = values.lookup(update->getOperand(1));
-      if (updateSemantics(update, "reset_policy") == "sync") {
-        Value reset = resetActive(updateReset(update), update);
-        next = mux(update, reset, updateInitial(update), next);
-      }
       edge.setValue(next);
     }
     for (auto &[original, edge] : producerEdges) {
@@ -1516,6 +1497,692 @@ public:
   }
 
 private:
+  struct GeneratedOutput {
+    Value value;
+    SmallVector<Value> destinations;
+    Type busType;
+  };
+  struct GeneratedFamilyPlan {
+    Operation *operation;
+    GeneratedDomain domain;
+    TypedAttr lower, upper, step;
+    StringAttr name, indexName, genvarName;
+    SmallVector<LogicalPortPlan> ports;
+    SmallVector<Value> captures;
+    SmallVector<GeneratedOutput> outputs;
+    SmallVector<Operation *> operations, registers;
+    llvm::DenseMap<Value, SmallVector<Operation *, 2>> updates;
+    llvm::DenseSet<Operation *> sinks;
+    circt::hw::HWModuleOp target;
+  };
+  SmallVector<std::unique_ptr<GeneratedFamilyPlan>> generatedFamilies;
+  llvm::DenseMap<Operation *, std::pair<GeneratedFamilyPlan *, unsigned>> generatedOutputPorts;
+  llvm::DenseMap<Operation *, std::pair<GeneratedFamilyPlan *, unsigned>> generatedExports;
+  llvm::DenseMap<Operation *, GeneratedMember> generatedMembers;
+  llvm::DenseMap<Attribute, SmallVector<TypedAttr>> generatedExclusions;
+  Value capturedValue(Value value) const {
+    for (unsigned depth = 0; depth < digitalTypeMaximumDepth; ++depth) {
+      auto argument = dyn_cast<BlockArgument>(value);
+      if (!argument || isa<GenerateOp>(argument.getOwner()->getParentOp()))
+        return value;
+      auto source = digitalRegionCaptureSource(argument);
+      if (failed(source) || !*source)
+        return {};
+      value = *source;
+    }
+    return {};
+  }
+  TypedAttr familyInteger(GeneratedFamilyPlan &family, Value value, Operation *use) {
+    value = capturedValue(value);
+    if (value == family.domain.induction)
+      return circt::hw::ParamDeclRefAttr::get(family.indexName, builder.getI32Type());
+    if (!value)
+      return {};
+    auto expression = resolveStructuralIntegerExpression(value, use);
+    return succeeded(expression) && expression->expression
+               ? parameterExpression(*expression->expression)
+               : TypedAttr();
+  }
+  LogicalResult planGeneratedFamilies() {
+    llvm::StringSet<> names;
+    for (Operation &op : *source->getParentOfType<mlir::ModuleOp>().getBody())
+      if (auto name = op.getAttrOfType<StringAttr>("sym_name"))
+        names.insert(name.getValue());
+    auto unique = [&](std::string base) {
+      std::string name = base;
+      unsigned suffix = 0;
+      while (!names.insert(name).second)
+        name = base + "_" + std::to_string(++suffix);
+      return builder.getStringAttr(name);
+    };
+    for (Operation &op : source.getBody().front()) {
+      if (!isa<GenerateOp>(op))
+        continue;
+      auto domain = resolveGeneratedDomain(&op);
+      if (op.getNumResults() != 1 || failed(domain) || domain->lower.bounds.lower != 0 ||
+          domain->lower.bounds.upper != 0 || domain->step.bounds.lower != 1 ||
+          domain->step.bounds.upper != 1 || domain->upperExclusive.bounds.lower <= 0)
+        return reject(&op,
+                      "generated target requires a checked nonempty zero-based unit-stride family");
+      if (domain->upperExclusive.bounds.lower == domain->upperExclusive.bounds.upper &&
+          !preserveConstantLoops)
+        return reject(&op, "concrete generated storage requires preserve-constant-loops=true");
+      if (generatedFamilies.size() >= 4096 || cost + 16 > maximumGeneratedOperations)
+        return reject(&op, "generated helper templates exceed finite target budget");
+      cost += 16;
+      auto plan = std::make_unique<GeneratedFamilyPlan>();
+      auto &family = *plan;
+      family.operation = &op;
+      family.domain = *domain;
+      family.lower = parameterExpression(domain->lower);
+      family.upper = parameterExpression(domain->upperExclusive);
+      family.step = parameterExpression(domain->step);
+      if (!family.lower || !family.upper || !family.step)
+        return reject(&op, "generated bounds require checked target Integer expressions");
+      family.name = unique((variant ? variant->name : text(source, "sym_name").str()) +
+                           "__family_" + std::to_string(generatedFamilies.size()));
+      llvm::StringSet<> parameterNames;
+      for (Attribute attr : targetParameters)
+        parameterNames.insert(cast<circt::hw::ParamDeclAttr>(attr).getName().getValue());
+      std::string index = "__nodal_index";
+      while (!parameterNames.insert(index).second)
+        index += "_";
+      family.indexName = builder.getStringAttr(index);
+      family.genvarName =
+          builder.getStringAttr("__nodal_lane_" + std::to_string(generatedFamilies.size()));
+      llvm::DenseSet<Value> captures;
+      auto capture = [&](Value value) -> LogicalResult {
+        value = capturedValue(value);
+        if (!value)
+          return failure();
+        Operation *producer = value.getDefiningOp();
+        if (value == domain->induction || (producer && op.isProperAncestor(producer)) ||
+            value.getType().isInteger(64))
+          return success();
+        Type type = targetValueType(value.getType());
+        if (!type || isa<ResolvedType>(value.getType()))
+          return reject(&op, "generated capture has no ordinary logical target value");
+        if (captures.insert(value).second)
+          family.captures.push_back(value);
+        return success();
+      };
+      auto output = [&](Value value) -> FailureOr<unsigned> {
+        value = capturedValue(value);
+        Type type = value ? targetValueType(value.getType()) : Type();
+        auto scalar = dyn_cast_if_present<IntegerType>(type);
+        if (!scalar || scalar.getWidth() > maximumWidth / domain->maximumTripCount)
+          return failure();
+        for (auto [index, prior] : llvm::enumerate(family.outputs))
+          if (prior.value == value)
+            return index;
+        TypedAttr bits = circt::hw::ParamExprAttr::get(
+            circt::hw::PEO::Mul, family.upper, builder.getI32IntegerAttr(scalar.getWidth()));
+        Type bus = isa<IntegerAttr>(bits)
+                       ? Type(builder.getIntegerType(cast<IntegerAttr>(bits).getInt()))
+                       : Type(circt::hw::IntType::get(bits));
+        family.outputs.push_back({value, {}, bus});
+        return family.outputs.size() - 1;
+      };
+      auto walk = op.walk<WalkOrder::PreOrder>([&](Operation *child) {
+        if (child == &op)
+          return WalkResult::advance();
+        if (cost + 16 > maximumGeneratedOperations) {
+          (void)reject(child, "generated body expansion exceeds finite target budget");
+          return WalkResult::interrupt();
+        }
+        cost += 16;
+        if (isa<StructuralIfOp>(child)) {
+          if (child->getParentOp() != &op || child->getNumResults()) {
+            (void)reject(
+                child,
+                "generated target currently requires direct result-free static alternatives");
+            return WalkResult::interrupt();
+          }
+          auto comparison = capturedValue(child->getOperand(0)).getDefiningOp<StaticCompareOp>();
+          if (!comparison ||
+              (text(comparison, "comparison") != "eq" && text(comparison, "comparison") != "ne") ||
+              !familyInteger(family, comparison->getOperand(0), comparison) ||
+              !familyInteger(family, comparison->getOperand(1), comparison)) {
+            (void)reject(child,
+                         "generated static alternatives require exact supported Integer equality");
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        }
+        if (child->getNumRegions() || child->getNumSuccessors()) {
+          (void)reject(
+              child,
+              "nested generated families and executable regions require later target admission");
+          return WalkResult::interrupt();
+        }
+        if (isa<StructuralYieldOp>(child))
+          return WalkResult::advance();
+        if (isa<GeneratedExportOp>(child)) {
+          auto index = output(child->getOperand(0));
+          if (failed(index)) {
+            (void)reject(child, "generated target exports require fixed scalar storage leaves");
+            return WalkResult::interrupt();
+          }
+          generatedExports.try_emplace(child, std::make_pair(&family, *index));
+          return WalkResult::advance();
+        }
+        if (isa<DigitalAssignOp>(child)) {
+          if (child->getParentOp() != &op) {
+            (void)reject(child, "generated output writes require the direct family body; static "
+                                "output adapters remain unsupported");
+            return WalkResult::interrupt();
+          }
+          if (text(child, "kind") != "continuous") {
+            (void)reject(child, "generated target requires canonical normalized updates");
+            return WalkResult::interrupt();
+          }
+          auto projection = resolveStaticShapeProjection(child->getOperand(0), child);
+          StaticShapeRegion image;
+          if (failed(projection) ||
+              resolveStaticShapeIterationImage(*projection, child, image) !=
+                  ShapeRegionProofStatus::Proved ||
+              !image.iteration || image.iteration->loop != &op ||
+              verifyStaticShapeRegionPartition(projection->root, {image}, child) !=
+                  ShapeRegionProofStatus::Proved) {
+            (void)reject(child, "generated output requires one exact complete iteration partition");
+            return WalkResult::interrupt();
+          }
+          auto portValue = projection->root.getDefiningOp<PortValueOp>();
+          Operation *port = portValue
+                                ? SymbolTable::lookupSymbolIn(
+                                      source, portValue->getAttrOfType<FlatSymbolRefAttr>("port"))
+                                : nullptr;
+          auto index = output(child->getOperand(1));
+          if (!port || text(port, "direction") != "output" || failed(index) ||
+              targetValueType(projection->root.getType()) != family.outputs[*index].busType ||
+              !generatedOutputPorts.try_emplace(port, std::make_pair(&family, *index)).second) {
+            (void)reject(
+                child, "generated output requires one ordinary output pin with exact lane layout");
+            return WalkResult::interrupt();
+          }
+          family.outputs[*index].destinations.push_back(projection->root);
+          family.sinks.insert(child->getOperand(0).getDefiningOp());
+          return WalkResult::advance();
+        }
+        if (isa<SequentialUpdateOp>(child)) {
+          Value state = capturedValue(child->getOperand(0));
+          if (!state || !state.getDefiningOp<DigitalStorageOp>() ||
+              state.getDefiningOp()->getParentOp() != &op || !child->getAttr("edge") ||
+              !child->getAttr("reset_policy")) {
+            (void)reject(
+                child,
+                "generated target requires direct storage and exact material update controls");
+            return WalkResult::interrupt();
+          }
+          family.updates[state].push_back(child);
+        } else if (isa<DigitalStorageOp>(child)) {
+          if (child->getParentOp() != &op || text(child, "kind") != "register" ||
+              !isa_and_nonnull<IntegerType>(targetValueType(child->getResult(0).getType()))) {
+            (void)reject(
+                child, "generated target currently requires direct fixed-scalar register storage");
+            return WalkResult::interrupt();
+          }
+          family.registers.push_back(child);
+        } else if (!isa<ConstantOp, ConstLiteralOp, StaticCompareOp, ShapeIndexOp,
+                        SequentialSelectOp>(child) &&
+                   !(isa<DigitalExprOp>(child) && scalarOpcode(text(child, "operator_name")))) {
+          (void)reject(child, "operation is outside the shared generated scalar value profile");
+          return WalkResult::interrupt();
+        }
+        if (isa<ShapeIndexOp>(child)) {
+          auto shape = dyn_cast<nodal::ShapedType>(child->getOperand(0).getType());
+          auto index = resolveStaticShapeIterationIndex(child->getOperand(1), child);
+          if (child->getNumOperands() != 2 || !shape || shape.getDimensions().contains(',') ||
+              !isa_and_nonnull<IntegerType>(targetValueType(child->getResult(0).getType())) ||
+              failed(index) || index->loop != &op ||
+              capturedValue(child->getOperand(1)) != domain->induction) {
+            (void)reject(child,
+                         "generated scalar slice requires the exact direct family induction");
+            return WalkResult::interrupt();
+          }
+        }
+        for (Value operand : child->getOperands())
+          if (failed(capture(operand)))
+            return WalkResult::interrupt();
+        family.operations.push_back(child);
+        return WalkResult::advance();
+      });
+      if (walk.wasInterrupted())
+        return failure();
+      for (Operation *reg : family.registers) {
+        auto &alternatives = family.updates[reg->getResult(0)];
+        if (alternatives.empty() || alternatives.size() > 2)
+          return reject(reg, "generated register lacks one canonical complete update choice");
+        Operation *first = alternatives.front();
+        if (alternatives.size() == 2 && !areOppositeStructuralArms(first, alternatives.back()))
+          return reject(reg,
+                        "generated register alternatives require exact opposite structural arms");
+        for (Operation *update : alternatives) {
+          for (StringRef key : {"domain", "edge", "reset_policy", "reset_polarity"})
+            if (update->getAttr(key) != first->getAttr(key))
+              return reject(update, "generated alternatives cannot change physical state controls");
+          if (update->getNumOperands() != first->getNumOperands())
+            return reject(update, "generated alternatives disagree on reset contract");
+          for (unsigned i = 2; i < update->getNumOperands(); ++i)
+            if (capturedValue(update->getOperand(i)) != capturedValue(first->getOperand(i)))
+              return reject(
+                  update,
+                  "generated alternatives require identical actual controls and initializer");
+        }
+      }
+      // A driven output bus is a sink, not a helper input. Reject any separate
+      // read of that bus rather than invent an internally driven input pin.
+      llvm::DenseSet<Value> outputRoots;
+      for (const auto &out : family.outputs)
+        outputRoots.insert(out.destinations.begin(), out.destinations.end());
+      for (Operation *child : family.operations)
+        if (!family.sinks.contains(child))
+          for (Value operand : child->getOperands())
+            if (outputRoots.contains(capturedValue(operand)))
+              return reject(child, "generated output bus reads require a separate logical adapter");
+      llvm::erase_if(family.captures, [&](Value value) { return outputRoots.contains(value); });
+      auto port = [&](Value value, bool input, unsigned index, Type type) {
+        LogicalPortPlan pin;
+        pin.key = {value.getDefiningOp(), Attribute()};
+        pin.originalType = value.getType();
+        pin.targetType = type;
+        pin.name = builder.getStringAttr((input ? "capture_" : "result_") + std::to_string(index));
+        pin.input = input;
+        pin.references.push_back(value);
+        if (auto structure = dyn_cast<circt::hw::StructType>(type))
+          for (const auto &field : structure.getElements())
+            pin.pins.push_back(builder.getStringAttr(pin.name.getValue().str() + "__" +
+                                                     field.name.getValue().str()));
+        else
+          pin.pins.push_back(pin.name);
+        family.ports.push_back(std::move(pin));
+      };
+      for (auto [index, value] : llvm::enumerate(family.captures))
+        port(value, true, index, targetValueType(value.getType()));
+      for (auto [index, out] : llvm::enumerate(family.outputs))
+        port(out.value, false, index, targetValueType(out.value.getType()));
+      if (cost + 8 * family.ports.size() + targetParameters.size() > maximumGeneratedOperations)
+        return reject(&op, "generated logical adapters exceed target budget");
+      cost += 8 * family.ports.size() + targetParameters.size();
+      if (cost + 12 * targetParameters.size() > maximumGeneratedOperations)
+        return reject(&op, "generated parameter guards exceed target budget");
+      cost += 12 * targetParameters.size();
+      staticOperations.insert(&op);
+      generatedFamilies.push_back(std::move(plan));
+    }
+    if (!generatedFamilies.empty())
+      for (Operation &op : source.getBody().front())
+        if (isa<ParameterConstraintOp>(op) && text(&op, "constraint_kind") == "exclude") {
+          auto excluded = resolveOwnedIntegerExpression(source, op.getOperand(0),
+                                                        ParameterIntegerMode::MathematicalSigned64);
+          TypedAttr actual = succeeded(excluded) ? parameterExpression(*excluded) : TypedAttr();
+          if (!actual || cost + 4 > maximumGeneratedOperations)
+            return reject(
+                &op, "generated parameter exclusion requires a checked target Integer expression");
+          generatedExclusions[op.getAttr("parameter")].push_back(actual);
+          cost += 4;
+        }
+    for (Operation &op : source.getBody().front())
+      if (isa<GeneratedMemberOp>(op)) {
+        auto member = inspectGeneratedMember(&op);
+        if (failed(member) || member->familyView || member->selections.size() != 1 ||
+            !generatedExports.count(member->exportOperation) ||
+            !parameterExpression(member->coordinate))
+          return reject(&op,
+                        "generated target selection requires one checked direct scalar export");
+        generatedMembers.try_emplace(&op, *member);
+      }
+    return success();
+  }
+
+  // Shared clocked storage emitter. Both ordinary modules and represented
+  // family helpers supply the canonical next value and exact physical controls.
+  Value emitClockedStorage(Operation *reg, Operation *update, Value next, Value clock, Value reset,
+                           Value initial) {
+    StringRef policy = updateSemantics(update, "reset_policy");
+    if (!next || !clock || (policy != "none" && (!reset || !initial))) {
+      (void)reject(update, "clocked state requires mapped next value and exact reset controls");
+      return {};
+    }
+    if (updateSemantics(update, "edge") == "falling")
+      clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
+    Operation *state;
+    if (policy == "async" || policy == "async_assert_sync_release")
+      state = circt::seq::FirRegOp::create(
+          builder, reg->getLoc(), next, clock, reg->getAttrOfType<StringAttr>("name"),
+          resetActive(reset, update), initial, circt::hw::InnerSymAttr(), true);
+    else {
+      if (policy == "sync")
+        next = mux(update, resetActive(reset, update), initial, next);
+      state = circt::seq::CompRegOp::create(builder, reg->getLoc(), next, clock);
+      state->setAttr("name", reg->getAttr("name"));
+    }
+    correlate(state, reg);
+    return state->getResult(0);
+  }
+  Operation *regionOperation(Operation *at, StringRef name, ArrayRef<NamedAttribute> attrs,
+                             unsigned regions = 1, ValueRange operands = {}) {
+    OperationState state(at->getLoc(), name);
+    state.addAttributes(attrs);
+    state.addOperands(operands);
+    for (unsigned i = 0; i != regions; ++i)
+      state.addRegion()->push_back(new Block());
+    Operation *result = builder.create(state);
+    correlate(result, at);
+    return result;
+  }
+  void assignGenerated(Operation *at, Value destination, Value value) {
+    OperationState state(at->getLoc(), "sv.assign");
+    state.addOperands({destination, value});
+    correlate(builder.create(state), at);
+  }
+  Value generatedSlice(Operation *at, Value input, Value index, Type result) {
+    Type element = result;
+    if (auto inout = dyn_cast<circt::hw::InOutType>(element))
+      element = inout.getElementType();
+    unsigned stride = cast<IntegerType>(element).getWidth();
+    // Keep the actual genvar as an SSA substitution. In particular, a comb.mul
+    // wire is not a legal elaboration-constant output connection selector.
+    std::string format =
+        "{{0}}[{{1}} * " + std::to_string(stride) + " +: " + std::to_string(stride) + "]";
+    return make(at, "sv.verbatim.expr", result, {input, index},
+                {builder.getNamedAttr("format_string", builder.getStringAttr(format)),
+                 builder.getNamedAttr("symbols", builder.getArrayAttr({}))});
+  }
+  LogicalResult lowerGeneratedHelper(GeneratedFamilyPlan &family) {
+    OpBuilder::InsertionGuard insertion(builder);
+    auto parentValues = std::move(values);
+    values.clear();
+    auto restoreValues = llvm::scope_exit([&] { values = std::move(parentValues); });
+    SmallVector<circt::hw::PortInfo> ports;
+    unsigned inputIndex = 0, outputIndex = 0;
+    appendPhysicalPorts(family.ports, ports, inputIndex, outputIndex);
+    SmallVector<Attribute> parameters(targetParameters.begin(), targetParameters.end());
+    parameters.push_back(
+        circt::hw::ParamDeclAttr::get(family.indexName, builder.getI32IntegerAttr(0)));
+    builder.setInsertionPoint(source);
+    family.target = circt::hw::HWModuleOp::create(builder, family.operation->getLoc(), family.name,
+                                                  circt::hw::ModulePortInfo(ports),
+                                                  builder.getArrayAttr(parameters));
+    correlate(family.target, family.operation);
+    family.target->setAttr("nodal.generated_template", family.operation->getAttr("region_id"));
+    family.target->setAttr("nodal.generated_definition", source->getAttr("sym_name"));
+    Block *body = family.target.getBodyBlock();
+    builder.setInsertionPoint(body->getTerminator());
+    inputIndex = 0;
+    for (const auto &port : family.ports)
+      if (port.input) {
+        SmallVector<Value> leaves;
+        for (unsigned i = 0; i != port.pins.size(); ++i)
+          leaves.push_back(body->getArgument(inputIndex++));
+        values[port.references.front()] = joinBoundary(port.key.first, port.targetType, leaves);
+      }
+    values[family.domain.induction] = circt::hw::ParamValueOp::create(
+        builder, family.operation->getLoc(), builder.getI32Type(),
+        circt::hw::ParamDeclRefAttr::get(family.indexName, builder.getI32Type()));
+    circt::BackedgeBuilder backedges(builder, family.operation->getLoc());
+    SmallVector<std::pair<Value, circt::Backedge>> edges;
+    for (Operation *op : family.operations) {
+      if (isa<StaticCompareOp>(op) || family.sinks.contains(op))
+        continue;
+      for (Value value : op->getResults()) {
+        auto edge = backedges.get(targetValueType(value.getType()), op->getLoc());
+        values[value] = edge;
+        edges.emplace_back(value, edge);
+      }
+    }
+    auto mapped = [&](Value value) { return values.lookup(capturedValue(value)); };
+    llvm::DenseMap<Operation *, Value> nextWires;
+    for (Operation *reg : family.registers) {
+      Type type = targetValueType(reg->getResult(0).getType());
+      Value wire = make(reg, "sv.wire", circt::hw::InOutType::get(type), {},
+                        {builder.getNamedAttr("name", builder.getStringAttr(""))});
+      nextWires.try_emplace(reg, wire);
+      Value next = make(reg, "sv.read_inout", type, {wire});
+      Operation *update = family.updates.find(reg->getResult(0))->second.front();
+      Value reset, initial;
+      if (updateSemantics(update, "reset_policy") != "none") {
+        reset = mapped(update->getOperand(3));
+        initial = mapped(update->getOperand(4));
+      }
+      Value state =
+          emitClockedStorage(reg, update, next, mapped(update->getOperand(2)), reset, initial);
+      if (!state) {
+        backedges.abandon();
+        return failure();
+      }
+      values[reg->getResult(0)] = state;
+    }
+    for (Operation *op : family.operations) {
+      if (!op->getNumResults() || isa<DigitalStorageOp, StaticCompareOp>(op) ||
+          family.sinks.contains(op))
+        continue;
+      Value result;
+      if (isa<ShapeIndexOp>(op))
+        result =
+            generatedSlice(op, mapped(op->getOperand(0)), values.lookup(family.domain.induction),
+                           targetValueType(op->getResult(0).getType()));
+      else {
+        SmallVector<Value> inputs;
+        for (Value operand : op->getOperands())
+          inputs.push_back(mapped(operand));
+        if (llvm::any_of(inputs, [](Value value) { return !value; })) {
+          backedges.abandon();
+          return reject(op, "generated scalar operand lacks its exact logical capture");
+        }
+        result = lowerValue(op, inputs);
+      }
+      if (!result) {
+        backedges.abandon();
+        return failure();
+      }
+      if (isa_and_nonnull<UnrealizedConversionCastOp>(result.getDefiningOp()))
+        result = circt::hw::WireOp::create(builder, op->getLoc(), result).getResult();
+      values[op->getResult(0)] = result;
+    }
+    // Each alternative already contains priority, enable and old-state hold in
+    // its normalized RHS. Only exact elaboration choice remains here.
+    for (Operation *reg : family.registers) {
+      const auto &updates = family.updates.find(reg->getResult(0))->second;
+      if (updates.size() == 1) {
+        if (updates.front()->getParentOp() != family.operation) {
+          backedges.abandon();
+          return reject(reg, "generated state requires a complete canonical structural choice");
+        }
+        assignGenerated(updates.front(), nextWires.lookup(reg),
+                        mapped(updates.front()->getOperand(1)));
+        continue;
+      }
+      Operation *choice = updates.front()->getParentOp();
+      if (!isa<StructuralIfOp>(choice) || choice != updates.back()->getParentOp()) {
+        backedges.abandon();
+        return reject(reg, "generated state alternatives must share one actual static owner");
+      }
+      Operation *comparison = capturedValue(choice->getOperand(0)).getDefiningOp();
+      TypedAttr cond = familyInteger(family, comparison->getOperand(0), comparison);
+      TypedAttr pattern = familyInteger(family, comparison->getOperand(1), comparison);
+      auto *wrapper = regionOperation(
+          choice, "sv.generate",
+          {builder.getNamedAttr("sym_name",
+                                builder.getStringAttr("choice_" + text(reg, "name").str()))});
+      builder.setInsertionPointToEnd(&wrapper->getRegion(0).front());
+      auto *branch = regionOperation(
+          choice, "sv.generate.case",
+          {builder.getNamedAttr("cond", cond),
+           builder.getNamedAttr("casePatterns",
+                                builder.getArrayAttr({pattern, builder.getUnitAttr()})),
+           builder.getNamedAttr("caseNames", builder.getStrArrayAttr({"equal", "other"}))},
+          2);
+      for (Operation *update : updates) {
+        bool thenArm = update->getParentRegion() == &choice->getRegion(0);
+        bool equalArm = thenArm == (text(comparison, "comparison") == "eq");
+        builder.setInsertionPointToEnd(&branch->getRegion(equalArm ? 0 : 1).front());
+        assignGenerated(update, nextWires.lookup(reg), mapped(update->getOperand(1)));
+      }
+      builder.setInsertionPoint(body->getTerminator());
+    }
+    SmallVector<Value> outputs;
+    for (const auto &port : family.ports)
+      if (!port.input)
+        llvm::append_range(outputs, splitBoundary(port.key.first, mapped(port.references.front())));
+    body->getTerminator()->setOperands(outputs);
+    for (auto &[original, edge] : edges) {
+      Value result = values.lookup(original);
+      if (!result || result == Value(edge)) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "generated template producer did not map");
+      }
+      edge.setValue(result);
+    }
+    return backedges.clearOrEmitError();
+  }
+  LogicalResult lowerGeneratedFamilies() {
+    if (!generatedFamilies.empty())
+      for (Operation &parameter : source.getBody().front()) {
+        if (!symbolicParameters.contains(&parameter))
+          continue;
+        auto envelope = resolveOwnedIntegerParameter(source, &parameter,
+                                                     ParameterIntegerMode::MathematicalSigned64);
+        if (failed(envelope))
+          return failure();
+        Value value = circt::hw::ParamValueOp::create(
+            builder, parameter.getLoc(), builder.getI32Type(),
+            circt::hw::ParamDeclRefAttr::get(parameter.getAttrOfType<StringAttr>("sym_name"),
+                                             builder.getI32Type()));
+        Value lo = compare(&parameter, "digital_ge", value,
+                           constant(&parameter, 32, uint64_t(envelope->bounds.lower)), true);
+        Value hi = compare(&parameter, "digital_le", value,
+                           constant(&parameter, 32, uint64_t(envelope->bounds.upper)), true);
+        SmallVector<Value> conditions{lo, hi};
+        auto reference = FlatSymbolRefAttr::get(builder.getContext(), text(&parameter, "sym_name"));
+        for (TypedAttr exclusion : generatedExclusions[reference]) {
+          Value excluded = circt::hw::ParamValueOp::create(builder, parameter.getLoc(),
+                                                           builder.getI32Type(), exclusion);
+          conditions.push_back(compare(&parameter, "digital_ne", value, excluded, true));
+        }
+        Value invalid =
+            invert(&parameter, make(&parameter, "comb.and", builder.getI1Type(), conditions));
+        OpBuilder::InsertionGuard insertion(builder);
+        Operation *initial = regionOperation(&parameter, "sv.initial", {});
+        builder.setInsertionPointToEnd(&initial->getRegion(0).front());
+        circt::sv::IfOp::create(builder, parameter.getLoc(), invalid, [&] {
+          circt::sv::FatalProceduralOp::create(
+              builder, parameter.getLoc(), 1,
+              builder.getStringAttr("NODAL generated family parameter outside verified range"));
+        });
+      }
+    for (auto &owned : generatedFamilies) {
+      auto &family = *owned;
+      SmallVector<Value> wires, buses;
+      for (const auto &out : family.outputs) {
+        Value wire = make(family.operation, "sv.wire", circt::hw::InOutType::get(out.busType), {},
+                          {builder.getNamedAttr("name", builder.getStringAttr(""))});
+        wires.push_back(wire);
+        buses.push_back(make(family.operation, "sv.read_inout", out.busType, {wire}));
+      }
+      {
+        OpBuilder::InsertionGuard insertion(builder);
+        auto *wrapper = regionOperation(
+            family.operation, "sv.generate",
+            {builder.getNamedAttr(
+                "sym_name",
+                builder.getStringAttr("family_" + family.genvarName.getValue().str()))});
+        builder.setInsertionPointToEnd(&wrapper->getRegion(0).front());
+        auto *loop =
+            regionOperation(family.operation, "sv.generate.for",
+                            {builder.getNamedAttr("lowerBound", family.lower),
+                             builder.getNamedAttr("upperBound", family.upper),
+                             builder.getNamedAttr("step", family.step),
+                             builder.getNamedAttr("genBlockName", builder.getStringAttr("lanes")),
+                             builder.getNamedAttr("inductionVarName", family.genvarName)});
+        Block &body = loop->getRegion(0).front();
+        Value index = body.addArgument(builder.getI32Type(), family.operation->getLoc());
+        builder.setInsertionPointToEnd(&body);
+        SmallVector<Value> inputs;
+        for (const auto &port : family.ports)
+          if (port.input) {
+            Value input = values.lookup(port.references.front());
+            if (!input)
+              return reject(family.operation, "generated template capture did not map");
+            llvm::append_range(inputs, splitBoundary(port.key.first, input));
+          }
+        SmallVector<Attribute> parameters;
+        for (Attribute attr : targetParameters) {
+          auto declaration = cast<circt::hw::ParamDeclAttr>(attr);
+          parameters.push_back(circt::hw::ParamDeclAttr::get(
+              declaration.getName(),
+              circt::hw::ParamDeclRefAttr::get(declaration.getName(), builder.getI32Type())));
+        }
+        parameters.push_back(circt::hw::ParamDeclAttr::get(
+            family.indexName, circt::hw::ParamVerbatimAttr::get(
+                                  builder.getContext(), family.genvarName, builder.getI32Type())));
+        auto instance = circt::hw::InstanceOp::create(
+            builder, family.operation->getLoc(), family.target, builder.getStringAttr("lane"),
+            ArrayRef<Value>(inputs), builder.getArrayAttr(parameters));
+        correlate(instance, family.operation);
+        for (auto [i, out] : llvm::enumerate(family.outputs)) {
+          Value destination =
+              generatedSlice(family.operation, wires[i], index,
+                             circt::hw::InOutType::get(targetValueType(out.value.getType())));
+          assignGenerated(family.operation, destination, instance.getResult(i));
+        }
+      }
+      for (auto [i, out] : llvm::enumerate(family.outputs)) {
+        for (Value destination : out.destinations) {
+          auto pin = destination.getDefiningOp<PortValueOp>();
+          Operation *port =
+              SymbolTable::lookupSymbolIn(source, pin->getAttrOfType<FlatSymbolRefAttr>("port"));
+          for (Value reference : portValues[port])
+            values[reference] = buses[i];
+        }
+      }
+      for (auto &[operation, member] : generatedMembers) {
+        auto selected = generatedExports.lookup(member.exportOperation);
+        if (selected.first != &family)
+          continue;
+        Value index =
+            circt::hw::ParamValueOp::create(builder, operation->getLoc(), builder.getI32Type(),
+                                            parameterExpression(member.coordinate));
+        values[operation->getResult(0)] =
+            generatedSlice(operation, buses[selected.second], index,
+                           targetValueType(operation->getResult(0).getType()));
+      }
+    }
+    return success();
+  }
+
+  void appendPhysicalPorts(ArrayRef<LogicalPortPlan> ports,
+                           SmallVectorImpl<circt::hw::PortInfo> &targetPorts, unsigned &inputIndex,
+                           unsigned &outputIndex) {
+    for (const auto &port : ports) {
+      SmallVector<Type> types;
+      if (auto structure = dyn_cast<circt::hw::StructType>(port.targetType))
+        for (const auto &field : structure.getElements())
+          types.push_back(field.type);
+      else
+        types.push_back(port.targetType);
+      for (auto [index, type] : llvm::enumerate(types)) {
+        circt::hw::PortInfo info;
+        info.name = port.pins[index];
+        info.type = type;
+        info.dir = port.input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
+        info.argNum = port.input ? inputIndex++ : outputIndex++;
+        info.loc = port.key.first->getLoc();
+        NamedAttrList attributes;
+        if (!sourcePath(port.key.first).empty())
+          attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port.key.first)));
+        if (aggregatePayload(port.originalType) && !isa<circt::hw::StructType>(port.targetType))
+          attributes.set("nodal.packed_abi", packedLayout(port.originalType));
+        if (port.interfaceContract || isa<circt::hw::StructType>(port.targetType)) {
+          attributes.set("nodal.logical_port", port.name);
+          attributes.set("nodal.logical_leaf", builder.getI32IntegerAttr(index));
+        }
+        info.attrs = builder.getDictionaryAttr(attributes);
+        targetPorts.push_back(info);
+      }
+    }
+  }
+
   LogicalResult planInterfaces() {
     bool hasEndpoints = false;
     for (Operation &op : source.getBody().front()) {
@@ -1717,7 +2384,8 @@ private:
       for (Value result : op->getResults())
         for (Operation *user : result.getUsers())
           if (!staticOperations.contains(user) && !controlSelectors.contains(user) &&
-              !controlProjections.contains(user))
+              !controlProjections.contains(user) && !isa<GenerateOp, GeneratedMemberOp>(user) &&
+              !user->getParentOfType<GenerateOp>())
             return reject(user, "static Integer target parameters cannot become runtime values");
     SmallVector<Attribute> declarations;
     for (Operation &op : source.getBody().front()) {
@@ -2692,6 +3360,15 @@ private:
       }
       return valid;
     }
+    if (code == "digital_extract") {
+      auto bound = capturedValue(op->getOperand(1)).getDefiningOp();
+      auto lower = bound ? bound->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+      if (!lower || lower.getInt() < 0 || lower.getInt() > maximumWidth) {
+        (void)reject(op, "target bit extraction requires an exact literal lower bound");
+        return {};
+      }
+      return circt::comb::ExtractOp::create(builder, op->getLoc(), inputs[0], lower.getInt(), bits);
+    }
     if (code == "digital_alias")
       return inputs[0];
     if (code == "digital_select")
@@ -2736,6 +3413,7 @@ private:
   ModuleVariantPlan *variant = nullptr;
   ArrayAttr targetParameters;
   bool namedBoundaryABI = false;
+  bool preserveConstantLoops = false;
   llvm::DenseSet<Operation *> staticOperations;
   llvm::DenseSet<Operation *> symbolicParameters;
   llvm::DenseMap<const InstantiatedIntegerNode *, TypedAttr> parameterExpressions;
@@ -2787,6 +3465,10 @@ public:
   Option<std::string> boundaryABI{
       *this, "boundary-abi", llvm::cl::desc("External data boundary ABI: legacy or named-fields"),
       llvm::cl::init("legacy")};
+  Option<bool> preserveConstantLoops{
+      *this, "preserve-constant-loops",
+      llvm::cl::desc("Preserve eligible concrete generated families as actual HDL loops"),
+      llvm::cl::init(false)};
   StringRef getArgument() const final { return "nodal-sequential-to-circt"; }
   StringRef getDescription() const final {
     return "Transactionally lower verified finite scalar register/FSM/CDC dataflow to "
@@ -2862,9 +3544,9 @@ public:
     }
     uint64_t cost = 2 * (hierarchyPlan ? hierarchyPlan->variants.size() : owners.size());
     auto preflight = [&](nodal::ModuleOp owner, ModuleVariantPlan *variant) {
-      auto lowering = std::make_unique<ModuleLowering>(owner, builder, cost,
-                                                       hierarchyPlan ? &*hierarchyPlan : nullptr,
-                                                       variant, boundaryABI == "named-fields");
+      auto lowering = std::make_unique<ModuleLowering>(
+          owner, builder, cost, hierarchyPlan ? &*hierarchyPlan : nullptr, variant,
+          boundaryABI == "named-fields", preserveConstantLoops);
       if (failed(lowering->preflight())) {
         return failure();
       }
@@ -2930,6 +3612,8 @@ public:
       return;
     }
     candidate->getOperation()->setAttr("nodal.boundary_abi", builder.getStringAttr(boundaryABI));
+    candidate->getOperation()->setAttr("nodal.preserve_constant_loops",
+                                       builder.getBoolAttr(preserveConstantLoops));
     input->setAttrs(candidate->getOperation()->getAttrs());
     input.getBodyRegion().takeBody(candidate->getBodyRegion());
   }

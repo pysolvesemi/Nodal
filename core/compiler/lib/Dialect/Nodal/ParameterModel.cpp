@@ -1998,12 +1998,24 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
     return finish(diagnostic->emitOpError(
         "NODAL-ITERATION-043-001: generated SSA bounds require signless i64 values"));
 
+  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+    auto header = nodal::inspectDigitalRegion(argument.getOwner());
+    auto source = nodal::digitalRegionCaptureSource(argument);
+    if (failed(header) || header->kind != nodal::DigitalRegionKind::StructuralArm ||
+        header->module != owner || failed(source) || !*source ||
+        failed(nodal::verifyDigitalValueScope(value, diagnostic)))
+      return finish(diagnostic->emitOpError(
+          "NODAL-ITERATION-043-001: generated bound requires an exact structural capture"));
+    return finish(verifyGeneratedBoundDependencies(*source, owner, header->operation, active,
+                                                   visited, requireStructural));
+  }
   Operation *operation = value.getDefiningOp();
   bool structuralScope = operation && enclosingNodalModule(operation) == owner;
   unsigned scopeDepth = 0;
   for (Operation *scope = operation ? operation->getParentOp() : nullptr;
        structuralScope && scope != owner; scope = scope ? scope->getParentOp() : nullptr)
-    structuralScope = scope && ++scopeDepth <= 128 && isNamed(scope, "nodal.generate");
+    structuralScope = scope && ++scopeDepth <= 128 &&
+                      (isNamed(scope, "nodal.generate") || isNamed(scope, "nodal.structural_if"));
   if (!structuralScope || operation->hasAttr("unit") ||
       (operation->getParentOp() != owner &&
        failed(nodal::verifyDigitalValueScope(value, diagnostic))))
@@ -2097,9 +2109,18 @@ LogicalResult analyzeGeneratedBounds(Operation *operation, Operation *owner,
         return failure();
       }
     }
-    lower = generatedAnalysis.value(operation->getOperand(0));
-    upper = generatedAnalysis.value(operation->getOperand(1));
-    step = generatedAnalysis.value(operation->getOperand(2));
+    auto bound = [&](unsigned index) -> FailureOr<IntegerBounds> {
+      if (operation->getParentOp() == owner)
+        return generatedAnalysis.value(operation->getOperand(index));
+      auto facts =
+          nodal::resolveStructuralIntegerExpression(operation->getOperand(index), operation);
+      return succeeded(facts) && facts->expression
+                 ? FailureOr<IntegerBounds>(facts->expression->bounds)
+                 : FailureOr<IntegerBounds>(failure());
+    };
+    lower = bound(0);
+    upper = bound(1);
+    step = bound(2);
     identicalBounds = operation->getOperand(0) == operation->getOperand(1);
     if (!hasGeneratedCountContract(operation)) {
       return operation->emitOpError(

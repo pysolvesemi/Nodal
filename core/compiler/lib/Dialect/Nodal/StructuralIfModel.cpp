@@ -252,12 +252,14 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     if (llvm::isa<SequentialSelectOp>(op))
       return verifySequentialSelect(op);
   }
-  if (!pure && generatedStorage && op->getParentOp() == family && llvm::isa<GenerateOp>(op) &&
-      op->getNumResults() == 1)
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GenerateOp>(op) &&
+      op->getNumResults() == 1 &&
+      ((generatedStorage && op->getParentOp() == family) ||
+       llvm::isa_and_nonnull<StructuralIfOp>(op->getParentOp())))
     return verifyGenerateBody(op, budget, depth + 1);
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GeneratedMemberOp>(op))
+    return success(succeeded(inspectGeneratedMember(op)));
   if (!pure && generatedStorage && op->getParentOp() == family) {
-    if (op->getName().getStringRef() == "nodal.generated_member")
-      return success(succeeded(inspectGeneratedMember(op)));
     if (llvm::isa<DigitalStorageOp>(op))
       return verifyDigitalStorageOperation(op);
     if (op->getName().getStringRef() == "nodal.generated_export")

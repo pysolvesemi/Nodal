@@ -476,6 +476,9 @@ LogicalResult verifyClockControlSamples(Operation *module, ArrayRef<ClockControl
       if (++work > limits.maximumOperations)
         return reject(sample.use, "clock control sampling exceeds finite graph budget");
       const auto &node = graph->nodes[id];
+      if (node.eventProcess)
+        return sample.use->emitOpError(
+            "NODAL-EVENT-057-001: event-owned state cannot become clock control");
       if (node.crossing && text(node.crossing, "kind") == "pulse")
         return sample.use->emitOpError(
             "NODAL-CDC-003: Pulse crossing cannot masquerade as clock control");
@@ -515,6 +518,9 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
   if (samples.size() != roots.size())
     return reject(module, "sampling roots must exactly match their physical dependency graph");
   unsigned work = alreadyCharged;
+  bool hasEventState = llvm::any_of(graph.nodes, [](const auto &node) {
+    return node.eventProcess != nullptr;
+  });
   const DomainModel domains(module);
   using SampleKey = std::pair<unsigned, std::pair<unsigned, Attribute>>;
   llvm::DenseSet<SampleKey> visited;
@@ -532,7 +538,7 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
       continue;
     // Permission and classification are distinct traversals of the same graph.
     // A stateless waiver changes one boundary permission, never Pulse lineage.
-    if (sample.rejectPulseSources) {
+    if (sample.rejectPulseSources || (!sample.observationOnly && hasEventState)) {
       llvm::DenseSet<unsigned> provenanceVisited;
       SmallVector<unsigned, 8> provenance{roots[i]};
       while (!provenance.empty()) {
@@ -542,7 +548,10 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
         if (id >= graph.nodes.size() || ++work > limits.maximumOperations)
           return reject(sample.use, "crossing classification proof exceeds finite graph budget");
         const auto &node = graph.nodes[id];
-        if (node.crossing && text(node.crossing, "kind") == "pulse")
+        if (node.eventProcess)
+          return sample.use->emitOpError(
+              "NODAL-EVENT-057-001: event-owned state requires a separately supported sampling boundary");
+        if (sample.rejectPulseSources && node.crossing && text(node.crossing, "kind") == "pulse")
           return sample.use->emitOpError(
               "NODAL-CDC-003: Pulse-classified crossing result cannot be "
               "relabeled as a non-pulse crossing");

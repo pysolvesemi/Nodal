@@ -175,9 +175,20 @@ def Nodal_MemoryWriteEffectOp : Nodal_Op<"memory_write_effect", [HasParent<"Modu
   let hasVerifier = 1;
 }
 
+// F57 quarantined root-owned digital event storage. No ordinary domain is inferred.
+def Nodal_EventProcessOp : Nodal_Op<"event_process",
+    [HasParent<"ModuleOp">, Symbol, AttrSizedOperandSegments]> {
+  let summary = "Owned root Bool edge and explicit event storage/capture inventory";
+  let arguments = (ins AnyType:$trigger, Variadic<AnyType>:$storage_targets,
+    Variadic<AnyType>:$external_captures, SymbolNameAttr:$sym_name, StrAttr:$edge,
+    StrAttr:$contract, DictionaryAttr:$obligations, DictionaryAttr:$metadata);
+  let hasVerifier = 1;
+}
+
 def Nodal_DigitalAssignOp : Nodal_Op<"digital_assign", [ParentOneOf<["ModuleOp", "HardwareLoopOp", "GenerateOp", "StructuralIfOp", "BehavioralIfOp", "FlatFSMOp", "EnumSwitchOp"]>]> {
   let summary = "Exact typed continuous connection or register-next intent";
-  let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind, DictionaryAttr:$metadata);
+  let arguments = (ins AnyType:$target, AnyType:$value, StrAttr:$kind,
+    OptionalAttr<FlatSymbolRefAttr>:$event_process, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 

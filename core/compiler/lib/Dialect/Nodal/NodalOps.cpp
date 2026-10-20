@@ -1,3 +1,4 @@
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -4414,4 +4415,8 @@ LogicalResult nodal::InstanceDomainBindingOp::verify() {
 }
 LogicalResult nodal::InstancePortOp::verify() {
   return success(succeeded(inspectInstancePort(getOperation())));
+}
+
+LogicalResult nodal::EventProcessOp::verify() {
+  return success(succeeded(inspectEventProcess(getOperation())));
 }

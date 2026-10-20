@@ -489,7 +489,7 @@ LogicalResult verifyHierarchyModule(Operation *module) {
   bool hierarchy = false, instances = false, executable = false;
   auto status = outer->walk([&](Operation *op) {
     instances |= isa<InstanceOp>(op);
-    executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp>(op) ||
+    executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp, EventProcessOp>(op) ||
                   (isa<CrossingOp, AsyncFifoOp>(op) && op->hasAttr("contract"));
     if (!hierarchyOperation(op))
       return WalkResult::advance();

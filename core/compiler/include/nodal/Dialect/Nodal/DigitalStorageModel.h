@@ -56,6 +56,8 @@ struct DigitalDependencyNode {
   /// Stateless permission boundary only. Physical dependencies and lineage stay
   /// intact; this operation is never a physical source or synchronizer identity.
   mlir::Operation *waiver = nullptr;
+  /// Actual event storage is never an ordinary domain or permission source.
+  mlir::Operation *eventProcess = nullptr;
 };
 struct DigitalCrossingSample {
   unsigned root;
@@ -78,6 +80,11 @@ struct DigitalWaiverDependency {
   unsigned root = 0;
   unsigned occurrence = 0;
 };
+struct DigitalEventUpdateDependency {
+  mlir::Operation *operation = nullptr;
+  mlir::Operation *process = nullptr;
+  unsigned root = 0;
+};
 struct DigitalObservationGroup {
   mlir::Operation *use = nullptr;
   llvm::SmallVector<unsigned, 2> roots;
@@ -87,6 +94,7 @@ struct DigitalDependencyGraph {
   llvm::SmallVector<unsigned> roots;
   llvm::SmallVector<DigitalCrossingDependency> crossings;
   llvm::SmallVector<DigitalWaiverDependency> waivers;
+  llvm::SmallVector<DigitalEventUpdateDependency> eventUpdates;
   /// Canonical coherent observations, never a module-wide group.
   llvm::SmallVector<DigitalObservationGroup> observations;
   std::shared_ptr<const HierarchyModel> hierarchy;

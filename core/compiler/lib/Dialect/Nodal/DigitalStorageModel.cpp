@@ -1,3 +1,4 @@
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 #include "mlir/IR/SymbolTable.h"
@@ -199,6 +200,10 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
       return reject(operation, "Clock/Reset wiring requires exact boundary domain identity");
     return success();
   }
+  if (text(operation, "kind") == "event_update")
+    return verifyEventUpdate(operation);
+  if (operation->hasAttr("event_process"))
+    return reject(operation, "only event_update may carry an event process identity");
   StringRef requiredKind;
   if (llvm::isa<DigitalStorageOp>(root)) {
     if (failed(verifyDigitalStorageOperation(root)))

@@ -21,6 +21,7 @@ add_mlir_dialect_library(NodalDialect
   ResetModel.cpp
   CrossingModel.cpp
   WaiverModel.cpp
+  EventModel.cpp
   MemoryModel.cpp
   SequentialModel.cpp
   FlatFSMModel.cpp

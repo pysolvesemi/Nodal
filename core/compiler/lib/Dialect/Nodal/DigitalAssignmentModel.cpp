@@ -1,3 +1,4 @@
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/CrossingModel.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
@@ -58,6 +59,7 @@ struct Node {
   Operation *family = nullptr;
   unsigned guard = 0;
   Operation *assignment = nullptr;
+  Operation *eventProcess = nullptr;
 };
 
 /// One graph for actual SSA dependencies and implicit reads through ordinary
@@ -100,20 +102,25 @@ public:
         boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
-                              crossing, index, endpoint.role, 0, boundary, waiver});
+                              crossing, index, endpoint.role, 0, boundary, waiver, node.eventProcess});
     }
+    result.eventUpdates = std::move(eventUpdates);
     result.crossings = std::move(crossings);
     result.waivers = std::move(waivers);
     result.observations = std::move(observations);
     SequentialModelLimits sampleLimits;
     sampleLimits.maximumOperations = limits.maximumNodes;
-    if (failed(verifyCrossingSourceDependencies(module, result, sampleLimits)) ||
+    if (failed(verifyEventSourceDependencies(module, result)) ||
+        failed(verifyCrossingSourceDependencies(module, result, sampleLimits)) ||
         failed(verifyWaiverSourceDependencies(module, result, sampleLimits)))
       return failure();
     return result;
   }
 
 private:
+  llvm::DenseMap<Operation *, Operation *> eventOwners;
+  SmallVector<ExecutableEventProcess, 2> events;
+  SmallVector<DigitalEventUpdateDependency, 2> eventUpdates;
   llvm::DenseMap<Operation *, unsigned> crossingIndexes;
   llvm::DenseMap<Operation *, unsigned> waiverIndexes;
   SmallVector<DigitalWaiverDependency> waivers;
@@ -466,6 +473,10 @@ LogicalResult AssignmentQuery::read(unsigned node, const StaticShapeProjection &
     return reject(use, "ordinary assignment read has no verified storage owner");
   if (llvm::isa<DigitalStorageOp>(*owner) && text(*owner, "kind") == "register")
     return success();
+  if (auto event = eventOwners.find(*owner); event != eventOwners.end()) {
+    nodes[node].eventProcess = event->second;
+    return success(); // Pre-event storage cuts, never a combinational write edge.
+  }
   auto found = writers.find(*owner);
   if (found == writers.end())
     return readAlternative(node, access, use, nodes[node].guard);
@@ -850,6 +861,13 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
     if (failed(root))
       return failure();
     node = *root;
+    if (text(operation, "kind") == "event_update") {
+      auto ref = operation->getAttrOfType<FlatSymbolRefAttr>("event_process");
+      Operation *process = SymbolTable::lookupSymbolIn(module, ref);
+      if (eventOwners.lookup(*owner) != process)
+        return reject(operation, "event update does not match its actual declared storage owner");
+      eventUpdates.push_back({operation, process, node});
+    }
   }
   writers[*owner].push_back(writes.size());
   writes.push_back({operation, std::move(*target), node, loop, ordinal, *guard});
@@ -866,6 +884,23 @@ LogicalResult AssignmentQuery::verify() {
     unsigned depth;
   };
   const DomainModel domains(module);
+  uint64_t eventStateBits = 0;
+  for (Operation &operation : module->getRegion(0).front()) {
+    if (!isa<EventProcessOp>(operation))
+      continue;
+    auto event = inspectEventProcess(&operation);
+    if (failed(event))
+      return failure();
+    eventStateBits += event->stateBits;
+    if (eventStateBits > 262144)
+      return reject(&operation, "module event storage exceeds finite 262144-bit budget");
+    for (Operation *port : event->storagePorts)
+      if (!eventOwners.try_emplace(port, &operation).second)
+        return reject(&operation, "event output has more than one process owner");
+    events.push_back(std::move(*event));
+  }
+  if (!events.empty() && failed(verifyEventRootOwnership(module)))
+    return failure();
   llvm::StringSet<> crossingIdentities, waiverIds, waiverIdentities;
   uint64_t crossingStateBits = 0;
   SmallVector<Scope, 8> scopes{{&module->getRegion(0).front(), nullptr, 0}};
@@ -968,6 +1003,13 @@ LogicalResult AssignmentQuery::verify() {
       }
     }
   }
+  for (const auto &event : events)
+    for (Operation *port : event.storagePorts) {
+      auto found = writers.find(port);
+      if (found == writers.end() || found->second.size() != 1 ||
+          text(writes[found->second.front()].operation, "kind") != "event_update")
+        return reject(event.operation, "each declared event output requires exactly one event update");
+    }
   // Written externally observable outputs are final whole-value reads. Merely
   // declaring an output remains a capability fixture, without an execution duty.
   for (const auto &entry : writers) {

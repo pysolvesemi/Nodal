@@ -1518,3 +1518,40 @@ claimed. This completes the selected waiver scope, including its reporting and
 global frequency prerequisites. Root event execution, remaining representative
 scale review and final F57 integration remain open. No CI or broad qualification
 ran; remote publication remains separately pending approval.
+
+### Tracked root-event native model and target structure checkpoint
+
+The closed root_event_v1 process/update records now independently verify actual
+root selection, root-only use (including unused instantiations), exact input
+trigger/capture and whole-output inventories, canonical writer ownership,
+finite ABI and bounded state. AssignmentQuery remains the one physical dependency
+and writer owner. Event output reads cut at persistent pre-event state while
+update RHS nodes retain actual dependencies; another process, ordinary domain,
+waiver or hierarchical capture cannot erase that quarantine. Input aliases with
+internal writers reject through the existing canonical writable-output check.
+Native capture diagnostics follow deterministic first-seen process order.
+
+Target lowering reuses existing expression materialization and backedges. It
+predeclares every canonical output and SSA alias before any RHS, yielding
+simultaneous old-state updates. Private verified trigger conversion/inversion
+feeds resetless, uninitialized compregs. Exact whole-value aggregates use the
+existing packed ABI, including selects; source-located environmental obligations
+remain attached. Invalid or unsupported input still rejects transactionally.
+There is no public Bool-to-Clock authority or runtime physical certification.
+
+Focused native checks pass **55/55 event model** and **19/19 event CIRCT**.
+Direct model predecessors pass sequential 71, storage 119, waiver 67, clock 51
+and hierarchy 63; direct target predecessors pass sequential CIRCT 145, clock
+CIRCT 45 and waiver CIRCT 16. Model inventory/hashes/commands are in
+`.work/event-native-model-checkpoint/`; target logs are
+`.work/event-{event,sequential,clock,waiver}-circt-unit.log`.
+The existing 129-register sequential witness measured 52 ms in this run, not a
+whole-program performance claim. State membership uses canonical PortOp lookups
+rather than repeated full inventory scans; shared graph and type budgets bound
+admission and target expansion.
+
+The maintained `tests/scala/root-events/run_target.py` harness is included, but
+actual Scala-to-HDL waveform execution is still pending and is not claimed from
+these structure tests. Source certificate repairs and final source acceptance
+also remain open. This checkpoint does not close F57. No CI or broad qualification
+ran; local focused CMake registrations do not launch either.

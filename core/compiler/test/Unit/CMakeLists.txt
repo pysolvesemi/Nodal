@@ -768,3 +768,18 @@ target_link_libraries(nodal-waiver-hierarchy-unit-tests PRIVATE
   NodalTransforms NodalDialect MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.waiver-hierarchy-unit COMMAND nodal-waiver-hierarchy-unit-tests)
 set_tests_properties(nodal.native.waiver-hierarchy-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-event-model-unit-tests EventModelTest.cpp)
+llvm_update_compile_flags(nodal-event-model-unit-tests)
+target_link_libraries(nodal-event-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.event-model-unit COMMAND nodal-event-model-unit-tests)
+set_tests_properties(nodal.native.event-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-event-circt-unit-tests EventCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-event-circt-unit-tests)
+target_link_libraries(nodal-event-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.event-circt-unit COMMAND nodal-event-circt-unit-tests)
+set_tests_properties(nodal.native.event-circt-unit PROPERTIES TIMEOUT 60)

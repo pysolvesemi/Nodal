@@ -19,6 +19,7 @@
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
+#include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/PhysicalControlModel.h"
@@ -143,12 +144,15 @@ public:
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
         if (aggregate &&
-            !isa<PortValueOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp>(op) &&
-            !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
+            !isa<PortValueOp, CrossingOp, AsyncFifoOp, WaiverOp, DigitalAssignOp, EventProcessOp>(
+                op) &&
+            !(isa<DigitalExprOp>(op) && (text(&op, "operator_name") == "digital_alias" ||
+                                         text(&op, "operator_name") == "digital_select")))
           return reject(
-              &op, "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
-                   "crossings and direct boundary/alias connections; projections "
-                   "require an explicit packed-offset lowering");
+              &op,
+              "fixed aggregate target profile supports only whole-value Gray/handshake/FIFO "
+              "crossings, event storage and whole boundary/alias/select connections; projections "
+              "require an explicit packed-offset lowering");
         for (Type type : op.getOperandTypes())
           if (!targetValueType(type))
             return reject(
@@ -226,6 +230,14 @@ public:
         if (failed(inspectExecutableWaiver(&op, domains)))
           return failure();
         expansion = 2; // One retained obligation and at most one identity wire; no state.
+      } else if (isa<EventProcessOp>(op)) {
+        auto event = inspectEventProcess(&op);
+        if (failed(event))
+          return failure();
+        events.push_back(*event);
+        // One private clock conversion, optional inversion, retained contract,
+        // and one next-value backedge plus state for each canonical output.
+        expansion = 3 + 2 * event->storagePorts.size();
       } else if (isa<DigitalStorageOp>(op)) {
         if (text(&op, "kind") == "register")
           registers.push_back(&op);
@@ -239,7 +251,7 @@ public:
           return reject(&op, "register requires exactly one normalized clocked update");
         expansion = 5;
       } else if (isa<DigitalAssignOp>(op)) {
-        if (text(&op, "kind") != "continuous")
+        if (text(&op, "kind") != "continuous" && text(&op, "kind") != "event_update")
           return reject(&op, "unnormalized or unbound register intent is not executable");
       } else if (isa<ConstantOp, ConstLiteralOp>(op)) {
         if (!op.getAttrOfType<IntegerAttr>("value"))
@@ -302,11 +314,24 @@ public:
     auto graph = analyzeDigitalAssignmentDependencies(source, seeds);
     if (failed(graph))
       return failure();
+    for (const auto &update : graph->eventUpdates) {
+      const auto &write = graph->nodes[update.root];
+      if (write.value || write.use != update.operation || write.dependencies.size() != 1)
+        return reject(update.operation, "event update requires its canonical assignment edge");
+      auto ref =
+          update.operation->getOperand(0).getDefiningOp()->getAttrOfType<FlatSymbolRefAttr>("port");
+      Operation *port = SymbolTable::lookupSymbolIn(source, ref);
+      Value rhs = graph->nodes[write.dependencies.front()].value;
+      if (!rhs || !eventUpdates.try_emplace(port, rhs).second)
+        return reject(update.operation, "event output requires one canonical whole-value update");
+    }
     // The finite profile has only direct whole-scalar connections. Read the
     // canonical graph's unique write edge, rather than collecting another set
     // of mutable driver facts or reimplementing physical overlap/coverage.
     for (unsigned i = 0; i < seeds.size(); ++i) {
       const auto &root = graph->nodes[graph->roots[i]];
+      if (root.eventProcess)
+        continue; // A verified event output reads persistent old state, not its writer.
       if (root.dependencies.size() != 1)
         return reject(seeds[i].second,
                       "scalar connection requires one verified whole-value writer");
@@ -343,6 +368,19 @@ public:
     }
     // Reserve generated names after every authored exact name is known.
     // Symbols keep even identical-source chains distinct through target CSE.
+    for (const auto &event : events) {
+      for (Operation *port : event.storagePorts) {
+        if (!eventUpdates.count(port))
+          return reject(port, "event storage lacks its verified canonical update");
+        std::string base = "__nodal_event_" + std::to_string(eventNames.size()) + "_" +
+                           text(port, "sym_name").str();
+        std::string name = base;
+        unsigned collision = 0;
+        while (!targetNames.insert(name).second)
+          name = base + "_" + std::to_string(++collision);
+        eventNames.try_emplace(port, builder.getStringAttr(name));
+      }
+    }
     for (const auto &crossing : crossings) {
       SmallVector<StringAttr> names;
       SmallVector<std::string> roles;
@@ -543,6 +581,53 @@ public:
       auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
+    }
+    SmallVector<std::pair<Value, circt::Backedge>> eventEdges;
+    for (const auto &event : events) {
+      Operation *op = event.operation;
+      Value trigger = values.lookup(event.trigger);
+      if (!trigger)
+        return reject(op, "verified event trigger did not map to its actual root input");
+      Value clock = circt::seq::ToClockOp::create(builder, op->getLoc(), trigger);
+      correlate(clock.getDefiningOp(), op);
+      if (event.edge == "falling") {
+        clock = circt::seq::ClockInverterOp::create(builder, op->getLoc(), clock);
+        correlate(clock.getDefiningOp(), op);
+      }
+      // Predeclare every physical output and all of its SSA aliases before
+      // evaluating any RHS. The existing expression/backedge path consequently
+      // observes one common pre-event state, independent of assignment order.
+      for (Operation *port : event.storagePorts) {
+        auto edge = backedges.get(portTypes.lookup(port), port->getLoc());
+        auto state = circt::seq::CompRegOp::create(builder, port->getLoc(), Value(edge), clock,
+                                                   circt::StringAttrOrRef(eventNames.lookup(port)));
+        state->setAttr("inner_sym", circt::hw::InnerSymAttr::get(eventNames.lookup(port)));
+        correlate(state, port);
+        state->setAttr("nodal.event_process", op->getAttr("sym_name"));
+        state->setAttr("nodal.event_contract", op->getAttr("contract"));
+        state->setAttr("nodal.event_obligations", op->getAttr("obligations"));
+        state->setAttr("nodal.event_source", op->getAttr("metadata"));
+        Type original = port->getAttrOfType<TypeAttr>("type").getValue();
+        if (aggregatePayload(original))
+          state->setAttr("nodal.packed_abi", packedLayout(original));
+        for (Value alias : portValues[port])
+          values[alias] = state.getResult();
+        eventEdges.emplace_back(eventUpdates.lookup(port), edge);
+      }
+      // Retain environment assumptions in emitted HDL without making authored
+      // source identity executable syntax or claiming a physical timing proof.
+      std::string detail = "// NODAL root event " + sourcePath(op).str() + ": " + event.edge.str() +
+                           "; known_levels_definite_edges; external_sampling=user_setup_hold; "
+                           "startup=unspecified; updates=simultaneous_pre_event; "
+                           "environment assumptions, not electrical certification";
+      for (char &c : detail)
+        if (c == '\n' || c == '\r' || c == '{' || c == '}')
+          c = ' ';
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(), builder.getStringAttr(detail + "; actual trigger {{0}}"),
+          ValueRange{trigger}, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.event_process", op->getAttrDictionary());
     }
     for (Operation *op : resets) {
       if (isa<ResetBoundaryOp>(op)) {
@@ -882,6 +967,14 @@ public:
         return reject(original.getDefiningOp(), "crossing actual sampled input did not lower");
       }
       edge.setValue(input);
+    }
+    for (auto &[original, edge] : eventEdges) {
+      Value next = values.lookup(original);
+      if (!next) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "event actual update RHS did not lower");
+      }
+      edge.setValue(next);
     }
     for (auto &[update, edge] : resetValueEdges)
       edge.setValue(values.lookup(update->getOperand(4)));
@@ -1634,6 +1727,9 @@ private:
   uint64_t &cost;
   DomainModel domains;
   SmallVector<ExecutableCrossing, 0> crossings;
+  SmallVector<ExecutableEventProcess, 0> events;
+  llvm::DenseMap<Operation *, Value> eventUpdates;
+  llvm::DenseMap<Operation *, StringAttr> eventNames;
   SmallVector<Operation *> resets, clocks, relationships;
   llvm::DenseMap<Operation *, llvm::StringMap<StringAttr>> clockNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;

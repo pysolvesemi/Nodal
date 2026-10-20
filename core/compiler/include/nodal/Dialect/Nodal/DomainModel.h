@@ -7,12 +7,16 @@
 
 #include "llvm/ADT/DenseMap.h"
 
+#include <memory>
+
 namespace nodal {
+struct DomainRelationshipIndex;
 /// Read-only index of one module's actual domain and physical binding records.
 /// Existing IR symbols remain authoritative. Rebuild this view after changing
 /// domain declarations or bindings; no facts are persisted into IR or a registry.
 /// This local F56 profile follows at most one unique requirement-to-domain bind.
-/// It does not infer relationships or prove crossings; ClockModel owns producer identity.
+/// ClockModel owns exact producer identity; verified Same classes supply a
+/// separate sampling permission without changing domain or reset identity.
 class DomainModel {
 public:
   explicit DomainModel(mlir::Operation *use);
@@ -27,6 +31,12 @@ public:
   /// Preserve the sampling contract: expected is an actual DomainOp reference,
   /// not another requirement. Only the source reference may follow a local bind.
   bool matchesActualDomain(mlir::Attribute reference, mlir::Attribute expected) const;
+  /// Ordinary data permission only. Explicit CDC attribution must continue to
+  /// use matchesActualDomain: an equivalence class is not one physical source.
+  bool allowsDirectSampling(mlir::Attribute reference, mlir::Attribute expected) const;
+  /// Closed executable relationships, physical aliases, exact period/phase and
+  /// frequency consistency. Legacy descriptors never enter this proof index.
+  mlir::LogicalResult verifyRelationships() const;
   /// Descriptor/executable opt-in lookup only, NOT a physical capability proof.
   /// Retains the first authored record so the module verifier can diagnose a
   /// duplicate at its original location. Use resolveBinding for a verified query.
@@ -39,6 +49,7 @@ private:
     mlir::Operation *first = nullptr;
     bool duplicate = false;
   };
+  mutable std::shared_ptr<DomainRelationshipIndex> relationships;
   mlir::Operation *module = nullptr;
   llvm::DenseMap<mlir::Attribute, Binding> requirements;
   llvm::DenseMap<mlir::Attribute, Binding> physicalBindings;
@@ -46,6 +57,7 @@ private:
 
 /// Independent physical producer validation, including exact owned input ports,
 /// explicit edge, policy and polarity. Preserves the F56 diagnostic contract.
+mlir::LogicalResult verifyClockRelationship(mlir::Operation *operation);
 mlir::LogicalResult verifyLocalDomainBinding(mlir::Operation *operation);
 mlir::LogicalResult verifyLocalDomainClock(mlir::Operation *operation);
 } // namespace nodal

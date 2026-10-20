@@ -16,6 +16,7 @@
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
@@ -134,6 +135,49 @@ std::string print(Operation *op) {
   op->print(stream);
   return text;
 }
+std::string relationshipFixture(StringRef kind = "same", bool reset = false,
+                                bool crossSample = true) {
+  std::string result = domain("a", "rising", reset) + domain("b", "rising", reset) +
+                       port("clkA", clockType, "a") + port("clkB", clockType, "b") +
+                       port("input", bit, "a") + port("output", bit, "b", "output") +
+                       literal("zero", 0);
+  if (reset) {
+    result += port("rst", resetType, "a") +
+              "%raw = \"nodal.reset_boundary\"(%rst) <{reset_polarity = \"active_high\", "
+              "release = \"raw\", metadata = {semantic_path = \"Fixture.raw\"}}> : (" +
+              resetType + ") -> " + resetType + "\n" + sync("resetA", "clkA", "a") +
+              sync("resetB", "clkB", "b");
+  }
+  result +=
+      binding("clkA", "a", reset ? "resetA" : "") + binding("clkB", "b", reset ? "resetB" : "");
+  std::string proof = "classification", obligations, parameters;
+  if (kind == "same") {
+    proof = "external_contract";
+    obligations = "active_edges = \"identical_stream\"";
+  } else if (kind == "ratio") {
+    proof = "timing_contract";
+    obligations = "timing = \"exact_relative_period_phase\"";
+    parameters = "multiply = 2 : i32, divide = 1 : i32, phase = \"-90.0\", ";
+  } else if (kind == "synchronous") {
+    proof = "timing_contract";
+    obligations = "timing = \"synchronous_phase_knowledge_retained\"";
+    parameters = "phase_known = true, ";
+  } else if (kind == "mutually_exclusive") {
+    proof = "operating_mode_contract";
+    obligations = "exclusion = \"never_simultaneously_enabled\"";
+  }
+  result +=
+      "\"nodal.clock_relationship\"(%clkA, %clkB) <{source = @a, destination = @b, kind = \"" +
+      kind.str() + "\", contract = \"relationship_v1\", proof = \"" + proof + "\", " + parameters +
+      "obligations = {" + obligations + "}, " + meta("relationship") + "}> : (" + clockType + ", " +
+      clockType + ") -> () loc(\"relationship.scala\":17:4)\n";
+  result += state("sourceState", "a", reset) + state("destinationState", "b", reset) +
+            assign("sourceState", "input", true) +
+            assign("destinationState", crossSample ? "sourceState" : "zero", true) +
+            assign("output", "destinationState", false);
+  return wrap(result);
+}
+
 // Interpret actual emitted combinational next-state cones, not a parallel mux
 // model. Register cuts make the controller's old-state timing explicit.
 uint64_t evaluate(Value value, const llvm::DenseMap<Operation *, uint64_t> &states,
@@ -286,6 +330,61 @@ int main() {
     report("mux-reset-exception-and-x-check-survive",
            StringRef(emitted).contains("except_reset_assertion") &&
                StringRef(emitted).contains("!== 1'b1") && StringRef(emitted).contains("!== 1'bx"));
+  }
+  for (StringRef kind :
+       {"same", "ratio", "synchronous", "mutually_exclusive", "asynchronous", "unknown"}) {
+    auto module = lower(relationshipFixture(kind, false, kind == "same"));
+    report(("relationship-" + kind + "-lowers").str(), bool(module));
+    if (!module)
+      continue;
+    unsigned comments = 0, clocks = 0, states = 0;
+    bool retained = false;
+    module->walk([&](Operation *op) {
+      if (op->hasAttr("nodal.clock_relationship")) {
+        ++comments;
+        auto record = op->getAttrOfType<DictionaryAttr>("nodal.clock_relationship");
+        retained = record && record.getAs<StringAttr>("kind").getValue() == kind &&
+                   record.getAs<DictionaryAttr>("obligations") && op->getNumOperands() == 2 &&
+                   op->getOperand(0) != op->getOperand(1) &&
+                   StringRef(print(op)).contains("not runtime physical certification") &&
+                   StringRef(print(op)).contains("Fixture.relationship");
+      }
+      if (auto hw = dyn_cast<circt::hw::HWModuleOp>(op))
+        for (BlockArgument argument : hw.getBodyBlock()->getArguments())
+          clocks += isa<circt::seq::ClockType>(argument.getType());
+      states += isa<circt::seq::CompRegOp, circt::seq::FirRegOp>(op);
+    });
+    report(("relationship-" + kind + "-retains-clocks-contract-only").str(),
+           comments == 1 && retained && clocks == 2 && states == 2);
+  }
+  {
+    auto module = lower(relationshipFixture("same", true));
+    report("same-independent-actual-reset-chains-lower", bool(module));
+    if (module) {
+      unsigned states = 0;
+      llvm::DenseSet<Value> receivingClocks;
+      module->walk([&](circt::seq::FirRegOp op) {
+        ++states;
+        receivingClocks.insert(op.getClk());
+      });
+      report("same-preserves-six-state-bits-and-two-reset-receiving-clocks",
+             states == 6 && receivingClocks.size() == 2);
+    }
+  }
+  for (StringRef kind : {"ratio", "synchronous", "mutually_exclusive", "asynchronous", "unknown"}) {
+    diagnostics.clear();
+    auto module =
+        parseSourceString<mlir::ModuleOp>(relationshipFixture(kind), ParserConfig(&context, false));
+    bool unchanged = false;
+    if (module) {
+      std::string before = print(*module);
+      PassManager pm(&context);
+      pm.enableVerifier(false);
+      pm.addPass(nodal::createSequentialToCIRCTPass());
+      unchanged = failed(pm.run(*module)) && print(*module) == before &&
+                  StringRef(diagnostics).contains("NODAL-CDC-001");
+    }
+    report(("relationship-" + kind + "-sampling-target-rejects-transactionally").str(), unchanged);
   }
   llvm::outs() << "CLOCK_CIRCT_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;

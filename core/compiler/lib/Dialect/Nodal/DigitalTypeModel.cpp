@@ -290,6 +290,8 @@ public:
         return success(succeeded(reject("Clock/Reset port requires an actual local domain")));
       return success();
     }
+    if (llvm::isa<ClockRelationshipOp>(use))
+      return verifyClockRelationship(use);
     if (llvm::isa<ClockGateOp, ClockMuxOp>(use))
       return verifyClockProducer(use);
     if (llvm::isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(use))

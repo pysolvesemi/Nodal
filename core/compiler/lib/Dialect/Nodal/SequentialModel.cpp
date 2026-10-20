@@ -536,7 +536,9 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
         if (sample.requireAttributedSource && unannotated)
           return sample.use->emitOpError(
               "NODAL-CDC-001: crossing input contains an unannotated source boundary");
-        if (!unannotated && !domains.matchesActualDomain(source.domain, sample.domain)) {
+        if (!unannotated && !(sample.requireAttributedSource
+                                  ? domains.matchesActualDomain(source.domain, sample.domain)
+                                  : domains.allowsDirectSampling(source.domain, sample.domain))) {
           // Keep established diagnostic distinctions while sharing the same
           // actual-source classification and domain proof for every consumer.
           if (llvm::isa_and_nonnull<PortOp>(source.identity))

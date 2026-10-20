@@ -45,7 +45,10 @@ existing exact-domain/clock identity queries keep their meaning. Ordinary data
 sampling may combine roots in one verified Same class. Existing explicit CDC
 construction still requires one unambiguous actual source domain: equivalence
 permission does not arbitrarily choose a physical capture clock or reset from
-multiple actual domains. A caller can register in its chosen domain first.
+multiple actual domains. FIFO/Stream ready ownership likewise remains attached
+to its exact protocol endpoint, not an interchangeable Same-class endpoint with
+a different capture/reset identity. A caller can register in its chosen domain
+first.
 
 ## Typed relationship meanings
 

@@ -101,8 +101,7 @@ FailureOr<OwnedClock> header(Operation *op, const DomainModel &domains) {
     if (auto ref = dyn_cast<FlatSymbolRefAttr>(controls[i])) {
       auto control = domains.resolveDomain(ref);
       if (failed(control) ||
-          (*control)->getAttr("sym_name") != StringAttr::get(op->getContext(), ref.getValue()) ||
-          (!mux && ref != refs[0]))
+          (*control)->getAttr("sym_name") != StringAttr::get(op->getContext(), ref.getValue()))
         return bad("gate controls must belong to their actual parent; mux controls to one domain");
     } else {
       auto kind = dyn_cast<StringAttr>(controls[i]);
@@ -249,6 +248,19 @@ FailureOr<OwnedClock> inspectOwnedClock(Operation *op, const DomainModel &domain
   auto h = header(op, domains);
   if (failed(h) || failed(resolveClock(op->getResult(0), op)))
     return failure();
+  // Sampling permission depends on relationships, while physical clock
+  // resolution must remain clock-only. Keep this out of header/ClockResolver
+  // so a relationship may inspect gate identity without recursively proving
+  // that same relationship through the gate's data controls.
+  if (!h->mux) {
+    auto parents = op->getAttrOfType<ArrayAttr>("parent_domains");
+    for (Attribute control : op->getAttrOfType<ArrayAttr>("control_domains"))
+      if (isa<FlatSymbolRefAttr>(control) && !domains.allowsDirectSampling(control, parents[0])) {
+        (void)reject(op,
+                     "gate controls must belong to their actual parent or verified Same domain");
+        return failure();
+      }
+  }
   for (unsigned i = 0; i != (h->mux ? 2u : 1u); ++i)
     if (failed(verifyLocalDomainBinding(h->parentBindings[i])))
       return failure();

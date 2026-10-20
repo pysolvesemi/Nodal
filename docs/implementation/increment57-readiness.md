@@ -1088,3 +1088,40 @@ This does not certify physical timing or close the remaining relationship,
 hierarchy, observed-output reconvergence, waiver, event, scale and final F57
 integration work. All coarse F57 items remain open. No CI or broad qualification
 was run. DG v0.7 selects the next bounded executable relationship-proof slice.
+
+### Executable relationship native checkpoint
+
+The closed clock_relationship operation carries actual Clock operands, exact
+endpoint bindings, typed fields, proof classification and explicit obligations.
+DomainModel owns a cached exact relationship index, distinct from physical clock
+identity. Only validated Same permits ordinary direct sampling; explicit CDC
+source and FIFO/Stream protocol endpoint ownership remain exact. Gate controls
+may use validated Same permission without changing their actual attribution.
+Reset receiving-clock identity and independent crossing identities are unchanged.
+
+Bounded exact rational constraints retain canonical decimal phase, signed/wrapped
+phase, known frequency consistency, physical aliases, alternative paths and
+contradiction checks. Intermediate arithmetic is limited to 4096 bits before
+oversized multiplication/allocation. Mode exclusion is independent of nominal
+Ratio/Synchronous timing; Same or physical identity still contradict exclusion.
+Source-located target comments retain assumptions and both actual clocks, not a
+runtime claim that external electrical streams were certified. Relationships
+invent no clock generator or state.
+
+Focused native checks pass **789/789**: relationship107, domain32, clock51, reset65,
+crossing273, sequential71, sequential-CIRCT145 and clock-CIRCT45. The latter has
+26 owned-clock predecessors and19 relationship target checks. Logs are
+`.work/relationship-final-<suite>.log`; exact source hashes are in
+`.work/relationship-native-checkpoint/source.sha256`. The immutable target compiler
+is `.work/relationship-native-checkpoint/nodalc`, SHA-256
+`f6f6151e99d3f634f0940f28dd7a3f56b5d3df311bf7d1f47e35ded3c606b089`.
+
+Architecture review: one DomainModel permission/consistency index uses bounded
+adjacency/spanning constraints and separate Same indexing. Exact identity APIs
+and shared sampling dependency traversal are preserved; no pairwise closure or
+parallel CDC engine is introduced. Clock-only producer resolution remains below
+relationship permission, avoiding recursive proof when validating Same gate
+controls. Source checks and actual Scala waveform acceptance remain pending at
+this checkpoint. DG v0.8 separately records the required concrete hierarchy proof
+and formal requirement-capability seam. All coarse F57 items remain open; no CI
+or broad qualification ran.

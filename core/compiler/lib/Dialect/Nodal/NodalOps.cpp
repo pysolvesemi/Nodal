@@ -2229,6 +2229,7 @@ LogicalResult nodal::ModuleOp::verify() {
   if (failed(verifyDigitalInterfaceModel(getOperation())) ||
       failed(verifyDigitalTypeModel(getOperation(), false)) ||
       failed(verifyStructuralIfModel(getOperation())) || failed(verifyClockModel(getOperation())) ||
+      failed(DomainModel(getOperation()).verifyRelationships()) ||
       failed(verifyCrossingModel(getOperation())) ||
       failed(verifyDigitalStorageModel(getOperation())) ||
       failed(verifySequentialModel(getOperation())) || failed(verifyMemoryModel(getOperation())) ||
@@ -2442,6 +2443,10 @@ LogicalResult nodal::ClockRelationOp::verify() {
   return verifyRelation(
       getOperation(), "clock relation",
       {"alias", "ratio", "synchronous", "mutually_exclusive", "asynchronous", "unknown"});
+}
+
+LogicalResult nodal::ClockRelationshipOp::verify() {
+  return verifyClockRelationship(getOperation());
 }
 
 LogicalResult nodal::ResetRelationOp::verify() {

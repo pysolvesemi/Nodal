@@ -45,6 +45,31 @@ chains and crossing instances retain occurrence-qualified identity. Two instance
 of one definition are not one synchronizer or reset chain. Same permits direct
 sampling only under v0.7 and does not merge physical or occurrence identities.
 
+## Formal requirement capabilities and mandatory discharge
+
+Child-local requirement Clock/Reset projections are formal SSA values referencing
+an actual local requirement, not physical producers, inferred HDL ports or proof
+of safety. Parent-local instance-domain bindings supply the actual parent-owned
+capabilities. A grandchild can receive forwarded formal capabilities, resolved
+through occurrence substitution to a real root binding. Never copy parent SSA
+into child scope. A demanded Reset must resolve to a reset-bearing binding;
+initialized state cannot silently become resetless.
+
+Local structural verification validates exact projection types, ownership and
+consumer shape. Requirement-dependent obligations remain explicitly unresolved
+until mandatory closed-root occurrence proof discharges them. Unbound ordinary
+symbols or arbitrary metadata are never eligible for this deferral. An unused
+structurally valid template is not executable evidence. Admission must validate
+the selected root and all its occurrences without trusting serialized verified
+markers or making the proof an optional pass.
+
+Return immutable contextual domain/capability/binding views from the shared owner,
+not synthetic local binding operations. Keep generic child register-next intent
+until concrete facts are resolved: never guess SequentialUpdate edge/reset fields
+from the first instance. Narrow requirement-dependent forms must make unresolved
+facts explicit. General hierarchy normalization/export remains unsupported until
+F58; this does not waive mandatory source/native occurrence proof.
+
 ## Digital boundary causality
 
 Add a narrow parent-owned typed digital instance-port reference/connection

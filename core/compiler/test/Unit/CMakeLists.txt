@@ -718,3 +718,10 @@ target_link_libraries(nodal-clock-circt-unit-tests PRIVATE
   MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.clock-circt-unit COMMAND nodal-clock-circt-unit-tests)
 set_tests_properties(nodal.native.clock-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-clock-relationship-model-unit-tests ClockRelationshipModelTest.cpp)
+llvm_update_compile_flags(nodal-clock-relationship-model-unit-tests)
+target_link_libraries(nodal-clock-relationship-model-unit-tests PRIVATE
+  NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.clock-relationship-model-unit COMMAND nodal-clock-relationship-model-unit-tests)
+set_tests_properties(nodal.native.clock-relationship-model-unit PROPERTIES TIMEOUT 60)

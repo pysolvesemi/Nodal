@@ -365,6 +365,28 @@ def Nodal_ClockRelationOp : Nodal_Op<"clock_relation",
   let hasVerifier = 1;
 }
 
+// Actual executable proof, deliberately distinct from the descriptor above.
+def Nodal_ClockRelationshipOp : Nodal_Op<"clock_relationship",
+    [HasParent<"ModuleOp">]> {
+  let summary = "Owned exact clock relationship and environment obligations";
+  let arguments = (ins
+    AnyType:$source_clock,
+    AnyType:$destination_clock,
+    FlatSymbolRefAttr:$source,
+    FlatSymbolRefAttr:$destination,
+    StrAttr:$kind,
+    StrAttr:$contract,
+    StrAttr:$proof,
+    OptionalAttr<I32Attr>:$multiply,
+    OptionalAttr<I32Attr>:$divide,
+    OptionalAttr<StrAttr>:$phase,
+    OptionalAttr<BoolAttr>:$phase_known,
+    DictionaryAttr:$obligations,
+    DictionaryAttr:$metadata
+  );
+  let hasVerifier = 1;
+}
+
 def Nodal_ResetRelationOp : Nodal_Op<"reset_relation",
     [HasParent<"ModuleOp">]> {
   let summary = "Declared relationship between two reset domains";

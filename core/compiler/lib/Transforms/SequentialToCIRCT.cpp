@@ -129,7 +129,7 @@ public:
       : source(source), builder(builder), cost(cost), domains(source) {}
 
   LogicalResult preflight() {
-    if (failed(planControlProjections()))
+    if (failed(domains.verifyRelationships()) || failed(planControlProjections()))
       return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
@@ -193,6 +193,11 @@ public:
         // control/release bits. Output-domain release is a separately charged
         // authored reset_sync. Include monitors and correlation comments.
         expansion = named(&op, "nodal.clock_mux") ? 192 : 16;
+      } else if (isa<ClockRelationshipOp>(op)) {
+        if (failed(verifyClockRelationship(&op)))
+          return failure();
+        relationships.push_back(&op);
+        expansion = 3;
       } else if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
         if (failed(verifyResetProducer(&op)))
           return failure();
@@ -754,6 +759,41 @@ public:
         return failure();
       }
       values[op->getResult(0)] = result;
+    }
+    for (Operation *op : relationships) {
+      SmallVector<Value, 2> actualClocks;
+      for (Value operand : op->getOperands()) {
+        Value mapped = values.lookup(operand);
+        if (!mapped) {
+          backedges.abandon();
+          return reject(op, "relationship actual clock did not map");
+        }
+        actualClocks.push_back(circt::seq::FromClockOp::create(builder, op->getLoc(), mapped));
+      }
+      std::string detail;
+      llvm::raw_string_ostream stream(detail);
+      stream << "// NODAL clock relationship " << sourcePath(op) << ": kind=" << text(op, "kind")
+             << "; source=" << op->getAttr("source")
+             << "; destination=" << op->getAttr("destination") << "; proof=" << text(op, "proof")
+             << "; obligations=" << op->getAttr("obligations");
+      for (StringRef field : {"multiply", "divide", "phase", "phase_known"})
+        if (Attribute value = op->getAttr(field))
+          stream << "; " << field << "=" << value;
+      stream << "; retained environment assumptions, not runtime physical certification";
+      // Never let an authored identity inject a new line or a Verbatim operand.
+      std::string prefix = detail;
+      for (unsigned i = 0; i != prefix.size(); ++i) {
+        char &c = prefix[i];
+        if (c == '\n' || c == '\r')
+          c = ' ';
+        else if (c == '{' || c == '}')
+          c = c == '{' ? '(' : ')';
+      }
+      auto comment = circt::sv::VerbatimOp::create(
+          builder, op->getLoc(), builder.getStringAttr(prefix + "; actual clocks {{0}} -> {{1}}"),
+          actualClocks, builder.getArrayAttr({}));
+      correlate(comment, op);
+      comment->setAttr("nodal.clock_relationship", op->getAttrDictionary());
     }
     for (Operation &op : source.getBody().front()) {
       if (!op.getNumResults() || controlProjections.contains(&op) ||
@@ -1551,7 +1591,7 @@ private:
   uint64_t &cost;
   DomainModel domains;
   SmallVector<ExecutableCrossing, 0> crossings;
-  SmallVector<Operation *> resets, clocks;
+  SmallVector<Operation *> resets, clocks, relationships;
   llvm::DenseMap<Operation *, llvm::StringMap<StringAttr>> clockNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> resetNames;
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;

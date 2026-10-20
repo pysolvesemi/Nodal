@@ -2342,10 +2342,13 @@ private[nodal] object DigitalValueMlir:
             "flat FSM actual dependency graph contains a cycle or exceeds depth limit",
             machine.path
           )
-          // Physical reset is an actual next/taken dependency even though it is owned by
-          // the local domain binding rather than the flat_fsm operand segment.
+          // The effective reset is an actual next/taken dependency even though it is owned
+          // by the local domain binding rather than the flat_fsm operand segment. Emitting
+          // only its raw input would leave a typed boundary/release producer after this use.
           module.domains.find(_.path == machine.domain).toVector.flatMap(_.attributes)
-            .collect { case (key, path) if Set("clock_source", "reset_source")(key) => path }
+            .collect {
+              case (key, path) if Set("clock_source", "effective_reset_source")(key) => path
+            }
             .foreach(path => { emit(path, depth + 1, None, output); () })
           val inputs = Vector(machine.storage) ++ machine.transitions.map(_.guard)
           val operands = (inputs ++ machine.actions.flatMap(_.captures)).map(

@@ -1039,3 +1039,28 @@ revealed an effective reset producer emitted after its consuming FSM. The bridge
 must fix ordering, not relax native SSA ownership. These prevent final selected
 clock acceptance until resolved, despite the passing target matrix. No CI or
 broad qualification ran; all coarse F57 items remain open.
+
+### Owned clock affected predecessor repair
+
+The bridge now materializes the exact effective reset producer before an FSM or
+enum action that can consume it during normalization. Previously only the raw
+reset input was ensured early, leaving reset_boundary after the FSM and causing
+a legitimate forward-SSA rejection when reset_asserted was synthesized. The fix
+preserves exact reset identity and binding operands; native lexical/scope checks
+are unchanged. The regression asserts producer dominance and actual normalization
+success, not merely text presence. Shaped-binding tests now check the actual
+supported binding and the causal missing-binding reset ownership diagnostic.
+
+The three-file repair passes its focused **26/26** bridge tests. Combined current
+source/predecessor selection passes **164/164**: 43 clock/reset/descriptor groups
+plus 121 directly affected predecessor groups, with configured actual native
+execution. Logs: `.work/owned-clock-predecessor-repair2.log` and
+`.work/owned-clock-all-focused-repaired.log`. Actual source and normalized FSM
+witnesses are retained under `.work/owned-clock-predecessor-repair-replay`.
+The effective reset now precedes both flat_fsm and enum_switch.
+
+Both previously reported predecessor failures are resolved. Final replay
+regeneration comparison and target predecessor checks remain to be recorded
+before final selected clock acceptance. The already-passing 637 native model,
+171 target structure and 36 actual clock waveform checks retain their scoped
+meaning. No CI or broad qualification was run; remaining F57 slices stay open.

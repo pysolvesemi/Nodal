@@ -454,7 +454,30 @@ object Increment56SequentialBridgeTests extends TestSuite:
                 assert(normalized.contains("\"nodal.sequential_select\""))
               assert(normalized.contains("!nodal.capability<\"clock\">"))
               assert(normalized.contains("!nodal.capability<\"reset\">"))
-            else assert(!normalized.contains("\"nodal.local_domain_binding\""))
+            else
+              // Fixed shaped Clock projections are executable physical bindings even without
+              // state. Retain the actual selected element and owned reset, not a fake port.
+              val lines = normalized.linesIterator.toVector
+              def unique(operation: String): String =
+                val selected = lines.filter(_.contains("\"nodal." + operation + "\""))
+                assert(selected.size == 1)
+                selected.head
+              def result(line: String): String = line.trim.takeWhile(_ != ' ')
+              val projectedClock = unique("shape_index")
+              val actualReset = unique("reset_boundary")
+              val binding = unique("local_domain_binding")
+              assert(projectedClock.contains("SequentialBridgeProjectedDescriptor.clocks_at_0"))
+              assert(projectedClock.contains("!nodal.shaped<\"2\", !nodal.capability<\"clock\">>"))
+              assert(binding.contains(s"(${result(projectedClock)}, ${result(actualReset)})"))
+              assert(
+                binding.contains("domain = @core"),
+                binding.contains("reset_polarity = \"active_high\"")
+              )
+              assert(
+                actualReset.contains("release = \"sync\""),
+                actualReset.contains("release_domain = @core")
+              )
+              assert(!normalized.contains("\"nodal.sequential_update\""))
             if Set("public-chain", "pure-structural-rhs")(name) then
               assert(normalized.contains("\"nodal.structural_if\""))
               assert(normalized.sliding("\"nodal.structural_yield\"".length).count(_ ==
@@ -467,5 +490,7 @@ object Increment56SequentialBridgeTests extends TestSuite:
             ).mkString("\n") + "\n"
           )
           NativeCompilerClient.run(unbound, request) match
-            case failure: NativeCompilerFailure => assert(failure.standardError.contains("binding"))
+            case failure: NativeCompilerFailure =>
+              assert(failure.diagnostic.code == "NODAL-RESET-057-001")
+              assert(failure.standardError.contains("exact owned executable clock domain"))
             case _: NativeCompilerSuccess => assert(false)

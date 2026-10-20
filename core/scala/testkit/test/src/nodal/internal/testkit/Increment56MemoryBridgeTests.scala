@@ -52,6 +52,28 @@ object Increment56MemoryBridgeTests extends TestSuite:
       assert(canonical.contains("memory_writes"), canonical.contains("memory_read"))
       assert(canonical.contains(value.memoryWrites.head.memory))
 
+    test("FSM control materializes the actual effective reset before regional actions"):
+      val value = ConstructionKernel.inspect(new nodal_external.Increment56MemoryBridgeSource)
+      val machine = value.flatFsms.head
+      val domain = value.modules.head.domains.find(_.path == machine.domain).get
+      val fields = domain.attributes.toMap
+      val effectiveReset = fields("effective_reset_source")
+      val rawReset = fields("reset_source")
+      assert(effectiveReset != rawReset)
+      val lines = ScalaToMlirBridge.fromSnapshot(value).text.linesIterator.toVector
+      val reset = lines.indexWhere(line =>
+        line.contains("\"nodal.reset_boundary\"") &&
+          line.contains(s"semantic_path = \"$effectiveReset\"")
+      )
+      val fsm = lines.indexWhere(_.contains("\"nodal.flat_fsm\""))
+      val switch = lines.indexWhere(_.contains("\"nodal.enum_switch\""))
+      assert(reset >= 0, reset < fsm, fsm < switch)
+      val resetValue = lines(reset).trim.takeWhile(_ != ' ')
+      val binding = lines.find(_.contains("\"nodal.local_domain_binding\"")).get
+      assert(binding.contains(s", $resetValue)"))
+      assert(lines(reset).contains("release = \"sync\""))
+      assert(lines(reset).contains("release_domain = @\"root\""))
+
     test("authored declaration and read names cannot collide with owned write effects"):
       Vector(false, true).foreach: late =>
         val value =

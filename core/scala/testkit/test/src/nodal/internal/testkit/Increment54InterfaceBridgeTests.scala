@@ -29,7 +29,10 @@ final class InterfaceSymbolicBridgeSource extends Module:
   endpoint.driveMember("data", input)
   inverted.observeMember("data")
 
-final class InterfaceCombinationalWidthSource(invalid: Boolean = false) extends Module:
+final class InterfaceCombinationalWidthSource(
+    invalid: Boolean = false,
+    concreteBoundary: Boolean = false
+) extends Module:
   val core = ClockDomain.external(
     "core",
     ClockEdge.Rising,
@@ -39,7 +42,9 @@ final class InterfaceCombinationalWidthSource(invalid: Boolean = false) extends 
   )
   val width = param(4.integer, range = 1 to 8)
   val other = param(4.integer, range = 1 to 8)
-  val input = in(UInt(if invalid then other else width))
+  val input = in(
+    if concreteBoundary then UInt(1) else UInt(if invalid then other else width)
+  )
   val enable = in(Bool)
   val definition = Interface[InterfaceCaptureLink](
     "CombinationalPayload",
@@ -58,11 +63,34 @@ final class InterfaceCombinationalWidthSource(invalid: Boolean = false) extends 
     ResolutionProfile.PortableBoundaryOnly,
     "pad"
   )
-  val sum = input + input
+  // Keep the child boundary concrete without treating a parameter default as its exact width.
+  val operand =
+    if concreteBoundary then
+      select(
+        input === 1.U(1),
+        1.U(if invalid then other else width),
+        0.U(if invalid then other else width)
+      )
+    else input
+  val sum = operand + operand
   endpoint.driveMember("data", sum)
   pad.drive(sum, enable)
 
 final class InterfaceCombinationalChildSource extends Module:
+  val core = ClockDomain.external(
+    "core",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val input = in(UInt(1))
+  val enable = in(Bool)
+  val child = instance(new InterfaceCombinationalWidthSource(concreteBoundary = true))
+  child(_.input) := input
+  child(_.enable) := enable
+
+final class InterfaceUnconnectedCombinationalChildSource extends Module:
   val child = instance(new InterfaceCombinationalWidthSource)
 
 final class InterfaceMixedDeclarationBridgeSource extends Module:
@@ -449,6 +477,15 @@ object Increment54InterfaceBridgeTests extends TestSuite:
       val childDirectory = directory.resolve("child")
       Files.createDirectories(childDirectory)
       assert(verified(child, childDirectory).contains("nodal.interface_drive"))
+      assert(child.text.contains("digital_select"))
+      assert(child.text.contains("nodal.instance_port"))
+
+      val unconnected = scala.util.Try(
+        ConstructionKernel.inspect(new InterfaceUnconnectedCombinationalChildSource)
+      ).failed.get
+      assert(unconnected.isInstanceOf[ConstructionException])
+      assert(unconnected.asInstanceOf[ConstructionException].diagnostic.code ==
+        "NODAL-CDC-057-001")
 
       val rejected = scala.util.Try(
         ConstructionKernel.inspect(new InterfaceCombinationalWidthSource(true))

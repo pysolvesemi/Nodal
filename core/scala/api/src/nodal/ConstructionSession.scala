@@ -9372,6 +9372,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ).flatten
       )
       source.map(SourceMapEntry(assignment.path, _))
+    // A member projection is generated from its actual endpoint declaration. Preserve any
+    // more precise captured leaf span; otherwise retain that declaration, never invent a line.
+    val interfaceMemberSources = interfaceCapture.interfaces.flatMap: endpoint =>
+      sourceByPath.get(endpoint.path).toVector.flatMap: source =>
+        endpoint.members.filterNot(member => sourceByPath.contains(member.path)).map(member =>
+          SourceMapEntry(member.path, source)
+        )
     val hierarchyBindingSources = selectedRequirementBindings.iterator.flatMap:
       case (requirement, (_, origin, owner, ordinal)) =>
         val instance = records(owner).instances(ordinal)
@@ -9425,7 +9432,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       origins = semantic.origins,
       generatedNames = semantic.generatedNames,
       sourceMap =
-        (semantic.sourceMap ++ hierarchyBindingSources ++ assignmentSources ++ memoryWriteRecords.flatMap(
+        (semantic.sourceMap ++ hierarchyBindingSources ++ assignmentSources ++ interfaceMemberSources ++ memoryWriteRecords.flatMap(
           (write, record) =>
             record.source.map(SourceMapEntry(write.path, _))
         ) ++ collectionArgumentSources ++ sequentialRegionSources ++ rootSources ++ endpointSources ++ topologyEdges.flatMap(

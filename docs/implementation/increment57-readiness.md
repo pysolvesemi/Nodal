@@ -1363,3 +1363,24 @@ IR retains the authored assignment spans. The protocol mutation currently report
 an unknown member-access location; a narrow truthful endpoint-declaration source
 fallback remains open before full source-mapped acceptance. Waiver/event work and
 final F57 integration remain required; no CI or broad qualification ran.
+
+### Member diagnostic mapping repair
+
+Canonical Interface member paths now inherit the real endpoint declaration span
+when no more specific source span exists. The regenerated protocol reconvergence
+mutation reports the actual member access at
+`Increment57InterfaceObservationSourceTests.scala:57:5`, rather than an unknown
+location; the output-selector mutation remains mapped at line 80. No invented
+leaf span or source-expression parser was added.
+
+The three-file repair passes **25/25** focused source checks (four mapping, seven
+observation admission, fourteen Interface bridge) and all **14** regenerated
+source/native replay expectations against the same immutable compiler. Logs and
+exact hashes are `.work/source-interface-observations/member-repair*`.
+A newly observed old child fixture had unconnected symbolic-width/Bool inputs;
+it now uses a concrete connected UInt(1) boundary and Bool input, with an explicit
+value-preserving symbolic-width select inside the child. Standalone symbolic type
+coverage and alternate-parameter identity rejection remain, and the original
+unconnected child is an explicit negative. No parameter-default equality or F58
+boundary capability was invented. Scoped hierarchy/observation source-location
+gaps are resolved; waivers, events and final F57 integration remain open.

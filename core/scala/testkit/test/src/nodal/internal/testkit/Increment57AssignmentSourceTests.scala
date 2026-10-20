@@ -56,3 +56,13 @@ object Increment57AssignmentSourceTests extends TestSuite:
       assert(source.path.endsWith("Increment57AssignmentSourceTests.scala"))
       assert(locations.get(assignment.target).contains(source) ||
         locations.get(assignment.value).contains(source))
+
+    test("generated interface member projections retain their actual endpoint declaration span"):
+      val snapshot = ConstructionKernel.inspect(new InterfaceObservationSource("protocol-shared"))
+      val locations = snapshot.sourceMap.map(value => value.semanticPath -> value.source).toMap
+      snapshot.interfaceContracts.foreach: endpoint =>
+        endpoint.members.foreach: member =>
+          assert(locations(member.path) == locations(endpoint.path))
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      val accesses = text.linesIterator.filter(_.contains("\"nodal.member_access\"")).toVector
+      assert(accesses.nonEmpty, accesses.forall(!_.contains("loc(unknown)")))

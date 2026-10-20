@@ -1555,3 +1555,23 @@ actual Scala-to-HDL waveform execution is still pending and is not claimed from
 these structure tests. Source certificate repairs and final source acceptance
 also remain open. This checkpoint does not close F57. No CI or broad qualification
 ran; local focused CMake registrations do not launch either.
+
+### Representative domain/relationship identity checkpoint
+
+The maintained `Increment57ScaleDeterminismTests` adds two bounded source/bridge
+representatives. Sixty-four independent domains retain 64 distinct authored
+waiver identities; a 64-link nested physical Same chain retains all relationship
+records. Both repeated constructions produce identical snapshots, bridge IR and
+reproducibility manifests. The nested positive uses a real synchronous reset
+input, not the synthetic resetless reset expression, and does not invent reset
+capability to satisfy the fixture.
+
+Both tests pass (**2/2**) in `.work/event-source-tests3.log`. Observed capture/bridge
+times were 1,561/491 ms for 64 domains/waivers (982,695 IR characters), and 70/42 ms
+for 64 nested relationships (220,518 characters). These are representative local
+observations, not a speedup or universal complexity claim. Existing 128-instance
+level/protocol checks and concrete hierarchy sibling/nesting observations retain
+their earlier scoped evidence. Actual native admission of the new emitted scale
+witnesses remains pending; the companion `Increment57ScaleReplay` preserves the
+real bridge inputs for that check. Final F57 scale/architecture acceptance remains
+open until the integration review, not inferred from these two tests alone.

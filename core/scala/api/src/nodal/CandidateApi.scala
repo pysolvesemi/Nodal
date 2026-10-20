@@ -702,8 +702,12 @@ object Cdc:
   def pulse(pulse: Pulse, to: ClockDomain): Expr[Bool] =
     ConstructionKernel.pulseSync(pulse.value, to)
 
+  /** Automatic coherent latest-snapshot transfer, not a lossless event queue. Changes while busy
+    * may coalesce; the destination holds its last delivery, unspecified before the first. Requires
+    * a common reset epoch with safe release and physical bundled-data settling before capture.
+    */
   def handshake[A <: Data](payload: Expr[A], to: ClockDomain): Expr[A] =
-    CandidateRuntime.expr(payload, to)
+    ConstructionKernel.handshakeSnapshot(payload, to)
 
   def fifo[A <: Data](
       stream: Stream[A],

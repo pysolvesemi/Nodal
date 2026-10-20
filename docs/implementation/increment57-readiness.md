@@ -703,3 +703,37 @@ are unchanged. Fixed whole-aggregate Gray no longer remains an unimplemented
 target promise. F57 overall remains open. The next coherent snapshot handshake
 slice is frozen in [v0.4](../design-gates/NodalClockResetExecution-DG-v0.4.md),
 retaining v0.1's automatic coalescing semantics and genuine returned acknowledgement.
+
+## Coherent snapshot handshake source checkpoint
+
+The [v0.4 handshake contract](../design-gates/NodalClockResetExecution-DG-v0.4.md)
+now captures through the unchanged public Expr API, construction records, bridge
+and existing report transport. This source checkpoint does not claim native or
+target handshake execution; those owners are being implemented separately.
+Source capture and independent bridge ingress reuse the existing finite payload,
+sampling/reconvergence and physical reset-root proof. The shared Pulse reset
+endpoint rule now also covers handshake without copying a lineage engine.
+Closed obligations preserve automatic latest-snapshot coalescing, bundled-data
+settling and common reset epoch. Pulse results cannot be silently relabeled as
+snapshot payload. Fixed scalar/Vec/Struct/Enum shapes preserve exact ABI.
+
+The six-suite runner reports **60 passing cases**: handshake 10, Gray/Pulse 13,
+level 9, FSM crossing 5, reset 19 and report 4. Of these, **59 source/bridge test
+bodies executed**; one report native-HDL parity body was environment-gated and
+not run because its native tool variables were unset. No target evidence is
+claimed from that gated body. All ten new handshake tests executed. Raw Async
+rejection is tested at its established bridge validation boundary, not moved or
+weakened merely to satisfy a construction-only test.
+
+Frozen public replay emits **8/8** actual MLIR designs: both edge/polarity pairs,
+whole Vec, Struct, no-zero Enum and a valid shared-clock Sync-reset witness.
+Actual emitted payload input is `sampled`. Logs are
+`.work/handshake-focused-final.log`, `.work/handshake-replay.log` and
+`.work/handshake-format-check.log`; replay IR is `.work/handshake-source/`.
+Source formatting, Markdown and diff checks pass. Native/target handshake checks
+and FIFO/remaining F57 work stay open; no CI or broad qualification was run.
+
+The preceding fixed Gray aggregate work also retained successful executions of
+the unchanged sequential 71, memory 114 and flat-FSM 59 predecessor cases, in
+addition to its freshly rebuilt type/crossing/target 362 cases. These 606 focused
+native executions are recorded separately from the pending handshake backend.

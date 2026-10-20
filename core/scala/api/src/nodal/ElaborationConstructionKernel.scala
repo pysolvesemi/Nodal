@@ -190,6 +190,10 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(throw new IllegalStateException("Cdc.pulse requires active construction"))
       .executableCrossing(value, to, 2, "pulse")
 
+  def handshakeSnapshot[A <: Data](value: Expr[A], to: ClockDomain): Expr[A] =
+    active.getOrElse(throw new IllegalStateException("Cdc.handshake requires active construction"))
+      .executableCrossing(value, to, 2, "handshake")
+
   def resetSync(reset: Expr[Reset], to: Option[ClockDomain], stages: Int): Expr[Reset] =
     active.getOrElse(throw new IllegalStateException("Rdc.sync requires active construction"))
       .resetSync(reset, to, stages)

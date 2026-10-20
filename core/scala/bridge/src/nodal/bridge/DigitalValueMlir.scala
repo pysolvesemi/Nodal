@@ -1243,8 +1243,10 @@ private[nodal] object DigitalValueMlir:
         requireValid(
           expression.region.isEmpty && expression.operands.size == 1 &&
             expression.dataType == expressionType(expression.operands.head) &&
-            (crossing.kind == "gray" || expression.dataType == "Bool") &&
-            Set("sync", "gray", "pulse")(crossing.kind) &&
+            (ExecutableCrossingContract.bitPatternPayload(
+              crossing.kind
+            ) || expression.dataType == "Bool") &&
+            ExecutableCrossingContract.Kinds(crossing.kind) &&
             expression.operation == "cdc_" + crossing.kind &&
             crossing.contract == ExecutableCrossingContract.contract(crossing.kind) &&
             crossing.obligations.size == ExecutableCrossingContract.obligations(
@@ -1253,11 +1255,10 @@ private[nodal] object DigitalValueMlir:
             crossing.obligations.toMap == ExecutableCrossingContract.obligations(
               crossing.kind
             ).toMap &&
-            (crossing.kind != "pulse" || crossing.stages == 2) &&
+            ExecutableCrossingContract.validStages(crossing.kind, crossing.stages) &&
             expression.literal.isEmpty && expression.enumIdentity.isEmpty &&
             expression.caseIds.isEmpty && expression.structure.isEmpty &&
             expression.materializationIntent.isEmpty && expression.memory.isEmpty &&
-            crossing.stages >= 2 && crossing.stages <= 32 &&
             crossing.sourceDomain != crossing.destinationDomain &&
             Vector(crossing.sourceDomain, crossing.destinationDomain).forall(domain =>
               modules(expression.owner).domains.exists(value =>
@@ -1267,11 +1268,11 @@ private[nodal] object DigitalValueMlir:
           "crossing requires exact payload, closed obligations, distinct actual endpoints and bounded stages",
           expression.path
         )
-        if crossing.kind == "pulse" then
+        if ExecutableCrossingContract.commonResetEpoch(crossing.kind) then
           val source = resetRoots.getOrElse(crossing.sourceDomain, Map.empty)
           requireValid(
             source.nonEmpty && resetRoots.get(crossing.destinationDomain).contains(source),
-            "pulse requires common nonempty physical reset roots and polarities with safe release",
+            s"${crossing.kind} requires common nonempty physical reset roots and polarities with safe release",
             expression.path
           )
       requireValid(
@@ -2029,7 +2030,11 @@ private[nodal] object DigitalValueMlir:
         var remaining = 65536
         def visit(value: String, depth: Int): BigInt =
           remaining -= 1
-          requireValid(depth <= 128 && remaining >= 0, "Gray type exceeds structural budget", path)
+          requireValid(
+            depth <= 128 && remaining >= 0,
+            "crossing type exceeds structural budget",
+            path
+          )
           val result = if value == "Bool" then BigInt(1)
           else if value.startsWith("Enum(") then BigInt(enums.bitWidth(value, path))
           else if value.startsWith("Struct(") then
@@ -2043,11 +2048,14 @@ private[nodal] object DigitalValueMlir:
             )
           else
             scalarType(value, path).map(info => BigInt(info.upper)).getOrElse(
-              fail("Gray requires finite Bool, bit-vector, Enum or Vec/Struct bit patterns", path)
+              fail(
+                "crossing requires finite Bool, bit-vector, Enum or Vec/Struct bit patterns",
+                path
+              )
             )
           requireValid(
             result > 0 && result <= Long.MaxValue,
-            "Gray type footprint is excessive",
+            "crossing type footprint is excessive",
             path
           )
           result
@@ -2797,7 +2805,7 @@ private[nodal] object DigitalValueMlir:
                       "crossing requires the exact complete input/result native type",
                       path
                     )
-                    val bits = if crossing.kind == "gray" then
+                    val bits = if ExecutableCrossingContract.bitPatternPayload(crossing.kind) then
                       bitPatternWidth(expression.dataType, path)
                     else BigInt(1)
                     crossingStateBits += ExecutableCrossingContract.stateBits(

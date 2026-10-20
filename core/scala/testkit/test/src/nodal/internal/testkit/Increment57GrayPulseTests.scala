@@ -56,8 +56,10 @@ final class GrayPulseCapture(kind: String, mode: String = "ordinary", count: Int
     val crossings = Vector.tabulate(count)(index =>
       val value = if mode == "separate" && index != 0 then separate.get else selected
       val target = if mode == "same" then source else destination
-      if kind == "gray" then Cdc.gray(Gray(value), target)
-      else Cdc.pulse(Pulse(value), target)
+      kind match
+        case "gray" => Cdc.gray(Gray(value), target)
+        case "handshake" => Cdc.handshake(value, target)
+        case _ => Cdc.pulse(Pulse(value), target)
     )
     if mode == "pulse-result-level" then
       val _ = Cdc.sync(crossings.head && true.B, source)
@@ -74,7 +76,7 @@ final class GrayPulseCapture(kind: String, mode: String = "ordinary", count: Int
       val outputValue = out(Bool)
       outputValue := crossings.last
 
-final class ShapedPulseCapture(sameRoot: Boolean) extends Module:
+final class ShapedPulseCapture(sameRoot: Boolean, kind: String = "pulse") extends Module:
   val clocks = in(Vec(Clock, 2))
   val resets = in(Vec(Reset, 2))
   val source = ClockDomain.from(
@@ -99,7 +101,9 @@ final class ShapedPulseCapture(sameRoot: Boolean) extends Module:
   source:
     val value = in(Bool)
     input = Some(value)
-  val pulse = Cdc.pulse(Pulse(input.get), destination)
+  val pulse =
+    if kind == "handshake" then Cdc.handshake(input.get, destination)
+    else Cdc.pulse(Pulse(input.get), destination)
   destination:
     val outputValue = out(Bool)
     outputValue := pulse

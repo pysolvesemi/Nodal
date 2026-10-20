@@ -83,8 +83,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         crossingFailure(
           s"$label destination and any active lexical domain must belong to the active Module"
         )
-      if stages < 2 || stages > 32 || (kind == "pulse" && stages != 2) then
-        crossingFailure(s"$label stages must be between 2 and 32 (pulse requires 2)")
+      if !ExecutableCrossingContract.validStages(kind, stages) then
+        crossingFailure(s"$label stages must be between 2 and 32 (pulse and handshake require 2)")
       val reference = valueReference(input)
       val inputOwner = reference match
         case value: DeclarationRef => value.module
@@ -94,16 +94,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
       val descriptor = CandidateRuntime.typeDescriptor(dataType)
       if inputOwner != owner ||
-        (kind != "gray" && descriptor != KernelTypeDescriptor("Bool"))
+        (!ExecutableCrossingContract.bitPatternPayload(kind) && descriptor != KernelTypeDescriptor(
+          "Bool"
+        ))
       then crossingFailure(s"$label input requires an actual owned Bool value")
-      val bits = if kind == "gray" then
+      val bits = if ExecutableCrossingContract.bitPatternPayload(kind) then
         shapeTypeFootprint(
           dataType,
           owner,
           cardinality = true,
           storageContext = true,
           bitPatternOnly = true
-        ).getOrElse(crossingFailure("Gray requires a finite digital bit pattern"))
+        ).getOrElse(crossingFailure(s"$label requires a finite digital bit pattern"))
       else BigInt(1)
       val stateBits = ExecutableCrossingContract.stateBits(kind, bits, stages)
       if crossingStateBits + stateBits > ExecutableCrossingContract.MaximumStateBits then
@@ -2243,23 +2245,27 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         current.get.fsmAction.foreach(header => fsmControls(header).foreach(include))
         current = current.get.parent
       verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet), owner)
-    val pulseLineage = new ResetLineageQuery
-    val pulseRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
-    def pulseResetRoots(path: String): Map[(DeclarationRef, Long), ResetPolarity] =
-      pulseRoots.getOrElseUpdate(
+    val commonResetLineage = new ResetLineageQuery
+    val commonResetRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
+    def resetEpochRoots(path: String, kind: String): Map[(DeclarationRef, Long), ResetPolarity] =
+      commonResetRoots.getOrElseUpdate(
         path, {
           val domain = domainsByPath(path).domain
           val reset = Option(effectiveResets.get(domain)).getOrElse(
-            crossingFailure("Cdc.pulse requires reset-bearing endpoints with common physical roots")
+            crossingFailure(
+              s"Cdc.$kind requires reset-bearing endpoints with common physical roots"
+            )
           )
-          pulseLineage(reset).view.mapValues(_._1).toMap
+          commonResetLineage(reset).view.mapValues(_._1).toMap
         }
       )
     executableCrossings.foreach: (reference, crossing) =>
       val facts = sampleFacts(crossing.input, reference.module, strict = true)
       verifyReconvergence(facts, reference.module)
       if crossing.kind != "pulse" && facts.pulseClassified then
-        crossingFailure("Pulse-classified input cannot be relabeled as a level or Gray value")
+        crossingFailure(
+          "Pulse-classified input cannot be relabeled as a level, Gray or handshake value"
+        )
       val sources = facts.domains
       if sources.size != 1 then
         crossingFailure(s"Cdc.${crossing.kind} input must have exactly one known source domain")
@@ -2276,10 +2282,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         crossingFailure(
           s"Cdc.${crossing.kind} endpoints must resolve to actual domains in the same Module"
         )
-      if crossing.kind == "pulse" then
-        val sourceRoots = pulseResetRoots(source)
-        if sourceRoots.isEmpty || sourceRoots != pulseResetRoots(destination) then
-          crossingFailure("Cdc.pulse requires common physical reset roots and polarities")
+      if ExecutableCrossingContract.commonResetEpoch(crossing.kind) then
+        val sourceRoots = resetEpochRoots(source, crossing.kind)
+        if sourceRoots.isEmpty || sourceRoots != resetEpochRoots(destination, crossing.kind) then
+          crossingFailure(
+            s"Cdc.${crossing.kind} requires common physical reset roots and polarities"
+          )
       crossing.sourceDomain = Some(source)
       crossing.destinationDomain = Some(destination)
     operations.zipWithIndex.foreach: (operation, index) =>
@@ -3761,7 +3769,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             descriptor.kind
           )
         then
-          crossingFailure("Gray requires Bool, bit-vector, Enum, or finite Vec/Struct bit patterns")
+          crossingFailure(
+            "crossing requires Bool, bit-vector, Enum, or finite Vec/Struct bit patterns"
+          )
         descriptor.kind match
           case "Bits" | "UInt" | "SInt" =>
             Some(BigInt(digitalWidthBound(descriptor, owner).bounds.upper))
@@ -4424,7 +4434,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     case expression: KernelExpr[?]
         if expression.operation.exists(ExecutableCrossingContract.Operations) =>
       crossingFailure(
-        "crossings require the owned Cdc.sync entrypoint or matching Gray/Pulse entrypoint"
+        "crossings require the owned Cdc.sync entrypoint or matching Gray/Pulse/handshake entrypoint"
       )
     case expression: KernelExpr[?] if expression.operation.contains("memory_read") =>
       memoryFailure("memory reads require the owned Mem.read entrypoint")

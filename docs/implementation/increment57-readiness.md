@@ -670,3 +670,36 @@ with an ignored output directory. Current logs are
 `.work/gray-pulse-source-final/`. Source formatting, Markdown and whitespace checks
 pass. Aggregate target work and remaining F57 categories stay open; no checklist
 parent or child is closed by this source checkpoint.
+
+### Fixed whole-aggregate Gray target checkpoint
+
+The required fixed whole-value Vec/Struct target continuation now uses the shared
+`inferDigitalBitPatternFixedBits` query. It reuses complete validated storage
+footprints and requires singleton bounds for every width and extent, rather than
+specializing a parameter default or mistaking its maximum for an exact size.
+Whole payload ports and state use flat packed integers with preserved canonical
+source ABI and recursive row-major/declared-field LSB-first layout metadata.
+Exported SystemVerilog retains the same complete layout comments. Native checks
+assert nested Vec strides and Struct field offsets, not only total width.
+Unsupported projections and storage operations still reject atomically; this is
+not a claim of general aggregate-operation target lowering.
+
+Fresh focused native checks pass **362/362**: DigitalTypeModel **114/114**,
+crossing model **140/140**, CIRCT target **108/108**. The full actual Scala →
+CIRCT → SystemVerilog → Icarus matrix passes **45/45**, adding Vec and Struct legal
+transport and executed invalid-transition failures to the prior scalar matrix.
+Input/output complete packed ABI comments are checked after export. Source files
+remain the frozen final replay from the preceding checkpoint; no fabricated
+target design is substituted. Logs are `.work/gray-pulse-fixed-type-tests.log`,
+`.work/gray-pulse-aggregate-crossing-tests.log`, `.work/f57-target/` and
+`.work/gray-pulse-aggregate-final.log`, with per-case hashes in
+`.work/gray-pulse-aggregate-final/manifest.json`. Formatting, Python syntax,
+Markdown and whitespace checks pass. No CI or broad qualification was run.
+
+Architecture review: exact fixedness belongs to the shared type owner, packing
+is bounded and recursive without lane expansion, and the existing target planner
+owns transactionality. Native/source semantic shape and exact type equivalence
+are unchanged. Fixed whole-aggregate Gray no longer remains an unimplemented
+target promise. F57 overall remains open. The next coherent snapshot handshake
+slice is frozen in [v0.4](../design-gates/NodalClockResetExecution-DG-v0.4.md),
+retaining v0.1's automatic coalescing semantics and genuine returned acknowledgement.

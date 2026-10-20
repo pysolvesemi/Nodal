@@ -780,6 +780,45 @@ FailureOr<int64_t> inferDigitalBitPatternMaximumBits(Type type, Operation *use) 
   return *bits;
 }
 
+FailureOr<int64_t> inferDigitalBitPatternFixedBits(Type type, Operation *use) {
+  auto maximum = inferDigitalBitPatternMaximumBits(type, use);
+  if (failed(maximum))
+    return failure();
+  Operation *module = isa<nodal::ModuleOp>(use) ? use : use->getParentOfType<nodal::ModuleOp>();
+  SmallVector<Type> pending{type};
+  llvm::DenseSet<Type> visited;
+  unsigned work = 0;
+  while (!pending.empty()) {
+    Type current = pending.pop_back_val();
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    if (!visited.insert(current).second)
+      continue;
+    if (isa<ParametricIntegerType>(current)) {
+      auto bounds = inferDigitalWidthBounds(current, module);
+      if (failed(bounds) || bounds->lower != bounds->upper)
+        return failure();
+    } else if (auto shaped = dyn_cast<nodal::ShapedType>(current)) {
+      SmallVector<StringRef> dimensions;
+      shaped.getDimensions().split(dimensions, ',');
+      for (StringRef dimension : dimensions) {
+        if (++work > digitalTypeMaximumNodes)
+          return failure();
+        auto extent = resolveStaticShapeDimension(module, dimension);
+        if (failed(extent) || extent->bounds.lower != extent->bounds.upper)
+          return failure();
+      }
+      pending.push_back(shaped.getElementType());
+    } else if (auto structure = dyn_cast<StructType>(current)) {
+      for (Attribute field : structure.getFields())
+        pending.push_back(cast<DictionaryAttr>(field).getAs<TypeAttr>("type").getValue());
+    }
+  }
+  // All component extents are singleton facts, so the canonical worst-case
+  // footprint is the exact width. No second arithmetic/type-layout engine.
+  return *maximum;
+}
+
 } // namespace nodal
 
 // Preserve the ordinary entry-point ABI for existing non-contextual consumers.

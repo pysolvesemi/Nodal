@@ -878,10 +878,16 @@ int main(int argc, char **argv) {
 
   negative("undriven-output-is-not-invented", wrap(setup() + enabled()),
            "undriven combinational wire");
-  negative("aggregate-target-profile-rejected",
-           wrap(setup() + port("aggregate", "!nodal.shaped<\"2\", !nodal.uint<8>>") +
-                assign("result", "state")),
-           "only fixed scalar");
+  test("fixed-aggregate-input-profile",
+       setup() + port("aggregate", "!nodal.shaped<\"2\", !nodal.uint<8>>") +
+           assign("result", "state"),
+       [&](mlir::ModuleOp m) {
+         auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
+         for (auto port : hw.getPortList())
+           if (port.name.getValue() == "aggregate")
+             return port.type.isInteger(16) && port.attrs.getAs<DictionaryAttr>("nodal.packed_abi");
+         return false;
+       });
   negative("shaped-control-width-cap-is-atomic",
            wrap(setup() + port("tooWide", controlShape("4097", "!nodal.capability<\"reset\">")) +
                 assign("result", "state")),
@@ -1023,14 +1029,105 @@ int main(int argc, char **argv) {
          });
          return good && states == 7 && print(m).find("seq.initial") == std::string::npos;
        });
-  negative("gray-aggregate-target-rejection-is-atomic",
-           wrap(executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<8>>")),
+  auto packedABI = [&](mlir::ModuleOp m, unsigned bits) {
+    auto hw = *m.getOps<circt::hw::HWModuleOp>().begin();
+    DictionaryAttr reference;
+    bool good = true;
+    for (auto port : hw.getPortList()) {
+      if (port.name.getValue() != "input" && port.name.getValue() != "result")
+        continue;
+      auto layout = port.attrs.getAs<DictionaryAttr>("nodal.packed_abi");
+      good &= layout && port.type.isInteger(bits);
+      if (!layout)
+        continue;
+      good &=
+          layout.getAs<IntegerAttr>("width").getInt() == bits &&
+          layout.getAs<StringAttr>("order").getValue() == "recursive-row-major-fields-lsb-first" &&
+          !layout.getAs<StringAttr>("source_type").getValue().empty();
+      if (reference)
+        good &= reference == layout;
+      reference = layout;
+    }
+    m.walk([&](circt::seq::CompRegOp reg) {
+      good &= reg->getAttrOfType<DictionaryAttr>("nodal.packed_abi") == reference;
+    });
+    return good ? reference : DictionaryAttr();
+  };
+  test("gray-fixed-vector-row-major-bit-offsets",
+       executableBody("gray", "!nodal.shaped<\"2,3\", !nodal.uint<2>>", 3, "sync"),
+       [&](mlir::ModuleOp m) {
+         auto layout = packedABI(m, 12);
+         if (!layout || !checkGray(m, 12, 3, 1, true))
+           return false;
+         auto strides = layout.getAs<ArrayAttr>("bit_strides");
+         auto dimensions = layout.getAs<ArrayAttr>("dimensions");
+         return dimensions.size() == 2 && cast<IntegerAttr>(dimensions[0]).getInt() == 2 &&
+                cast<IntegerAttr>(dimensions[1]).getInt() == 3 && strides.size() == 2 &&
+                cast<IntegerAttr>(strides[0]).getInt() == 6 &&
+                cast<IntegerAttr>(strides[1]).getInt() == 2 &&
+                layout.getAs<DictionaryAttr>("element").getAs<IntegerAttr>("width").getInt() == 2;
+       });
+  const std::string packedStruct =
+      "!nodal.struct<\"Frame\", [{name = \"head\", type = !nodal.uint<3>}, "
+      "{name = \"lanes\", type = !nodal.shaped<\"2,3\", !nodal.bits<2>>}, "
+      "{name = \"tail\", type = !nodal.struct<\"Tail\", "
+      "[{name = \"flag\", type = !nodal.bits<1>}, {name = \"tag\", type = !nodal.sint<4>}]>}]>";
+  test("gray-fixed-nested-struct-field-bit-offsets", executableBody("gray", packedStruct),
+       [&](mlir::ModuleOp m) {
+         auto layout = packedABI(m, 20);
+         if (!layout || !checkGray(m, 20, 2))
+           return false;
+         auto fields = layout.getAs<ArrayAttr>("fields");
+         if (fields.size() != 3)
+           return false;
+         unsigned offsets[] = {0, 3, 15};
+         for (unsigned i = 0; i < 3; ++i)
+           if (cast<DictionaryAttr>(fields[i]).getAs<IntegerAttr>("bit_offset").getInt() !=
+               offsets[i])
+             return false;
+         auto lanes = cast<DictionaryAttr>(fields[1]).getAs<DictionaryAttr>("layout");
+         auto tail = cast<DictionaryAttr>(fields[2]).getAs<DictionaryAttr>("layout");
+         auto tags = tail.getAs<ArrayAttr>("fields");
+         return cast<IntegerAttr>(lanes.getAs<ArrayAttr>("bit_strides")[0]).getInt() == 6 &&
+                cast<DictionaryAttr>(tags[1]).getAs<IntegerAttr>("bit_offset").getInt() == 1 &&
+                cast<DictionaryAttr>(tags[1]).getAs<StringAttr>("name").getValue() == "tag" &&
+                layout.getAs<StringAttr>("source_type").getValue().contains("Frame");
+       });
+  test("gray-fixed-aggregate-independent-cse",
+       executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<2>>", 2, "none", true),
+       [&](mlir::ModuleOp m) {
+         PassManager pm(&context);
+         pm.addPass(createCSEPass());
+         return succeeded(pm.run(m)) && checkGray(m, 4, 2, 2);
+       });
+  test("gray-fixed-packed-width-boundary",
+       executableBody("gray", "!nodal.shaped<\"2\", !nodal.bits<2048>>"),
+       [&](mlir::ModuleOp m) { return checkGray(m, 4096, 2) && packedABI(m, 4096); });
+  negative("gray-aggregate-width-rejection-is-atomic",
+           wrap(executableBody("gray", "!nodal.shaped<\"3\", !nodal.bits<2048>>")),
            "only fixed scalar");
+  const std::string aggregate = "!nodal.shaped<\"2\", !nodal.uint<8>>";
+  negative("gray-vector-index-profile-rejection-is-atomic",
+           wrap(executableSetup(aggregate) + executableCrossing("gray", aggregate) +
+                "%index = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
+                "%lane = \"nodal.shape_index\"(%sample, %index) <{metadata = {}}> : (" +
+                aggregate + ", index) -> !nodal.uint<8>\n" + port("result", u8, "output") +
+                assign("result", "lane")),
+           "result requires fixed scalar");
+  negative("gray-struct-projection-rejection-is-atomic",
+           wrap(executableSetup(packedStruct) + executableCrossing("gray", packedStruct) +
+                "%head = \"nodal.digital_expr\"(%sample) <{operator_name = \"digital_struct_get\", "
+                "metadata = {}, struct_schema = " +
+                packedStruct + ", field_ordinal = 0 : i64, field_name = \"head\"}> : (" +
+                packedStruct + ") -> !nodal.uint<3>\n" +
+                port("result", "!nodal.uint<3>", "output") +
+                assign("result", "head", false, "!nodal.uint<3>")),
+           "fixed aggregate target profile");
   negative("gray-wide-target-rejection-is-atomic",
            wrap(executableBody("gray", "!nodal.bits<4097>")), "only fixed scalar");
   negative("gray-unsupported-sibling-is-atomic",
            "module {" + owner(executableBody("gray", u8)) +
-               owner(replace(executableBody("gray", "!nodal.shaped<\"2\", !nodal.uint<8>>"),
+               owner(replace(executableBody("gray", "!nodal.shaped<\"3\", !nodal.bits<2048>>"),
                              "Fixture.sample", "Other.sample"),
                      "Other") +
                "}",

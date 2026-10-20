@@ -145,6 +145,13 @@ def main() -> None:
                 raise RuntimeError(f"{name}: target lost obligation {obligation}")
         if "// NODAL crossing " not in design:
             raise RuntimeError(f"{name}: source-located crossing annotation missing")
+        if name in ("gray_vector", "gray_struct"):
+            for port in ("sampled", "outputValue"):
+                marker = f"// NODAL packed ABI: {port}; layout=recursive-row-major-fields-lsb-first;"
+                if marker not in design:
+                    raise RuntimeError(f"{name}: complete packed ABI annotation missing for {port}")
+            if "source_type" not in design or "bit_offset" not in design and name == "gray_struct":
+                raise RuntimeError(f"{name}: target lost canonical type/layout details")
         ports = ["srcClock", "dstClock", "sampled", "outputValue"]
         ports.append("reset")
         for port in ports:

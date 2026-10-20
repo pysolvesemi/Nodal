@@ -110,3 +110,22 @@ adds no parallel registry, graph engine or speculative general CDC framework.
 Prototype acceptance is focused local evidence, not exhaustive qualification or
 a claim that digital simulation proves physical metastability behavior. No CI is
 run. Required remaining F57 categories and aggregate lowering stay open.
+
+## Fixed whole-aggregate Gray target ABI
+
+The required fixed Vec/Struct continuation uses one flat packed integer for each
+whole payload boundary and state value. Canonical Vec row-major element zero
+occupies the least-significant element bits; Struct fields follow declaration
+order with the first field least-significant, recursively. The complete canonical
+source ABI and explicit layout convention accompany the target representation.
+This extends the existing fixed-control row-major bit-offset convention, not
+source-level shape identity or structural assignment equivalence.
+
+A shared DigitalTypeModel fixed-bit query first reuses validated bounded storage
+footprints, then requires singleton bounds for every scalar width and shape
+extent. A maximum bound or a parameter default is not an exact target width.
+The initial target bound remains 1–4096 packed bits. No lane expansion or second
+width engine is introduced. Whole-value transport is the selected executable
+profile; unsupported aggregate projections or unresolved layout reject
+transactionally rather than silently changing packing. Source/native complete
+aggregate admission and existing general projection semantics are unchanged.

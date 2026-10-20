@@ -85,6 +85,11 @@ inferDigitalStorageMaximumBits(mlir::Type type, mlir::Operation *use,
 /// their canonical ABI owner, without physical lane expansion.
 mlir::FailureOr<int64_t> inferDigitalBitPatternMaximumBits(mlir::Type type, mlir::Operation *use);
 
+/// Same complete bit-pattern ABI with every scalar width and shape extent
+/// proved fixed. Bounds/defaults never substitute for exact target widths;
+/// footprint arithmetic and nominal validation remain with the shared owner.
+mlir::FailureOr<int64_t> inferDigitalBitPatternFixedBits(mlir::Type type, mlir::Operation *use);
+
 /// Verify this actual operation under an optional admitted context. Collection
 /// block arguments and bodies belong to the collection proof coordinator.
 mlir::LogicalResult

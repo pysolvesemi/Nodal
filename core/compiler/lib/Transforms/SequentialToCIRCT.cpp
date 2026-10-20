@@ -137,14 +137,22 @@ public:
         return reject(&op, "target profile requires flat normalized scalar operations");
       bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op);
       if (!structural) {
+        bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
+                         llvm::any_of(op.getResultTypes(), aggregatePayload);
+        if (aggregate && !isa<PortValueOp, CrossingOp, DigitalAssignOp>(op) &&
+            !(isa<DigitalExprOp>(op) && text(&op, "operator_name") == "digital_alias"))
+          return reject(&op, "fixed aggregate target profile supports only whole-value Gray "
+                             "crossings and direct boundary/alias connections; projections "
+                             "require an explicit packed-offset lowering");
         for (Type type : op.getOperandTypes())
-          if (!targetType(type))
-            return reject(&op,
-                          "operand requires fixed scalar width 1..4096 or a direct clock/reset");
+          if (!targetValueType(type))
+            return reject(
+                &op, "operand requires fixed scalar/packed width 1..4096 or a direct clock/reset");
         for (Type type : op.getResultTypes())
-          if (!targetType(type) && !(isa<PortValueOp>(op) && targetControlShapeType(type, source)))
-            return reject(&op,
-                          "result requires fixed scalar width 1..4096 or a fixed control input");
+          if (!targetValueType(type) &&
+              !(isa<PortValueOp>(op) && targetControlShapeType(type, source)))
+            return reject(
+                &op, "result requires fixed scalar/packed width 1..4096 or a fixed control input");
       }
       uint64_t expansion = 1;
       if (structural) {
@@ -152,14 +160,13 @@ public:
         expansion = controlProjections.contains(&op) ? 2 : 0;
       } else if (isa<PortOp>(op)) {
         auto type = op.getAttrOfType<TypeAttr>("type");
-        Type lowered = type ? targetType(type.getValue()) : Type();
+        Type lowered = type ? targetValueType(type.getValue()) : Type();
         if (type && !lowered)
           lowered = targetControlShapeType(type.getValue(), source);
         if (!type || !lowered ||
             (text(&op, "direction") != "input" && text(&op, "direction") != "output"))
-          return reject(
-              &op,
-              "only fixed scalar input/output and fixed Clock/Reset input ports are supported");
+          return reject(&op, "only fixed scalar/packed input/output and fixed Clock/Reset input "
+                             "ports are supported");
         if (text(&op, "direction") == "output" &&
             !getDigitalControlBoundaryKind(type.getValue()).empty())
           return reject(&op, "clock/reset output capabilities require a later boundary profile");
@@ -365,9 +372,13 @@ public:
       info.dir = input ? circt::hw::ModulePort::Input : circt::hw::ModulePort::Output;
       info.argNum = input ? inputIndex++ : outputIndex++;
       info.loc = port->getLoc();
+      NamedAttrList attributes;
       if (!sourcePath(port).empty())
-        info.attrs = builder.getDictionaryAttr(
-            {builder.getNamedAttr("nodal.source_path", builder.getStringAttr(sourcePath(port)))});
+        attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port)));
+      Type originalType = port->getAttrOfType<TypeAttr>("type").getValue();
+      if (aggregatePayload(originalType))
+        attributes.set("nodal.packed_abi", packedLayout(originalType));
+      info.attrs = builder.getDictionaryAttr(attributes);
       targetPorts.push_back(info);
     }
     builder.setInsertionPoint(source);
@@ -377,6 +388,19 @@ public:
     correlate(target, source);
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
+    for (Operation *port : ports) {
+      Type type = port->getAttrOfType<TypeAttr>("type").getValue();
+      if (!aggregatePayload(type))
+        continue;
+      std::string contract;
+      llvm::raw_string_ostream stream(contract);
+      stream << "// NODAL packed ABI: " << text(port, "sym_name")
+             << "; layout=recursive-row-major-fields-lsb-first; " << packedLayout(type);
+      auto comment =
+          circt::sv::VerbatimOp::create(builder, port->getLoc(), builder.getStringAttr(contract),
+                                        ValueRange{}, builder.getArrayAttr({}));
+      correlate(comment, port);
+    }
     circt::BackedgeBuilder backedges(builder, source.getLoc());
     inputIndex = 0;
     for (Operation *port : ports) {
@@ -461,7 +485,7 @@ public:
       Value original = op.getResult(0);
       if (!aliases.count(original))
         continue;
-      auto edge = backedges.get(targetType(original.getType()), op.getLoc());
+      auto edge = backedges.get(targetValueType(original.getType()), op.getLoc());
       values[original] = edge;
       connectionEdges.emplace_back(original, edge);
     }
@@ -475,14 +499,14 @@ public:
       }
       if (text(update, "edge") == "falling")
         clock = circt::seq::ClockInverterOp::create(builder, update->getLoc(), clock);
-      auto edge = backedges.get(targetType(reg->getResult(0).getType()), reg->getLoc());
+      auto edge = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
       Operation *state;
       StringRef policy = text(update, "reset_policy");
       if (policy == "async" || policy == "async_assert_sync_release") {
         Value rawReset = values.lookup(update->getOperand(3));
         if (!rawReset)
           return reject(update, "effective reset did not map before consumer");
-        auto initial = backedges.get(targetType(reg->getResult(0).getType()), reg->getLoc());
+        auto initial = backedges.get(targetValueType(reg->getResult(0).getType()), reg->getLoc());
         state = circt::seq::FirRegOp::create(
             builder, reg->getLoc(), Value(edge), clock, reg->getAttrOfType<StringAttr>("name"),
             resetActive(rawReset, update), Value(initial), circt::hw::InnerSymAttr(), true);
@@ -503,7 +527,7 @@ public:
         backedges.abandon();
         return reject(op, "crossing destination physical clock/reset did not map");
       }
-      auto input = backedges.get(targetType(op->getOperand(0).getType()), op->getLoc());
+      auto input = backedges.get(targetValueType(op->getOperand(0).getType()), op->getLoc());
       crossingEdges.emplace_back(op, input);
       Value previous = input;
       if (crossing.kind == CrossingKind::Level || crossing.kind == CrossingKind::Gray) {
@@ -527,7 +551,7 @@ public:
                                       "previous_payload", false);
         Value seen = crossingState(crossing, crossing.stages + 1, constant(op, 1, 1),
                                    *sourceControl, "seen_sample");
-        unsigned bits = width(op->getOperand(0).getType());
+        unsigned bits = cast<IntegerType>(history.getType()).getWidth();
         Value delta = make(op, "comb.xor", history.getType(), {Value(input), history});
         Value minusOne = make(op, "comb.sub", history.getType(), {delta, constant(op, bits, 1)});
         Value changed = make(op, "comb.and", history.getType(), {delta, minusOne});
@@ -687,6 +711,79 @@ public:
   }
 
 private:
+  static bool aggregatePayload(Type type) {
+    return isa<nodal::ShapedType, StructType>(type) && getDigitalControlBoundaryKind(type).empty();
+  }
+  Type targetValueType(Type type) {
+    if (Type scalar = targetType(type))
+      return scalar;
+    if (!aggregatePayload(type))
+      return {};
+    auto [entry, inserted] = packedTypes.try_emplace(type, Type());
+    if (inserted) {
+      // Canonical type/enum/shape owners establish exactness. A finite maximum
+      // or an overridable parameter default is never an actual packed width.
+      auto bits = inferDigitalBitPatternFixedBits(type, source);
+      if (succeeded(bits) && *bits > 0 && *bits <= maximumWidth)
+        entry->second = builder.getIntegerType(*bits);
+    }
+    return entry->second;
+  }
+  DictionaryAttr packedLayout(Type type) {
+    auto found = packedLayouts.find(type);
+    if (found != packedLayouts.end())
+      return found->second;
+    // This is target representation metadata, not a second type validator.
+    // Exact width/shape facts were established by the canonical owners above.
+    // Record structural strides rather than expanding physical vector lanes.
+    auto bits = inferDigitalBitPatternFixedBits(type, source);
+    assert(succeeded(bits) && *bits <= maximumWidth);
+    NamedAttrList layout;
+    std::string identity;
+    llvm::raw_string_ostream stream(identity);
+    type.print(stream);
+    layout.set("source_type", builder.getStringAttr(identity));
+    layout.set("width", builder.getI64IntegerAttr(*bits));
+    layout.set("order", builder.getStringAttr("recursive-row-major-fields-lsb-first"));
+    if (auto shape = dyn_cast<nodal::ShapedType>(type)) {
+      layout.set("kind", builder.getStringAttr("vec"));
+      DictionaryAttr element = packedLayout(shape.getElementType());
+      layout.set("element", element);
+      SmallVector<StringRef> dimensions;
+      shape.getDimensions().split(dimensions, ',');
+      SmallVector<Attribute> extents, strides(dimensions.size());
+      int64_t stride = element.getAs<IntegerAttr>("width").getInt();
+      for (StringRef dimension : dimensions) {
+        auto extent = resolveStaticShapeDimension(source, dimension);
+        assert(succeeded(extent) && extent->bounds.lower == extent->bounds.upper);
+        extents.push_back(builder.getI64IntegerAttr(extent->bounds.lower));
+      }
+      for (unsigned i = dimensions.size(); i; --i) {
+        strides[i - 1] = builder.getI64IntegerAttr(stride);
+        stride *= cast<IntegerAttr>(extents[i - 1]).getInt();
+      }
+      layout.set("dimensions", builder.getArrayAttr(extents));
+      layout.set("bit_strides", builder.getArrayAttr(strides));
+    } else if (auto structure = dyn_cast<StructType>(type)) {
+      layout.set("kind", builder.getStringAttr("struct"));
+      SmallVector<Attribute> fields;
+      int64_t offset = 0;
+      for (Attribute attribute : structure.getFields()) {
+        auto field = cast<DictionaryAttr>(attribute);
+        DictionaryAttr child = packedLayout(field.getAs<TypeAttr>("type").getValue());
+        fields.push_back(builder.getDictionaryAttr(
+            {builder.getNamedAttr("name", field.getAs<StringAttr>("name")),
+             builder.getNamedAttr("bit_offset", builder.getI64IntegerAttr(offset)),
+             builder.getNamedAttr("layout", child)}));
+        offset += child.getAs<IntegerAttr>("width").getInt();
+      }
+      layout.set("fields", builder.getArrayAttr(fields));
+    } else
+      layout.set("kind", builder.getStringAttr("scalar"));
+    auto result = builder.getDictionaryAttr(layout);
+    packedLayouts.try_emplace(type, result);
+    return result;
+  }
   struct CrossingControls {
     Value clock;
     Value assertionClock;
@@ -740,6 +837,8 @@ private:
     state->setAttr("nodal.crossing_role", builder.getStringAttr(role));
     if (Attribute obligations = op->getAttr("obligations"))
       state->setAttr("nodal.crossing_obligations", obligations);
+    if (aggregatePayload(op->getOperand(0).getType()))
+      state->setAttr("nodal.packed_abi", packedLayout(op->getOperand(0).getType()));
     return state->getResult(0);
   }
   std::string crossingSourceComment(const ExecutableCrossing &crossing) {
@@ -975,6 +1074,8 @@ private:
   llvm::DenseMap<Operation *, SmallVector<StringAttr>> crossingNames;
   SmallVector<Operation *> ports, registers;
   llvm::DenseMap<Operation *, Type> portTypes;
+  llvm::DenseMap<Type, Type> packedTypes;
+  llvm::DenseMap<Type, DictionaryAttr> packedLayouts;
   llvm::DenseSet<Operation *> controlProjections, controlSelectors;
   SmallVector<std::pair<Value, PhysicalControl>> physicalControls;
   llvm::DenseMap<Operation *, SmallVector<Value>> portValues;

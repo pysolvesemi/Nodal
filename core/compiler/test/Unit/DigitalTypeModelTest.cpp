@@ -447,6 +447,30 @@ int main() {
          "!nodal.capability<\"clock\">", false);
   family("width-family-rejects-invalid-width", digital("missing"), digital("W"), false);
 
+  auto exactModel = parseSourceString<mlir::ModuleOp>(model(parameter("W", 4, 4) + port(digital())),
+                                                      ParserConfig(&context, false));
+  auto exactOwner = exactModel ? &exactModel->getBody()->front() : nullptr;
+  auto packed = [&](StringRef name, StringRef spelling, Operation *owner, int64_t expected) {
+    Type type = parseType(spelling);
+    auto result = nodal::inferDigitalBitPatternFixedBits(type, owner);
+    report(name, expected > 0 ? succeeded(result) && *result == expected : failed(result));
+  };
+  packed("bit-pattern-fixed-scalar", "!nodal.sint<9>", identityOwner, 9);
+  packed("bit-pattern-fixed-row-major-shape", shape("2,3", "!nodal.uint<4>"), identityOwner, 24);
+  packed("bit-pattern-fixed-nested-struct",
+         structure(field("flag", "!nodal.bits<1>") + ", " +
+                   field("lanes", shape("2", "!nodal.sint<3>"))),
+         identityOwner, 7);
+  packed("bit-pattern-fixed-nominal-enum", "!nodal.enum<\"Mode\", 2>", identityOwner, 2);
+  packed("bit-pattern-symbolic-width-not-default", digital(), identityOwner, -1);
+  packed("bit-pattern-symbolic-shape-not-default", shape("W", "!nodal.uint<4>"), identityOwner, -1);
+  packed("bit-pattern-singleton-width-proof", digital(), exactOwner, 4);
+  packed("bit-pattern-singleton-shape-proof", shape("W", digital()), exactOwner, 16);
+  packed("bit-pattern-host-integer-not-packed", "i64", identityOwner, -1);
+  packed("bit-pattern-nested-real-not-packed", shape("2", "f64"), identityOwner, -1);
+  report("bit-pattern-fixed-query-preserves-IR",
+         identityBefore == print(identityModel->getOperation()));
+
   llvm::outs() << "DIGITAL_TYPE_MODEL_SUMMARY " << (cases - failures) << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

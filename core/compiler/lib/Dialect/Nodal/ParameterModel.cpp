@@ -1999,7 +1999,14 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
         "NODAL-ITERATION-043-001: generated SSA bounds require signless i64 values"));
 
   Operation *operation = value.getDefiningOp();
-  if (!operation || operation->getParentOp() != owner || operation->hasAttr("unit"))
+  bool structuralScope = operation && enclosingNodalModule(operation) == owner;
+  unsigned scopeDepth = 0;
+  for (Operation *scope = operation ? operation->getParentOp() : nullptr;
+       structuralScope && scope != owner; scope = scope ? scope->getParentOp() : nullptr)
+    structuralScope = scope && ++scopeDepth <= 128 && isNamed(scope, "nodal.generate");
+  if (!structuralScope || operation->hasAttr("unit") ||
+      (operation->getParentOp() != owner &&
+       failed(nodal::verifyDigitalValueScope(value, diagnostic))))
     return finish(diagnostic->emitOpError(
         "NODAL-ITERATION-043-001: generated SSA bound escapes its owning module"));
 
@@ -2941,8 +2948,15 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
                   "induction domain requires a representable positive-step count");
   InstanceIntegerAnalysis expressions(module, nullptr, false, true);
   auto expression = [&](unsigned index, llvm::StringRef name) -> FailureOr<InstanceExpression> {
-    if (operation->getNumOperands())
+    if (operation->getNumOperands()) {
+      if (operation->getParentOp() != module) {
+        auto facts = resolveStructuralIntegerExpression(operation->getOperand(index), operation);
+        return succeeded(facts) && facts->expression
+                   ? FailureOr<InstanceExpression>(*facts->expression)
+                   : FailureOr<InstanceExpression>(failure());
+      }
       return instanceExpression(expressions.value(operation->getOperand(index)));
+    }
     Attribute attribute = operation->getAttr(name);
     if (auto reference = llvm::dyn_cast_or_null<FlatSymbolRefAttr>(attribute))
       return instanceExpression(

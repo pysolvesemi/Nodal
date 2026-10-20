@@ -698,3 +698,41 @@ retained target loops, complete resolved/inout/conservative topology, timed and
 protocol states, explicit finite construction and runtime call/return stacks
 remain required continuation. This source checkpoint closes no F58 parent or
 child checklist item. Markdown, Python syntax and diff checks pass.
+
+## Checkpoint 14 — bounded lexical nested-family native admission
+
+Existing storage, parameter, shape and structural-body owners now admit an actual
+family beneath an unbroken Generate-family ancestry. Independently static bounds
+retain lexical dominance and the canonical structural Integer expression proof;
+member ordinals reuse that same proof instead of discarding it through a second
+module-only query. Storage/export identity remains directly in the exact inner
+family. Recursive body admission shares its finite depth/work budget and keeps
+procedural/behavioral declaration capture outside this selected profile.
+
+A fresh exact local-family wire/register root is independent in each nested
+occurrence. Repeated outer/module roots do not gain that independence. The new
+causal register test exposed an early register-next dependency branch that lacked
+this check; it now rejects nested writes unless their actual root belongs to that
+exact inner family. No loop iteration or parameter value is enumerated, and no
+new family registry or graph is introduced.
+
+Matched native acceptance passed **476/476 cases**: storage 155, structural 73,
+shape iteration 130, sequential 84 and assignment guard 34. Eight new storage
+cases cover nested lexical selection, nonzero lower/step coordinates, independent
+symbolic bounds, out-of-range ordinals, non-independent bounds, local register
+updates, repeated outer writes and raw storage escape. The parameter executable
+also exits zero with its 23 named symbolic checks and earlier assertions.
+Three actual maintained source exports (concrete, symbolic and register-update)
+pass the full default gate with zero diagnostic bytes. The pending source
+promotion is separate; these exports are not claimed as committed source here.
+
+The frozen workspace compiler is `.work/f58-nested-native/final/nodalc`, SHA256
+`30973efaca3f0038120a787d28cba9c365063b7481ead9e3c4f93fb96329b769`.
+Full native source/test manifests match before/after the build and tests. This
+workspace also contains the separate pending Interface target adapter: 199 of
+200 target cases passed, with one exact expected-diagnostic mismatch retained
+for its owner. That target is excluded from this checkpoint and these results do
+not claim its acceptance. Logs, commands and hashes remain adjacent to the frozen
+compiler. Outer-dependent domains, guarded family declarations, external selected
+family chains, generated symbols and actual retained target loops remain required
+continuation. No F58 checklist completion is inferred.

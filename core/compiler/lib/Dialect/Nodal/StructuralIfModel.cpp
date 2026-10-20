@@ -230,6 +230,7 @@ struct Budget {
   unsigned work = 0;
 };
 LogicalResult verifyIf(Operation *, const ParameterIntegerEnvironment *, Budget &, unsigned);
+LogicalResult verifyGenerateBody(Operation *, Budget &, unsigned);
 LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &environment, bool pure,
                          Budget &budget, unsigned depth) {
   if (depth >= 128 || ++budget.work > 65536)
@@ -251,7 +252,12 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     if (llvm::isa<SequentialSelectOp>(op))
       return verifySequentialSelect(op);
   }
+  if (!pure && generatedStorage && op->getParentOp() == family && llvm::isa<GenerateOp>(op) &&
+      op->getNumResults() == 1)
+    return verifyGenerateBody(op, budget, depth + 1);
   if (!pure && generatedStorage && op->getParentOp() == family) {
+    if (op->getName().getStringRef() == "nodal.generated_member")
+      return success(succeeded(inspectGeneratedMember(op)));
     if (llvm::isa<DigitalStorageOp>(op))
       return verifyDigitalStorageOperation(op);
     if (op->getName().getStringRef() == "nodal.generated_export")
@@ -533,7 +539,10 @@ LogicalResult verifyStructuralIfModel(Operation *module) {
   }
   return success();
 }
-LogicalResult verifyDigitalGenerateBody(Operation *op) {
+namespace {
+LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth) {
+  if (depth >= 128 || ++budget.work > 65536)
+    return reject(op, "structural body exceeds its finite proof budget");
   if (!llvm::isa_and_nonnull<GenerateOp>(op))
     return failure();
   // Legacy attribute-bound Generate has its existing target-neutral contract.
@@ -549,12 +558,16 @@ LogicalResult verifyDigitalGenerateBody(Operation *op) {
   auto domain = resolveGeneratedDomain(op);
   if (failed(domain))
     return failure();
-  Budget budget;
   for (Operation &child : op->getRegion(0).front()) {
     auto context = digitalGenerateIntegerContextAtUse(&child);
-    if (failed(context) || failed(verifyBody(&child, *context, false, budget, 0)))
+    if (failed(context) || failed(verifyBody(&child, *context, false, budget, depth)))
       return failure();
   }
   return success();
+}
+} // namespace
+LogicalResult verifyDigitalGenerateBody(Operation *op) {
+  Budget budget;
+  return verifyGenerateBody(op, budget, 0);
 }
 } // namespace nodal

@@ -470,11 +470,12 @@ FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *fami
   auto structural = resolveStructuralIntegerExpression(ordinal, use);
   if (failed(structural) || !structural->expression)
     return failure();
-  auto index = resolveOwnedIntegerExpression(domain->module, ordinal,
-                                             ParameterIntegerMode::MathematicalSigned64);
-  if (failed(index) || index->bounds.lower < 0)
+  // Reuse the canonical lexical structural proof above. Re-resolving through
+  // a module-only query would discard valid enclosing Generate ownership.
+  const auto &index = *structural->expression;
+  if (index.bounds.lower < 0)
     return failure();
-  auto displacement = composeIntegerExpression("mul", {*index, domain->step});
+  auto displacement = composeIntegerExpression("mul", {index, domain->step});
   auto coordinate = succeeded(displacement)
                         ? composeIntegerExpression("add", {domain->lower, *displacement})
                         : FailureOr<InstantiatedIntegerExpression>(failure());

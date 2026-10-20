@@ -768,6 +768,52 @@ int main() {
         generatedDomain + family("0", "3", "1") + selected("0", "register") +
             literal(sint, "0", "zero") + assign(sint, sint, "selected", "zero", "register_next"),
         false);
+  auto nestedFamily = [&](std::string body) {
+    std::size_t position = 0;
+    while ((position = body.find("Fixture.family", position)) != std::string::npos) {
+      body.replace(position, std::string("Fixture.family").size(), "Fixture.outer.family");
+      position += std::string("Fixture.outer.family").size();
+    }
+    return literal("i64", "0", "outerLo") + literal("i64", "2", "outerHi") +
+           literal("i64", "1", "outerStep") +
+           "%outerFamily = \"nodal.generate\"(%outerLo, %outerHi, %outerStep) "
+           "<{induction = \"outer\", region_id = \"Fixture.outer\", "
+           "induction_path = \"Fixture.outer.i\", metadata = {maximum_trip_count = 2 : i64}}> "
+           "({^bb0(%outerIndex: i64):\n" +
+           body + "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  check("nested-family-exact-local-selection",
+        generatedDomain + nestedFamily(family("0", "3", "1") + selected("0")), true);
+  check("nested-family-nonzero-step-coordinate",
+        generatedDomain + nestedFamily(family("4", "10", "2") + selected("2")), true);
+  graph("nested-family-ordinal-bound",
+        generatedDomain + nestedFamily(family("0", "3", "1") + selected("3")),
+        "generated ordinal lacks an all-legal existence proof");
+  check("nested-family-independent-symbolic-bound",
+        generatedDomain + parameter() +
+            nestedFamily(replace(family("0", "4", "1"), "(%family_lo, %family_hi, %family_step)",
+                                 "(%family_lo, %N, %family_step)") +
+                         selected("0")),
+        true);
+  check("nested-family-outer-induction-bound-not-independent",
+        generatedDomain +
+            nestedFamily(replace(family("0", "3", "1"), "(%family_lo, %family_hi, %family_step)",
+                                 "(%family_lo, %outerIndex, %family_step)")),
+        false);
+  auto updatedFamily =
+      replace(family("0", "3", "1"), "\"nodal.generated_export\"(%stored)",
+              literal(sint, "1", "one") + assign(sint, sint, "stored", "one", "register_next") +
+                  "\"nodal.generated_export\"(%stored)");
+  check("nested-family-fresh-local-register-update",
+        generatedDomain + nestedFamily(updatedFamily + selected("0")), true);
+  graph("nested-family-outer-register-update-repeats",
+        generatedDomain + storage(sint, "outside", "register", "", "", "clock") +
+            nestedFamily(replace(updatedFamily, "(%stored, %one)", "(%outside, %one)")),
+        "nested state updates require a fresh exact local family root");
+  check("nested-family-raw-storage-escape",
+        generatedDomain + nestedFamily(family("0", "3", "1") + storage(sint, "outerCopy") +
+                                       assign(sint, sint, "outerCopy", "stored")),
+        false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

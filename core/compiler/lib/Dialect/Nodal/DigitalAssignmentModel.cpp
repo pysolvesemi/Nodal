@@ -872,6 +872,13 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
   if (failed(guard))
     return failure();
   if (text(operation, "kind") == "register_next") {
+    if (loop && iterationScope(loop)) {
+      auto target = resolveStaticShapeProjection(operation->getOperand(0), operation);
+      Operation *root = succeeded(target) ? target->root.getDefiningOp() : nullptr;
+      if (!llvm::isa<GenerateOp>(loop) || loop->getNumResults() != 1 ||
+          !llvm::isa_and_nonnull<DigitalStorageOp>(root) || root->getParentOp() != loop)
+        return reject(operation, "nested state updates require a fresh exact local family root");
+    }
     if (*guard == impossibleGuard)
       return success();
     return succeeded(assignmentNode(operation, loop, *guard)) ? success() : failure();
@@ -886,7 +893,11 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
   if (loop) {
     // The image owner admits one varying occurrence axis. A second enclosing
     // iteration would repeat that family, even if the nearest loop is injective.
-    if (iterationScope(loop))
+    bool localFamilyRoot = llvm::isa_and_nonnull<GenerateOp>(loop) &&
+                           target->root.getDefiningOp()->getParentOp() == loop &&
+                           llvm::isa<DigitalStorageOp>(target->root.getDefiningOp()) &&
+                           loop->getNumResults() == 1;
+    if (iterationScope(loop) && !localFamilyRoot)
       return reject(operation,
                     "nested iteration assignment images are outside the bounded profile");
     StaticShapeRegion image;
@@ -895,10 +906,6 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
     auto domain = iterationDomain(loop);
     // A declaration in this exact family is fresh storage in each occurrence,
     // unlike a module root whose varying index must establish injectivity.
-    bool localFamilyRoot = llvm::isa_and_nonnull<GenerateOp>(loop) &&
-                           target->root.getDefiningOp()->getParentOp() == loop &&
-                           llvm::isa<DigitalStorageOp>(target->root.getDefiningOp()) &&
-                           loop->getNumResults() == 1;
     if (failed(domain) || (!localFamilyRoot && domain->maximumTripCount > 1 &&
                            (status != ShapeRegionProofStatus::Proved || !image.iteration ||
                             image.iteration->loop != loop)))

@@ -28,12 +28,27 @@ StringRef text(Operation *operation, StringRef name) {
   return attribute ? attribute.getValue() : StringRef();
 }
 
+// A family is a retained lexical template, never one occurrence per lane.
+// Only structural Generate ancestry is admitted here; behavioral/procedural
+// regions cannot manufacture declaration ownership.
+bool ownedFamilyScope(Operation *family) {
+  unsigned depth = 0;
+  for (Operation *scope = family; scope; scope = scope->getParentOp()) {
+    if (llvm::isa<ModuleOp>(scope))
+      return true;
+    if (++depth > 128 || !llvm::isa<GenerateOp>(scope) || scope->getNumResults() != 1 ||
+        !llvm::isa<GeneratedFamilyType>(scope->getResult(0).getType()))
+      return false;
+  }
+  return false;
+}
+
 LogicalResult verifyDeclaration(Operation *operation) {
   Operation *parent = operation->getParentOp();
   bool family = llvm::isa_and_nonnull<GenerateOp>(parent) && parent->getNumResults() == 1 &&
                 llvm::isa<GeneratedFamilyType>(parent->getResult(0).getType()) &&
-                llvm::isa_and_nonnull<ModuleOp>(parent->getParentOp()) &&
-                llvm::isa<DigitalStorageOp>(operation) && succeeded(resolveGeneratedDomain(parent));
+                ownedFamilyScope(parent) && llvm::isa<DigitalStorageOp>(operation) &&
+                succeeded(resolveGeneratedDomain(parent));
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(parent) && !family)
     return reject(operation,
                   "digital storage must be declared directly in its owning module or family");
@@ -102,8 +117,8 @@ LogicalResult verifyGeneratedFamilyOperation(Operation *operation) {
   }
   if (operation->getNumResults() != 1 ||
       !llvm::isa<GeneratedFamilyType>(operation->getResult(0).getType()) ||
-      !llvm::isa_and_nonnull<ModuleOp>(operation->getParentOp()) ||
-      operation->getNumOperands() != 3 || failed(resolveGeneratedDomain(operation)))
+      !ownedFamilyScope(operation) || operation->getNumOperands() != 3 ||
+      failed(resolveGeneratedDomain(operation)))
     return reject(operation, "family requires one typed handle and a direct owned SSA domain");
   llvm::StringSet<> members, storageNames;
   unsigned count = 0;

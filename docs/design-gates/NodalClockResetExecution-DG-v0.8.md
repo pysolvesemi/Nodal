@@ -63,6 +63,14 @@ structurally valid template is not executable evidence. Admission must validate
 the selected root and all its occurrences without trusting serialized verified
 markers or making the proof an optional pass.
 
+Preserve legacy rootless flat/descriptor units. New executable hierarchy/formal
+obligations require the existing explicit nodal.root.module selector; never infer
+a root from definition order. Validate structural schemas, symbols, ownership,
+instance targets and definition cycles across all definitions, including unused
+components. Only occurrence discharge is limited to the selected root closure.
+Unused well-formed templates are permitted, but their unresolved obligations are
+not executed proof. Unrelated concrete operations still receive ordinary checks.
+
 Return immutable contextual domain/capability/binding views from the shared owner,
 not synthetic local binding operations. Keep generic child register-next intent
 until concrete facts are resolved: never guess SequentialUpdate edge/reset fields

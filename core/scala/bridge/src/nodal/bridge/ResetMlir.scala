@@ -5,8 +5,13 @@ import scala.collection.mutable
 
 /** Independent bounded verification of the actual reset producer graph at snapshot ingress. */
 private[nodal] object ResetMlir:
-  def validate(snapshot: ConstructionSnapshot)
-      : Map[String, Map[PhysicalControlMlir.Identity, String]] =
+  final case class Facts(
+      domains: Map[String, Map[PhysicalControlMlir.Identity, String]],
+      producers: Map[String, Map[PhysicalControlMlir.Identity, String]],
+      rawAssertions: Set[String]
+  )
+
+  def validate(snapshot: ConstructionSnapshot, clocks: ClockMlir.Resolver): Facts =
     def fail(message: String, path: String): Nothing = throw new BridgeException(
       BridgeDiagnostic("NODAL-RDC-001", message, Some(path))
     )
@@ -17,28 +22,20 @@ private[nodal] object ResetMlir:
     val polarities = mutable.Map.empty[PhysicalControlMlir.Identity, String]
     val synchronousClocks = mutable.Map.empty[
       PhysicalControlMlir.Identity,
-      (PhysicalControlMlir.Identity, String)
+      (ClockMlir.Identity, String)
     ]
     final case class Release(
         kind: String,
-        clock: Option[(PhysicalControlMlir.Identity, String)] = None,
+        clock: Option[(ClockMlir.Identity, String)] = None,
         producer: Option[String] = None
     )
     val lineageMemo =
       mutable.Map.empty[(String, String), Map[PhysicalControlMlir.Identity, (String, Release)]]
     var work = 0L
-    def clock(domain: String): (PhysicalControlMlir.Identity, String) =
-      val d = domains.getOrElse(domain, fail("reset destination is not an owned domain", domain))
-      (
-        controls.resolve(
-          d.attributes.toMap.getOrElse(
-            "clock_source",
-            fail("resolved domain lacks physical clock", domain)
-          ),
-          domainOwners.getOrElse(domain, fail("clock domain is not owned", domain)),
-          "Clock"
-        ).identity,
-        d.edge.getOrElse(fail("resolved domain lacks clock edge", domain))
+    def clock(domain: String): (ClockMlir.Identity, String) =
+      clocks.domainClock(
+        domain,
+        domainOwners.getOrElse(domain, fail("clock domain is not owned", domain))
       )
     def visit(
         path: String,
@@ -153,7 +150,7 @@ private[nodal] object ResetMlir:
             result(root) = fact
         if r.kind == "sync" then
           if r.destination.isEmpty || r.inputs.size != 2 || r.stages < 2 || r.stages > 32 ||
-            controls.resolve(r.inputs(1), owner, "Clock").identity != clock(r.destination.get)._1
+            clocks.resolve(r.inputs(1), owner).identity != clock(r.destination.get)._1
           then fail("reset sync has invalid physical destination", path)
           if values.get(r.inputs.head).flatMap(_.reset).forall(_.polarity != r.polarity) then
             fail("synchronizer cannot change reset polarity", path)
@@ -187,4 +184,15 @@ private[nodal] object ResetMlir:
               )
             domainRoots(domain.path) =
               visit(reset, module.path, Set.empty, 0).view.mapValues(_._1).toMap
-    domainRoots.toMap
+    val producerRoots = values.valuesIterator.map(e =>
+      e.path -> visit(e.path, e.owner, Set.empty, 0).view.mapValues(_._1).toMap
+    ).toMap
+    val rawMemo = mutable.Map.empty[String, Boolean]
+    def raw(path: String): Boolean = rawMemo.getOrElseUpdate(
+      path, {
+        val r = values(path).reset.get
+        r.kind == "boundary" && r.release == "raw" ||
+        r.kind == "combine" && r.inputs.forall(raw)
+      }
+    )
+    Facts(domainRoots.toMap, producerRoots, values.keysIterator.filter(raw).toSet)

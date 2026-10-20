@@ -127,7 +127,19 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     structure: Option[KernelStructOperationSnapshot] = None,
     memory: Option[KernelMemoryPortSnapshot] = None,
     crossing: Option[KernelExecutableCrossingSnapshot] = None,
-    reset: Option[KernelResetSnapshot] = None
+    reset: Option[KernelResetSnapshot] = None,
+    clock: Option[KernelClockSnapshot] = None
+)
+
+private[nodal] final case class KernelClockSnapshot(
+    kind: String,
+    parents: Vector[String],
+    destination: String,
+    edge: String,
+    controlKinds: Vector[String],
+    controlDomains: Vector[Option[String]],
+    contract: String,
+    obligations: Vector[(String, String)]
 )
 
 private[nodal] final case class KernelResetSnapshot(

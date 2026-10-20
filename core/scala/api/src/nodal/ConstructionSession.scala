@@ -310,6 +310,210 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ))
     else None
 
+  private final case class ClockRecord(
+      kind: String,
+      parents: Vector[ClockDomain],
+      controls: Vector[Expr[Bool]],
+      var destination: Option[ClockDomain] = None,
+      var controlKinds: Vector[String] = Vector.empty,
+      var controlDomains: Vector[Option[String]] = Vector.empty
+  )
+  private val clockRecords = mutable.LinkedHashMap.empty[ExpressionRef, ClockRecord]
+  private val rawClockResets = mutable.Map.empty[(DeclarationRef, Long), Expr[Reset]]
+  private var clockState = 0L
+  private val provedClockIdentities = mutable.HashSet.empty[ExpressionRef]
+  private var clockProofWork = 0L
+
+  private def clockFailure(message: String): Nothing =
+    behavioralFailure(message, "NODAL-CLOCK-057-001")
+
+  private def clockTransaction[A](body: => A): A =
+    try
+      closeBehavioralChain()
+      if activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty ||
+        analogStack.nonEmpty || analogSemanticContext.nonEmpty
+      then clockFailure("owned clock structures require direct module-level construction")
+      body
+    catch
+      case error: Throwable =>
+        poisonConstructor(error, "owned clock construction")
+        throw error
+
+  /** A derived producer is distinct from every physical input and from every other producer. */
+  private def clockIdentity(value: Expr[Clock], owner: Long, depth: Int = 0)
+      : Either[(DeclarationRef, Long), ExpressionRef] =
+    if depth > 128 then clockFailure("clock graph exceeds depth budget")
+    val reference = assignmentReference(value)
+    reference match
+      case expression: ExpressionRef if clockRecords.contains(expression) =>
+        if expression.module != owner || expressionRegions.contains(expression) then
+          clockFailure("owned clock producer is foreign or regional")
+        if !provedClockIdentities(expression) then
+          clockProofWork += 1
+          if clockProofWork > 524288 then clockFailure("clock graph exceeds work budget")
+          val record = clockRecords(expression)
+          record.parents.foreach(parent =>
+            clockIdentity(
+              parent.clock.getOrElse(clockFailure("parent lacks actual Clock")),
+              owner,
+              depth + 1
+            )
+          )
+          provedClockIdentities += expression
+        Right(expression)
+      case _ =>
+        val physical = physicalControlIdentity(value)
+        if physical._1.module != owner then clockFailure("clock boundary belongs to another module")
+        Left(physical)
+
+  private def clockResetSafe(value: Expr[Reset], receiving: ClockDomain): Boolean =
+    val memo = new IdentityHashMap[Expr[Reset], java.lang.Boolean]()
+    val owner = domainRef(receiving).module
+    val identity = clockIdentity(receiving.clock.get, owner)
+    val edge = inheritedClockEdge(receiving)
+    val synchronous = receiving.resetPolicy.contains(ResetPolicy.Sync) ||
+      (receiving.resetPolicy.isEmpty && hasSynchronousResetAssertion(value))
+    def sameClock(other: ClockDomain): Boolean =
+      clockIdentity(
+        other.clock.getOrElse(clockFailure("reset destination lacks Clock")),
+        owner
+      ) == identity &&
+        inheritedClockEdge(other) == edge
+    def visit(input: Expr[Reset], depth: Int): Boolean =
+      clockProofWork += 1
+      if depth > 128 || clockProofWork > 524288 then
+        clockFailure("parent reset proof exceeds budget")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).map(_.booleanValue).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "sync" => record.destination.exists(sameClock)
+          case "combine" => record.inputs.forall(visit(_, depth + 1))
+          case "boundary" =>
+            (record.release == "external" || record.release == "sync" && synchronous) &&
+            record.destination.exists(sameClock)
+          case _ => false
+        memo.put(actual, java.lang.Boolean.valueOf(result))
+        result
+    visit(value, 0)
+
+  /** Reuse raw physical assertion, never combine independently released reset chains. */
+  private def rawClockAssertion(value: Expr[Reset]): Expr[Reset] =
+    val memo = new IdentityHashMap[Expr[Reset], Expr[Reset]]()
+    var work = 0
+    def visit(input: Expr[Reset], depth: Int): Expr[Reset] =
+      work += 1
+      if depth > 128 || work > 524288 then
+        clockFailure("clock reset assertion graph exceeds budget")
+      val actual = actualReset(input)
+      Option(memo.get(actual)).getOrElse:
+        val record = resetRecord(actual)
+        val result = record.kind match
+          case "boundary" =>
+            val identity = physicalControlIdentity(record.inputs.head)
+            rawClockResets.get(identity) match
+              case Some(previous) =>
+                if resetRecord(previous).polarity != record.polarity then
+                  clockFailure("clock reset roots have contradictory polarities")
+                previous
+              case None =>
+                val raw = if record.release == "raw" then actual
+                else makeReset(record.copy(release = "raw", destination = None), "reset_boundary")
+                rawClockResets(identity) = raw
+                raw
+          case "sync" => visit(record.inputs.head, depth + 1)
+          case "combine" => resetCombine(record.inputs.map(visit(_, depth + 1)))
+          case _ => clockFailure("clock requires actual reset assertion roots")
+        memo.put(actual, result)
+        result
+    visit(value, 0)
+
+  private def ownedClock(
+      kind: String,
+      parents: Vector[ClockDomain],
+      controls: Vector[Expr[Bool]],
+      name: String
+  ): ClockDomain = clockTransaction:
+    val owner = currentModule.handle
+    if parents.size != (if kind == "gate" then 1 else 2) ||
+      parents.exists(domain => domainRef(domain).module != owner || domain.clock.isEmpty)
+    then clockFailure("owned clock requires actual local parent domains (mux exactly two)")
+    controls.foreach(ownedStreamValue(_, "clock control", bool = true))
+    val clocks = parents.map(_.clock.get)
+    val identities = clocks.map(clockIdentity(_, owner))
+    if kind == "mux" && identities.distinct.size != 2 then
+      clockFailure("glitchless mux requires two distinct actual clock parents")
+    val edges = parents.map(inheritedClockEdge(_))
+    if edges.exists(_.isEmpty) || edges.distinct.size != 1 then
+      clockFailure("owned clocks require matching actual parent edges")
+    val resets = parents.map(parent => Option(effectiveResets.get(parent)))
+    parents.zip(resets).foreach: (parent, reset) =>
+      if reset.exists(value => !clockResetSafe(value, parent)) then
+        clockFailure("owned clock parent requires safe release for its actual clock and edge")
+    if kind == "mux" && resets.exists(_.isEmpty) then
+      clockFailure("glitchless mux requires common nonempty reset roots")
+    if kind == "mux" then
+      val lineage = new ResetLineageQuery
+      val roots = resets.map(reset => lineage(reset.get).view.mapValues(_._1).toMap)
+      if roots.head.isEmpty || roots.distinct.size != 1 then
+        clockFailure("glitchless mux requires equal actual reset roots and polarities")
+    val state = if kind == "gate" then 1L else 22L
+    if clockState + resetState + state > 262144 then
+      clockFailure("owned clock generated state exceeds expansion budget")
+    clockState += state
+    val assertion = resets.head.map(rawClockAssertion)
+    val operands: Vector[Any] = clocks ++ controls ++ Option.when(kind == "mux")(assertion.get)
+    val clock = new KernelExpr[Clock](
+      operands,
+      resultType = Some(KernelTypeDescriptor("Clock")),
+      operation = Some("clock_" + kind)
+    )
+    val reference = captureExpression(clock).get
+    val record = ClockRecord(kind, parents, controls)
+    clockRecords(reference) = record
+    val release = assertion.map(resetSync(_, None, 2))
+    val result = new ClockDomain(
+      name,
+      release.getOrElse(parents.head.reset),
+      KernelDomainKind.Generated,
+      edge = edges.head,
+      resetPolicy = Option.when(release.isEmpty)(ResetPolicy.None),
+      resetPolarity = release.map(resetRecord(_).polarity).orElse(parents.head.resetPolarity),
+      relation = Some(ClockRelation.Unknown),
+      clock = Some(clock),
+      parent = Some(parents.head)
+    )
+    record.destination = Some(result)
+    result
+
+  def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
+      : ClockDomain =
+    if stimulusOnly then
+      CandidateRuntime.statement(enable, testEnable)
+      new ClockDomain(name, domain.reset, KernelDomainKind.Generated, parent = Some(domain))
+    else ownedClock("gate", Vector(domain), Vector(enable, testEnable), name)
+
+  def clockMux(select: Expr[Bool], domains: Vector[ClockDomain], name: String): ClockDomain =
+    if stimulusOnly then
+      CandidateRuntime.statement(select, domains)
+      new ClockDomain(name, CandidateRuntime.expr(domains), KernelDomainKind.Generated)
+    else ownedClock("mux", domains, Vector(select), name)
+
+  private def clockSnapshot(expression: KernelExpr[?]): Option[KernelClockSnapshot] =
+    clockRecords.get(expressionIds.get(expression)).map: record =>
+      if record.controlKinds.size != record.controls.size then
+        clockFailure("clock control provenance was not validated")
+      KernelClockSnapshot(
+        record.kind,
+        record.parents.map(value => domainPath(domainRef(value))),
+        domainPath(domainRef(record.destination.get)),
+        clockEdgeName(inheritedClockEdge(record.parents.head).get),
+        record.controlKinds,
+        record.controlDomains,
+        OwnedClockContract.contract(record.kind),
+        OwnedClockContract.obligations(record.kind)
+      )
+
   private final case class ResetRecord(
       kind: String,
       inputs: Vector[Expr[Reset]],
@@ -456,7 +660,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         resetScope()
         if stages < 2 || stages > 32 then
           resetFailure("reset synchronizer stages must be 2 through 32")
-        if resetState + stages > 262144 then
+        if resetState + clockState + stages > 262144 then
           resetFailure("reset synchronization expansion budget exceeded")
         val input = actualReset(reset)
         val producer = resetRecord(input)
@@ -2230,10 +2434,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         domains: Set[String],
         sources: Set[DeclarationRef | ExpressionRef],
         crossings: Set[ExpressionRef],
-        pulseClassified: Boolean = false
+        pulseClassified: Boolean = false,
+        externalSources: Set[DeclarationRef] = Set.empty
     )
     val sampleCache =
-      mutable.HashMap.empty[(Long, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
+      mutable.HashMap.empty[(Long, Boolean, Boolean, Boolean), IdentityHashMap[AnyRef, SampleFacts]]
     val fsmControlCache = mutable.HashMap.empty[FlatFsmActionHeader, Vector[Any]]
     var fsmControlEdges = 0L
     def fsmControls(header: FlatFsmActionHeader): Vector[Any] =
@@ -2279,10 +2484,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         value: Any,
         owner: Long,
         strict: Boolean,
-        inferSourceOwnership: Boolean = false
+        inferSourceOwnership: Boolean = false,
+        allowExternalControl: Boolean = false
     ): SampleFacts =
       val cache = sampleCache.getOrElseUpdate(
-        (owner, strict, inferSourceOwnership),
+        (owner, strict, inferSourceOwnership, allowExternalControl),
         new IdentityHashMap[AnyRef, SampleFacts]()
       )
       val root = value.asInstanceOf[AnyRef]
@@ -2296,6 +2502,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           pending.append(next)
         val visited = new IdentityHashMap[AnyRef, java.lang.Boolean]()
         val domains = mutable.HashSet.empty[String]
+        val externalSources = mutable.HashSet.empty[DeclarationRef]
         val sourceRoots = mutable.HashSet.empty[DeclarationRef | ExpressionRef]
         val crossings = mutable.HashSet.empty[ExpressionRef]
         var count = 0
@@ -2334,7 +2541,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                     .contains(declaration.kind)
                 then crossingFailure("wire/output dependency has no actual driver")
                 domains ++= sourceDomain
-                if sourceDomain.isEmpty &&
+                val externalControl = allowExternalControl && sourceDomain.isEmpty &&
+                  declaration.kind == KernelSignalKind.Input && declaration.dataType.exists(t =>
+                    CandidateRuntime.typeDescriptor(t) == KernelTypeDescriptor("Bool")
+                  )
+                if externalControl then externalSources += declarationRef
+                if sourceDomain.isEmpty && !externalControl &&
                   (declaration.kind == KernelSignalKind.Register ||
                     (strict && drivers.isEmpty && declaration.kind != KernelSignalKind.Parameter))
                 then crossingFailure("input dependency has unknown or unresolved source domain")
@@ -2398,7 +2610,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           domains.toSet,
           if strict then sourceRoots.toSet else Set.empty,
           crossings.toSet,
-          pulseClassified
+          pulseClassified,
+          externalSources.toSet
         )
         cachedFacts += result.domains.size.toLong + result.sources.size + result.crossings.size
         if cachedFacts > 262144 then
@@ -2458,6 +2671,34 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         current.get.fsmAction.foreach(header => fsmControls(header).foreach(include))
         current = current.get.parent
       verifyReconvergence(SampleFacts(Set.empty, Set.empty, crossings.toSet), owner)
+    clockRecords.foreach: (reference, clock) =>
+      val kinds = Vector.newBuilder[String]
+      val domains = Vector.newBuilder[Option[String]]
+      clock.controls.foreach: control =>
+        val facts =
+          sampleFacts(control, reference.module, strict = true, allowExternalControl = true)
+        verifyReconvergence(facts, reference.module)
+        if facts.pulseClassified then
+          clockFailure("Pulse-classified value cannot control an owned clock")
+        if facts.domains.size > 1 ||
+          (facts.domains.nonEmpty && facts.externalSources.nonEmpty)
+        then clockFailure("clock control has mixed or unresolved source provenance")
+        if facts.domains.nonEmpty then
+          val domain = facts.domains.head
+          if clock.kind == "gate" && domain != domainPath(domainRef(clock.parents.head)) then
+            clockFailure("gate control must belong to its actual parent domain")
+          kinds += "domain"
+          domains += Some(domain)
+        else if facts.sources.isEmpty then
+          kinds += "constant"
+          domains += None
+        else if facts.externalSources.size == 1 && facts.sources == facts.externalSources then
+          kinds += "external"
+          domains += None
+        else
+          clockFailure("clock control requires one owned external Bool boundary or actual domain")
+      clock.controlKinds = kinds.result()
+      clock.controlDomains = domains.result()
     val commonResetLineage = new ResetLineageQuery
     val commonResetRoots = mutable.Map.empty[String, Map[(DeclarationRef, Long), ResetPolarity]]
     def resetEpochRoots(path: String, kind: String): Map[(DeclarationRef, Long), ResetPolarity] =
@@ -2667,7 +2908,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             behavioralFailure(
               "executable clock/reset input belongs to another module or is not an input"
             )
-        capability(domain.domain.clock.get, "Clock")
+        val _ = clockIdentity(domain.domain.clock.get, domain.reference.module)
         if !domain.domain.resetPolicy.contains(ResetPolicy.None) then
           val effective = Option(effectiveResets.get(domain.domain)).getOrElse(
             behavioralFailure("executable reset requires an owned reset producer")
@@ -7522,6 +7763,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             domain.domain.parent.toVector.map(value =>
               "clock_parent" -> domainPath(domainRef(value))
             ) ++
+            domain.domain.clock.toVector.flatMap(value =>
+              clockRecords.get(expressionIds.get(value)).toVector.flatMap(_.parents.drop(1))
+                .map(parent => "clock_parent_1" -> domainPath(domainRef(parent)))
+            ) ++
             domain.domain.clock.toVector.map(value => "clock_source" -> domainSourcePath(value)) ++
             Vector("reset_source" -> domainSourcePath(domain.domain.reset)) ++
             Option(effectiveResets.get(domain.domain)).toVector.map(value =>
@@ -8358,7 +8603,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       collectionArguments.keysIterator.map(expressionPath).toSet,
       memoryReadSnapshot,
       executableCrossingSnapshot,
-      resetSnapshot
+      resetSnapshot,
+      clockSnapshot
     )
 
   private def parameterExpressionSnapshots(

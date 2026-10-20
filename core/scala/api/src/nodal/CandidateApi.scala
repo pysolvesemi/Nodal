@@ -758,8 +758,7 @@ object ClockGate:
       testEnable: Expr[Bool] = false.B,
       name: String = "gated"
   ): ClockDomain =
-    CandidateRuntime.statement(enable, testEnable)
-    new ClockDomain(name, domain.reset, KernelDomainKind.Generated, parent = Some(domain))
+    ConstructionKernel.clockGate(domain, enable, testEnable, name)
 
 object ClockMux:
   def glitchless(
@@ -767,12 +766,7 @@ object ClockMux:
       domains: Seq[ClockDomain],
       name: String = "selected"
   ): ClockDomain =
-    CandidateRuntime.statement(select, domains)
-    new ClockDomain(
-      name,
-      CandidateRuntime.expr(domains),
-      KernelDomainKind.Generated
-    )
+    ConstructionKernel.clockMux(select, domains.toVector, name)
 
 /** Typed event handle. Analog composition is distinct from Boolean short-circuit logic. */
 final class Event private[nodal] (

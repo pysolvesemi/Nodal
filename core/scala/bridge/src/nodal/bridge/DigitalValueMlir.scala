@@ -50,7 +50,11 @@ private[nodal] object DigitalValueMlir:
     else if value >= 0 then math.max(1, value.bitLength).toLong
     else Long.MaxValue
 
-  final class Plan(snapshot: ConstructionSnapshot, enums: EnumMlir.Plan):
+  final class Plan(
+      snapshot: ConstructionSnapshot,
+      enums: EnumMlir.Plan,
+      clocks: ClockMlir.Resolver
+  ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
       module.declarations.map(value => value.path -> (module.path, value))
@@ -1207,7 +1211,9 @@ private[nodal] object DigitalValueMlir:
         then
           requireVisible(input, expression.owner, expression.region, expression.path)
 
-    private val resetRoots = ResetMlir.validate(snapshot)
+    private val resetFacts = ResetMlir.validate(snapshot, clocks)
+    clocks.validateResets(resetFacts)
+    private val resetRoots = resetFacts.domains
 
     requireValid(
       snapshot.digitalExpressions.size <= 65536 &&
@@ -1291,6 +1297,11 @@ private[nodal] object DigitalValueMlir:
           "reset_combine"
         ).contains(expression.operation) == expression.reset.nonEmpty,
         "reset producers require one exact typed reset contract",
+        expression.path
+      )
+      requireValid(
+        OwnedClockContract.Operations(expression.operation) == expression.clock.nonEmpty,
+        "owned clock producers require one exact typed clock contract",
         expression.path
       )
       expression.reset.foreach: reset =>
@@ -2860,7 +2871,7 @@ private[nodal] object DigitalValueMlir:
               )
               val payloadType =
                 if expressions.get(path).exists(e =>
-                    e.operation != "shape_reference" && e.reset.isEmpty
+                    e.operation != "shape_reference" && e.reset.isEmpty && e.clock.isEmpty
                   )
                 then
                   computedType(sourceType, path)
@@ -2892,7 +2903,36 @@ private[nodal] object DigitalValueMlir:
                         "a digital capability cannot be used as an ordinary typed value",
                         path
                       )
-                  if expression.reset.nonEmpty then
+                  if expression.clock.nonEmpty then
+                    val clock = expression.clock.get
+                    val controlDomains = clock.controlKinds.zip(clock.controlDomains).map:
+                      case ("domain", Some(domain)) => domainReference(domain)
+                      case (kind, _) => quoted(kind)
+                    val obligations = clock.obligations.map((key, value) =>
+                      s"$key = ${quoted(value)}"
+                    ).mkString(", ")
+                    val attrs = Vector(
+                      s"parent_domains = [${clock.parents.map(domainReference).mkString(", ")}]",
+                      s"domain = ${domainReference(clock.destination)}",
+                      s"edge = ${quoted(clock.edge)}",
+                      s"contract = ${quoted(clock.contract)}",
+                      s"control_domains = [${controlDomains.mkString(", ")}]",
+                      s"obligations = {$obligations}",
+                      s"metadata = ${metadata(path, false)}"
+                    )
+                    (
+                      Vector(operation(
+                        "nodal.clock_" + clock.kind,
+                        result,
+                        dataType,
+                        operands,
+                        "{" + attrs.mkString(", ") + "}",
+                        sourceLocation(path)
+                      )),
+                      height,
+                      Unknown
+                    )
+                  else if expression.reset.nonEmpty then
                     val reset = expression.reset.get
                     val attrs = Vector(
                       s"reset_polarity = ${quoted(reset.polarity)}",

@@ -145,8 +145,11 @@ private[nodal] object ScalaToMlirBridge:
       snapshot.root,
       digitalMaterialization.metadata
     )
-    private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues)
     private val physicalControls = new PhysicalControlMlir.Resolver(snapshot)
+    private val clockControls = new ClockMlir.Resolver(snapshot, physicalControls)
+    private val ownedClockModules =
+      snapshot.digitalExpressions.filter(_.clock.nonEmpty).map(_.owner).toSet
+    private val digitalValues = new DigitalValueMlir.Plan(snapshot, enumValues, clockControls)
     private val interfaceValues = new InterfaceMlir.Plan(snapshot)
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
@@ -1891,15 +1894,18 @@ ${indent(body, 2)}
               "edge" -> quoted(edge),
               "reset_policy" -> quoted(resetPolicy),
               "metadata" -> metadata
-            ) ++ domain.attributes.collect { case ("clock_parent", parent) =>
-              val actual = module.domains.find(_.path == parent).getOrElse(
-                fail(
-                  "NODAL-BRIDGE-057-RESET",
-                  "generated parent must be an exact owned domain",
-                  Some(domain.path)
+            ) ++ domain.attributes.collect {
+              case (key @ ("clock_parent" | "clock_parent_1"), parent) =>
+                val actual = module.domains.find(_.path == parent).getOrElse(
+                  fail(
+                    "NODAL-BRIDGE-057-RESET",
+                    "generated parent must be an exact owned domain",
+                    Some(domain.path)
+                  )
                 )
-              )
-              "parent" -> symbolReference(localDomains(actual.name))
+                (if key == "clock_parent" then "parent" else "second_parent") -> symbolReference(
+                  localDomains(actual.name)
+                )
             },
             semanticPath = domain.path
           )
@@ -2631,7 +2637,8 @@ ${indent(body, 2)}
         snapshot.digitalExpressions.filter(value =>
           value.owner == module.path && value.reset.nonEmpty
         ).map(_.path).toSet,
-        physicalControls
+        physicalControls,
+        clockControls
       )
       val digital = digitalValues.renderModule(
         module,
@@ -3804,9 +3811,11 @@ ${indent(body, 2)}
           vecTypeParts(value, declaration.path)._1 == "Clock"
         case _ => false
       val domainAttribute =
-        if clockInput &&
-          declaration.domain.isEmpty && module.domains.size > 1
-        then Vector.empty
+        if declaration.domain.isEmpty && declaration.kind == "input" &&
+          declaration.dataType.contains("Bool") && ownedClockModules(module.path)
+        then Vector("domain" -> "@none")
+        else if clockInput && declaration.domain.isEmpty && module.domains.size > 1 then
+          Vector.empty
         else
           val domainName = localDomainName(module, declaration)
           Vector("domain" -> symbolReference(localDomains.getOrElse(

@@ -20,7 +20,8 @@ private[nodal] object SequentialMlir:
   private def bindings(
       module: KernelModuleSnapshot,
       resetValues: Set[String],
-      controls: PhysicalControlMlir.Resolver
+      controls: PhysicalControlMlir.Resolver,
+      clocks: ClockMlir.Resolver
   )
       : Vector[(KernelDomainSnapshot, Vector[String], String)] =
     val declarations = module.declarations.map(value => value.path -> value).toMap
@@ -84,19 +85,26 @@ private[nodal] object SequentialMlir:
         val operands = Vector(clock) ++ reset
         operands.zip(Vector("Clock") ++ reset.map(_ => "Reset")).foreach: (path, dataType) =>
           if dataType != "Reset" || !resetValues.contains(path) then
-            val resolved = controls.resolve(path, module.path, dataType)
-            if dataType == "Clock" &&
-              !resolved.declaration.domain.forall(clockOwnerAllowed(_, domain.path))
-            then fail("physical clock must belong to this domain or its generated parent", path)
+            if dataType == "Clock" then
+              val resolved = clocks.resolve(path, module.path)
+              if !resolved.physical.forall(_.declaration.domain.forall(clockOwnerAllowed(
+                  _,
+                  domain.path
+                )))
+              then
+                fail("physical clock must belong to this domain or its generated parent", path)
+            else
+              val _ = controls.resolve(path, module.path, dataType)
         Vector((domain, operands, polarity))
 
   final class Plan(
       module: KernelModuleSnapshot,
       crossingDomains: Set[String] = Set.empty,
       resetValues: Set[String] = Set.empty,
-      controls: PhysicalControlMlir.Resolver
+      controls: PhysicalControlMlir.Resolver,
+      clocks: ClockMlir.Resolver
   ):
-    private val physical = bindings(module, resetValues, controls)
+    private val physical = bindings(module, resetValues, controls, clocks)
     crossingDomains.foreach: domain =>
       if !physical.exists(_._1.path == domain) then
         fail("level crossing endpoint requires an actual supported physical domain binding", domain)

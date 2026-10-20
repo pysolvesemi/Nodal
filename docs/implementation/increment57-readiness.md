@@ -942,3 +942,30 @@ checks. Physical pointer skew, data settling, reset duration and protocol
 assumptions remain explicit. Gates/muxes and the remaining F57 relationship,
 hierarchy, reconvergence, waiver and event work keep all coarse F57 items open.
 No CI or broad qualification was run.
+
+### Owned gate/mux source and bridge checkpoint
+
+Public ClockGate and ClockMux.glitchless now capture actual owned clock producers
+under DG v0.6. Gate controls retain enable/test operands and inactive-phase
+obligations. Mux captures both actual parents, the selector, canonical common
+assertion roots and serialized switching obligations. Derived domains retain
+independent output-clock release, never a fabricated parent release proof.
+Shared clock identity is consumed by reset verification; missing/mismatched roots,
+foreign controls, invalid callback construction and forged bridge authority
+reject. External Bool controls reuse existing canonical `domain=@none` boundary
+semantics without inventing source ownership or widening port admission.
+
+The frozen source/bridge checkpoint passes **43/43** focused groups: owned-clock
+13, reset 19 and descriptor DomainStimulus 11. All 14 files pass formatting and
+scoped diff checks. Actual public Scala replay emits **12 profiles**, covering
+both gate/mux edges and polarities, resetless gates, nested gates/mux and shaped
+clock inputs. Fixture lines are frozen before replay. Evidence is in
+`.work/owned-clock-tests3.log`, `.work/owned-clock-source-replay.log`,
+`.work/owned-clock-source-replay` and the source checkpoint hash manifest.
+
+This is source/bridge acceptance only. Additional source predecessors, native
+clock proof and actual target waveform integration remain pending. First target
+inspection found CIRCT's default clock-gate external cell requires a production
+implementation; a handwritten test substitute will not count. No gate/mux
+closure, CI or broad qualification is claimed here. All coarse F57 items remain
+open while the selected clock implementation and remaining required slices run.

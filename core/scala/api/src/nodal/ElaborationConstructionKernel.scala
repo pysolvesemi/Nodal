@@ -223,6 +223,15 @@ private[nodal] object ConstructionKernel:
     )
       .resetCombine(resets)
 
+  def clockGate(domain: ClockDomain, enable: Expr[Bool], testEnable: Expr[Bool], name: String)
+      : ClockDomain =
+    active.getOrElse(throw new IllegalStateException("ClockGate requires active construction"))
+      .clockGate(domain, enable, testEnable, name)
+
+  def clockMux(select: Expr[Bool], domains: Vector[ClockDomain], name: String): ClockDomain =
+    active.getOrElse(throw new IllegalStateException("ClockMux requires active construction"))
+      .clockMux(select, domains, name)
+
   def registerDomain(domain: ClockDomain, kind: KernelDomainKind): Unit =
     active.foreach(_.registerDomain(domain, kind))
 

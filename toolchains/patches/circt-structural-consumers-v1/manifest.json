@@ -1,0 +1,226 @@
+{
+  "base_lock_sha256": "14d67d279d0cf66c4d51fcc470da7c6b4392391b64d17db7dbaf4900fecab05b",
+  "builder_sha256": "8de1744111dd436abae0fd00afaa4f4e534ef7cdc96fbd2490d0b3d5025ef5ae",
+  "circt_commit": "87898a876f730a2ebc607dc9b83da487cba49119",
+  "components": [
+    {
+      "base_library_sha256": "80ba56f0b5daca1543760a53f8455219d3e267c86d919b33951720212f07be23",
+      "name": "CIRCTHW"
+    },
+    {
+      "base_library_sha256": "e36e2f69da7cae55714e784eb12ad0dbe0602fb541e8cef28ca1312b353d60f8",
+      "name": "CIRCTSVTransforms"
+    },
+    {
+      "base_library_sha256": "308bd78b7b4965564cfc6931237ef31ae6a288d727368a30651d7e2c5897e06e",
+      "name": "CIRCTExportVerilog"
+    }
+  ],
+  "host": {
+    "arch": "x86_64",
+    "os": "linux"
+  },
+  "id": "circt-structural-consumers-v1",
+  "patch": {
+    "file": "structural-consumers.patch",
+    "sha256": "f5f1db2df6f139311c6eeb584571b0c95de73631211efc38f0acaeb2352a24ed"
+  },
+  "schema": 2,
+  "sources": [
+    {
+      "after": "02ac92e7eeef976abf8bb7b658680c3b0a01aa286b40d0b4b8a39d648fc9027d",
+      "before": "02ac92e7eeef976abf8bb7b658680c3b0a01aa286b40d0b4b8a39d648fc9027d",
+      "path": "lib/Dialect/HW/ConversionPatterns.cpp"
+    },
+    {
+      "after": "460bb3b4d075a0da2c0a411126c6ccb06a3c358d9b8e271d26b77bc36ea21e24",
+      "before": "460bb3b4d075a0da2c0a411126c6ccb06a3c358d9b8e271d26b77bc36ea21e24",
+      "path": "lib/Dialect/HW/CustomDirectiveImpl.cpp"
+    },
+    {
+      "after": "2ee7db1ad505eaf14edda1073eee33615f988d8beb19e692506cd821fb4239e6",
+      "before": "2ee7db1ad505eaf14edda1073eee33615f988d8beb19e692506cd821fb4239e6",
+      "path": "lib/Dialect/HW/HierPathCache.cpp"
+    },
+    {
+      "after": "c84aa324a7124db10a96fd8049e708fb7053e9afc62658babfa86105574de1bf",
+      "before": "bdba535e744990e65ebe7c8ac5f8a8eedc2bd8cdf7d2ba937669b7250fc442fa",
+      "path": "lib/Dialect/HW/HWAttributes.cpp"
+    },
+    {
+      "after": "0162edfc97e9ed94261b621c3a71d9577581f870fe2337157d3c79b7d6d95e47",
+      "before": "0162edfc97e9ed94261b621c3a71d9577581f870fe2337157d3c79b7d6d95e47",
+      "path": "lib/Dialect/HW/HWEnums.cpp"
+    },
+    {
+      "after": "0d833a564b58b9561f1164d68bc722b0bed2c228638045440d51384c3bde19ba",
+      "before": "0d833a564b58b9561f1164d68bc722b0bed2c228638045440d51384c3bde19ba",
+      "path": "lib/Dialect/HW/HWDialect.cpp"
+    },
+    {
+      "after": "ed727798140e419d56157a3541244659d83aab289bc0cf3f9290afca0b53d69c",
+      "before": "ed727798140e419d56157a3541244659d83aab289bc0cf3f9290afca0b53d69c",
+      "path": "lib/Dialect/HW/HWInstanceGraph.cpp"
+    },
+    {
+      "after": "3b7f5db31e8ba03bb9a25c0726d7a41aa1f0bec20fdfed2971f0328d525efd8a",
+      "before": "3b7f5db31e8ba03bb9a25c0726d7a41aa1f0bec20fdfed2971f0328d525efd8a",
+      "path": "lib/Dialect/HW/HWInstanceImplementation.cpp"
+    },
+    {
+      "after": "3edb58d3c09bf73796df2f6439f5b0d3cfe8b0764a3101832a15a464ad5f1f57",
+      "before": "3edb58d3c09bf73796df2f6439f5b0d3cfe8b0764a3101832a15a464ad5f1f57",
+      "path": "lib/Dialect/HW/HWModuleOpInterface.cpp"
+    },
+    {
+      "after": "5d644071a6277f5ba5d339f00443c498cf599eac17fb9c6967d2fb45e2a42f83",
+      "before": "5d644071a6277f5ba5d339f00443c498cf599eac17fb9c6967d2fb45e2a42f83",
+      "path": "lib/Dialect/HW/HWOpInterfaces.cpp"
+    },
+    {
+      "after": "38e9ad03182d07c8a976a24b8c42868594ab1e5a5a5d85a632c8c0e31993585e",
+      "before": "38e9ad03182d07c8a976a24b8c42868594ab1e5a5a5d85a632c8c0e31993585e",
+      "path": "lib/Dialect/HW/HWOps.cpp"
+    },
+    {
+      "after": "8fa130dcbdf5d980397112372599b6d2dc10a20a87d18822c6054445005bad97",
+      "before": "8fa130dcbdf5d980397112372599b6d2dc10a20a87d18822c6054445005bad97",
+      "path": "lib/Dialect/HW/HWTypeInterfaces.cpp"
+    },
+    {
+      "after": "a993b32ffbccca804af0867bd2fa2aafef0c40878fc6d2968a74cb7c1e07eaa2",
+      "before": "a993b32ffbccca804af0867bd2fa2aafef0c40878fc6d2968a74cb7c1e07eaa2",
+      "path": "lib/Dialect/HW/HWTypes.cpp"
+    },
+    {
+      "after": "504e18a80fab2c46e37a8fb890e3d2a3008140524b10c180f1ec581fa1d630de",
+      "before": "504e18a80fab2c46e37a8fb890e3d2a3008140524b10c180f1ec581fa1d630de",
+      "path": "lib/Dialect/HW/ModuleImplementation.cpp"
+    },
+    {
+      "after": "79c41118b73e3870838f5d0a58233637990b7c2b799471965848d608d528e4f8",
+      "before": "79c41118b73e3870838f5d0a58233637990b7c2b799471965848d608d528e4f8",
+      "path": "lib/Dialect/HW/InnerSymbolTable.cpp"
+    },
+    {
+      "after": "bfb32edfdd11a1dac4c4dea3b6afac68bac76b6a12509f580828cf17ba519ded",
+      "before": "bfb32edfdd11a1dac4c4dea3b6afac68bac76b6a12509f580828cf17ba519ded",
+      "path": "lib/Dialect/HW/PortConverter.cpp"
+    },
+    {
+      "after": "a94d622fc6b2609be67d4b2167aedb0bfc9d3e27a9ced96a023cd18cdeb63bef",
+      "before": "a94d622fc6b2609be67d4b2167aedb0bfc9d3e27a9ced96a023cd18cdeb63bef",
+      "path": "lib/Dialect/HW/InferIntRangeInterfaceImpls.cpp"
+    },
+    {
+      "after": "6f6f1de03484c86bcc97a1ffb305b0523ad22c99241bcade392bc6c12977d104",
+      "before": "8b67ff89dd28fe38cd4637993f0f4ce5bc284989e82be5e89d54287ffc23993e",
+      "path": "test/Dialect/HW/parameters.mlir"
+    },
+    {
+      "after": "8adfba80e1760f79162382ad5bf401f9a1578a2a74fa46f683ffd9363802f797",
+      "before": "d0717ac388821b3a7d8afc3849b3a58f06a076759f0c2cbef3300a53d1681aad",
+      "path": "unittests/Dialect/HW/TypesTest.cpp"
+    },
+    {
+      "after": "295d7dc34a1afe9279fad41215f4a0fc4bf6282634f6bd77e6a3ed20aa827d27",
+      "before": "295d7dc34a1afe9279fad41215f4a0fc4bf6282634f6bd77e6a3ed20aa827d27",
+      "path": "include/circt/Dialect/HW/HWAttributes.h"
+    },
+    {
+      "after": "d7b0683ade4ea170732980e4e909e0a27df3115459f81fe19e4a2b6c63ca360a",
+      "before": "d7b0683ade4ea170732980e4e909e0a27df3115459f81fe19e4a2b6c63ca360a",
+      "path": "lib/Dialect/HW/CMakeLists.txt"
+    },
+    {
+      "after": "39485d9555af065f76f8bdf5cc7059e53ee725cda4c03246efc3310782da9ba5",
+      "before": "39485d9555af065f76f8bdf5cc7059e53ee725cda4c03246efc3310782da9ba5",
+      "path": "lib/Dialect/SV/Transforms/CMakeLists.txt"
+    },
+    {
+      "after": "d8a88b352c847630b2163ed9e63582360c85d472c88fca5b5ee0309a12265cb9",
+      "before": "d8a88b352c847630b2163ed9e63582360c85d472c88fca5b5ee0309a12265cb9",
+      "path": "lib/Dialect/SV/Transforms/GeneratorCallout.cpp"
+    },
+    {
+      "after": "e44f5288c2ab5b9701f3894cbb387287acb9a2dbac182fd975c652018dd9e82f",
+      "before": "e44f5288c2ab5b9701f3894cbb387287acb9a2dbac182fd975c652018dd9e82f",
+      "path": "lib/Dialect/SV/Transforms/HWCleanup.cpp"
+    },
+    {
+      "after": "69ed856c20a8fbf1acc073b587f9ebc49f2c26427750f1bd42979e35c85d52e4",
+      "before": "69ed856c20a8fbf1acc073b587f9ebc49f2c26427750f1bd42979e35c85d52e4",
+      "path": "lib/Dialect/SV/Transforms/HWEliminateInOutPorts.cpp"
+    },
+    {
+      "after": "28793a90e1924a7e74110a7aa00549c2d3c0c960aa1e8f3d510a6757f19fe948",
+      "before": "28793a90e1924a7e74110a7aa00549c2d3c0c960aa1e8f3d510a6757f19fe948",
+      "path": "lib/Dialect/SV/Transforms/HWExportModuleHierarchy.cpp"
+    },
+    {
+      "after": "6707efc20ee722dcc3f7ee7cb6423c94ee3916067119003088ff4f03620e60ea",
+      "before": "6707efc20ee722dcc3f7ee7cb6423c94ee3916067119003088ff4f03620e60ea",
+      "path": "lib/Dialect/SV/Transforms/HWLegalizeModules.cpp"
+    },
+    {
+      "after": "196aa4c99c431ca0df5035e3c771728b528e9c9faeaf9eaaa06d79a21db5f89a",
+      "before": "196aa4c99c431ca0df5035e3c771728b528e9c9faeaf9eaaa06d79a21db5f89a",
+      "path": "lib/Dialect/SV/Transforms/HWStubExternalModules.cpp"
+    },
+    {
+      "after": "45385c660cde4d74f070a94659ad74dec820b31213fdff79a433d3d75e375a0f",
+      "before": "c5b0617c1b1c6ea65555ffed2d3817bda2b53719528dd5f619e4d024fa4f60b5",
+      "path": "lib/Dialect/SV/Transforms/PrettifyVerilog.cpp"
+    },
+    {
+      "after": "8d458f405569700351afcb8605123133bd4412e03a6bbae4e6387f5262634a14",
+      "before": "8d458f405569700351afcb8605123133bd4412e03a6bbae4e6387f5262634a14",
+      "path": "lib/Dialect/SV/Transforms/SVMaskNonSynthesizable.cpp"
+    },
+    {
+      "after": "36ca86cd7956aa29f8dff9478ec17823637c8dd83f023cd600820337c586c080",
+      "before": "36ca86cd7956aa29f8dff9478ec17823637c8dd83f023cd600820337c586c080",
+      "path": "lib/Dialect/SV/Transforms/SVTraceIVerilog.cpp"
+    },
+    {
+      "after": "8cb750b73333b9a06cb992ee0db3213dffdf1cc7e2769d35948b47291b9d5b90",
+      "before": "8cb750b73333b9a06cb992ee0db3213dffdf1cc7e2769d35948b47291b9d5b90",
+      "path": "lib/Conversion/ExportVerilog/ApplyLoweringOptions.cpp"
+    },
+    {
+      "after": "cb070b423ac7e8f7d4ce722719cf19ee5d0e80105ed7d9df9cb5ff92868bf3c9",
+      "before": "cb070b423ac7e8f7d4ce722719cf19ee5d0e80105ed7d9df9cb5ff92868bf3c9",
+      "path": "lib/Conversion/ExportVerilog/CMakeLists.txt"
+    },
+    {
+      "after": "7cd646e8b6e1ece92ae7519856bcfb74922fdab39eef9370c84be572d12dea34",
+      "before": "7cd646e8b6e1ece92ae7519856bcfb74922fdab39eef9370c84be572d12dea34",
+      "path": "lib/Conversion/ExportVerilog/ExportVerilog.cpp"
+    },
+    {
+      "after": "0d07c952cd7951b4f30408c1687ca55d2611cec2f1bcbd7566a5fda4b6954b51",
+      "before": "0d07c952cd7951b4f30408c1687ca55d2611cec2f1bcbd7566a5fda4b6954b51",
+      "path": "lib/Conversion/ExportVerilog/ExportVerilogInternals.h"
+    },
+    {
+      "after": "4ad3f2cd882a81fce3823d82d8e7a74356d384b7cdae01c5fc64881475530caf",
+      "before": "4ad3f2cd882a81fce3823d82d8e7a74356d384b7cdae01c5fc64881475530caf",
+      "path": "lib/Conversion/ExportVerilog/LegalizeAnonEnums.cpp"
+    },
+    {
+      "after": "0d6fce9e479f53ae31d02c6a1417291faee9a0d2420a356c9ee23a6ba020fa4a",
+      "before": "0d6fce9e479f53ae31d02c6a1417291faee9a0d2420a356c9ee23a6ba020fa4a",
+      "path": "lib/Conversion/ExportVerilog/LegalizeNames.cpp"
+    },
+    {
+      "after": "6a3c81d97479ad6f2497c08745ed569732e95bfb466bf4277022cffb873c18d3",
+      "before": "ae694c886859e7a653fc41656260987f40b62fc71b710ff2c264dc8251820e36",
+      "path": "lib/Conversion/ExportVerilog/PrepareForEmission.cpp"
+    },
+    {
+      "after": "830eb3c278a5278a11b6580773a41a9abe8f56dc071077526ca7c80680951afc",
+      "before": "830eb3c278a5278a11b6580773a41a9abe8f56dc071077526ca7c80680951afc",
+      "path": "lib/Conversion/ExportVerilog/PruneZeroValuedLogic.cpp"
+    }
+  ]
+}

@@ -1510,3 +1510,21 @@ True bidirectional scalar Bits/UInt/SInt transport reuses verified component
 proof and the optional managed profile. Resolved Interface arrays, generated or
 selected physical routes, and broader conservative/electrical profiles remain
 open. No replacement of electrical connectivity with paired assignments occurs.
+
+## Checkpoint 44 — managed structural-consumer prerequisite
+
+The 12 exact historical accepted source/test/profile files in
+`.work/f58-circt-consumer-next/managed/shared` preserve the optional bounded
+structural profile, before any later consumer work. Their before-hashes match
+the preceding commit; the symbolic target `4b5f3676` and inout v1 source/patch
+manifest remain unchanged. Stored source manifest `cee4be2c` matched before and
+after. Existing bootstrap executable metadata is retained. Unified patch blank
+context markers are preserved verbatim and checked independently.
+
+The original receipt records 55 Python checks, five SSA/graph two-state probes,
+seven private-generated-target configurations and five symbolic-resolved
+four-state profiles at widths 2/7/8. Private generated-target behavior does not
+promote that target here. Baseline dominance/late-lvalue failures, incompatible
+inout types and missing-output CMake refusal are retained causal evidence.
+This commit only preserves accepted source and receipts; no new consumer
+execution, installation or retry of the separate held repair occurs.

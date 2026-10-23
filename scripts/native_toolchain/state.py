@@ -37,7 +37,7 @@ def default_prefix(lock: dict[str, Any], host: tuple[str, str] | None = None) ->
 
 def manifest_payload(
     lock: dict[str, Any], *, mode: str, host: tuple[str, str] | None = None,
-    overlay: dict[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     os_name, arch = host or normalize_host()
     result = {
@@ -61,7 +61,7 @@ def write_manifest(
     *,
     mode: str,
     host: tuple[str, str] | None = None,
-    overlay: dict[str, str] | None = None,
+    overlay: dict[str, Any] | None = None,
 ) -> Path:
     path = prefix / MANIFEST_NAME
     path.write_text(

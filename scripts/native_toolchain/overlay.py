@@ -15,7 +15,28 @@ from typing import Any, Callable
 
 from toolchain_lock import LockError, SHA256, lock_digest
 
-OUTPUT = "lib/libCIRCTHW.so"
+OUTPUT = "lib/libCIRCTHW.so"  # Schema-1 compatibility.
+# A manifest can select only this exact ordered catalog, never a build command.
+COMPONENTS = {
+    "CIRCTHW": ("lib/Dialect/HW", ("lib/Dialect/HW/", "include/circt/Dialect/HW/", "test/Dialect/HW/", "unittests/Dialect/HW/")),
+    "CIRCTSVTransforms": ("lib/Dialect/SV/Transforms", ("lib/Dialect/SV/Transforms/",)),
+    "CIRCTExportVerilog": ("lib/Conversion/ExportVerilog", ("lib/Conversion/ExportVerilog/",)),
+}
+
+
+def _components(profile: dict[str, Any]) -> list[str]:
+    return ["CIRCTHW"] if profile["schema"] == 1 else [entry["name"] for entry in profile["components"]]
+
+
+def _base_libraries(profile: dict[str, Any]) -> dict[str, str]:
+    if profile["schema"] == 1:
+        return {OUTPUT: profile["base_library_sha256"]}
+    return {f"lib/lib{entry['name']}.so": entry["base_library_sha256"] for entry in profile["components"]}
+
+
+def _outputs(prefix: Path, profile: dict[str, Any]) -> str | dict[str, str]:
+    values = {relative: sha256(prefix / relative) for relative in _base_libraries(profile)}
+    return values[OUTPUT] if profile["schema"] == 1 else values
 
 
 def sha256(path: Path) -> str:
@@ -48,16 +69,31 @@ def load_overlay(root: Path, lock: dict[str, Any], name: str) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise LockError(f"cannot read checked overlay manifest: {exc}") from exc
-    expected = {"schema", "id", "base_lock_sha256", "circt_commit", "host", "component", "base_library_sha256", "patch", "sources"}
-    if not isinstance(value, dict) or set(value) != expected or value.get("schema") != 1:
+    common = {"schema", "id", "base_lock_sha256", "circt_commit", "host", "patch", "sources"}
+    if not isinstance(value, dict) or type(value.get("schema")) is not int:
+        raise LockError("invalid closed overlay manifest")
+    schema = value["schema"]
+    expected = common | ({"component", "base_library_sha256"} if schema == 1 else {"components", "builder_sha256"})
+    if schema not in (1, 2) or set(value) != expected:
         raise LockError("invalid closed overlay manifest")
     if (value["id"] != name or value["base_lock_sha256"] != lock_digest(lock) or
             value["circt_commit"] != lock["native"]["circt"]["commit"]):
         raise LockError("overlay does not match the exact locked CIRCT revision")
-    if value["host"] != {"os": "linux", "arch": "x86_64"} or value["component"] != "CIRCTHW":
-        raise LockError("overlay supports only the pinned Linux x86_64 CIRCTHW component")
-    if not SHA256.fullmatch(str(value["base_library_sha256"])):
-        raise LockError("overlay requires an exact base library checksum")
+    if value["host"] != {"os": "linux", "arch": "x86_64"}:
+        raise LockError("overlay supports only pinned Linux x86_64 components")
+    if schema == 1:
+        if value["component"] != "CIRCTHW":
+            raise LockError("schema-1 overlay supports only the CIRCTHW component")
+    else:
+        if value["builder_sha256"] != sha256(Path(__file__)):
+            raise LockError("overlay builder identity differs from checked recipe")
+        entries = value["components"]
+        if (not isinstance(entries, list) or len(entries) != len(COMPONENTS) or
+                any(not isinstance(entry, dict) or set(entry) != {"name", "base_library_sha256"} for entry in entries) or
+                [entry["name"] for entry in entries] != list(COMPONENTS)):
+            raise LockError("overlay requires the exact ordered three-component catalog")
+    if any(not SHA256.fullmatch(str(checksum)) for checksum in _base_libraries(value).values()):
+        raise LockError("overlay requires exact base library checksums")
     patch = value["patch"]
     if not isinstance(patch, dict) or set(patch) != {"file", "sha256"}:
         raise LockError("invalid overlay patch identity")
@@ -68,13 +104,14 @@ def load_overlay(root: Path, lock: dict[str, Any], name: str) -> dict[str, Any]:
     sources = value["sources"]
     if not isinstance(sources, list) or not 1 <= len(sources) <= 64:
         raise LockError("overlay source inventory exceeds bounded profile")
+    prefixes = tuple(prefix for component in _components(value) for prefix in COMPONENTS[component][1])
     paths: set[str] = set()
     for source in sources:
         if not isinstance(source, dict) or set(source) != {"path", "before", "after"}:
             raise LockError("invalid overlay source identity")
         relative = _relative(source["path"])
-        if relative in paths or not relative.startswith(("lib/Dialect/HW/", "include/circt/Dialect/HW/", "test/Dialect/HW/", "unittests/Dialect/HW/")):
-            raise LockError("overlay source path is duplicate or outside HW owner")
+        if relative in paths or not relative.startswith(prefixes):
+            raise LockError("overlay source path is duplicate or outside component owners")
         paths.add(relative)
         if any(not SHA256.fullmatch(str(source[key])) for key in ("before", "after")):
             raise LockError("overlay source checksum is invalid")
@@ -88,25 +125,62 @@ def load_overlay(root: Path, lock: dict[str, Any], name: str) -> dict[str, Any]:
     return value | {"manifest_sha256": sha256(path), "directory": str(directory)}
 
 
-def identity(profile: dict[str, Any]) -> dict[str, str]:
-    return {"id": profile["id"], "manifest_sha256": profile["manifest_sha256"],
-            "patch_sha256": profile["patch"]["sha256"],
-            "base_library_sha256": profile["base_library_sha256"]}
+def identity(profile: dict[str, Any]) -> dict[str, Any]:
+    value = {"id": profile["id"], "manifest_sha256": profile["manifest_sha256"],
+             "patch_sha256": profile["patch"]["sha256"]}
+    if profile["schema"] == 1:
+        value["base_library_sha256"] = profile["base_library_sha256"]
+    else:
+        value["base_libraries_sha256"] = _base_libraries(profile)
+    return value
 
 
 def validate_overlay(prefix: Path, root: Path, lock: dict[str, Any], value: Any) -> list[str]:
     try:
-        if not isinstance(value, dict) or set(value) != {"id", "manifest_sha256", "patch_sha256", "base_library_sha256", "output_sha256", "receipt_sha256"}:
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
             return ["invalid installed overlay identity"]
         profile = load_overlay(root, lock, value["id"])
-        if any(value[key] != expected for key, expected in identity(profile).items()):
+        expected = identity(profile)
+        if set(value) != set(expected) | {"output_sha256", "receipt_sha256"}:
+            return ["invalid installed overlay identity"]
+        if any(value[key] != expected_value for key, expected_value in expected.items()):
             return ["installed overlay differs from checked repair identity"]
-        output = prefix / OUTPUT
+        outputs = value["output_sha256"]
+        if profile["schema"] == 1:
+            outputs = {OUTPUT: outputs}
+        if not isinstance(outputs, dict) or set(outputs) != set(_base_libraries(profile)):
+            return ["installed overlay output inventory mismatch"]
+        for relative, checksum in outputs.items():
+            output = prefix / relative
+            if output.is_symlink() or not output.is_file() or not isinstance(checksum, str) or not SHA256.fullmatch(checksum) or sha256(output) != checksum:
+                return ["installed overlay library checksum mismatch"]
         receipt = prefix / "share/nodal/overlays" / value["id"] / "build.json"
-        if output.is_symlink() or not output.is_file() or sha256(output) != value["output_sha256"]:
-            return ["installed overlay library checksum mismatch"]
         if receipt.is_symlink() or not receipt.is_file() or sha256(receipt) != value["receipt_sha256"]:
             return ["installed overlay build receipt checksum mismatch"]
+        if profile["schema"] == 2:
+            build = json.loads(receipt.read_text(encoding="utf-8"))
+            if (not isinstance(build, dict) or build.get("identity") != expected or
+                    build.get("output_sha256") != outputs or
+                    build.get("sources") != profile["sources"] or
+                    build.get("circt_commit") != profile["circt_commit"] or
+                    build.get("base_lock_sha256") != profile["base_lock_sha256"] or
+                    not isinstance(build.get("build"), dict) or
+                    set(build["build"]) != set(_components(profile)) or
+                    build.get("builder_sha256") != profile["builder_sha256"]):
+                return ["installed overlay build receipt identity mismatch"]
+            for component_build in build["build"].values():
+                if (not isinstance(component_build, dict) or
+                        set(component_build) != {"tools", "llvm_cxxflags", "cmake_cache_sha256"} or
+                        not isinstance(component_build["llvm_cxxflags"], str) or
+                        not SHA256.fullmatch(str(component_build["cmake_cache_sha256"])) or
+                        not isinstance(component_build["tools"], dict) or
+                        set(component_build["tools"]) != {"cxx", "cmake", "ninja", "llvm-config"}):
+                    return ["installed overlay component build identity mismatch"]
+                for tool in component_build["tools"].values():
+                    if (not isinstance(tool, dict) or set(tool) != {"path", "sha256", "version"} or
+                            any(not isinstance(tool[key], str) or not tool[key] for key in tool) or
+                            not SHA256.fullmatch(tool["sha256"])):
+                        return ["installed overlay compiler/tool identity mismatch"]
         return []
     except (OSError, ValueError, TypeError, KeyError, LockError) as exc:
         return [f"cannot validate installed overlay: {exc}"]
@@ -117,7 +191,9 @@ def _cmake_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace(";", "\\;")
 
 
-def _compile_component(prefix: Path, source: Path, build: Path, sources: list[str], jobs: int | None) -> tuple[list[list[str]], dict[str, Any]]:
+def _compile_component(prefix: Path, source: Path, build: Path, sources: list[str], jobs: int | None, component: str = "CIRCTHW") -> tuple[list[list[str]], dict[str, Any]]:
+    if component not in COMPONENTS:
+        raise LockError("overlay build component is outside the closed catalog")
     project = build / "project"
     project.mkdir(parents=True)
     # Compile the complete upstream component using its imported dependency
@@ -131,7 +207,7 @@ execute_process(COMMAND "${NODAL_BASE}/bin/llvm-config" --cxxflags
 separate_arguments(flags NATIVE_COMMAND "${flags}")
 add_library(NodalPatchedCIRCTHW SHARED
 '''
-    content += "".join(f'  "{_cmake_string(str(source / name))}"\n' for name in sources)
+    content += "@SOURCES@"
     content += r''')
 get_target_property(dependencies CIRCTHW INTERFACE_LINK_LIBRARIES)
 target_compile_options(NodalPatchedCIRCTHW PRIVATE ${flags})
@@ -141,13 +217,14 @@ set_target_properties(NodalPatchedCIRCTHW PROPERTIES OUTPUT_NAME CIRCTHW
   BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out")
 '''
+    content = content.replace("CIRCTHW", component).replace("@SOURCES@", "".join(f'  "{_cmake_string(str(source / name))}"\n' for name in sources))
     (project / "CMakeLists.txt").write_text(content, encoding="utf-8")
     commands = [["cmake", "-G", "Ninja", "-S", str(project), "-B", str(build / "native"),
                  "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={prefix}", f"-DNODAL_BASE={prefix}"],
-                ["cmake", "--build", str(build / "native"), "--target", "NodalPatchedCIRCTHW", "--parallel", str(jobs or 2)]]
+                ["cmake", "--build", str(build / "native"), "--target", "NodalPatched" + component, "--parallel", str(jobs or 2)]]
     for command in commands:
         subprocess.run(command, check=True)
-    shutil.copyfile(build / "native/out/libCIRCTHW.so", prefix / OUTPUT)
+    shutil.copyfile(build / f"native/out/lib{component}.so", prefix / f"lib/lib{component}.so")
     cache = (build / "native/CMakeCache.txt").read_text(encoding="utf-8")
     compiler = re.search(r"^CMAKE_CXX_COMPILER:FILEPATH=(.+)$", cache, re.MULTILINE)
     if compiler is None:
@@ -163,10 +240,32 @@ set_target_properties(NodalPatchedCIRCTHW PROPERTIES OUTPUT_NAME CIRCTHW
     return commands, {"tools": tools, "llvm_cxxflags": flags, "cmake_cache_sha256": sha256(build / "native/CMakeCache.txt")}
 
 
+def _component_sources(profile: dict[str, Any], source: Path) -> dict[str, list[str]]:
+    inventories = {}
+    paths = {entry["path"] for entry in profile["sources"]}
+    for component in _components(profile):
+        directory = COMPONENTS[component][0]
+        cmake = (source / directory / "CMakeLists.txt").read_text(encoding="utf-8")
+        patterns = {
+            "CIRCTHW": r"set\(CIRCT_HW_Sources\s+([^)]*)\)",
+            "CIRCTSVTransforms": r"add_circt_dialect_library\(CIRCTSVTransforms\s+(.*?)\s+DEPENDS",
+            "CIRCTExportVerilog": r"add_circt_translation_library\(CIRCTExportVerilog\s+(.*?)\s+ADDITIONAL_HEADER_DIRS",
+        }
+        match = re.search(patterns[component], cmake, re.DOTALL)
+        if not match:
+            raise LockError("overlay cannot find canonical component source inventory")
+        names = match.group(1).split()
+        if not 1 <= len(names) <= 64 or len(names) != len(set(names)) or any(not re.fullmatch(r"[A-Za-z0-9_]+\.cpp", name) or f"{directory}/{name}" not in paths for name in names):
+            raise LockError("overlay component source inventory is not closed")
+        inventories[component] = [f"{directory}/{name}" for name in names]
+    return inventories
+
+
 def apply_overlay(prefix: Path, profile: dict[str, Any], stage: Path, cache: Path,
-                  download: Callable, jobs: int | None) -> dict[str, str]:
-    if sha256(prefix / OUTPUT) != profile["base_library_sha256"]:
-        raise LockError("overlay requires the exact unmodified pinned base library")
+                  download: Callable, jobs: int | None) -> dict[str, Any]:
+    for relative, checksum in _base_libraries(profile).items():
+        if sha256(prefix / relative) != checksum:
+            raise LockError("overlay requires the exact unmodified pinned base libraries")
     source = stage / "overlay-source"
     source.mkdir()
     for entry in profile["sources"]:
@@ -191,21 +290,20 @@ def apply_overlay(prefix: Path, profile: dict[str, Any], stage: Path, cache: Pat
     for entry in profile["sources"]:
         if sha256(source / entry["path"]) != entry["after"]:
             raise LockError(f"overlay patched source checksum mismatch: {entry['path']}")
-    cmake = (source / "lib/Dialect/HW/CMakeLists.txt").read_text(encoding="utf-8")
-    match = re.search(r"set\(CIRCT_HW_Sources\s+([^)]*)\)", cmake)
-    if not match:
-        raise LockError("overlay cannot find canonical CIRCTHW source inventory")
-    names = match.group(1).split()
-    paths = {entry["path"] for entry in profile["sources"]}
-    if not 1 <= len(names) <= 64 or any(not re.fullmatch(r"[A-Za-z0-9_]+\.cpp", name) or f"lib/Dialect/HW/{name}" not in paths for name in names):
-        raise LockError("overlay component source inventory is not closed")
-    commands, build_identity = _compile_component(prefix, source, stage / "overlay-build", [f"lib/Dialect/HW/{name}" for name in names], jobs)
+    inventories = _component_sources(profile, source)
+    commands: list[list[str]] = []
+    builds = {}
+    for component, sources in inventories.items():
+        component_commands, build_identity = _compile_component(prefix, source, stage / "overlay-build" / component, sources, jobs, component)
+        commands.extend(component_commands)
+        builds[component] = build_identity
+    build_identity = builds["CIRCTHW"] if profile["schema"] == 1 else builds
     receipt = prefix / "share/nodal/overlays" / profile["id"] / "build.json"
     receipt.parent.mkdir(parents=True)
     value = {"identity": identity(profile), "circt_commit": profile["circt_commit"],
              "sources": profile["sources"], "commands": [command, *commands],
              "base_lock_sha256": profile["base_lock_sha256"], "build": build_identity,
              "builder_sha256": sha256(Path(__file__)),
-             "output_sha256": sha256(prefix / OUTPUT)}
+             "output_sha256": _outputs(prefix, profile)}
     receipt.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return identity(profile) | {"output_sha256": value["output_sha256"], "receipt_sha256": sha256(receipt)}

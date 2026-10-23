@@ -1280,3 +1280,22 @@ Scope remains existing explicit-storage result finalization in canonical lexical
 contexts. Pure collections, procedural loops, branch-result joins and inferred
 storage lifecycles are excluded from this checkpoint and remain required where
 applicable. No broader target or full pending-construction completion is claimed.
+
+## Checkpoint 32 — coherent native occurrence and conservative integration
+
+The corrected second integration snapshot in `.work/f58-native-integration/second`
+restores 25 native paths and matches all 230 accepted repository source hashes
+(manifest `e2b3e8d5`). Compiler `9fbcef7b` and translator `14df2009` passed nine
+selected unit executables: 650 named cases plus the separately reported
+conservative-connectivity and scalar-materialization units. Retained checks
+also cover 10 actual gate outcomes, eight generated parameter overrides, five
+analog profiles and ten causal analog negatives. Counts are not combined across
+these distinct receipts. The corrected second run, not prior failing attempts,
+is the accepted evidence; no tests are newly executed by this preservation.
+
+Canonical hierarchy/domain owners retain actual generated occurrence provenance,
+external physical-boundary proof and conservative Interface materialization and
+closure. Existing CDC target source is preserved. Generated selected-prefix,
+broader source and physical-target continuations remain separate required work.
+Historical build-generated headers are not newly reproduced or independently
+sealed here. Foundation 58 remains incomplete.

@@ -56,6 +56,16 @@ struct DigitalInterfaceLeaf {
   /// Null means unrepresented, never permission to allocate another net.
   mlir::Value resolvedComponent;
 };
+/// An actual member SSA access, independently checked against its selected role.
+/// Repeated role-qualified accesses to the same endpoint/path share canonicalValue,
+/// not arbitrary connected endpoints, and retain their own
+/// access rights. This is an immutable query result, not a connectivity registry.
+struct DigitalInterfaceAccess {
+  mlir::Value value, canonicalValue;
+  mlir::Operation *projection = nullptr;
+  DigitalInterfaceMember identity;
+  DigitalInterfaceLeaf leaf;
+};
 struct DigitalInterfaceEndpoint {
   /// Parent-owned local declaration or exact child projection operation.
   mlir::Operation *operation = nullptr;
@@ -81,6 +91,12 @@ struct DigitalInterfaceEndpoint {
 mlir::LogicalResult
 collectDigitalInterfaceEndpoints(mlir::Operation *module,
                                  llvm::SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints);
+mlir::LogicalResult
+collectDigitalInterfaceEndpoints(mlir::Operation *module,
+                                 llvm::SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints,
+                                 llvm::SmallVectorImpl<DigitalInterfaceAccess> *accesses);
+/// Per-use independent ingress. Bulk consumers use the combined collector once.
+mlir::FailureOr<DigitalInterfaceAccess> resolveDigitalInterfaceAccess(mlir::Value value);
 
 /// Verified implicit read edges for actual typed member/net values. Canonical
 /// aliases and pass-through components share one physical identity; resolution
@@ -93,6 +109,8 @@ struct DigitalInterfaceValueDependencies {
   /// standalone boundary with no declared Interface domain constraint.
   mlir::FlatSymbolRefAttr domain;
   llvm::SmallVector<std::pair<mlir::Value, mlir::Operation *>, 2> sources;
+  /// Opaque external declaration contribution, never an inferred conditional driver.
+  bool externalContribution = false;
 };
 /// A final observation of actual locally driven Interface/net values. The
 /// canonical owner groups a valid/stream endpoint's forward payload and valid;
@@ -113,6 +131,7 @@ struct DigitalResolvedComponent {
   /// Existing net aliases and read results whose provenance follows this component.
   llvm::SmallVector<mlir::Value, 2> values;
   llvm::SmallVector<mlir::Operation *, 2> drivers, splits;
+  llvm::SmallVector<mlir::Operation *, 2> externalContributions;
 };
 /// Logical slots include unaccessed Interface leaves and existing standalone nets.
 /// Standalone declarations/boundaries use an explicit empty member path. A null
@@ -124,6 +143,9 @@ struct DigitalResolvedEndpoint {
   mlir::StringAttr path;
   mlir::FlatSymbolRefAttr domain;
   mlir::Value component;
+  /// Verified local type and policy. Placement is absent for Interface members.
+  mlir::Type type;
+  mlir::StringAttr mode, profile, placement;
 };
 struct DigitalResolvedTopology {
   llvm::SmallVector<DigitalResolvedComponent> components;

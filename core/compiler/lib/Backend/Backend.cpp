@@ -17,6 +17,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Base64.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -512,6 +513,9 @@ LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &
                           const TargetVerificationHooks *hooks, HierarchyEmission hierarchy) {
   OwningOpRef<ModuleOp> working(llvm::cast<ModuleOp>(module.getOperation()->clone()));
 
+  if (failed(materializeConservativeInterfaceBoundary(*working)))
+    return failure();
+
   FailureOr<BackendConfiguration> configuration = resolveBackendConfiguration(*working, kind);
   if (failed(configuration))
     return failure();
@@ -539,6 +543,19 @@ LogicalResult emitBackend(ModuleOp module, BackendKind kind, llvm::raw_ostream &
   llvm::raw_string_ostream candidateStream(candidate);
   if (failed(renderCandidate(definitions, *configuration, candidateStream)))
     return failure();
+  if (auto correspondence = (*working)->getAttrOfType<ArrayAttr>(
+          "nodal.backend.interface_correspondence")) {
+    // Preserve the complete independently proved logical-to-physical boundary
+    // map. Base64 prevents authored names from becoming target comment syntax.
+    for (Attribute entry : correspondence) {
+      std::string encoded;
+      llvm::raw_string_ostream stream(encoded);
+      entry.print(stream);
+      stream.flush();
+      candidateStream << "// nodal.interface_correspondence mlir-v1 "
+                      << llvm::encodeBase64(encoded) << "\n";
+    }
+  }
   candidateStream.flush();
 
   const TargetVerificationHooks &selectedHooks =

@@ -18,6 +18,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -39,6 +40,18 @@
 using namespace mlir;
 
 namespace {
+
+// One invocation-local budget spans generated domains and structural Integer queries.
+// Re-entry must not reset work/depth limits; no state survives the public query.
+struct GeneratedQueryContext {
+  unsigned work = 0;
+  llvm::DenseSet<Operation *> activeDomains;
+  llvm::DenseMap<Operation *, nodal::GeneratedDomain> domains;
+  bool charge() { return ++work <= 65536; }
+};
+FailureOr<nodal::GeneratedDomain> generatedDomain(Operation *, GeneratedQueryContext &);
+FailureOr<nodal::StructuralIntegerFacts> structuralInteger(Value, Operation *,
+                                                           GeneratedQueryContext &);
 
 enum class ConstantKind { Invalid, Integer, Real, Boolean };
 
@@ -1977,9 +1990,26 @@ LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds l
 LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Operation *diagnostic,
                                                llvm::DenseSet<Value> &active,
                                                llvm::DenseSet<Value> &visited,
+                                               GeneratedQueryContext &query,
                                                bool requireStructural = true) {
-  if (!value)
-    return diagnostic->emitOpError("NODAL-ITERATION-043-001: generated SSA bound has no value");
+  if (!value || !query.charge())
+    return diagnostic->emitOpError(
+        "NODAL-ITERATION-043-001: generated SSA bound has no value or exceeds query work budget");
+  // Cached dependency facts never substitute for the actual use's lexical scope.
+  if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+    auto header = nodal::inspectDigitalRegion(argument.getOwner());
+    if (failed(header) || header->module != owner ||
+        failed(nodal::verifyDigitalValueScope(value, diagnostic)) ||
+        (header->kind == nodal::DigitalRegionKind::Generate &&
+         (argument.getArgNumber() != 0 || !header->operation->isProperAncestor(diagnostic))))
+      return diagnostic->emitOpError(
+          "NODAL-ITERATION-043-001: generated bound argument escapes its actual use scope");
+  }
+  if (Operation *definition = value.getDefiningOp();
+      definition && definition != diagnostic && definition->getParentOp() != owner &&
+      failed(nodal::verifyDigitalValueScope(value, diagnostic)))
+    return diagnostic->emitOpError(
+        "NODAL-ITERATION-043-001: generated bound expression escapes its actual use scope");
   if (visited.contains(value))
     return success();
   if (active.size() >= 512 || !active.insert(value).second)
@@ -2000,6 +2030,13 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
 
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
     auto header = nodal::inspectDigitalRegion(argument.getOwner());
+    if (succeeded(header) && header->kind == nodal::DigitalRegionKind::Generate &&
+        header->module == owner && argument.getArgNumber() == 0 &&
+        header->operation->isProperAncestor(diagnostic) &&
+        succeeded(nodal::verifyDigitalValueScope(value, diagnostic))) {
+      auto domain = generatedDomain(header->operation, query);
+      return finish(success(succeeded(domain) && domain->induction == argument));
+    }
     auto source = nodal::digitalRegionCaptureSource(argument);
     if (failed(header) || header->kind != nodal::DigitalRegionKind::StructuralArm ||
         header->module != owner || failed(source) || !*source ||
@@ -2007,7 +2044,7 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
       return finish(diagnostic->emitOpError(
           "NODAL-ITERATION-043-001: generated bound requires an exact structural capture"));
     return finish(verifyGeneratedBoundDependencies(*source, owner, header->operation, active,
-                                                   visited, requireStructural));
+                                                   visited, query, requireStructural));
   }
   Operation *operation = value.getDefiningOp();
   bool structuralScope = operation && enclosingNodalModule(operation) == owner;
@@ -2048,7 +2085,7 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
           return finish(diagnostic->emitOpError(
               "NODAL-ITERATION-043-001: fixed generated parameter has an invalid expression"));
         if (failed(verifyGeneratedBoundDependencies(definition->getOperand(0), owner, diagnostic,
-                                                    active, visited, requireStructural)))
+                                                    active, visited, query, requireStructural)))
           return finish(failure());
       }
     }
@@ -2069,7 +2106,7 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
     if (operand.getType() != value.getType())
       return finish(diagnostic->emitOpError(
           "NODAL-ITERATION-043-001: generated SSA bound arithmetic type mismatch"));
-    if (failed(verifyGeneratedBoundDependencies(operand, owner, diagnostic, active, visited,
+    if (failed(verifyGeneratedBoundDependencies(operand, owner, diagnostic, active, visited, query,
                                                 requireStructural)))
       return finish(failure());
   }
@@ -2085,7 +2122,7 @@ LogicalResult analyzeGeneratedBounds(Operation *operation, Operation *owner,
                                      IntegerBoundsAnalysis &analysis,
                                      IntegerBoundsAnalysis &generatedAnalysis,
                                      llvm::DenseSet<Value> &verifiedDependencies,
-                                     CheckedGeneratedBounds &out) {
+                                     CheckedGeneratedBounds &out, GeneratedQueryContext &query) {
   if (failed(nodal::verifyGeneratedBoundForm(operation))) {
     return failure();
   }
@@ -2105,15 +2142,14 @@ LogicalResult analyzeGeneratedBounds(Operation *operation, Operation *owner,
     llvm::DenseSet<Value> active;
     for (Value bound : operation->getOperands()) {
       if (failed(verifyGeneratedBoundDependencies(bound, owner, operation, active,
-                                                  verifiedDependencies))) {
+                                                  verifiedDependencies, query))) {
         return failure();
       }
     }
     auto bound = [&](unsigned index) -> FailureOr<IntegerBounds> {
       if (operation->getParentOp() == owner)
         return generatedAnalysis.value(operation->getOperand(index));
-      auto facts =
-          nodal::resolveStructuralIntegerExpression(operation->getOperand(index), operation);
+      auto facts = structuralInteger(operation->getOperand(index), operation, query);
       return succeeded(facts) && facts->expression
                  ? FailureOr<IntegerBounds>(facts->expression->bounds)
                  : FailureOr<IntegerBounds>(failure());
@@ -2179,6 +2215,7 @@ LogicalResult analyzeGeneratedBounds(Operation *operation, Operation *owner,
 }
 
 LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
+  GeneratedQueryContext query;
   IntegerBoundsAnalysis analysis(owner);
   IntegerBoundsAnalysis generatedAnalysis(owner, true);
   llvm::DenseSet<Value> verifiedDependencies;
@@ -2189,7 +2226,7 @@ LogicalResult verifyGeneratedIntegerBounds(Operation *owner) {
       return;
     CheckedGeneratedBounds bounds;
     result = analyzeGeneratedBounds(operation, owner, analysis, generatedAnalysis,
-                                    verifiedDependencies, bounds);
+                                    verifiedDependencies, bounds, query);
   });
   return result;
 }
@@ -2902,6 +2939,7 @@ LogicalResult nodal::verifyGeneratedBoundForm(Operation *operation) {
 
 FailureOr<nodal::GeneratedScopeActivity>
 nodal::analyzeGeneratedScopeActivity(Operation *operation) {
+  GeneratedQueryContext query;
   using Activity = GeneratedScopeActivity;
   if (!operation)
     return failure();
@@ -2917,7 +2955,7 @@ nodal::analyzeGeneratedScopeActivity(Operation *operation) {
   llvm::DenseSet<Value> dependencies;
   CheckedGeneratedBounds bounds;
   if (failed(analyzeGeneratedBounds(operation, module, analysis, generatedAnalysis, dependencies,
-                                    bounds)))
+                                    bounds, query)))
     return failure();
   if (body->getNumArguments() && bounds.step.lower <= 0) {
     operation->emitOpError(
@@ -2940,9 +2978,20 @@ nodal::analyzeGeneratedScopeActivity(Operation *operation) {
   return Activity::MaybeEmpty;
 }
 
-FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *operation) {
-  if (!operation)
+namespace {
+FailureOr<nodal::GeneratedDomain> generatedDomain(Operation *operation,
+                                                  GeneratedQueryContext &query) {
+  using namespace nodal;
+  if (!operation || !query.charge())
     return failure();
+  if (auto found = query.domains.find(operation); found != query.domains.end())
+    return found->second;
+  if (query.activeDomains.size() >= 128 || !query.activeDomains.insert(operation).second) {
+    operation->emitOpError(
+        "NODAL-ITERATION-043-001: generated domain query is cyclic or exceeds depth budget");
+    return failure();
+  }
+  auto release = llvm::scope_exit([&] { query.activeDomains.erase(operation); });
   auto reject = [&](llvm::StringRef code, llvm::StringRef message) -> FailureOr<GeneratedDomain> {
     operation->emitOpError() << code << ": " << message;
     return failure();
@@ -2958,7 +3007,7 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
   llvm::DenseSet<Value> dependencies;
   CheckedGeneratedBounds bounds;
   if (failed(analyzeGeneratedBounds(operation, module, analysis, generatedAnalysis, dependencies,
-                                    bounds)))
+                                    bounds, query)))
     return failure();
   if (bounds.step.lower <= 0)
     return reject("NODAL-ITERATION-043-002", "induction domain requires a proven positive step");
@@ -2971,7 +3020,7 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
   auto expression = [&](unsigned index, llvm::StringRef name) -> FailureOr<InstanceExpression> {
     if (operation->getNumOperands()) {
       if (operation->getParentOp() != module) {
-        auto facts = resolveStructuralIntegerExpression(operation->getOperand(index), operation);
+        auto facts = structuralInteger(operation->getOperand(index), operation, query);
         return succeeded(facts) && facts->expression
                    ? FailureOr<InstanceExpression>(*facts->expression)
                    : FailureOr<InstanceExpression>(failure());
@@ -3001,15 +3050,31 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
   domain.upperExclusive = *upper;
   domain.step = *step;
   domain.maximumTripCount = *count;
-  // A nonempty positive half-open domain proves upper > lower, so subtracting
-  // one cannot underflow. This outer envelope deliberately retains stride holes.
-  if (*count)
+  // Retain stride holes but do not invent a final attained value above the
+  // largest count/step envelope. Widen before multiplying: legal count and
+  // step envelopes can exceed signed i64 intermediates independently.
+  if (*count) {
+    llvm::APInt last(128, static_cast<uint64_t>(bounds.lower.upper), true);
+    last +=
+        llvm::APInt(128, *count - 1) * llvm::APInt(128, static_cast<uint64_t>(bounds.step.upper));
+    llvm::APInt exclusiveLast(128, static_cast<uint64_t>(bounds.upper.upper - 1), true);
+    if (exclusiveLast.slt(last))
+      last = exclusiveLast;
     domain.attainedInductionBounds =
-        ParameterIntegerBounds{bounds.lower.lower, bounds.upper.upper - 1};
+        ParameterIntegerBounds{bounds.lower.lower, last.getSExtValue()};
+  }
+  query.domains.try_emplace(operation, domain);
   return domain;
+}
+} // namespace
+
+FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *operation) {
+  GeneratedQueryContext query;
+  return generatedDomain(operation, query);
 }
 
 FailureOr<nodal::GeneratedDomain> nodal::resolveBoundedIterationDomain(Operation *operation) {
+  GeneratedQueryContext query;
   auto reject = [&](llvm::StringRef message) -> FailureOr<GeneratedDomain> {
     if (operation)
       operation->emitOpError("NODAL-DIGITAL-055-011: ") << message;
@@ -3028,7 +3093,8 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveBoundedIterationDomain(Operation
     return reject("bounded induction must be signless i64 with mathematical signed semantics");
   llvm::DenseSet<Value> active, visited;
   for (Value bound : operation->getOperands().take_front(3))
-    if (failed(verifyGeneratedBoundDependencies(bound, module, operation, active, visited, false)))
+    if (failed(verifyGeneratedBoundDependencies(bound, module, operation, active, visited, query,
+                                                false)))
       return failure();
   InstanceIntegerAnalysis expressions(module, nullptr, false, true);
   auto lower = instanceExpression(expressions.value(operation->getOperand(0)));
@@ -3895,15 +3961,18 @@ namespace {
 /// Neither contextual width formals nor procedural loop induction are static.
 class StructuralIntegerQuery {
 public:
-  explicit StructuralIntegerQuery(bool behavioral = false, bool captureProbe = false)
-      : behavioral(behavioral), captureProbe(captureProbe) {}
+  explicit StructuralIntegerQuery(GeneratedQueryContext &query, bool behavioral = false,
+                                  bool captureProbe = false)
+      : query(query), behavioral(behavioral), captureProbe(captureProbe) {}
   FailureOr<StructuralIntegerFacts> operation(Operation *op) {
     if (!op || op->getNumResults() != 1 || !op->getResult(0).getType().isSignlessInteger(64))
+      return failure();
+    if (!query.charge())
       return failure();
     return compute(op->getResult(0), op, 0);
   }
   FailureOr<StructuralIntegerFacts> resolve(Value value, Operation *use, unsigned depth = 0) {
-    if (depth >= 128 || ++work > 65536 || !value || !value.getType().isSignlessInteger(64) ||
+    if (depth >= 128 || !query.charge() || !value || !value.getType().isSignlessInteger(64) ||
         !use || failed(verifyDigitalValueScope(value, use)))
       return failure();
     if (auto found = memo.find(value); found != memo.end())
@@ -3929,7 +3998,7 @@ private:
         // but never turns it (or arithmetic containing it) into a type binding.
         if (captureProbe)
           return failure();
-        auto domain = resolveGeneratedDomain(h->operation);
+        auto domain = generatedDomain(h->operation, query);
         if (failed(domain) || domain->induction != arg)
           return failure();
         if (!domain->attainedInductionBounds)
@@ -3958,7 +4027,7 @@ private:
       }
       llvm::DenseSet<Value> activeDependencies, visited;
       if (failed(verifyGeneratedBoundDependencies(value, module, use, activeDependencies, visited,
-                                                  !behavioral)))
+                                                  query, !behavioral)))
         return failure();
       if (!captureProbe)
         expression = resolveOwnedIntegerExpression(module, value,
@@ -3986,7 +4055,8 @@ private:
             return failure();
           llvm::DenseSet<Value> activeDependencies, visited;
           if (failed(verifyGeneratedBoundDependencies(definition->getOperand(0), module, use,
-                                                      activeDependencies, visited, !behavioral)))
+                                                      activeDependencies, visited, query,
+                                                      !behavioral)))
             return failure();
         }
       }
@@ -4028,23 +4098,34 @@ private:
                ? FailureOr<StructuralIntegerFacts>(failure())
                : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
   }
+  GeneratedQueryContext &query;
   bool behavioral;
   bool captureProbe;
-  unsigned work = 0;
   llvm::DenseMap<Value, StructuralIntegerFacts> memo;
   llvm::DenseSet<Value> active;
 };
 } // namespace
 LogicalResult verifyStructuralIntegerOperation(Operation *op) {
-  return success(succeeded(StructuralIntegerQuery().operation(op)));
+  GeneratedQueryContext query;
+  return success(succeeded(StructuralIntegerQuery(query).operation(op)));
 }
 FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(Value value, Operation *use) {
-  return StructuralIntegerQuery().resolve(value, use);
+  GeneratedQueryContext query;
+  return structuralInteger(value, use, query);
 }
 FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(Value value, Operation *use) {
-  return StructuralIntegerQuery(true).resolve(value, use);
+  GeneratedQueryContext query;
+  return StructuralIntegerQuery(query, true).resolve(value, use);
 }
 FailureOr<StructuralIntegerFacts> probeBehavioralIntegerCapture(Value value, Operation *use) {
-  return StructuralIntegerQuery(true, true).resolve(value, use);
+  GeneratedQueryContext query;
+  return StructuralIntegerQuery(query, true, true).resolve(value, use);
 }
 } // namespace nodal
+
+namespace {
+FailureOr<nodal::StructuralIntegerFacts> structuralInteger(Value value, Operation *use,
+                                                           GeneratedQueryContext &query) {
+  return nodal::StructuralIntegerQuery(query).resolve(value, use);
+}
+} // namespace

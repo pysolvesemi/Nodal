@@ -483,6 +483,8 @@ struct SampleSource {
 /// One source classification for sampling and direct reconvergence. The physical
 /// graph already owns dependency edges, captures, projections and actual writers.
 SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) {
+  if (node.externalContribution)
+    return {{}, true, node.value ? node.value.getDefiningOp() : node.use, true};
   if (node.hierarchyBoundary)
     return {};
   if (node.sourceDomain)

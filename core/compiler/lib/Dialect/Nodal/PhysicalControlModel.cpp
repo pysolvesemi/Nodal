@@ -10,7 +10,7 @@ namespace nodal {
 FailureOr<PhysicalControl> resolvePhysicalControl(Value value, Operation *use, StringRef kind) {
   auto capability =
       value ? dyn_cast<ControlCapabilityType>(value.getType()) : ControlCapabilityType();
-  Operation *module = use ? use->getParentOp() : nullptr;
+  Operation *module = use ? use->getParentOfType<ModuleOp>() : nullptr;
   if (!capability || capability.getKind() != kind || !isa_and_nonnull<ModuleOp>(module) ||
       failed(verifyDigitalValueScope(value, use)))
     return failure();

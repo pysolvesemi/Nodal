@@ -34,6 +34,8 @@ struct ConservativeEndpoint {
   mlir::Value value;
   ConservativeShape shape;
   mlir::Operation *instance = nullptr;
+  /// For a verified Interface member, this is its actual endpoint declaration;
+  /// shape.declaration is its canonical member_access retaining the complete path.
   mlir::Operation *port = nullptr;
   mlir::Operation *declarationScope = nullptr;
   mlir::Operation *useScope = nullptr;

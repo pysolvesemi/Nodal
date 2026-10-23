@@ -123,6 +123,125 @@ std::string replace(std::string source, StringRef from, StringRef to) {
     llvm::report_fatal_error("missing hierarchy test mutation");
   return source.replace(pos, from.size(), to.str());
 }
+
+std::string generatedFamily(StringRef name, StringRef count, const std::string &body) {
+  std::string n = name.str();
+  auto literal = [&](StringRef suffix, StringRef value) {
+    return "%" + n + "_" + suffix.str() +
+           " = \"nodal.const_literal\"() <{value = " + value.str() +
+           " : i64, spelling = \"" + value.str() +
+           "\", metadata = {}}> : () -> i64\n";
+  };
+  return literal("lo", "0") + literal("hi", count) + literal("step", "1") +
+         "%" + n + " = \"nodal.generate\"(%" + n + "_lo, %" + n + "_hi, %" + n +
+         "_step) <{induction = \"i\", region_id = \"Top." + n +
+         "\", induction_path = \"Top." + n +
+         ".index\", metadata = {maximum_trip_count = " + count.str() + " : i64, semantic_path = \"Top." + n + "\"}}> ({^bb0(%" + n +
+         "_index: i64):\n" + body + "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+}
+std::string generatedChild(StringRef family) {
+  std::string scope = "generated_owner = \"Top." + family.str() +
+                      "\", generated_induction = \"Top." + family.str() + ".index\", ";
+  return "\"nodal.instance\"() <{sym_name = \"lane\", module = @Lane, parameter_bindings = {}, "
+         "domain_bindings = {req = @a}, " + scope + "metadata = {}}> : () -> ()\n" +
+         binding("lane", "req", "a") + proxy("lane_in", "lane", "in", "input") +
+         proxy("lane_out", "lane", "out", "output") + assign("lane_in", "x") +
+         "%sink = \"nodal.digital_storage\"() <{name = \"sink\", kind = \"register\", "
+         "domain = @a, metadata = {}}> : () -> " + bit + "\n" +
+         assign("sink", "lane_out", "register_next");
+}
+std::string generatedFixture(StringRef count = "3", bool nested = false) {
+  std::string child = requirement("req") + port("in", "input", "req") +
+                      port("out", "output", "req") + assign("out", "in");
+  std::string family = nested ? "outer.lanes" : "lanes";
+  std::string body = generatedFamily(family, count, generatedChild(family));
+  if (nested)
+    body = generatedFamily("outer", "2", body);
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         module("Top", domain("a") + domain("b") + port("x", "input", "a") + body) +
+         module("Lane", child) + "}\n";
+}
+
+std::string guardedGeneratedFixture(bool rawOuter = false) {
+  std::string child = generatedChild("guard.then.lanes");
+  child = replace(child, "instance_domain_binding\"(%clock_a)",
+                  rawOuter ? "instance_domain_binding\"(%clock_a)"
+                           : "instance_domain_binding\"(%arm_clock)");
+  child = replace(child, assign("lane_in", "x"), assign("lane_in", "arm_x"));
+  std::string branch =
+      "%guard_zero = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", metadata = {semantic_path = \"Top.guard_zero\"}}> : () -> i64\n"
+      "%guard_one = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", metadata = {semantic_path = \"Top.guard_one\"}}> : () -> i64\n"
+      "%guard = \"nodal.static_compare\"(%guard_one, %guard_zero) <{comparison = \"gt\", metadata = {semantic_path = \"Top.guard.predicate\"}}> : (i64, i64) -> !nodal.static_predicate\n"
+      "\"nodal.structural_if\"(%guard, %clock_a, %x) <{contract_version = \"structural-if-v1\", region_id = \"Top.guard\", operandSegmentSizes = array<i32: 1, 2, 0>, metadata = {semantic_path = \"Top.guard\"}}> ({^bb0(%arm_clock: " + clockType + ", %arm_x: " + bit + "):\n" +
+      generatedFamily("guard.then.lanes", "3", child) +
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Top.guard.then.yield\"}}> : () -> ()\n"
+      "}, {\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Top.guard.else.yield\"}}> : () -> ()}) : (!nodal.static_predicate, " + clockType + ", " + bit + ") -> ()\n";
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         module("Top", domain("a") + domain("b") + port("x", "input", "a") + branch) +
+         module("Lane", requirement("req") + port("in", "input", "req") +
+                            port("out", "output", "req") + assign("out", "in")) + "}\n";
+}
+
+std::string generatedResetFixture() {
+  const std::string resetType = "!nodal.capability<\"reset\">";
+  const std::string resetsType = "!nodal.shaped<\"2\", " + resetType + ">";
+  std::string controls =
+      "\"nodal.port\"() <{sym_name = \"resets\", type = " + resetsType + ", direction = \"input\", domain = @a, metadata = {}}> : () -> ()\n"
+      "%resets = \"nodal.port_value\"() <{port = @resets, metadata = {}}> : () -> " + resetsType + "\n"
+      "%r0 = \"nodal.constant\"() <{value = 0 : index, metadata = {}}> : () -> index\n"
+      "%r1 = \"nodal.constant\"() <{value = 1 : index, metadata = {}}> : () -> index\n"
+      "%reset0 = \"nodal.shape_index\"(%resets, %r0) <{metadata = {}}> : (" + resetsType + ", index) -> " + resetType + "\n"
+      "%reset1 = \"nodal.shape_index\"(%resets, %r1) <{metadata = {}}> : (" + resetsType + ", index) -> " + resetType + "\n";
+  std::string actualDomain = replace(domain("a"), "reset_policy = \"none\"", "reset_policy = \"sync\"");
+  actualDomain = replace(actualDomain, "\"nodal.local_domain_binding\"(%clock_a)", controls + "\"nodal.local_domain_binding\"(%clock_a, %reset0)");
+  actualDomain = replace(actualDomain, ": (" + clockType + ") -> ()", ": (" + clockType + ", " + resetType + ") -> ()");
+  std::string child = generatedChild("lanes");
+  std::string bound = replace(binding("lane", "req", "a"), "(%clock_a)", "(%clock_a, %reset0)");
+  bound = replace(bound, ": (" + clockType + ") -> ()", ": (" + clockType + ", " + resetType + ") -> ()");
+  child = replace(child, binding("lane", "req", "a"), bound);
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         module("Top", actualDomain + port("x", "input", "a") + generatedFamily("lanes", "3", child)) +
+         module("Lane", requirement("req") + port("in", "input", "req") + port("out", "output", "req") + assign("out", "in")) + "}\n";
+}
+
+std::string conditionalGeneratedFixture(bool complete) {
+  std::string effect =
+      "%condition_one = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", metadata = {semantic_path = \"Top.lanes.one\"}}> : () -> i64\n"
+      "%condition = \"nodal.static_compare\"(%lanes_index, %condition_one) <{comparison = \"lt\", metadata = {semantic_path = \"Top.lanes.condition\"}}> : (i64, i64) -> !nodal.static_predicate\n"
+      "\"nodal.structural_if\"(%condition, %lane_in, %x" + std::string(complete ? ", %lane_in, %x" : "") + ") <{contract_version = \"structural-if-v1\", region_id = \"Top.lanes.choice\", operandSegmentSizes = array<i32: 1, 2, " + (complete ? "2" : "0") + ">, metadata = {semantic_path = \"Top.lanes.choice\"}}> ({^bb0(%in_t: " + bit + ", %x_t: " + bit + "):\n" +
+      assign("in_t", "x_t") + "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Top.lanes.choice.then.yield\"}}> : () -> ()\n}, {" +
+      (complete ? "^bb0(%in_f: " + bit + ", %x_f: " + bit + "):\n" + assign("in_f", "x_f") : "") +
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Top.lanes.choice.else.yield\"}}> : () -> ()\n}) : (!nodal.static_predicate, " + bit + ", " + bit + (complete ? ", " + bit + ", " + bit : "") + ") -> ()\n";
+  return replace(generatedFixture(), assign("lane_in", "x"), effect);
+}
+
+std::string crossingFamilyFixture(bool generated) {
+  std::string body = instance("left");
+  if (generated)
+    body = replace(body, "module = @Child,", "module = @Child, generated_owner = \"Top.lanes\", generated_induction = \"Top.lanes.index\",");
+  body += "%q = \"nodal.digital_storage\"() <{name = \"q\", kind = \"register\", domain = @b, metadata = {}}> : () -> " + bit + "\n" + assign("q", "left_out", "register_next");
+  if (generated)
+    body = generatedFamily("lanes", "3", body);
+  std::string child = requirement("src") + requirement("dst") + port("in", "input", "src") + port("out", "output", "dst") + crossing("sync", "in", "src", "dst", "Child") + assign("out", "sync");
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", domain("a") + domain("b") + port("x", "input", "a") + body) + module("Child", child) + "}\n";
+}
+std::string resolvedFamilyFixture(bool generated) {
+  const std::string net = "!nodal.resolved<\"push_pull\", " + bit + ">";
+  const std::string tag = "metadata = {interface_abi_version = 1 : i64}";
+  const std::string child = requirement("req") + port("in", "input", "req") + port("out", "output", "req") +
+      "%net = \"nodal.resolved_net\"() <{name = \"net\", metadata = {interface_abi_version = 1 : i64, placement = \"top_level_pin\", profile = \"portable_boundary_only\"}}> : () -> " + net + "\n"
+      "%driver = \"nodal.net_driver\"(%net) <{driver_id = \"driver\", " + tag + "}> : (" + net + ") -> !nodal.driver<" + bit + ">\n"
+      "%enable = \"nodal.const_literal\"() <{value = 1 : ui1, spelling = \"1\", metadata = {}}> : () -> " + bit + "\n"
+      "\"nodal.net_drive\"(%net, %driver, %in, %enable) <{mode = \"push_pull\", " + tag + "}> : (" + net + ", !nodal.driver<" + bit + ">, " + bit + ", " + bit + ") -> ()\n"
+      "%write, %enabled = \"nodal.net_split\"(%net) <{" + tag + "}> : (" + net + ") -> (" + bit + ", " + bit + ")\n" + assign("out", "write");
+  std::string body = generatedChild("lanes");
+  if (generated)
+    body = generatedFamily("lanes", "3", body);
+  else
+    body = replace(body, "generated_owner = \"Top.lanes\", generated_induction = \"Top.lanes.index\", ", "");
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", domain("a") + port("x", "input", "a") + body) + module("Lane", child) + "}\n";
+}
+
 } // namespace
 int main() {
   MLIRContext context;
@@ -151,6 +270,116 @@ int main() {
       llvm::errs() << "FAIL " << name << '\n' << diagnostics;
     }
   };
+
+  check("generated-child-guarded-capture", guardedGeneratedFixture(), true);
+  check("generated-child-guarded-raw-outer-rejected", guardedGeneratedFixture(true), false,
+        "parent-local SSA ownership");
+  check("generated-child-guarded-wrong-clock-capture",
+        replace(guardedGeneratedFixture(), "structural_if\"(%guard, %clock_a, %x)",
+                "structural_if\"(%guard, %clock_b, %x)"), false, "actual instance Clock");
+  check("generated-child-projected-reset", generatedResetFixture(), true);
+  check("generated-child-wrong-projected-reset",
+        replace(generatedResetFixture(), "instance_domain_binding\"(%clock_a, %reset0)",
+                "instance_domain_binding\"(%clock_a, %reset1)"), false, "actual instance Reset");
+  auto mutatedControl = [&](StringRef name, const std::string &source, auto mutate,
+                            StringRef message) {
+    diagnostics.clear();
+    ++count;
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    nodal::InstanceDomainBindingOp actual;
+    if (parsed)
+      parsed->walk([&](nodal::InstanceDomainBindingOp op) { actual = op; });
+    bool ok = parsed && actual && succeeded(verify(*parsed));
+    diagnostics.clear();
+    if (ok) {
+      mutate(*parsed, actual.getOperation());
+      ok = failed(verify(*parsed)) && StringRef(diagnostics).contains(message);
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  mutatedControl("generated-child-foreign-module-clock", generatedFixture(),
+                 [&](mlir::ModuleOp outer, Operation *actual) {
+                   outer.walk([&](nodal::RequirementClockOp clock) {
+                     actual->setOperand(0, clock->getResult(0));
+                   });
+                 }, "parent-local SSA ownership");
+  mutatedControl("generated-child-nondominating-clock", generatedFixture(),
+                 [&](mlir::ModuleOp, Operation *actual) {
+                   Operation *copy = actual->getOperand(0).getDefiningOp()->clone();
+                   actual->getParentOfType<nodal::ModuleOp>()->getRegion(0).front().push_back(copy);
+                   actual->setOperand(0, copy->getResult(0));
+                 }, "parent-local SSA ownership");
+  mutatedControl("generated-child-wrong-clock-capability-type", generatedResetFixture(),
+                 [&](mlir::ModuleOp, Operation *actual) { actual->setOperand(0, actual->getOperand(1)); },
+                 "requires one Clock");
+  mutatedControl("generated-child-wrong-reset-capability-type", generatedResetFixture(),
+                 [&](mlir::ModuleOp, Operation *actual) { actual->setOperand(1, actual->getOperand(0)); },
+                 "requires one Clock");
+  check("generated-child-conditional-complete-input", conditionalGeneratedFixture(true), true);
+  check("generated-child-conditional-hole-input", conditionalGeneratedFixture(false), false,
+        "undriven combinational wire");
+  check("ordinary-child-executable-crossing-control", crossingFamilyFixture(false), true);
+  check("generated-child-executable-crossing-needs-selected-provenance", crossingFamilyFixture(true), false,
+        "selection-qualified lane provenance");
+  check("ordinary-child-resolved-split-control", resolvedFamilyFixture(false), true);
+  check("generated-child-resolved-split-needs-selected-driver-proof", resolvedFamilyFixture(true), false,
+        "selection-qualified driver proof");
+  check("generated-child-local-boundary", generatedFixture(), true);
+  check("generated-child-empty-family", generatedFixture("0"), true);
+  check("generated-child-large-retained-family", generatedFixture("1000000"), true);
+  check("generated-child-nested-family", generatedFixture("3", true), true);
+  check("generated-child-clock-mismatch",
+        replace(generatedFixture(), "instance_domain_binding\"(%clock_a)",
+                "instance_domain_binding\"(%clock_b)"), false, "actual instance Clock");
+  check("generated-child-foreign-domain",
+        replace(generatedFixture(), "domain_bindings = {req = @a}",
+                "domain_bindings = {req = @foreign}"), false, "parent actuals");
+  check("generated-child-owner-forgery",
+        replace(generatedFixture(), "generated_owner = \"Top.lanes\"",
+                "generated_owner = \"Top.other\""), false, "exact generated owner");
+  // A symbol reference outside the actual family never denotes a selected lane.
+  check("generated-child-no-implicit-parent-selection",
+        replace(generatedFixture(), port("x", "input", "a"),
+                port("x", "input", "a") + proxy("escaped", "lane", "out", "output")),
+        false, "exact lexical immediate-child");
+  check("generated-child-direction-not-weakened",
+        replace(generatedFixture(), "port = \"out\", direction = \"output\"",
+                "port = \"out\", direction = \"input\""), false, "exact child data type");
+  check("generated-child-output-readonly",
+        replace(generatedFixture(), assign("lane_in", "x"), assign("lane_out", "x")),
+        false, "read-only");
+  check("generated-child-missing-input-connection",
+        replace(generatedFixture(), assign("lane_in", "x"), ""), false, "typed connection");
+  check("generated-child-missing-physical-binding",
+        replace(generatedFixture(), binding("lane", "req", "a"), ""), false,
+        "unique concrete instance binding");
+  for (bool nested : {false, true}) {
+    diagnostics.clear();
+    ++count;
+    auto parsed = parseSourceString<mlir::ModuleOp>(generatedFixture("1000000", nested),
+                                                    ParserConfig(&context, false));
+    auto hierarchy = parsed ? nodal::HierarchyModel::create(parsed->getOperation())
+                            : FailureOr<std::shared_ptr<nodal::HierarchyModel>>(failure());
+    bool ok = succeeded(hierarchy) && (*hierarchy)->occurrences().size() == 2;
+    if (ok) {
+      auto &context = (*hierarchy)->occurrences()[1];
+      ok = context.generatedScopes.size() == (nested ? 2u : 1u) &&
+           context.generatedScopes.back().domain.maximumTripCount == 1000000 &&
+           context.generatedScopes.back().family == context.instance->getParentOp();
+      for (const auto &scope : context.generatedScopes)
+        ok &= scope.occurrence == 0 && scope.domain.induction &&
+              scope.domain.induction == scope.family->getRegion(0).front().getArgument(0);
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL generated-context-without-lane-expansion " << nested << '\n'
+                   << diagnostics;
+    }
+  }
+
   check("child-to-parent-level-boundary", fixture(), true);
   check("parent-to-child-level-boundary", fixture(false, false, false, false, true), true);
   check("reused-definition-distinct-actual-clocks", fixture(true, false, true), true);

@@ -84,7 +84,8 @@ def Nodal_PlaceholderOp : Nodal_Op<"placeholder"> {
 def Nodal_ModuleOp : Nodal_Op<"module",
     [IsolatedFromAbove, Symbol, SymbolTable, NoTerminator]> {
   let summary = "Target-neutral Nodal hardware module";
-  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
+  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata,
+                       OptionalAttr<StrAttr>:$external_name);
   let regions = (region SizedRegion<1>:$body);
   let hasVerifier = 1;
 }
@@ -210,7 +211,7 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
 }
 
 // F57: actual immediate-child data boundaries, distinct from conservative terminals.
-def Nodal_InstancePortOp : Nodal_Op<"instance_port", [HasParent<"ModuleOp">]> {
+def Nodal_InstancePortOp : Nodal_Op<"instance_port", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Parent-owned exact immediate-child digital port reference";
   let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port,
     StrAttr:$direction, DictionaryAttr:$metadata);
@@ -218,7 +219,7 @@ def Nodal_InstancePortOp : Nodal_Op<"instance_port", [HasParent<"ModuleOp">]> {
   let hasVerifier = 1;
 }
 def Nodal_InstanceDomainBindingOp : Nodal_Op<"instance_domain_binding",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Actual parent-owned capabilities bound to one child requirement";
   let arguments = (ins AnyType:$clock, Variadic<AnyType>:$reset,
     FlatSymbolRefAttr:$instance, FlatSymbolRefAttr:$requirement,

@@ -30,6 +30,9 @@ struct GeneratedMember {
   bool familyView = false;
   enum class Access { Read, Wire, Register } access = Access::Read;
 };
+/// Original direct family for one checked local storage or child-port root.
+/// This is not a proof about externally selected aliases or all physical lanes.
+mlir::Operation *resolveGeneratedLocalRootFamily(mlir::Operation *root);
 mlir::LogicalResult verifyGeneratedFamilyOperation(mlir::Operation *operation);
 mlir::LogicalResult verifyGeneratedExportOperation(mlir::Operation *operation);
 mlir::FailureOr<GeneratedMember> inspectGeneratedMember(mlir::Operation *operation);
@@ -87,6 +90,9 @@ struct DigitalDependencyNode {
   /// action. This is an obligation, never an absent Reset capability. Closed
   /// hierarchy composition resolves it independently for every occurrence.
   mlir::FlatSymbolRefAttr contextualReset;
+  /// Opaque external contribution remains a real unannotated source while the
+  /// same component also retains every explicit authored driver dependency.
+  bool externalContribution = false;
 };
 struct DigitalCrossingSample {
   unsigned root;
@@ -144,9 +150,30 @@ struct DigitalResolvedSplitBinding {
   mlir::Value component, data, enable;
   mlir::StringAttr level;
 };
+struct DigitalResolvedOccurrenceOperation {
+  unsigned occurrence = 0;
+  mlir::Operation *operation = nullptr;
+};
+struct DigitalResolvedOccurrenceEndpoint {
+  unsigned occurrence = 0;
+  DigitalResolvedEndpoint endpoint;
+};
+/// Successful component facts from the same exact occurrence union. A missing
+/// representative Value retains a logical unaccessed endpoint, never fabricated data.
+struct DigitalResolvedHierarchyComponent {
+  unsigned occurrence = 0;
+  mlir::Value representative;
+  llvm::SmallVector<DigitalResolvedOccurrenceEndpoint, 0> endpoints;
+  llvm::SmallVector<DigitalResolvedOccurrenceOperation, 2> drivers, externalContributions;
+};
 mlir::LogicalResult verifyHierarchyDependencies(
     std::shared_ptr<const HierarchyModel> hierarchy, DigitalAssignmentProofLimits limits = {},
     llvm::SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings = nullptr);
+mlir::LogicalResult
+verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                            DigitalAssignmentProofLimits limits,
+                            llvm::SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings,
+                            llvm::SmallVectorImpl<DigitalResolvedHierarchyComponent> *components);
 
 /// Verify an owned structural wire/register declaration. The actual SSA result
 /// retains the recursive value type; register initialization and domain are

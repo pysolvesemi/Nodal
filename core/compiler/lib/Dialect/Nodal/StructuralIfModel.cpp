@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
@@ -279,6 +280,36 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
   if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GeneratedMemberOp>(op))
     return success(succeeded(inspectGeneratedMember(op)));
   if (!pure && generatedStorage && op->getParentOp() == family) {
+    if (llvm::isa<InstanceOp>(op))
+      return verifyHierarchyInstanceOperation(op);
+    if (llvm::isa<ParameterOverrideOp>(op)) {
+      auto boundary = resolveHierarchyInstance(op, op->getAttr("instance"));
+      auto reference = op->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *parameter = nullptr;
+      if (succeeded(boundary) && reference)
+        for (Operation &candidate : boundary->module->getRegion(0).front())
+          if (llvm::isa<ParameterOp>(candidate) && text(&candidate, "sym_name") == reference.getValue())
+            parameter = &candidate;
+      auto declared = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      for (NamedAttribute attribute : op->getAttrs())
+        if (!llvm::is_contained(ArrayRef<StringRef>{"instance", "parameter", "generated_owner",
+                                                   "generated_induction", "metadata"},
+                                attribute.getName().getValue()))
+          return reject(op, "generated parameter override carries an unsupported field");
+      if (failed(boundary) || boundary->instance->getParentOp() != family || !parameter ||
+          !declared || !declared.getValue().isSignlessInteger(64) || op->getNumOperands() != 1 ||
+          op->getOperand(0).getType() != declared.getValue() ||
+          !op->getOperand(0).getDefiningOp() ||
+          op->getOperand(0).getDefiningOp()->getParentOp() != at->module() ||
+          failed(mlir::verify(op, false)) ||
+          failed(resolveInstanceIntegerParameter(boundary->instance, parameter)))
+        return reject(op, "generated child parameter override requires exact invariant Integer formal/actual proof");
+      return success();
+    }
+    if (llvm::isa<InstanceDomainBindingOp>(op))
+      return verifyInstanceDomainBinding(op);
+    if (llvm::isa<InstancePortOp>(op))
+      return success(succeeded(inspectInstancePort(op)));
     if (llvm::isa<DigitalStorageOp>(op))
       return verifyDigitalStorageOperation(op);
     if (op->getName().getStringRef() == "nodal.generated_export")
@@ -395,21 +426,38 @@ FailureOr<SmallVector<BlockArgument, 8>> captureUseOrder(Block *body, unsigned &
     attribute.walkImmediateSubElements([&](Attribute a) { visitAttribute(a, depth + 1); },
                                        [&](Type t) { visitType(t, depth + 1); });
   };
-  for (Operation &child : *body) {
-    for (Value operand : child.getOperands()) {
+  std::function<LogicalResult(Block *, unsigned)> visitBlock =
+      [&](Block *current, unsigned depth) -> LogicalResult {
+    if (depth >= 128)
+      return failure();
+    for (Operation &child : *current) {
       if (++work > maximumWork)
         return failure();
-      mark(operand);
+      for (Value operand : child.getOperands()) {
+        if (++work > maximumWork)
+          return failure();
+        mark(operand);
+      }
+      for (NamedAttribute attribute : child.getAttrs())
+        visitAttribute(attribute.getValue(), 0);
+      for (Type type : child.getOperandTypes())
+        visitType(type, 0);
+      for (Type type : child.getResultTypes())
+        visitType(type, 0);
+      if (!valid)
+        return failure();
+      // Generate is deliberately non-isolated. Its actual nested body can use
+      // this arm's arguments directly; other regions expose explicit captures.
+      if (llvm::isa<GenerateOp>(child)) {
+        if (child.getNumRegions() != 1 || !llvm::hasSingleElement(child.getRegion(0)) ||
+            failed(visitBlock(&child.getRegion(0).front(), depth + 1)))
+          return failure();
+      }
     }
-    for (NamedAttribute attribute : child.getAttrs())
-      visitAttribute(attribute.getValue(), 0);
-    for (Type type : child.getOperandTypes())
-      visitType(type, 0);
-    for (Type type : child.getResultTypes())
-      visitType(type, 0);
-    if (!valid)
-      return failure();
-  }
+    return success();
+  };
+  if (failed(visitBlock(body, 0)))
+    return failure();
   return result;
 }
 LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, Budget &budget,

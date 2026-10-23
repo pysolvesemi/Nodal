@@ -531,6 +531,123 @@ int main() {
           left && other &&
               !nodal::areOppositeStructuralArms(left, &other->getRegion(1).front().back()));
   }
+  {
+    const std::string scalar = "!nodal.uint<8>";
+    auto generate = [&](std::string name, std::string index, std::string upper,
+                        std::string body) {
+      return "%" + index + "Family = \"nodal.generate\"(%localLo, %" + upper +
+             ", %localStep) <{induction = \"" + index + "\", region_id = \"Fixture." + name +
+             "\", induction_path = \"Fixture." + name + "." + index +
+             "\", metadata = {semantic_path = \"Fixture." + name +
+             "\", maximum_trip_count = 2 : i64}}> ({^bb0(%" + index + ": i64):\n" + body +
+             "%" + index + "Stored = \"nodal.digital_storage\"() <{name = \"stored\", kind = \"wire\", " +
+             metadata(name + ".stored") + "}> : () -> " + scalar + "\n" +
+             "\"nodal.generated_export\"(%" + index + "Stored) <{member = \"stored\", access = \"read\", " +
+             metadata(name + ".export.stored") + "}> : (" + scalar + ") -> ()\n" +
+             "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+    };
+    const std::string value =
+        "%used = \"nodal.digital_storage\"() <{name = \"used\", kind = \"wire\", " +
+        metadata("choice.then.used") + "}> : () -> " + scalar + "\n" +
+        "\"nodal.digital_assign\"(%used, %ax) <{kind = \"continuous\", " + metadata("choice.then.assignA") +
+        "}> : (" + scalar + ", " + scalar + ") -> ()\n" +
+        "%usedB = \"nodal.digital_storage\"() <{name = \"usedB\", kind = \"wire\", " +
+        metadata("choice.then.usedB") + "}> : () -> " + scalar + "\n" +
+        "\"nodal.digital_assign\"(%usedB, %bx) <{kind = \"continuous\", " + metadata("choice.then.assignB") +
+        "}> : (" + scalar + ", " + scalar + ") -> ()\n";
+    auto body = [&](bool nested) {
+      const std::string generated =
+          generate("choice.then.outer", "outerIndex", "bound", nested ? generate("choice.then.outer.inner", "innerIndex", "bound", value) : value);
+      return param() + compare() + literal("hi", 2) + port("a", scalar) + port("b", scalar) +
+             "\"nodal.structural_if\"(%pred, %hi, %a, %b) <{contract_version = \"structural-if-v1\", "
+             "region_id = \"Fixture.choice\", operandSegmentSizes = array<i32: 1, 3, 0>, " +
+             metadata("choice") + "}> ({^bb0(%bound: i64, %ax: " + scalar + ", %bx: " + scalar +
+             "):\n" + literal("localLo", 0) + literal("localStep", 1) + generated + yield("then") +
+             "}, {^bb0:\n" + yield("else") + "}) : (!nodal.static_predicate, i64, " + scalar +
+             ", " + scalar + ") -> ()\n";
+    };
+    verifyCase("generate-bound-then-body-first-use", body(false), true);
+    verifyCase("nested-generate-first-use-preorder", body(true), true);
+    verifyCase("nested-generate-misordered-capture-reject",
+               replace(replace(body(true), "%used, %ax", "%used, %bx"), "%usedB, %bx", "%usedB, %ax"), false);
+    verifyCase("nested-generate-duplicate-capture-reject",
+               replace(body(true), "%pred, %hi, %a, %b", "%pred, %hi, %a, %a"), false);
+    verifyCase("nested-generate-unused-capture-reject",
+               replace(body(true), "%usedB, %bx", "%usedB, %ax"), false);
+    auto repaired = parse(replace(replace(body(true), "%used, %ax", "%used, %bx"), "%usedB, %bx", "%usedB, %ax"));
+    nodal::StructuralIfOp choiceOp;
+    if (repaired)
+      repaired->walk([&](nodal::StructuralIfOp value) { choiceOp = value; });
+    unsigned work = 0;
+    check("generated-capture-canonicalization-shares-preorder",
+          choiceOp && succeeded(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 65536)) &&
+              succeeded(verify(*repaired)));
+    work = 0;
+    check("generated-capture-inventory-budget-reject",
+          choiceOp && failed(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 1)));
+  }
+
+  {
+    const std::string scalar = "!nodal.uint<8>";
+    auto generate = [&](std::string name, std::string index, std::string upper,
+                        std::string body) {
+      return "%" + index + "Family = \"nodal.generate\"(%localLo, %" + upper +
+             ", %localStep) <{induction = \"" + index + "\", region_id = \"Fixture." + name +
+             "\", induction_path = \"Fixture." + name + "." + index +
+             "\", metadata = {semantic_path = \"Fixture." + name +
+             "\", maximum_trip_count = 2 : i64}}> ({^bb0(%" + index + ": i64):\n" + body +
+             "%" + index + "Stored = \"nodal.digital_storage\"() <{name = \"stored\", kind = \"wire\", " +
+             metadata(name + ".stored") + "}> : () -> " + scalar + "\n" +
+             "\"nodal.generated_export\"(%" + index + "Stored) <{member = \"stored\", access = \"read\", " +
+             metadata(name + ".export.stored") + "}> : (" + scalar + ") -> ()\n" +
+             "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+    };
+    const std::string value =
+        "%used = \"nodal.digital_expr\"(%ax, %bx) <{operator_name = \"digital_xor\", " +
+        metadata("used") + "}> : (" + scalar + ", " + scalar + ") -> " + scalar + "\n";
+    auto body = [&](bool nested) {
+      const std::string generated =
+          generate("choice.then.outer", "outerIndex", "bound", nested ? generate("choice.then.outer.inner", "innerIndex", "bound", value) : value);
+      return param() + compare() + literal("hi", 2) + port("a", scalar) + port("b", scalar) +
+             "\"nodal.structural_if\"(%pred, %hi, %a, %b) <{contract_version = \"structural-if-v1\", "
+             "region_id = \"Fixture.choice\", operandSegmentSizes = array<i32: 1, 3, 0>, " +
+             metadata("choice") + "}> ({^bb0(%bound: i64, %ax: " + scalar + ", %bx: " + scalar +
+             "):\n" + literal("localLo", 0) + literal("localStep", 1) + generated + yield("then") +
+             "}, {^bb0:\n" + yield("else") + "}) : (!nodal.static_predicate, i64, " + scalar +
+             ", " + scalar + ") -> ()\n";
+    };
+    verifyCase("scalar-generate-bound-then-body-first-use", body(false), true);
+    auto widthForgery = [&](std::string token) {
+      return replace(body(true), "%used = ",
+          "%forgedWidth = \"nodal.digital_storage\"() <{name = \"forgedWidth\", kind = \"wire\", " +
+          metadata("choice.then.outer.inner.forgedWidth") + "}> : () -> !nodal.digital<\"uint\", \"" +
+          token + "\">\n%used = ");
+    };
+    verifyCase("generated-parent-context-does-not-bind-induction-as-width",
+               widthForgery("Fixture.choice.then.outer.outerIndex"), false);
+    verifyCase("generated-parent-context-rejects-foreign-width-owner",
+               widthForgery("Foreign.other.index"), false);
+
+    verifyCase("scalar-nested-generate-first-use-preorder", body(true), true);
+    verifyCase("scalar-nested-generate-misordered-capture-reject",
+               replace(body(true), "(%ax, %bx)", "(%bx, %ax)"), false);
+    verifyCase("scalar-nested-generate-duplicate-capture-reject",
+               replace(body(true), "%pred, %hi, %a, %b", "%pred, %hi, %a, %a"), false);
+    verifyCase("scalar-nested-generate-unused-capture-reject",
+               replace(body(true), "(%ax, %bx)", "(%ax, %ax)"), false);
+    auto repaired = parse(replace(body(true), "(%ax, %bx)", "(%bx, %ax)"));
+    nodal::StructuralIfOp choiceOp;
+    if (repaired)
+      repaired->walk([&](nodal::StructuralIfOp value) { choiceOp = value; });
+    unsigned work = 0;
+    check("scalar-generated-capture-canonicalization-shares-preorder",
+          choiceOp && succeeded(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 65536)) &&
+              succeeded(verify(*repaired)));
+    work = 0;
+    check("scalar-generated-capture-inventory-budget-reject",
+          choiceOp && failed(nodal::canonicalizeStructuralIfCaptures(choiceOp, work, 1)));
+  }
+
   llvm::outs() << "STRUCTURAL_IF_CASES " << cases << " FAILURES " << failures << '\n';
   return failures ? 1 : 0;
 }

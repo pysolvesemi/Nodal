@@ -689,7 +689,7 @@ inferDigitalWidthExpression(Type type, Operation *module,
 FailureOr<InstantiatedIntegerExpression> inferInstanceDigitalWidthExpression(Type type,
                                                                              Operation *instance) {
   Operation *module = resolveInstanceModuleDefinition(instance);
-  if (!module || !isa_and_nonnull<nodal::ModuleOp>(instance->getParentOp()))
+  if (!module || failed(verifyHierarchyInstanceOperation(instance)))
     return failure();
   if (failed(inferDigitalWidthBounds(type, module)))
     return failure();
@@ -724,7 +724,7 @@ bool equivalentDigitalStorageTypesAcross(Type left, const ParameterIntegerEnviro
       .equivalentStorageTypesAcross(left, right, rightContext);
 }
 bool equivalentInstanceDigitalStorageTypes(Operation *instance, Type formal, Type actual) {
-  return instance && equivalentDigitalStorageTypesAcrossInstances(instance->getParentOp(), formal,
+  return instance && equivalentDigitalStorageTypesAcrossInstances(instance->getParentOfType<nodal::ModuleOp>(), formal,
                                                                   instance, actual, nullptr);
 }
 bool equivalentDigitalStorageTypesAcrossInstances(Operation *parent, Type left,
@@ -735,7 +735,10 @@ bool equivalentDigitalStorageTypesAcrossInstances(Operation *parent, Type left,
   auto owner = [&](Operation *instance) -> Operation * {
     if (!instance)
       return parent;
-    return instance->getParentOp() == parent ? resolveInstanceModuleDefinition(instance) : nullptr;
+    return instance->getParentOfType<nodal::ModuleOp>() == parent &&
+                   succeeded(verifyHierarchyInstanceOperation(instance))
+               ? resolveInstanceModuleDefinition(instance)
+               : nullptr;
   };
   Operation *leftOwner = owner(leftInstance), *rightOwner = owner(rightInstance);
   return leftOwner && rightOwner &&

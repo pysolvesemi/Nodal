@@ -79,7 +79,12 @@ public:
   FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds) {
     DigitalDependencyGraph result;
     for (auto [value, use] : seeds) {
-      auto root = valueNode(value, use);
+      Operation *localRoot = value ? value.getDefiningOp() : nullptr;
+      const bool localFamily = resolveGeneratedLocalRootFamily(localRoot) != nullptr;
+      auto guard = localFamily ? ancestry(localRoot) : FailureOr<unsigned>(unsigned(0));
+      if (failed(guard))
+        return failure();
+      auto root = valueNode(value, use, localFamily ? localRoot : nullptr, *guard);
       if (failed(root))
         return failure();
       result.roots.push_back(*root);
@@ -102,6 +107,8 @@ public:
       bool boundary = node.value && isa_and_nonnull<NetSplitOp>(node.value.getDefiningOp()) &&
                       node.value.getDefiningOp()->hasAttr("hierarchy_driver");
       if (node.value) {
+        boundary |= interfaceDependencies.count(node.value) &&
+                    isa_and_nonnull<ResolvedBoundaryOp>(node.value.getDefiningOp());
         auto access = resolveStaticShapeProjection(node.value, node.use);
         Operation *root = succeeded(access) ? access->root.getDefiningOp() : nullptr;
         boundary |= isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
@@ -114,7 +121,8 @@ public:
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
                               crossing, index, endpoint.role, 0, boundary, waiver,
-                              node.eventProcess, node.eventTrigger, node.contextualReset});
+                              node.eventProcess, node.eventTrigger, node.contextualReset,
+                              externalContributions.contains(node.value)});
     }
     result.eventUpdates = std::move(eventUpdates);
     result.crossings = std::move(crossings);
@@ -217,6 +225,7 @@ private:
   llvm::DenseMap<Operation *, SmallVector<unsigned, 2>> writers;
   llvm::DenseMap<Value, SmallVector<std::pair<Value, Operation *>, 2>> interfaceDependencies;
   llvm::DenseMap<Value, FlatSymbolRefAttr> interfaceDomains;
+  llvm::DenseSet<Value> externalContributions;
   DigitalResolvedTopology resolved;
   llvm::DenseMap<std::pair<Value, Value>, bool> relations;
 };
@@ -384,7 +393,7 @@ FailureOr<Operation *> AssignmentQuery::storageOwner(const StaticShapeProjection
                                                      Operation *use) {
   Operation *root = access.root.getDefiningOp();
   if (!root || root->getParentOfType<ModuleOp>() != module ||
-      (root->getParentOp() != module && !llvm::isa<DigitalStorageOp>(root)))
+      (root->getParentOp() != module && !llvm::isa<DigitalStorageOp, InstancePortOp>(root)))
     return failure();
   if (llvm::isa<DigitalStorageOp>(root)) {
     if (failed(verifyDigitalStorageOperation(root)))
@@ -432,9 +441,7 @@ FailureOr<bool> AssignmentQuery::disjoint(const StaticShapeProjection &a,
   bool independent = false;
   if (a.root == b.root) {
     Operation *root = a.root.getDefiningOp();
-    if (root && llvm::isa<DigitalStorageOp>(root) &&
-        llvm::isa_and_nonnull<GenerateOp>(root->getParentOp()) && a.projections.empty() &&
-        b.projections.empty())
+    if (resolveGeneratedLocalRootFamily(root) && a.projections.empty() && b.projections.empty())
       use = &root->getBlock()->back();
     auto relation =
         compareStaticShapeProjections(a, b, use, {limits.maximumShapeWork, limits.maximumNodes});
@@ -653,8 +660,8 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
     }
     driven |= !*separate;
     const bool localFamilyRoot =
-        llvm::isa_and_nonnull<GenerateOp>(write.loop) && (*owner)->getParentOp() == write.loop &&
-        llvm::isa<DigitalStorageOp>(*owner) && write.loop->isProperAncestor(use);
+        resolveGeneratedLocalRootFamily(*owner) == write.loop && write.loop &&
+        write.loop->isProperAncestor(use);
     wholeWriter |= write.target.wholeRoot && (!write.loop || localFamilyRoot);
     bool attainedForEverySetting = true;
     if (write.loop) {
@@ -686,6 +693,8 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
 }
 
 LogicalResult AssignmentQuery::expand(unsigned node) {
+  if (nodes[node].guard == impossibleGuard)
+    return success(); // Static source verification still validates the inactive template.
   Value value = nodes[node].value;
   Operation *use = nodes[node].use;
   if (!value) {
@@ -903,10 +912,7 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
     return reject(operation, "ordinary assignment target lacks its actual writable owner");
   bool active = *guard != impossibleGuard;
   if (loop) {
-    bool localFamilyRoot = llvm::isa_and_nonnull<GenerateOp>(loop) &&
-                           target->root.getDefiningOp()->getParentOp() == loop &&
-                           llvm::isa<DigitalStorageOp>(target->root.getDefiningOp()) &&
-                           loop->getNumResults() == 1;
+    bool localFamilyRoot = resolveGeneratedLocalRootFamily(target->root.getDefiningOp()) == loop;
     bool repeated = false;
     Operation *rootScope = target->root.getDefiningOp()->getParentOp();
     bool outsideRoot = false;
@@ -1134,6 +1140,8 @@ LogicalResult AssignmentQuery::verify() {
     return failure();
   for (auto &entry : interface) {
     interfaceDependencies.try_emplace(entry.value, std::move(entry.sources));
+    if (entry.externalContribution)
+      externalContributions.insert(entry.value);
     if (entry.domain)
       interfaceDomains.try_emplace(entry.value, entry.domain);
     // Actual typed member/net values are graph roots even without an ordinary
@@ -1206,6 +1214,13 @@ LogicalResult
 verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
                             DigitalAssignmentProofLimits limits,
                             SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings) {
+  return verifyHierarchyDependencies(std::move(hierarchy), limits, splitBindings, nullptr);
+}
+LogicalResult
+verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                            DigitalAssignmentProofLimits limits,
+                            SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings,
+                            SmallVectorImpl<DigitalResolvedHierarchyComponent> *components) {
   struct LocalGraph {
     DigitalDependencyGraph graph;
     SmallVector<SequentialSample, 8> samples;
@@ -1258,12 +1273,22 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (const auto &sample : *localSamples)
       seeds.emplace_back(sample.value, sample.use);
-    for (Operation &op : context.module->getRegion(0).front()) {
-      if (!isa<PortValueOp, InstancePortOp>(op) || op.getNumResults() != 1 ||
-          isDigitalControlBoundaryType(op.getResult(0).getType()) || op.getResult(0).use_empty())
-        continue;
-      seeds.emplace_back(op.getResult(0), *op.getResult(0).getUsers().begin());
-    }
+    unsigned portWork = 0;
+    auto portInventory = context.module->walk([&](Operation *op) {
+      if (++portWork > limits.maximumNodes) {
+        (void)reject(op, "hierarchy boundary inventory exceeds finite node budget");
+        return WalkResult::interrupt();
+      }
+      if (!isa<PortValueOp, InstancePortOp>(op) || op->getNumResults() != 1 ||
+          isDigitalControlBoundaryType(op->getResult(0).getType()) || op->getResult(0).use_empty())
+        return WalkResult::advance();
+      if (isa<InstancePortOp>(op) && failed(inspectInstancePort(op)))
+        return WalkResult::interrupt();
+      seeds.emplace_back(op->getResult(0), *op->getResult(0).getUsers().begin());
+      return WalkResult::advance();
+    });
+    if (portInventory.wasInterrupted())
+      return failure();
     auto resetRoots = resetSeeds.find(context.module);
     if (resetRoots != resetSeeds.end())
       seeds.append(resetRoots->second.begin(), resetRoots->second.end());
@@ -1476,13 +1501,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   struct ResolvedSlot {
     unsigned parent, rank = 0;
     std::optional<ContextualDomain> domain;
-    bool boundary = false;
+    bool boundary = false, generated = false;
   };
   struct ResolvedUse {
     unsigned slot, occurrence;
     Operation *operation;
   };
-  SmallVector<ResolvedUse> resolvedDrivers, resolvedSplits;
+  SmallVector<ResolvedUse> resolvedDrivers, resolvedSplits, externalContributions;
   SmallVector<DigitalResolvedSplitBinding> collectedSplitBindings;
   SmallVector<ResolvedSlot> resolvedSlots;
   DenseMap<unsigned, unsigned> resolvedNodes;
@@ -1513,7 +1538,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       actual = *resolved;
     }
     unsigned index = resolvedSlots.size();
-    resolvedSlots.push_back({index, 0, actual, false});
+    resolvedSlots.push_back(
+        {index, 0, actual, false, !hierarchy->occurrences()[occurrence].generatedScopes.empty()});
     return index;
   };
   auto joinSlots = [&](unsigned left, unsigned right, bool boundary,
@@ -1537,6 +1563,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     if (!root.domain)
       root.domain = child.domain;
     root.boundary |= child.boundary || boundary;
+    root.generated |= child.generated;
     return success();
   };
   for (auto [occurrence, context] : llvm::enumerate(hierarchy->occurrences())) {
@@ -1549,12 +1576,16 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       if (failed(slot))
         return failure();
       if (component.drivers.size() > limits.maximumNodes - resolvedDrivers.size() ||
-          component.splits.size() > limits.maximumNodes - resolvedSplits.size())
+          component.splits.size() > limits.maximumNodes - resolvedSplits.size() ||
+          component.externalContributions.size() >
+              limits.maximumNodes - externalContributions.size())
         return reject(context.module, "resolved hierarchy driver/split facts exceed finite budget");
       for (Operation *driver : component.drivers)
         resolvedDrivers.push_back({*slot, static_cast<unsigned>(occurrence), driver});
       for (Operation *split : component.splits)
         resolvedSplits.push_back({*slot, static_cast<unsigned>(occurrence), split});
+      for (Operation *external : component.externalContributions)
+        externalContributions.push_back({*slot, static_cast<unsigned>(occurrence), external});
       resolvedNodes.try_emplace(offsets[occurrence] + found->second, *slot);
       for (Value value : component.values) {
         auto alias = local.values.find(value);
@@ -1610,6 +1641,9 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   for (const auto &driver : resolvedDrivers)
     if (driverIdentities.insert({driver.occurrence, driver.operation}).second)
       componentDrivers[rootSlot(driver.slot)].push_back(driver);
+  DenseMap<unsigned, SmallVector<ResolvedUse, 2>> componentExternal;
+  for (const auto &external : externalContributions)
+    componentExternal[rootSlot(external.slot)].push_back(external);
   auto dependencyNode = [&](unsigned occurrence, Value value,
                             Operation *use) -> FailureOr<unsigned> {
     Operation *owner = hierarchy->occurrences()[occurrence].module;
@@ -1623,10 +1657,17 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   };
   for (const auto &split : resolvedSplits) {
     unsigned slot = rootSlot(split.slot);
+    if (resolvedSlots[slot].generated)
+      return reject(split.operation,
+                    "resolved split of generated occurrence families requires exact selection-qualified driver proof");
     bool joined = resolvedSlots[slot].boundary;
     if (split.operation->hasAttr("hierarchy_driver") && !joined)
       return reject(split.operation,
                     "hierarchy-driver split requires an actual closed-root boundary connection");
+    if (componentExternal.count(slot))
+      return reject(
+          split.operation,
+          "resolved split cannot infer a unique driver across an opaque external contribution");
     auto found = componentDrivers.find(slot);
     if (found == componentDrivers.end() || found->second.size() != 1)
       return reject(split.operation,
@@ -1694,6 +1735,41 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       // A joined component contributes only its actual drivers, not a nominal
       // domain assertion at a projection. Original contexts stay on each node.
       alias.hierarchyBoundary = true;
+      if (node == canonical)
+        alias.externalContribution = componentExternal.count(slot);
+    }
+  }
+  SmallVector<DigitalResolvedHierarchyComponent> collectedComponents;
+  if (components) {
+    DenseMap<unsigned, unsigned> positions;
+    for (auto [occurrence, context] : llvm::enumerate(hierarchy->occurrences())) {
+      const auto &local = definitions[indexes.lookup(context.module)];
+      for (const auto &endpoint : local.graph.resolved.endpoints) {
+        auto known = resolvedEndpoints.find(
+            {occurrence, endpoint.operation, endpoint.path.getValue().str()});
+        if (known == resolvedEndpoints.end())
+          return reject(endpoint.operation,
+                        "resolved physical endpoint lost its exact logical slot");
+        unsigned root = rootSlot(known->second);
+        auto [position, inserted] = positions.try_emplace(root, collectedComponents.size());
+        if (inserted) {
+          DigitalResolvedHierarchyComponent result;
+          result.occurrence = occurrence;
+          auto values = resolvedGroups.find(root);
+          if (values != resolvedGroups.end() && !values->second.empty()) {
+            const auto &value = graph.nodes[values->second.front()];
+            result.occurrence = value.occurrence;
+            result.representative = value.value;
+          }
+          for (const auto &driver : componentDrivers.lookup(root))
+            result.drivers.push_back({driver.occurrence, driver.operation});
+          for (const auto &external : componentExternal.lookup(root))
+            result.externalContributions.push_back({external.occurrence, external.operation});
+          collectedComponents.push_back(std::move(result));
+        }
+        collectedComponents[position->second].endpoints.push_back(
+            {static_cast<unsigned>(occurrence), endpoint});
+      }
     }
   }
   SmallVector<unsigned> incoming(graph.nodes.size(), 0), pending;
@@ -1720,6 +1796,9 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     return failure();
   if (splitBindings)
     splitBindings->append(collectedSplitBindings.begin(), collectedSplitBindings.end());
+  if (components)
+    components->append(std::make_move_iterator(collectedComponents.begin()),
+                       std::make_move_iterator(collectedComponents.end()));
   return success();
 }
 } // namespace nodal

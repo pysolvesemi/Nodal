@@ -7,6 +7,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
@@ -337,6 +338,13 @@ std::string sanitizeSymbol(llvm::StringRef value) {
 std::string endpointPath(Operation *operation, llvm::StringRef modulePath) {
   if (nodal::isNodeArraySelection(operation))
     return metadataText(operation, "semantic_path").str();
+  if (llvm::isa<nodal::MemberAccessOp>(operation)) {
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+    Operation *endpoint = reference
+        ? SymbolTable::lookupSymbolIn(operation->getParentOp(), reference) : nullptr;
+    if (endpoint)
+      return (metadataText(endpoint, "semantic_path") + "." + textAttr(operation, "path")).str();
+  }
   llvm::StringRef explicitPath = textAttr(operation, "source_path");
   if (!explicitPath.empty())
     return explicitPath.str();
@@ -562,13 +570,27 @@ LogicalResult materializeModule(Operation *module) {
   for (Operation *operation : generated)
     operation->erase();
 
+  llvm::SmallVector<nodal::DigitalInterfaceEndpoint> interfaces;
+  llvm::SmallVector<nodal::DigitalInterfaceAccess> accesses;
+  llvm::DenseMap<Value, const nodal::DigitalInterfaceAccess *> interfaceValues;
+  llvm::DenseMap<Value, bool> interfaceUsed;
+  if (llvm::any_of(*body, [](Operation &operation) { return llvm::isa<nodal::MemberAccessOp>(operation); })) {
+    if (failed(nodal::collectDigitalInterfaceEndpoints(module, interfaces, &accesses)))
+      return failure();
+    for (const auto &access : accesses)
+      if (access.leaf.protocol.getValue() == "conservative") {
+        interfaceValues.try_emplace(access.value, &access);
+        interfaceUsed[access.canonicalValue] |= hasSourceUse(access.value);
+      }
+  }
   std::vector<EndpointInfo> endpoints;
   llvm::DenseMap<Value, unsigned> endpointIndex;
   llvm::StringSet<> endpointNames;
   llvm::StringSet<> sourcePaths;
   for (Operation &operation : *body) {
     if (!isNamed(&operation, "nodal.terminal") && !isNamed(&operation, "nodal.node") &&
-        !isNamed(&operation, "nodal.instance_terminal") && !nodal::isNodeArraySelection(&operation))
+        !isNamed(&operation, "nodal.instance_terminal") && !nodal::isNodeArraySelection(&operation) &&
+        !(operation.getNumResults() == 1 && interfaceValues.count(operation.getResult(0))))
       continue;
     if (operation.getNumResults() != 1)
       return operation.emitOpError(
@@ -583,9 +605,18 @@ LogicalResult materializeModule(Operation *module) {
           "NODAL-TERMINAL-DISCIPLINE-001: endpoint discipline must resolve to a "
           "continuous conservative discipline");
 
-    const llvm::StringRef endpointName = nodal::isNodeArraySelection(&operation)
-                                             ? metadataText(&operation, "semantic_path")
-                                             : textAttr(&operation, "name");
+    const auto *interface = interfaceValues.lookup(operation.getResult(0));
+    if (interface && interface->canonicalValue != operation.getResult(0)) {
+      auto known = endpointIndex.find(interface->canonicalValue);
+      if (known == endpointIndex.end())
+        return operation.emitOpError("NODAL-CONNECTION-001: Interface canonical access must precede its aliases");
+      endpointIndex[operation.getResult(0)] = known->second;
+      continue;
+    }
+    std::string interfacePath = interface ? endpointPath(&operation, modulePath) : std::string();
+    const llvm::StringRef endpointName = interface ? llvm::StringRef(interfacePath)
+        : nodal::isNodeArraySelection(&operation) ? metadataText(&operation, "semantic_path")
+                                                : textAttr(&operation, "name");
     if (!isCanonicalText(endpointName) || !endpointNames.insert(endpointName).second)
       return operation.emitOpError(
           "NODAL-CONNECTIVITY-PROVENANCE-001: endpoint names must be canonical and unique "
@@ -599,16 +630,18 @@ LogicalResult materializeModule(Operation *module) {
       if (llvm::isa<nodal::TerminalArrayOp, nodal::InstanceTerminalArrayOp>(selected->declaration))
         incidence = selected->declaration;
     }
-    const bool terminal =
+    const bool terminal = interface ||
         llvm::isa<nodal::TerminalArrayOp, nodal::InstanceTerminalArrayOp>(incidence) ||
         isNamed(&operation, "nodal.terminal") || isNamed(&operation, "nodal.instance_terminal");
     if (terminal) {
-      llvm::StringRef direction = textAttr(incidence, "direction");
+      llvm::StringRef direction = interface ? "inout" : textAttr(incidence, "direction");
       if (!oneOf(direction, {"input", "output", "inout"}))
         return operation.emitOpError(
             "NODAL-TERMINAL-DIRECTION-001: conservative terminal direction must be input, "
             "output, or inout");
-      llvm::StringRef orientation = textAttr(incidence, "flow_orientation");
+      llvm::StringRef orientation = interface
+          ? (interface->identity.instance ? "out_of_component" : "into_component")
+          : textAttr(incidence, "flow_orientation");
       if (!oneOf(orientation, {"into_component", "out_of_component"}))
         return operation.emitOpError(
             "NODAL-TERMINAL-ORIENTATION-001: flow orientation must be into_component or "
@@ -619,7 +652,10 @@ LogicalResult materializeModule(Operation *module) {
     if (!isCanonicalText(path) || !sourcePaths.insert(path).second)
       return operation.emitOpError(
           "NODAL-CONNECTIVITY-PROVENANCE-001: endpoint source paths must be canonical and unique");
-    if (!partial && !hasSourceUse(operation.getResult(0)))
+    bool used = hasSourceUse(operation.getResult(0));
+    if (interface)
+      used |= interfaceUsed.lookup(interface->canonicalValue);
+    if (!partial && !used)
       return operation.emitOpError(
           "NODAL-CONNECTION-001: concrete component contains an unowned floating endpoint");
 
@@ -627,7 +663,8 @@ LogicalResult materializeModule(Operation *module) {
     endpointIndex[operation.getResult(0)] = index;
     endpoints.push_back(EndpointInfo{operation.getResult(0), &operation, std::move(path),
                                      std::move(*discipline), terminal,
-                                     textAttr(incidence, "flow_orientation").str()});
+                                     interface ? (interface->identity.instance ? "out_of_component" : "into_component")
+                                               : textAttr(incidence, "flow_orientation").str()});
   }
 
   UnionFind sets(static_cast<unsigned>(endpoints.size()));
@@ -1245,6 +1282,12 @@ LogicalResult nodal::FlowConservationOp::verify() {
             "NODAL-CONNECTION-FLOW-001: terminal flow terms must be boundary members of the "
             "connection set");
       llvm::StringRef orientation = textAttr(incidenceDeclaration, "flow_orientation");
+      if (llvm::isa<nodal::MemberAccessOp>(definition)) {
+        auto endpoint = nodal::resolveConservativeEndpoint(term, getOperation());
+        if (failed(endpoint) || !llvm::isa<nodal::MemberAccessOp>(endpoint->shape.declaration))
+          return emitOpError("NODAL-CONNECTION-FLOW-001: Interface incidence lost its exact origin");
+        orientation = endpoint->instance ? "out_of_component" : "into_component";
+      }
       const int64_t expectedSign = orientation == "into_component" ? -1 : 1;
       if (!oneOf(orientation, {"into_component", "out_of_component"}) || sign != expectedSign)
         return emitOpError(
@@ -1512,6 +1555,28 @@ FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value 
       endpoint.instance = child->instance;
       endpoint.port = child->port;
     }
+    return endpoint;
+  }
+  if (llvm::isa<MemberAccessOp>(definition)) {
+    auto access = resolveDigitalInterfaceAccess(value);
+    if (failed(access) || !llvm::isa<TerminalType>(value.getType()) ||
+        access->leaf.protocol.getValue() != "conservative" ||
+        definition->getParentOp() != module || scope != module)
+      return failure();
+    // Access rights are per selected view, never inherited from the first alias.
+    if (llvm::isa<ConnectOp, AliasOp, ConnectArrayOp>(use) &&
+        access->leaf.access.getValue() != "connect") {
+      use->emitOpError("NODAL-INTERFACE-CONSERVATIVE-001: connection requires the actual connect role");
+      return failure();
+    }
+    auto projection = resolveStaticShapeProjection(access->canonicalValue, use);
+    if (failed(projection))
+      return failure();
+    endpoint.shape = ConservativeShape{access->canonicalValue.getDefiningOp(),
+                                       std::move(*projection)};
+    endpoint.declarationScope = module;
+    endpoint.instance = access->identity.instance;
+    endpoint.port = access->identity.endpoint;
     return endpoint;
   }
   if (!llvm::isa<TerminalType>(value.getType()) ||
@@ -2327,6 +2392,17 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
   result.module = module;
   result.scope = scope;
   const bool generated = llvm::isa<GenerateOp>(scope);
+  llvm::SmallVector<DigitalInterfaceEndpoint> interfaceEndpoints;
+  llvm::SmallVector<DigitalInterfaceAccess> interfaceAccesses;
+  llvm::DenseMap<Value, const DigitalInterfaceAccess *> interfaceValues;
+  if (llvm::any_of(*body, [](Operation &operation) {
+        return llvm::isa<MemberAccessOp>(operation);
+      })) {
+    if (failed(collectDigitalInterfaceEndpoints(module, interfaceEndpoints, &interfaceAccesses)))
+      return failure();
+    for (const auto &access : interfaceAccesses)
+      interfaceValues.try_emplace(access.value, &access);
+  }
   llvm::SmallVector<Operation *, 8> connections;
   llvm::SmallVector<Operation *, 8> allScalarConnections;
   llvm::SmallVector<Value, 16> endpoints;
@@ -2334,10 +2410,14 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
   std::map<std::pair<Operation *, Operation *>, Value> childPorts;
   llvm::StringSet<> connectionIds, connectionPaths, instanceNames, nodeNames;
   auto addEndpoint = [&](Value value) {
-    auto [entry, inserted] = endpointIndex.try_emplace(value, endpoints.size());
+    const auto *access = interfaceValues.lookup(value);
+    Value canonical = access ? access->canonicalValue : value;
+    auto [entry, inserted] = endpointIndex.try_emplace(canonical, endpoints.size());
     if (inserted)
-      endpoints.push_back(value);
-    return entry->second;
+      endpoints.push_back(canonical);
+    unsigned index = entry->second;
+    endpointIndex.try_emplace(value, index);
+    return index;
   };
   auto resolveChild = [&](Operation *reference) -> FailureOr<std::pair<Operation *, Operation *>> {
     auto invalid = [&](llvm::StringRef code,
@@ -2442,6 +2522,12 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
         } else if (llvm::isa<TerminalOp>(endpoint)) {
           if (endpoint->getParentOp() != module)
             return reject(&operation, "boundary terminal must be module-owned");
+        } else if (llvm::isa<MemberAccessOp>(endpoint)) {
+          const auto *access = interfaceValues.lookup(value);
+          if (generated || !access || access->leaf.protocol.getValue() != "conservative" ||
+              access->leaf.access.getValue() != "connect" ||
+              !llvm::isa<TerminalType>(value.getType()) || endpoint->getParentOp() != module)
+            return reject(&operation, "Interface connection requires an exact conservative capability");
         } else if (llvm::isa<NodeOp>(endpoint)) {
           if (!structuralBody(endpoint->getParentOp()))
             return reject(&operation, "local node must have a structural declaration owner");
@@ -2510,6 +2596,12 @@ nodal::resolveConservativePortIncidence(Value value, Operation *use) {
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (llvm::isa_and_nonnull<TerminalOp>(definition) && definition->getParentOp() == module)
     return ConservativePortIncidence{definition, value, std::nullopt};
+  if (llvm::isa_and_nonnull<MemberAccessOp>(definition)) {
+    auto endpoint = resolveConservativeEndpoint(value, use);
+    if (succeeded(endpoint) && llvm::isa<MemberAccessOp>(endpoint->shape.declaration) && !endpoint->instance)
+      return ConservativePortIncidence{definition, value, std::nullopt};
+    return failure();
+  }
   if (!isNodeArraySelection(definition))
     return failure();
   auto selection = resolveConservativeSelection(value, use);

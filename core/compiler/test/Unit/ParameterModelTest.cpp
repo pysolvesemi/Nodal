@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <iterator>
 #include <limits>
 
 namespace {
@@ -1046,6 +1047,104 @@ int checkGeneratedParameterQueries(mlir::MLIRContext &context) {
   return 0;
 }
 
+int checkDependentGeneratedBounds(mlir::MLIRContext &context) {
+  const char *source = R"mlir(module {
+  "nodal.module"() <{metadata = {}, sym_name = "Dependent"}> ({
+    %lo = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+    %hi = "nodal.const_literal"() <{metadata = {}, spelling = "4", value = 4 : i64}> : () -> i64
+    %step = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+    "nodal.generate"(%lo, %hi, %step) <{induction = "i", region_id = "Dependent.outer", induction_path = "Dependent.outer.i", metadata = {maximum_trip_count = 4 : i64}}> ({
+    ^bb0(%i: i64):
+      %zero = "nodal.const_literal"() <{metadata = {}, spelling = "0", value = 0 : i64}> : () -> i64
+      %one = "nodal.const_literal"() <{metadata = {}, spelling = "1", value = 1 : i64}> : () -> i64
+      %upper = "nodal.const_expr"(%i, %one) <{metadata = {}, operator_name = "add"}> : (i64, i64) -> i64
+      "nodal.generate"(%zero, %upper, %one) <{induction = "j", region_id = "Dependent.outer.inner", induction_path = "Dependent.outer.inner.j", metadata = {maximum_trip_count = 4 : i64}}> ({
+      ^bb0(%j: i64):
+      }) : (i64, i64, i64) -> ()
+    }) : (i64, i64, i64) -> ()
+  }) : () -> ()
+})mlir";
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
+  if (!module)
+    return fail("dependent Generate fixture did not parse");
+  llvm::SmallVector<mlir::Operation *> scopes;
+  module->walk([&](nodal::GenerateOp op) { scopes.push_back(op); });
+  if (scopes.size() != 2)
+    return fail("dependent Generate fixture lost exact owners");
+  auto *outer = scopes[0], *inner = scopes[1];
+  if (outer->getAttrOfType<mlir::StringAttr>("region_id").getValue() != "Dependent.outer")
+    std::swap(outer, inner);
+  auto domain = nodal::resolveGeneratedDomain(inner);
+  if (mlir::failed(domain) || domain->maximumTripCount != 4 ||
+      domain->upperExclusive.bounds.lower != 1 || domain->upperExclusive.bounds.upper != 4 ||
+      mlir::failed(nodal::verifyParameterModel(*module)))
+    return fail("actual ancestor induction did not retain bounded dependent domain");
+  // Module-wide dependency caching must not authorize a later sibling use of
+  // the same already-verified regional SSA expression.
+  mlir::Operation *escaped = inner->clone();
+  outer->getBlock()->getOperations().insert(std::next(outer->getIterator()), escaped);
+  bool escapedAccepted = mlir::succeeded(nodal::verifyParameterModel(*module));
+  escaped->erase();
+  if (escapedAccepted)
+    return fail("cached regional bound escaped into a sibling Generate");
+  auto metadata = inner->getAttr("metadata");
+  inner->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context,
+          {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 3))}));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("dependent bound accepted forged maximum count");
+  inner->setAttr("metadata", metadata);
+  auto upper = inner->getOperand(1);
+  inner->setOperand(1, inner->getRegion(0).front().getArgument(0));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("inner induction became its own bound");
+  inner->setOperand(1, upper);
+  auto *outerUpper = outer->getOperand(1).getDefiningOp();
+  auto upperAttr = outerUpper->getAttr("value"), outerMetadata = outer->getAttr("metadata");
+  outerUpper->setAttr("value", mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0));
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "0"));
+  outer->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context,
+          {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                mlir::IntegerAttr::get(mlir::IntegerType::get(&context, 64), 0))}));
+  if (mlir::succeeded(nodal::resolveGeneratedDomain(inner)))
+    return fail("empty ancestor invented an attained induction interval");
+  outerUpper->setAttr("value", upperAttr);
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "4"));
+  outer->setAttr("metadata", outerMetadata);
+  // A fresh public query must not retain the prior mutation or failure.
+  if (mlir::failed(nodal::resolveGeneratedDomain(inner)))
+    return fail("query-local domain cache survived an independent call");
+  auto i64 = mlir::IntegerType::get(&context, 64);
+  outer->getOperand(0).getDefiningOp()->setAttr("value", mlir::IntegerAttr::get(i64, 2));
+  outer->getOperand(0).getDefiningOp()->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  outerUpper->setAttr("value", mlir::IntegerAttr::get(i64, 8));
+  outerUpper->setAttr("spelling", mlir::StringAttr::get(&context, "8"));
+  outer->getOperand(2).getDefiningOp()->setAttr("value", mlir::IntegerAttr::get(i64, 2));
+  outer->getOperand(2).getDefiningOp()->setAttr("spelling", mlir::StringAttr::get(&context, "2"));
+  outer->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                          mlir::IntegerAttr::get(i64, 3))}));
+  inner->setAttr(
+      "metadata",
+      mlir::DictionaryAttr::get(
+          &context, {mlir::NamedAttribute(mlir::StringAttr::get(&context, "maximum_trip_count"),
+                                          mlir::IntegerAttr::get(i64, 7))}));
+  domain = nodal::resolveGeneratedDomain(inner);
+  if (mlir::failed(domain) || domain->maximumTripCount != 7 ||
+      domain->upperExclusive.bounds.lower != 3 || domain->upperExclusive.bounds.upper != 7)
+    return fail("dependent bound lost nonzero positive-step ancestor envelope");
+  llvm::outs() << "Dependent generated bound checks: 7 passed\n";
+  return 0;
+}
+
 int checkGeneratedWaveformParameterLookup(mlir::MLIRContext &context) {
   std::string source = kValid.str();
   const auto end = source.rfind("  }) : () -> ()");
@@ -1188,7 +1287,8 @@ int main() {
   if (checkParameterRenderBudget(context) || checkStaticIntegerMaximum(context) ||
       checkStaticReductionPrimitives(context) || checkMathematicalIntegerMode(context) ||
       checkSymbolicDigitalParameters(context) || checkInstanceParameterQueries(context) ||
-      checkGeneratedParameterQueries(context) || checkGeneratedWaveformParameterLookup(context))
+      checkGeneratedParameterQueries(context) || checkDependentGeneratedBounds(context) ||
+      checkGeneratedWaveformParameterLookup(context))
     return 1;
 
   auto valid = mlir::parseSourceString<mlir::ModuleOp>(kValid, &context);

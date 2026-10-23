@@ -88,6 +88,20 @@ bool canonicalDepth(StringRef depth) {
 }
 } // namespace
 
+Operation *resolveGeneratedLocalRootFamily(Operation *root) {
+  Operation *family = root ? root->getParentOp() : nullptr;
+  if (!llvm::isa_and_nonnull<GenerateOp>(family) || root->getNumResults() != 1 ||
+      family->getNumResults() != 1 ||
+      !llvm::isa<GeneratedFamilyType>(family->getResult(0).getType()) ||
+      failed(verifyGeneratedFamilyOperation(family)))
+    return nullptr;
+  if (llvm::isa<DigitalStorageOp>(root))
+    return succeeded(verifyDigitalStorageOperation(root)) ? family : nullptr;
+  if (llvm::isa<InstancePortOp>(root))
+    return succeeded(inspectInstancePort(root)) ? family : nullptr;
+  return nullptr;
+}
+
 LogicalResult verifyGeneratedExportOperation(Operation *operation) {
   Operation *family = operation->getParentOp();
   if (!llvm::isa_and_nonnull<GenerateOp>(family) || family->getNumResults() != 1 ||
@@ -383,7 +397,8 @@ LogicalResult verifyDigitalAssignmentOperation(Operation *operation) {
   Operation *root = projection->root.getDefiningOp();
   if (!root || root->getParentOfType<ModuleOp>() != module ||
       (root->getParentOp() != module &&
-       (!llvm::isa<DigitalStorageOp>(root) || failed(verifyDigitalStorageOperation(root)))))
+       !((llvm::isa<DigitalStorageOp>(root) && succeeded(verifyDigitalStorageOperation(root))) ||
+         (llvm::isa<InstancePortOp>(root) && succeeded(inspectInstancePort(root))))))
     return reject(operation, "digital assignment target root belongs to another module");
   const bool staticStateScope = (llvm::isa<StructuralIfOp>(parent) ||
                                  (llvm::isa<GenerateOp>(parent) && parent->getNumResults() == 1)) &&

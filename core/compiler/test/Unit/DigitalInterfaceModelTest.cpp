@@ -389,6 +389,20 @@ std::string bareSplitFixture(StringRef parentEffects = "", StringRef childEffect
          bareModule("Top", top + parentEffects.str()) +
          bareModule("Child", net("exported") + childEffects.str()) + "}\n";
 }
+std::string externalModule(StringRef name = "Child", StringRef physical = "ExternalPad",
+                           StringRef body = "") {
+  auto result =
+      bareModule(name, body.empty() ? net("exported", "push_pull", "black_box_pin") : body.str());
+  return replace(result, "metadata = {}",
+                 "metadata = {}, external_name = \"" + physical.str() + "\"");
+}
+std::string externalFixture(StringRef parentEffects = "", StringRef declarations = "") {
+  auto boundary = replace(standaloneBoundary(), "placement = \"top_level_pin\"",
+                          "placement = \"black_box_pin\"");
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         bareModule("Top", bareInstance() + boundary + parentEffects.str()) +
+         (declarations.empty() ? externalModule() : declarations.str()) + "}\n";
+}
 std::string symbolicStandaloneBoundaryFixture(bool wrong = false) {
   std::string parentParameter = parameter();
   parentParameter = replace(parentParameter, "sym_name = \"N\"", "sym_name = \"P\"");
@@ -1330,6 +1344,138 @@ int main() {
                                  literal("enable", boolean) +
                                  replace(netDrive("driver", "exported"), "%value", "%input")),
             false, "hierarchy connection contains a causal combinational dependency cycle");
+  hierarchy("external-inout-exact-declaration-and-pass-through",
+            externalFixture(net("top") + through("projected", "top") + resolvedRead("top")), true);
+  hierarchy("external-inout-one-bit-pin-keeps-exact-bit-pattern-identity",
+            replace(replace(externalFixture(), resolved(), resolved("push_pull", boolean)),
+                    resolved(), resolved("push_pull", boolean)),
+            true);
+  hierarchy("external-inout-bool-is-not-a-bit-pattern-pin",
+            replace(replace(externalFixture(), resolved(), resolved("push_pull", "i1")), resolved(),
+                    resolved("push_pull", "i1")),
+            false, "fixed scalar black-box resolved pin declarations");
+
+  hierarchy("external-inout-read-retains-opaque-contribution",
+            externalFixture(resolvedRead("projected")), true);
+  hierarchy("external-inout-conditional-local-drive-is-not-an-external-body",
+            externalFixture(parentDriver), true);
+  hierarchy("external-inout-local-split-cannot-ignore-opaque-contribution",
+            externalFixture(parentDriver + split("projected")), false,
+            "opaque external contribution");
+  hierarchy("external-inout-contextual-split-cannot-infer-empty-driver",
+            externalFixture(contextualSplit("projected")), false, "opaque external contribution");
+  hierarchy("external-signature-executable-body-rejected",
+            externalFixture("", externalModule("Child", "ExternalPad",
+                                               net("exported", "push_pull", "black_box_pin") +
+                                                   literal("value"))),
+            false, "never executable statements");
+  hierarchy("external-signature-placement-is-not-an-internal-net",
+            externalFixture("", externalModule("Child", "ExternalPad", net("exported"))), false,
+            "black-box resolved pin declarations");
+  hierarchy("external-signature-technology-profile-is-not-assumed",
+            externalFixture("", externalModule("Child", "ExternalPad",
+                                               net("exported", "push_pull", "black_box_pin",
+                                                   "technology_mapped"))),
+            false, "black-box resolved pin declarations");
+  hierarchy("external-signature-empty-declaration-rejected",
+            externalFixture("", replace(externalModule(),
+                                        net("exported", "push_pull", "black_box_pin"), "^bb0:\n")),
+            false, "at least one independently verified resolved pin");
+  hierarchy("external-signature-physical-name-is-exact",
+            externalFixture("", externalModule("Child", "bad name")), false,
+            "canonical exact external symbol");
+  hierarchy("external-signature-duplicate-physical-name-rejected",
+            externalFixture("", externalModule() + externalModule("Other")), false,
+            "external physical symbol has more than one declaration");
+  hierarchy("external-signature-cannot-shadow-local-module-name",
+            externalFixture("", externalModule() + bareModule("ExternalPad", "")), false,
+            "external physical symbol collides with a local module definition");
+  hierarchy(
+      "external-signature-duplicate-pin-rejected",
+      externalFixture("", externalModule("Child", "ExternalPad",
+                                         net("exported", "push_pull", "black_box_pin") +
+                                             replace(net("alias", "push_pull", "black_box_pin"),
+                                                     "name = \"alias\"", "name = \"exported\""))),
+      false, "black-box resolved pin declarations");
+  hierarchy("external-signature-is-top-level-definition-only",
+            "module {" + bareModule("Top", externalModule()) + "}", false,
+            "canonical exact external symbol");
+  hierarchy(
+      "external-signature-does-not-admit-control-domain-body",
+      externalFixture("", externalModule("Child", "ExternalPad",
+                                         net("exported", "push_pull", "black_box_pin") + domain())),
+      false, "never executable statements");
+  hierarchy("external-boundary-cannot-forge-element",
+            replace(externalFixture(), resolved(), resolved("push_pull", boolean)), false,
+            "must preserve exact mode");
+  auto physicalFacts = [&](StringRef name, const std::string &source, bool expected, auto inspect) {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool valid = bool(parsed);
+    SmallVector<nodal::DigitalResolvedHierarchyComponent> facts(1);
+    SmallVector<nodal::DigitalResolvedSplitBinding> bindings(1);
+    const std::string before = parsed ? print(parsed->getOperation()) : "";
+    if (valid) {
+      auto model = nodal::HierarchyModel::create(parsed->getOperation());
+      valid = succeeded(model) &&
+              succeeded(nodal::verifyHierarchyDependencies(*model, {}, &bindings, &facts));
+    }
+    bool passed =
+        valid == expected && parsed && before == print(parsed->getOperation()) &&
+        (valid ? inspect(llvm::ArrayRef(facts).drop_front(), llvm::ArrayRef(bindings).drop_front())
+               : facts.size() == 1 && bindings.size() == 1);
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  physicalFacts(
+      "resolved-component-query-keeps-all-actual-external-identities",
+      externalFixture(net("top") + through("projected", "top") + parentDriver), true,
+      [](auto facts, auto bindings) {
+        if (facts.size() != 1 || !bindings.empty() || facts[0].endpoints.size() != 3 ||
+            facts[0].drivers.size() != 1 || facts[0].externalContributions.size() != 1)
+          return false;
+        const auto &component = facts[0];
+        const auto &projected = component.endpoints[0];
+        const auto &top = component.endpoints[1];
+        const auto &external = component.endpoints[2];
+        return component.representative && component.occurrence == 0 && projected.occurrence == 0 &&
+               top.occurrence == 0 && external.occurrence == 1 &&
+               projected.endpoint.declaration == external.endpoint.operation &&
+               projected.endpoint.placement == "black_box_pin" &&
+               top.endpoint.placement == "top_level_pin" &&
+               external.endpoint.type == projected.endpoint.type &&
+               external.endpoint.profile == "portable_boundary_only" && !external.endpoint.domain &&
+               component.externalContributions[0].occurrence == 1 &&
+               component.externalContributions[0].operation == external.endpoint.operation &&
+               component.drivers[0].occurrence == 0;
+      });
+  physicalFacts("black-box-placement-tag-alone-is-not-an-opaque-external-signature",
+                "module attributes {nodal.root.module = @Top} {" +
+                    bareModule("Top", net("net", "push_pull", "black_box_pin") + driver() +
+                                          conditional + netDrive() + split()) +
+                    "}",
+                true, [](auto facts, auto bindings) {
+                  return facts.size() == 1 && bindings.size() == 1 &&
+                         facts[0].externalContributions.empty() && facts[0].drivers.size() == 1 &&
+                         facts[0].endpoints.size() == 1;
+                });
+  physicalFacts("resolved-component-query-failed-split-is-transactional",
+                externalFixture(parentDriver + split("projected")), false,
+                [](auto, auto) { return false; });
+  physicalFacts("resolved-component-query-retains-unaccessed-interface-identities",
+                hierarchyResolvedFixture("", "", "sink", false, false), true,
+                [](auto facts, auto bindings) {
+                  return facts.size() == 1 && bindings.empty() && !facts[0].representative &&
+                         facts[0].endpoints.size() == 2 && facts[0].drivers.empty() &&
+                         facts[0].externalContributions.empty() &&
+                         facts[0].endpoints[0].endpoint.path == "data" &&
+                         facts[0].endpoints[1].endpoint.path == "data" &&
+                         !facts[0].endpoints[0].endpoint.placement;
+                });
   auto bindingFacts = [&](StringRef name, const std::string &source, unsigned expected) {
     ++cases;
     diagnosticText.clear();
@@ -1473,6 +1619,22 @@ int main() {
     unAttributed = replace(unAttributed, bits, boolean);
   hierarchy("resolved-unaccessed-child-is-not-attributed-by-domain-label", unAttributed, false,
             "actual attributed dependency evidence");
+  std::string opaqueSampling =
+      externalFixture(hierarchyDomain("clock") + hierarchyDomain("other") + attributedRead);
+  while (opaqueSampling.find(bits) != std::string::npos)
+    opaqueSampling = replace(opaqueSampling, bits, boolean);
+  hierarchy("external-inout-is-an-unannotated-source-not-a-constant", opaqueSampling, false,
+            "crossing input contains an unannotated source boundary");
+  std::string opaqueDrivenSampling = externalFixture(
+      hierarchyDomain("clock") + hierarchyDomain("other") + port("value", bits, "input", "clock") +
+      driver("driver", "projected") + literal("enable", boolean) + netDrive("driver", "projected") +
+      attributedRead);
+  while (opaqueDrivenSampling.find(bits) != std::string::npos)
+    opaqueDrivenSampling = replace(opaqueDrivenSampling, bits, boolean);
+  hierarchy("external-contribution-remains-unannotated-alongside-attributed-visible-driver",
+            opaqueDrivenSampling, false, "crossing input contains an unannotated source boundary");
+  hierarchy("ordinary-tagged-pin-retains-attributed-visible-driver-without-external-contribution",
+            replace(opaqueDrivenSampling, ", external_name = \"ExternalPad\"", ""), true);
   hierarchy("child-output-actual-crossing", hierarchyFixture(), true);
   hierarchy("child-input-forwarding", hierarchyFixture(false, true), true);
   hierarchy("child-output-domain-label-does-not-hide-source", hierarchyFixture(true), false);
@@ -1699,6 +1861,69 @@ int main() {
                 [](auto) { return true; });
   endpointQuery("logical-endpoints-reject-forged-shared-role-transactionally",
                 siblingRoleFixture(true), false, [](auto) { return true; });
+  // Conservative members use the same complete role model, never digital union.
+  const std::string terminalType = "!nodal.terminal<\"electrical\">";
+  auto analogAccessQuery = [&](StringRef name, StringRef effect, bool expected,
+                               StringRef accessRole = "monitor") {
+    ++cases;
+    diagnosticText.clear();
+    std::string body = conservative + member("a", "left", terminalType) +
+                       member("b", "left", terminalType, accessRole) + effect.str();
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(body, analogOwners()),
+                                                    ParserConfig(&context, false));
+    bool passed = false;
+    if (parsed) {
+      Operation *owner = &*std::prev(parsed->getBody()->end());
+      auto before = print(parsed->getOperation());
+      SmallVector<nodal::DigitalInterfaceEndpoint> endpoints;
+      SmallVector<nodal::DigitalInterfaceAccess> accesses;
+      bool valid = succeeded(nodal::collectDigitalInterfaceEndpoints(owner, endpoints, &accesses));
+      passed = valid == expected && before == print(parsed->getOperation());
+      if (valid)
+        passed &= accesses.size() == 2 && endpoints.size() == 1 &&
+                  accesses[0].canonicalValue == accesses[1].canonicalValue &&
+                  accesses[0].leaf.access == "connect" &&
+                  accesses[1].leaf.access == (accessRole == "monitor" ? "sense" : "connect") &&
+                  accesses[0].leaf.type == accesses[0].value.getType();
+      else
+        passed &= endpoints.empty() && accesses.empty() &&
+                  diagnosticText.find("selected-role permission") != std::string::npos;
+    }
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  analogAccessQuery("conservative-repeated-member-preserves-narrow-monitor-role", "", true);
+  const std::string analogConnect =
+      "\"nodal.connect\"(%a, %b) <{connection_id = \"same\", source_path = \"Fixture.same\", "
+      "metadata = {}}> : (" +
+      terminalType + ", " + terminalType + ") -> ()\n";
+  analogAccessQuery("conservative-connect-role-is-not-digital-payload", analogConnect, true,
+                    "sink");
+  analogAccessQuery("conservative-monitor-cannot-connect", analogConnect, false);
+  analogAccessQuery(
+      "conservative-monitor-cannot-alias",
+      replace(replace(analogConnect, "nodal.connect", "nodal.alias"), "connection_id", "alias_id"),
+      false);
+  analogAccessQuery("conservative-monitor-cannot-reference",
+                    "\"nodal.reference\"(%b) <{scope = \"module\", source_path = \"Fixture.ref\", "
+                    "metadata = {}}> : (" +
+                        terminalType + ") -> ()\n",
+                    false);
+  analogAccessQuery(
+      "conservative-branch-contribution-cannot-escalate-monitor",
+      "%branch = \"nodal.branch\"(%a, %b) <{metadata = {}}> : (" + terminalType + ", " +
+          terminalType +
+          ") -> !nodal.branch<\"electrical\">\n"
+          "\"nodal.analog\"() <{metadata = {}}> ({\n"
+          "%value = \"nodal.real_literal\"() <{value = 1.0 : f64, "
+          "metadata = {}}> : () -> f64\n"
+          "\"nodal.contribute\"(%branch, %value) <{kind = \"flow\", metadata = {}}> : "
+          "(!nodal.branch<\"electrical\">, f64) -> ()\n}) : () -> ()\n",
+      false);
+
   llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

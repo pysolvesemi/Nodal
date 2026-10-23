@@ -3,6 +3,7 @@
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
@@ -1720,11 +1721,8 @@ ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjectio
   // Direct template storage is intrinsically local to one actual occurrence.
   // This proof does not apply to module storage or selected external aliases.
   Operation *root = left.root ? left.root.getDefiningOp() : nullptr;
-  auto family = root ? llvm::dyn_cast<GenerateOp>(root->getParentOp()) : GenerateOp();
-  if (root && left.root == right.root && llvm::isa<DigitalStorageOp>(root) && family &&
-      family->getNumResults() == 1 &&
-      llvm::isa<GeneratedFamilyType>(family->getResult(0).getType()) &&
-      succeeded(resolveGeneratedDomain(family)) && family->isProperAncestor(use) &&
+  Operation *family = resolveGeneratedLocalRootFamily(root);
+  if (family && left.root == right.root && family->isProperAncestor(use) &&
       left.projections.empty() && right.projections.empty() &&
       succeeded(resolveStaticShapeProjection(left.root, use)))
     return ShapeRegionProofStatus::Proved;

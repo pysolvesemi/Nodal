@@ -3,6 +3,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/TargetCapabilities.h"
 #include "nodal/Backend/Backend.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
@@ -62,6 +66,321 @@ bool childOperation(Operation *op) {
                    AnalogFunctionOp, AnalogUserFunctionOp, AnalogFunctionValueOp,
                    AnalogFunctionReturnOp, AnalogUserCallOp, ContributeOp>(op);
 }
+
+/// Physical adaptation consumes the complete Interface owner once per definition.
+/// It does not assign analog values or build a second connectivity graph.
+class InterfaceMaterializer {
+public:
+  explicit InterfaceMaterializer(mlir::ModuleOp outer) : outer(outer), builder(outer.getContext()) {}
+
+  LogicalResult run() {
+    bool present = false;
+    outer.walk([&](InterfaceInstanceOp) { present = true; });
+    if (!present)
+      return success();
+    if (failed(mlir::verify(outer)) || failed(preflight()))
+      return failure();
+    // All borrowed source facts remain alive until replacement and correspondence
+    // construction finish. No operation is changed during admission.
+    for (auto &entry : endpoints) {
+      auto &endpoint = entry.endpoint;
+      if (endpoint.instance)
+        continue;
+      builder.setInsertionPoint(endpoint.operation);
+      for (auto &leaf : entry.leaves) {
+        OperationState state(endpoint.operation->getLoc(), TerminalOp::getOperationName());
+        state.addTypes(leaf.type);
+        state.addAttribute("name", builder.getStringAttr(leaf.name));
+        state.addAttribute("direction", builder.getStringAttr("inout"));
+        state.addAttribute("flow_orientation", builder.getStringAttr("into_component"));
+        state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
+        state.addAttribute("metadata", metadata(endpoint, leaf, false));
+        leaf.value = builder.create(state)->getResult(0);
+        record(endpoint, leaf, "into_component");
+      }
+    }
+    for (auto &entry : endpoints) {
+      auto &endpoint = entry.endpoint;
+      if (!endpoint.instance)
+        continue;
+      builder.setInsertionPoint(endpoint.operation);
+      for (auto &leaf : entry.leaves) {
+        const auto &target = endpoints[positions.lookup(endpoint.declaration)];
+        auto port = llvm::find_if(target.leaves, [&](const Leaf &candidate) {
+          return candidate.path == leaf.path;
+        });
+        OperationState state(endpoint.operation->getLoc(), InstanceTerminalOp::getOperationName());
+        state.addTypes(leaf.type);
+        state.addAttribute("instance", FlatSymbolRefAttr::get(
+            outer.getContext(), text(endpoint.instance, "sym_name")));
+        state.addAttribute("port", builder.getStringAttr(port->name));
+        state.addAttribute("name", builder.getStringAttr(leaf.name));
+        state.addAttribute("direction", builder.getStringAttr("inout"));
+        state.addAttribute("flow_orientation", builder.getStringAttr("out_of_component"));
+        state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
+        state.addAttribute("metadata", metadata(endpoint, leaf, true));
+        leaf.value = builder.create(state)->getResult(0);
+        record(endpoint, leaf, "out_of_component");
+      }
+    }
+    for (auto &access : accesses) {
+      auto &entry = endpoints[positions.lookup(access.projection)];
+      auto leaf = llvm::find_if(entry.leaves, [&](const Leaf &candidate) {
+        return candidate.path == access.identity.path.getValue();
+      });
+      access.value.replaceAllUsesWith(leaf->value);
+    }
+    // Canonical proof-only domain records are removed only after every actual
+    // SSA and symbol use has been shown to belong to this closed erase set.
+    for (Operation *module : modules)
+      for (Operation &operation : llvm::make_early_inc_range(
+               llvm::reverse(module->getRegion(0).front().getOperations())))
+        if (erase.contains(&operation))
+          operation.erase();
+    for (Operation *module : modules)
+      for (Operation &operation : module->getRegion(0).front())
+        if (llvm::isa<InstanceOp>(operation))
+          operation.setAttr("domain_bindings", builder.getDictionaryAttr({}));
+    outer->setAttr("nodal.backend.interface_correspondence", builder.getArrayAttr(correspondence));
+    if (Attribute profile = outer->getAttr("nodal.target.profile"))
+      outer->setAttr("nodal.backend.interface_source_profile", profile);
+    outer->setAttr("nodal.target.profile", builder.getStringAttr("analog"));
+    return mlir::verify(outer);
+  }
+
+private:
+  struct Leaf {
+    std::string path, name, logical;
+    Type type;
+    DictionaryAttr analog, references;
+    StringAttr role, access;
+    ArrayAttr nestedRoles, nestedInterfaces;
+    Value value;
+  };
+  struct Endpoint {
+    DigitalInterfaceEndpoint endpoint;
+    llvm::SmallVector<Leaf> leaves;
+  };
+  LogicalResult invalid(Operation *site, llvm::StringRef message) {
+    return emitMappedFailure(site, "NODAL-BACKEND-INTERFACE-CONSERVATIVE-001", message);
+  }
+  static std::string encode(llvm::StringRef value) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result;
+    for (unsigned char byte : value.bytes()) {
+      result.push_back(hex[byte >> 4]);
+      result.push_back(hex[byte & 15]);
+    }
+    return result;
+  }
+  DictionaryAttr metadata(const DigitalInterfaceEndpoint &endpoint, const Leaf &leaf, bool child) {
+    return builder.getDictionaryAttr({
+        builder.getNamedAttr("semantic_path", builder.getStringAttr(leaf.logical)),
+        builder.getNamedAttr("logical_interface", builder.getStringAttr(text(endpoint.declaration, "sym_name"))),
+        builder.getNamedAttr("logical_member", builder.getStringAttr(leaf.path)),
+        builder.getNamedAttr("selected_role", endpoint.selectedRole->getAttr("sym_name")),
+        builder.getNamedAttr("leaf_role", leaf.role),
+        builder.getNamedAttr("selected_access", leaf.access),
+        builder.getNamedAttr("nested_roles", leaf.nestedRoles),
+        builder.getNamedAttr("nested_interfaces", leaf.nestedInterfaces),
+        builder.getNamedAttr("analog", leaf.analog),
+        builder.getNamedAttr("analog_refs", leaf.references),
+        builder.getNamedAttr("allow_floating", builder.getBoolAttr(true)),
+        builder.getNamedAttr("interface_boundary", builder.getBoolAttr(child)),
+        builder.getNamedAttr("declaration_kind", builder.getStringAttr("analog-inout"))});
+  }
+  void record(const DigitalInterfaceEndpoint &endpoint, const Leaf &leaf, llvm::StringRef orientation) {
+    correspondence.push_back(builder.getDictionaryAttr({
+        builder.getNamedAttr("owner", builder.getStringAttr(text(endpoint.domainOwner, "sym_name"))),
+        builder.getNamedAttr("endpoint", builder.getStringAttr(text(endpoint.declaration, "sym_name"))),
+        builder.getNamedAttr("member", builder.getStringAttr(leaf.path)),
+        builder.getNamedAttr("source", builder.getStringAttr(leaf.logical)),
+        builder.getNamedAttr("target", builder.getStringAttr(leaf.name)),
+        builder.getNamedAttr("instance", builder.getStringAttr(endpoint.instance ? text(endpoint.instance, "sym_name") : "")),
+        builder.getNamedAttr("flow_orientation", builder.getStringAttr(orientation)),
+        builder.getNamedAttr("selected_role", endpoint.selectedRole->getAttr("sym_name")),
+        builder.getNamedAttr("leaf_role", leaf.role),
+        builder.getNamedAttr("selected_access", leaf.access),
+        builder.getNamedAttr("nested_roles", leaf.nestedRoles),
+        builder.getNamedAttr("nested_interfaces", leaf.nestedInterfaces),
+        builder.getNamedAttr("analog", leaf.analog),
+        builder.getNamedAttr("analog_refs", leaf.references)}));
+  }
+  LogicalResult preflight() {
+    uint64_t work = 0;
+    WalkResult bounded = outer.walk([&](Operation *operation) {
+      if (++work <= kOperations)
+        return WalkResult::advance();
+      (void)invalid(operation, "conservative Interface physical plan exceeds finite operation budget");
+      return WalkResult::interrupt();
+    });
+    if (bounded.wasInterrupted())
+      return failure();
+    uint64_t leaves = 0;
+    for (Operation &module : outer.getBody()->getOperations()) {
+      if (!llvm::isa<ModuleOp>(module))
+        continue;
+      modules.push_back(&module);
+      llvm::SmallVector<DigitalInterfaceEndpoint> logical;
+      llvm::SmallVector<DigitalInterfaceAccess> represented;
+      if (failed(collectDigitalInterfaceEndpoints(&module, logical, &represented)) ||
+          failed(resolveConservativeStructuralScope(&module)))
+        return failure();
+      llvm::StringSet<> names;
+      for (Operation &operation : module.getRegion(0).front())
+        for (llvm::StringRef key : {"name", "sym_name"})
+          if (!text(&operation, key).empty())
+            names.insert(text(&operation, key));
+      for (auto &endpoint : logical) {
+        if (!endpoint.dimensions.empty())
+          return invalid(endpoint.operation, "conservative Interface emission requires scalar endpoints");
+        Endpoint entry{endpoint, {}};
+        for (const auto &leaf : endpoint.leaves) {
+          if (++leaves > kOperations)
+            return invalid(endpoint.operation, "conservative Interface leaf plan exceeds finite budget");
+          if (leaf.protocol.getValue() != "conservative" ||
+              !llvm::isa<TerminalType>(leaf.type))
+            return invalid(endpoint.operation, "mixed/digital/signal-flow Interface emission is unsupported");
+          std::string base = "nodal_i" + encode(text(endpoint.operation, "sym_name")) + "_" + encode(leaf.path.getValue());
+          std::string physical = base;
+          unsigned ordinal = 0;
+          while (!names.insert(physical).second)
+            physical = base + "_" + std::to_string(++ordinal);
+          std::string logicalPath = path(endpoint.operation).str() + "." + leaf.path.getValue().str();
+          entry.leaves.push_back(Leaf{leaf.path.getValue().str(), std::move(physical),
+              std::move(logicalPath), leaf.type, leaf.analogMetadata, leaf.analogReferences,
+              leaf.role, leaf.access, leaf.nestedRoles, leaf.nestedInterfaces, {}});
+        }
+        positions.try_emplace(endpoint.operation, endpoints.size());
+        endpoints.push_back(std::move(entry));
+        erase.insert(endpoint.operation);
+        Operation *domain = SymbolTable::lookupSymbolIn(&module, endpoint.domain);
+        if (!domain)
+          return invalid(endpoint.operation, "Interface domain witness disappeared");
+        domains.insert(domain);
+      }
+      accesses.append(represented.begin(), represented.end());
+      for (Operation &operation : module.getRegion(0).front()) {
+        if (llvm::isa<InterfaceOp, InterfaceAbiOp, MemberAccessOp>(operation))
+          erase.insert(&operation);
+      }
+    }
+    for (const auto &entry : endpoints)
+      if (entry.endpoint.instance && !positions.count(entry.endpoint.declaration))
+        return invalid(entry.endpoint.operation, "Interface child endpoint has no exact physical plan");
+    for (const auto &access : accesses) {
+      if (access.leaf.protocol.getValue() != "conservative" || !positions.count(access.projection))
+        return invalid(access.value.getDefiningOp(), "member has no conservative physical plan");
+      for (Operation *user : access.value.getUsers())
+        if (!llvm::isa<ConnectOp, BranchOp>(user))
+          return invalid(user, "conservative Interface member requires supported connection or branch use");
+    }
+    // Keep domain erasure bounded to the exact Interface witness closure. Unknown
+    // producers or any surviving SSA/symbol consumer fail before mutation.
+    for (Operation *domain : domains)
+      erase.insert(domain);
+    for (Operation *module : modules) {
+      for (Operation &operation : module->getRegion(0).front()) {
+        auto reference = [&](llvm::StringRef key) {
+          auto ref = operation.getAttrOfType<FlatSymbolRefAttr>(key);
+          return ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
+        };
+        if ((llvm::isa<LocalDomainBindingOp>(operation) && domains.contains(reference("domain"))) ||
+            (llvm::isa<InstanceDomainBindingOp>(operation) && domains.contains(reference("actual"))) ||
+            (llvm::isa<DomainBindOp, RequirementClockOp, RequirementResetOp>(operation) &&
+             domains.contains(reference("requirement"))))
+          erase.insert(&operation);
+      }
+    }
+    llvm::SmallVector<Operation *> pending(erase.begin(), erase.end());
+    while (!pending.empty()) {
+      Operation *operation = pending.pop_back_val();
+      for (Value operand : operation->getOperands()) {
+        Operation *producer = operand.getDefiningOp();
+        if (!producer || (!erase.contains(producer) &&
+            !llvm::isa<PortValueOp, RequirementClockOp, RequirementResetOp>(producer)))
+          return invalid(operation, "Interface-only domain witness has an unsupported producer");
+        if (erase.insert(producer).second)
+          pending.push_back(producer);
+        if (llvm::isa<PortValueOp>(producer)) {
+          auto ref = producer->getAttrOfType<FlatSymbolRefAttr>("port");
+          Operation *port = ref ? SymbolTable::lookupSymbolIn(producer->getParentOp(), ref) : nullptr;
+          auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+          if (!llvm::isa_and_nonnull<PortOp>(port) || !type ||
+              !isDigitalControlBoundaryType(type.getValue()))
+            return invalid(producer, "domain witness is not an exact control port");
+          erase.insert(port);
+        }
+      }
+    }
+    // Instance domain_bindings are cleared below, but no other attribute on
+    // that operation may retain a reference to an erased proof-domain symbol.
+    // Validate once per instance rather than rescanning attributes per use.
+    for (Operation *module : modules)
+      for (Operation &operation : module->getRegion(0).front()) {
+        if (!llvm::isa<InstanceOp>(operation))
+          continue;
+        for (NamedAttribute named : operation.getAttrs()) {
+          if (named.getName() == "domain_bindings")
+            continue;
+          Attribute value = named.getValue();
+          WalkResult uses = value.walk<WalkOrder::PreOrder>([&](Attribute nested) {
+            if (++work > kOperations) {
+              (void)invalid(&operation, "Interface domain attribute inventory exceeds finite budget");
+              return WalkResult::interrupt();
+            }
+            auto reference = llvm::dyn_cast<SymbolRefAttr>(nested);
+            if (reference && domains.contains(SymbolTable::lookupSymbolIn(
+                                 module, reference.getRootReference()))) {
+              (void)invalid(&operation,
+                            "Interface domain symbol survives outside exact instance domain_bindings");
+              return WalkResult::interrupt();
+            }
+            return WalkResult::advance();
+          });
+          if (uses.wasInterrupted())
+            return failure();
+        }
+      }
+    for (Operation *operation : erase) {
+      for (Value value : operation->getResults())
+        for (Operation *user : value.getUsers())
+          if (!erase.contains(user) && !llvm::isa<MemberAccessOp>(operation))
+            return invalid(user, "Interface domain witness has a surviving actual consumer");
+      if (operation->hasAttr("sym_name")) {
+        auto uses = SymbolTable::getSymbolUses(operation, operation->getParentOp());
+        if (!uses)
+          return invalid(operation, "Interface domain symbol use inventory is not closed");
+        for (const auto &use : *uses)
+          if (!erase.contains(use.getUser()) &&
+              !(llvm::isa<InstanceOp>(use.getUser()) && domains.contains(operation)))
+            return invalid(use.getUser(), "Interface witness symbol has a surviving consumer");
+      }
+    }
+    for (Operation *module : modules) {
+      WalkResult digital = module->walk([&](Operation *operation) {
+        if (erase.contains(operation) || operation->getParentOfType<InterfaceOp>())
+          return WalkResult::advance();
+        if (hasDigitalTargetCapability(operation)) {
+          (void)invalid(operation, "real digital behavior remains outside conservative Interface emission");
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+      if (digital.wasInterrupted())
+        return failure();
+    }
+    return success();
+  }
+  mlir::ModuleOp outer;
+  OpBuilder builder;
+  llvm::SmallVector<Operation *> modules;
+  llvm::SmallVector<Endpoint, 0> endpoints;
+  llvm::SmallVector<DigitalInterfaceAccess> accesses;
+  llvm::DenseMap<Operation *, unsigned> positions;
+  llvm::DenseSet<Operation *> domains, erase;
+  llvm::SmallVector<Attribute> correspondence;
+};
 
 struct Definition {
   Definition(Operation *op, ConservativeStructuralScope topology)
@@ -444,6 +763,10 @@ private:
   llvm::SmallVector<Attribute> correspondence;
 };
 } // namespace
+
+LogicalResult materializeConservativeInterfaceBoundary(mlir::ModuleOp module) {
+  return InterfaceMaterializer(module).run();
+}
 
 LogicalResult materializeScalarElectricalHierarchy(mlir::ModuleOp module) {
   return Materializer(module).run();

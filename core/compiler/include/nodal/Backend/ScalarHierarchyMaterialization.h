@@ -6,6 +6,10 @@
 
 namespace nodal {
 
+/// Reify verified scalar conservative Interface leaves through existing terminal
+/// topology, preserving inverse paths. Never admits digital/signal-flow behavior.
+mlir::LogicalResult materializeConservativeInterfaceBoundary(mlir::ModuleOp module);
+
 /// Materialize one already verified, finite scalar electrical root graph.
 /// Preflight rejects unsupported semantics and expansion budgets before cloning
 /// occurrences. The caller owns the transaction and must independently verify

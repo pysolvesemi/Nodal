@@ -229,7 +229,20 @@ public:
     if (failed(h) || h->kind != DigitalRegionKind::Generate ||
         failed(resolveGeneratedDomain(h->operation)))
       return failure();
-    // The induction is deliberately absent: generated indices cannot become widths.
+    // Retain the actual enclosing lexical context, but never bind the induction:
+    // generated indices remain Shape/iteration facts, not type-width atoms.
+    unsigned depth = 0;
+    for (Operation *scope = h->operation; scope != h->module; scope = scope->getParentOp())
+      if (!scope || !isDigitalRegionOwner(scope) || ++depth > 128)
+        return failure();
+    if (isDigitalRegionOwner(h->operation->getParentOp())) {
+      auto parents = digitalIntegerContextsAtUse(h->operation);
+      if (failed(parents) || parents->size() != 1)
+        return failure(); // A single context consumer cannot select a reduction case.
+      const auto &parent = parents->front();
+      return ParameterIntegerEnvironment::create(h->module, h->body, use, parent.instance(), {},
+                                                 {}, &parent);
+    }
     return ParameterIntegerEnvironment::create(h->module, h->body, use, nullptr, {}, {});
   }
 };

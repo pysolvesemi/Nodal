@@ -1151,3 +1151,20 @@ not attributed to this source-only checkpoint. General symbolic arithmetic,
 region-owned inference, generated Instance/Interface routing and remaining
 physical boundary profiles are still required continuations. No F58 parent
 checkbox is closed by this checkpoint.
+
+## Checkpoint 26 — deferred scalar conversion and Struct values
+
+Four source paths extend the existing bounded result-intent lifecycle through
+canonical scalar-conversion and nominal Struct owners. All 372 Scala source files
+in this prospective tree match the retained 31-group shared acceptance snapshot;
+logs, individual counts and four actual default-gate replay profiles are retained
+in `.work/f58-deferred-values/shared`. Parent ranges differ from child formal
+envelopes, so the checks exercise real substitution rather than matching defaults.
+
+Wrong nominal or equal-envelope foreign schemas, field order, width direction,
+narrowing/sign, assignment and forged bridge results remain causal negatives.
+FiniteReal width 1023 accepts and 1024 rejects in source, without a digital Real
+target claim. The concrete all-values target does not pass: packed projection
+and named-field saturation refusals remain explicit. This source checkpoint
+therefore establishes neither that waveform nor region-owned/inferred-storage
+lifecycle support. Those consumers remain separate required work where applicable.

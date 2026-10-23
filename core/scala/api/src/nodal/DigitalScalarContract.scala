@@ -24,7 +24,6 @@ private[nodal] object DigitalScalarContract:
     DigitalValueContract.fail(number, message)
 
   private def scalarType(value: Expr[?]): KernelTypeDescriptor =
-    DeferredResultType.requireFinal(Vector(value), "digital scalar conversion")
     val descriptor = CandidateRuntime.expressionDataType(value).map(CandidateRuntime.typeDescriptor)
       .getOrElse(fail(5, "digital conversion requires an operand with an exact scalar type"))
     if !Set("Bits", "UInt", "SInt").contains(descriptor.kind) then
@@ -195,73 +194,109 @@ private[nodal] object DigitalScalarContract:
     ConstructionKernel.expression(expression)
     expression
 
+  /** Preserve the source kind without evaluating a child's formal width in the parent. The existing
+    * conversion proof runs after its exact operand has finalized.
+    */
+  private def emitInferred[A <: Data](
+      operation: String,
+      value: Expr[?],
+      provisional: => KernelTypeDescriptor
+  )(result: => KernelTypeDescriptor): Expr[A] =
+    if !DeferredResultType.pending(value) then emit(operation, value, result)
+    else
+      val expression = new KernelExpr[A](
+        Vector(value),
+        resultType = Some(provisional),
+        operation = Some(operation),
+        typeIntent = DeferredResultType.intent(Vector(value))(result)
+      )
+      ConstructionKernel.expression(expression)
+      expression
+
   def resize[A <: Data](value: Expr[A], width: Int, policy: String): Expr[A] =
-    val source = scalarType(value)
-    val (minimum, maximum) = widthBounds(source)
-    val result = source.copy(arguments = Vector(width))
-    val _ = widthBounds(result)
-    policy match
-      case "extend" if width.toLong < maximum =>
-        fail(7, "extend must not narrow for any legal source width")
-      case "truncate" if width.toLong > minimum =>
-        fail(7, "truncate must not widen for any legal source width")
-      case "resize_checked"
-          if width.toLong < maximum &&
-            !knownValue(value).exists(requiredWidth(source.kind, _) <= width.toLong) =>
-        fail(8, "checked resize requires a proof that every source value fits the result width")
-      case "extend" | "truncate" | "wrap" | "saturate" | "resize_checked" => ()
-      case _ => fail(5, s"unsupported digital resize policy '$policy'")
-    emit(s"$Prefix$policy", value, result)
+    def result: KernelTypeDescriptor =
+      val source = scalarType(value)
+      val (minimum, maximum) = widthBounds(source)
+      val resized = source.copy(arguments = Vector(width))
+      val _ = widthBounds(resized)
+      policy match
+        case "extend" if width.toLong < maximum =>
+          fail(7, "extend must not narrow for any legal source width")
+        case "truncate" if width.toLong > minimum =>
+          fail(7, "truncate must not widen for any legal source width")
+        case "resize_checked"
+            if width.toLong < maximum &&
+              !knownValue(value).exists(requiredWidth(source.kind, _) <= width.toLong) =>
+          fail(8, "checked resize requires a proof that every source value fits the result width")
+        case "extend" | "truncate" | "wrap" | "saturate" | "resize_checked" => ()
+        case _ => fail(5, s"unsupported digital resize policy '$policy'")
+      resized
+    emitInferred(
+      s"$Prefix$policy",
+      value,
+      scalarType(value).copy(arguments = Vector(width))
+    )(result)
 
   def toSigned(value: Expr[UInt]): Expr[SInt] =
-    val source = scalarType(value)
-    if source.kind != "UInt" then fail(5, "toSigned requires an unsigned numeric operand")
-    val _ = widthBounds(source)
-    val width = source.arguments.head match
-      case literal: Int if literal < Int.MaxValue => literal + 1
-      case _: Int => fail(7, "numeric signed conversion exceeds the static width representation")
-      case symbolic: Expr[?] =>
-        CandidateRuntime.integerExpr(
-          "analog_add",
-          symbolic.asInstanceOf[Expr[Integer]],
-          CandidateRuntime.literalInteger(1)
-        )
-      case _ => fail(1, "digital width requires a static Integer expression")
-    val result = KernelTypeDescriptor("SInt", Vector(width))
-    val _ = widthBounds(result)
-    emit("digital_to_signed", value, result)
+    def result: KernelTypeDescriptor =
+      val source = scalarType(value)
+      if source.kind != "UInt" then fail(5, "toSigned requires an unsigned numeric operand")
+      val _ = widthBounds(source)
+      val width = source.arguments.head match
+        case literal: Int if literal < Int.MaxValue => literal + 1
+        case _: Int => fail(7, "numeric signed conversion exceeds the static width representation")
+        case symbolic: Expr[?] =>
+          CandidateRuntime.integerExpr(
+            "analog_add",
+            symbolic.asInstanceOf[Expr[Integer]],
+            CandidateRuntime.literalInteger(1)
+          )
+        case _ => fail(1, "digital width requires a static Integer expression")
+      val signed = KernelTypeDescriptor("SInt", Vector(width))
+      val _ = widthBounds(signed)
+      signed
+    emitInferred("digital_to_signed", value, scalarType(value).copy(kind = "SInt"))(result)
 
   def toUnsigned(value: Expr[SInt]): Expr[UInt] =
-    val source = scalarType(value)
-    if source.kind != "SInt" then fail(5, "toUnsigned requires a signed numeric operand")
-    val _ = widthBounds(source)
-    if !nonnegative(value) then
-      fail(8, "numeric unsigned conversion requires a proof that every source value is nonnegative")
-    emit("digital_to_unsigned", value, source.copy(kind = "UInt"))
+    def result: KernelTypeDescriptor =
+      val source = scalarType(value)
+      if source.kind != "SInt" then fail(5, "toUnsigned requires a signed numeric operand")
+      val _ = widthBounds(source)
+      if !nonnegative(value) then
+        fail(
+          8,
+          "numeric unsigned conversion requires a proof that every source value is nonnegative"
+        )
+      source.copy(kind = "UInt")
+    emitInferred("digital_to_unsigned", value, scalarType(value).copy(kind = "UInt"))(result)
 
   def reinterpret[A <: Data](value: Expr[?], signed: Boolean): Expr[A] =
-    val source = scalarType(value)
-    val expected = if signed then "UInt" else "SInt"
-    if source.kind != expected then
-      fail(5, s"signedness reinterpretation requires a $expected operand")
-    val _ = widthBounds(source)
     val kind = if signed then "SInt" else "UInt"
-    emit(
+    def result: KernelTypeDescriptor =
+      val source = scalarType(value)
+      val expected = if signed then "UInt" else "SInt"
+      if source.kind != expected then
+        fail(5, s"signedness reinterpretation requires a $expected operand")
+      val _ = widthBounds(source)
+      source.copy(kind = kind)
+    emitInferred(
       if signed then "digital_reinterpret_signed" else "digital_reinterpret_unsigned",
       value,
-      source.copy(kind = kind)
-    )
+      scalarType(value).copy(kind = kind)
+    )(result)
 
   /** Explicit numeric conversion uses binary64 round-to-nearest, ties-to-even. Rounding is
     * permitted; overflow to infinity is not. A width up to 1023 proves finite conversion for the
     * entire unsigned source range; larger widths require an exact constant proof.
     */
   def toReal(value: Expr[UInt]): Expr[Real] =
-    val source = scalarType(value)
-    if source.kind != "UInt" then fail(5, "toReal requires an unsigned numeric operand")
-    if widthBounds(source)._2 > 1023L && !knownValue(value).exists(_.toDouble.isFinite) then
-      fail(8, "numeric Real conversion requires a proof of finite binary64 representation")
-    emit("digital_to_real", value, KernelTypeDescriptor("Real"))
+    def result: KernelTypeDescriptor =
+      val source = scalarType(value)
+      if source.kind != "UInt" then fail(5, "toReal requires an unsigned numeric operand")
+      if widthBounds(source)._2 > 1023L && !knownValue(value).exists(_.toDouble.isFinite) then
+        fail(8, "numeric Real conversion requires a proof of finite binary64 representation")
+      KernelTypeDescriptor("Real")
+    emitInferred("digital_to_real", value, KernelTypeDescriptor("Real"))(result)
 
   /** Recheck ordinary conversion obligations under an admitted collection Integer context. */
   def validateCaptured(expression: KernelExpr[?]): Unit =

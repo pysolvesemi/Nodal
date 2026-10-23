@@ -61,7 +61,7 @@ private[nodal] object DigitalAggregateContract:
       result: KernelTypeDescriptor,
       operands: Vector[Expr[?]],
       metadata: StructOperationMetadata,
-      typeIntent: Option[KernelResultTypeIntent] = None
+      typeIntent: Option[KernelResultTypeIntent]
   ): Expr[A] =
     val value = new KernelExpr[A](
       operands :+ metadata,
@@ -100,22 +100,33 @@ private[nodal] object DigitalAggregateContract:
     )
 
   def make(schema: DataType[Struct], bindings: Vector[StructBinding[? <: Data]]): Expr[Struct] =
-    DeferredResultType.requireFinal(bindings.map(_.expression), "Struct construction")
     val base = CandidateRuntime.typeDescriptor(schema)
     val declared = fields(base)
     if bindings.size != declared.size then fail("Struct value requires every field exactly once")
     if bindings.size > 4098 then fail("Struct value exceeds the shared value-DAG operand budget")
-    val actual = bindings.zipWithIndex.map: (binding, index) =>
+    // Member identity is independent of boundary width substitution and is checked now.
+    bindings.zipWithIndex.foreach: (binding, index) =>
       if binding.member.ordinal != index ||
         binding.member.declaration.name != declared(index).name ||
         !DigitalEnumContract.sameType(base, CandidateRuntime.typeDescriptor(binding.member.schema))
       then fail("Struct bindings must belong to this semantic schema in declared order")
-      val result = descriptor(binding.expression)
-      if !DigitalEnumContract.sameWidthFamily(
-          CandidateRuntime.typeDescriptor(declared(index).dataType),
-          result
-        )
-      then fail("Struct value changes a field kind, enum ABI, layout or inner dimension")
-      StructField(declared(index).name, new KernelDataType[Data](result))
-    val result = base.copy(arguments = Vector(base.arguments.head, actual))
-    emit("digital_struct_make", result, bindings.map(_.expression), StructOperationMetadata(schema))
+    def result: KernelTypeDescriptor =
+      val actual = bindings.zipWithIndex.map: (binding, index) =>
+        val selected = descriptor(binding.expression)
+        DigitalCombinationalContract.validateValueType(selected)
+        if !DigitalEnumContract.sameWidthFamily(
+            CandidateRuntime.typeDescriptor(declared(index).dataType),
+            selected
+          )
+        then fail("Struct value changes a field kind, enum ABI, layout or inner dimension")
+        StructField(declared(index).name, new KernelDataType[Data](selected))
+      base.copy(arguments = Vector(base.arguments.head, actual))
+    val operands = bindings.map(_.expression)
+    val intent = DeferredResultType.intent(operands)(result)
+    emit(
+      "digital_struct_make",
+      if intent.nonEmpty then base else result,
+      operands,
+      StructOperationMetadata(schema),
+      intent
+    )

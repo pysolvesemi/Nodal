@@ -1061,8 +1061,8 @@ int main() {
     malformed.erase();
   }
   auto generatedTarget = [&](StringRef name, const std::string &input, bool preserve, bool expected,
-                             StringRef diagnostic = "", int extractOffset = -1,
-                             unsigned depth = 1) {
+                             StringRef diagnostic = "", int extractOffset = -1, unsigned depth = 1,
+                             int terminalCoordinate = 0, int terminalOrdinal = 0) {
     diagnostics.clear();
     auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
     bool valid = parsed && succeeded(verify(*parsed));
@@ -1097,7 +1097,11 @@ int main() {
               auto frame = cast<DictionaryAttr>(raw);
               auto coordinate = dyn_cast<IntegerAttr>(frame.get("coordinate"));
               exact &= frame.getAs<StringAttr>("family") && frame.get("stride_bits") &&
-                       coordinate && coordinate.getInt() == (index + 1 == depth ? 0 : 1);
+                       coordinate &&
+                       coordinate.getInt() == (index + 1 == depth ? terminalCoordinate : 1) &&
+                       frame.getAs<IntegerAttr>("ordinal") &&
+                       frame.getAs<IntegerAttr>("ordinal").getInt() ==
+                           (index + 1 == depth ? terminalOrdinal : 1);
             }
             prefixMaps += exact;
           }
@@ -1142,12 +1146,89 @@ int main() {
                   replace(generatedFixture(), "comparison = \"eq\"", "comparison = \"lt\""), false,
                   false, "generated static alternatives require exact supported Integer equality");
   generatedTarget(
-      "generated-nonunit-stride-does-not-change-lane-layout",
+      "generated-nonunit-stride-retains-ordinal-transport",
       replace(replace(generatedFixture(false, false),
                       "%step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
                       "%step = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\""),
               "maximum_trip_count = 3", "maximum_trip_count = 2"),
-      true, false, "zero-based unit-stride family");
+      true, true);
+  generatedTarget(
+      "generated-nonzero-domain-retains-actual-induction",
+      replace(replace(generatedFixture(false, false),
+                      "%lower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"",
+                      "%lower = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\""),
+              "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+              "%upper = \"nodal.const_literal\"() <{value = 4 : i64, spelling = \"4\""),
+      true, true, "", -1, 1, 2, 1);
+  {
+    auto overflow = replace(
+        replace(
+            replace(
+                replace(generatedFixture(false, false),
+                        "%lower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"",
+                        "%lower = \"nodal.const_literal\"() <{value = -2147483647 : i64, spelling "
+                        "= \"-2147483647\""),
+                "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+                "%upper = \"nodal.const_literal\"() <{value = 2147483647 : i64, spelling = "
+                "\"2147483647\""),
+            "%step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
+            "%step = \"nodal.const_literal\"() <{value = 2147483647 : i64, spelling = "
+            "\"2147483647\""),
+        "maximum_trip_count = 3", "maximum_trip_count = 2");
+    overflow = replace(overflow, "%family =",
+                       "%ordinal = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+                       "metadata = {}}> : () -> i64\n%family =");
+    overflow = replace(overflow, "generated_member\"(%family, %lower)",
+                       "generated_member\"(%family, %ordinal)");
+    generatedTarget("generated-cardinality-rejects-signed-i32-intermediate-overflow", overflow,
+                    true, false,
+                    "generated cardinality requires checked positive signed-i32 arithmetic");
+  }
+  for (unsigned depth : {1U, 2U}) {
+    std::string input =
+        depth == 1 ? generatedFixture(false, false) : nestedGeneratedFixture(2, false);
+    input = replace(input, "%upper = \"nodal.const_literal\"() <{value = 3 : i64, spelling = \"3\"",
+                    "%upper = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"");
+    input = replace(input, "maximum_trip_count = 3", "maximum_trip_count = 0");
+    // Remove only the impossible read, not the authored storage/export or loops.
+    auto eraseLine = [&](StringRef prefix) {
+      size_t begin = input.find(prefix.str());
+      size_t end = input.find('\n', begin);
+      input.erase(begin, end - begin + 1);
+    };
+    eraseLine("%selected =");
+    if (depth == 2)
+      eraseLine("%view0 =");
+    input =
+        replace(input, "digital_assign\"(%output, %selected)", "digital_assign\"(%output, %input)");
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager manager(&context);
+    auto pass = nodal::createSequentialToCIRCTPass();
+    bool valid = parsed && succeeded(verify(*parsed)) &&
+                 succeeded(pass->initializeOptions("preserve-constant-loops=true",
+                                                   [&](const Twine &) { return failure(); }));
+    manager.addPass(std::move(pass));
+    valid &= valid && succeeded(manager.run(*parsed));
+    unsigned helpers = 0, loops = 0, zeroTrip = 0, states = 0;
+    if (valid) {
+      parsed->walk([&](Operation *op) {
+        helpers += op->hasAttr("nodal.generated_template");
+        states += isa<circt::seq::CompRegOp>(op);
+        if (op->getName().getStringRef() == "sv.generate.for") {
+          ++loops;
+          zeroTrip += op->getAttr("lowerBound") == op->getAttr("upperBound");
+        }
+        if (isa<circt::hw::InstanceOp>(op))
+          valid &= op->getNumResults() == 0;
+      });
+      valid &= helpers == depth && loops == depth && zeroTrip == 1 && states == 1 &&
+               !StringRef(print(*parsed)).contains("i0") && succeeded(verify(*parsed));
+    }
+    report(depth == 1 ? "empty-authored-export-has-no-physical-slot-or-driver"
+                      : "nested-empty-export-has-no-fabricated-parent-slot",
+           valid);
+  }
   generatedTarget("nested-family-two-exact-prefixes-and-reusable-bodies", nestedGeneratedFixture(),
                   true, true, "", -1, 2);
   generatedTarget("nested-matrix-routes-exact-parent-row-through-shared-helpers",

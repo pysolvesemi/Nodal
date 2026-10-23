@@ -1455,3 +1455,24 @@ Both maintained fixture hashes already match the historical receipt in
 controls retain refusal at nine lanes and 5x3. This is matched historical
 two-state evidence, not a current-compiler rerun or four-state claim. The
 mismatched historical TARGET.md copy remains excluded; no fixtures are changed.
+
+## Checkpoint 41 — maintained generated-domain target
+
+The exact native snapshot in `.work/f58-generated-domain-target/shared`
+(manifest `002bbbaa`) changes two target/test paths and matches all 233 hashes.
+Compiler `8fa475e1` passed HierarchyTarget 71, SequentialTarget 157 and
+SymbolicHierarchy 31 cases, 259 total. Sixteen maintained profiles passed 47
+configurations through unchanged SV, Slang and arcilator, explicitly two-state.
+Thirteen inputs match the checkpoint 40 domain extension; three retain selected
+source `0915a24f`. Exact runner helper dependencies precede this checkpoint.
+The runner is byte-identical; TARGET.md includes only freshly composed domain
+text, not the mismatched historical nested-document copy.
+
+Real reusable family/structural-arm helpers preserve nonzero/nonunit positive
+steps, empty/maybe-empty and captured/dependent/guarded domains without lane
+cloning. Canonical selected-prefix existence governs use; no default-width or
+maximum-lane substitution occurs. Symbolic operation support remains exact-type
+bitwise/alias/Bool select with uninitialized resetless storage, not general
+arithmetic/resize/reset literals. Generated child Instance/Interface, descending
+domains, resolved/analog routes and four-state startup remain separate scope.
+These are retained matched results, not new consumer execution or F58 closure.

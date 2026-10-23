@@ -252,7 +252,8 @@ FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, u
       operation->getResult(0).getType() != storage.getType())
     return rejectMember(
         "generated member must retain exact kind, type and monotonic export access");
-  auto coordinate = resolveGeneratedOrdinal(family, operation->getOperand(1), operation);
+  auto coordinate =
+      resolveGeneratedOrdinal(family, operation->getOperand(1), operation, selections);
   if (failed(coordinate))
     return rejectMember("generated ordinal lacks an all-legal existence proof");
   selections.push_back({family, operation->getOperand(1), *coordinate});

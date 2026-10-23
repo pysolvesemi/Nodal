@@ -84,6 +84,14 @@ verifyShapeIndexInExtent(mlir::Value value, const StaticShapeDimension &extent,
 mlir::FailureOr<InstantiatedIntegerExpression>
 resolveGeneratedOrdinal(mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use);
 
+struct GeneratedSelection;
+/// Refine a nested declaration's domain with the already inspected, immutable
+/// ancestor selection chain. This does not alter template cardinality or admit
+/// new structural identities; callers must obtain the prefix from GeneratedMember.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinal(mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use,
+                        llvm::ArrayRef<GeneratedSelection> prefix);
+
 /// Element-neutral facts derived from an actual acyclic SSA projection chain.
 /// These establish shape/ordinal mapping, never storage or conservative rights.
 struct StaticShapeProjection {

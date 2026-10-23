@@ -461,13 +461,75 @@ LogicalResult verifyInstanceShapeDimension(Operation *instance, const StaticShap
 
 FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *family, Value ordinal,
                                                                  Operation *use) {
-  if (!family || !ordinal || !use)
+  return resolveGeneratedOrdinal(family, ordinal, use, {});
+}
+
+FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
+                        llvm::ArrayRef<GeneratedSelection> prefix) {
+  if (!family || !ordinal || !use || prefix.size() > 128)
     return failure();
   auto domain = resolveGeneratedDomain(family);
   if (failed(domain) || !ordinal.getType().isSignlessInteger(64) ||
       family->getParentOfType<ModuleOp>() != use->getParentOfType<ModuleOp>() ||
       failed(verifyDigitalValueScope(ordinal, use)))
     return failure();
+  // Prefix facts come only from the recursively inspected actual family/export
+  // chain. Substitute its exact induction identities in this query, never in the
+  // declaration's retained domain or maximum trip count. A captured family view
+  // need not expose its parent's ordinal as a fresh SSA use in the current arm.
+  llvm::DenseMap<Value, InstantiatedIntegerExpression> substitutions;
+  Operation *previous = nullptr;
+  for (const auto &selection : prefix) {
+    Operation *ancestor = selection.family;
+    if (!llvm::isa_and_nonnull<GenerateOp>(ancestor) || !ancestor->isProperAncestor(family) ||
+        (previous && !previous->isProperAncestor(ancestor)) || ancestor->getNumRegions() != 1 ||
+        !llvm::hasSingleElement(ancestor->getRegion(0)) ||
+        ancestor->getRegion(0).front().getNumArguments() == 0 || !selection.coordinate.root)
+      return failure();
+    substitutions.try_emplace(ancestor->getRegion(0).front().getArgument(0), selection.coordinate);
+    previous = ancestor;
+  }
+  using Node = InstantiatedIntegerNode;
+  llvm::DenseMap<const Node *, InstantiatedIntegerExpression> memo;
+  unsigned remaining = 65536;
+  auto substitute = [&](auto &&self, const std::shared_ptr<const Node> &node,
+                        unsigned depth) -> FailureOr<InstantiatedIntegerExpression> {
+    if (!node || depth > 128 || !remaining)
+      return failure();
+    --remaining;
+    if (auto found = memo.find(node.get()); found != memo.end())
+      return found->second;
+    InstantiatedIntegerExpression result{node, node->bounds};
+    if (node->kind == Node::Kind::OpaqueValue) {
+      if (auto found = substitutions.find(node->identity); found != substitutions.end())
+        result = found->second;
+    } else if (node->kind == Node::Kind::Apply) {
+      llvm::SmallVector<InstantiatedIntegerExpression, 4> operands;
+      for (const auto &operand : node->operands) {
+        auto mapped = self(self, operand, depth + 1);
+        if (failed(mapped))
+          return failure();
+        operands.push_back(*mapped);
+      }
+      auto mapped = composeIntegerExpression(node->opcode, operands);
+      if (failed(mapped))
+        return failure();
+      result = *mapped;
+    }
+    memo.try_emplace(node.get(), result);
+    return result;
+  };
+  if (!prefix.empty()) {
+    auto lower = substitute(substitute, domain->lower.root, 0);
+    auto upper = substitute(substitute, domain->upperExclusive.root, 0);
+    auto step = substitute(substitute, domain->step.root, 0);
+    if (failed(lower) || failed(upper) || failed(step) || step->bounds.lower <= 0)
+      return failure();
+    domain->lower = *lower;
+    domain->upperExclusive = *upper;
+    domain->step = *step;
+  }
   // Selecting a family member is a structural/topology use, not a width or
   // array-extent effect. Preserve the actual static DAG and bounded ownership.
   auto structural = resolveStructuralIntegerExpression(ordinal, use);

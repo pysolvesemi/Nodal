@@ -1360,3 +1360,21 @@ Ordinary Scala loops remain elaboration-only. Guarded controls, exported and
 selected Instance/Interface prefixes, lane-indexed clocks/resets and generated
 child HDL remain separate required continuations. No actual target behavior or
 Foundation 58 completion is claimed by this source checkpoint.
+
+## Checkpoint 36 — selected prefix and guarded control proof
+
+Six native paths reproduce the exact 206-file snapshot in
+`.work/f58-selected-control-shared/final/before.json` (`8c7fc2ae`), identical
+to its after inventory. The filter omits 27 unchanged predecessor build/catalog/
+registry/tool files; their hashes were checked against the complete previous
+233-file inventory and preserved. Compiler `660d55cb` passed Storage 212,
+ShapeIteration 173, Sequential 99 and SequentialTarget 157 cases, 641 total,
+plus ten selected/symbolic gate outcomes and four guarded normalize/default-gate
+profiles. These retained results do not imply rerunning every preceding suite.
+
+Canonical selected occurrence-prefix and physical control provenance remain
+owned by existing Shape, storage and sequential models. Explicit zero checks
+prevent unsigned budget exhaustion wrap while preserving depth 128 and work
+65536. Broader source/selected Interface, physical targets and pending lifecycle
+continuations remain open. No new consumer execution or whole F58 acceptance
+is claimed by this native checkpoint.

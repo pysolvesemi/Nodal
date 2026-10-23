@@ -828,6 +828,69 @@ int main() {
       replace(selected("1"), "%family, %ordinal", "%innerView, %ordinal");
   check("family-view-exact-two-level-selection",
         generatedDomain + exportedNested + familyView("0") + nestedRead, true);
+  // A selected ancestor refines only this query. The inner declaration keeps
+  // its template-wide maximum cardinality and exact original induction DAG.
+  auto dependentBody =
+      replace(family("0", "2", "1"), literal("i64", "2", "family_hi"),
+              literal("i64", "1", "dependentOne") +
+                  "%family_hi = \"nodal.const_expr\"(%outerIndex, %dependentOne) "
+                  "<{operator_name = \"add\", metadata = {}}> : (i64, i64) -> i64\n");
+  auto dependent = nestedFamily(dependentBody + familyExport);
+  check("selected-prefix-dependent-last-exists",
+        generatedDomain + dependent + familyView("1") + nestedRead, true);
+  graph("selected-prefix-other-parent-does-not-prove-member",
+        generatedDomain + dependent + familyView("0") + nestedRead,
+        "generated ordinal lacks an all-legal existence proof");
+  graph("selected-prefix-terminal-exclusive-bound",
+        generatedDomain + dependent + familyView("1") +
+            replace(nestedRead, literal("i64", "1", "ordinal"), literal("i64", "2", "ordinal")),
+        "generated ordinal lacks an all-legal existence proof");
+  graph("selected-prefix-parent-exclusive-bound",
+        generatedDomain + dependent + familyView("2") + nestedRead,
+        "generated ordinal lacks an all-legal existence proof");
+  graph("selected-prefix-negative-ordinal",
+        generatedDomain + dependent + familyView("1") +
+            replace(nestedRead, literal("i64", "1", "ordinal"), literal("i64", "-1", "ordinal")),
+        "generated ordinal lacks an all-legal existence proof");
+  auto nonunitDependent =
+      replace(dependent, literal("i64", "0", "outerLo"), literal("i64", "2", "outerLo"));
+  nonunitDependent =
+      replace(nonunitDependent, literal("i64", "2", "outerHi"), literal("i64", "6", "outerHi"));
+  nonunitDependent =
+      replace(nonunitDependent, literal("i64", "1", "outerStep"), literal("i64", "2", "outerStep"));
+  // The nonunit parent attains 2 and 4, so the inner template envelope is 5.
+  nonunitDependent =
+      replace(nonunitDependent,
+              "induction_path = \"Fixture.outer.family.i\", metadata = {maximum_trip_count = 2",
+              "induction_path = \"Fixture.outer.family.i\", metadata = {maximum_trip_count = 5");
+  auto coordinateRead =
+      replace(nestedRead, literal("i64", "1", "ordinal"), literal("i64", "4", "ordinal"));
+  check("selected-prefix-nonunit-coordinate-not-ordinal",
+        generatedDomain + nonunitDependent + familyView("1") + coordinateRead, true);
+  graph("selected-prefix-nonunit-other-coordinate",
+        generatedDomain + nonunitDependent + familyView("0") + coordinateRead,
+        "generated ordinal lacks an all-legal existence proof");
+  {
+    auto parsed = parseSourceString<mlir::ModuleOp>(
+        model(generatedDomain + dependent + familyView("1") + nestedRead),
+        ParserConfig(&context, false));
+    Operation *terminal = nullptr;
+    if (parsed)
+      parsed->walk([&](nodal::GeneratedMemberOp member) {
+        if (!llvm::isa<nodal::GeneratedFamilyType>(member->getResult(0).getType()))
+          terminal = member;
+      });
+    auto proof = terminal ? nodal::inspectGeneratedMember(terminal)
+                          : FailureOr<nodal::GeneratedMember>(failure());
+    auto original = succeeded(proof) ? nodal::resolveGeneratedDomain(proof->family)
+                                     : FailureOr<nodal::GeneratedDomain>(failure());
+    report("selected-prefix-retains-template-domain-and-two-identities",
+           succeeded(proof) && succeeded(original) && original->maximumTripCount == 2 &&
+               proof->selections.size() == 2 &&
+               proof->selections[0].family != proof->selections[1].family &&
+               proof->selections[1].coordinate.bounds.lower == 1 &&
+               proof->selections[1].coordinate.bounds.upper == 1);
+  }
   check("family-view-terminal-real-storage-dependency",
         generatedDomain + exportedNested + familyView("1") + nestedRead + storage(sint) +
             assign(sint, sint, "wire", "selected"),

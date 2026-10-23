@@ -700,6 +700,132 @@ int main(int argc, char **argv) {
   }
   normalize("generated-declaration-only-reset-hold",
             generatedSetup + family(state() + exportState));
+  const std::string guardedSetup =
+      generatedSetup + parameter(true) +
+      "\"nodal.parameter_envelope\"() <{parameter = @MODE, effects = [\"topology\"], "
+      "policy = \"static_generate\", metadata = {}}> : () -> ()\n";
+  const std::vector<Capture> guardedCaptures{{"enable", "ge", bit}, {"input", "gv"}};
+  const std::string guardedBody =
+      literal("localZero", 0) + replace(state(), "%zero", "%localZero") +
+      branch("guarded.then.family.when", "ge", {{"state", "s"}, {"gv", "v"}}, assign("s", "v")) +
+      exportState;
+  const std::string guardedFamily =
+      replace(family(guardedBody), "Fixture.family", "Fixture.guarded.then.family");
+  auto guarded =
+      normalize("guarded-generated-state-retains-declaration-existence",
+                replace(guardedSetup, binding(), "") +
+                    structural("guarded", "static", guardedCaptures, guardedFamily) + binding());
+  if (guarded) {
+    unsigned registers = 0, updates = 0, holds = 0;
+    bool exact = true;
+    guarded->walk([&](nodal::DigitalStorageOp) { ++registers; });
+    guarded->walk([&](nodal::SequentialUpdateOp op) {
+      ++updates;
+      holds += op->getOperand(0) == op->getOperand(1);
+      exact &= isa<nodal::GenerateOp>(op->getParentOp()) && op->getNumOperands() == 5;
+      for (unsigned index : {2u, 3u}) {
+        auto argument = dyn_cast<BlockArgument>(op->getOperand(index));
+        exact &= argument && isa<nodal::StructuralIfOp>(argument.getOwner()->getParentOp());
+        if (argument) {
+          auto source = nodal::digitalRegionCaptureSource(argument);
+          exact &= succeeded(source) && *source &&
+                   isa_and_nonnull<nodal::PortValueOp>(source->getDefiningOp());
+        }
+      }
+    });
+    report("guarded-local-state-has-one-update-and-real-control-captures",
+           exact && registers == 1 && updates == 1 && holds == 0);
+    auto mutateControl = [&](StringRef name, auto mutate) {
+      OwningOpRef<mlir::ModuleOp> candidate(cast<mlir::ModuleOp>(guarded->clone()));
+      nodal::SequentialUpdateOp update;
+      candidate->walk([&](nodal::SequentialUpdateOp op) { update = op; });
+      bool ok = bool(update);
+      if (ok) {
+        mutate(update);
+        ok = failed(nodal::verifySequentialUpdate(update));
+        StringRef expected = name.contains("role-forgery")
+                                 ? "clock/reset/reset-value fields must exactly match"
+                                 : "clocked update cannot use foreign or escaped values";
+        ok &= diagnostics.find(expected.str()) != std::string::npos;
+        ok &= failed(verify(*candidate));
+      }
+      report(name, ok);
+    };
+    mutateControl("guarded-normalized-missing-clock-capture-rejected", [&](auto update) {
+      auto argument = cast<BlockArgument>(update->getOperand(2));
+      update->setOperand(2, *nodal::digitalRegionCaptureSource(argument));
+    });
+    mutateControl("guarded-normalized-clock-reset-role-forgery-rejected", [&](auto update) {
+      Value clock = update->getOperand(2);
+      update->setOperand(2, update->getOperand(3));
+      update->setOperand(3, clock);
+    });
+    mutateControl("guarded-normalized-wrong-arm-clock-rejected", [&](auto update) {
+      auto argument = cast<BlockArgument>(update->getOperand(2));
+      Operation *choice = argument.getOwner()->getParentOp();
+      auto sizes = choice->getAttrOfType<DenseI32ArrayAttr>("operandSegmentSizes");
+      SmallVector<int32_t> counts(sizes.asArrayRef());
+      Value source = *nodal::digitalRegionCaptureSource(argument);
+      choice->insertOperands(choice->getNumOperands(), source);
+      ++counts[2];
+      choice->setAttr("operandSegmentSizes", DenseI32ArrayAttr::get(&context, counts));
+      Value foreign = choice->getRegion(1).front().addArgument(source.getType(), choice->getLoc());
+      update->setOperand(2, foreign);
+    });
+  }
+  auto nestedGuarded = normalize(
+      "nested-guards-generated-state-preserves-capture-chain",
+      guardedSetup +
+          structural(
+              "outer", "static",
+              {{"static", "gp", "!nodal.static_predicate"}, {"enable", "oe", bit}, {"input", "ov"}},
+              structural("outer.then.inner", "gp", {{"oe", "ge", bit}, {"ov", "gv"}},
+                         replace(guardedFamily, "Fixture.guarded.then.family",
+                                 "Fixture.outer.then.inner.then.family"))));
+  if (nestedGuarded) {
+    unsigned updates = 0;
+    bool exact = true;
+    nestedGuarded->walk([&](nodal::SequentialUpdateOp op) {
+      ++updates;
+      for (unsigned index : {2u, 3u}) {
+        Value control = op->getOperand(index);
+        unsigned depth = 0;
+        while (auto argument = dyn_cast<BlockArgument>(control)) {
+          auto source = nodal::digitalRegionCaptureSource(argument);
+          if (failed(source) || !*source) {
+            exact = false;
+            break;
+          }
+          control = *source;
+          ++depth;
+        }
+        exact &= depth == 2 && isa_and_nonnull<nodal::PortValueOp>(control.getDefiningOp());
+      }
+    });
+    report("nested-guards-use-two-exact-control-capture-edges", exact && updates == 1);
+  }
+  const std::string guardedHoldBody =
+      literal("localZero", 0) + replace(state(), "%zero", "%localZero") + exportState;
+  normalize("guarded-generated-declaration-only-real-reset-hold",
+            guardedSetup + structural("guarded", "static", {},
+                                      replace(family(guardedHoldBody), "Fixture.family",
+                                              "Fixture.guarded.then.family")));
+  const std::string mixedBody = assign("outer", "gv") + guardedFamily;
+  auto mixedGenerated = normalize(
+      "guarded-generated-and-outer-state-have-distinct-hold-coverage",
+      guardedSetup + state("outside") +
+          structural("guarded", "static",
+                     {{"outside", "outer"}, {"input", "gv"}, {"enable", "ge", bit}}, mixedBody));
+  if (mixedGenerated) {
+    unsigned updates = 0, holds = 0, generatedUpdates = 0;
+    mixedGenerated->walk([&](nodal::SequentialUpdateOp update) {
+      ++updates;
+      holds += update->getOperand(0) == update->getOperand(1);
+      generatedUpdates += isa<nodal::GenerateOp>(update->getParentOp());
+    });
+    report("only-preexisting-state-needs-opposite-arm-hold",
+           updates == 3 && holds == 1 && generatedUpdates == 1);
+  }
   const std::string lateSetup = replace(generatedSetup, binding(), "");
   auto late = normalize("generated-late-clock-reset-producers",
                         lateSetup + parameter(true) +

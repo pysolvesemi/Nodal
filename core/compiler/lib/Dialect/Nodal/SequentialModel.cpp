@@ -1223,8 +1223,12 @@ private:
           for (Value state : arm)
             states.insert(state);
         for (Value state : states) {
+          // A generated register declared inside this choice only exists in
+          // that arm. Cover missing updates in the opposite arm only for state
+          // whose declaration is outside the choice; never invent a capture of
+          // branch-local storage across mutually exclusive lexical regions.
           for (unsigned arm = 0; arm != 2; ++arm)
-            if (!arms[arm].contains(state)) {
+            if (!op->isProperAncestor(state.getDefiningOp()) && !arms[arm].contains(state)) {
               setEnd(header->bodies[arm]);
               if (failed(update(state, state, nullptr)))
                 return failure();

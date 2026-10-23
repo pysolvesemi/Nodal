@@ -41,30 +41,36 @@ private[nodal] object GeneratedAreaDerivation:
               case '[child] => '{ GeneratedAreaRuntime.instance[child & Module]($value, $name) }
           case _ => valueMember(value, name, result)
 
-  private def valueMember[A <: Area: Type](using quotes: Quotes)(
+  private def valueMember[A <: Area: Type](using
+      quotes: Quotes
+  )(
       value: QuotedExpr[GeneratedAreaRef[A]],
       name: QuotedExpr[String],
       result: quotes.reflect.TypeRepr
   ): QuotedExpr[Any] =
     import quotes.reflect.*
+    result.baseType(Symbol.requiredClass("nodal.InterfaceValueRef")).typeArgs match
+      case element :: Nil => element.asType match
+          case '[data] => return '{ GeneratedAreaRuntime.value[data & Data]($value, $name) }
+      case _ => ()
     result.asType match
-          case '[member] =>
-            if result <:< TypeRepr.of[Area] then
-              '{ GeneratedAreaRuntime.nested[member & Area]($value, $name) }
-            else if result <:< TypeRepr.of[InterfaceEndpoint] then
-              '{ GeneratedAreaRuntime.interface[member & InterfaceEndpoint]($value, $name) }
-            else if result <:< TypeRepr.of[Expr[Data]] then
-              val kind =
-                if result.baseType(Symbol.requiredClass("nodal.Register")).typeArgs.nonEmpty then
-                  "register"
-                else if result.baseType(Symbol.requiredClass("nodal.Signal")).typeArgs.nonEmpty then
-                  "signal"
-                else "read_only"
-              '{ GeneratedAreaRuntime.member[member]($value, $name, ${ QuotedExpr(kind) }) }
-            else
-              report.errorAndAbort(
-                "NODAL-AREA-058-MEMBER: generated member is not a hardware value, family or nested Area"
-              )
+      case '[member] =>
+        if result <:< TypeRepr.of[Area] then
+          '{ GeneratedAreaRuntime.nested[member & Area]($value, $name) }
+        else if result <:< TypeRepr.of[InterfaceEndpoint] then
+          '{ GeneratedAreaRuntime.interface[member & InterfaceEndpoint]($value, $name) }
+        else if result <:< TypeRepr.of[Expr[Data]] then
+          val kind =
+            if result.baseType(Symbol.requiredClass("nodal.Register")).typeArgs.nonEmpty then
+              "register"
+            else if result.baseType(Symbol.requiredClass("nodal.Signal")).typeArgs.nonEmpty then
+              "signal"
+            else "read_only"
+          '{ GeneratedAreaRuntime.member[member]($value, $name, ${ QuotedExpr(kind) }) }
+        else
+          report.errorAndAbort(
+            "NODAL-AREA-058-MEMBER: generated member is not a hardware value, family or nested Area"
+          )
 
   def familyAt[A <: Area: Type](
       value: QuotedExpr[GeneratedAreaRef[A]],

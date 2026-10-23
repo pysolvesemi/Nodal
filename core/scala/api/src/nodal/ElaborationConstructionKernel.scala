@@ -132,6 +132,22 @@ private[nodal] object ConstructionKernel:
   def declareExternalModule(module: Module, name: String): Unit =
     active.foreach(_.declareExternalModule(module, name))
 
+  def externalInterfaceArray[I <: Interface, R <: RoleKind](
+      module: ExternalModule,
+      definition: InterfaceType[I],
+      role: Role[R],
+      count: Int,
+      name: String,
+      placement: InoutPlacement,
+      profile: ResolutionProfile
+  ): InterfaceArray[I, R] =
+    active.getOrElse(failConstructor(
+      "NODAL-EXTERNAL-058-001",
+      "external InterfaceArray requires an active exact ExternalModule construction",
+      name
+    ))
+      .externalInterfaceArray(module, definition, role, count, name, placement, profile)
+
   private def areaSession: ConstructionSession = active.getOrElse(
     failConstructor(
       "NODAL-AREA-058-OWNER",
@@ -660,6 +676,40 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(
       throw new IllegalStateException("conservative member selection requires active construction")
     ).interfaceConservativeMember[D, A](endpoint, field, through, permission)
+
+  def interfaceValueReference[A <: Data](
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): InterfaceValueRef[A] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface member reference requires construction")
+    ).interfaceValueReference[A](endpoint, field, through)
+
+  def interfaceValueRefRead(value: InterfaceValueRef[?]): Expr[?] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface read requires construction")
+    ).interfaceValueRefRead(value)
+
+  def instanceInterfaceValue[A <: Data](value: InterfaceValueRef[A]): InterfaceValueRef[A] =
+    active.getOrElse(
+      throw new IllegalStateException("instance selection requires active construction")
+    ).instanceInterfaceValue(value)
+
+  def generatedAreaValue[A <: Data](
+      value: GeneratedAreaRef[?],
+      name: String
+  ): InterfaceValueRef[A] =
+    areaSession.generatedAreaValue[A](value, name)
+
+  def interfaceValueRead(
+      endpoint: InterfaceEndpoint,
+      field: InterfaceMember.Value[?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): Expr[?] =
+    active.getOrElse(
+      throw new IllegalStateException("ordinary Interface read requires construction")
+    ).interfaceValueRead(endpoint, field, through)
 
   def interfaceResolvedMember[A <: Bits, M <: DriveMode](
       endpoint: InterfacePort[?, ?],

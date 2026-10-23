@@ -130,6 +130,79 @@ private[nodal] object InterfaceMlir:
     private val shapeQuery = new StructuralParameterBinding.Query(snapshot)
     private val instanceQueries =
       new StructuralParameterBinding.InstanceQueries(snapshot, Some(shapeQuery))
+
+    /** Independently check selected child capability from original immutable inventories. */
+    private def validateSelectedConservativeChild(endpoint: KernelInterfaceSnapshot): Unit =
+      val path = endpoint.path
+      val boundary = endpoint.boundary.get
+      val selection = boundary.selection.get
+      val owner = modules(endpoint.owner)
+      val instance = boundary.instance.flatMap(value => owner.instances.find(_.path == value))
+        .getOrElse(fail("selected conservative endpoint requires its actual child instance", path))
+      val child = endpoints.getOrElse(
+        boundary.endpoint,
+        fail("selected conservative child endpoint is absent", path)
+      )
+      val family = snapshot.generatedRegions.find(_.path == selection.family)
+        .getOrElse(fail("selected conservative child family is absent", path))
+      val scope = KernelGeneratedScope(family.path, family.induction)
+      requireValid(
+        boundary.region.isEmpty && declarations(path)._2.generatedScope.isEmpty &&
+          selection.selectionPrefix.isEmpty && selection.ordinal.toLongOption.exists(value =>
+            selection.ordinal == value.toString
+          ) &&
+          family.owner == endpoint.owner && family.parent.isEmpty && family.lexicalParent.isEmpty &&
+          family.digitalBody.nonEmpty && family.yieldedArea.nonEmpty && family.maximumTripCount > 0 &&
+          instance.generatedScope.contains(scope) && instance.parameterBindings.isEmpty &&
+          !modules(instance.childModule).declarations.exists(_.kind == "parameter") &&
+          child.owner == instance.childModule && child.boundary.isEmpty &&
+          declarations(child.path)._2.kind == "interface-port" && endpoint.dimensions.isEmpty &&
+          endpoint.members.nonEmpty && endpoint.members.forall(member =>
+            member.protocol == "conservative" && member.access == "connect" && member.mode.isEmpty
+          ),
+        "selected conservative child requires its exact constant scalar connect profile",
+        path
+      )
+      val indices = Vector(
+        family.lower,
+        family.upperExclusive,
+        family.step
+      ).map(shapeQuery.resolve(endpoint.owner, _))
+      val graph = shapeQuery.exportValues(indices)
+      val bounds = indices.map(shapeQuery.bounds)
+      requireValid(
+        graph.nodes.forall(_.parameter.isEmpty) && bounds.forall(value =>
+          value.lower == value.upper
+        ) &&
+          bounds(2).lower > 0 &&
+          IterationDomain.structural(bounds(0), bounds(1), bounds(2), family.maximum)
+            .toOption.exists(domain =>
+              domain.maximumTripCount == family.maximumTripCount &&
+                domain.maximumTripCount > 0 && IterationDomain.verifyOrdinal(
+                  domain,
+                  IterationDomain.Bounds(selection.ordinal.toLong, selection.ordinal.toLong)
+                ).isRight
+            ),
+        "selected conservative child requires a fixed nonempty signed32 family and literal ordinal",
+        path
+      )
+      requireValid(
+        endpoints.values.exists(body =>
+          body.owner == endpoint.owner &&
+            family.declarations.contains(body.path) && declarations(
+              body.path
+            )._2.generatedScope.contains(scope) &&
+            body.boundary.exists(original =>
+              original.instance.contains(instance.path) &&
+                original.endpoint == child.path && original.selection.isEmpty && original.region.contains(
+                  family.path
+                )
+            )
+        ),
+        "selected conservative child requires its authentic authored body Interface boundary",
+        path
+      )
+
     private def sameDimensions(
         left: KernelInterfaceSnapshot,
         right: KernelInterfaceSnapshot
@@ -334,13 +407,23 @@ private[nodal] object InterfaceMlir:
           declaration.generatedScope.forall(scope =>
             snapshot.generatedRegions.exists(family =>
               family.path == scope.owner && family.induction == scope.induction &&
-                family.owner == endpoint.owner && family.declarations.contains(endpoint.path)
+                family.owner == endpoint.owner && family.declarations.contains(endpoint.path) &&
+                (endpoint.members.forall(member =>
+                  !Set("conservative", "signal-flow")(member.protocol)
+                ) ||
+                  endpoint.dimensions.isEmpty && endpoint.members.nonEmpty &&
+                  endpoint.members.forall(_.protocol == "conservative") &&
+                  family.parent.isEmpty && family.lexicalParent.isEmpty)
             )
           ) &&
           declaration.interfaceBoundary == endpoint.boundary &&
           attributes.get("interface").contains(endpoint.identity) &&
           attributes.get("role").contains(endpoint.role) &&
-          declaration.domain.contains(endpoint.domain) && endpoint.identity.nonEmpty &&
+          declaration.domain == endpoint.domain &&
+          (endpoint.domain.nonEmpty || ExternalModuleContract.externalInterfacePaths(snapshot)(
+            endpoint.path
+          )) &&
+          endpoint.identity.nonEmpty &&
           endpoint.roles.nonEmpty &&
           endpoint.roles.map(_.name).distinct.size == endpoint.roles.size &&
           (if declaration.kind == "interface-port" then endpoint.dimensions.isEmpty
@@ -377,6 +460,9 @@ private[nodal] object InterfaceMlir:
           "direct Interface boundary requires an actual child instance",
           endpoint.path
         )
+        val selectedConservative =
+          boundary.selection.nonEmpty && endpoint.members.exists(_.protocol == "conservative")
+        if selectedConservative then validateSelectedConservativeChild(endpoint)
         if boundary.selection.nonEmpty then selectedBoundary(endpoint.path)
         else
           requireValid(
@@ -392,9 +478,15 @@ private[nodal] object InterfaceMlir:
         val childRoles = canonical(child.roles)
         val exactOwner = instance match
           case Some(value) =>
-            val binding = value.actualBindings.filter(_.requirement == child.domain)
+            val binding =
+              value.actualBindings.filter(actual => child.domain.contains(actual.requirement))
             child.owner == value.childModule && childDeclaration.generatedScope.isEmpty &&
-            binding.size == 1 && binding.head.actual == endpoint.domain
+            (if child.domain.nonEmpty then
+               binding.size == 1 && endpoint.domain.contains(binding.head.actual)
+             else
+               endpoint.domain.isEmpty && value.actualBindings.isEmpty &&
+               value.generatedScope.isEmpty && boundary.selection.isEmpty &&
+               ExternalModuleContract.externalInterfacePaths(snapshot)(child.path))
           case None => child.owner == module.path && childDeclaration.generatedScope.nonEmpty &&
             child.domain == endpoint.domain
         requireValid(
@@ -405,9 +497,17 @@ private[nodal] object InterfaceMlir:
             endpointRoles.forall((name, role) => childRoles.get(name).forall(_ == role)) &&
             endpoint.members.forall(value =>
               Set("plain", "valid", "stream")(value.protocol) ||
-                boundary.selection.isEmpty && instance.forall(_.generatedScope.isEmpty) &&
-                (value.protocol == "resolved" ||
-                  value.protocol == "conservative" && endpoint.dimensions.isEmpty)
+                selectedConservative && value.protocol == "conservative" ||
+                boundary.selection.isEmpty &&
+                (value.protocol == "resolved" && instance.forall(_.generatedScope.isEmpty) ||
+                  value.protocol == "conservative" && endpoint.dimensions.isEmpty &&
+                  instance.forall(instance =>
+                    instance.generatedScope.forall(scope =>
+                      declaration.generatedScope.contains(scope) && boundary.region.contains(
+                        scope.owner
+                      )
+                    )
+                  ))
             ),
           "Interface projection changes exact owner, selected roles, ABI or domain binding",
           endpoint.path
@@ -763,7 +863,7 @@ private[nodal] object InterfaceMlir:
             )
             requireValid(
               endpoint.identity == other.identity && endpoint.definitionContexts == other.definitionContexts &&
-                endpoint.domain == other.domain &&
+                (endpoint.domain.isEmpty || other.domain.isEmpty || endpoint.domain == other.domain) &&
                 sameDimensions(endpoint, other) &&
                 target.name == source.name &&
                 sameType(actualType(endpoint, target), actualType(other, source), target.path) &&
@@ -905,16 +1005,17 @@ private[nodal] object InterfaceMlir:
       aliasNet(effect.target, effect.source.get)
     private val componentDomains = mutable.HashMap.empty[String, String]
     snapshot.interfaceContracts.foreach: endpoint =>
-      endpoint.members.filter(_.protocol == "resolved").foreach: member =>
-        val key = component(member.path)
-        componentDomains.get(key).foreach(previous =>
-          requireValid(
-            previous == endpoint.domain,
-            "resolved pass-through component crosses exact Interface domain ownership",
-            member.path
+      endpoint.domain.foreach: domain =>
+        endpoint.members.filter(_.protocol == "resolved").foreach: member =>
+          val key = component(member.path)
+          componentDomains.get(key).foreach(previous =>
+            requireValid(
+              previous == domain,
+              "resolved pass-through component crosses exact Interface domain ownership",
+              member.path
+            )
           )
-        )
-        componentDomains.update(key, endpoint.domain)
+          componentDomains.update(key, domain)
     private val localComponents =
       netComponents.keysIterator.map(path => path -> component(path)).toMap
     private val driverOperations = snapshot.digitalConnectivity.filter(effect =>
@@ -1103,9 +1204,67 @@ private[nodal] object InterfaceMlir:
         resultType: String,
         operands: Vector[(String, String)],
         nativeType: (String, String) => String,
+        symbol: (String, String) => String,
         sourceMetadata: String,
         sourceLocation: String
     ): DigitalValueMlir.Projection =
+      if expression.operation == DigitalInterfaceContract.OrdinaryReadOperation then
+        val origin = expression.interfaceMember.getOrElse(fail(
+          "ordinary read has no exact member origin",
+          expression.path
+        ))
+        requireValid(
+          expression.operands.isEmpty && operands.isEmpty && expression.literal.isEmpty &&
+            expression.enumIdentity.isEmpty && expression.caseIds.isEmpty && !expression.hierarchyDriver,
+          "ordinary read changed its closed expression contract",
+          expression.path
+        )
+        val (endpoint, selected) = selectedMember(
+          s"${origin.endpoint}.${origin.member}",
+          expression.owner,
+          Some(origin.role)
+        )
+        requireValid(
+          endpoint.path == origin.endpoint && selected.name == origin.member &&
+            selected.protocol == "plain" && selected.mode.isEmpty && selected.analogAttributes.isEmpty &&
+            Set("in", "out", "observe")(selected.access),
+          "ordinary read requires its exact visible digital Value member",
+          expression.path
+        )
+        val expected = wholeType(endpoint.dimensions, actualType(endpoint, selected))
+        requireValid(
+          sameType(expression.dataType, expected, expression.path),
+          "ordinary read changed its exact contextual payload type",
+          expression.path
+        )
+        val leafType = memberType(actualMember(endpoint, selected), nativeType)
+        val expectedNative = if endpoint.dimensions.isEmpty then leafType
+        else s"!nodal.shaped<${quoted(endpoint.dimensions.mkString(","))}, $leafType>"
+        requireValid(
+          resultType == expectedNative,
+          "ordinary read changed its exact native payload type",
+          expression.path
+        )
+        return DigitalValueMlir.Projection(
+          Vector(operation(
+            "nodal.member_access",
+            Vector(result -> resultType),
+            Vector.empty,
+            sourceLocation,
+            "instance" -> ("@" + quoted(symbol(
+              "interface_instance",
+              declarations(endpoint.path)._2.name
+            ))),
+            "path" -> quoted(selected.name),
+            "metadata" -> metadata(sourceMetadata, "role" -> quoted(origin.role))
+          )),
+          result -> resultType
+        )
+      requireValid(
+        expression.interfaceMember.isEmpty,
+        "non-member expression carries ordinary member authority",
+        expression.path
+      )
       requireValid(
         DigitalInterfaceContract.ValueOperations.contains(expression.operation) &&
           expression.operands.size == 1 && operands.size == 1 && expression.literal.isEmpty &&
@@ -1301,11 +1460,16 @@ private[nodal] object InterfaceMlir:
       locally:
         val declaration = declarations(endpoint.path)._2
         val domains = module.domains.filter(value =>
-          value.path == endpoint.domain || value.binding.contains(endpoint.domain)
+          endpoint.domain.contains(value.path) || value.binding.exists(endpoint.domain.contains)
         )
         requireValid(
-          domains.size == 1,
-          "interface endpoint requires one owned clock/reset domain",
+          if endpoint.domain.nonEmpty then domains.size == 1
+          else
+            domains.isEmpty && ExternalModuleContract.externalInterfacePaths(snapshot)(
+              endpoint.path
+            )
+          ,
+          "interface endpoint requires an owned domain or exact external signature",
           endpoint.path
         )
         if endpoint.dimensions.nonEmpty then
@@ -1348,8 +1512,14 @@ private[nodal] object InterfaceMlir:
               "role" -> quoted(endpoint.role),
               "metadata" -> metadata(
                 sourceMetadata(endpoint.path),
-                "domain" -> ("@" + quoted(symbol("domain", domains.head.name))),
-                "dimensions" -> array(endpoint.dimensions.map(quoted))
+                (domains.map(domain => "domain" -> ("@" + quoted(symbol("domain", domain.name)))) ++
+                  Vector("dimensions" -> array(endpoint.dimensions.map(quoted))) ++
+                  (if endpoint.domain.nonEmpty then Vector.empty
+                   else
+                     Vector(
+                       "placement" -> quoted("black_box_pin"),
+                       "profile" -> quoted("portable_boundary_only")
+                     )))*
               )
             )
             val abi = endpoint.members.map(member =>
@@ -1401,7 +1571,25 @@ private[nodal] object InterfaceMlir:
       requireValid(
         owner == endpoint.owner && endpoint.dimensions.isEmpty &&
           (origin.role == endpoint.role || (origin.role == "monitor" && endpoint.boundary.isEmpty)) &&
-          declaration.kind == "conservative-terminal" && declaration.generatedScope.isEmpty &&
+          declaration.kind == "conservative-terminal" &&
+          declaration.generatedScope == declarations(endpoint.path)._2.generatedScope &&
+          declaration.generatedScope.forall(scope =>
+            snapshot.generatedRegions.exists(family =>
+              family.owner == owner && family.path == scope.owner &&
+                family.induction == scope.induction && family.yieldedArea.nonEmpty && family.parent.isEmpty &&
+                family.lexicalParent.isEmpty && family.declarations.contains(declaration.path) &&
+                family.declarations.contains(endpoint.path)
+            ) &&
+              endpoint.boundary.forall(boundary =>
+                boundary.selection.isEmpty &&
+                  boundary.region.contains(scope.owner) && boundary.instance.exists(path =>
+                    modules(owner).instances.exists(instance =>
+                      instance.path == path &&
+                        instance.generatedScope.contains(scope)
+                    )
+                  )
+              )
+          ) &&
           declaration.resolvedMember.isEmpty && declaration.interfaceBoundary.isEmpty &&
           selected.protocol == "conservative" &&
           selected.analogAttributes.forall((key, value) => fields.get(key).contains(value)) &&
@@ -1422,6 +1610,39 @@ private[nodal] object InterfaceMlir:
         "metadata" -> metadata(sourceMetadata(declaration.path), "role" -> quoted(origin.role))
       )
 
+    def renderMemberAccess(
+        module: KernelModuleSnapshot,
+        path: String,
+        role: String,
+        scheduledOwner: Option[String],
+        nativeType: (String, String) => String,
+        symbol: (String, String) => String,
+        sourceMetadata: String => String,
+        sourceLocation: String => String
+    ): DigitalValueMlir.Projection =
+      val (endpoint, selected) = selectedMember(path, module.path, Some(role))
+      val result =
+        "%interface_member_" + hash(path + "\u0000" + role + scheduledOwner.getOrElse(""))
+      val leafType = memberType(actualMember(endpoint, selected), nativeType)
+      val resultType = if endpoint.dimensions.isEmpty then leafType
+      else s"!nodal.shaped<${quoted(endpoint.dimensions.mkString(","))}, $leafType>"
+      val identity = scheduledOwner.map(owner => s"$owner.access.$path.$role").getOrElse(path)
+      DigitalValueMlir.Projection(
+        Vector(operation(
+          "nodal.member_access",
+          Vector(result -> resultType),
+          Vector.empty,
+          sourceLocation(path),
+          "instance" -> ("@" + quoted(symbol(
+            "interface_instance",
+            declarations(endpoint.path)._2.name
+          ))),
+          "path" -> quoted(selected.name),
+          "metadata" -> metadata(sourceMetadata(identity), "role" -> quoted(role))
+        )),
+        result -> resultType
+      )
+
     def renderEffects(
         module: KernelModuleSnapshot,
         resolve: String => (String, String),
@@ -1431,38 +1652,36 @@ private[nodal] object InterfaceMlir:
         sourceLocation: String => String,
         validateCapabilitySource: (String, String, String, String) => Unit,
         exactPayloadType: (String, String, String, String) => Boolean,
-        selectedEffects: Option[Vector[KernelDigitalConnectivitySnapshot]] = None
+        selectedEffects: Option[Vector[KernelDigitalConnectivitySnapshot]] = None,
+        capturedMember: (String, String) => Option[(String, String)] = (_, _) => None
     ): Vector[String] =
       val output = mutable.ArrayBuffer.empty[String]
       val accessed = mutable.HashMap.empty[(String, String), (String, String)]
       def member(path: String, role: Option[String]): (String, String) =
-        val (endpoint, selected) = selectedMember(path, module.path, role)
         val roleName = role.get
         accessed.getOrElseUpdate(
           path -> roleName, {
-            val salt = selectedEffects.map(_.head.path).getOrElse("")
-            val result = "%interface_member_" + hash(path + "\u0000" + roleName + salt)
-            val leafType = memberType(actualMember(endpoint, selected), nativeType)
-            val resultType = if endpoint.dimensions.isEmpty then leafType
-            else s"!nodal.shaped<${quoted(endpoint.dimensions.mkString(","))}, $leafType>"
-            output += operation(
-              "nodal.member_access",
-              Vector(result -> resultType),
-              Vector.empty,
-              sourceLocation(path),
-              "instance" ->
-                ("@" + quoted(symbol("interface_instance", declarations(endpoint.path)._2.name))),
-              "path" -> quoted(selected.name),
-              "metadata" -> metadata(
-                sourceMetadata(selectedEffects
-                  .map(group =>
-                    s"${group.head.path}.access.${endpoint.path}.${selected.name}.$roleName"
-                  )
-                  .getOrElse(path)),
-                "role" -> quoted(roleName)
-              )
+            val rendered = renderMemberAccess(
+              module,
+              path,
+              roleName,
+              selectedEffects.map(_.head.path),
+              nativeType,
+              symbol,
+              sourceMetadata,
+              sourceLocation
             )
-            result -> resultType
+            capturedMember(path, roleName) match
+              case Some(value) =>
+                requireValid(
+                  value._2 == rendered.value._2,
+                  "captured Interface member changed its exact native payload",
+                  path
+                )
+                value
+              case None =>
+                output ++= rendered.lines
+                rendered.value
           }
         )
       selectedEffects.getOrElse(effects.getOrElse(module.path, Vector.empty)
@@ -1502,7 +1721,9 @@ private[nodal] object InterfaceMlir:
             validateCapabilitySource(
               effect.value.get,
               module.path,
-              members(effect.target)._1.domain,
+              members(effect.target)._1.domain.getOrElse(
+                fail("ordinary Interface driver requires its actual domain", effect.path)
+              ),
               value._2
             )
             output += operation(

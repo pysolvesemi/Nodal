@@ -1054,7 +1054,10 @@ private[nodal] object DigitalValueMlir:
             .getOrElse(fail("generated storage has no actual module declaration", path))
           requireValid(
             (Set("wire", "register")(storage.kind) || generatedInstancePort(path) ||
-              Set("interface-port", "interface-array")(storage.kind)) &&
+              Set(
+                "interface-port",
+                "interface-array"
+              )(storage.kind) || generatedConservativeMember(path)) &&
               storage.generatedScope.contains(KernelGeneratedScope(value.path, value.induction)),
             "family storage must retain its exact generated owner and induction",
             path
@@ -1127,6 +1130,25 @@ private[nodal] object DigitalValueMlir:
 
     def generatedDeclaration(path: String): Boolean =
       generatedStorage(path) || generatedInstancePort(path)
+
+    def generatedConservativeMember(path: String): Boolean = declarations.get(path).exists:
+      (owner, declaration) =>
+        declaration.kind == "conservative-terminal" && declaration.dataType.isEmpty &&
+          declaration.resolvedMember.isEmpty && declaration.interfaceBoundary.isEmpty &&
+          declaration.generatedScope.exists(scope =>
+            generatedDeclarationOwners.get(path).exists(family =>
+              family.owner == owner && family.path == scope.owner && family.induction == scope.induction &&
+                family.yieldedArea.nonEmpty && family.parent.isEmpty && family.lexicalParent.isEmpty
+            ) &&
+              declaration.conservativeMember.exists(origin =>
+                generatedInterfaceDeclaration(origin.endpoint) &&
+                  declarations(origin.endpoint)._2.generatedScope.contains(scope) &&
+                  interfaceEndpoints.get(origin.endpoint).exists(endpoint =>
+                    endpoint.owner == owner && endpoint.dimensions.isEmpty && endpoint.members.nonEmpty &&
+                      endpoint.members.forall(_.protocol == "conservative")
+                  )
+              )
+          )
 
     def generatedInterfaceDeclaration(path: String): Boolean = declarations.get(path).exists:
       (owner, declaration) =>
@@ -1394,7 +1416,6 @@ private[nodal] object DigitalValueMlir:
       )
       requireValid(
         exported.kind == "storage" &&
-          expression.dataType == declarations(exported.target)._2.dataType.get &&
           expression.literal.isEmpty && expression.enumIdentity.isEmpty && expression.caseIds.isEmpty &&
           expression.structure.isEmpty && expression.materializationIntent.isEmpty &&
           expression.memory.isEmpty && expression.crossing.isEmpty && expression.waiver.isEmpty &&
@@ -1404,6 +1425,37 @@ private[nodal] object DigitalValueMlir:
       )
       val _ = generatedAccess(exported, member.access)
       family -> exported
+
+    def generatedStorageTypeContext(path: String): Option[(
+        StructuralParameterBinding.SelectedGeneratedContext,
+        StructuralParameterBinding.Query,
+        String
+    )] = expressions.get(path).filter(_.generatedMember.nonEmpty).map: expression =>
+      val (_, exported) = generatedMemberExport(expression)
+      val context = generatedSelectionExport(
+        expression.owner,
+        path,
+        expression.region,
+        expression.generatedMember.get
+      )._3
+      val original = declarations(exported.target)._2
+      val scope = original.generatedScope.map(_.owner).getOrElse(
+        fail("selected storage type requires its original generated declaration", path)
+      )
+      (context, generatedLexicalQuery(scope), original.path)
+
+    def validateGeneratedMemberTypes(sameType: (String, String, String) => Boolean): Unit =
+      snapshot.digitalExpressions.filter(_.generatedMember.nonEmpty).foreach: expression =>
+        val (_, exported) = generatedMemberExport(expression)
+        requireValid(
+          sameType(
+            expression.dataType,
+            declarations(exported.target)._2.dataType.get,
+            expression.path
+          ),
+          "selected storage type differs from its exact original declaration",
+          expression.path
+        )
 
     private def selectedInstanceExport(declaration: KernelDeclarationSnapshot)
         : (
@@ -2161,6 +2213,11 @@ private[nodal] object DigitalValueMlir:
     val waiverIds = mutable.HashSet.empty[(String, String)]
     snapshot.digitalExpressions.foreach: expression =>
       DigitalMaterializationMlir.validate(expression)
+      requireValid(
+        (expression.operation == DigitalInterfaceContract.OrdinaryReadOperation) == expression.interfaceMember.nonEmpty,
+        "ordinary member origin must belong to its exact read operation",
+        expression.path
+      )
       requireValid(
         (expression.operation == GeneratedAreaRuntime.MemberOperation) == expression.generatedMember.nonEmpty,
         "only generated member operations carry family projection metadata",
@@ -3107,13 +3164,20 @@ private[nodal] object DigitalValueMlir:
             KernelGeneratedRegionSnapshot,
             Map[String, (String, String)]
         ) => Vector[String],
+        renderGeneratedConservativeMember: (KernelDeclarationSnapshot, String) => Projection,
+        renderGeneratedTopology: (
+            KernelGeneratedRegionSnapshot,
+            Map[String, (String, String)]
+        ) => Vector[String],
         symbol: (String, String) => String,
         interfaceEndpoint: (String, Vector[(String, String)]) => Vector[String],
         interfaceSymbol: String => String,
         interfaceEffects: (
             Vector[KernelDigitalConnectivitySnapshot],
-            String => (String, String)
+            String => (String, String),
+            (String, String) => Option[(String, String)]
         ) => Vector[String],
+        interfaceMemberAccess: (String, String, String) => Projection,
         interfaceDefinitions: Vector[(KernelInterfaceDefinitionContextSnapshot, Vector[String])],
         renderInterfaceDefinition: KernelInterfaceDefinitionContextSnapshot => Vector[String]
     ): Rendered =
@@ -3203,6 +3267,64 @@ private[nodal] object DigitalValueMlir:
       val localInterfaceEndpoints = module.declarations.filter(value =>
         Set("interface-port", "interface-array")(value.kind)
       )
+      def interfaceMemberIdentity(owner: String, path: String, role: String): String =
+        s"$owner.access.$path.$role"
+      // A member is materialized where its real endpoint is visible. Only actual
+      // non-isolated Generate edges can reuse that SSA without a source capture.
+      val interfaceCaptureRequests = orderedInterfaceEffects.valuesIterator.flatMap: group =>
+        val owner = group.head.path
+        group.flatMap: effect =>
+          (Vector(effect.target -> effect.endpointRole) ++
+            effect.source.toVector.map(_ -> effect.sourceEndpointRole)).flatMap: (path, role) =>
+            interfaceMembers.get(path).toVector.flatMap: endpoint =>
+              val endpointRegion = valueRegion(endpoint)
+              if endpointRegion == effect.region then Vector.empty
+              else
+                requireValid(
+                  role.nonEmpty && declarations(endpoint)._1 == module.path,
+                  "captured Interface member lost its actual endpoint owner or role",
+                  path
+                )
+                val member = interfaceEndpoints(endpoint).members.find(_.path == path).get
+                requireValid(
+                  member.protocol == "plain" && member.mode.isEmpty && member.analogAttributes.isEmpty,
+                  "regional Interface capture requires an ordinary member",
+                  path
+                )
+                var current = effect.region
+                var first = Option.empty[String]
+                val seen = mutable.HashSet.empty[String]
+                while current != endpointRegion do
+                  val scope = current.getOrElse(fail(
+                    "Interface endpoint is not an actual lexical ancestor",
+                    path
+                  ))
+                  requireValid(
+                    seen.add(scope) && seen.size <= 128,
+                    "Interface capture ancestry is cyclic or exceeds its budget",
+                    path
+                  )
+                  val family = generated.getOrElse(
+                    scope,
+                    fail(
+                      "Interface member crossing an isolated region requires an actual source capture",
+                      path
+                    )
+                  )
+                  requireValid(
+                    family.owner == module.path,
+                    "Interface capture ancestry belongs to another module",
+                    path
+                  )
+                  first = Some(scope)
+                  current = family.lexicalParent
+                Vector((first.get, owner, path, role.get))
+      .toVector.distinct.groupBy(_._1)
+      requireValid(
+        interfaceCaptureRequests.valuesIterator.map(_.size.toLong).sum <= 262144,
+        "Interface member capture inventory exceeds its budget",
+        module.path
+      )
       def definitionKey(context: KernelInterfaceDefinitionContextSnapshot) =
         (context.region, context.identity, context.sourceOrdinal)
       def emitInterfaceDefinition(
@@ -3273,7 +3395,19 @@ private[nodal] object DigitalValueMlir:
           (Vector(effect.target) ++ effect.source).foreach(path =>
             interfaceMembers.get(path).foreach(emitInterface(_, depth + 1, region, output))
           )
-        output ++= interfaceEffects(group, path => emit(path, depth + 1, region, output))
+        output ++= interfaceEffects(
+          group,
+          path => emit(path, depth + 1, region, output),
+          (path, role) =>
+            val endpoint =
+              interfaceMembers.getOrElse(path, fail("Interface member lost its endpoint", path))
+            if valueRegion(endpoint) == region then None
+            else
+              Some(values.getOrElse(
+                interfaceMemberIdentity(group.head.path, path, role),
+                fail("ancestor Interface member has no actual captured SSA value", path)
+              ))
+        )
       def scheduledInterfaces(
           region: Option[String],
           depth: Int,
@@ -3896,6 +4030,22 @@ private[nodal] object DigitalValueMlir:
           "digital Generate has duplicate execution or exceeds depth limit",
           region.path
         )
+        interfaceCaptureRequests.getOrElse(region.path, Vector.empty).foreach:
+          (_, owner, path, role) =>
+            val identity = interfaceMemberIdentity(owner, path, role)
+            if !values.contains(identity) then
+              val endpoint = interfaceMembers(path)
+              requireValid(
+                valueRegion(endpoint) == region.lexicalParent,
+                "Interface member capture must render at its exact endpoint scope",
+                path
+              )
+              emitInterface(endpoint, depth + 1, region.lexicalParent, output)
+              val rendered = interfaceMemberAccess(path, role, owner)
+              output ++= rendered.lines
+              values.update(identity, rendered.value)
+              heights.update(identity, 0)
+              proofs.update(identity, Unknown)
         val body = region.digitalBody.get
         val header = Vector(region.lower, region.upperExclusive, region.step).map: path =>
           if path.toLongOption.nonEmpty then
@@ -3979,6 +4129,7 @@ private[nodal] object DigitalValueMlir:
                   emitInterface(path, depth + 1, Some(region.path), local)
               else emit(path, depth + 1, Some(region.path), local)
             emitScope(region.path, depth + 1, local)
+            local ++= renderGeneratedTopology(region, values.toMap)
             region.exports.foreach: exported =>
               val symbolExport = Set("instance", "interface")(exported.kind)
               val value = if symbolExport then Vector.empty
@@ -4239,6 +4390,20 @@ private[nodal] object DigitalValueMlir:
           heights.update(path, 0)
           proofs.update(path, Unknown)
           value
+        else if generatedConservativeMember(path) then
+          values.getOrElseUpdate(
+            path, {
+              val declaration = declarations(path)._2
+              emitInterface(declaration.conservativeMember.get.endpoint, depth + 1, region, output)
+              val result = s"%conservative_member_$ordinal"
+              ordinal += 1
+              val projection = renderGeneratedConservativeMember(declaration, result)
+              output ++= projection.lines
+              heights.update(path, 0)
+              proofs.update(path, Unknown)
+              projection.value
+            }
+          )
         else
           values.get(path) match
             case Some(value) =>
@@ -4290,8 +4455,12 @@ private[nodal] object DigitalValueMlir:
                     )
                   )
                   val height = expression.operands.map(heights).maxOption.getOrElse(-1) + 1
+                  val ordinaryRead =
+                    expression.operation == DigitalInterfaceContract.OrdinaryReadOperation
                   val specialized =
-                    DigitalInterfaceContract.ValueOperations.contains(expression.operation)
+                    DigitalInterfaceContract.ValueOperations.contains(
+                      expression.operation
+                    ) || ordinaryRead
                   if !specialized && expression.operation != "behavioral_predicate" then
                     expression.operands.zip(operands).foreach: (input, actual) =>
                       requireValid(
@@ -4632,11 +4801,71 @@ private[nodal] object DigitalValueMlir:
                       Proof(None, unsigned)
                     )
                   else if specialized then
-                    requireValid(
-                      region.isEmpty,
-                      "interface effects are not pure collection operations",
-                      path
-                    )
+                    if ordinaryRead then
+                      requireStructuralFamilyScope(region, path)
+                      var payloadBudget = 65536
+                      def ordinaryPayload(value: String, depth: Int): Unit =
+                        payloadBudget -= 1
+                        requireValid(
+                          depth <= 128 && payloadBudget >= 0,
+                          "ordinary member payload exceeds its structural budget",
+                          path
+                        )
+                        if value == "Bool" then ()
+                        else if value.startsWith("Enum(") then
+                          val _ = enums.bitWidth(value, path)
+                        else if value.startsWith("Struct(") then
+                          structType(value, path)._2.foreach(field =>
+                            ordinaryPayload(field._2, depth + 1)
+                          )
+                        else if value.startsWith("Vec(") then
+                          ordinaryPayload(vectorType(value, path)._1, depth + 1)
+                        else
+                          requireValid(
+                            scalarFacts(value, path).nonEmpty,
+                            "ordinary member payload contains a capability or non-digital type",
+                            path
+                          )
+                      ordinaryPayload(expression.dataType, 0)
+                      val endpoint = expression.interfaceMember.get.endpoint
+                      requireValid(
+                        declarations.get(endpoint).exists(_._1 == module.path) &&
+                          interfaceEndpoints.contains(endpoint),
+                        "ordinary read endpoint belongs to another module or inventory",
+                        path
+                      )
+                      val targetScope = valueRegion(endpoint)
+                      var useScope = region
+                      val scopes = mutable.HashSet.empty[String]
+                      while useScope != targetScope && useScope.nonEmpty do
+                        val scope = useScope.get
+                        requireValid(
+                          scopes.add(scope) && scopes.size <= 128,
+                          "ordinary member use ancestry exceeds its budget",
+                          path
+                        )
+                        val context = regions.getOrElse(
+                          scope,
+                          fail("ordinary member use scope is absent", path)
+                        )
+                        requireValid(
+                          context.owner == module.path,
+                          "ordinary member use scope belongs to another module",
+                          path
+                        )
+                        useScope = context.parentRegion
+                      requireValid(
+                        useScope == targetScope,
+                        "ordinary member endpoint is outside its actual lexical use ancestry",
+                        path
+                      )
+                      emitInterface(endpoint, depth + 1, region, output)
+                    else
+                      requireValid(
+                        region.isEmpty,
+                        "interface effects are not pure collection operations",
+                        path
+                      )
                     val projected = specializedValue(expression, result, dataType, operands)
                     requireValid(
                       projected.value._2 == dataType,

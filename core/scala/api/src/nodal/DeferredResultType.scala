@@ -12,6 +12,7 @@ private[nodal] object DeferredResultType:
   def pending(value: Any): Boolean = value match
     case expression: KernelExpr[?] => !expression.typeFinalized
     case signal: Signal[?] => pendingType(signal.dataType)
+    case register: Register[?] => register.dataType.exists(pendingType)
     case endpoint: ResolvedDigitalCapability[?, ?] => pendingType(endpoint.dataType)
     case _ => false
 
@@ -19,6 +20,8 @@ private[nodal] object DeferredResultType:
   def hasTypeObligation(value: Any): Boolean = value match
     case expression: KernelExpr[?] => expression.typeIntent.nonEmpty
     case signal: Signal[?] => signal.dataType.isInstanceOf[KernelInstanceDataType[?]]
+    case register: Register[?] =>
+      register.dataType.exists(_.isInstanceOf[KernelInstanceDataType[?]])
     case endpoint: ResolvedDigitalCapability[?, ?] =>
       endpoint.dataType.isInstanceOf[KernelInstanceDataType[?]]
     case _ => false

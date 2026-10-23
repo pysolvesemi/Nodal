@@ -57,6 +57,8 @@ private[nodal] object GeneratedAreaRuntime:
     ConstructionKernel.generatedAreaFamily(value, name)
   def instance[M <: Module](value: GeneratedAreaRef[?], name: String): GeneratedInstanceRef[M] =
     ConstructionKernel.generatedAreaInstance[M](value, name)
+  def value[A <: Data](value: GeneratedAreaRef[?], name: String): InterfaceValueRef[A] =
+    ConstructionKernel.generatedAreaValue[A](value, name)
   def interface[A <: InterfaceEndpoint](value: GeneratedAreaRef[?], name: String): A =
     ConstructionKernel.generatedAreaInterface(value, name).asInstanceOf[A]
   def member[A](value: GeneratedAreaRef[?], name: String, kind: String): A =

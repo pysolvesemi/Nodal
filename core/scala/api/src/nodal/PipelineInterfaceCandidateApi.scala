@@ -37,7 +37,7 @@ object InterfaceMember:
       extends InterfaceMember
   final case class SignalFlow[D](name: String, dimension: String) extends InterfaceMember
 
-  def value[A <: Data](name: String, dataType: DataType[A]): InterfaceMember =
+  def value[A <: Data](name: String, dataType: DataType[A]): Value[A] =
     Value(name, dataType)
 
   def valid[A <: Data](name: String, payloadType: DataType[A]): InterfaceMember =
@@ -237,6 +237,7 @@ private[nodal] sealed trait InterfaceEndpoint:
   def role: Role[?]
   def name: String
   def domain: ClockDomain
+  private[nodal] def domainOption: Option[ClockDomain] = Some(domain)
   private[nodal] def boundary: Boolean
 
 final class InterfacePort[I <: Interface, R <: RoleKind] private[nodal] (
@@ -262,11 +263,16 @@ final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val role: Role[R],
     private[nodal] val formalCount: Dimension,
     val name: String,
-    val domain: ClockDomain,
+    override private[nodal] val domainOption: Option[ClockDomain],
     private[nodal] val exported: Boolean = true,
     private[nodal] val boundary: Boolean = false,
-    private[nodal] val origin: Option[InterfaceArray[I, ?]] = None
+    private[nodal] val origin: Option[InterfaceArray[I, ?]] = None,
+    private[nodal] val externalAttributes: Vector[(String, Any)] = Vector.empty
 ) extends InterfaceEndpoint:
+  def domain: ClockDomain = domainOption.getOrElse(
+    DigitalInterfaceContract.fail(6, "declaration-only external InterfaceArray has no ClockDomain")
+  )
+
   /** Local declared count. A projected count is finalized after all Instance overrides. */
   def count: Dimension =
     if origin.nonEmpty then return origin.get.count
@@ -281,12 +287,12 @@ final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
       this,
       KernelSignalKind.InterfaceArray,
       explicitName = Some(name),
-      domain = Some(domain),
+      domain = domainOption,
       attributes = Vector(
         "interface" -> definition.name,
         "role" -> role.name,
         "count" -> formalCount
-      )
+      ) ++ externalAttributes
     )
 
 def interfacePort[I <: Interface, R <: RoleKind](
@@ -302,9 +308,30 @@ def interfaceArray[I <: Interface, R <: RoleKind](
     count: Dimension,
     name: String,
     domain: ClockDomain
-): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, domain)
+): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, Some(domain))
+
+/** A closed ordinary read capability bound to one exact endpoint and declared member. */
+final class InterfaceValueRef[A <: Data] private[nodal] (
+    private[nodal] val memberRecord: InterfaceValueReadRecord
+):
+  def read: Expr[A] =
+    ConstructionKernel.interfaceValueRefRead(this).asInstanceOf[Expr[A]]
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
+  /** Retain an exact member witness for checked instance or generated-family projection. */
+  def valueRef[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): InterfaceValueRef[A] =
+    ConstructionKernel.interfaceValueReference[A](endpoint, field, through.toVector)
+
+  /** Read one exact ordinary Value declaration without changing endpoint orientation. */
+  def read[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): Expr[A] =
+    ConstructionKernel.interfaceValueRead(endpoint, field, through.toVector).asInstanceOf[Expr[A]]
+
   /** Select the exact conservative declaration and retain the actual role's rights. */
   def connectTerminal[D <: Discipline](
       field: InterfaceMember.Conservative[D],
@@ -392,6 +419,24 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
     ConstructionKernel.operation("interface-observe", endpoint, member)
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfaceArray[I, R])
+  /** Retain the exact whole-array ordinary member without flattening the outer axis. */
+  def valueRef[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): InterfaceValueRef[Vec[A]] =
+    ConstructionKernel.interfaceValueReference[Vec[A]](endpoint, field, through.toVector)
+
+  /** Read the exact whole outer family of one ordinary Value declaration. */
+  def read[A <: Data](
+      field: InterfaceMember.Value[A],
+      through: InterfaceMember.Nested[?]*
+  ): Expr[Vec[A]] =
+    ConstructionKernel.interfaceValueRead(
+      endpoint,
+      field,
+      through.toVector
+    ).asInstanceOf[Expr[Vec[A]]]
+
   /** A whole-family resolved capability over this exact declared array member. */
   def resolved[A <: Bits, M <: DriveMode](
       field: InterfaceMember.DigitalResolved[A, M],
@@ -405,7 +450,7 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfaceArray[I, R])
       monitor,
       endpoint.formalCount,
       s"${endpoint.name}.monitor",
-      endpoint.domain,
+      endpoint.domainOption,
       exported = false,
       origin = Some(endpoint)
     )

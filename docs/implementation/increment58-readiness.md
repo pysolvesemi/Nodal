@@ -1708,3 +1708,35 @@ against the predecessor; the five changed query sources are included here.
 No firtool, comparator, held consumer repair, CI or full suite was invoked.
 Pending geometry lifecycle, broader generated/selected Interface routing and
 remaining physical/backend profiles stay open. Foundation 58 is incomplete.
+
+## Checkpoint 53: matched source reduction and conservative capture closure
+
+The accepted pre-C1 source stack is now preserved on the composed native
+checkpoint. All 108 API/bridge/plugin/annotation/resource inputs were verified;
+24 engine files changed. Five maintained Scala source/test files and six exact
+standalone fixtures retain their causal checks and separate compilation scopes.
+No experimental pending-construction epoch changes are included.
+
+Historical source acceptance used API `b16d1bbc`, bridge `1ebe7884` and plugin
+`8d5aab70`: 28 selected-child source/bridge expectations; 26 retained reduction
+checks; 11 A/B lifecycle primitive checks; three conservative groups; and
+separate 14 reduction plus five conservative byte-identical export comparisons.
+The selected first/control fixture pairs were freshly compiled on that stack.
+The retained maintained suites reused their previously compiled test JARs with
+final API/bridge substituted, not a fresh whole-testkit compilation. The fixture
+guide records original stacks, isolated pairs and relocation limits.
+
+The original source receipt's pending-native and repeated-connection-identity
+warnings are superseded only for the five exact public profiles by supplement
+`59ba2c8c` and checkpoint 52's fresh composed adapter replay. Two distinct
+selected ordinals 1 and 2 emit byte-identical accepted Verilog-A. The authored
+connection ordinal remains owned by ConstructionSession; this is not a new
+connectivity engine or blanket cross-boundary alias authority.
+
+The source stack preserves pending-width/capture inference and canonical
+generated conservative views within their checked profiles. Full pending
+outer/inner reduction geometry and callback lifecycle remain open. Internal
+A/B prerequisites do not admit those callbacks. Broader selected conservative
+profiles, remaining generated/physical routing and held consumer work remain
+open; no CI, global suite or numerical/backend qualification is claimed.
+Foundation 58 remains incomplete.

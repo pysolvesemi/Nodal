@@ -1,11 +1,29 @@
 package nodal
 
 /** An explicit declaration-only flavor of Module. External behavior belongs to the supplied
-  * implementation, not an executable Nodal body. The initial signature supports fixed scalar
-  * portable digital inout pins only.
+  * implementation, not an executable Nodal body. Signatures support fixed scalar digital inout
+  * pins and fixed positive all-resolved Interface arrays with portable black-box placement.
   */
 abstract class ExternalModule(externalName: String) extends Module:
   ConstructionKernel.declareExternalModule(this, externalName)
+
+  protected final def externalInterfaceArray[I <: Interface, R <: RoleKind](
+      definition: InterfaceType[I],
+      role: Role[R],
+      count: Int,
+      name: String,
+      placement: InoutPlacement,
+      profile: ResolutionProfile
+  ): InterfaceArray[I, R] =
+    ConstructionKernel.externalInterfaceArray(
+      this,
+      definition,
+      role,
+      count,
+      name,
+      placement,
+      profile
+    )
 
 private[nodal] object ExternalModuleContract:
   private def fail(message: String, path: String): Nothing =
@@ -15,9 +33,71 @@ private[nodal] object ExternalModuleContract:
     if name == null || name.length > 256 || !name.matches("[A-Za-z_][A-Za-z0-9_$]*") then
       fail("external module requires one canonical exact physical symbol", path)
 
+  def validateArray(
+      definition: InterfaceType[?],
+      role: Role[?],
+      count: Int,
+      placement: InoutPlacement,
+      profile: ResolutionProfile
+  ): Unit =
+    if count <= 0 || placement != InoutPlacement.BlackBoxPin ||
+      profile != ResolutionProfile.PortableBoundaryOnly
+    then
+      fail(
+        "external InterfaceArray requires fixed positive count and portable black-box placement",
+        definition.name
+      )
+    def fixed(dataType: DataType[?]): Boolean =
+      val descriptor = CandidateRuntime.typeDescriptor(dataType)
+      Set("Bits", "UInt", "SInt")(descriptor.kind) && descriptor.arguments.size == 1 &&
+      (descriptor.arguments.head match
+        case width: Int => width > 0
+        case width: KernelExpr[?] => width.literal.exists(literal =>
+            literal.kind == "integer" && literal.dataType == KernelTypeDescriptor("Integer") &&
+              literal.value.toLongOption.exists(_ > 0)
+          )
+        case _ => false)
+    val selected = ConstructionInterfaceLayout.leaves(definition, role)
+    val all = (definition.roles :+ role).flatMap(value =>
+      ConstructionInterfaceLayout.leaves(definition, value)
+    )
+    if selected.isEmpty || selected.exists(_.access != "connect") ||
+      all.exists(leaf => leaf.protocol != "resolved" || !leaf.dataType.exists(fixed))
+    then
+      fail(
+        "external InterfaceArray requires a complete fixed scalar resolved definition and connect role",
+        definition.name
+      )
+
+  /** Exact direct external declarations and their actual unselected immediate-child projections. */
+  def externalInterfacePaths(snapshot: ConstructionSnapshot): Set[String] =
+    val owners = snapshot.modules.filter(_.externalName.nonEmpty).map(_.path).toSet
+    val direct = snapshot.interfaceContracts.filter(endpoint =>
+      owners(endpoint.owner) && endpoint.boundary.isEmpty
+    ).map(_.path).toSet
+    direct ++ snapshot.interfaceContracts.filter(endpoint =>
+      endpoint.boundary.exists(boundary =>
+        boundary.selection.isEmpty && direct(boundary.endpoint) &&
+          boundary.instance.exists(path =>
+            snapshot.modules.find(_.path == endpoint.owner).exists(
+              _.instances.exists(instance =>
+                instance.path == path && instance.generatedScope.isEmpty &&
+                  snapshot.interfaceContracts.exists(child =>
+                    child.path == boundary.endpoint &&
+                      child.owner == instance.childModule
+                  )
+              )
+            )
+          )
+      )
+    ).map(_.path)
+
   def externalNetPaths(snapshot: ConstructionSnapshot): Set[String] =
-    snapshot.modules.iterator.filter(_.externalName.nonEmpty)
-      .flatMap(_.declarations.iterator.map(_.path)).toSet
+    val owners = snapshot.modules.iterator.filter(_.externalName.nonEmpty).map(_.path).toSet
+    snapshot.modules.iterator.filter(module => owners(module.path))
+      .flatMap(_.declarations.iterator.filter(_.kind == "digital-inout").map(_.path)).toSet ++
+      snapshot.interfaceContracts.filter(endpoint => owners(endpoint.owner))
+        .flatMap(_.members.map(_.path))
 
   /** Read-only snapshot admission shared by construction and bridge ingress. Native signature
     * verification independently checks the actual emitted declaration body.
@@ -25,6 +105,12 @@ private[nodal] object ExternalModuleContract:
   def validate(snapshot: ConstructionSnapshot): Unit =
     val external = snapshot.modules.filter(_.externalName.nonEmpty)
     if external.nonEmpty then
+      val arrayOwners =
+        external.filter(_.declarations.exists(_.kind == "interface-array")).map(_.path).toSet
+      snapshot.modules.foreach: module =>
+        module.instances.filter(instance => arrayOwners(instance.childModule)).foreach: instance =>
+          if instance.generatedScope.nonEmpty then
+            fail("external InterfaceArray instances require direct Module ownership", instance.path)
       val modulePaths = snapshot.modules.iterator.map(_.path).toSet
       def lexicalOwner(path: String): String =
         var current = path
@@ -36,7 +122,6 @@ private[nodal] object ExternalModuleContract:
           snapshot.digitalExpressions.iterator.map(_.owner) ++
           snapshot.digitalAssignments.iterator.map(_.owner) ++
           snapshot.digitalConnectivity.iterator.map(_.owner) ++
-          snapshot.interfaceContracts.iterator.map(_.owner) ++
           snapshot.topology.iterator.map(_.owner) ++
           snapshot.eventProcesses.iterator.map(_.owner) ++
           snapshot.memoryWrites.iterator.map(_.owner) ++
@@ -73,7 +158,11 @@ private[nodal] object ExternalModuleContract:
       val nets = snapshot.resolvedNets.iterator.map(net => net.path -> net).toMap
       val signatures = scala.collection.mutable.HashMap.empty[
         String,
-        (String, Vector[(String, Option[String], Vector[(String, String)])])
+        (
+            String,
+            Vector[(String, Option[String], Vector[(String, String)])],
+            Vector[KernelInterfaceSnapshot]
+        )
       ]
       external.foreach: module =>
         val name = module.externalName.get
@@ -85,25 +174,73 @@ private[nodal] object ExternalModuleContract:
             "external module is declaration-only and cannot contain executable bodies, domains, instances or empty signatures",
             module.path
           )
-        module.declarations.foreach: pin =>
-          val net = nets.getOrElse(
-            pin.path,
-            fail("external pin has no exact resolved declaration", pin.path)
+        val endpoints = snapshot.interfaceContracts.filter(_.owner == module.path)
+        if endpoints.map(_.path).toSet !=
+            module.declarations.filter(_.kind == "interface-array").map(_.path).toSet
+        then
+          fail(
+            "external Interface inventory differs from its exact declaration signature",
+            module.path
           )
-          if pin.kind != "digital-inout" || pin.domain.nonEmpty || pin.generatedScope.nonEmpty ||
-            pin.interfaceBoundary.nonEmpty || pin.resolvedBoundary.nonEmpty ||
-            pin.resolvedMember.nonEmpty || pin.conservativeMember.nonEmpty ||
-            net.boundary.nonEmpty || net.member.nonEmpty || net.operations.nonEmpty ||
-            net.placement != InoutPlacement.BlackBoxPin.toString ||
-            net.profile != ResolutionProfile.PortableBoundaryOnly.toString ||
-            !pin.dataType.contains(net.dataType)
-          then
-            fail(
-              "external signature permits only direct portable black-box digital inout declarations",
-              pin.path
+        module.declarations.foreach: pin =>
+          if pin.kind == "interface-array" then
+            val endpoint = endpoints.find(_.path == pin.path).getOrElse(
+              fail("external Interface pin has no complete signature", pin.path)
             )
-        val signature = module.className ->
-          module.declarations.map(pin => (pin.name, pin.dataType, pin.attributes))
+            val attrs = pin.attributes.toMap
+            def fixed(member: KernelInterfaceMemberSnapshot): Boolean =
+              member.protocol == "resolved" && member.mode.nonEmpty &&
+                member.dataType.matches("(?:Bits|UInt|SInt)\\([1-9][0-9]*\\)")
+            if pin.domain.nonEmpty || pin.generatedScope.nonEmpty ||
+              pin.interfaceBoundary.nonEmpty ||
+              pin.resolvedBoundary.nonEmpty || pin.resolvedMember.nonEmpty ||
+              pin.conservativeMember.nonEmpty ||
+              endpoint.domain.nonEmpty || endpoint.boundary.nonEmpty ||
+              endpoint.definitionContexts.nonEmpty ||
+              endpoint.actualMemberTypes.nonEmpty || endpoint.dimensions.size != 1 ||
+              !endpoint.dimensions.forall(value => value.toLongOption.exists(_ > 0)) ||
+              attrs.get("placement") != Some(InoutPlacement.BlackBoxPin.toString) ||
+              attrs.get("profile") != Some(ResolutionProfile.PortableBoundaryOnly.toString) ||
+              endpoint.members.isEmpty ||
+              !endpoint.members.forall(member => fixed(member) && member.access == "connect") ||
+              endpoint.roles.isEmpty || !endpoint.roles.forall(_.members.forall(fixed))
+            then
+              fail(
+                "external Interface signature requires direct fixed positive portable resolved connect pins without domain",
+                pin.path
+              )
+          else
+            val net = nets.getOrElse(
+              pin.path,
+              fail("external pin has no exact resolved declaration", pin.path)
+            )
+            if pin.kind != "digital-inout" || pin.domain.nonEmpty || pin.generatedScope.nonEmpty ||
+              pin.interfaceBoundary.nonEmpty || pin.resolvedBoundary.nonEmpty ||
+              pin.resolvedMember.nonEmpty || pin.conservativeMember.nonEmpty ||
+              net.boundary.nonEmpty || net.member.nonEmpty || net.operations.nonEmpty ||
+              net.placement != InoutPlacement.BlackBoxPin.toString ||
+              net.profile != ResolutionProfile.PortableBoundaryOnly.toString ||
+              !pin.dataType.contains(net.dataType)
+            then
+              fail(
+                "external signature permits only direct portable black-box digital inout declarations",
+                pin.path
+              )
+        val canonicalEndpoints = endpoints.map(endpoint =>
+          endpoint.copy(
+            path = module.declarations.find(_.path == endpoint.path).get.name,
+            owner = "",
+            members = endpoint.members.map(member => member.copy(path = member.name)),
+            roles = endpoint.roles.map(role =>
+              role.copy(members = role.members.map(member => member.copy(path = member.name)))
+            )
+          )
+        )
+        val signature = (
+          module.className,
+          module.declarations.map(pin => (pin.name, pin.dataType, pin.attributes)),
+          canonicalEndpoints
+        )
         signatures.get(name).foreach: previous =>
           if previous != signature then
             fail(

@@ -56,6 +56,23 @@ private[nodal] object DigitalCollectionCallback:
         "collection callback requires typed effect validation by the Nodal compiler plugin"
       ))).get
 
+  /** Preserve the exact compiler carrier across the vector-argument adapter. */
+  final class ReductionBody private[DigitalCollectionCallback] (
+      val checked: AnyRef,
+      invoke: Vector[Expr[?]] => Expr[?]
+  ) extends (Vector[Expr[?]] => Expr[?]):
+    def apply(arguments: Vector[Expr[?]]): Expr[?] = invoke(arguments)
+
+  def reductionBody[A <: Data](function: (Expr[A], Expr[A]) => Expr[A]): ReductionBody =
+    function match
+      case _: Checked2[?, ?, ?] => ()
+      case _ => requireChecked(new Object)
+    new ReductionBody(
+      function,
+      arguments =>
+        function(arguments(0).asInstanceOf[Expr[A]], arguments(1).asInstanceOf[Expr[A]])
+    )
+
   // Immutable graph construction is strictly narrower than ordinary expression purity.
   private final class CheckedFsmGraph2[S](function: (Int, FsmDef[S]) => FsmDef[S])
       extends ((Int, FsmDef[S]) => FsmDef[S]):

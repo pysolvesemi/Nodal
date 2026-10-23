@@ -180,7 +180,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     clock: Option[KernelClockSnapshot] = None,
     waiver: Option[KernelExecutableWaiverSnapshot] = None,
     generatedMember: Option[KernelGeneratedMemberSnapshot] = None,
-    hierarchyDriver: Boolean = false
+    hierarchyDriver: Boolean = false,
+    interfaceMember: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelClockSnapshot(

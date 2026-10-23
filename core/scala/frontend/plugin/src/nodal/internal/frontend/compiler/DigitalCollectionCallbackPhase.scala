@@ -53,6 +53,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var areaRangeFactories = Set.empty[Symbol]
   private var areaFamilyMethods = Set.empty[Symbol]
   private var areaInterfaceMethods = Set.empty[Symbol]
+  private var areaConservativeMethods = Set.empty[Symbol]
   private var areaInterfaceModule: Symbol = NoSymbol
   private var selectedInstanceClosures = Set.empty[Symbol]
   private var loopMethods = Set.empty[Symbol]
@@ -222,7 +223,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         moduleMethods("nodal.Interface", "apply") ++
         methods(requiredClass("nodal.InterfaceType"), "withRoles") ++
         moduleMethods("nodal.Role", "apply") ++
-        moduleMethods("nodal.InterfaceMember", "value", "valid", "stream", "nested") ++
+        moduleMethods("nodal.InterfaceMember", "value", "valid", "stream", "nested", "terminal") ++
+        moduleMethods("nodal.RoleAccess.Connect", "apply") ++
+        moduleMethods("nodal.RoleAccess.Sense", "apply") ++
+        moduleMethods("nodal.RoleAccess.Contribute", "apply") ++
         moduleMethods("nodal.RoleAccess.In", "apply") ++
         moduleMethods("nodal.RoleAccess.Out", "apply") ++
         moduleMethods("nodal.RoleAccess.Observe", "apply") ++
@@ -518,11 +522,28 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "interfaceArray",
       "driveMember",
       "observeMember",
+      "read",
+      "valueRef",
       "connectExact",
       "forwardExact"
     ) ++
-      methods(requiredModule("nodal.GeneratedAreaRuntime"), "interface")
+      methods(requiredModule("nodal.GeneratedAreaRuntime"), "interface", "value") ++
+      methods(requiredClass("nodal.InterfaceValueRef"), "read")
     areaInterfaceMethods ++= defaultGetters(areaInterfaceMethods)
+    areaConservativeMethods = methods(
+      areaInterfaceModule,
+      "connectTerminal",
+      "senseTerminal",
+      "contributeTerminal",
+      "connectTo",
+      "connectView"
+    )
+    areaConservativeMethods ++= defaultGetters(areaConservativeMethods)
+    areaConservativeMethods ++= methods(
+      requiredModule("nodal.ConservativeAccess.Connect"),
+      "connectAccess"
+    )
+
     val selections = requiredModule("nodal.SignalSelection")
     loopModules += selections
     loopMethods = methods(requiredClass("nodal.LoopIndex"), "value") ++
@@ -882,6 +903,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.InterfaceType")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.InterfaceValueRef")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.GeneratedAreas")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.FsmDef")) ||
@@ -970,7 +992,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               Profile.Pure,
               Profile.StructuralIf,
               Profile.StructuralFamily,
-              Profile.Sequential
+              Profile.Sequential,
+              Profile.GeneratedArea
             )
           else if kind == "singleton" then
             List(
@@ -1206,6 +1229,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else
       pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
       (permitsInterface && areaInterfaceMethods(symbol)) ||
+      ((profile == Profile.GeneratedArea || profile == Profile.StructuralFamily) &&
+        areaConservativeMethods(symbol)) ||
       (directModuleInitializer && requiredDomainMethods(symbol)) ||
       sequentialMethods(symbol) ||
       ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily) &&
@@ -1219,6 +1244,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if profile == Profile.ImmutableFsm then immutableFsmModules(symbol)
       else
         pureModules(symbol) || (permitsInterface && symbol == areaInterfaceModule) ||
+        ((profile == Profile.GeneratedArea || profile == Profile.StructuralFamily) &&
+          (symbol == requiredModule("nodal.ConservativeAccess.Connect") ||
+            symbol == requiredModule("nodal.ConservativeAccess.Connect.connectAccess"))) ||
         (directModuleInitializer && symbol == requiredModule("nodal.ClockDomain")) ||
         structuralModules(symbol) || sequentialModules(symbol) ||
         (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
@@ -1498,6 +1526,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if !budget(tree, depth) then false
       else
         tree match
+          case Apply(function, List(closure))
+              if profile == Profile.Pure && (
+                (function.symbol == requiredMethod("nodal.DigitalCollectionCallback.checked1") &&
+                  callbackArity(closure) == 1) ||
+                  (function.symbol == requiredMethod("nodal.DigitalCollectionCallback.checked2") &&
+                    callbackArity(closure) == 2)
+              ) =>
+            // Source-authored factories are rejected before lowering. Parent callbacks can revisit
+            // this exact compiler-inserted wrapper, but must revalidate its original pure closure.
+            callback(closure, depth + 1)
           case Apply(function, List(closure))
               if profile == Profile.GeneratedArea &&
                 function.symbol == requiredMethod(

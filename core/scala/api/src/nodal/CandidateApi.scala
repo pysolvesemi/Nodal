@@ -40,25 +40,105 @@ private[nodal] final case class KernelLiteral(
     dataType: KernelTypeDescriptor
 )
 
-private[nodal] final class KernelExpr[A <: Data](
-    val operands: Vector[Any],
-    resultType: Option[KernelTypeDescriptor] = None,
-    val literal: Option[KernelLiteral] = None,
-    val operation: Option[String] = None,
-    val materializationIntent: Option[KernelDigitalIntent] = None,
-    val typeIntent: Option[KernelResultTypeIntent] = None
+private[nodal] final case class KernelExpressionPayload(
+    operands: Vector[Any],
+    resultType: Option[KernelTypeDescriptor],
+    literal: Option[KernelLiteral],
+    operation: Option[String],
+    materializationIntent: Option[KernelDigitalIntent],
+    typeIntent: Option[KernelResultTypeIntent],
+    interfaceMember: Option[InterfaceValueReadRecord]
+)
+
+private[nodal] final class KernelExpr[A <: Data] private (
+    private var payload: Option[KernelExpressionPayload],
+    private val constructionOwner: Option[AnyRef],
+    private val provisionalType: Option[KernelTypeDescriptor],
+    private[nodal] val constructionDependencies: Vector[Any],
+    private[nodal] val constructionCallback: Option[DigitalCollectionCallback.ReductionBody]
 ) extends Expr[A]:
-  // Authored provisional metadata is deliberately not a public field. Final consumers use
-  // this one accessor after the owning construction session seals every pending intent.
-  private val authoredResultType = resultType
+  def this(
+      operands: Vector[Any],
+      resultType: Option[KernelTypeDescriptor] = None,
+      literal: Option[KernelLiteral] = None,
+      operation: Option[String] = None,
+      materializationIntent: Option[KernelDigitalIntent] = None,
+      typeIntent: Option[KernelResultTypeIntent] = None,
+      interfaceMember: Option[InterfaceValueReadRecord] = None
+  ) = this(
+    Some(KernelExpressionPayload(
+      operands,
+      resultType,
+      literal,
+      operation,
+      materializationIntent,
+      typeIntent,
+      interfaceMember
+    )),
+    None,
+    None,
+    Vector.empty,
+    None
+  )
+
+  private var constructionState = if payload.nonEmpty then 2 else 0
+  private var reservedSourceSlot: Option[Int] = None
+  private[nodal] def constructionSourceSlot: Int = reservedSourceSlot.getOrElse(
+    throw new IllegalStateException("reserved expression has no source slot")
+  )
+  private[nodal] def attachConstructionSource(owner: AnyRef, slot: Int): Unit =
+    requireOwner(owner)
+    require(
+      constructionState == 0 && reservedSourceSlot.isEmpty && slot >= 0,
+      "reserved expression source may be attached only once"
+    )
+    reservedSourceSlot = Some(slot)
   private var finalizedResultType: Option[KernelTypeDescriptor] = None
-  def typeFinalized: Boolean = typeIntent.isEmpty || finalizedResultType.nonEmpty
+  def constructionFinalized: Boolean = constructionState == 2
+  private def complete: KernelExpressionPayload =
+    require(constructionFinalized, "expression construction is not complete")
+    payload.get
+  def operands: Vector[Any] = complete.operands
+  def literal: Option[KernelLiteral] = complete.literal
+  def operation: Option[String] = complete.operation
+  def materializationIntent: Option[KernelDigitalIntent] = complete.materializationIntent
+  def typeIntent: Option[KernelResultTypeIntent] = complete.typeIntent
+  def interfaceMember: Option[InterfaceValueReadRecord] = complete.interfaceMember
+  def typeFinalized: Boolean =
+    constructionFinalized && (complete.typeIntent.isEmpty || finalizedResultType.nonEmpty)
   def resultDescriptor: Option[KernelTypeDescriptor] =
-    finalizedResultType.orElse(authoredResultType)
+    if constructionFinalized then finalizedResultType.orElse(complete.resultType)
+    else provisionalType
+  private def requireOwner(owner: AnyRef): Unit =
+    require(constructionOwner.exists(_ eq owner), "construction belongs to another session")
+  private[nodal] def beginConstruction(owner: AnyRef): Unit =
+    requireOwner(owner)
+    require(constructionState == 0, "expression construction may begin only once")
+    constructionState = 1
+  private[nodal] def sealConstruction(owner: AnyRef, value: KernelExpressionPayload): Unit =
+    requireOwner(owner)
+    require(constructionState == 1, "expression construction may seal only once")
+    require(value.literal.isEmpty, "reserved construction cannot become a literal")
+    payload = Some(value)
+    constructionState = 2
+  private[nodal] def failConstruction(owner: AnyRef): Unit =
+    requireOwner(owner)
+    constructionState = 3
   def sealResultType(value: KernelTypeDescriptor): Unit =
     require(typeIntent.nonEmpty && !typeFinalized, "expression type may be finalized only once")
     require(literal.isEmpty, "literal expressions cannot carry a deferred result type")
     finalizedResultType = Some(value)
+
+private[nodal] object KernelExpr:
+  def reserve[A <: Data](
+      owner: AnyRef,
+      provisionalType: KernelTypeDescriptor,
+      dependencies: Vector[Any],
+      body: DigitalCollectionCallback.ReductionBody
+  ): KernelExpr[A] =
+    DigitalCollectionCallback.requireChecked(body.checked)
+    require(dependencies.size <= 4098, "construction dependency inventory exceeds finite budget")
+    new KernelExpr[A](None, Some(owner), Some(provisionalType), dependencies, Some(body))
 
 /** Candidate declaration-time type descriptor. */
 sealed trait DataType[+A <: Data]
@@ -68,8 +148,9 @@ private[nodal] final class KernelDataType[A <: Data](
 ) extends DataType[A],
       KernelDescribedType
 
-/** A boundary view, sealed from the exact finalized child binding before snapshot publication. The
-  * child descriptor is retained only for construction metadata, never as parent shape proof.
+/** A checked boundary view, sealed from an exact child binding or generated storage selection
+  * before snapshot publication. The original descriptor is construction metadata, never proof of
+  * the selected use's shape. The internal name is retained for existing boundary consumers.
   */
 private[nodal] final class KernelInstanceDataType[A <: Data](
     val formal: KernelTypeDescriptor
@@ -525,6 +606,8 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
         ConstructionKernel.instanceInterfaceArray(array).asInstanceOf[A]
       case port: InterfacePort[?, ?] =>
         ConstructionKernel.instanceInterfacePort(port).asInstanceOf[A]
+      case value: InterfaceValueRef[?] =>
+        ConstructionKernel.instanceInterfaceValue(value).asInstanceOf[A]
       case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
@@ -1651,8 +1734,14 @@ private[nodal] object CandidateRuntime:
   def shapeIndex[A <: Data](
       value: Expr[Vec[A]],
       indices: Vector[Dimension]
+  ): Expr[A] = shapeIndex(value, indices, None)
+
+  def shapeIndex[A <: Data](
+      value: Expr[Vec[A]],
+      indices: Vector[Dimension],
+      destination: Option[(KernelExpr[A], AnyRef)]
   ): Expr[A] =
-    val element = expressionDataType(value)
+    def element = expressionDataType(value)
       .map(typeDescriptor)
       .filter(_.kind == "Vec")
       .flatMap(_.arguments.headOption.collect { case candidate: DataType[?] => candidate })
@@ -1663,11 +1752,33 @@ private[nodal] object CandidateRuntime:
           )
         ).get
       )
-    val expression = new KernelExpr[A](
-      value +: indices,
-      resultType = Some(typeDescriptor(element)),
-      operation = Some("shape_index")
-    )
+    val operands = value +: indices
+    val resultType = Some(typeDescriptor(element))
+    val intent = DeferredResultType.intent(Vector(value) ++ indices.collect {
+      case expression: Expr[?] => expression
+    })(typeDescriptor(element))
+    val expression = destination match
+      case None => new KernelExpr[A](
+          operands,
+          resultType = resultType,
+          operation = Some("shape_index"),
+          typeIntent = intent
+        )
+      case Some((reserved, owner)) =>
+        reserved.beginConstruction(owner)
+        reserved.sealConstruction(
+          owner,
+          KernelExpressionPayload(
+            operands,
+            resultType,
+            None,
+            Some("shape_index"),
+            None,
+            intent,
+            None
+          )
+        )
+        reserved
     ConstructionKernel.shapeIndex(expression, value, indices)
     expression
 

@@ -430,7 +430,15 @@ private[nodal] object StructuralParameterBinding:
           case Key.Literal(value) => Some(operands(if value == 0L then 1 else 2))
           case _ if operands(1) == operands(2) => Some(operands(1))
           case _ => None
-      else None
+      else
+        IterationDomain.neutralArithmeticOperand(
+          operation,
+          operands.map(index =>
+            facts(index).key match
+              case Key.Literal(value) => Some(value)
+              case _ => None
+          )
+        ).map(operands)
 
     def bounds(index: Int): IterationDomain.Bounds = facts(index).bounds
 

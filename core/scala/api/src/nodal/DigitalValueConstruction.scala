@@ -17,6 +17,7 @@ private[nodal] object DigitalValueConstruction:
         DigitalAggregateContract.Operations.contains(operation) ||
         DigitalCombinationalContract.ReachableBooleanOperations.contains(operation) ||
         DigitalInterfaceContract.ValueOperations.contains(operation) ||
+        operation == DigitalInterfaceContract.OrdinaryReadOperation ||
         (operation == DigitalCollectionContract.Operation ||
           operation == StructuralIfRuntime.Operation ||
           operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
@@ -101,6 +102,7 @@ private[nodal] object DigitalValueConstruction:
             DigitalCombinationalContract.Operations.contains(operation) ||
             DigitalAggregateContract.Operations.contains(operation) ||
             DigitalInterfaceContract.ValueOperations.contains(operation) ||
+            operation == DigitalInterfaceContract.OrdinaryReadOperation ||
             (operation == DigitalCollectionContract.Operation ||
               operation == StructuralIfRuntime.Operation ||
               operation == SequentialRuntime.PredicateOperation || operation == "memory_read" ||
@@ -177,7 +179,9 @@ private[nodal] object DigitalValueConstruction:
           fail("operand expression is outside the implemented typed digital profile")
         if !isEnum && metadata.nonEmpty then fail("non-enum expression carries enum metadata")
         val operands = if reset(expression).nonEmpty then reset(expression).get.inputs
-        else if expression.literal.nonEmpty || isProjection || familyMember.nonEmpty then
+        else if expression.literal.nonEmpty || isProjection || familyMember.nonEmpty ||
+          expression.interfaceMember.nonEmpty
+        then
           Vector.empty
         else
           expression.operands.filterNot(value =>
@@ -218,7 +222,7 @@ private[nodal] object DigitalValueConstruction:
           materializationIntent = expression.materializationIntent,
           structure = structure.headOption.map(value =>
             KernelStructOperationSnapshot(
-              renderType(value.schema, handle, None),
+              renderType(value.schema, handle, regionOf(expression)),
               value.ordinal,
               value.name
             )

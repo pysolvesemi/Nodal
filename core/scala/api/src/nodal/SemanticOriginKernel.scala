@@ -234,6 +234,30 @@ private[nodal] final class SemanticOriginBuilder:
       captureSite()
     )
 
+  def reserveExpression(
+      module: Long,
+      index: Int,
+      value: AnyRef,
+      operands: Vector[Any]
+  ): Int =
+    val slot = expressions.size
+    captureExpression(module, index, value, operands)
+    slot
+
+  def completeReservedExpression(
+      slot: Int,
+      module: Long,
+      index: Int,
+      value: AnyRef,
+      operands: Vector[Any]
+  ): Unit =
+    val capture = expressions(slot)
+    require(
+      capture.module == module && capture.index == index && (capture.value eq value),
+      "reserved expression lost its original source capture"
+    )
+    expressions(slot) = capture.copy(operands = operands)
+
   def captureInstance(
       parent: Long,
       ordinal: Int,

@@ -65,7 +65,9 @@ private[nodal] final case class GeneratedSymbolSelectionRecord(
     reference.family.generatedRegion,
     ordinal(reference.ordinal),
     reference.members,
-    reference.family.selectionPrefix.map(value => (value.family, ordinal(value.ordinal), value.members)),
+    reference.family.selectionPrefix.map(value =>
+      (value.family, ordinal(value.ordinal), value.members)
+    ),
     member
   )
   override def equals(other: Any): Boolean = other match
@@ -91,6 +93,7 @@ private[nodal] final case class GeneratedAreaMemberRecord(
     members: Vector[String],
     target: DeclarationRef,
     access: String,
+    dataType: KernelInstanceDataType[Data],
     selectionPrefix: Vector[GeneratedFamilySelectionRecord] = Vector.empty
 )
 
@@ -116,4 +119,12 @@ private[nodal] final case class InterfaceBoundaryRecord(
     port: DeclarationRef,
     generated: Option[GeneratedSymbolSelectionRecord] = None,
     scope: Option[DigitalValueRegionRecord] = None
+)
+
+/** Exact ordinary member witness on a normal expression; never a declaration or net. */
+private[nodal] final case class InterfaceValueReadRecord(
+    endpoint: InterfaceEndpoint,
+    field: InterfaceMember.Value[?],
+    through: Vector[InterfaceMember.Nested[?]],
+    member: String
 )

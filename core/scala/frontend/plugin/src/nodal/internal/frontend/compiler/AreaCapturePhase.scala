@@ -165,6 +165,7 @@ private[compiler] final class AreaCapturePhase extends PluginPhase:
       "nodal.ClockDomain",
       "nodal.InterfacePort",
       "nodal.InterfaceArray",
+      "nodal.InterfaceValueRef",
       "nodal.DigitalInout",
       "nodal.Node",
       "nodal.NodeArray"

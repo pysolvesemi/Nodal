@@ -419,6 +419,12 @@ private[nodal] object ReproducibilityContract:
             )
           ))
         ).toVector)*)
+      ) ++ value.interfaceMember.toVector.map(member =>
+        "interface_member" -> obj(
+          "endpoint" -> string(member.endpoint),
+          "member" -> string(member.member),
+          "role" -> string(member.role)
+        )
       ) ++ Option.when(value.hierarchyDriver)("hierarchy_driver" -> JBoolean(true)))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
@@ -1130,14 +1136,13 @@ private[nodal] object ReproducibilityContract:
       ),
       "interface_abi" -> array(
         snapshot.interfaceAbi.sortBy(_.logicalPath).map: entry =>
-          obj(
+          obj((Vector(
             "logical_path" -> string(entry.logicalPath),
             "emitted_path" -> string(entry.emittedPath),
             "role" -> string(entry.role),
             "access" -> string(entry.access),
-            "data_type" -> string(entry.dataType),
-            "domain" -> string(entry.domain)
-          )
+            "data_type" -> string(entry.dataType)
+          ) ++ entry.domain.toVector.map(value => "domain" -> string(value)))*)
       ),
       "resolved_nets" -> array(
         snapshot.resolvedNets.sortBy(_.path).map: net =>
@@ -1246,8 +1251,8 @@ private[nodal] object ReproducibilityContract:
           "path" -> string(endpoint.path),
           "owner" -> string(endpoint.owner),
           "identity" -> string(endpoint.identity),
-          "role" -> string(endpoint.role),
-          "domain" -> string(endpoint.domain),
+          "role" -> string(endpoint.role)
+        ) ++ endpoint.domain.toVector.map(value => "domain" -> string(value)) ++ Vector(
           "dimensions" -> array(endpoint.dimensions.map(string)),
           "members" -> array(endpoint.members.map(interfaceMember)),
           "roles" -> array(endpoint.roles.sortBy(_.name).map(role =>

@@ -87,6 +87,21 @@ private[nodal] object IterationDomain:
     case "static_integer_choose_zero" => Some(Arithmetic.ChooseZero)
     case _ => None
 
+  /** Reuse only a nonneutral operand after the caller has checked every original operand and
+    * arithmetic bound. These are actual literal facts, never singleton parameter envelopes.
+    */
+  def neutralArithmeticOperand(operation: Arithmetic, literals: Vector[Option[Long]]): Option[Int] =
+    if literals.size != operation.arity then None
+    else
+      operation match
+        case Arithmetic.Add =>
+          if literals(0).contains(0L) then Some(1)
+          else Option.when(literals(1).contains(0L))(0)
+        case Arithmetic.Multiply =>
+          if literals(0).contains(1L) then Some(1)
+          else Option.when(literals(1).contains(1L))(0)
+        case _ => None
+
   /** Wide intermediates also serve trip-count proofs, where distance can exceed signed 64 bits. */
   private def wideArithmetic(
       operation: Arithmetic,

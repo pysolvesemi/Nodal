@@ -582,6 +582,14 @@ private[nodal] object ScalaToMlirBridge:
         ))
 
     def render(): String =
+      digitalValues.validateGeneratedMemberTypes: (actual, formal, path) =>
+        compareDigitalValueType(
+          actual,
+          formal,
+          path,
+          widthFamily = false,
+          selectedContext = digitalValues.generatedStorageTypeContext(path)
+        )
       hierarchy.validatePortTypes: (actual, formal, owner, instance) =>
         compareDigitalValueType(
           actual.dataType.get,
@@ -1180,7 +1188,8 @@ ${indent(body, 2)}
           )
           if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) &&
             !digitalValues.generatedDeclaration(path) &&
-            !digitalValues.generatedInterfaceDeclaration(path)
+            !digitalValues.generatedInterfaceDeclaration(path) &&
+            !digitalValues.generatedConservativeMember(path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -1382,7 +1391,8 @@ ${indent(body, 2)}
         module.declarations.foreach: declaration =>
           if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" &&
             !digitalValues.generatedDeclaration(declaration.path) &&
-            !digitalValues.generatedInterfaceDeclaration(declaration.path)
+            !digitalValues.generatedInterfaceDeclaration(declaration.path) &&
+            !digitalValues.generatedConservativeMember(declaration.path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -2703,6 +2713,208 @@ ${indent(body, 2)}
         physicalControls,
         clockControls
       )
+      val externallyBoundTerminals =
+        externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
+      val moduleTerminals = terminalDeclarations(module)
+        .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path)).zipWithIndex
+      def emitModuleTerminal(declaration: KernelDeclarationSnapshot, index: Int): Unit =
+        if !values.contains(declaration.path) then
+          val discipline = conservativeDiscipline(declaration)
+          val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
+          val result = s"%terminal_$index"
+          val opName =
+            if declaration.kind == "analog-node" then "nodal.node"
+            else "nodal.terminal"
+          val boundaryAttributes = declaration.kind match
+            case "analog-input" => Vector(
+                "direction" -> quoted("input"),
+                "flow_orientation" -> quoted("into_component")
+              )
+            case "analog-output" => Vector(
+                "direction" -> quoted("output"),
+                "flow_orientation" -> quoted("into_component")
+              )
+            case "analog-inout" | "conservative-terminal" => Vector(
+                "direction" -> quoted("inout"),
+                "flow_orientation" -> quoted("into_component")
+              )
+            case _ => Vector.empty
+          if declaration.conservativeMember.nonEmpty then
+            body += interfaceValues.renderConservativeMember(
+              declaration,
+              result,
+              resultType,
+              interfaceNativeType,
+              stableLocalSymbol,
+              path => bridgeMetadata(path, Vector.empty),
+              location
+            )
+          else
+            body += operation(
+              opName,
+              results = Vector(result),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "name" -> quoted(declaration.name),
+                "source_path" -> quoted(declaration.path),
+                "metadata" -> bridgeMetadata(
+                  declaration.path,
+                  Vector(
+                    "declaration_kind" -> quoted(declaration.kind),
+                    "declared_discipline" -> quoted(
+                      declaration.attributes.toMap.getOrElse("discipline", discipline)
+                    )
+                  ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
+                    "allow_floating" -> boolean(true)
+                  )
+                )
+              ) ++ boundaryAttributes,
+              semanticPath = declaration.path
+            )
+          values.update(declaration.path, result -> resultType)
+
+      def renderTopology(
+          scope: Option[KernelGeneratedScope],
+          scopeBody: mutable.ArrayBuffer[String],
+          scopeValues: mutable.LinkedHashMap[String, (String, String)]
+      ): Unit =
+        val topology = topologyEntries(module).filter(_.generatedScope == scope)
+        val childEndpoints = topology
+          .flatMap(edge => Vector(edge.left, edge.right))
+          .distinct
+          .filter(path => topologyEndpointOwners(path) != module.path)
+          .sorted
+        childEndpoints.zipWithIndex.foreach: (path, index) =>
+          val owner = topologyEndpointOwners(path)
+          val child = modulesByPath.getOrElse(
+            owner,
+            fail("NODAL-BRIDGE-007", "child Module is absent from the snapshot", Some(path))
+          )
+          val declaration = child.declarations.find(_.path == path).getOrElse(
+            fail("NODAL-BRIDGE-032", "child endpoint declaration is absent", Some(path))
+          )
+          val instance = instancesByChildModule.getOrElse(
+            owner,
+            fail(
+              "NODAL-BRIDGE-026",
+              "child endpoint is not owned by an immediate instance",
+              Some(path)
+            )
+          )
+          val direction = declaration.kind match
+            case "analog-input" => "input"
+            case "analog-output" => "output"
+            case "analog-inout" | "conservative-terminal" => "inout"
+            case _ =>
+              fail("NODAL-BRIDGE-027", "child endpoint is not a boundary terminal", Some(path))
+          val discipline = conservativeDiscipline(declaration)
+          val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
+          val result = if scope.isEmpty then s"%instance_terminal_$index"
+          else "%" + stableLocalSymbol("instance_terminal", path)
+          scopeBody += operation(
+            "nodal.instance_terminal",
+            results = Vector(result),
+            resultTypes = Vector(resultType),
+            attributes = Vector(
+              "instance" -> symbolReference(
+                stableLocalSymbol("instance", lastSegment(instance.path))
+              ),
+              "port" -> quoted(declaration.name),
+              "name" -> quoted(s"${lastSegment(instance.path)}.${declaration.name}"),
+              "direction" -> quoted(direction),
+              "flow_orientation" -> quoted("out_of_component"),
+              "source_path" -> quoted(path),
+              "metadata" -> bridgeMetadata(
+                path,
+                Vector(
+                  "child_path" -> quoted(owner),
+                  "declared_discipline" -> quoted(
+                    declaration.attributes.toMap.getOrElse("discipline", discipline)
+                  )
+                )
+              )
+            ) ++ scopeAttributes(scope),
+            semanticPath = path
+          )
+          scopeValues.update(path, result -> resultType)
+
+        conservativeArrayBindingsByOwner.getOrElse(module.path, Vector.empty)
+          .filter(_.generatedScope == scope).foreach: binding =>
+            def endpoint(path: String): (String, String) =
+              scopeValues.get(path).orElse(emittedShapes.get(path).map((value, dataType, _) =>
+                value -> dataType
+              ))
+                .getOrElse(fail(
+                  "NODAL-BRIDGE-050",
+                  "array relation endpoint was not emitted before its use",
+                  Some(binding.path)
+                ))
+            val left = endpoint(binding.left)
+            val right = endpoint(binding.right)
+            scopeBody += operation(
+              "nodal.connect_array",
+              operands = Vector(left._1, right._1),
+              operandTypes = Vector(left._2, right._2),
+              attributes = Vector(
+                "connection_id" -> quoted(binding.path),
+                "source_path" -> quoted(binding.path),
+                "metadata" -> bridgeMetadata(
+                  binding.path,
+                  Vector(
+                    "left_path" -> quoted(binding.left),
+                    "right_path" -> quoted(binding.right)
+                  )
+                )
+              ) ++ scopeAttributes(scope),
+              semanticPath = binding.path
+            )
+
+        topology.foreach: edge =>
+          if Set("terminal-connect", "node-connect").contains(edge.kind) then
+            (scopeValues.get(edge.left), scopeValues.get(edge.right)) match
+              case (Some((leftValue, leftType)), Some((rightValue, rightType)))
+                  if leftType == rightType =>
+                scopeBody += operation(
+                  "nodal.connect",
+                  operands = Vector(leftValue, rightValue),
+                  operandTypes = Vector(leftType, rightType),
+                  attributes = Vector(
+                    "connection_id" -> quoted(edge.path.getOrElse(s"${edge.left}<->${edge.right}")),
+                    "source_path" -> quoted(edge.path.getOrElse(s"${edge.left}<->${edge.right}")),
+                    "metadata" -> bridgeMetadata(
+                      edge.path.getOrElse(s"${edge.left}->${edge.right}"),
+                      Vector("topology_kind" -> quoted(edge.kind))
+                    )
+                  ) ++ scopeAttributes(scope),
+                  semanticPath = edge.path.getOrElse(edge.left)
+                )
+              case (Some((_, leftType)), Some((_, rightType))) =>
+                fail(
+                  "NODAL-BRIDGE-028",
+                  s"conservative connection type mismatch '$leftType' versus '$rightType'",
+                  Some(edge.left)
+                )
+              case _ =>
+                fail(
+                  "NODAL-BRIDGE-029",
+                  "conservative connection endpoint is unavailable",
+                  Some(edge.left)
+                )
+
+      val generatedTerminalRoots = topologyEntries(module).filter(edge =>
+        edge.generatedScope.nonEmpty && Vector(
+          edge.left,
+          edge.right
+        ).exists(digitalValues.generatedConservativeMember)
+      ).flatMap(edge => Vector(edge.left, edge.right)).filter(path =>
+        declarationsByPath.get(path).exists(declaration =>
+          declaration.kind == "conservative-terminal" &&
+            declaration.conservativeMember.isEmpty && declaration.generatedScope.isEmpty
+        )
+      ).toSet
+      moduleTerminals.filter((declaration, _) => generatedTerminalRoots(declaration.path))
+        .foreach((declaration, index) => emitModuleTerminal(declaration, index))
+
       val digital = digitalValues.renderModule(
         module,
         parseType,
@@ -2733,13 +2945,16 @@ ${indent(body, 2)}
             dataType,
             operands,
             interfaceNativeType,
+            stableLocalSymbol,
             bridgeMetadata(expression.path, Vector.empty),
             location(expression.path)
           ),
         interfaceValues.roots(module) ++ sequential.roots ++ clockRelationships.roots(
           module.path
         ) ++ hierarchy.roots(module),
-        values.iterator.filter((path, _) => hierarchy.projections.contains(path)).toMap,
+        values.iterator.filter((path, _) =>
+          hierarchy.projections.contains(path) || generatedTerminalRoots(path)
+        ).toMap,
         path =>
           "@" + quoted(stableLocalSymbol(
             "domain",
@@ -2858,6 +3073,27 @@ ${indent(body, 2)}
             Some(region.path)
           )
         ,
+        (declaration, result) =>
+          val resultType = "!nodal.terminal<" + quoted(conservativeDiscipline(declaration)) + ">"
+          DigitalValueMlir.Projection(
+            Vector(interfaceValues.renderConservativeMember(
+              declaration,
+              result,
+              resultType,
+              interfaceNativeType,
+              stableLocalSymbol,
+              path => bridgeMetadata(path, Vector.empty),
+              location
+            )),
+            result -> resultType
+          )
+        ,
+        (region, generatedValues) =>
+          val output = mutable.ArrayBuffer.empty[String]
+          val scoped = mutable.LinkedHashMap.from(generatedValues)
+          renderTopology(Some(KernelGeneratedScope(region.path, region.induction)), output, scoped)
+          output.toVector
+        ,
         stableLocalSymbol,
         (path, selection) =>
           val output = mutable.ArrayBuffer.empty[String]
@@ -2874,7 +3110,7 @@ ${indent(body, 2)}
           output.toVector
         ,
         path => interfaceValues.endpointSymbol(path, stableLocalSymbol),
-        (effects, resolve) =>
+        (effects, resolve, capturedMember) =>
           interfaceValues.renderEffects(
             module,
             resolve,
@@ -2891,7 +3127,19 @@ ${indent(body, 2)}
                 widthFamily = false,
                 definitionContext = digitalValues.interfaceDefinitionTypeContext(memberPath)
               ),
-            Some(effects)
+            Some(effects),
+            capturedMember
+          ),
+        (path, role, owner) =>
+          interfaceValues.renderMemberAccess(
+            module,
+            path,
+            role,
+            Some(owner),
+            interfaceNativeType,
+            stableLocalSymbol,
+            path => bridgeMetadata(path, Vector.empty),
+            location
           ),
         interfaceValues.regionalDefinitions(module.path).map((context, types) =>
           context -> types.flatMap((dataType, path) =>
@@ -3022,72 +3270,20 @@ ${indent(body, 2)}
                   "role" -> quoted(entry.role),
                   "access" -> quoted(entry.access),
                   "data_type" -> quoted(entry.dataType),
-                  "domain" -> quoted(entry.domain)
+                  "domain" -> quoted(entry.domain.getOrElse(
+                    fail(
+                      "NODAL-INTERFACE-054-006",
+                      "legacy Interface ABI requires its actual domain",
+                      Some(entry.logicalPath)
+                    )
+                  ))
                 )
               )
             ),
             semanticPath = entry.logicalPath
           )
 
-      val externallyBoundTerminals =
-        externallyBoundTerminalsByModule.getOrElse(module.path, Set.empty)
-      terminalDeclarations(module)
-        .filterNot(declaration => generatedDeclarationPaths.contains(declaration.path))
-        .zipWithIndex
-        .foreach: (declaration, index) =>
-          val discipline = conservativeDiscipline(declaration)
-          val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
-          val result = s"%terminal_$index"
-          val opName =
-            if declaration.kind == "analog-node" then "nodal.node"
-            else "nodal.terminal"
-          val boundaryAttributes = declaration.kind match
-            case "analog-input" => Vector(
-                "direction" -> quoted("input"),
-                "flow_orientation" -> quoted("into_component")
-              )
-            case "analog-output" => Vector(
-                "direction" -> quoted("output"),
-                "flow_orientation" -> quoted("into_component")
-              )
-            case "analog-inout" | "conservative-terminal" => Vector(
-                "direction" -> quoted("inout"),
-                "flow_orientation" -> quoted("into_component")
-              )
-            case _ => Vector.empty
-          if declaration.conservativeMember.nonEmpty then
-            body += interfaceValues.renderConservativeMember(
-              declaration,
-              result,
-              resultType,
-              interfaceNativeType,
-              stableLocalSymbol,
-              path => bridgeMetadata(path, Vector.empty),
-              location
-            )
-          else
-            body += operation(
-              opName,
-              results = Vector(result),
-              resultTypes = Vector(resultType),
-              attributes = Vector(
-                "name" -> quoted(declaration.name),
-                "source_path" -> quoted(declaration.path),
-                "metadata" -> bridgeMetadata(
-                  declaration.path,
-                  Vector(
-                    "declaration_kind" -> quoted(declaration.kind),
-                    "declared_discipline" -> quoted(
-                      declaration.attributes.toMap.getOrElse("discipline", discipline)
-                    )
-                  ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
-                    "allow_floating" -> boolean(true)
-                  )
-                )
-              ) ++ boundaryAttributes,
-              semanticPath = declaration.path
-            )
-          values.update(declaration.path, result -> resultType)
+      moduleTerminals.foreach((declaration, index) => emitModuleTerminal(declaration, index))
 
       val generatedStatic = mutable.ArrayBuffer.empty[String]
       val generatedStaticValues = shapeStaticValues
@@ -3096,133 +3292,6 @@ ${indent(body, 2)}
         val result = "%generated_bound_value_" + nextGeneratedStaticValue
         nextGeneratedStaticValue += 1
         result
-      def renderTopology(
-          scope: Option[KernelGeneratedScope],
-          scopeBody: mutable.ArrayBuffer[String],
-          scopeValues: mutable.LinkedHashMap[String, (String, String)]
-      ): Unit =
-        val topology = topologyEntries(module).filter(_.generatedScope == scope)
-        val childEndpoints = topology
-          .flatMap(edge => Vector(edge.left, edge.right))
-          .distinct
-          .filter(path => topologyEndpointOwners(path) != module.path)
-          .sorted
-        childEndpoints.zipWithIndex.foreach: (path, index) =>
-          val owner = topologyEndpointOwners(path)
-          val child = modulesByPath.getOrElse(
-            owner,
-            fail("NODAL-BRIDGE-007", "child Module is absent from the snapshot", Some(path))
-          )
-          val declaration = child.declarations.find(_.path == path).getOrElse(
-            fail("NODAL-BRIDGE-032", "child endpoint declaration is absent", Some(path))
-          )
-          val instance = instancesByChildModule.getOrElse(
-            owner,
-            fail(
-              "NODAL-BRIDGE-026",
-              "child endpoint is not owned by an immediate instance",
-              Some(path)
-            )
-          )
-          val direction = declaration.kind match
-            case "analog-input" => "input"
-            case "analog-output" => "output"
-            case "analog-inout" | "conservative-terminal" => "inout"
-            case _ =>
-              fail("NODAL-BRIDGE-027", "child endpoint is not a boundary terminal", Some(path))
-          val discipline = conservativeDiscipline(declaration)
-          val resultType = s"""!nodal.terminal<${quoted(discipline)}>"""
-          val result = if scope.isEmpty then s"%instance_terminal_$index"
-          else "%" + stableLocalSymbol("instance_terminal", path)
-          scopeBody += operation(
-            "nodal.instance_terminal",
-            results = Vector(result),
-            resultTypes = Vector(resultType),
-            attributes = Vector(
-              "instance" -> symbolReference(
-                stableLocalSymbol("instance", lastSegment(instance.path))
-              ),
-              "port" -> quoted(declaration.name),
-              "name" -> quoted(s"${lastSegment(instance.path)}.${declaration.name}"),
-              "direction" -> quoted(direction),
-              "flow_orientation" -> quoted("out_of_component"),
-              "source_path" -> quoted(path),
-              "metadata" -> bridgeMetadata(
-                path,
-                Vector(
-                  "child_path" -> quoted(owner),
-                  "declared_discipline" -> quoted(
-                    declaration.attributes.toMap.getOrElse("discipline", discipline)
-                  )
-                )
-              )
-            ) ++ scopeAttributes(scope),
-            semanticPath = path
-          )
-          scopeValues.update(path, result -> resultType)
-
-        conservativeArrayBindingsByOwner.getOrElse(module.path, Vector.empty)
-          .filter(_.generatedScope == scope).foreach: binding =>
-            def endpoint(path: String): (String, String) =
-              scopeValues.get(path).orElse(emittedShapes.get(path).map((value, dataType, _) =>
-                value -> dataType
-              ))
-                .getOrElse(fail(
-                  "NODAL-BRIDGE-050",
-                  "array relation endpoint was not emitted before its use",
-                  Some(binding.path)
-                ))
-            val left = endpoint(binding.left)
-            val right = endpoint(binding.right)
-            scopeBody += operation(
-              "nodal.connect_array",
-              operands = Vector(left._1, right._1),
-              operandTypes = Vector(left._2, right._2),
-              attributes = Vector(
-                "connection_id" -> quoted(binding.path),
-                "source_path" -> quoted(binding.path),
-                "metadata" -> bridgeMetadata(
-                  binding.path,
-                  Vector(
-                    "left_path" -> quoted(binding.left),
-                    "right_path" -> quoted(binding.right)
-                  )
-                )
-              ) ++ scopeAttributes(scope),
-              semanticPath = binding.path
-            )
-
-        topology.foreach: edge =>
-          if Set("terminal-connect", "node-connect").contains(edge.kind) then
-            (scopeValues.get(edge.left), scopeValues.get(edge.right)) match
-              case (Some((leftValue, leftType)), Some((rightValue, rightType)))
-                  if leftType == rightType =>
-                scopeBody += operation(
-                  "nodal.connect",
-                  operands = Vector(leftValue, rightValue),
-                  operandTypes = Vector(leftType, rightType),
-                  attributes = Vector(
-                    "connection_id" -> quoted(edge.path.getOrElse(s"${edge.left}<->${edge.right}")),
-                    "source_path" -> quoted(edge.path.getOrElse(s"${edge.left}<->${edge.right}")),
-                    "metadata" -> bridgeMetadata(
-                      edge.path.getOrElse(s"${edge.left}->${edge.right}"),
-                      Vector("topology_kind" -> quoted(edge.kind))
-                    )
-                  ) ++ scopeAttributes(scope),
-                  semanticPath = edge.path.getOrElse(edge.left)
-                )
-              case (Some((_, leftType)), Some((_, rightType))) =>
-                fail(
-                  "NODAL-BRIDGE-028",
-                  s"conservative connection type mismatch '$leftType' versus '$rightType'",
-                  Some(edge.left)
-                )
-              case _ =>
-                fail(
-                  "NODAL-BRIDGE-029",
-                  "conservative connection endpoint is unavailable",
-                  Some(edge.left)
-                )
 
       renderTopology(None, body, values)
 
@@ -5660,13 +5729,20 @@ ${indent(body, 2)}
         widthFamily: Boolean,
         storageContext: Boolean = true,
         instanceContext: Option[(String, KernelInstanceSnapshot, String)] = None,
-        definitionContext: Option[(StructuralParameterBinding.Query, String)] = None
+        definitionContext: Option[(StructuralParameterBinding.Query, String)] = None,
+        selectedContext: Option[(
+            StructuralParameterBinding.SelectedGeneratedContext,
+            StructuralParameterBinding.Query,
+            String
+        )] = None
     ): Boolean =
       // Interface boundaries permit Clock/Reset; ordinary values and nested Struct
       // fields retain the existing storage restrictions in the shared type owner.
       val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext)
       val directContext =
-        if instanceContext.isEmpty then digitalValues.directInterfaceTypeContext(path) else None
+        if instanceContext.isEmpty then
+          selectedContext.orElse(digitalValues.directInterfaceTypeContext(path))
+        else None
       val rightPath = instanceContext.map(_._3).orElse(directContext.map(_._3))
         .orElse(definitionContext.map(_._2)).getOrElse(path)
       val _ = parseTypeChecked(right, rightPath, 0, Array(65536), storageContext)
@@ -6569,6 +6645,10 @@ ${indent(body, 2)}
       )
 
     private def declarationInventory: String =
+      // This is a display-only legacy table. New domainless endpoints already
+      // carry verified typed absence; do not encode that capability as text.
+      val domainlessInterfaces =
+        snapshot.interfaceContracts.filter(_.domain.isEmpty).map(_.path).toSet
       array(
         modules.flatMap(module =>
           module.declarations.map: declaration =>
@@ -6577,9 +6657,13 @@ ${indent(body, 2)}
                 "path" -> quoted(declaration.path),
                 "kind" -> quoted(declaration.kind),
                 "name" -> quoted(declaration.name),
-                "data_type" -> optionalString(declaration.dataType),
-                "domain" -> optionalString(declaration.domain),
-                "resolved_domain" -> optionalString(declaration.resolvedDomain),
+                "data_type" -> optionalString(declaration.dataType)
+              ) ++ (if domainlessInterfaces(declaration.path) then Vector.empty
+                    else
+                      Vector(
+                        "domain" -> optionalString(declaration.domain),
+                        "resolved_domain" -> optionalString(declaration.resolvedDomain)
+                      )) ++ Vector(
                 "attributes" -> dictionary(
                   declaration.attributes.map((key, value) =>
                     normalizeKey(key) -> quoted(value)

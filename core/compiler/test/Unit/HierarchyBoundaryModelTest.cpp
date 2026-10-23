@@ -330,6 +330,131 @@ int main() {
         return view.leaves.size() == 1 && view.leaves[0].width.bounds.upper == 1000000;
       },
       largeChild);
+  // Value queries derive their sole type-use anchor from the original producer.
+  // These fixtures exercise type facts, not admission of the carrier operation.
+  auto valueLiteral = [](StringRef name, int64_t value) {
+    return "%" + name.str() + " = \"nodal.const_literal\"() <{metadata = {}, spelling = \"" +
+           std::to_string(value) + "\", value = " + std::to_string(value) +
+           " : i64}> : () -> i64\n";
+  };
+  auto valueFamily = [&](StringRef body, int64_t lower = 0, int64_t upper = 3, int64_t step = 1,
+                         StringRef id = "family") {
+    std::string n = id.str();
+    return valueLiteral(n + "_lo", lower) + valueLiteral(n + "_hi", upper) +
+           valueLiteral(n + "_step", step) + "%" + n + " = \"nodal.generate\"(%" + n + "_lo, %" +
+           n + "_hi, %" + n + "_step) <{induction = \"i\", region_id = \"Parent." + n +
+           "\", induction_path = \"Parent." + n + ".i\", metadata = {maximum_trip_count = " +
+           std::to_string(upper <= lower ? 0 : (upper - lower + step - 1) / step) +
+           " : i64}}> ({^bb0(%" + n + "_i: i64):\n" + body.str() +
+           "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  auto widthExpression = [](StringRef induction = "%family_i") {
+    return "%width = \"nodal.const_expr\"(" + induction.str() +
+           ", %one) <{operator_name = \"add\", metadata = {semantic_path = \"Parent.width\"}}> "
+           ": (i64, i64) -> i64\n";
+  };
+  auto valueUse = [&](StringRef spelling = "") {
+    return "%typed = \"builtin.unrealized_conversion_cast\"() {test_value} : () -> " +
+           (spelling.empty() ? digital("Parent.width") : spelling.str()) + "\n";
+  };
+  const auto valueWidth = valueLiteral("one", 1) + widthExpression();
+  auto valueFixture = [&](StringRef body) {
+    return parseSourceString<mlir::ModuleOp>("module {" + module("Parent", body.str()) + "}",
+                                             ParserConfig(&context, false));
+  };
+  auto markedValues = [](Operation *root) {
+    SmallVector<Value> values;
+    root->walk([&](Operation *op) {
+      if (op->hasAttr("test_value") && op->getNumResults() == 1)
+        values.push_back(op->getResult(0));
+    });
+    return values;
+  };
+  auto valueQuery = [&](StringRef name, StringRef body, bool expected, int64_t lower = 0,
+                        int64_t upper = 0) {
+    auto fixture = valueFixture(body);
+    bool good = false;
+    if (fixture) {
+      auto unchanged = print(fixture->getOperation());
+      auto values = markedValues(fixture->getOperation());
+      if (values.size() == 1) {
+        Value value = values.front();
+        auto view = nodal::inspectHierarchyBoundaryValue(value);
+        good = succeeded(view) == expected;
+        if (expected && succeeded(view))
+          good &=
+              !view->instance && view->type == value.getType() && view->leaves.size() == 1 &&
+              view->declarationOwner == value.getDefiningOp()->getParentOfType<nodal::ModuleOp>() &&
+              view->leaves[0].width.bounds.lower == lower &&
+              view->leaves[0].width.bounds.upper == upper;
+      }
+      good &= unchanged == print(fixture->getOperation());
+    }
+    report(name, good);
+  };
+  valueQuery("value-original-module-result", valueUse("!nodal.uint<8>"), true, 8, 8);
+  valueQuery("value-generated-original-i-plus-one", valueFamily(valueWidth + valueUse()), true, 1,
+             3);
+  valueQuery("value-generated-nonzero-nonunit-original-coordinate",
+             valueFamily(valueWidth + valueUse(), 2, 9, 3), true, 3, 9);
+  valueQuery("value-forward-token-rejected", valueFamily(valueUse() + valueWidth), false);
+  valueQuery("value-sibling-token-rejected",
+             valueFamily(valueWidth) + valueFamily(valueUse(), 0, 3, 1, "other"), false);
+  valueQuery("value-module-cannot-borrow-regional-token", valueFamily(valueWidth) + valueUse(),
+             false);
+  valueQuery("value-missing-token-rejected", valueFamily(valueUse()), false);
+  valueQuery("value-empty-dependent-width-has-no-numeric-fact",
+             valueFamily(valueWidth + valueUse(), 0, 0), false);
+  valueQuery("value-host-integer-not-bit-pattern", valueUse("i64"), false);
+  report("value-null-rejected", failed(nodal::inspectHierarchyBoundaryValue({})));
+  auto noOwner = parseSourceString<mlir::ModuleOp>("module {" + valueUse("!nodal.uint<8>") + "}",
+                                                   ParserConfig(&context, false));
+  report("value-without-actual-nodal-module-rejected",
+         noOwner && failed(nodal::inspectHierarchyBoundaryValue(
+                        noOwner->getBody()->front().getResult(0))));
+  auto siblings =
+      valueFixture(valueFamily(valueWidth + valueUse()) +
+                   valueFamily(valueLiteral("one", 1) + widthExpression("%other_i") + valueUse(), 0,
+                               3, 1, "other"));
+  bool distinct = false, repeated = false, blockArgumentRefused = false, oldModuleRefused = false;
+  if (siblings) {
+    auto values = markedValues(siblings->getOperation());
+    if (values.size() == 2) {
+      auto a = nodal::inspectHierarchyBoundaryValue(values[0]);
+      auto b = nodal::inspectHierarchyBoundaryValue(values[1]);
+      auto again = nodal::inspectHierarchyBoundaryValue(values[0]);
+      distinct =
+          succeeded(a) && succeeded(b) && values[0].getType() == values[1].getType() &&
+          !nodal::equivalentInstantiatedIntegerExpressions(a->leaves[0].width, b->leaves[0].width);
+      repeated = succeeded(a) && succeeded(again) &&
+                 nodal::equivalentInstantiatedIntegerExpressions(a->leaves[0].width,
+                                                                 again->leaves[0].width);
+      auto induction = values[0].getDefiningOp()->getBlock()->getArgument(0);
+      blockArgumentRefused = failed(nodal::inspectHierarchyBoundaryValue(induction));
+      oldModuleRefused = failed(nodal::inspectHierarchyBoundaryType(
+          values[0].getType(), values[0].getDefiningOp()->getParentOfType<nodal::ModuleOp>()));
+    }
+  }
+  report("value-identical-token-and-bounds-do-not-alias-sibling-inductions", distinct);
+  report("value-repeated-original-result-retains-expression-identity", repeated);
+  report("value-block-argument-remains-refused", blockArgumentRefused);
+  report("value-module-only-query-still-refuses-regional-width", oldModuleRefused);
+  auto guardedValue = [&](StringRef spelling) {
+    return valueLiteral("g0", 0) + valueLiteral("g1", 1) +
+           "%condition = \"nodal.static_compare\"(%g0, %g1) <{comparison = \"lt\", metadata = {}}> "
+           ": (i64, i64) -> !nodal.static_predicate\n"
+           "\"nodal.structural_if\"(%condition, %width) <{contract_version = \"structural-if-v1\", "
+           "region_id = \"Parent.guard\", operandSegmentSizes = array<i32: 1, 1, 0>, "
+           "metadata = {semantic_path = \"Parent.guard\"}}> ({^bb0(%captured: i64):\n" +
+           valueUse(spelling) +
+           "\"nodal.structural_yield\"() <{metadata = {}}> : () -> ()\n}, "
+           "{\"nodal.structural_yield\"() <{metadata = {}}> : () -> ()\n}) : "
+           "(!nodal.static_predicate, i64) -> ()\n";
+  };
+  valueQuery("value-explicit-static-capture-type-identity",
+             valueFamily(valueWidth + guardedValue(digital("Parent.guard.then.arg0"))), true, 1, 3);
+  valueQuery("value-raw-outer-token-cannot-bypass-capture",
+             valueFamily(valueWidth + guardedValue(digital("Parent.width"))), false);
   report("all-queries-read-only", before == print(parsed->getOperation()));
   llvm::outs() << "HIERARCHY_BOUNDARY_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;

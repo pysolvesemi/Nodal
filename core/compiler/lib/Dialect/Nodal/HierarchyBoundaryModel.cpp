@@ -147,6 +147,17 @@ inspectHierarchyBoundaryType(Type type, Operation *declarationOwner, Operation *
   unsigned work = 0;
   return BoundaryQuery(type, declarationOwner, instance, work).run();
 }
+FailureOr<HierarchyBoundaryType> inspectHierarchyBoundaryValue(Value value) {
+  auto original = dyn_cast_or_null<OpResult>(value);
+  if (!original)
+    return failure();
+  Operation *producer = original.getOwner();
+  Operation *module = producer->getParentOfType<nodal::ModuleOp>();
+  if (!module)
+    return failure();
+  unsigned work = 0;
+  return BoundaryQuery(original.getType(), module, nullptr, work, producer).run();
+}
 FailureOr<SmallVector<DigitalInterfaceBoundaryType, 4>>
 inspectDigitalInterfaceBoundaryTypes(Operation *module,
                                      ArrayRef<std::pair<Operation *, Operation *>> seeds) {

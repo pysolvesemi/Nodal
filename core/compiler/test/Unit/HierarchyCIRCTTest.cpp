@@ -997,6 +997,97 @@ std::pair<unsigned, unsigned> run() {
                    "spelling = \"513\", value = 513 : i64"),
            "split physical routes exceed their checked bounded profile");
 
+  const std::string externalArray =
+      R"mlir(module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {}} {
+"nodal.module"() <{sym_name = "Fixture", metadata = {}}> ({
+"nodal.domain"() <{sym_name = "clock", edge = "rising", reset_policy = "none", metadata = {}}> : () -> ()
+"nodal.port"() <{sym_name = "clockPin", type = !nodal.capability<"clock">, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%clockPin = "nodal.port_value"() <{port = @clockPin, metadata = {}}> : () -> !nodal.capability<"clock">
+"nodal.local_domain_binding"(%clockPin) <{domain = @clock, reset_polarity = "active_high", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "left", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.left"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.left", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @left}}> : () -> ()
+%left = "nodal.member_access"() <{instance = @left, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_instance"() <{sym_name = "right", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.right"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.right", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @right}}> : () -> ()
+%right = "nodal.member_access"() <{instance = @right, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+"nodal.port"() <{sym_name = "data", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%data = "nodal.port_value"() <{port = @data, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "enable", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%enable = "nodal.port_value"() <{port = @enable, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+%driver = "nodal.net_driver"(%left) <{driver_id = "writer", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>
+"nodal.net_drive"(%left, %driver, %data, %enable) <{mode = "push_pull", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+%read = "nodal.net_read"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "observed", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%observed = "nodal.port_value"() <{port = @observed, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%observed, %read) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.instance"() <{sym_name = "child", module = @Extern, parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()
+"nodal.interface_boundary"() <{sym_name = "child_view", instance = @child, endpoint = "exported", metadata = {interface_abi_version = 1 : i64, dimensions = ["2", "3"], semantic_path = "Fixture.child_view"}}> : () -> ()
+%child_pin = "nodal.member_access"() <{instance = @child_view, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %child_pin) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+}) : () -> ()
+"nodal.module"() <{sym_name = "Extern", external_name = "ExternalArray", metadata = {}}> ({
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "exported", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, placement = "black_box_pin", profile = "portable_boundary_only", dimensions = ["2", "3"], semantic_path = "Extern.exported"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Extern.exported", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @exported}}> : () -> ()
+}) : () -> ()
+}
+)mlir";
+  auto independentExternalArray = replace(
+      externalArray,
+      R"mlir("nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+)mlir",
+      "");
+  independentExternalArray = replace(
+      independentExternalArray, "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Extern\"",
+      std::string(
+          R"mlir("nodal.instance"() <{sym_name = "sibling", module = @Extern, parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()
+"nodal.interface_boundary"() <{sym_name = "sibling_view", instance = @sibling, endpoint = "exported", metadata = {interface_abi_version = 1 : i64, dimensions = ["2", "3"], semantic_path = "Fixture.sibling_view"}}> : () -> ()
+%sibling_pin = "nodal.member_access"() <{instance = @sibling_view, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%right, %sibling_pin) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+)mlir") + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Extern\"");
+  auto exactExternalArray = [&](unsigned expectedInstances) {
+    return [&, expectedInstances](mlir::ModuleOp module) {
+      unsigned externals = 0, instances = 0;
+      module.walk([&](circt::hw::HWModuleExternOp op) { ++externals; });
+      module.walk([&](circt::hw::InstanceOp op) { ++instances; });
+      auto ir = print(module);
+      return externals == 1 && instances == expectedInstances && oneArrayLoop(module) &&
+             StringRef(ir).contains("hw.module.extern @Extern(inout %exported__m_4_data : i48") &&
+             StringRef(ir).contains("outer_dimensions = [\"2\", \"3\"]") &&
+             StringRef(ir).contains("placement = \"black_box_pin\"");
+    };
+  };
+  positive("resolved-external-array-one-original-opaque-family-pin", externalArray,
+           exactExternalArray(1));
+  positive("resolved-external-array-reused-definition-retains-independent-occurrences",
+           independentExternalArray, exactExternalArray(2));
+  negative(
+      "resolved-external-array-opaque-drive-forbids-split",
+      replace(
+          externalArray, "%read =",
+          std::string(
+              R"mlir(%write, %enabled = "nodal.net_split"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>)
+)mlir") + "%read ="),
+      "resolved split cannot infer a unique driver across an opaque external contribution");
+  negative("resolved-external-array-equal-cardinality-swapped-axes-refused",
+           replace(externalArray,
+                   "dimensions = [\"2\", \"3\"], semantic_path = \"Fixture.child_view\"",
+                   "dimensions = [\"3\", \"2\"], semantic_path = \"Fixture.child_view\""),
+           "actual extent differs from the exact substituted child extent");
+  negative("resolved-external-array-top-level-placement-is-not-black-box",
+           replace(externalArray, "placement = \"black_box_pin\"", "placement = \"top_level_pin\""),
+           "external Interface requires explicit portable black-box placement");
+
   llvm::outs() << count << " resolved target cases, " << failures << " failures\n";
   return {count, failures};
 }

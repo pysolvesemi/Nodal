@@ -1638,3 +1638,21 @@ bridge `656ac392`, plugin `1d720ab5`, all recorded with exact source hashes.
 These are not asserted to be fresh compilations of checkpoint 47's 108-file
 source engine. Selected Interface/direct/typed-fill runner source mappings
 remain separate; their missing fixture provenance is not hidden by this slice.
+
+## Checkpoint 50 — coherent external-array native and target boundary
+
+Eleven exact files from `.work/f58-external-array-target` combine the nine-file
+native receipt `4e0f15ce` and two-file target receipt `2b57a2c0`. All recorded
+base hashes match checkpoint 49. The native 341-authored-input inventory and
+generated supplements were independently audited; its older target/test and
+CMake are not blindly restored. The accepted target explicitly extends unified
+`12a1d607`; current CMake and four generated target suites remain present.
+
+Historical native acceptance passed 16 focused executables including 545
+Interface cases. Compiler `9ec28e55` passed 91 hierarchy, 157 sequential and
+31 symbolic target cases, three authored external-array four-state profiles
+and the existing nine ordinary source profiles across 25 configurations.
+These are separate scopes; this snapshot does not grant public external-array
+source admission or broader generated electrical behavior. Native/target
+owner and dependency identities are matched rather than inferred from the
+subsequent analog-only probe. No new compiler or consumer execution occurs.

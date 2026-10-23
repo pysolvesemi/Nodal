@@ -117,9 +117,21 @@ inspectResolvedPhysicalGeometry(const DigitalResolvedEndpoint &endpoint, Operati
       shape.axes.size() != shape.dimensions.size() || shape.axes.size() > digitalTypeMaximumDepth ||
       !isa<InterfaceInstanceOp, InterfaceBoundaryOp, ResolvedNetOp, ResolvedBoundaryOp>(
           shape.owner) ||
-      (!shape.axes.empty() && (!isa<InterfaceInstanceOp, InterfaceBoundaryOp>(shape.owner) ||
-                               module->hasAttr("external_name"))))
+      (!shape.axes.empty() && !isa<InterfaceInstanceOp, InterfaceBoundaryOp>(shape.owner)))
     return failure();
+  if (!shape.axes.empty() && module->hasAttr("external_name")) {
+    // The complete declaration-only signature is independently checked once by
+    // planResolved. Here retain exact original family and opaque provenance.
+    if (!isa<InterfaceInstanceOp>(shape.owner) || endpoint.instance || endpoint.domain ||
+        endpoint.declaration != shape.owner || endpoint.externalContribution != shape.owner ||
+        !endpoint.placement || endpoint.placement.getValue() != "black_box_pin" ||
+        !endpoint.profile || endpoint.profile.getValue() != "portable_boundary_only" ||
+        failed(inferDigitalBitPatternFixedBits(resolved.getElementType(), module)) ||
+        llvm::any_of(shape.axes, [](const StaticShapeDimension &axis) {
+          return axis.parameter || axis.expression || axis.literal <= 0;
+        }))
+      return failure();
+  }
   auto metadata = shape.owner->getAttrOfType<DictionaryAttr>("metadata");
   auto original = metadata ? metadata.getAs<ArrayAttr>("dimensions") : ArrayAttr();
   if ((original && original != shape.dimensions) || (!original && !shape.axes.empty()))
@@ -4285,6 +4297,8 @@ private:
   LogicalResult planResolved() {
     if (!hierarchy || !variant)
       return success();
+    if (source->hasAttr("external_name") && failed(inspectExternalModuleSignature(source)))
+      return reject(source, "external resolved target requires a complete declaration-only signature");
     bool checkedParametricInOut = false;
     llvm::DenseMap<Value, unsigned> byRepresentative;
     for (const auto *endpoint : hierarchy->resolvedEndpoints[variant->occurrence]) {

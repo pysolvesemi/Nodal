@@ -43,6 +43,13 @@ struct HierarchyBoundaryType {
 mlir::FailureOr<HierarchyBoundaryType>
 inspectHierarchyBoundaryType(mlir::Type type, mlir::Operation *declarationOwner,
                              mlir::Operation *instance = nullptr);
+/// Exact bit-pattern boundary facts for an original SSA operation result.
+/// The producer supplies the only allowed lexical type-use anchor. No caller
+/// scope, selected coordinate, or instance substitution is accepted. Block
+/// arguments require a separate canonical capture proof and are refused here.
+/// This is a type query, not a replacement for the original operation verifier.
+mlir::FailureOr<HierarchyBoundaryType> inspectHierarchyBoundaryValue(mlir::Value value);
+
 /// Original direct endpoint geometry. Payload dimensions retain their authored
 /// definition anchor; outer InterfaceArray axes retain the endpoint anchor.
 /// All expressions are numeric all-lane facts, never selected specialization.

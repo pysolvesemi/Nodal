@@ -197,6 +197,14 @@ struct DigitalResolvedOccurrenceOperation {
   unsigned occurrence = 0;
   mlir::Operation *operation = nullptr;
 };
+/// An opaque electrical contribution is not an authored digital driver. Keep
+/// the full original member identity even when two leaves are physically joined.
+struct DigitalResolvedOpaqueContribution {
+  unsigned occurrence = 0;
+  mlir::Operation *operation = nullptr;
+  /// Empty only for an actual standalone external declaration.
+  mlir::StringAttr memberPath;
+};
 struct DigitalResolvedOccurrenceEndpoint {
   unsigned occurrence = 0;
   DigitalResolvedEndpoint endpoint;
@@ -207,7 +215,10 @@ struct DigitalResolvedHierarchyComponent {
   unsigned occurrence = 0;
   mlir::Value representative;
   llvm::SmallVector<DigitalResolvedOccurrenceEndpoint, 0> endpoints;
-  llvm::SmallVector<DigitalResolvedOccurrenceOperation, 2> drivers, externalContributions;
+  llvm::SmallVector<DigitalResolvedOccurrenceOperation, 2> drivers;
+  // Typical external families contain one declaration. Larger alias groups use
+  // checked heap storage, not inline capacity proportional to physical lanes.
+  llvm::SmallVector<DigitalResolvedOpaqueContribution, 1> externalContributions;
   /// Geometry is local to the existing representative occurrence, or the first
   /// exact endpoint when no SSA representative exists. It never enumerates lanes.
   DigitalResolvedShape shape;

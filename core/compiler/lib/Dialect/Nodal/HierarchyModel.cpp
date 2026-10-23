@@ -663,7 +663,43 @@ FailureOr<ExternalModuleSignature> inspectExternalModuleSignature(Operation *mod
     return fail("external module requires a canonical exact external symbol and declaration body");
   ExternalModuleSignature result{module, name, {}};
   llvm::StringSet<> pins;
+  unsigned work = 0;
   for (Operation &operation : module->getRegion(0).front()) {
+    if (++work > digitalTypeMaximumNodes)
+      return fail("external module signature exceeds finite declaration budget");
+    if (isa<InterfaceOp, InterfaceAbiOp, InterfaceInstanceOp>(operation) &&
+        !hasDigitalInterfaceContract(&operation))
+      return fail("external Interface signatures require fully typed declaration contracts");
+    // These are signature declarations only. The Interface owner independently
+    // checks the complete definition, selected role, ABI and exact outer axes.
+    if (isa<InterfaceOp>(operation)) {
+      if (operation.getNumRegions() != 1 || !operation.getRegion(0).hasOneBlock())
+        return fail("external Interface requires its exact declaration block");
+      bool hasLeaf = false;
+      for (Operation &member : operation.getRegion(0).front()) {
+        if (++work > digitalTypeMaximumNodes)
+          return fail("external module signature exceeds finite declaration budget");
+        if (!isa<InterfaceMemberOp>(member))
+          continue;
+        hasLeaf = true;
+        auto attr = member.getAttrOfType<TypeAttr>("type");
+        auto type = attr ? dyn_cast<ResolvedType>(attr.getValue()) : ResolvedType();
+        if (text(&member, "protocol") != "resolved" || !type ||
+            failed(inferDigitalBitPatternFixedBits(type.getElementType(), &operation)))
+          return fail("external Interface definitions require only fixed resolved leaves");
+      }
+      if (!hasLeaf)
+        return fail("external Interface definition requires at least one resolved pin leaf");
+      continue;
+    }
+    if (isa<InterfaceAbiOp>(operation))
+      continue;
+    if (isa<InterfaceInstanceOp>(operation)) {
+      if (!pins.insert(text(&operation, "sym_name")).second)
+        return fail("external module repeats an original pin declaration identity");
+      result.pins.push_back(&operation);
+      continue;
+    }
     auto meta = operation.getAttrOfType<DictionaryAttr>("metadata");
     auto placement = meta ? meta.getAs<StringAttr>("placement") : StringAttr();
     auto profile = meta ? meta.getAs<StringAttr>("profile") : StringAttr();

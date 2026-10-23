@@ -3562,6 +3562,245 @@ int main() {
         unrelated + replaceEvery(symbolicFamily, shaped("N", boolean), shaped("Q", boolean)), false,
         "", "conditional driver enable requires an actual owned canonical Bool");
 
+  auto externalArrayDeclaration = [&](StringRef dimensions = "\"2\", \"3\"") {
+    auto endpoint = instance("exported", "sink", "connect", resolved(), dimensions);
+    endpoint = replace(endpoint, ", domain = @clock",
+                       ", placement = \"black_box_pin\", profile = \"portable_boundary_only\"");
+    return externalModule("Child", "ExternalArray", resolvedDefinition() + endpoint);
+  };
+  auto externalArrayBoundary = [&](StringRef name = "projected", StringRef child = "child",
+                                   StringRef dimensions = "\"2\", \"3\"") {
+    auto boundary = replace(hierarchyBoundary(), "Top.projected", "Top." + name.str());
+    boundary = replace(boundary, "sym_name = \"projected\"", "sym_name = \"" + name.str() + "\"");
+    boundary = replace(boundary, "instance = @child", "instance = @" + child.str());
+    return replace(boundary,
+                   "semantic_path =", "dimensions = [" + dimensions.str() + "], semantic_path =");
+  };
+  auto externalArray = [&](StringRef parentEffects = "", StringRef childDefinition = "",
+                           bool sibling = false) {
+    std::string top = bareInstance() + externalArrayBoundary() + parentEffects.str();
+    if (sibling)
+      top += bareInstance("sibling") + externalArrayBoundary("sibling_view", "sibling");
+    return "module attributes {nodal.root.module = @Top, nodal.root.parameter_bindings = {}} {\n" +
+           bareModule("Top", top) +
+           (childDefinition.empty() ? externalArrayDeclaration() : childDefinition.str()) + "}\n";
+  };
+  const auto externalFamilyAccess = member("projected", "projected", shaped("2,3", resolved()));
+  const auto externalFamilyDriver =
+      familyValues("2,3", "none") + externalFamilyAccess +
+      liftFamily(driver("driver", "projected") + netDrive("driver", "projected"));
+  physicalFacts("external-array-unaccessed-family-retains-opaque-declaration", externalArray(),
+                true, [&](auto facts, auto bindings) {
+                  if (facts.size() != 1 || !bindings.empty() || facts[0].representative ||
+                      facts[0].externalContributions.size() != 1 || facts[0].endpoints.size() != 2)
+                    return false;
+                  const auto &external = facts[0].endpoints[1];
+                  return external.occurrence == 1 && !external.endpoint.component &&
+                         !external.endpoint.domain && external.endpoint.shape.axes.size() == 2 &&
+                         external.endpoint.shape.axes[0].literal == 2 &&
+                         external.endpoint.shape.axes[1].literal == 3 &&
+                         external.endpoint.externalContribution == external.endpoint.operation &&
+                         facts[0].externalContributions[0].operation == external.endpoint.operation;
+                });
+  physicalFacts("external-array-reused-definition-retains-two-opaque-occurrences",
+                externalArray("", "", true), true, [](auto facts, auto bindings) {
+                  return facts.size() == 2 && bindings.empty() &&
+                         facts[0].externalContributions.size() == 1 &&
+                         facts[1].externalContributions.size() == 1 &&
+                         facts[0].externalContributions[0].occurrence !=
+                             facts[1].externalContributions[0].occurrence &&
+                         facts[0].externalContributions[0].operation ==
+                             facts[1].externalContributions[0].operation;
+                });
+  hierarchy("external-array-parent-read",
+            externalArray(externalFamilyAccess + liftFamily(resolvedRead("projected"))), true);
+  hierarchy("external-array-parent-pointwise-drive", externalArray(externalFamilyDriver), true);
+  hierarchy("external-array-local-split-retains-unknown-driver",
+            externalArray(externalFamilyDriver + liftFamily(split("projected"))), false,
+            "opaque external contribution");
+  hierarchy("external-array-contextual-split-retains-unknown-driver",
+            externalArray(externalFamilyAccess + liftFamily(contextualSplit("projected"))), false,
+            "opaque external contribution");
+  auto aliasFamily = hierarchyDomain("clock") + resolvedDefinition() +
+                     instance("local", "sink", "connect", resolved(), "\"2\", \"3\"") +
+                     member("local", "local", shaped("2,3", resolved())) + externalFamilyAccess +
+                     connect("local", "projected", shaped("2,3", resolved()));
+  physicalFacts("external-array-ordinary-local-alias-preserves-one-opaque-family",
+                externalArray(aliasFamily), true, [](auto facts, auto bindings) {
+                  return facts.size() == 1 && bindings.empty() &&
+                         facts[0].externalContributions.size() == 1 &&
+                         facts[0].endpoints.size() == 3;
+                });
+  hierarchy("external-array-equal-cardinality-axis-permutation-refused",
+            replace(externalArray(), externalArrayBoundary(),
+                    externalArrayBoundary("projected", "child", "\"3\", \"2\"")),
+            false, "shape differs from exact finalized selection binding");
+  hierarchy("external-array-scalar-projection-refused",
+            replace(externalArray(), externalArrayBoundary(), hierarchyBoundary()), false,
+            "changes its exact structural rank");
+  hierarchy("external-array-explicit-domain-refused",
+            externalArray("", replace(externalArrayDeclaration(),
+                                      "placement =", "domain = @clock, placement =")),
+            false, "local domain and semantic path");
+  hierarchy(
+      "external-array-top-level-placement-is-not-black-box",
+      externalArray("", replace(externalArrayDeclaration(), "black_box_pin", "top_level_pin")),
+      false, "explicit portable black-box placement");
+  hierarchy("external-array-technology-profile-refused",
+            externalArray("", replace(externalArrayDeclaration(), "portable_boundary_only",
+                                      "technology_mapped")),
+            false, "explicit portable black-box placement");
+  hierarchy(
+      "external-array-driver-role-not-connect",
+      externalArray("", replace(externalArrayDeclaration(), "definition = @Bus, role = \"sink\"",
+                                "definition = @Bus, role = \"source\"")),
+      false, "fixed resolved connect-role leaves");
+  hierarchy("external-array-no-executable-body",
+            externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                      resolvedDefinition() + literal("notDeclaration"))),
+            false, "never executable statements");
+  hierarchy("external-array-no-domain-body",
+            externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                      resolvedDefinition() + domain())),
+            false, "never executable statements");
+  hierarchy("external-array-no-parameter-body",
+            externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                      resolvedDefinition() + parameter())),
+            false, "never executable statements");
+  hierarchy(
+      "external-array-unused-ordinary-definition-refused",
+      externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                resolvedDefinition() + replace(definition(), "sym_name = \"Bus\"",
+                                                               "sym_name = \"Other\""))),
+      false, "only fixed resolved leaves");
+  hierarchy("external-array-control-definition-refused",
+            externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                      definition("!nodal.capability<\"clock\">"))),
+            false, "only fixed resolved leaves");
+  hierarchy("external-array-analog-definition-refused",
+            externalArray("", replace(externalArrayDeclaration(), resolvedDefinition(),
+                                      analogDefinition(false))),
+            false, "only fixed resolved leaves");
+  hierarchy("external-array-empty-axis-refused",
+            externalArray("", externalArrayDeclaration("\"0\", \"3\"")), false,
+            "fixed positive literal dimensions");
+  hierarchy("external-array-symbolic-axis-refused",
+            externalArray("", externalArrayDeclaration("\"N\", \"3\"")), false,
+            "fixed positive literal dimensions");
+  hierarchy("external-array-forged-mode-refused",
+            replace(externalArray(externalFamilyAccess), shaped("2,3", resolved()),
+                    shaped("2,3", resolved("open_drain"))),
+            false, "member SSA result must retain the exact declared type and ordered dimensions");
+
+  auto externalTwoLeaves = resolvedDefinition();
+  for (auto access : {std::pair{"source", "drive"}, std::pair{"sink", "connect"},
+                      std::pair{"monitor", "observe"}}) {
+    auto leaf = entry("data", access.second, access.first);
+    externalTwoLeaves =
+        replace(externalTwoLeaves, leaf, leaf + ", " + entry("aux", access.second, access.first));
+  }
+  auto secondMember = "\"nodal.interface_member\"() <{sym_name = \"aux\", type = " + resolved() +
+                      ", protocol = \"resolved\", roles = [\"source\", \"sink\", \"monitor\"], "
+                      "metadata = {" +
+                      tag + "}}> : () -> ()\n";
+  externalTwoLeaves = replace(externalTwoLeaves, "}) : () -> ()", secondMember + "}) : () -> ()");
+  auto twoLeafDeclaration =
+      replace(externalArrayDeclaration(), resolvedDefinition(), externalTwoLeaves);
+  auto abiMember =
+      "{path = \"data\", type = " + resolved() +
+      ", role = \"sink\", access = \"connect\", nested_roles = [], nested_interfaces = []}";
+  twoLeafDeclaration =
+      replace(twoLeafDeclaration, abiMember,
+              abiMember + ", " + replace(abiMember, "path = \"data\"", "path = \"aux\""));
+  auto twoLeafAliases = externalFamilyAccess +
+                        member("aux", "projected", shaped("2,3", resolved()), "", "aux") +
+                        liftFamily(through("projected", "aux"));
+  physicalFacts(
+      "external-array-two-aliased-leaves-retain-exact-original-member-paths",
+      externalArray(twoLeafAliases, twoLeafDeclaration), true, [](auto facts, auto bindings) {
+        if (facts.size() != 1 || !bindings.empty() || facts[0].externalContributions.size() != 2)
+          return false;
+        const auto &a = facts[0].externalContributions[0];
+        const auto &b = facts[0].externalContributions[1];
+        return a.occurrence == b.occurrence && a.operation == b.operation &&
+               a.memberPath == "data" && b.memberPath == "aux";
+      });
+  auto noLeafDefinition = "\"nodal.interface\"() <{sym_name = \"Empty\", metadata = {" + tag +
+                          ", semantic_identity = \"pkg.Empty\"}}> ({\n"
+                          "\"nodal.interface_role\"() <{sym_name = \"sink\", kind = \"explicit\", "
+                          "metadata = {" +
+                          tag + ", access = []}}> : () -> ()\n}) : () -> ()\n";
+  auto noLeafEndpoint =
+      "\"nodal.interface_instance\"() <{sym_name = \"empty\", definition = @Empty, "
+      "role = \"sink\", metadata = {" +
+      tag +
+      ", dimensions = [\"2\"], semantic_path = \"Empty.empty\", "
+      "placement = \"black_box_pin\", profile = \"portable_boundary_only\"}}> : () -> ()\n";
+  hierarchy("external-array-empty-interface-is-not-a-pin-signature",
+            "module {" +
+                externalModule("Empty", "EmptyExternal", noLeafDefinition + noLeafEndpoint) + "}",
+            false, "at least one resolved pin leaf");
+
+  auto externalDomainBridge =
+      aliasFamily + hierarchyDomain("other") +
+      instance("local_other", "sink", "connect", resolved(), "\"2\", \"3\"", "other") +
+      member("local_other", "local_other", shaped("2,3", resolved())) +
+      connect("local_other", "projected", shaped("2,3", resolved()));
+  hierarchy("external-array-cannot-erase-two-local-domain-constraints",
+            externalArray(externalDomainBridge), false,
+            "resolved pass-through component crosses exact Interface domain ownership");
+  hierarchy("external-array-pass-through-cannot-erase-two-local-domains",
+            externalArray(replace(externalDomainBridge,
+                                  connect("local_other", "projected", shaped("2,3", resolved())),
+                                  liftFamily(through("local_other", "projected")))),
+            false, "resolved pass-through component crosses exact Interface domain ownership");
+
+  auto ordinaryChildArray = bareModule(
+      "Local", hierarchyRequirement("required") + resolvedDefinition() +
+                   instance("exported", "sink", "connect", resolved(), "\"2\", \"3\"", "required"));
+  auto projectedLocal = [&](StringRef name, StringRef domainName) {
+    return replace(bareInstance(name, "Local"), "domain_bindings = {}",
+                   "domain_bindings = {required = @" + domainName.str() + "}") +
+           replace(hierarchyBinding("required", domainName), "instance = @child",
+                   "instance = @" + name.str()) +
+           externalArrayBoundary(name.str() + "_view", name) +
+           member(name, name.str() + "_view", shaped("2,3", resolved())) +
+           liftFamily(through(name, "projected"));
+  };
+  auto unaccessedChildBridge =
+      "module attributes {nodal.root.module = @Top, "
+      "nodal.root.parameter_bindings = {}} {\n" +
+      bareModule("Top", hierarchyDomain("clock") + hierarchyDomain("other") + bareInstance() +
+                            externalArrayBoundary() + externalFamilyAccess +
+                            projectedLocal("left", "clock") + projectedLocal("right", "other")) +
+      ordinaryChildArray + externalArrayDeclaration() + "}\n";
+  hierarchy("external-array-unaccessed-child-slots-retain-transitive-domain-constraints",
+            unaccessedChildBridge, false,
+            "resolved pass-through component crosses exact Interface domain ownership");
+
+  hierarchy("external-array-unaccessed-child-slots-accept-one-domain",
+            replace(unaccessedChildBridge, projectedLocal("right", "other"),
+                    projectedLocal("right", "clock")),
+            true);
+
+  auto legacyExternalArray = replaceEvery(externalArrayDeclaration(), tag + ", ", "");
+  legacyExternalArray = replaceEvery(legacyExternalArray, tag, "");
+  hierarchy("external-array-legacy-signature-cannot-bypass-typed-proof",
+            "module {" + legacyExternalArray + "}", false,
+            "external Interface signatures require fully typed declaration contracts");
+  hierarchy(
+      "external-array-unused-empty-definition-is-not-a-pin-signature",
+      "module {" +
+          externalModule(
+              "Child", "ExternalArray",
+              resolvedDefinition() +
+                  replace(instance("exported", "sink", "connect", resolved(), "\"2\", \"3\""),
+                          ", domain = @clock",
+                          ", placement = \"black_box_pin\", profile = \"portable_boundary_only\"") +
+                  noLeafDefinition) +
+          "}",
+      false, "external Interface definition requires at least one resolved pin leaf");
+
   llvm::outs() << "DIGITAL_INTERFACE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

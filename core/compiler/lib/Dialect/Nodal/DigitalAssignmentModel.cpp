@@ -1980,6 +1980,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   struct ResolvedUse {
     unsigned slot, occurrence;
     Operation *operation;
+    StringAttr memberPath;
   };
   SmallVector<ResolvedUse> resolvedDrivers, resolvedSplits, externalContributions;
   SmallVector<DigitalResolvedSplitBinding> collectedSplitBindings;
@@ -2131,6 +2132,16 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         return failure();
       resolvedEndpoints.emplace(
           EndpointKey{occurrence, endpoint.operation, endpoint.path.getValue().str()}, *slot);
+      if (endpoint.externalContribution) {
+        if (externalContributions.size() >= limits.maximumNodes ||
+            !context.module->hasAttr("external_name") || endpoint.instance ||
+            endpoint.externalContribution != endpoint.operation ||
+            endpoint.operation->getParentOp() != context.module)
+          return reject(endpoint.operation,
+                        "external family contribution lost its original declaration");
+        externalContributions.push_back({*slot, static_cast<unsigned>(occurrence),
+                                         endpoint.externalContribution, endpoint.path});
+      }
       if (endpoint.component) {
         auto found = local.values.find(endpoint.component);
         if (found == local.values.end())
@@ -2298,7 +2309,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
           for (const auto &driver : componentDrivers.lookup(root))
             result.drivers.push_back({driver.occurrence, driver.operation});
           for (const auto &external : componentExternal.lookup(root))
-            result.externalContributions.push_back({external.occurrence, external.operation});
+            result.externalContributions.push_back(
+                {external.occurrence, external.operation, external.memberPath});
           collectedComponents.push_back(std::move(result));
         }
         collectedComponents[position->second].endpoints.push_back(

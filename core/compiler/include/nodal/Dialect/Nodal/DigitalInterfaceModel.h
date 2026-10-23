@@ -191,6 +191,10 @@ struct DigitalResolvedEndpoint {
   mlir::Type type;
   mlir::StringAttr mode, profile, placement;
   DigitalResolvedShape shape;
+  /// A declaration-only external member contributes unknown electrical drive
+  /// even without an SSA access. This is the original endpoint, never a driver
+  /// or manufactured component Value; occurrence qualification belongs to union.
+  mlir::Operation *externalContribution = nullptr;
 };
 struct DigitalResolvedTopology {
   llvm::SmallVector<DigitalResolvedComponent> components;

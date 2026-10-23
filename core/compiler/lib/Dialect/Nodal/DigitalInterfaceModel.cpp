@@ -241,6 +241,14 @@ struct Instance {
   llvm::StringMap<Type> actualTypes;
   Operation *selection = nullptr;
 };
+// Only the independently admitted declaration-only external endpoint has no
+// clock-domain constraint. An ordinary missing domain is never a wildcard.
+static bool unconstrainedExternal(const Instance &instance) {
+  Operation *endpoint = instance.childEndpoint ? instance.childEndpoint : instance.operation;
+  Operation *owner = endpoint ? endpoint->getParentOp() : nullptr;
+  return !instance.domain && !instance.selection && llvm::isa_and_nonnull<ModuleOp>(owner) &&
+         owner->hasAttr("external_name");
+}
 struct Access {
   Instance *instance = nullptr;
   Member *member = nullptr;
@@ -712,11 +720,33 @@ LogicalResult Model::instance(Operation *operation) {
   auto dictionary = metadata(operation);
   auto domain = dictionary.getAs<FlatSymbolRefAttr>("domain");
   Operation *domainDeclaration = domain ? SymbolTable::lookupSymbolIn(module, domain) : nullptr;
-  if (role == definition.roles.end() ||
-      !llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(domainDeclaration) ||
-      domainDeclaration->getParentOp() != module || !identity(text(dictionary, "semantic_path")))
+  const bool external = module->hasAttr("external_name");
+  if (role == definition.roles.end() || !identity(text(dictionary, "semantic_path")) ||
+      (external ? bool(dictionary.get("domain"))
+                : !llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(domainDeclaration) ||
+                      domainDeclaration->getParentOp() != module))
     return reject(operation,
                   "Interface instance requires an actual role, local domain and semantic path");
+  if (external) {
+    if (definition.members.empty())
+      return reject(operation, "external Interface requires at least one resolved pin leaf");
+    if (operation->getParentOp() != module || text(dictionary, "placement") != "black_box_pin" ||
+        text(dictionary, "profile") != "portable_boundary_only")
+      return reject(operation, "external Interface requires explicit portable black-box placement");
+    for (const auto &item : definition.members) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(operation, "external Interface signature exceeds its declaration budget");
+      auto resolved = llvm::dyn_cast<ResolvedType>(item.second.type);
+      if (item.second.protocol != "resolved" || !resolved ||
+          role->second.entries.find(item.getKey())->second.access != "connect" ||
+          failed(inferDigitalBitPatternFixedBits(resolved.getElementType(), definition.operation)))
+        return reject(operation,
+                      "external Interface requires only fixed resolved connect-role leaves");
+    }
+  } else if (dictionary.get("placement") || dictionary.get("profile")) {
+    return reject(operation,
+                  "ordinary Interface cannot claim external signature placement/profile");
+  }
   auto dimensions = dictionary.getAs<ArrayAttr>("dimensions");
   if (!dimensions || dimensions.size() > digitalTypeMaximumDepth)
     return reject(operation,
@@ -726,6 +756,12 @@ LogicalResult Model::instance(Operation *operation) {
     auto value = llvm::dyn_cast<StringAttr>(attribute);
     if (!value || value.getValue().contains(',') || !identity(value.getValue()))
       return reject(operation, "Interface dimensions require individual canonical shape tokens");
+    if (external) {
+      auto axis = resolveStaticShapeDimension(module, value.getValue());
+      if (failed(axis) || axis->parameter || axis->expression || axis->literal <= 0)
+        return reject(operation,
+                      "external Interface axes require fixed positive literal dimensions");
+    }
     if (!shape.empty())
       shape += ',';
     shape += value.getValue().str();
@@ -1355,7 +1391,9 @@ LogicalResult Model::effect(Operation *operation) {
             right.instance->definition->semanticIdentity)) ||
       left.member->protocol != right.member->protocol ||
       left.entry->nestedInterfaces != right.entry->nestedInterfaces || left.path != right.path ||
-      left.instance->domain != right.instance->domain ||
+      (left.instance->domain != right.instance->domain &&
+       (!resolved ||
+        (!unconstrainedExternal(*left.instance) && !unconstrainedExternal(*right.instance)))) ||
       (isDigitalControlBoundaryType(operation->getOperand(0).getType())
            ? operation->getOperand(0).getType() != operation->getOperand(1).getType()
        : resolved
@@ -1465,7 +1503,9 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
         (otherMember != accesses.end() && otherMember->second.entry->access != "connect"))
       return reject(operation, "Interface pass-through requires actual connect capability");
     if (member != accesses.end() && otherMember != accesses.end() &&
-        member->second.instance->domain != otherMember->second.instance->domain)
+        member->second.instance->domain != otherMember->second.instance->domain &&
+        !unconstrainedExternal(*member->second.instance) &&
+        !unconstrainedExternal(*otherMember->second.instance))
       return reject(operation, "Interface resolved pass-through requires exact domain identity");
     unite(*index, *other);
     return success();
@@ -1645,6 +1685,10 @@ LogicalResult Model::verify() {
   for (auto &item : accesses) {
     auto index = netIndices.find(item.first);
     if (index == netIndices.end())
+      continue;
+    // A proven external declaration adds an opaque electrical contribution,
+    // not a domain. Retain every ordinary constraint across the entire union.
+    if (unconstrainedExternal(*item.second.instance))
       continue;
     unsigned root = representative(index->second);
     auto [known, inserted] = componentDomains.try_emplace(root, item.second.instance->domain);
@@ -2051,11 +2095,8 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
       // Member accesses may be authored after their declaration. Populate the
       // represented component below, after the single authored-order inventory.
       collected.endpoints.push_back(
-          {&operation,
-           instance.childInstance,
-           instance.childEndpoint ? instance.childEndpoint : &operation,
-           path,
-           instance.domain,
+          {&operation, instance.childInstance,
+           instance.childEndpoint ? instance.childEndpoint : &operation, path, instance.domain,
            represented == resolvedMembers.end() ? Value() : represented->second,
            instance.childInstance ? instance.actualTypes.lookup(path.getValue())
                                   : memberOperation.getAttrOfType<TypeAttr>("type").getValue(),
@@ -2064,8 +2105,9 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
                llvm::cast<ResolvedType>(memberOperation.getAttrOfType<TypeAttr>("type").getValue())
                    .getDriveMode()),
            StringAttr::get(module->getContext(), "portable_boundary_only"),
-           {},
-           **geometry});
+           metadata(instance.childEndpoint ? instance.childEndpoint : &operation)
+               .getAs<StringAttr>("placement"),
+           **geometry, module->hasAttr("external_name") ? &operation : nullptr});
     }
   }
   for (auto &endpoint : collected.endpoints) {
@@ -2332,6 +2374,15 @@ FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *o
     (void)reject(operation,
                  "Interface boundary requires its exact immediate child's direct endpoint");
     return failure();
+  }
+  if (childModule->hasAttr("external_name")) {
+    if (selected || failed(verifyDigitalInterfaceOperation(endpoint)) ||
+        metadata(operation).get("domain")) {
+      (void)reject(operation,
+                   "external Interface projection retains its domainless direct declaration");
+      return failure();
+    }
+    return DigitalInterfaceBoundary{instance, childModule, endpoint, {}, nullptr};
   }
   auto requirement = metadata(endpoint).getAs<FlatSymbolRefAttr>("domain");
   Operation *required =

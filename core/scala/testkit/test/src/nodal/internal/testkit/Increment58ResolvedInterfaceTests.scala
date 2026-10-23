@@ -47,8 +47,7 @@ object Increment58ResolvedInterfaceTests extends TestSuite:
         "wrong-type" -> "NODAL-INTERFACE-054-008",
         "connect-cannot-drive" -> "NODAL-INTERFACE-054-003",
         "drive-cannot-read" -> "NODAL-INTERFACE-054-003",
-        "raw" -> "NODAL-INTERFACE-054-003",
-        "array" -> "NODAL-HIERARCHY-058-INTERFACE"
+        "raw" -> "NODAL-INTERFACE-054-003"
       ).foreach: (mode, code) =>
         val error = scala.util.Try(capture(mode)).failed.get
         assert(error.isInstanceOf[ConstructionException])
@@ -57,6 +56,14 @@ object Increment58ResolvedInterfaceTests extends TestSuite:
           assert(
             error.getMessage.contains("forwardExact requires one local and one child endpoint")
           )
+    test("resolved child arrays retain complete actual member and dimension inventory"):
+      val snapshot = capture("array")
+      val array = snapshot.interfaceContracts.find(value =>
+        value.owner == snapshot.root && value.boundary.exists(_.endpoint.endsWith(".lanes"))
+      ).get
+      assert(array.dimensions == Vector("2"))
+      assert(array.members.forall(_.protocol == "resolved"))
+      assert(ScalaToMlirBridge.fromSnapshot(snapshot).text.contains("\"nodal.interface_boundary\""))
     test("bridge independently rejects changed resolved mode and complete actual payload"):
       val snapshot = capture("empty")
       val endpoint = snapshot.interfaceContracts.find(_.boundary.nonEmpty).get

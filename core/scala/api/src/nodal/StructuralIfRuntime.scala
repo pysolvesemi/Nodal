@@ -160,4 +160,17 @@ private[nodal] object StructuralPredicateOrdering:
             else if same(left, comparison.right) && same(right, comparison.left) then
               reverse(literal.mask)
             else 7
-          (mask & ~wanted) == 0
+          if (mask & ~wanted) == 0 then true
+          else
+            // The authored comparison can bound a wider requested pair without changing
+            // any parameter envelope: L <= a and a < b and b <= R proves L < R.
+            // Reuse this query's exact identities, interval facts and shared work budget.
+            def through(a: I, b: I, relation: Int): Boolean =
+              val possible = relation & attainable(a, b)
+              possible != 0 &&
+              (possible & ~3) == 0 &&
+              less(left, a, inclusive = true) && less(b, right, inclusive = true) &&
+              (inclusive || (possible & ~1) == 0 ||
+                less(left, a, inclusive = false) || less(b, right, inclusive = false))
+            through(comparison.left, comparison.right, literal.mask) ||
+            through(comparison.right, comparison.left, reverse(literal.mask))

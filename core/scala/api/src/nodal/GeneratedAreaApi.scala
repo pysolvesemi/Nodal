@@ -38,12 +38,27 @@ final class GeneratedAreaRef[A <: Area] private[nodal] (
   transparent inline def applyDynamic(inline name: String)(ordinal: Int | Expr[Integer]): Any =
     ${ GeneratedAreaDerivation.familyAt[A]('this, 'name, 'ordinal) }
 
+/** A checked lane reference to the original authored child, never a materialized template instance.
+  * Binding mutations belong to construction of the family and are intentionally unavailable here.
+  */
+final class GeneratedInstanceRef[M <: Module] private[nodal] (
+    private[nodal] val instance: Instance[M],
+    private[nodal] val selection: GeneratedSymbolSelectionRecord
+):
+  def apply[A](select: M => A): A =
+    ConstructionKernel.withGeneratedInstanceSelection(this):
+      instance.selectPort(select)
+
 private[nodal] object GeneratedAreaRuntime:
   val MemberOperation = "generated_member"
   def nested[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreaRef[A] =
     ConstructionKernel.generatedAreaNested(value, name)
   def family[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
     ConstructionKernel.generatedAreaFamily(value, name)
+  def instance[M <: Module](value: GeneratedAreaRef[?], name: String): GeneratedInstanceRef[M] =
+    ConstructionKernel.generatedAreaInstance[M](value, name)
+  def interface[A <: InterfaceEndpoint](value: GeneratedAreaRef[?], name: String): A =
+    ConstructionKernel.generatedAreaInterface(value, name).asInstanceOf[A]
   def member[A](value: GeneratedAreaRef[?], name: String, kind: String): A =
     ConstructionKernel.generatedAreaMember(value, name, kind).asInstanceOf[A]
   def bind[A <: Area](name: String, priority: Int, value: GeneratedAreas[A]): GeneratedAreas[A] =

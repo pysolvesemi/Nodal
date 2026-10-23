@@ -39,6 +39,42 @@ private[nodal] object AnalogHierarchyOverridePolicy:
   )
 
   def validate(evidence: Evidence): Either[Rejection, Unit] =
+    validate(evidence, generatedInteger = false)
+
+  /** Only the construction owner supplies a bound obtained from the actual generated Integer DAG.
+    * This is not generic type-binding authority; occurrence queries still check every formal over
+    * the complete original template envelope before any selected specialization.
+    */
+  def validateGeneratedInteger(
+      evidence: Evidence,
+      provedBounds: IterationDomain.Bounds
+  ): Either[Rejection, Unit] =
+    validateGeneratedIntegerFacts(evidence, Some(provedBounds))
+
+  /** Absence is supplied only after the construction owner's original DAG and exact generated
+    * occurrence have been checked. It does not denote a value or a formal default.
+    */
+  def validateGeneratedIntegerFacts(
+      evidence: Evidence,
+      provedBounds: Option[IterationDomain.Bounds]
+  ): Either[Rejection, Unit] =
+    if !evidence.targetTypeSignature.contains("Integer") ||
+      !evidence.valueTypeSignature.contains("Integer") ||
+      provedBounds.exists(bounds =>
+        bounds.lower < Long.MinValue || bounds.upper > Long.MaxValue ||
+          bounds.lower > bounds.upper
+      )
+    then
+      Left(Rejection(
+        "NODAL-HIERARCHY-037",
+        "generated override requires a proven signed Integer DAG"
+      ))
+    else validate(evidence, generatedInteger = true)
+
+  private def validate(
+      evidence: Evidence,
+      generatedInteger: Boolean
+  ): Either[Rejection, Unit] =
     if evidence.duplicate then
       Left(
         Rejection(
@@ -63,7 +99,9 @@ private[nodal] object AnalogHierarchyOverridePolicy:
         )
       )
     else
-      evidence.operations.find(operation => !acceptedStaticOperations.contains(operation)) match
+      evidence.operations.find(operation =>
+        !generatedInteger && !acceptedStaticOperations.contains(operation)
+      ) match
         case Some(operation) =>
           Left(
             Rejection(

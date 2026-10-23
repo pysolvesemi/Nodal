@@ -512,17 +512,20 @@ final class Instance[M <: Module] private[nodal] (private[nodal] val module: M):
 
   def apply[A](select: M => A): A =
     ConstructionKernel.withInstanceSelection(this):
-      val result = select(module)
-      result match
-        case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
-        case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
-        case endpoint: DigitalInout[?, ?] =>
-          ConstructionKernel.instanceDigitalInout(endpoint).asInstanceOf[A]
-        case array: InterfaceArray[?, ?] =>
-          ConstructionKernel.instanceInterfaceArray(array).asInstanceOf[A]
-        case port: InterfacePort[?, ?] =>
-          ConstructionKernel.instanceInterfacePort(port).asInstanceOf[A]
-        case _ => result
+      selectPort(select)
+
+  private[nodal] def selectPort[A](select: M => A): A =
+    val result = select(module)
+    result match
+      case array: NodeArray[?] => ConstructionKernel.nodeArrayUse(array).asInstanceOf[A]
+      case signal: Signal[?] => ConstructionKernel.instanceDigitalPort(signal).asInstanceOf[A]
+      case endpoint: DigitalInout[?, ?] =>
+        ConstructionKernel.instanceDigitalInout(endpoint).asInstanceOf[A]
+      case array: InterfaceArray[?, ?] =>
+        ConstructionKernel.instanceInterfaceArray(array).asInstanceOf[A]
+      case port: InterfacePort[?, ?] =>
+        ConstructionKernel.instanceInterfacePort(port).asInstanceOf[A]
+      case _ => result
 
   def param[A <: Data](select: M => Param[A], value: Expr[A]): this.type =
     val parameter = select(module)

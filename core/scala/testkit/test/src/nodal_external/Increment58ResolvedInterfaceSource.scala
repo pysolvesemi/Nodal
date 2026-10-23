@@ -64,7 +64,9 @@ final class HierarchyResolvedParent(mode: String = "ok") extends Module:
   child.param(_.width, actualWidth)
   require(projected eq child(_.passed))
   mode match
-    case "array" => val _ = child(_.lanes)
+    case "array" =>
+      child(_.data) := data
+      val _ = child(_.lanes)
     case "wrong-type" => driven.driveMember("pad", wrong)
     case "connect-cannot-drive" => projected.driveMember("pad", data)
     case "drive-cannot-read" => driven.observeMember("pad")

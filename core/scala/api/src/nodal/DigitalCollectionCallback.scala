@@ -7,6 +7,10 @@ package nodal
   * The compiler rejects authored references to the checked factories before injecting its calls.
   */
 private[nodal] object DigitalCollectionCallback:
+  /** Compiler-authored global immutable Interface initializer, not a factory call marker. */
+  def initializeGlobalInterface[A](initializer: () => A): A =
+    ConstructionKernel.initializeGlobalInterface(initializer)
+
   // Structural callbacks carry a distinct profile. A checked collection function cannot attest
   // a branch, and an ordinary Function0 cannot bypass validation of either authored arm.
   private final class Checked0[A](function: () => A) extends (() => A):

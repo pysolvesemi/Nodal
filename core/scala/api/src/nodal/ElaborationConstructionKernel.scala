@@ -87,6 +87,13 @@ private[nodal] object ConstructionKernel:
 
   def constructorDepth: Int = active.map(_.constructorDepth).getOrElse(0)
 
+  def initializeGlobalInterface[A](initializer: () => A): A = active match
+    case Some(session) => session.initializeGlobalInterface(initializer)
+    case None => initializer()
+
+  def interfaceDefinitionContext(): Option[InterfaceDefinitionContext] =
+    active.flatMap(_.interfaceDefinitionContext())
+
   def bindConstructorParameters(
       module: Module,
       parameters: Vector[ConstructorCapturedParameter]
@@ -166,6 +173,12 @@ private[nodal] object ConstructionKernel:
 
   def generatedAreaFamily[A <: Area](value: GeneratedAreaRef[?], name: String): GeneratedAreas[A] =
     areaSession.generatedAreaFamily(value, name)
+
+  def generatedAreaInstance[M <: Module](value: GeneratedAreaRef[?], name: String)
+      : GeneratedInstanceRef[M] = areaSession.generatedAreaInstance[M](value, name)
+
+  def generatedAreaInterface(value: GeneratedAreaRef[?], name: String): InterfaceEndpoint =
+    areaSession.generatedAreaInterface(value, name)
 
   def generatedAreaMember(value: GeneratedAreaRef[?], name: String, kind: String): Any =
     areaSession.generatedAreaMember(value, name, kind)
@@ -657,6 +670,18 @@ private[nodal] object ConstructionKernel:
       throw new IllegalStateException("resolved member selection requires active construction")
     ).interfaceResolvedMember(endpoint, field, through)
 
+  def interfaceResolvedArrayMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfaceArray[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigitalArray[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("resolved member selection requires active construction")
+    ).interfaceResolvedArrayMember(endpoint, field, through)
+
+  def withGeneratedInstanceSelection[A](view: GeneratedInstanceRef[?])(body: => A): A =
+    areaSession.withGeneratedInstanceSelection(view)(body)
+
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
@@ -760,6 +785,9 @@ private[nodal] object ConstructionKernel:
 
   def shortAnalogContribution(target: Expr[Real], value: Expr[Real]): Unit =
     active.foreach(_.recordShortAnalogContribution(target, value))
+
+  def digitalLiteralWidthFacts(descriptor: KernelTypeDescriptor): Option[Option[(Long, Long)]] =
+    active.map(_.digitalLiteralWidthFacts(descriptor))
 
   def digitalWidthBounds(descriptor: KernelTypeDescriptor): Option[(Long, Long)] =
     active.map(_.digitalWidthBounds(descriptor))

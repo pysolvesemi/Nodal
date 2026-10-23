@@ -22,7 +22,24 @@ private[nodal] final case class KernelInterfaceRoleSnapshot(
     members: Vector[KernelInterfaceMemberSnapshot]
 )
 
-private[nodal] final case class KernelInterfaceBoundarySnapshot(instance: String, endpoint: String)
+private[nodal] final case class KernelInterfaceBoundarySnapshot(
+    instance: Option[String],
+    endpoint: String,
+    selection: Option[KernelGeneratedMemberSnapshot] = None,
+    region: Option[String] = None
+)
+private[nodal] object KernelInterfaceBoundarySnapshot:
+  def apply(instance: String, endpoint: String): KernelInterfaceBoundarySnapshot =
+    new KernelInterfaceBoundarySnapshot(Some(instance), endpoint)
+
+/** One entry for each actual regional definition application, including the empty root path. */
+private[nodal] final case class KernelInterfaceDefinitionContextSnapshot(
+    application: String,
+    identity: String,
+    owner: String,
+    region: String,
+    sourceOrdinal: Int
+)
 
 private[nodal] final case class KernelInterfaceSnapshot(
     path: String,
@@ -34,7 +51,8 @@ private[nodal] final case class KernelInterfaceSnapshot(
     members: Vector[KernelInterfaceMemberSnapshot],
     roles: Vector[KernelInterfaceRoleSnapshot] = Vector.empty,
     boundary: Option[KernelInterfaceBoundarySnapshot] = None,
-    actualMemberTypes: Vector[(String, String)] = Vector.empty
+    actualMemberTypes: Vector[(String, String)] = Vector.empty,
+    definitionContexts: Vector[KernelInterfaceDefinitionContextSnapshot] = Vector.empty
 )
 
 /** Reference fields are semantic edges, never rendered source expressions or operation labels. */
@@ -55,7 +73,9 @@ private[nodal] final case class KernelDigitalConnectivitySnapshot(
     nestedRoles: Vector[(String, String)] = Vector.empty,
     sourceNestedRoles: Vector[(String, String)] = Vector.empty,
     endpointRole: Option[String] = None,
-    sourceEndpointRole: Option[String] = None
+    sourceEndpointRole: Option[String] = None,
+    region: Option[String] = None,
+    sourceOrdinal: Option[Int] = None
 )
 
 /** Typed Interface/access and resolved-net capture; the construction session owns all mutable
@@ -92,9 +112,18 @@ private[nodal] object DigitalInterfaceContract:
       memberValueType: DataType[?] => DataType[?] = identity,
       actualMemberType: DataType[?] => DataType[?] = identity,
       renderFormalType: Option[DataType[?] => String] = None,
-      shapeWitness: DataType[?] = Bool
+      shapeWitness: DataType[?] = Bool,
+      definitionContext: InterfaceType[?] => Option[KernelInterfaceDefinitionContextSnapshot] =
+        _ => None,
+      renderDefinitionType: Option[(InterfaceType[?], DataType[?]) => String] = None
   )
-  final case class Operation(kind: String, values: Vector[Any], owner: String)
+  final case class Operation(
+      kind: String,
+      values: Vector[Any],
+      owner: String,
+      region: Option[String] = None,
+      sourceOrdinal: Option[Int] = None
+  )
 
   /** One coherent externally observable value, rooted only in actual local drivers. The endpoint's
     * declared domain is deliberately not a proof of its contents.
@@ -118,7 +147,7 @@ private[nodal] object DigitalInterfaceContract:
 
   def netExpression[A <: Data](
       operation: String,
-      endpoint: ResolvedDigital[?, ?],
+      endpoint: ResolvedDigitalCapability[?, ?],
       resultType: DataType[A]
   ): Expr[A] =
     ConstructionKernel.requireNoGeneratedEffect("resolved-net expression")
@@ -128,21 +157,40 @@ private[nodal] object DigitalInterfaceContract:
       resultType = Some(CandidateRuntime.typeDescriptor(resultType)),
       operation = Some(operation),
       typeIntent = DeferredResultType.intent(Vector(endpoint)):
-        if operation == "digital_net_enable_view" then KernelTypeDescriptor("Bool")
+        if operation == "digital_net_enable_view" then
+          CandidateRuntime.typeDescriptor(endpoint.enableDataType)
         else CandidateRuntime.typeDescriptor(endpoint.dataType)
     )
     ConstructionKernel.expression(expression)
     expression
 
-  private def resolutionProfile(endpoint: ResolvedDigital[?, ?]): ResolutionProfile = endpoint match
-    case net: DigitalInout[?, ?] => net.profile
-    case _: InterfaceResolvedView[?, ?] => ResolutionProfile.PortableBoundaryOnly
+  private def resolutionProfile(endpoint: ResolvedDigitalCapability[?, ?]): ResolutionProfile =
+    endpoint match
+      case net: DigitalInout[?, ?] => net.profile
+      case _: InterfaceResolvedMember[?, ?] => ResolutionProfile.PortableBoundaryOnly
 
   def requireInvertible(endpoint: InterfacePort[?, ?]): Unit =
     endpoint.role.access.foreach:
       case RoleAccess.In(_) | RoleAccess.Out(_) | RoleAccess.Master(_) | RoleAccess.Slave(_) |
           RoleAccess.Nested(_, _) => ()
       case _ => fail(4, "automatic inversion requires fully complementary digital member access")
+
+  def root(endpoint: InterfaceEndpoint): InterfaceEndpoint = endpoint match
+    case port: InterfacePort[?, ?] => root(port)
+    case array: InterfaceArray[?, ?] => root(array)
+
+  def root(endpoint: InterfaceArray[?, ?]): InterfaceArray[?, ?] =
+    var result = endpoint
+    var depth = 0
+    while result.origin.nonEmpty do
+      if depth >= 128 then fail(1, "interface view nesting exceeds 128")
+      result = result.origin.get
+      depth += 1
+    result
+
+  private def viewOrigin(endpoint: InterfaceEndpoint): Option[InterfaceEndpoint] = endpoint match
+    case port: InterfacePort[?, ?] => port.origin
+    case array: InterfaceArray[?, ?] => array.origin
 
   def root(endpoint: InterfacePort[?, ?]): InterfacePort[?, ?] =
     var result = endpoint
@@ -218,12 +266,12 @@ private[nodal] object DigitalInterfaceContract:
     expressions.foreach: (expression, owner) =>
       expression.operation.filter(ValueOperations.contains).foreach: operation =>
         val endpoint = expression.operands match
-          case Vector(value: ResolvedDigital[?, ?]) => value
+          case Vector(value: ResolvedDigitalCapability[?, ?]) => value
           case _ => fail(11, "resolved-net expression requires exactly one typed endpoint")
         if !ownerOf(endpoint).contains(owner) then
           fail(7, "resolved-net expression belongs to another module or transaction")
         endpoint match
-          case view: InterfaceResolvedView[?, ?] =>
+          case view: InterfaceResolvedMember[?, ?] =>
             val selected =
               ConstructionInterfaceLayout.leaves(view.endpoint.definition, view.endpoint.role)
                 .find(_.name == view.member).getOrElse(fail(
@@ -235,7 +283,8 @@ private[nodal] object DigitalInterfaceContract:
           case _ => ()
         val path =
           pathOf(endpoint).getOrElse(fail(7, "resolved-net expression has no endpoint identity"))
-        val expected = if operation == "digital_net_enable_view" then KernelTypeDescriptor("Bool")
+        val expected = if operation == "digital_net_enable_view" then
+          CandidateRuntime.typeDescriptor(endpoint.enableDataType)
         else CandidateRuntime.typeDescriptor(endpoint.dataType)
         if !expression.resultDescriptor.contains(expected) || expression.literal.nonEmpty then
           fail(8, "resolved-net expression has an incorrect exact result type")
@@ -295,7 +344,8 @@ private[nodal] object DigitalInterfaceContract:
     val declarationsByValue = new IdentityHashMap[AnyRef, Declaration]()
     declarations.foreach(value => declarationsByValue.put(value.value, value))
     val roles = new IdentityHashMap[InterfaceType[?], mutable.LinkedHashMap[String, Role[?]]]()
-    val namedRoles = mutable.HashMap.empty[(String, String), Seq[RoleAccess]]
+    val namedRoles =
+      mutable.HashMap.empty[(String, Option[DigitalValueRegionRecord], String), Seq[RoleAccess]]
     val discovered = new IdentityHashMap[InterfaceType[?], java.lang.Boolean]()
     val pending = mutable.ArrayDeque.empty[(InterfaceType[?], Int)]
     def register(definition: InterfaceType[?], requested: Role[?]): Unit =
@@ -303,13 +353,20 @@ private[nodal] object DigitalInterfaceContract:
         ConstructionInterfaceLayout.monitorRole(definition)
       else requested
       val ordered = role.access.sortBy(ConstructionInterfaceLayout.accessMember)
-      namedRoles.get(definition.name -> role.name).foreach: previous =>
+      namedRoles.get((
+        definition.name,
+        definition.constructionContext.map(_.region),
+        role.name
+      )).foreach: previous =>
         if previous != ordered then
           fail(
             2,
             s"Interface '${definition.name}' has conflicting definitions for role '${role.name}'"
           )
-      namedRoles.update(definition.name -> role.name, ordered)
+      namedRoles.update(
+        (definition.name, definition.constructionContext.map(_.region), role.name),
+        ordered
+      )
       val known = Option(roles.get(definition)).getOrElse:
         val fresh = mutable.LinkedHashMap.empty[String, Role[?]]
         roles.put(definition, fresh)
@@ -331,7 +388,7 @@ private[nodal] object DigitalInterfaceContract:
         case array: InterfaceArray[?, ?] =>
           register(array.definition, array.role)
           pending.append((array.definition, 0))
-        case view: InterfaceResolvedView[?, ?] =>
+        case view: InterfaceResolvedMember[?, ?] =>
           register(view.endpoint.definition, view.endpoint.role)
           pending.append((view.endpoint.definition, 0))
         case view: InterfaceTerminalView[?, ?] =>
@@ -340,7 +397,7 @@ private[nodal] object DigitalInterfaceContract:
         case _ => ()
     operations.foreach: operation =>
       operation.values.foreach:
-        case view: InterfacePort[?, ?] if view.origin.nonEmpty =>
+        case view: InterfaceEndpoint if viewOrigin(view).nonEmpty =>
           register(view.definition, view.role)
           pending.append((view.definition, 0))
         case _ => ()
@@ -364,7 +421,14 @@ private[nodal] object DigitalInterfaceContract:
     val layouts = new IdentityHashMap[AnyRef, Vector[ConstructionInterfaceLayout.Leaf]]()
     val declarationTypes = mutable.ArrayBuffer.empty[DataType[?]]
     val identities =
-      mutable.LinkedHashMap.empty[String, (Declaration, Vector[ConstructionInterfaceLayout.Leaf])]
+      mutable.LinkedHashMap.empty[
+        (String, Option[DigitalValueRegionRecord]),
+        (Declaration, Vector[ConstructionInterfaceLayout.Leaf])
+      ]
+    val definitionIdentities = mutable.HashMap.empty[
+      (String, Option[DigitalValueRegionRecord]),
+      Option[InterfaceDefinitionContext]
+    ]
     def sameLeafType(
         left: ConstructionInterfaceLayout.Leaf,
         a: Declaration,
@@ -391,14 +455,25 @@ private[nodal] object DigitalInterfaceContract:
         layouts.put(declaration.value, leaves)
         declarationTypes ++= leaves.flatMap(_.dataType)
         declarationTypes ++= leaves.flatMap(_.dataType).map(declaration.actualMemberType)
-        identities.get(definition.name).foreach: (previousContext, previous) =>
-          if previous.size != leaves.size || previous.zip(leaves).exists: (before, after) =>
-              before.name != after.name || before.protocol != after.protocol ||
-                before.mode != after.mode || before.nestedInterfaces != after.nestedInterfaces ||
-                before.analogAttributes != after.analogAttributes ||
-                !sameLeafType(before, previousContext, after, declaration)
-          then fail(5, s"Interface '${definition.name}' has conflicting exact member ABIs")
-        identities.update(definition.name, declaration -> leaves)
+        // Selected boundaries specialize an existing definition; they do not declare a new ABI.
+        if declaration.boundary.forall(_.selection.isEmpty) then
+          val key = definition.name -> definition.constructionContext.map(_.region)
+          definitionIdentities.get(key).foreach(previous =>
+            if previous != definition.constructionContext then
+              fail(
+                5,
+                "separately constructed lexical Interface definitions cannot share one local name"
+              )
+          )
+          definitionIdentities.update(key, definition.constructionContext)
+          identities.get(key).foreach: (previousContext, previous) =>
+            if previous.size != leaves.size || previous.zip(leaves).exists: (before, after) =>
+                before.name != after.name || before.protocol != after.protocol ||
+                  before.mode != after.mode || before.nestedInterfaces != after.nestedInterfaces ||
+                  before.analogAttributes != after.analogAttributes ||
+                  !sameLeafType(before, previousContext, after, declaration)
+            then fail(5, s"Interface '${definition.name}' has conflicting exact member ABIs")
+          identities.update(key, declaration -> leaves)
         val domain =
           declaration.domain.getOrElse(fail(6, "interface endpoint has no resolved domain"))
         def snapshotLeaves(values: Vector[ConstructionInterfaceLayout.Leaf])
@@ -409,7 +484,12 @@ private[nodal] object DigitalInterfaceContract:
               value.name,
               value.role,
               value.access,
-              value.rendered(declaration.renderFormalType.getOrElse(declaration.renderType)),
+              value.rendered(dataType =>
+                declaration.renderDefinitionType.map(_(value.definition, dataType))
+                  .getOrElse(
+                    declaration.renderFormalType.getOrElse(declaration.renderType)(dataType)
+                  )
+              ),
               value.protocol,
               value.mode,
               value.nestedRoles,
@@ -424,6 +504,24 @@ private[nodal] object DigitalInterfaceContract:
               ConstructionInterfaceLayout.leaves(definition, selected, resolve)
             )
           )
+        val definitionContexts = mutable.ArrayBuffer.empty[KernelInterfaceDefinitionContextSnapshot]
+        var contextWork = 0
+        def collectContexts(current: InterfaceType[?], prefix: String, depth: Int): Unit =
+          contextWork += 1
+          if depth > 128 || contextWork > 65536 then
+            fail(1, "Interface definition context exceeds structural budget")
+          declaration.definitionContext(current).foreach(value =>
+            definitionContexts += value.copy(application = prefix)
+          )
+          current.members.foreach:
+            case nested: InterfaceMember.Nested[?] =>
+              collectContexts(
+                nested.definition,
+                if prefix.isEmpty then nested.name else s"$prefix.${nested.name}",
+                depth + 1
+              )
+            case _ => ()
+        collectContexts(definition, "", 0)
         KernelInterfaceSnapshot(
           declaration.path,
           declaration.owner,
@@ -436,11 +534,12 @@ private[nodal] object DigitalInterfaceContract:
           declaration.boundary,
           if declaration.boundary.nonEmpty then
             leaves.map(value => value.name -> actualType(value, declaration))
-          else Vector.empty
+          else Vector.empty,
+          definitionContexts.toVector
         )
     def declaration(value: AnyRef, owner: String): Declaration =
       val canonical = value match
-        case endpoint: InterfacePort[?, ?] => root(endpoint)
+        case endpoint: InterfaceEndpoint => root(endpoint)
         case other => other
       val result = Option(declarationsByValue.get(canonical)).getOrElse(
         fail(7, "connectivity endpoint belongs to another construction transaction")
@@ -451,14 +550,6 @@ private[nodal] object DigitalInterfaceContract:
       if !ownerOf(value).contains(owner) then
         fail(7, "digital operand belongs to another module or transaction")
       pathOf(value).getOrElse(fail(7, "digital operand has no captured semantic identity"))
-    def valueType(value: Expr[?], context: Declaration): String =
-      CandidateRuntime.expressionDataType(value).map(context.renderType).getOrElse(
-        fail(8, "digital operand requires an exact type")
-      )
-    def exact(value: Expr[?], expected: String, context: Declaration): String =
-      if valueType(value, context) != expected then
-        fail(8, s"digital operand must have exact type '$expected'")
-      owned(value, context.owner)
     def exactPayload(value: Expr[?], expected: DataType[?], context: Declaration): String =
       val actual = CandidateRuntime.expressionDataType(value).getOrElse(
         fail(8, "digital operand requires an exact type")
@@ -467,14 +558,18 @@ private[nodal] object DigitalInterfaceContract:
       then fail(8, "digital operand must have the exact owned payload type")
       owned(value, context.owner)
     val viewLayouts =
-      new IdentityHashMap[InterfacePort[?, ?], Vector[ConstructionInterfaceLayout.Leaf]]()
-    def portLeaves(endpoint: InterfacePort[?, ?], depth: Int = 0)
+      new IdentityHashMap[InterfaceEndpoint, Vector[ConstructionInterfaceLayout.Leaf]]()
+    def endpointLeaves(endpoint: InterfaceEndpoint, depth: Int = 0)
         : Vector[ConstructionInterfaceLayout.Leaf] =
       if depth > 128 then fail(1, "interface view nesting exceeds 128")
-      if endpoint.origin.isEmpty then layouts.get(endpoint)
+      if viewOrigin(endpoint).isEmpty then layouts.get(endpoint)
       else
         Option(viewLayouts.get(endpoint)).getOrElse:
-          val original = portLeaves(endpoint.origin.get, depth + 1)
+          val originalEndpoint = viewOrigin(endpoint).get
+          if (endpoint.definition ne originalEndpoint.definition) ||
+            (endpoint.domain ne originalEndpoint.domain)
+          then fail(5, "interface view changed its actual definition or domain identity")
+          val original = endpointLeaves(originalEndpoint, depth + 1)
           if root(endpoint).boundary then
             fail(3, "child Interface views cannot invert the declared role")
           if endpoint.role.name != "monitor" && original.exists(value =>
@@ -497,17 +592,6 @@ private[nodal] object DigitalInterfaceContract:
           then fail(4, "automatic inversion requires truly complementary actual nested role maps")
           viewLayouts.put(endpoint, viewed)
           viewed
-    def endpointLeaves(endpoint: InterfaceEndpoint): Vector[ConstructionInterfaceLayout.Leaf] =
-      endpoint match
-        case port: InterfacePort[?, ?] => portLeaves(port)
-        case array: InterfaceArray[?, ?] =>
-          val leaves = layouts.get(array)
-          if leaves.exists(_.mode.nonEmpty) then
-            fail(
-              9,
-              "resolved Interface array effects require an explicit physical component projection"
-            )
-          leaves
     operations.filter(_.kind == "interface-invert").foreach: operation =>
       operation.values match
         case Vector(original: InterfacePort[?, ?], view: InterfacePort[?, ?]) =>
@@ -516,7 +600,7 @@ private[nodal] object DigitalInterfaceContract:
           val _ = declaration(view, context.owner)
           val _ = endpointLeaves(view)
         case _ => fail(11, "inverted view lost its captured typed endpoints")
-    def net(value: ResolvedDigital[?, ?], owner: String): Declaration =
+    def net(value: ResolvedDigitalCapability[?, ?], owner: String): Declaration =
       val result = declaration(value, owner)
       val descriptor = CandidateRuntime.typeDescriptor(value.dataType)
       if !Set(
@@ -528,14 +612,23 @@ private[nodal] object DigitalInterfaceContract:
         ).contains(value.mode.name)
       then
         fail(9, "resolved digital endpoint has an unknown drive mode")
-      if !Set("Bits", "UInt", "SInt").contains(descriptor.kind) then
-        fail(8, "resolved digital endpoints require a finite bit-vector type")
+      val leafDescriptor = value match
+        case view: InterfaceResolvedArrayView[?, ?] =>
+          CandidateRuntime.typeDescriptor(view.declaration.dataType)
+        case _ => descriptor
+      if !Set("Bits", "UInt", "SInt").contains(leafDescriptor.kind) ||
+        (descriptor.kind == "Vec" && !value.isInstanceOf[InterfaceResolvedArrayView[?, ?]])
+      then
+        fail(
+          8,
+          "resolved digital endpoints require an actual scalar or Interface-array bit-vector capability"
+        )
       value match
         case net: DigitalInout[?, ?] =>
           if net.profile == ResolutionProfile.PortableBoundaryOnly &&
             net.placement == InoutPlacement.InternalResolvedNet
           then fail(9, "portable boundary resolution does not support an internal resolved net")
-        case view: InterfaceResolvedView[?, ?] =>
+        case view: InterfaceResolvedMember[?, ?] =>
           val context = declaration(view.endpoint, owner)
           val selected = ConstructionInterfaceLayout.resolvedMemberPath(
             view.endpoint.definition,
@@ -549,12 +642,12 @@ private[nodal] object DigitalInterfaceContract:
             !leaf.mode.contains(value.mode.name) ||
             !context.samePayloadTypes(
               value.dataType,
-              context.actualMemberType(view.declaration.dataType)
+              context.memberValueType(view.declaration.dataType)
             )
           then fail(8, "resolved view changed its exact member, mode or contextual type")
       result
-    def requireNetAccess(value: ResolvedDigital[?, ?], access: String): Unit = value match
-      case view: InterfaceResolvedView[?, ?] =>
+    def requireNetAccess(value: ResolvedDigitalCapability[?, ?], access: String): Unit = value match
+      case view: InterfaceResolvedMember[?, ?] =>
         val selected = endpointLeaves(view.endpoint).find(_.name == view.member).getOrElse(
           fail(3, "resolved view has no selected role member")
         )
@@ -562,7 +655,7 @@ private[nodal] object DigitalInterfaceContract:
       case _ => ()
     declarations.foreach: candidate =>
       candidate.value match
-        case endpoint: ResolvedDigital[?, ?] =>
+        case endpoint: ResolvedDigitalCapability[?, ?] =>
           val _ = net(endpoint, candidate.owner)
           declarationTypes += endpoint.dataType
         case _ => ()
@@ -604,7 +697,9 @@ private[nodal] object DigitalInterfaceContract:
         nestedRoles,
         sourceNestedRoles,
         endpointRole,
-        sourceEndpointRole
+        sourceEndpointRole,
+        operation.region,
+        operation.sourceOrdinal
       )
     val connectivity = operations.filter(value => EffectOperations.contains(value.kind)).flatMap:
       operation =>
@@ -613,7 +708,9 @@ private[nodal] object DigitalInterfaceContract:
               if operation.kind == "interface-connect" =>
             val a = declaration(left, operation.owner)
             val b = declaration(right, operation.owner)
-            if left.definition.name != right.definition.name || a.domain != b.domain ||
+            if left.definition.name != right.definition.name ||
+              left.definition.constructionContext != right.definition.constructionContext ||
+              a.domain != b.domain ||
               a.path == b.path ||
               !a.samePayloadTypes(a.shapeWitness, b.shapeWitness)
             then
@@ -627,15 +724,16 @@ private[nodal] object DigitalInterfaceContract:
               fail(5, "exact interface connection changed members")
             leftLeaves.zip(rightLeaves).map: (first, second) =>
               if first.name != second.name || first.protocol != second.protocol ||
+                first.definition.constructionContext != second.definition.constructionContext ||
                 first.mode != second.mode ||
                 first.nestedInterfaces != second.nestedInterfaces ||
                 !sameLeafType(first, a, second, b)
               then fail(5, "exact interface connection changed a member ABI")
               val sink = ConstructionInterfaceLayout.connectionSink(
                 first.access,
-                a.boundary.nonEmpty,
+                a.boundary.exists(_.instance.nonEmpty),
                 second.access,
-                b.boundary.nonEmpty
+                b.boundary.exists(_.instance.nonEmpty)
               )
               val complementary = sink.nonEmpty ||
                 (first.protocol == "resolved" && first.access == "connect" &&
@@ -643,6 +741,9 @@ private[nodal] object DigitalInterfaceContract:
               if first.analogType.nonEmpty || !complementary then
                 fail(3, "exact digital interface connection requires complementary digital access")
               if first.protocol != "resolved" then
+                val sinkContext = if sink.contains(true) then a else b
+                if sinkContext.boundary.exists(_.selection.nonEmpty) then
+                  fail(3, "selected Interface writes require exact lane-qualified driver proof")
                 val sinkPath = if sink.contains(true) then s"${a.path}.${first.name}"
                 else s"${b.path}.${second.name}"
                 if !driven.add(sinkPath) then
@@ -672,7 +773,7 @@ private[nodal] object DigitalInterfaceContract:
               )
             )
             val writable = if leaf.mode.nonEmpty then leaf.access == "drive"
-            else if context.boundary.nonEmpty then leaf.access == "in"
+            else if context.boundary.exists(_.instance.nonEmpty) then leaf.access == "in"
             else leaf.access == "out"
             if leaf.analogType.nonEmpty || !writable || endpoint.role.name == "monitor"
             then
@@ -720,7 +821,7 @@ private[nodal] object DigitalInterfaceContract:
                 nestedRoles = leaf.nestedRoles,
                 endpointRole = Some(endpoint.role.name)
               )
-          case Vector(endpoint: ResolvedDigital[?, ?], value: Expr[?], enable: Expr[?])
+          case Vector(endpoint: ResolvedDigitalCapability[?, ?], value: Expr[?], enable: Expr[?])
               if operation.kind == "inout-drive" =>
             val context = net(endpoint, operation.owner)
             requireNetAccess(endpoint, "drive")
@@ -731,10 +832,10 @@ private[nodal] object DigitalInterfaceContract:
               operation,
               context.path,
               value = Some(exactPayload(value, endpoint.dataType, context)),
-              enable = Some(exact(enable, "Bool", context)),
+              enable = Some(exactPayload(enable, endpoint.enableDataType, context)),
               dataType = Some(expected)
             ))
-          case Vector(endpoint: ResolvedDigital[?, ?], enable: Expr[?])
+          case Vector(endpoint: ResolvedDigitalCapability[?, ?], enable: Expr[?])
               if Set("inout-drive-low", "inout-drive-high").contains(operation.kind) =>
             val context = net(endpoint, operation.owner)
             requireNetAccess(endpoint, "drive")
@@ -745,10 +846,11 @@ private[nodal] object DigitalInterfaceContract:
             Vector(effect(
               operation,
               context.path,
-              enable = Some(exact(enable, "Bool", context)),
+              enable = Some(exactPayload(enable, endpoint.enableDataType, context)),
               dataType = Some(context.renderType(endpoint.dataType))
             ))
-          case Vector(endpoint: ResolvedDigital[?, ?]) if operation.kind == "inout-high-z" =>
+          case Vector(endpoint: ResolvedDigitalCapability[?, ?])
+              if operation.kind == "inout-high-z" =>
             val context = net(endpoint, operation.owner)
             requireNetAccess(endpoint, "drive")
             if endpoint.mode.name == "read-only" then
@@ -758,7 +860,7 @@ private[nodal] object DigitalInterfaceContract:
               context.path,
               dataType = Some(context.renderType(endpoint.dataType))
             ))
-          case Vector(left: ResolvedDigital[?, ?], right: ResolvedDigital[?, ?])
+          case Vector(left: ResolvedDigitalCapability[?, ?], right: ResolvedDigitalCapability[?, ?])
               if operation.kind == "inout-pass-through" =>
             val a = net(left, operation.owner)
             val b = net(right, operation.owner)
@@ -799,7 +901,7 @@ private[nodal] object DigitalInterfaceContract:
       .flatMap(_.values.collect { case expression: Expr[?] => expression })
     val resolvedAliases = declarations.flatMap: context =>
       context.value match
-        case view: InterfaceResolvedView[?, ?] =>
+        case view: InterfaceResolvedMember[?, ?] =>
           Some(context.path -> s"${declaration(view.endpoint, context.owner).path}.${view.member}")
         case _ => None
     Capture(
@@ -827,7 +929,7 @@ private[nodal] object DigitalInterfaceContract:
     val members = interfaces.flatMap(_.members).filter(member =>
       Set("plain", "valid", "stream", "resolved").contains(member.protocol)
     )
-    val nets = declarations.filter(_.value.isInstanceOf[ResolvedDigital[?, ?]])
+    val nets = declarations.filter(_.value.isInstanceOf[ResolvedDigitalCapability[?, ?]])
     val paths = (members.map(_.path) ++ nets.map(_.path)).distinct.sorted
     if paths.size > 65536 || connectivity.size > 262144 then
       fail(1, "digital observation graph exceeds its bounded node or edge budget")
@@ -875,7 +977,8 @@ private[nodal] object DigitalInterfaceContract:
     val direct = mutable.HashMap.empty[String, mutable.ArrayBuffer[Expr[?]]]
     val sources = mutable.HashMap.empty[String, String]
     var dependencyEdges = 0
-    val boundaries = interfaces.filter(_.boundary.nonEmpty).flatMap(_.members.map(_.path)).toSet
+    val boundaries =
+      interfaces.filter(_.boundary.exists(_.instance.nonEmpty)).flatMap(_.members.map(_.path)).toSet
     connectivity.foreach: edge =>
       val target = canonical(edge.target)
       val values = (edge.value.toVector ++ edge.enable.toVector).map(path =>

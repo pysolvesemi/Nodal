@@ -109,7 +109,7 @@ object Increment58SelectedDependentAreaTests extends TestSuite:
           else value
         )
       )
-      rejected(forged, "exact export type and selected family chain")
+      rejected(forged, "generated selection requires its exact family export chain")
     test("each source ordinal requires all legal selected existence"):
       Vector((0, 1, false), (1, 2, false), (3, 0, false), (1, 5, true), (-1, 0, false)).foreach:
         (outer, inner, nonunit) =>

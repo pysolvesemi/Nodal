@@ -30,7 +30,7 @@ object Increment58BoundaryArtifactTests extends TestSuite:
         member.copy(analogAttributes = Vector("discipline" -> "changed"))
       )
       val variants = Vector(
-        endpoint.copy(boundary = Some(boundary.copy(instance = boundary.instance + "_other"))),
+        endpoint.copy(boundary = Some(boundary.copy(instance = boundary.instance.map(_ + "_other")))),
         endpoint.copy(boundary = Some(boundary.copy(endpoint = boundary.endpoint + "_other"))),
         endpoint.copy(actualMemberTypes = endpoint.actualMemberTypes.reverse),
         endpoint.copy(actualMemberTypes =
@@ -51,7 +51,7 @@ object Increment58BoundaryArtifactTests extends TestSuite:
         original.contains("\"interface_contracts\""),
         original.contains("\"interface_boundary\""),
         original.contains("\"actual_member_types\""),
-        original.contains(boundary.instance),
+        boundary.instance.exists(original.contains),
         original.contains(boundary.endpoint)
       )
       variants.foreach: changed =>

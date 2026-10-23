@@ -100,13 +100,21 @@ private[nodal] object InterfaceMlir:
   private final case class Definition(
       owner: String,
       identity: String,
-      roles: Vector[KernelInterfaceRoleSnapshot]
+      roles: Vector[KernelInterfaceRoleSnapshot],
+      context: Option[KernelInterfaceDefinitionContextSnapshot]
   )
 
   final class Plan(
       snapshot: ConstructionSnapshot,
       sameType: (String, String, String) => Boolean,
-      instanceType: (String, String, String, KernelInstanceSnapshot, String) => Boolean
+      instanceType: (String, String, String, KernelInstanceSnapshot, String) => Boolean,
+      selectedBoundary: String => Unit,
+      validateEffectScope: (KernelDigitalConnectivitySnapshot, Vector[String]) => Unit,
+      boundaryQuery: (
+          String,
+          StructuralParameterBinding.InstanceQueries
+      ) => Option[StructuralParameterBinding.Query],
+      validateDefinitionContext: (KernelInterfaceDefinitionContextSnapshot, String) => Unit
   ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val declarations = snapshot.modules.flatMap(module =>
@@ -302,10 +310,33 @@ private[nodal] object InterfaceMlir:
         fail("interface endpoint has no declaration", endpoint.path)
       )
       val attributes = declaration.attributes.toMap
+      val applications = Vector(
+        "" -> endpoint.identity
+      ) ++ endpoint.roles.flatMap(_.members.flatMap(_.nestedInterfaces)).distinct
+      requireValid(
+        endpoint.definitionContexts.map(
+          _.application
+        ).distinct.size == endpoint.definitionContexts.size &&
+          endpoint.definitionContexts.size <= 65536,
+        "Interface definition contexts require unique bounded application paths",
+        endpoint.path
+      )
+      endpoint.definitionContexts.foreach: context =>
+        requireValid(
+          applications.contains(context.application -> context.identity),
+          "Interface definition context differs from its complete original application",
+          endpoint.path
+        )
+        validateDefinitionContext(context, endpoint.path)
       requireValid(
         module.path == endpoint.owner && modules.contains(endpoint.owner) &&
           Set("interface-port", "interface-array").contains(declaration.kind) &&
-          declaration.generatedScope.isEmpty &&
+          declaration.generatedScope.forall(scope =>
+            snapshot.generatedRegions.exists(family =>
+              family.path == scope.owner && family.induction == scope.induction &&
+                family.owner == endpoint.owner && family.declarations.contains(endpoint.path)
+            )
+          ) &&
           declaration.interfaceBoundary == endpoint.boundary &&
           attributes.get("interface").contains(endpoint.identity) &&
           attributes.get("role").contains(endpoint.role) &&
@@ -331,38 +362,54 @@ private[nodal] object InterfaceMlir:
         endpoint.path
       )
       endpoint.boundary.foreach: boundary =>
-        val instance = module.instances.find(_.path == boundary.instance).getOrElse(
-          fail("Interface projection lost its exact immediate child instance", endpoint.path)
-        )
         val child = endpoints.getOrElse(
           boundary.endpoint,
-          fail("Interface projection lost its actual child endpoint", endpoint.path)
+          fail("Interface projection lost its actual original endpoint", endpoint.path)
         )
         val childDeclaration = declarations(child.path)._2
-        val binding = instance.actualBindings.filter(_.requirement == child.domain)
+        val instance = boundary.instance.map(path =>
+          module.instances.find(_.path == path).getOrElse(
+            fail("Interface projection lost its exact immediate child instance", endpoint.path)
+          )
+        )
+        requireValid(
+          boundary.selection.nonEmpty || instance.nonEmpty,
+          "direct Interface boundary requires an actual child instance",
+          endpoint.path
+        )
+        if boundary.selection.nonEmpty then selectedBoundary(endpoint.path)
+        else
+          requireValid(
+            boundary.region == declaration.generatedScope.map(_.owner) &&
+              instance.get.generatedScope == declaration.generatedScope,
+            "direct Interface boundary must retain its exact occurrence scope",
+            endpoint.path
+          )
         def canonical(values: Vector[KernelInterfaceRoleSnapshot]) = values.map(role =>
           role.name -> role.copy(members = role.members.map(value => value.copy(path = value.name)))
         ).toMap
         val endpointRoles = canonical(endpoint.roles)
         val childRoles = canonical(child.roles)
+        val exactOwner = instance match
+          case Some(value) =>
+            val binding = value.actualBindings.filter(_.requirement == child.domain)
+            child.owner == value.childModule && childDeclaration.generatedScope.isEmpty &&
+            binding.size == 1 && binding.head.actual == endpoint.domain
+          case None => child.owner == module.path && childDeclaration.generatedScope.nonEmpty &&
+            child.domain == endpoint.domain
         requireValid(
-          child.owner == instance.childModule && child.boundary.isEmpty &&
-            childDeclaration.kind == declaration.kind && childDeclaration.generatedScope.isEmpty &&
-            instance.generatedScope.isEmpty &&
-            endpoint.identity == child.identity && endpoint.role == child.role &&
+          exactOwner && child.boundary.isEmpty &&
+            childDeclaration.kind == declaration.kind && endpoint.identity == child.identity &&
+            endpoint.role == child.role && endpoint.definitionContexts == child.definitionContexts &&
             endpointRoles.get(endpoint.role) == childRoles.get(child.role) &&
-            endpointRoles.forall((name, role) =>
-              childRoles.get(name).forall(_ == role)
-            ) &&
-            binding.size == 1 && binding.head.actual == endpoint.domain &&
+            endpointRoles.forall((name, role) => childRoles.get(name).forall(_ == role)) &&
             endpoint.members.forall(value =>
-              Set("plain", "valid", "stream").contains(value.protocol) ||
-                Set(
-                  "resolved",
-                  "conservative"
-                ).contains(value.protocol) && endpoint.dimensions.isEmpty
+              Set("plain", "valid", "stream")(value.protocol) ||
+                boundary.selection.isEmpty && instance.forall(_.generatedScope.isEmpty) &&
+                (value.protocol == "resolved" ||
+                  value.protocol == "conservative" && endpoint.dimensions.isEmpty)
             ),
-          "Interface projection changes exact child, selected roles, ABI or actual domain binding",
+          "Interface projection changes exact owner, selected roles, ABI or domain binding",
           endpoint.path
         )
         val childMembers = child.members.map(value => value.name -> value).toMap
@@ -370,28 +417,54 @@ private[nodal] object InterfaceMlir:
           val formal = childMembers(member.name)
           requireValid(
             if member.protocol == "conservative" then
-              actualType(endpoint, member) == formal.dataType &&
-              member.analogAttributes == formal.analogAttributes
+              actualType(
+                endpoint,
+                member
+              ) == formal.dataType && member.analogAttributes == formal.analogAttributes
             else
-              instanceType(
-                actualType(endpoint, member),
-                formal.dataType,
-                member.path,
-                instance,
-                formal.path
-              )
-            ,
-            "Interface actual payload differs from its exact finalized child type",
+              instance match
+                case Some(value) => instanceType(
+                    actualType(endpoint, member),
+                    formal.dataType,
+                    member.path,
+                    value,
+                    formal.path
+                  )
+                case None => sameType(actualType(endpoint, member), formal.dataType, member.path),
+            "Interface actual payload differs from its exact finalized original type",
             member.path
           )
         if declaration.kind == "interface-array" then
           try
-            instanceQueries.validateInterfaceDimensions(
-              module.path,
-              instance.path,
-              child.path,
-              endpoint.dimensions
-            )
+            instance match
+              case Some(value) =>
+                val query = boundaryQuery(
+                  endpoint.path,
+                  instanceQueries
+                ).getOrElse(instanceQueries.query(module.path, value.path))
+                requireValid(
+                  endpoint.dimensions.size == child.dimensions.size &&
+                    endpoint.dimensions.zip(child.dimensions).forall((actual, formal) =>
+                      val original = shapeQuery.resolve(module.path, actual)
+                      val imported = query.importValue(
+                        module.path,
+                        shapeQuery.exportDimensions(module.path, Vector(original))
+                      )
+                      imported == query.resolve(child.owner, formal)
+                    ),
+                  "Interface array dimensions differ from the exact occurrence",
+                  endpoint.path
+                )
+              case None => requireValid(
+                  endpoint.dimensions.size == child.dimensions.size &&
+                    sameType(
+                      s"Vec(Bool;${endpoint.dimensions.mkString("x")})",
+                      s"Vec(Bool;${child.dimensions.mkString("x")})",
+                      endpoint.path
+                    ),
+                  "selected direct Interface array changed its dimensions",
+                  endpoint.path
+                )
           catch case error: IllegalArgumentException => fail(error.getMessage, endpoint.path)
       endpoint.roles.foreach(validateRole(endpoint, _))
       requireValid(
@@ -420,9 +493,10 @@ private[nodal] object InterfaceMlir:
         net.path
       )
       net.boundary.foreach: boundary =>
-        val instance = module.instances.find(_.path == boundary.instance).getOrElse(
-          fail("resolved projection lost its exact immediate child instance", net.path)
-        )
+        val instance =
+          module.instances.find(value => boundary.instance.contains(value.path)).getOrElse(
+            fail("resolved projection lost its exact immediate child instance", net.path)
+          )
         val child = nets.getOrElse(
           boundary.endpoint,
           fail("resolved projection lost its actual child net", net.path)
@@ -445,10 +519,16 @@ private[nodal] object InterfaceMlir:
           val (endpoint, member) =
             selectedMember(s"${origin.endpoint}.${origin.member}", module.path, Some(origin.role))
           requireValid(
-            endpoint.path == origin.endpoint && endpoint.dimensions.isEmpty &&
+            endpoint.path == origin.endpoint &&
+              declarations(endpoint.path)._2.generatedScope.isEmpty &&
+              endpoint.boundary.forall(_.selection.isEmpty) &&
               member.name == origin.member && member.protocol == "resolved" &&
               member.mode.contains(net.mode) &&
-              sameType(net.dataType, actualType(endpoint, member), net.path),
+              sameType(
+                net.dataType,
+                wholeType(endpoint.dimensions, actualType(endpoint, member)),
+                net.path
+              ),
             "resolved member view changes its exact endpoint, selected role, path, mode or contextual type",
             net.path
           )
@@ -472,19 +552,35 @@ private[nodal] object InterfaceMlir:
     )
 
     private val definitions: Vector[Definition] =
-      val entries = mutable.LinkedHashMap.empty[(String, String), mutable.LinkedHashMap[
-        String,
-        Vector[KernelInterfaceMemberSnapshot]
-      ]]
+      val entries =
+        mutable.LinkedHashMap.empty[(String, String, Option[String]), mutable.LinkedHashMap[
+          String,
+          Vector[KernelInterfaceMemberSnapshot]
+        ]]
+      val contexts = mutable.HashMap.empty[
+        (String, String, Option[String]),
+        Option[KernelInterfaceDefinitionContextSnapshot]
+      ]
       var count = 0L
       def add(
           owner: String,
           identity: String,
           role: String,
-          values: Vector[KernelInterfaceMemberSnapshot]
+          values: Vector[KernelInterfaceMemberSnapshot],
+          context: Option[KernelInterfaceDefinitionContextSnapshot]
       ): Unit =
         val normalized = values
-        val known = entries.getOrElseUpdate(owner -> identity, mutable.LinkedHashMap.empty)
+        val key = (owner, identity, context.map(_.region))
+        val actual = context.map(_.copy(application = ""))
+        contexts.get(key).foreach(previous =>
+          requireValid(
+            previous == actual,
+            "Interface name is not identity for separately constructed lexical definitions",
+            identity
+          )
+        )
+        contexts.update(key, actual)
+        val known = entries.getOrElseUpdate(key, mutable.LinkedHashMap.empty)
         known.headOption.foreach((_, previous) =>
           requireValid(
             sameShape(previous, normalized),
@@ -507,38 +603,53 @@ private[nodal] object InterfaceMlir:
             identity
           )
           known.update(role, values)
-      snapshot.interfaceContracts.sortBy(_.path).foreach: endpoint =>
-        endpoint.roles.foreach: role =>
-          val actualMembers = role.members.map(actualMember(endpoint, _))
-          add(endpoint.owner, endpoint.identity, role.name, actualMembers)
-          val applications = actualMembers.flatMap(_.nestedInterfaces).distinct
-          applications.foreach: (prefix, identity) =>
-            val selected = actualMembers.filter(_.name.startsWith(prefix + "."))
-            val names = selected.flatMap(_.nestedRoles.find(_._1 == prefix).map(_._2)).distinct
-            requireValid(
-              names.size == 1,
-              "nested role application is incomplete or ambiguous",
-              endpoint.path
+      snapshot.interfaceContracts.filterNot(_.boundary.exists(_.selection.nonEmpty))
+        .sortBy(_.path).foreach: endpoint =>
+          endpoint.roles.foreach: role =>
+            val actualMembers = role.members.map(actualMember(endpoint, _))
+            add(
+              endpoint.owner,
+              endpoint.identity,
+              role.name,
+              actualMembers,
+              endpoint.definitionContexts.find(_.application.isEmpty)
             )
-            val projected = selected.map: member =>
-              val strip = prefix + "."
-              member.copy(
-                name = member.name.stripPrefix(strip),
-                nestedRoles = member.nestedRoles.filter(_._1.startsWith(strip)).map((path, name) =>
-                  path.stripPrefix(strip) -> name
-                ),
-                nestedInterfaces = member.nestedInterfaces.filter(_._1.startsWith(strip)).map(
-                  (path, name) => path.stripPrefix(strip) -> name
-                )
+            val applications = actualMembers.flatMap(_.nestedInterfaces).distinct
+            applications.foreach: (prefix, identity) =>
+              val selected = actualMembers.filter(_.name.startsWith(prefix + "."))
+              val names = selected.flatMap(_.nestedRoles.find(_._1 == prefix).map(_._2)).distinct
+              requireValid(
+                names.size == 1,
+                "nested role application is incomplete or ambiguous",
+                endpoint.path
               )
-            add(endpoint.owner, identity, names.head, projected)
+              val projected = selected.map: member =>
+                val strip = prefix + "."
+                member.copy(
+                  name = member.name.stripPrefix(strip),
+                  nestedRoles =
+                    member.nestedRoles.filter(_._1.startsWith(strip)).map((path, name) =>
+                      path.stripPrefix(strip) -> name
+                    ),
+                  nestedInterfaces = member.nestedInterfaces.filter(_._1.startsWith(strip)).map(
+                    (path, name) => path.stripPrefix(strip) -> name
+                  )
+                )
+              add(
+                endpoint.owner,
+                identity,
+                names.head,
+                projected,
+                endpoint.definitionContexts.find(_.application == prefix)
+              )
       entries.toVector.sortBy(_._1).map:
-        case ((owner, identity), roles) => Definition(
+        case (key @ (owner, identity, _), roles) => Definition(
             owner,
             identity,
             roles.toVector.sortBy(_._1).map((name, values) =>
               KernelInterfaceRoleSnapshot(name, values)
-            )
+            ),
+            contexts(key)
           )
 
     private def sourceMember(
@@ -609,6 +720,10 @@ private[nodal] object InterfaceMlir:
       )
       if effect.kind.startsWith("interface-") then
         val (endpoint, target) = selectedMember(effect.target, effect.owner, effect.endpointRole)
+        val sourceEndpoint = effect.source.toVector.map(path =>
+          selectedMember(path, effect.owner, effect.sourceEndpointRole)._1.path
+        )
+        validateEffectScope(effect, Vector(endpoint.path) ++ sourceEndpoint)
         if effect.kind != "interface-connect" then
           requireValid(
             effect.sourceRole.isEmpty && effect.sourceAccess.isEmpty &&
@@ -632,8 +747,23 @@ private[nodal] object InterfaceMlir:
               effect.owner,
               effect.sourceEndpointRole
             )
+            val sink = ConstructionInterfaceLayout.connectionSink(
+              target.access,
+              endpoint.boundary.exists(_.instance.nonEmpty),
+              source.access,
+              other.boundary.exists(_.instance.nonEmpty)
+            )
             requireValid(
-              endpoint.identity == other.identity && endpoint.domain == other.domain &&
+              !sink.exists(left =>
+                (if left then endpoint else other).boundary
+                  .exists(_.selection.nonEmpty)
+              ),
+              "selected Interface writes require exact selection-qualified driver proof",
+              effect.path
+            )
+            requireValid(
+              endpoint.identity == other.identity && endpoint.definitionContexts == other.definitionContexts &&
+                endpoint.domain == other.domain &&
                 sameDimensions(endpoint, other) &&
                 target.name == source.name &&
                 sameType(actualType(endpoint, target), actualType(other, source), target.path) &&
@@ -644,9 +774,9 @@ private[nodal] object InterfaceMlir:
                 effect.sourceNestedRoles == source.nestedRoles && effect.value.isEmpty &&
                 (ConstructionInterfaceLayout.connectionSink(
                   target.access,
-                  endpoint.boundary.nonEmpty,
+                  endpoint.boundary.exists(_.instance.nonEmpty),
                   source.access,
-                  other.boundary.nonEmpty
+                  other.boundary.exists(_.instance.nonEmpty)
                 ).nonEmpty ||
                   (target.protocol == "resolved" && target.access == "connect" &&
                     source.access == "connect")),
@@ -655,9 +785,14 @@ private[nodal] object InterfaceMlir:
             )
           case "interface-drive" =>
             requireValid(
+              !endpoint.boundary.exists(_.selection.nonEmpty),
+              "selected Interface writes require exact selection-qualified driver proof",
+              effect.path
+            )
+            requireValid(
               effect.source.isEmpty && effect.value.nonEmpty &&
                 (if target.protocol == "resolved" then target.access == "drive"
-                 else if endpoint.boundary.nonEmpty then target.access == "in"
+                 else if endpoint.boundary.exists(_.instance.nonEmpty) then target.access == "in"
                  else target.access == "out") &&
                 target.mode.forall(_ == "push-pull"),
               "member drive violates actual role or mode",
@@ -671,6 +806,11 @@ private[nodal] object InterfaceMlir:
             )
           case _ => fail("unknown interface effect", effect.path)
       else
+        requireValid(
+          effect.region.isEmpty && effect.sourceOrdinal.isEmpty,
+          "resolved connectivity cannot acquire generated or selected effect authority",
+          effect.path
+        )
         val target = net(effect.target, effect.owner)
         requireValid(
           effect.dataType.contains(target.dataType) && effect.member.isEmpty &&
@@ -812,9 +952,9 @@ private[nodal] object InterfaceMlir:
           val source = members(effect.source.get)._1
           val leftSink = ConstructionInterfaceLayout.connectionSink(
             effect.access.get,
-            target.boundary.nonEmpty,
+            target.boundary.exists(_.instance.nonEmpty),
             effect.sourceAccess.get,
-            source.boundary.nonEmpty
+            source.boundary.exists(_.instance.nonEmpty)
           ).get
           Vector(if leftSink then effect.target else effect.source.get)
         case _ => Vector.empty
@@ -854,20 +994,59 @@ private[nodal] object InterfaceMlir:
 
     def roots(module: KernelModuleSnapshot): Vector[String] =
       (module.declarations.filter(_.kind == "digital-inout").map(_.path) ++
-        effects.getOrElse(module.path, Vector.empty).flatMap(value =>
-          value.value.toVector ++ value.enable.toVector ++
-            (if value.kind.startsWith("inout-") then Vector(value.target) ++ value.source.toVector
-             else Vector.empty)
+        effects.getOrElse(module.path, Vector.empty).filter(_.sourceOrdinal.isEmpty).flatMap(
+          value =>
+            value.value.toVector ++ value.enable.toVector ++
+              (if value.kind.startsWith("inout-") then Vector(value.target) ++ value.source.toVector
+               else Vector.empty)
         )).distinct.sorted
 
-    def declarationType(declaration: KernelDeclarationSnapshot, payloadNativeType: String): String =
+    private def wholeType(dimensions: Vector[String], element: String): String =
+      if dimensions.isEmpty then element else s"Vec($element;${dimensions.mkString("x")})"
+
+    private def netGeometry(value: KernelResolvedNetSnapshot): (Vector[String], String) =
+      value.member match
+        case Some(origin) =>
+          val (endpoint, member) = selectedMember(
+            s"${origin.endpoint}.${origin.member}",
+            declarations(value.path)._1.path,
+            Some(origin.role)
+          )
+          endpoint.dimensions -> actualType(endpoint, member)
+        case None => Vector.empty -> value.dataType
+
+    private def netCarrierType(
+        value: KernelResolvedNetSnapshot,
+        driver: Boolean,
+        nativeType: (String, String) => String
+    ): String =
+      val (dimensions, element) = netGeometry(value)
+      val payload = nativeType(element, value.path)
+      val leaf = if driver then s"!nodal.driver<$payload>"
+      else s"!nodal.resolved<${quoted(mode(value.mode, value.path))}, $payload>"
+      if dimensions.isEmpty then leaf
+      else s"!nodal.shaped<${quoted(dimensions.mkString(","))}, $leaf>"
+
+    private def netEnableType(value: KernelResolvedNetSnapshot): String =
+      wholeType(netGeometry(value)._1, "Bool")
+
+    def declarationType(
+        declaration: KernelDeclarationSnapshot,
+        payloadNativeType: String,
+        nativeType: (String, String) => String
+    ): String =
       if declaration.kind != "digital-inout" then payloadNativeType
       else
         val selected = nets.getOrElse(
           declaration.path,
           fail("net declaration lost its typed contract", declaration.path)
         )
-        s"!nodal.resolved<${quoted(mode(selected.mode, declaration.path))}, $payloadNativeType>"
+        requireValid(
+          payloadNativeType == nativeType(selected.dataType, selected.path),
+          "resolved capability payload changed its exact geometry",
+          selected.path
+        )
+        netCarrierType(selected, driver = false, nativeType)
 
     def renderDeclaration(
         declaration: KernelDeclarationSnapshot,
@@ -895,7 +1074,13 @@ private[nodal] object InterfaceMlir:
         ))
       val identity = selected.boundary match
         case Some(boundary) => Vector(
-            "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
+            "instance" -> ("@" + quoted(symbol(
+              "instance",
+              boundary.instance.getOrElse(fail(
+                "resolved boundary requires an instance",
+                boundary.endpoint
+              )).split('.').last
+            ))),
             "endpoint" -> quoted(declarations(boundary.endpoint)._2.name)
           )
         case None => Vector("name" -> quoted(declaration.name))
@@ -936,13 +1121,14 @@ private[nodal] object InterfaceMlir:
       )
       requireValid(
         expression.dataType ==
-          (if expression.operation == "digital_net_enable_view" then "Bool" else endpoint.dataType),
+          (if expression.operation == "digital_net_enable_view" then netEnableType(endpoint)
+           else endpoint.dataType),
         "net value changed the exact payload type",
         expression.path
       )
       val payloadType = nativeType(endpoint.dataType, endpoint.path)
-      val expectedType =
-        s"!nodal.resolved<${quoted(mode(endpoint.mode, endpoint.path))}, $payloadType>"
+      val expectedType = netCarrierType(endpoint, driver = false, nativeType)
+      val enableType = nativeType(netEnableType(endpoint), endpoint.path)
       requireValid(
         operands.head._2 == expectedType,
         "net value operand is not the exact resolved capability",
@@ -967,14 +1153,14 @@ private[nodal] object InterfaceMlir:
       else
         requireValid(
           resultType ==
-            (if expression.operation == "digital_net_enable_view" then "!nodal.bits<1>"
+            (if expression.operation == "digital_net_enable_view" then enableType
              else payloadType),
           "net split changed the exact projection type",
           expression.path
         )
         val outputs = if expression.operation == "digital_net_write_view" then
-          Vector(result -> payloadType, s"${result}_enable" -> "!nodal.bits<1>")
-        else Vector(s"${result}_write" -> payloadType, result -> "!nodal.bits<1>")
+          Vector(result -> payloadType, s"${result}_enable" -> enableType)
+        else Vector(s"${result}_write" -> payloadType, result -> enableType)
         DigitalValueMlir.Projection(
           Vector(operation(
             "nodal.net_split",
@@ -1011,39 +1197,108 @@ private[nodal] object InterfaceMlir:
           endpoint.roles.flatMap(_.members.flatMap(_.nestedInterfaces.map(_._2)))
       ).toSet
       definitions.filter(value =>
-        value.owner == module.path &&
+        value.owner == module.path && value.context.isEmpty &&
           localDefinitions(value.identity)
       ).foreach: definition =>
-        val selected = definition.roles.head.members
-        val roles = definition.roles.map: role =>
-          operation(
-            "nodal.interface_role",
+        result ++= renderDefinition(definition, module.path, nativeType, symbol, sourceLocation)
+      snapshot.interfaceContracts.filter(endpoint =>
+        endpoint.owner == module.path &&
+          declarations(endpoint.path)._2.generatedScope.isEmpty &&
+          !endpoint.boundary.exists(value => value.selection.nonEmpty || value.region.nonEmpty)
+      )
+        .sortBy(_.path).foreach: endpoint =>
+          result ++= renderEndpoint(
+            endpoint.path,
             Vector.empty,
-            Vector.empty,
-            sourceLocation(module.path),
-            "sym_name" -> quoted(role.name),
-            "kind" -> quoted("explicit"),
-            "metadata" -> metadata("{}", "access" -> array(role.members.map(permission)))
+            nativeType,
+            symbol,
+            sourceMetadata,
+            sourceLocation
           )
-        val leaves = selected.map: member =>
-          operation(
-            "nodal.interface_member",
-            Vector.empty,
-            Vector.empty,
-            sourceLocation(module.path),
-            "sym_name" -> quoted(member.name),
-            "type" -> memberType(member, nativeType),
-            "protocol" -> quoted(member.protocol.replace('-', '_')),
-            "roles" -> array(definition.roles.map(role => quoted(role.name))),
-            "metadata" -> memberMetadata(member)
-          )
-        val attributes = dictionary(
-          "sym_name" -> quoted(symbol("interface", definition.identity)),
-          "metadata" -> metadata("{}", "semantic_identity" -> quoted(definition.identity))
+      result.toVector
+
+    private def renderDefinition(
+        definition: Definition,
+        owner: String,
+        nativeType: (String, String) => String,
+        symbol: (String, String) => String,
+        sourceLocation: String => String
+    ): Vector[String] =
+      val result = mutable.ArrayBuffer.empty[String]
+      val selected = definition.roles.head.members
+      val roles = definition.roles.map: role =>
+        operation(
+          "nodal.interface_role",
+          Vector.empty,
+          Vector.empty,
+          sourceLocation(owner),
+          "sym_name" -> quoted(role.name),
+          "kind" -> quoted("explicit"),
+          "metadata" -> metadata("{}", "access" -> array(role.members.map(permission)))
         )
-        result +=
-          s"\"nodal.interface\"() <$attributes> ({\n${(roles ++ leaves).map("  " + _).mkString("\n")}\n}) : () -> () ${sourceLocation(module.path)}"
-      snapshot.interfaceContracts.filter(_.owner == module.path).sortBy(_.path).foreach: endpoint =>
+      val leaves = selected.map: member =>
+        operation(
+          "nodal.interface_member",
+          Vector.empty,
+          Vector.empty,
+          sourceLocation(owner),
+          "sym_name" -> quoted(member.name),
+          "type" -> memberType(member, nativeType),
+          "protocol" -> quoted(member.protocol.replace('-', '_')),
+          "roles" -> array(definition.roles.map(role => quoted(role.name))),
+          "metadata" -> memberMetadata(member)
+        )
+      val attributes = dictionary(
+        "sym_name" -> quoted(symbol("interface", definition.identity)),
+        "metadata" -> metadata("{}", "semantic_identity" -> quoted(definition.identity))
+      )
+      result +=
+        s"\"nodal.interface\"() <$attributes> ({\n${(roles ++ leaves).map("  " + _).mkString("\n")}\n}) : () -> () ${sourceLocation(owner)}"
+      result.toVector
+
+    def regionalDefinitions(owner: String)
+        : Vector[(KernelInterfaceDefinitionContextSnapshot, Vector[(String, String)])] =
+      definitions.filter(value => value.owner == owner && value.context.nonEmpty).map(value =>
+        value.context.get -> value.roles.head.members.map(member => member.dataType -> member.path)
+      )
+
+    def renderRegionalDefinition(
+        context: KernelInterfaceDefinitionContextSnapshot,
+        nativeType: (String, String) => String,
+        symbol: (String, String) => String,
+        sourceLocation: String => String
+    ): Vector[String] =
+      val found = definitions.filter(_.context.contains(context))
+      requireValid(
+        found.size == 1,
+        "regional Interface definition lost exact construction identity",
+        context.identity
+      )
+      renderDefinition(found.head, context.owner, nativeType, symbol, sourceLocation)
+
+    /** Original members are scheduled with their definition; boundary actuals belong to the use. */
+    def actualTypeRoots(path: String): Vector[(String, String)] =
+      val endpoint = endpoints(path)
+      endpoint.actualMemberTypes.map((name, dataType) => dataType -> s"$path.$name") ++
+        Option.when(
+          endpoint.dimensions.nonEmpty
+        )(s"Vec(Bool;${endpoint.dimensions.mkString("x")})" -> path)
+
+    def endpointSymbol(path: String, symbol: (String, String) => String): String =
+      symbol("interface_instance", declarations(path)._2.name)
+
+    def renderEndpoint(
+        path: String,
+        selection: Vector[(String, String)],
+        nativeType: (String, String) => String,
+        symbol: (String, String) => String,
+        sourceMetadata: String => String,
+        sourceLocation: String => String
+    ): Vector[String] =
+      val endpoint = endpoints(path)
+      val module = modules(endpoint.owner)
+      val result = mutable.ArrayBuffer.empty[String]
+      locally:
         val declaration = declarations(endpoint.path)._2
         val domains = module.domains.filter(value =>
           value.path == endpoint.domain || value.binding.contains(endpoint.domain)
@@ -1061,21 +1316,25 @@ private[nodal] object InterfaceMlir:
             result += operation(
               "nodal.interface_boundary",
               Vector.empty,
-              Vector.empty,
+              selection,
               sourceLocation(endpoint.path),
-              "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
-              "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
-              "endpoint" -> quoted(symbol("interface_instance", target.name)),
-              "metadata" -> metadata(
-                sourceMetadata(endpoint.path),
-                "dimensions" -> array(endpoint.dimensions.map(quoted)),
-                "actual_types" -> array(endpoint.members.map(member =>
-                  dictionary(
-                    "path" -> quoted(member.name),
-                    "type" -> memberType(actualMember(endpoint, member), nativeType)
-                  )
-                ))
-              )
+              (Vector(
+                "sym_name" -> quoted(symbol("interface_instance", declaration.name)),
+                "endpoint" -> quoted(symbol("interface_instance", target.name)),
+                "metadata" -> metadata(
+                  sourceMetadata(endpoint.path),
+                  "dimensions" -> array(endpoint.dimensions.map(quoted)),
+                  "actual_types" -> array(endpoint.members.map(member =>
+                    dictionary(
+                      "path" -> quoted(member.name),
+                      "type" -> memberType(actualMember(endpoint, member), nativeType)
+                    )
+                  ))
+                )
+              ) ++ boundary.instance.toVector.map(instance =>
+                "instance" -> ("@" + quoted(symbol("instance", instance.split('.').last)))
+              ) ++
+                boundary.selection.toVector.map(value => "member" -> quoted(value.member)))*
             )
           case None =>
             val instance = "@" + quoted(symbol("interface_instance", declaration.name))
@@ -1171,7 +1430,8 @@ private[nodal] object InterfaceMlir:
         sourceMetadata: String => String,
         sourceLocation: String => String,
         validateCapabilitySource: (String, String, String, String) => Unit,
-        exactPayloadType: (String, String, String) => Boolean
+        exactPayloadType: (String, String, String, String) => Boolean,
+        selectedEffects: Option[Vector[KernelDigitalConnectivitySnapshot]] = None
     ): Vector[String] =
       val output = mutable.ArrayBuffer.empty[String]
       val accessed = mutable.HashMap.empty[(String, String), (String, String)]
@@ -1180,7 +1440,8 @@ private[nodal] object InterfaceMlir:
         val roleName = role.get
         accessed.getOrElseUpdate(
           path -> roleName, {
-            val result = "%interface_member_" + hash(path + "\u0000" + roleName)
+            val salt = selectedEffects.map(_.head.path).getOrElse("")
+            val result = "%interface_member_" + hash(path + "\u0000" + roleName + salt)
             val leafType = memberType(actualMember(endpoint, selected), nativeType)
             val resultType = if endpoint.dimensions.isEmpty then leafType
             else s"!nodal.shaped<${quoted(endpoint.dimensions.mkString(","))}, $leafType>"
@@ -1192,13 +1453,24 @@ private[nodal] object InterfaceMlir:
               "instance" ->
                 ("@" + quoted(symbol("interface_instance", declarations(endpoint.path)._2.name))),
               "path" -> quoted(selected.name),
-              "metadata" -> metadata(sourceMetadata(path), "role" -> quoted(roleName))
+              "metadata" -> metadata(
+                sourceMetadata(selectedEffects
+                  .map(group =>
+                    s"${group.head.path}.access.${endpoint.path}.${selected.name}.$roleName"
+                  )
+                  .getOrElse(path)),
+                "role" -> quoted(roleName)
+              )
             )
             result -> resultType
           }
         )
-      effects.getOrElse(module.path, Vector.empty).sortBy(_.path).foreach: effect =>
-        val info = metadata(sourceMetadata(effect.path))
+      selectedEffects.getOrElse(effects.getOrElse(module.path, Vector.empty)
+        .filter(_.sourceOrdinal.isEmpty)).sortBy(_.path).foreach: effect =>
+        val info = metadata(
+          sourceMetadata(effect.path),
+          effect.sourceOrdinal.toVector.map(ordinal => "source_ordinal" -> s"$ordinal : i64")*
+        )
         effect.kind match
           case "interface-connect" =>
             output += operation(
@@ -1221,7 +1493,8 @@ private[nodal] object InterfaceMlir:
                 else
                   s"Vec(${effect.dataType.get};${members(effect.target)._1.dimensions.mkString("x")})"
                 ,
-                effect.path
+                effect.path,
+                effect.target
               ),
               "interface driver value differs from exact member payload",
               effect.path
@@ -1257,9 +1530,10 @@ private[nodal] object InterfaceMlir:
             )
           case _ =>
             val target = resolve(effect.target)
-            val payload = nativeType(effect.dataType.get, effect.path)
+            val endpoint = nets(effect.target)
+            val enableType = nativeType(netEnableType(endpoint), effect.path)
             val driver = "%net_driver_" + hash(effect.path)
-            val driverType = s"!nodal.driver<$payload>"
+            val driverType = netCarrierType(endpoint, driver = true, nativeType)
             output += operation(
               "nodal.net_driver",
               Vector(driver -> driverType),
@@ -1280,8 +1554,13 @@ private[nodal] object InterfaceMlir:
                 val value = resolve(effect.value.get)
                 val enable = resolve(effect.enable.get)
                 requireValid(
-                  exactPayloadType(effect.value.get, effect.dataType.get, effect.path) &&
-                    enable._2 == "!nodal.bits<1>",
+                  exactPayloadType(
+                    effect.value.get,
+                    effect.dataType.get,
+                    effect.path,
+                    effect.target
+                  ) &&
+                    enable._2 == enableType,
                   "net driver value/enable lost exact types",
                   effect.path
                 )
@@ -1296,8 +1575,8 @@ private[nodal] object InterfaceMlir:
               case "inout-drive-low" | "inout-drive-high" =>
                 val enable = resolve(effect.enable.get)
                 requireValid(
-                  enable._2 == "!nodal.bits<1>",
-                  "active-level driver enable lost Bool type",
+                  enable._2 == enableType,
+                  "active-level driver enable lost its exact pointwise Bool type",
                   effect.path
                 )
                 output += operation(

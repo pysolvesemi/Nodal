@@ -12,7 +12,8 @@ private[nodal] object ConstructionInterfaceLayout:
       mode: Option[String],
       nestedRoles: Vector[(String, String)],
       nestedInterfaces: Vector[(String, String)],
-      analogAttributes: Vector[(String, String)]
+      analogAttributes: Vector[(String, String)],
+      definition: InterfaceType[?]
   ):
     def rendered(renderType: DataType[?] => String): String =
       dataType.map(renderType).orElse(analogType).getOrElse(
@@ -184,7 +185,8 @@ private[nodal] object ConstructionInterfaceLayout:
           mode,
           nestedRoles,
           nestedInterfaces,
-          analogAttributes
+          analogAttributes,
+          current
         )
         def protocol(payload: DataType[?], stream: Boolean): Vector[Leaf] =
           val forward = access match

@@ -1096,6 +1096,14 @@ private[nodal] object ReproducibilityContract:
                   "data_type" -> optionalString(declaration.dataType),
                   "domain" -> optionalString(declaration.domain),
                   "attributes" -> attributes(declaration.attributes)
+                ) ++ declaration.instancePort.filter(_.selection.nonEmpty).toVector.map(boundary =>
+                  "instance_port" -> obj((Vector(
+                    "instance" -> string(boundary.instance),
+                    "port" -> string(boundary.port),
+                    "direction" -> string(boundary.direction),
+                    "selection" -> generatedSelection(boundary.selection.get)
+                  ) ++
+                    boundary.region.toVector.map(region => "region" -> string(region)))*)
                 ) ++ declaration.interfaceBoundary.toVector.map(boundary =>
                   "interface_boundary" -> interfaceBoundary(boundary)
                 ) ++ declaration.resolvedBoundary.toVector.map(boundary =>
@@ -1234,7 +1242,7 @@ private[nodal] object ReproducibilityContract:
       ))
     ).toVector ++ Option.when(snapshot.interfaceContracts.nonEmpty)(
       "interface_contracts" -> array(snapshot.interfaceContracts.sortBy(_.path).map(endpoint =>
-        obj(
+        obj((Vector(
           "path" -> string(endpoint.path),
           "owner" -> string(endpoint.owner),
           "identity" -> string(endpoint.identity),
@@ -1252,11 +1260,20 @@ private[nodal] object ReproducibilityContract:
           "actual_member_types" -> array(endpoint.actualMemberTypes.map((name, dataType) =>
             obj("name" -> string(name), "data_type" -> string(dataType))
           ))
-        )
+        ) ++ Option.when(endpoint.definitionContexts.nonEmpty)("definition_contexts" ->
+          array(endpoint.definitionContexts.map(context =>
+            obj(
+              "application" -> string(context.application),
+              "identity" -> string(context.identity),
+              "owner" -> string(context.owner),
+              "region" -> string(context.region),
+              "source_ordinal" -> number(context.sourceOrdinal)
+            )
+          ))).toVector)*)
       ))
     ).toVector ++ Option.when(snapshot.digitalConnectivity.nonEmpty)(
       "digital_connectivity" -> array(snapshot.digitalConnectivity.sortBy(_.path).map(effect =>
-        obj(
+        obj((Vector(
           "path" -> string(effect.path),
           "owner" -> string(effect.owner),
           "kind" -> string(effect.kind),
@@ -1274,7 +1291,8 @@ private[nodal] object ReproducibilityContract:
           "source_nested_roles" -> interfaceRoles(effect.sourceNestedRoles),
           "endpoint_role" -> optionalString(effect.endpointRole),
           "source_endpoint_role" -> optionalString(effect.sourceEndpointRole)
-        )
+        ) ++ effect.region.toVector.map(region => "region" -> string(region)) ++
+          effect.sourceOrdinal.toVector.map(ordinal => "source_ordinal" -> number(ordinal)))*)
       ))
     ).toVector ++ Option.when(nodeSelections.nonEmpty)(
       "node_array_selections" -> array(nodeSelections.map: selection =>
@@ -1308,8 +1326,29 @@ private[nodal] object ReproducibilityContract:
         snapshot.instanceArrayRoots.isEmpty &&
         snapshot.parameterExpressions.nonEmpty)(parameterExpressionInventory(snapshot)).toVector)
 
+  private def generatedSelection(value: KernelGeneratedMemberSnapshot): JsonValue =
+    obj((Vector(
+      "family" -> string(value.family),
+      "ordinal" -> string(value.ordinal),
+      "member" -> string(value.member),
+      "access" -> string(value.access)
+    ) ++
+      value.familyInput.toVector.map(input => "family_input" -> string(input)) ++
+      Option.when(value.selectionPrefix.nonEmpty)(
+        "selection_prefix" -> array(value.selectionPrefix.map(frame =>
+          obj(
+            "family" -> string(frame.family),
+            "ordinal" -> string(frame.ordinal),
+            "member" -> string(frame.member)
+          )
+        ))
+      ).toVector)*)
+
   private def interfaceBoundary(value: KernelInterfaceBoundarySnapshot): JsonValue =
-    obj("instance" -> string(value.instance), "endpoint" -> string(value.endpoint))
+    obj((value.instance.toVector.map(instance => "instance" -> string(instance)) ++
+      Vector("endpoint" -> string(value.endpoint)) ++
+      value.selection.toVector.map(selection => "selection" -> generatedSelection(selection)) ++
+      value.region.toVector.map(region => "region" -> string(region)))*)
 
   private def resolvedMember(value: KernelInterfaceMemberOrigin): JsonValue =
     obj(

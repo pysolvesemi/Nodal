@@ -12,14 +12,14 @@ private[nodal] object DeferredResultType:
   def pending(value: Any): Boolean = value match
     case expression: KernelExpr[?] => !expression.typeFinalized
     case signal: Signal[?] => pendingType(signal.dataType)
-    case endpoint: ResolvedDigital[?, ?] => pendingType(endpoint.dataType)
+    case endpoint: ResolvedDigitalCapability[?, ?] => pendingType(endpoint.dataType)
     case _ => false
 
   /** The existing descriptor/intent remains the proof obligation after once-only sealing. */
   def hasTypeObligation(value: Any): Boolean = value match
     case expression: KernelExpr[?] => expression.typeIntent.nonEmpty
     case signal: Signal[?] => signal.dataType.isInstanceOf[KernelInstanceDataType[?]]
-    case endpoint: ResolvedDigital[?, ?] =>
+    case endpoint: ResolvedDigitalCapability[?, ?] =>
       endpoint.dataType.isInstanceOf[KernelInstanceDataType[?]]
     case _ => false
 

@@ -184,7 +184,10 @@ private[nodal] object DigitalScalarContract:
 
   def literal[A <: Data](kind: String, value: Int, width: Expr[Integer]): Expr[A] =
     val descriptor = KernelTypeDescriptor(kind, Vector(width))
-    DigitalValueContract.validateLiteral(kind, BigInt(value), widthBounds(descriptor)._1)
+    val _ = DigitalValueContract.literalRequiredWidth(kind, BigInt(value))
+    val facts = ConstructionKernel.digitalLiteralWidthFacts(descriptor)
+      .getOrElse(Some(widthBounds(descriptor)))
+    facts.foreach(bounds => DigitalValueContract.validateLiteral(kind, BigInt(value), bounds._1))
     val expression = new KernelExpr[A](
       Vector(value, width),
       resultType = Some(descriptor),

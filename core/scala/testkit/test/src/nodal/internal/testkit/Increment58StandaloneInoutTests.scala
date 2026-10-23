@@ -57,7 +57,7 @@ object Increment58StandaloneInoutTests extends TestSuite:
       val boundary = selected.boundary.get
       val variants = Vector(
         selected.copy(boundary = Some(boundary.copy(endpoint = boundary.endpoint + "_missing"))),
-        selected.copy(boundary = Some(boundary.copy(instance = boundary.instance + "_missing"))),
+        selected.copy(boundary = Some(boundary.copy(instance = boundary.instance.map(_ + "_missing")))),
         selected.copy(mode = "open-drain"),
         selected.copy(profile = "TechnologyMapped"),
         selected.copy(placement = "PadCellBoundary"),
@@ -99,7 +99,7 @@ object Increment58StandaloneInoutTests extends TestSuite:
       val boundary = selected.boundary.get
       assert(
         original.contains("\"resolved_boundary\""),
-        original.contains(boundary.instance),
+        boundary.instance.exists(original.contains),
         original.contains(boundary.endpoint)
       )
       val changed = snapshot.copy(resolvedNets =

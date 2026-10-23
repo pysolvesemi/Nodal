@@ -1582,3 +1582,30 @@ profiles remain open. F58 is incomplete.
 The accepted occurrence test contains one two-space blank line inside its
 embedded raw MLIR fixture (line 68). It is preserved as exact tested input; all
 other staged whitespace checks pass. No semantic test assertion is relaxed.
+
+## Checkpoint 47 — coherent source ownership and array prerequisites
+
+The exact 108-file source engine in
+`.work/f58-generated-occurrences/source-coherent-final/accepted` manifest
+`f54a0979` is preserved with its actual fixtures, not an assumed unchanged
+403-file test inventory. Forty-four paths change: 23 engine paths, seven
+predecessor fixtures, six selected/resolved-array maintained files and eight
+global-Interface initializer fixture/runner files. All bytes match the accepted
+source manifest. Other omitted examples/tests remain untouched.
+
+Historical strict API/plugin/bridge compilation passed. Eight maintained
+resolved groups, six selected groups, 97 affected predecessor groups, six
+initializer stages/eight runtime outcomes and 29 native-exported inputs used
+query compiler `d59b274b`. Frontend/integration classes were reused, not freshly
+rebuilt as a complete testkit. Eight ordinary and eight selected byte-parity
+cases pass; three dependent artifacts differ only in checked source locations
+and derived origin IDs. Counts are separate scopes, not an additive total.
+
+The accepted record also retains 19 checked-empty initialization and seven
+guarded-ordering outcomes; their scratch-harness maintenance is audited
+separately, not presented as a new maintained suite here. The unified native
+checkpoint precedes this source, but its older body/selected waveforms used
+distinct recorded source stacks. Only matching resolved-array fixture bytes
+are asserted; no blanket source-to-target rerun is implied. Public array rank
+limits, broader selected/generated electrical admission and dependent payload
+target work remain open.

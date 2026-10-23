@@ -119,7 +119,9 @@ private[nodal] object HierarchyMlir:
             "demanded requirement Reset has no actual operand",
             binding.path
           )
-      val proxyKeys = module.declarations.flatMap(_.instancePort.map(p => p.instance -> p.port))
+      val proxyKeys = module.declarations.flatMap(_.instancePort.map(p =>
+        (p.instance, p.port, p.selection, p.region)
+      ))
       check(
         proxyKeys.distinct.size == proxyKeys.size,
         "aliased instance port references must share one declaration",
@@ -146,7 +148,13 @@ private[nodal] object HierarchyMlir:
               declaration.dataType.nonEmpty && port.dataType.nonEmpty &&
               declaration.domain.isEmpty &&
               declaration.attributes.isEmpty &&
-              declaration.generatedScope == instance.generatedScope &&
+              (if proxy.selection.isEmpty then
+                 declaration.generatedScope == instance.generatedScope && proxy.region.isEmpty
+               else
+                 instance.generatedScope.nonEmpty && proxy.selection.exists(selection =>
+                   selection.family == instance.generatedScope.get.owner &&
+                     selection.access == "read_only"
+                 ) && declaration.generatedScope.forall(scope => proxy.region.contains(scope.owner))) &&
               actualScope(instance, module.path) &&
               port.generatedScope.isEmpty && declaration.conservativeDimensions.isEmpty,
             "instance port requires exact digital type, direction and direct boundary ownership",
@@ -187,7 +195,7 @@ private[nodal] object HierarchyMlir:
     def roots(module: KernelModuleSnapshot): Vector[String] =
       physicalRoots(module) ++
         module.declarations.filter(value =>
-          value.instancePort.nonEmpty && value.generatedScope.isEmpty
+          value.instancePort.exists(_.region.isEmpty) && value.generatedScope.isEmpty
         ).map(_.path)
 
     def renderBindings(

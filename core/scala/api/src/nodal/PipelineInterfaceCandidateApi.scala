@@ -64,15 +64,20 @@ object InterfaceMember:
 final class InterfaceType[I <: Interface] private[nodal] (
     val name: String,
     val members: Seq[InterfaceMember],
-    private[nodal] val roles: Vector[Role[?]] = Vector.empty
+    private[nodal] val roles: Vector[Role[?]] = Vector.empty,
+    private[nodal] val constructionContext: Option[InterfaceDefinitionContext] = None
 ):
   /** Bind actual named role maps for nested Interface applications without global registration. */
   def withRoles(bindings: Role[?]*): InterfaceType[I] =
-    new InterfaceType(name, members, roles ++ bindings)
+    new InterfaceType(name, members, roles ++ bindings, constructionContext)
 
 object Interface:
   def apply[I <: Interface](name: String, members: InterfaceMember*): InterfaceType[I] =
-    new InterfaceType(name, members.toSeq)
+    new InterfaceType(
+      name,
+      members.toSeq,
+      constructionContext = ConstructionKernel.interfaceDefinitionContext()
+    )
 
 /** Stable named role identity. */
 trait RoleKind
@@ -259,10 +264,12 @@ final class InterfaceArray[I <: Interface, R <: RoleKind] private[nodal] (
     val name: String,
     val domain: ClockDomain,
     private[nodal] val exported: Boolean = true,
-    private[nodal] val boundary: Boolean = false
+    private[nodal] val boundary: Boolean = false,
+    private[nodal] val origin: Option[InterfaceArray[I, ?]] = None
 ) extends InterfaceEndpoint:
   /** Local declared count. A projected count is finalized after all Instance overrides. */
   def count: Dimension =
+    if origin.nonEmpty then return origin.get.count
     if boundary then
       DigitalInterfaceContract.fail(
         7,
@@ -385,6 +392,24 @@ extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
     ConstructionKernel.operation("interface-observe", endpoint, member)
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfaceArray[I, R])
+  /** A whole-family resolved capability over this exact declared array member. */
+  def resolved[A <: Bits, M <: DriveMode](
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: InterfaceMember.Nested[?]*
+  ): ResolvedDigitalArray[A, M] =
+    ConstructionKernel.interfaceResolvedArrayMember(endpoint, field, through.toVector)
+
+  def monitorView: InterfaceArray[I, MonitorRole] =
+    new InterfaceArray(
+      endpoint.definition,
+      monitor,
+      endpoint.formalCount,
+      s"${endpoint.name}.monitor",
+      endpoint.domain,
+      exported = false,
+      origin = Some(endpoint)
+    )
+
   def connectExact[OtherRole <: RoleKind](
       other: InterfaceArray[I, OtherRole]
   )(using RoleConnection[R, OtherRole]): Unit =
@@ -442,12 +467,29 @@ enum ResolutionProfile:
   case FullResolvedSimulation
   case TechnologyMapped
 
-/** A resolved capability. Physical placement belongs only to an actual standalone declaration. */
-sealed trait ResolvedDigital[A <: Bits, M <: DriveMode]:
+/** Closed internal carrier shared by scalar and whole Interface-array views. */
+private[nodal] sealed trait ResolvedDigitalCapability[A <: Data, M <: DriveMode]:
   val dataType: DataType[A]
   val mode: DriveMode.Value[M]
+  def enableDataType: DataType[?]
   final def read: Expr[A] =
     DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
+
+/** A scalar resolved capability. Standalone declarations remain scalar only. */
+sealed trait ResolvedDigital[A <: Bits, M <: DriveMode] extends ResolvedDigitalCapability[A, M]:
+  final def enableDataType: DataType[Bool] = Bool
+
+/** A whole actual InterfaceArray member, with pointwise data and enable geometry. */
+sealed trait ResolvedDigitalArray[A <: Bits, M <: DriveMode]
+    extends ResolvedDigitalCapability[Vec[A], M]:
+  val enableDataType: DataType[Vec[Bool]]
+
+private[nodal] sealed trait InterfaceResolvedMember[A <: Data, M <: DriveMode]
+    extends ResolvedDigitalCapability[A, M]:
+  val endpoint: InterfaceEndpoint
+  val declaration: InterfaceMember.DigitalResolved[?, M]
+  val through: Vector[InterfaceMember.Nested[?]]
+  val member: String
 
 private[nodal] final class InterfaceResolvedView[A <: Bits, M <: DriveMode](
     val dataType: DataType[A],
@@ -456,7 +498,17 @@ private[nodal] final class InterfaceResolvedView[A <: Bits, M <: DriveMode](
     val declaration: InterfaceMember.DigitalResolved[A, M],
     val through: Vector[InterfaceMember.Nested[?]],
     val member: String
-) extends ResolvedDigital[A, M]
+) extends ResolvedDigital[A, M] with InterfaceResolvedMember[A, M]
+
+private[nodal] final class InterfaceResolvedArrayView[A <: Bits, M <: DriveMode](
+    val dataType: DataType[Vec[A]],
+    val enableDataType: DataType[Vec[Bool]],
+    val mode: DriveMode.Value[M],
+    val endpoint: InterfaceArray[?, ?],
+    val declaration: InterfaceMember.DigitalResolved[A, M],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String
+) extends ResolvedDigitalArray[A, M] with InterfaceResolvedMember[Vec[A], M]
 
 final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val dataType: DataType[A],
@@ -500,6 +552,13 @@ final class TriStateCarrier[A <: Bits, M <: DriveMode] private[nodal] (
     val mode: DriveMode.Value[M]
 )
 
+final class TriStateArrayCarrier[A <: Bits, M <: DriveMode] private[nodal] (
+    val read: Expr[Vec[A]],
+    val write: Expr[Vec[A]],
+    val enable: Expr[Vec[Bool]],
+    val mode: DriveMode.Value[M]
+)
+
 final class PadAdapter[A <: Bits, M <: DriveMode] private[nodal] (
     val endpoint: DigitalInout[A, M],
     val cell: String
@@ -539,6 +598,38 @@ extension [A <: Bits](endpoint: ResolvedDigital[A, DriveMode.OpenSource])
 def passThrough[A <: Bits, M <: DriveMode](
     outer: ResolvedDigital[A, M],
     inner: ResolvedDigital[A, M]
+): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
+
+extension [A <: Bits, M <: DriveMode](endpoint: ResolvedDigitalArray[A, M])
+  def drive(value: Expr[Vec[A]], enable: Expr[Vec[Bool]])(using ArbitraryDrive[M]): Unit =
+    ConstructionKernel.operation("inout-drive", endpoint, value, enable)
+
+  def highZ()(using ReleasableDrive[M]): Unit =
+    ConstructionKernel.operation("inout-high-z", endpoint)
+
+  def split: TriStateArrayCarrier[A, M] =
+    new TriStateArrayCarrier(
+      endpoint.read,
+      DigitalInterfaceContract.netExpression("digital_net_write_view", endpoint, endpoint.dataType),
+      DigitalInterfaceContract.netExpression(
+        "digital_net_enable_view",
+        endpoint,
+        endpoint.enableDataType
+      ),
+      endpoint.mode
+    )
+
+extension [A <: Bits](endpoint: ResolvedDigitalArray[A, DriveMode.OpenDrain])
+  def driveLow(enable: Expr[Vec[Bool]]): Unit =
+    ConstructionKernel.operation("inout-drive-low", endpoint, enable)
+
+extension [A <: Bits](endpoint: ResolvedDigitalArray[A, DriveMode.OpenSource])
+  def driveHigh(enable: Expr[Vec[Bool]]): Unit =
+    ConstructionKernel.operation("inout-drive-high", endpoint, enable)
+
+def passThrough[A <: Bits, M <: DriveMode](
+    outer: ResolvedDigitalArray[A, M],
+    inner: ResolvedDigitalArray[A, M]
 ): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
 
 def padAdapter[A <: Bits, M <: DriveMode](

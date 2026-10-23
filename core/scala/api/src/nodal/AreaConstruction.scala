@@ -50,6 +50,41 @@ private[nodal] final case class KernelGeneratedMemberSnapshot(
     familyInput: Option[String] = None
 )
 
+/** Exact non-Data exported symbol selection, sharing the original family reference and prefix. */
+private[nodal] final case class GeneratedSymbolSelectionRecord(
+    reference: GeneratedAreaRef[?],
+    member: String
+):
+  private def ordinal(value: Int | Expr[Integer]): Any = value match
+    case literal: Int => literal.toLong
+    case expression: KernelExpr[?] =>
+      expression.literal.filter(_.kind == "integer").flatMap(_.value.toLongOption)
+        .getOrElse(expression)
+    case expression => expression
+  private val identity = (
+    reference.family.generatedRegion,
+    ordinal(reference.ordinal),
+    reference.members,
+    reference.family.selectionPrefix.map(value => (value.family, ordinal(value.ordinal), value.members)),
+    member
+  )
+  override def equals(other: Any): Boolean = other match
+    case value: GeneratedSymbolSelectionRecord => identity == value.identity
+    case _ => false
+  override def hashCode(): Int = identity.hashCode()
+
+private[nodal] final case class InstanceSelectionRecord(
+    instance: Instance[?],
+    generated: Option[GeneratedSymbolSelectionRecord] = None
+)
+
+private[nodal] final case class InstancePortBoundaryRecord(
+    instance: InstanceRecord,
+    port: DeclarationRef,
+    generated: Option[GeneratedSymbolSelectionRecord] = None,
+    scope: Option[DigitalValueRegionRecord] = None
+)
+
 private[nodal] final case class GeneratedAreaMemberRecord(
     family: GeneratedRegionRecord,
     ordinal: Int | Expr[Integer],
@@ -74,3 +109,11 @@ private[nodal] final class AreaRecord(
   val members: mutable.LinkedHashMap[String, AreaMemberRecord] = mutable.LinkedHashMap.empty
   val declarations: mutable.ArrayBuffer[DeclarationRef] = mutable.ArrayBuffer.empty
   val instances: mutable.ArrayBuffer[InstanceRecord] = mutable.ArrayBuffer.empty
+
+/** One boundary projection of an original complete Interface endpoint. */
+private[nodal] final case class InterfaceBoundaryRecord(
+    instance: Option[InstanceRecord],
+    port: DeclarationRef,
+    generated: Option[GeneratedSymbolSelectionRecord] = None,
+    scope: Option[DigitalValueRegionRecord] = None
+)

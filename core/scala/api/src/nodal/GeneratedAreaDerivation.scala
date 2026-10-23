@@ -36,10 +36,23 @@ private[nodal] object GeneratedAreaDerivation:
     result.baseType(Symbol.requiredClass("nodal.GeneratedAreas")).typeArgs match
       case element :: Nil => element.asType match
           case '[child] => '{ GeneratedAreaRuntime.family[child & Area]($value, $name) }
-      case _ => result.asType match
+      case _ => result.baseType(Symbol.requiredClass("nodal.Instance")).typeArgs match
+          case element :: Nil => element.asType match
+              case '[child] => '{ GeneratedAreaRuntime.instance[child & Module]($value, $name) }
+          case _ => valueMember(value, name, result)
+
+  private def valueMember[A <: Area: Type](using quotes: Quotes)(
+      value: QuotedExpr[GeneratedAreaRef[A]],
+      name: QuotedExpr[String],
+      result: quotes.reflect.TypeRepr
+  ): QuotedExpr[Any] =
+    import quotes.reflect.*
+    result.asType match
           case '[member] =>
             if result <:< TypeRepr.of[Area] then
               '{ GeneratedAreaRuntime.nested[member & Area]($value, $name) }
+            else if result <:< TypeRepr.of[InterfaceEndpoint] then
+              '{ GeneratedAreaRuntime.interface[member & InterfaceEndpoint]($value, $name) }
             else if result <:< TypeRepr.of[Expr[Data]] then
               val kind =
                 if result.baseType(Symbol.requiredClass("nodal.Register")).typeArgs.nonEmpty then

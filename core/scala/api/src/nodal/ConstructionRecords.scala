@@ -99,7 +99,9 @@ private[nodal] final case class KernelDeclarationSnapshot(
 private[nodal] final case class KernelInstancePortSnapshot(
     instance: String,
     port: String,
-    direction: String
+    direction: String,
+    selection: Option[KernelGeneratedMemberSnapshot] = None,
+    region: Option[String] = None
 )
 
 /** Executable immediate-child binding; actual is always parent-local, unlike resolved occurrence
@@ -851,6 +853,14 @@ private final class ModuleRecord(
   var scaffoldExpressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
   var externalName: Option[String] = None
+
+/** Immutable construction provenance, retained by the existing complete Interface definition. */
+private[nodal] final case class InterfaceDefinitionContext(
+    owner: ModuleRecord,
+    region: DigitalValueRegionRecord,
+    sourceOrdinal: Int,
+    source: Option[SourceSpan]
+)
 
 private final case class Operation(
     owner: Long,

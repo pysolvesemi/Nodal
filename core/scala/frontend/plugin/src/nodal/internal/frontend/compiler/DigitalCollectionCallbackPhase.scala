@@ -45,12 +45,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var areaMemberMethods = Set.empty[Symbol]
   private var pureModules = Set.empty[Symbol]
   private var factories = Set.empty[Symbol]
+  private var globalInterfaceInitializers = Set.empty[Symbol]
   private var iterationFactories = Set.empty[Symbol]
   private var loops = Set.empty[Symbol]
   private var ranges = Set.empty[Symbol]
   private var areaRanges = Set.empty[Symbol]
   private var areaRangeFactories = Set.empty[Symbol]
   private var areaFamilyMethods = Set.empty[Symbol]
+  private var areaInterfaceMethods = Set.empty[Symbol]
+  private var areaInterfaceModule: Symbol = NoSymbol
+  private var selectedInstanceClosures = Set.empty[Symbol]
   private var loopMethods = Set.empty[Symbol]
   private var loopModules = Set.empty[Symbol]
   private var rangeMethods = Set.empty[Symbol]
@@ -108,6 +112,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     collections = methods(owner, "map", "zipWith", "fold", "scan", "reduce", "reduceBalancedTree")
     pureModules += owner
     factories = methods(requiredModule("nodal.DigitalCollectionCallback"), "checked1", "checked2")
+    globalInterfaceInitializers =
+      methods(requiredModule("nodal.DigitalCollectionCallback"), "initializeGlobalInterface")
+    factories ++= globalInterfaceInitializers
+    factories ++= methods(requiredModule("nodal.ConstructionKernel"), "initializeGlobalInterface")
     val structuralRuntime = requiredModule("nodal.StructuralIfRuntime")
     structuralModules += structuralRuntime
     structuralModules += requiredModule("nodal.DigitalCollectionCallback")
@@ -197,7 +205,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         methods(requiredClass("nodal.DigitalUIntOperators"), "-") ++
         moduleMethods("nodal.SInt", "+", "-", ">>") ++
         moduleMethods("nodal.Bits", ">>") ++
-        moduleMethods("nodal.UInt") ++
+        moduleMethods("nodal.UInt", "apply") ++
+        moduleMethods("nodal.SInt", "apply") ++
+        moduleMethods("nodal.Bits", "apply") ++
+        moduleMethods("nodal.Vec", "apply") ++
         moduleMethods("nodal.DigitalCombinationalApi$package", "select") ++
         moduleMethods("nodal.DigitalAggregateApi$package", "field", "value", "member") ++
         areaMemberMethods ++
@@ -208,6 +219,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         // argument still traverses the same bounded effect and ownership checks.
         moduleMethods("nodal.Struct", "apply") ++
         moduleMethods("nodal.StructField", "apply") ++
+        moduleMethods("nodal.Interface", "apply") ++
+        methods(requiredClass("nodal.InterfaceType"), "withRoles") ++
+        moduleMethods("nodal.Role", "apply") ++
+        moduleMethods("nodal.InterfaceMember", "value", "valid", "stream", "nested") ++
+        moduleMethods("nodal.RoleAccess.In", "apply") ++
+        moduleMethods("nodal.RoleAccess.Out", "apply") ++
+        moduleMethods("nodal.RoleAccess.Observe", "apply") ++
+        moduleMethods("nodal.RoleAccess.Master", "apply") ++
+        moduleMethods("nodal.RoleAccess.Slave", "apply") ++
+        moduleMethods("nodal.RoleAccess.Nested", "apply") ++
         methods(
           owner,
           "S",
@@ -342,6 +363,39 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         "toLong"
       )
 
+    // The enum companion is immutable; only the exact case factories above are sanctioned.
+    pureModules += requiredModule("nodal.RoleAccess")
+    // Library role witnesses are empty immutable objects, not endpoint construction authority.
+    List(
+      "masterCanDrive",
+      "slaveCanDrive",
+      "sourceCanDrive",
+      "sinkCanDrive",
+      "initiatorCanDrive",
+      "targetCanDrive",
+      "controllerCanDrive",
+      "peripheralCanDrive",
+      "deviceCanDrive",
+      "environmentCanDrive"
+    ).foreach(name =>
+      pureModules += requiredModule("nodal.RoleCanDrive." + name)
+    )
+    pureModules += requiredModule("nodal.RoleCanDrive")
+    List(
+      "masterSlave",
+      "slaveMaster",
+      "sourceSink",
+      "sinkSource",
+      "initiatorTarget",
+      "targetInitiator",
+      "controllerPeripheral",
+      "peripheralController",
+      "deviceEnvironment",
+      "environmentDevice"
+    ).foreach(name =>
+      pureModules += requiredModule("nodal.RoleConnection." + name)
+    )
+    pureModules += requiredModule("nodal.RoleConnection")
     // Default expressions are part of the trusted library method's contract too (e.g. slice axis).
     pureMethods ++= defaultGetters(pureMethods)
     initializeImmutableFsmProfile()
@@ -453,8 +507,22 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         "checkedAreaRange"
       )
     factories ++= iterationFactories
-    areaFamilyMethods = methods(requiredModule("nodal.GeneratedAreaRuntime"), "bind") ++
-      methods(requiredModule("nodal.DigitalIterationCallback"), "checkedAreaRange")
+    selectedInstanceClosures = methods(requiredClass("nodal.GeneratedInstanceRef"), "apply")
+    areaFamilyMethods = methods(requiredModule("nodal.GeneratedAreaRuntime"), "bind", "instance") ++
+      methods(requiredModule("nodal.DigitalIterationCallback"), "checkedAreaRange") ++
+      selectedInstanceClosures
+    areaInterfaceModule = requiredModule("nodal.PipelineInterfaceCandidateApi$package")
+    areaInterfaceMethods = methods(
+      areaInterfaceModule,
+      "interfacePort",
+      "interfaceArray",
+      "driveMember",
+      "observeMember",
+      "connectExact",
+      "forwardExact"
+    ) ++
+      methods(requiredModule("nodal.GeneratedAreaRuntime"), "interface")
+    areaInterfaceMethods ++= defaultGetters(areaInterfaceMethods)
     val selections = requiredModule("nodal.SignalSelection")
     loopModules += selections
     loopMethods = methods(requiredClass("nodal.LoopIndex"), "value") ++
@@ -597,10 +665,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       rangeModule("nodal.NoisePoint", "apply") ++
       rangeModule("nodal.NoiseOptions", "apply") ++
       rangeModule("nodal.Param", "liftReal") ++
-      rangeModule("nodal.UInt", "apply") ++
-      rangeModule("nodal.SInt", "apply") ++
-      rangeModule("nodal.Bits", "apply") ++
-      rangeModule("nodal.Vec", "apply", "fill") ++
+      rangeModule("nodal.Vec", "fill") ++
       rangeModule("scala.Predef", "intWrapper") ++
       methods(requiredClass("scala.runtime.RichInt"), "to", "until") ++
       methods(requiredClass("nodal.Event"), "or", "||") ++
@@ -620,7 +685,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "reshape"
     )
     selectionMethods ++= defaultGetters(selectionMethods)
-    rangeClosures = methods(requiredClass("nodal.Instance"), "apply", "param")
+    rangeClosures = methods(requiredClass("nodal.Instance"), "apply", "param") ++
+      methods(requiredClass("nodal.GeneratedInstanceRef"), "apply")
     constructorClosures = rangeModule("nodal.ConstructorCaptureRuntime", "guard", "allocate")
     rangeMethods ++= rangeClosures ++ constructorClosures ++
       rangeModule("nodal.ConstructorCaptureRuntime", "carrierReal", "omittedReal")
@@ -815,6 +881,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.InterfaceType")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.GeneratedAreas")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.FsmDef")) ||
@@ -946,6 +1013,29 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
               tree.span
             ))
 
+  private def globalInterfaceMember(tree: ValDef)(using Context): Boolean =
+    def globalOwner(symbol: Symbol, remaining: Int): Boolean =
+      symbol.exists && remaining > 0 &&
+        (symbol.is(Package) ||
+          (symbol.is(ModuleClass) &&
+            !symbol.derivesFrom(requiredClass("nodal.Module")) &&
+            !symbol.derivesFrom(requiredClass("nodal.Area")) &&
+            globalOwner(symbol.owner, remaining - 1)))
+    !tree.rhs.isEmpty && !tree.symbol.isOneOf(Mutable | Synthetic) &&
+    tree.symbol.owner.is(ModuleClass) && globalOwner(tree.symbol.owner, 128) &&
+    tree.tpt.tpe.widen.dealias.derivesFrom(requiredClass("nodal.InterfaceType"))
+
+  override def transformValDef(tree: ValDef)(using Context): Tree =
+    if !globalInterfaceMember(tree) then tree
+    else
+      val method = newAnonFun(tree.symbol, MethodType(Nil)(_ => Nil, _ => tree.tpt.tpe))
+      val moved = tree.rhs.changeOwnerAfter(tree.symbol, method, this)
+      val closure = Closure(method, _ => moved)
+      val initialized =
+        ref(requiredMethod("nodal.DigitalCollectionCallback.initializeGlobalInterface"))
+          .appliedToType(tree.tpt.tpe).appliedTo(closure).withSpan(tree.rhs.span)
+      cpy.ValDef(tree)(rhs = initialized)
+
   override def prepareForValDef(tree: ValDef)(using Context): Context =
     structural.admitResult(tree.rhs, tree.tpt.tpe)
     ctx
@@ -1061,6 +1151,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange ||
       profile == Profile.GeneratedArea
     private val permitsAreaFamily = permitsStructure || profile == Profile.StructuralFamily
+    private def permitsInterface = directModuleInitializer || profile == Profile.GeneratedArea ||
+      profile == Profile.StructuralFamily || profile == Profile.StructuralIf
     private val permitsWrites = profile == Profile.Loop || profile == Profile.Range ||
       profile == Profile.StructuralIf || profile == Profile.StructuralFamily || profile == Profile.GeneratedArea
     // Quotes may insert a synthetic module accessor whose name is absent from the source member table.
@@ -1113,6 +1205,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         : Boolean = if profile == Profile.ImmutableFsm then immutableFsmMethods(symbol)
     else
       pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
+      (permitsInterface && areaInterfaceMethods(symbol)) ||
       (directModuleInitializer && requiredDomainMethods(symbol)) ||
       sequentialMethods(symbol) ||
       ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily) &&
@@ -1125,7 +1218,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     private def trustedModule(symbol: Symbol): Boolean =
       if profile == Profile.ImmutableFsm then immutableFsmModules(symbol)
       else
-        pureModules(symbol) ||
+        pureModules(symbol) || (permitsInterface && symbol == areaInterfaceModule) ||
         (directModuleInitializer && symbol == requiredModule("nodal.ClockDomain")) ||
         structuralModules(symbol) || sequentialModules(symbol) ||
         (permitsWrites && loopModules(symbol)) || (permitsStructure && rangeModules(symbol))
@@ -1618,7 +1711,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         tree match
           case application: Apply =>
             val symbol = application.fun.symbol
-            if instanceDomainMethods(symbol) then
+            if globalInterfaceInitializers(symbol) then
+              application.args.size == 1 &&
+              nestedCallback(application.args.head, Profile.Pure, depth + 1)
+            else if instanceDomainMethods(symbol) then
               val receiver = application.fun match
                 case selection: Select => Some(selection.qualifier)
                 case _ => None
@@ -1692,7 +1788,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                   nestedCallback(argument, Profile.StructuralRange, depth + 1)
                 else if areaRanges(symbol) && callbackArity(argument) > 0 then
                   nestedCallback(argument, Profile.GeneratedArea, depth + 1)
-                else if permitsStructure && rangeClosures(symbol) && callbackArity(argument) > 0
+                else if ((permitsStructure && rangeClosures(symbol)) ||
+                    (permitsAreaFamily && selectedInstanceClosures(symbol))) && callbackArity(
+                    argument
+                  ) > 0
                 then
                   nestedCallback(argument, Profile.Selection, depth + 1)
                 else if permitsStructure && constructorClosures(symbol) &&

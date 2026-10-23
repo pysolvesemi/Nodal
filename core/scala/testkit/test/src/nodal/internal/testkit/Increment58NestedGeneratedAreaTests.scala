@@ -112,7 +112,7 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
             if value.path == inner.path then value.copy(parent = None) else value
           )
         ),
-        "generated export requires a canonical key, exact direct storage and attested access"
+        "generated export requires a canonical key, exact direct owner and attested access"
       )
       bridgeRejected(
         snapshot.copy(generatedRegions =
@@ -120,7 +120,7 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
             if value.path == inner.path then value.copy(parent = Some(inner.path)) else value
           )
         ),
-        "generated export requires a canonical key, exact direct storage and attested access"
+        "generated export requires a canonical key, exact direct owner and attested access"
       )
       bridgeRejected(
         snapshot.copy(digitalExpressions =

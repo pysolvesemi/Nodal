@@ -178,6 +178,60 @@ private[nodal] object StructuralParameterBinding:
       unique(value._2.parameterBindings, "parameter override")
     ).getOrElse(Map.empty)
 
+    // Only exact generated-occurrence factories install these retained DAGs, once,
+    // before any resolution. Generic formal/type bindings remain unchanged.
+    private var retainedInstanceOverrides: Option[Map[String, ResolvedDimensions]] = None
+
+    def selectedGenerated(owner: String): SelectedGeneratedContext =
+      val _ = module(owner)
+      new SelectedGeneratedContext(snapshot, owner, this)
+
+    private def admitsGeneratedInduction(path: String): Boolean = generatedDomains.contains(path)
+
+    private def originalInstanceOverrides(originalBody: Query): Vector[(String, Int)] =
+      val (owner, occurrence) = instance.getOrElse(
+        invalid("generated Instance query requires its actual occurrence")
+      )
+      val generated = occurrence.generatedScope.getOrElse(
+        invalid("generated Instance query requires its actual generated scope")
+      )
+      if retainedInstanceOverrides.nonEmpty || facts.nonEmpty || memo.nonEmpty ||
+        !(originalBody.sourceSnapshot eq snapshot) ||
+        !originalBody.scope.contains(generated.owner) ||
+        !snapshot.generatedRegions.exists(family =>
+          family.path == generated.owner && family.owner == owner &&
+            family.induction == generated.induction &&
+            originalBody.admitsGeneratedInduction(family.induction)
+        )
+      then invalid("generated Instance binding requires a fresh query and exact original body")
+      overrides.toVector.flatMap: (name, token) =>
+        val formal = module(occurrence.childModule).declarations.find(_.name == name)
+          .getOrElse(invalid("override names an unknown child parameter"))
+        if formal.kind != "parameter" then invalid("override names a non-parameter declaration")
+        if !formal.dataType.contains("Integer") then None
+        else Some(name -> originalBody.resolve(owner, token))
+
+    private[StructuralParameterBinding] def installOriginalInstance(originalBody: Query): Unit =
+      val originals = originalInstanceOverrides(originalBody)
+      retainedInstanceOverrides = Some(originals.map((name, value) =>
+        name -> originalBody.exportValues(Vector(value))
+      ).toMap)
+
+    private[StructuralParameterBinding] def installSelectedInstance(
+        context: SelectedGeneratedContext,
+        originalBody: Query
+    ): Unit =
+      val originals = originalInstanceOverrides(originalBody)
+      val (owner, occurrence) = instance.get
+      context.freezeFor(snapshot, owner, occurrence.generatedScope.get)
+      val selected = originals.map: (name, original) =>
+        val value = context.importValues(originalBody, Vector(original)).head
+        val closed = context.query.exportValues(Vector(value))
+        if closed.nodes.exists(_.parameter.exists(arguments.contains)) then
+          invalid("selected Instance override retains an unselected regional Integer atom")
+        name -> closed
+      retainedInstanceOverrides = Some(selected.toMap)
+
     /** Enter one actual conditional arm through its unchanged explicit capture substitution. */
     def conditionalArm(parentRegion: Option[String], arm: KernelStructuralArmSnapshot): Query =
       if scope != parentRegion || !conditionalArmIndex.get(arm.path).exists: actual =>
@@ -312,7 +366,15 @@ private[nodal] object StructuralParameterBinding:
             then
               invalid("fixed parameter cannot be overridden")
             val result = overrideValue match
-              case Some(value) => resolve(parent, value, defaults = false)
+              case Some(value) => retainedInstanceOverrides match
+                  case Some(checked) => importValue(
+                      parent,
+                      checked.getOrElse(
+                        declaration.name,
+                        invalid("selected Instance override lacks its exact closed proof")
+                      )
+                    )
+                  case None => resolve(parent, value, defaults = false)
               case None => resolve(
                   owner,
                   attrs.getOrElse("default", invalid("parameter default is missing")),
@@ -680,6 +742,92 @@ private[nodal] object StructuralParameterBinding:
           val _ = resolve(child.path, declaration.path)
         }
 
+  /** Query-local selected coordinates are capabilities of this exact numerical proof, never a raw
+    * binding map. Consumers still verify actual export and capture rights.
+    */
+  final class SelectedGeneratedContext private[StructuralParameterBinding] (
+      snapshot: ConstructionSnapshot,
+      owner: String,
+      val query: Query
+  ):
+    private var coordinates = Map.empty[String, Int]
+    private var families = Vector.empty[KernelGeneratedRegionSnapshot]
+    private var frozen = false
+    private var remaining = 65536
+    private def charge(): Unit =
+      remaining -= 1
+      if remaining < 0 then invalid("selected family Integer proof exceeds work budget")
+
+    def importValues(original: Query, values: Vector[Int]): Vector[Int] =
+      charge()
+      if (original eq query) && coordinates.isEmpty then values
+      else query.importGeneratedValues(owner, original, values, coordinates, () => charge())
+
+    def admit(
+        family: KernelGeneratedRegionSnapshot,
+        ordinal: String,
+        originalHeader: Query,
+        proveLess: (Int, Int, Boolean) => Boolean
+    ): Unit =
+      charge()
+      if frozen || families.size >= 128 || family.owner != owner ||
+        !snapshot.generatedRegions.exists(_ eq family) ||
+        originalHeader.scope != family.lexicalParent || coordinates.contains(family.induction) ||
+        !family.digitalBody.exists(_.arguments.headOption.exists(argument =>
+          argument.path == family.induction && argument.role == "induction" &&
+            argument.dataType == "Integer"
+        )) ||
+        families.lastOption.exists(previous =>
+          !family.parent.contains(previous.path) || !family.lexicalParent.contains(previous.path)
+        )
+      then invalid("selected family requires its exact fresh ordered numerical context")
+      ordinal.toLongOption.foreach(value =>
+        if ordinal != value.toString then
+          invalid("generated ordinal literal must be canonical signed i64")
+      )
+      val header = importValues(
+        originalHeader,
+        Vector(
+          family.lower,
+          family.upperExclusive,
+          family.step
+        ).map(originalHeader.resolve(owner, _))
+      )
+      val bounds = header.map(query.bounds)
+      val index = query.resolve(owner, ordinal)
+      val domain = IterationDomain.structural(
+        bounds(0),
+        bounds(1),
+        bounds(2),
+        family.maximum,
+        identicalBounds = header(0) == header(1)
+      )
+        .fold(problem => invalid(problem.message), identity)
+      if domain.maximumTripCount > family.maximumTripCount then
+        invalid("selected domain exceeds original template cardinality")
+      val coordinate = query.compose(
+        "analog_add",
+        Vector(header(0), query.compose("analog_mul", Vector(index, header(2))))
+      )
+      IterationDomain.verifyOrdinal(domain, query.bounds(index)).left.foreach: problem =>
+        if !proveLess(query.literal(0L), index, true) || !proveLess(coordinate, header(1), false)
+        then
+          invalid(problem.message)
+      coordinates = coordinates.updated(family.induction, coordinate)
+      families :+= family
+
+    private[StructuralParameterBinding] def freezeFor(
+        actualSnapshot: ConstructionSnapshot,
+        actualOwner: String,
+        actualScope: KernelGeneratedScope
+    ): Unit =
+      if !(snapshot eq actualSnapshot) || owner != actualOwner ||
+        !families.lastOption.exists(family =>
+          family.path == actualScope.owner && family.induction == actualScope.induction
+        )
+      then invalid("selected Instance query has another exact family or owner")
+      frozen = true
+
   def sameInteger(
       snapshot: ConstructionSnapshot,
       owner: String,
@@ -748,6 +896,40 @@ private[nodal] object StructuralParameterBinding:
           result
         }
       )
+
+    /** The original generated occurrence retains its actual all-lane Integer context. Only a
+      * verified body-local consumer may use this uncached query for materialization.
+      */
+    def generated(ownerPath: String, instancePath: String, originalBody: Query): Query =
+      val occurrence = occurrences.getOrElse(
+        ownerPath -> instancePath,
+        invalid("binding is not owned by the exact immediate instance")
+      )
+      val result =
+        new Query(snapshot, Some(ownerPath -> occurrence), enclosing = Some(originalBody))
+      result.installOriginalInstance(originalBody)
+      result.validateOverrides()
+      result
+
+    /** A selected view never replaces or shares the unspecialized template cache. */
+    def selected(
+        ownerPath: String,
+        instancePath: String,
+        context: SelectedGeneratedContext,
+        originalBody: Query
+    ): Query =
+      val occurrence = occurrences.getOrElse(
+        ownerPath -> instancePath,
+        invalid("binding is not owned by the exact immediate instance")
+      )
+      // Selected legality cannot conceal a bad original lane or formal constraint.
+      val _ = generated(ownerPath, instancePath, originalBody)
+      val result =
+        new Query(snapshot, Some(ownerPath -> occurrence), enclosing = Some(context.query))
+      result.installSelectedInstance(context, originalBody)
+      result.validateOverrides()
+      result
+
     def resolveInterfaceDimensions(
         ownerPath: String,
         instancePath: String,

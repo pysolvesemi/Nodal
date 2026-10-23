@@ -174,7 +174,11 @@ private[nodal] object ScalaToMlirBridge:
           path,
           widthFamily = false,
           instanceContext = Some((resolveOwningModule(path), instance, formalPath))
-        )
+        ),
+      path => { val _ = digitalValues.interfaceSelection(path); () },
+      digitalValues.validateInterfaceEffect,
+      digitalValues.instancePortQuery,
+      digitalValues.validateInterfaceDefinitionContext
     )
     private val interfaceContractOwners = snapshot.interfaceContracts.map(_.owner).toSet
     private val interfaceMembersByPath = snapshot.interfaceContracts.flatMap(value =>
@@ -1175,7 +1179,8 @@ ${indent(body, 2)}
             )
           )
           if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) &&
-            !digitalValues.generatedDeclaration(path)
+            !digitalValues.generatedDeclaration(path) &&
+            !digitalValues.generatedInterfaceDeclaration(path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -1376,7 +1381,8 @@ ${indent(body, 2)}
       modules.foreach: module =>
         module.declarations.foreach: declaration =>
           if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" &&
-            !digitalValues.generatedDeclaration(declaration.path)
+            !digitalValues.generatedDeclaration(declaration.path) &&
+            !digitalValues.generatedInterfaceDeclaration(declaration.path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -1958,28 +1964,29 @@ ${indent(body, 2)}
         nextShapeStaticValue += 1
         result
 
-      module.declarations.sortBy(_.path).foreach: declaration =>
-        (declaration.dataType.toVector
-          .flatMap(compoundShapeDimensionPaths(_, declaration.path)) ++
-          declaration.conservativeDimensions.filter(expressionsByPath.contains))
-          .distinct
-          .foreach: dimensionPath =>
-            val (_, dataType) = emitStaticValue(
-              dimensionPath,
-              parameterSymbols,
-              declarationsByPath,
-              expressionsByPath,
-              body,
-              shapeStaticValues,
-              () => allocateShapeStaticValue(),
-              requireStructural = true
-            )
-            if dataType != "i64" then
-              fail(
-                "NODAL-BRIDGE-018",
-                "compound Vec dimension must have Integer type",
-                Some(dimensionPath)
+      module.declarations.filter(value => digitalValues.valueRegion(value.path).isEmpty)
+        .sortBy(_.path).foreach: declaration =>
+          (declaration.dataType.toVector
+            .flatMap(compoundShapeDimensionPaths(_, declaration.path)) ++
+            declaration.conservativeDimensions.filter(expressionsByPath.contains))
+            .distinct
+            .foreach: dimensionPath =>
+              val (_, dataType) = emitStaticValue(
+                dimensionPath,
+                parameterSymbols,
+                declarationsByPath,
+                expressionsByPath,
+                body,
+                shapeStaticValues,
+                () => allocateShapeStaticValue(),
+                requireStructural = true
               )
+              if dataType != "i64" then
+                fail(
+                  "NODAL-BRIDGE-018",
+                  "compound Vec dimension must have Integer type",
+                  Some(dimensionPath)
+                )
 
       val digitalTypeRoots = snapshot.digitalExpressions.filter(_.owner == module.path)
         .flatMap(value =>
@@ -1992,10 +1999,9 @@ ${indent(body, 2)}
         snapshot.interfaceContracts.filter(_.owner == module.path).flatMap: endpoint =>
           val actual = endpoint.actualMemberTypes.toMap
           endpoint.members.map(value => value.path -> actual.getOrElse(value.name, value.dataType))
-      val digitalStaticRoots = digitalTypeRoots.filter((path, _) =>
-        digitalValues.valueRegion(path).isEmpty
-      ).flatMap: (path, dataType) =>
-        compoundShapeDimensionPaths(dataType, path).map(path -> _)
+      val digitalStaticRoots = digitalTypeRoots.flatMap: (path, dataType) =>
+        compoundShapeDimensionPaths(dataType, path)
+          .filter(digitalValues.valueRegion(_).isEmpty).map(path -> _)
       val interfaceStaticRoots = snapshot.interfaceContracts.filter(_.owner == module.path)
         .flatMap(value => value.dimensions.filter(expressionsByPath.contains).map(value.path -> _))
       (digitalStaticRoots ++ interfaceStaticRoots).distinct.sortBy(identity).foreach:
@@ -2468,12 +2474,21 @@ ${indent(body, 2)}
           case (token, index) if token.toLongOption.nonEmpty =>
             (region -> token) -> s"$path.bound$index"
         }
-      val memberIdentities = snapshot.digitalExpressions.filter(_.owner == module.path)
-        .sortBy(_.path).flatMap: expression =>
-          expression.generatedMember.toVector.flatMap: member =>
-            (member.selectionPrefix.map(_.ordinal) :+ member.ordinal).zipWithIndex.collect:
-              case (token, index) if token.toLongOption.nonEmpty =>
-                (expression.region -> token) -> s"${expression.path}.ordinal$index"
+      val selectedUses = snapshot.digitalExpressions.filter(_.owner == module.path)
+        .flatMap(expression =>
+          expression.generatedMember.map(member =>
+            (expression.path, expression.region, member)
+          )
+        ) ++ module.declarations.flatMap(declaration =>
+        declaration.instancePort.flatMap(_.selection)
+          .orElse(declaration.interfaceBoundary.flatMap(_.selection)).map(member =>
+            (declaration.path, digitalValues.valueRegion(declaration.path), member)
+          )
+      )
+      val memberIdentities = selectedUses.sortBy(_._1).flatMap: (path, region, member) =>
+        (member.selectionPrefix.map(_.ordinal) :+ member.ordinal).zipWithIndex.collect:
+          case (token, index) if token.toLongOption.nonEmpty =>
+            (region -> token) -> s"$path.ordinal$index"
       val literalBoundIdentities = (boundIdentities ++ memberIdentities).groupMap(_._1)(_._2)
         .view.mapValues(_.head).toMap
       def renderDigitalStatic(
@@ -2693,6 +2708,7 @@ ${indent(body, 2)}
         parseType,
         (text, path) => parseTypeChecked(text, path, 0, Array(65536), storageContext = true),
         digitalScalarType,
+        digitalScalarFacts,
         digitalWidthRelation,
         digitalWidthFormula,
         exactDigitalValueType,
@@ -2708,7 +2724,8 @@ ${indent(body, 2)}
           ),
         location,
         renderDigitalProjection,
-        interfaceValues.declarationType,
+        (declaration, payloadType) =>
+          interfaceValues.declarationType(declaration, payloadType, interfaceNativeType),
         (expression, result, dataType, operands) =>
           interfaceValues.renderValue(
             expression,
@@ -2822,7 +2839,15 @@ ${indent(body, 2)}
               shapeStaticValues,
               () => allocateShapeStaticValue(),
               staticBody = Some(body),
-              definitionComparison = definitionComparison
+              definitionComparison = definitionComparison,
+              scopedStatic = Some((path, output) =>
+                renderDigitalStatic(
+                  path,
+                  Some(region.path),
+                  output,
+                  DigitalValueMlir.StaticPurpose.RuntimeValue
+                )
+              )
             )
           ) ++ hierarchy.renderBindings(
             module,
@@ -2831,6 +2856,54 @@ ${indent(body, 2)}
             path => bridgeMetadata(path, Vector.empty),
             location,
             Some(region.path)
+          )
+        ,
+        stableLocalSymbol,
+        (path, selection) =>
+          val output = mutable.ArrayBuffer.empty[String]
+          interfaceValues.actualTypeRoots(path).foreach: (dataType, memberPath) =>
+            prepareDigitalType(dataType, memberPath, digitalValues.valueRegion(path), output)
+          output ++= interfaceValues.renderEndpoint(
+            path,
+            selection,
+            interfaceNativeType,
+            stableLocalSymbol,
+            path => bridgeMetadata(path, Vector.empty),
+            location
+          )
+          output.toVector
+        ,
+        path => interfaceValues.endpointSymbol(path, stableLocalSymbol),
+        (effects, resolve) =>
+          interfaceValues.renderEffects(
+            module,
+            resolve,
+            interfaceNativeType,
+            stableLocalSymbol,
+            path => bridgeMetadata(path, Vector.empty),
+            location,
+            validateInterfaceCapabilitySource,
+            (valuePath, expected, usePath, memberPath) =>
+              compareDigitalValueType(
+                digitalValues.expressionType(valuePath),
+                expected,
+                usePath,
+                widthFamily = false,
+                definitionContext = digitalValues.interfaceDefinitionTypeContext(memberPath)
+              ),
+            Some(effects)
+          ),
+        interfaceValues.regionalDefinitions(module.path).map((context, types) =>
+          context -> types.flatMap((dataType, path) =>
+            compoundShapeDimensionPaths(dataType, path)
+          ).distinct
+        ),
+        context =>
+          interfaceValues.renderRegionalDefinition(
+            context,
+            interfaceNativeType,
+            stableLocalSymbol,
+            location
           )
       )
       body ++= digital.lines
@@ -2868,13 +2941,14 @@ ${indent(body, 2)}
         path => bridgeMetadata(path, Vector.empty),
         location,
         validateInterfaceCapabilitySource,
-        (valuePath, expected, usePath) =>
+        (valuePath, expected, usePath, memberPath) =>
           compareDigitalValueType(
             digitalValues.expressionType(valuePath),
             expected,
             usePath,
             widthFamily = false,
-            storageContext = false
+            storageContext = false,
+            definitionContext = digitalValues.interfaceDefinitionTypeContext(memberPath)
           )
       )
 
@@ -4803,7 +4877,8 @@ ${indent(body, 2)}
         staticValues: mutable.LinkedHashMap[String, (String, String)],
         allocateStaticValue: () => String,
         staticBody: Option[mutable.ArrayBuffer[String]] = None,
-        definitionComparison: Boolean
+        definitionComparison: Boolean,
+        scopedStatic: Option[(String, mutable.ArrayBuffer[String]) => (String, String)] = None
     ): Vector[String] =
       val moduleSymbol = moduleSymbols.getOrElse(
         instance.childModule,
@@ -4886,16 +4961,19 @@ ${indent(body, 2)}
       )
       symbolicBindings.zipWithIndex.foreach: (binding, bindingIndex) =>
         val (name, sourcePath, dataType) = binding
-        val (value, sourceType) = emitStaticValue(
-          sourcePath,
-          parameterSymbols,
-          declarationsByPath,
-          expressionsByPath,
-          staticBody.getOrElse(rendered),
-          staticValues,
-          allocateStaticValue,
-          requireStructural = false
+        val (value, sourceType) = scopedStatic.filter(_ =>
+          dataType == "i64" && digitalValues.valueRegion(sourcePath).nonEmpty
         )
+          .map(_(sourcePath, rendered)).getOrElse(emitStaticValue(
+            sourcePath,
+            parameterSymbols,
+            declarationsByPath,
+            expressionsByPath,
+            staticBody.getOrElse(rendered),
+            staticValues,
+            allocateStaticValue,
+            requireStructural = false
+          ))
         if sourceType != dataType then
           fail(
             "NODAL-BRIDGE-034",
@@ -5360,7 +5438,8 @@ ${indent(body, 2)}
         declaration: KernelDeclarationSnapshot,
         result: String,
         dataType: String,
-        initial: Option[(String, String)]
+        initial: Option[(String, String)],
+        selection: Vector[(String, String)] = Vector.empty
     ): Vector[String] =
       declaration.kind match
         case "instance-input" | "instance-output" =>
@@ -5372,6 +5451,8 @@ ${indent(body, 2)}
           val port = child.declarations.find(_.path == proxy.port).get
           Vector(operation(
             "nodal.instance_port",
+            operands = selection.map(_._1),
+            operandTypes = selection.map(_._2),
             results = Vector(result),
             resultTypes = Vector(dataType),
             attributes = Vector(
@@ -5382,7 +5463,7 @@ ${indent(body, 2)}
               "port" -> quoted(stableLocalSymbol("port", port.name)),
               "direction" -> quoted(proxy.direction),
               "metadata" -> bridgeMetadata(declaration.path, Vector.empty)
-            ),
+            ) ++ proxy.selection.toVector.map(member => "member" -> quoted(member.member)),
             semanticPath = declaration.path
           ))
         case "digital-inout" => interfaceValues.renderDeclaration(
@@ -5474,16 +5555,23 @@ ${indent(body, 2)}
       visit(text, 0)
 
     private def digitalScalarType(text: String, path: String): Option[DigitalValueMlir.ScalarType] =
+      digitalScalarFacts(text, path).flatMap(_.bounds)
+
+    private def digitalScalarFacts(
+        text: String,
+        path: String
+    ): Option[DigitalValueMlir.ScalarFacts] =
       text match
         case WidthType(kind, width) =>
           val bounds = width.toLongOption match
-            case Some(value) if width == value.toString => IterationDomain.Bounds(value, value)
+            case Some(value) if width == value.toString =>
+              Some(IterationDomain.Bounds(value, value))
             case _ =>
               val module = modulesByPath(resolveOwningModule(path))
               val reference = shapeDimensionStaticPath(module, width).getOrElse(
                 fail("NODAL-BRIDGE-054", "digital width has no exact owned identity", Some(path))
               )
-              shapeStaticBounds(
+              shapeStaticFacts(
                 module,
                 reference,
                 path,
@@ -5491,13 +5579,15 @@ ${indent(body, 2)}
                 "digital width",
                 requiredEffect = "width"
               )
-          if bounds.lower <= 0L || bounds.upper < bounds.lower then
-            fail(
-              "NODAL-BRIDGE-054",
-              "digital width is not positive for every legal parameter value",
-              Some(path)
-            )
-          Some(DigitalValueMlir.ScalarType(kind, width, bounds.lower, bounds.upper))
+          val attainedType = bounds.map: attained =>
+            if attained.lower <= 0L || attained.upper < attained.lower then
+              fail(
+                "NODAL-BRIDGE-054",
+                "digital width is not positive for every legal parameter value",
+                Some(path)
+              )
+            DigitalValueMlir.ScalarType(kind, width, attained.lower, attained.upper)
+          Some(DigitalValueMlir.ScalarFacts(kind, attainedType))
         case _ => None
 
     private def digitalWidthRelation(
@@ -5569,24 +5659,46 @@ ${indent(body, 2)}
         path: String,
         widthFamily: Boolean,
         storageContext: Boolean = true,
-        instanceContext: Option[(String, KernelInstanceSnapshot, String)] = None
+        instanceContext: Option[(String, KernelInstanceSnapshot, String)] = None,
+        definitionContext: Option[(StructuralParameterBinding.Query, String)] = None
     ): Boolean =
       // Interface boundaries permit Clock/Reset; ordinary values and nested Struct
       // fields retain the existing storage restrictions in the shared type owner.
       val _ = parseTypeChecked(left, path, 0, Array(65536), storageContext)
-      val rightPath = instanceContext.map(_._3).getOrElse(path)
+      val directContext =
+        if instanceContext.isEmpty then digitalValues.directInterfaceTypeContext(path) else None
+      val rightPath = instanceContext.map(_._3).orElse(directContext.map(_._3))
+        .orElse(definitionContext.map(_._2)).getOrElse(path)
       val _ = parseTypeChecked(right, rightPath, 0, Array(65536), storageContext)
       val owner = resolveOwningModule(path)
       val rightOwner = instanceContext.map(_._2.childModule).getOrElse(owner)
       val comparisonQuery = instanceContext.map: (parent, instance, _) =>
-        instanceIntegerQueries.query(parent, instance.path)
-      .getOrElse(integerQuery)
+        digitalValues.instancePortQuery(path, instanceIntegerQueries)
+          .getOrElse(instanceIntegerQueries.query(parent, instance.path))
+      .getOrElse(directContext.map(_._1.query).getOrElse(integerQuery))
       val pending = mutable.ArrayDeque((left, right, 0))
       val visited = mutable.HashSet.empty[(String, String)]
       var equal = true
       def sameDimension(a: String, b: String): Boolean =
         try
-          comparisonQuery.resolve(owner, a) == comparisonQuery.resolve(rightOwner, b)
+          val actual = if instanceContext.isEmpty then comparisonQuery.resolve(owner, a)
+          else
+            val original = queryForPath(path)
+            comparisonQuery.importValue(
+              owner,
+              original.exportValues(Vector(original.resolve(owner, a)))
+            )
+          val expected = directContext.map: (selected, original, _) =>
+            val id = original.resolve(rightOwner, b)
+            original.positive(id)
+            selected.importValues(original, Vector(id)).head
+          .getOrElse(definitionContext.map: (original, _) =>
+            val id = original.resolve(rightOwner, b)
+            original.positive(id)
+            if original.scope == comparisonQuery.scope then comparisonQuery.resolve(rightOwner, b)
+            else comparisonQuery.importValue(rightOwner, original.exportValues(Vector(id)))
+          .getOrElse(comparisonQuery.resolve(rightOwner, b)))
+          actual == expected
         catch
           case error: IllegalArgumentException =>
             fail("NODAL-BRIDGE-055", error.getMessage, Some(path))
@@ -5594,7 +5706,10 @@ ${indent(body, 2)}
         val (a, b, depth) = pending.removeLast()
         if depth > 128 || visited.size >= 65536 then
           fail("NODAL-BRIDGE-055", "digital type comparison exceeds structural budget", Some(path))
-        if visited.add(a -> b) && (a != b || instanceContext.nonEmpty) then
+        if visited.add(
+            a -> b
+          ) && (a != b || instanceContext.nonEmpty || directContext.nonEmpty || definitionContext.nonEmpty)
+        then
           (a, b) match
             case (WidthType(aKind, aWidth), WidthType(bKind, bWidth)) =>
               equal = aKind == bKind && (widthFamily || sameDimension(aWidth, bWidth))
@@ -6182,6 +6297,21 @@ ${indent(body, 2)}
         subject: String,
         requiredEffect: String = "shape"
     ): IterationDomain.Bounds =
+      shapeStaticFacts(module, value, diagnosticPath, diagnosticCode, subject, requiredEffect)
+        .getOrElse(fail(
+          diagnosticCode,
+          "empty Generate has no attained numeric extent",
+          Some(diagnosticPath)
+        ))
+
+    private def shapeStaticFacts(
+        module: KernelModuleSnapshot,
+        value: String,
+        diagnosticPath: String,
+        diagnosticCode: String,
+        subject: String,
+        requiredEffect: String
+    ): Option[IterationDomain.Bounds] =
       val expressions = parameterExpressionsByOwner.getOrElse(module.path, Map.empty)
       val declarations =
         module.declarations.map(declaration => declaration.path -> declaration).toMap
@@ -6231,7 +6361,7 @@ ${indent(body, 2)}
                 then invalid(s"$subject induction has no actual owned Generate body", token)
                 try
                   val query = regionalQuery(generated.path)
-                  val _ = query.bounds(query.resolve(module.path, token))
+                  val _ = query.resolveIfAttained(module.path, token).map(query.bounds)
                 catch
                   case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)
               case None =>
@@ -6245,7 +6375,10 @@ ${indent(body, 2)}
       check(value)
       try
         val query = queryForPath(value)
-        query.bounds(query.resolve(module.path, value))
+        val result = query.resolveIfAttained(module.path, value).map(query.bounds)
+        if result.isEmpty && (query.scope.isEmpty || query.scope != integerQuery.scope) then
+          invalid("empty type extent escaped its actual lexical use scope", diagnosticPath)
+        result
       catch
         case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)
 
@@ -6266,7 +6399,7 @@ ${indent(body, 2)}
       else
         modulesByPath.get(resolveOwningModule(path)).flatMap: module =>
           shapeDimensionStaticPath(module, dimension).map: staticPath =>
-            val bounds = shapeStaticBounds(
+            val bounds = shapeStaticFacts(
               module,
               staticPath,
               path,
@@ -6274,7 +6407,7 @@ ${indent(body, 2)}
               s"symbolic $requiredEffect dimension",
               requiredEffect = requiredEffect
             )
-            bounds.lower > 0L
+            bounds.forall(_.lower > 0L)
         .getOrElse(false)
 
     private object WidthType:

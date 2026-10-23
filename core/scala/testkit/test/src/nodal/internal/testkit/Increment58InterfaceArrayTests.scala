@@ -111,7 +111,7 @@ object Increment58InterfaceArrayTests extends TestSuite:
         StructuralParameterBinding.validateInterfaceDimensions(
           snapshot,
           endpoint.owner,
-          boundary.instance,
+          boundary.instance.get,
           boundary.endpoint,
           endpoint.dimensions
         )
@@ -134,9 +134,10 @@ object Increment58InterfaceArrayTests extends TestSuite:
       Vector("write-output", "wrong-shape", "raw", "foreign-count", "wrong-instance").foreach:
         mode =>
           assert(scala.util.Try(capture(mode)).failed.get.isInstanceOf[ConstructionException])
-      val unsupported =
-        scala.util.Try(ConstructionKernel.inspect(new HierarchyResolvedArrayAttempt))
-      assert(unsupported.failed.get.isInstanceOf[ConstructionException])
+      val supported = ConstructionKernel.inspect(new HierarchyResolvedArrayAttempt)
+      val endpoint = supported.interfaceContracts.find(_.path.endsWith(".endpoint")).get
+      assert(endpoint.dimensions == Vector("2"), endpoint.members.forall(_.protocol == "resolved"))
+      assert(ScalaToMlirBridge.fromSnapshot(supported).text.contains("\"nodal.interface_observe\""))
     test("bridge independently rejects forged substituted count and rank"):
       val snapshot = capture()
       val endpoint = snapshot.interfaceContracts.find(_.boundary.nonEmpty).get
@@ -180,7 +181,12 @@ object Increment58InterfaceArrayTests extends TestSuite:
       Vector("early", "late").foreach: mode =>
         val document = ScalaToMlirBridge.fromSnapshot(capture(mode))
         val directory =
-          Path.of(sys.env("NODAL_ROOT"), ".work", "f58-interface-arrays", mode).toAbsolutePath
+          Path.of(
+            sys.env("NODAL_ROOT"),
+            ".work",
+            "f58-selected-interface-predecessors-arrays",
+            mode
+          ).toAbsolutePath
         Files.createDirectories(directory)
         val _ = Files.writeString(directory.resolve("input.mlir"), document.text)
         val result = NativeCompilerClient.run(

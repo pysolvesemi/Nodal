@@ -1257,6 +1257,47 @@ LogicalResult inspectDigitalCollectionRegion(Block *body) {
   auto h = body ? signature(body->getParentOp()) : FailureOr<Signature>(failure());
   return success(succeeded(h) && h->body == body);
 }
+FailureOr<bool> inspectGeneratedCollectionTypeApplicability(Block *body,
+                                                             unsigned &remainingWork) {
+  auto charge = [&](unsigned amount) {
+    if (amount > remainingWork) {
+      remainingWork = 0;
+      return false;
+    }
+    remainingWork -= amount;
+    return true;
+  };
+  if (!charge(1) || !body || !body->getParentOp())
+    return failure();
+  Operation *operation = body->getParentOp();
+  if (!charge(body->getNumArguments()) || !charge(operation->getNumOperands()))
+    return failure();
+  // Account for the raw signature's bounded enclosing-collection walk too.
+  for (Operation *parent = operation->getParentOp(); named(parent, "nodal.collection");
+       parent = parent->getParentOp())
+    if (!charge(2))
+      return failure();
+  auto h = signature(operation);
+  if (failed(h) || h->body != body)
+    return failure();
+  bool applicable = true;
+  for (BlockArgument argument : body->getArguments()) {
+    if (!charge(1))
+      return failure();
+    if (!argument.getType().isSignlessInteger(64))
+      continue;
+    unsigned ordinal = argument.getArgNumber();
+    if (ordinal < h->ordinaryArguments) {
+      applicable = false;
+      continue;
+    }
+    Value source = operation->getOperand(h->inputs + h->seeds + ordinal - h->ordinaryArguments);
+    if (!charge(1) || !source.getType().isSignlessInteger(64) ||
+        failed(verifyCollectionValueScope(source, operation)))
+      return failure();
+  }
+  return applicable;
+}
 FailureOr<Value> collectionCaptureSource(BlockArgument argument) {
   auto h = signature(argument.getOwner()->getParentOp());
   if (failed(h) || h->body != argument.getOwner())
@@ -1302,6 +1343,12 @@ resolveCollectionIntegerTokenValue(Operation *module, StringRef token, StringRef
   auto header = inspectDigitalRegion(environment.scope());
   if (failed(header) || header->module != module)
     return failure();
+  if (isGeneratedTypeUse(environment.use())) {
+    auto dimension = resolveGeneratedTypeDimension(environment.use(), token, effect);
+    return succeeded(dimension) && dimension->expression
+               ? FailureOr<Value>(dimension->expression)
+               : FailureOr<Value>(failure());
+  }
   auto value = lookupDigitalRegionToken(environment.scope(), token);
   if (failed(value))
     return failure();
@@ -1324,6 +1371,10 @@ FailureOr<Expr> resolveCollectionIntegerToken(Operation *module, StringRef token
                                               const ParameterIntegerEnvironment &environment) {
   if (module != environment.module() || (effect != "width" && effect != "shape"))
     return failure();
+  // Generated coordinates keep their original all-lane DAG. This is an
+  // applicability dispatch, not a failure fallback into ordinary formals.
+  if (isGeneratedTypeUse(environment.use()))
+    return resolveGeneratedTypeDimensionExpression(environment.use(), token, effect);
   int64_t literal = 0;
   if (!token.getAsInteger(10, literal))
     return makeLiteralIntegerExpression(literal);

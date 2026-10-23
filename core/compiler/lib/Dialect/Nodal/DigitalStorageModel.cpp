@@ -211,10 +211,12 @@ LogicalResult verifyGeneratedFamilyOperation(Operation *operation) {
 }
 
 namespace {
-FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work);
-FailureOr<GeneratedSelectionProof> inspectSelection(Value handle, Value ordinal, StringRef member,
-                                                    Operation *operation, unsigned depth,
-                                                    unsigned &work) {
+FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work,
+                                         llvm::SmallVectorImpl<Operation *> *selectionUses);
+FailureOr<GeneratedSelectionProof>
+inspectSelection(Value handle, Value ordinal, StringRef member, Operation *operation,
+                 unsigned depth, unsigned &work,
+                 llvm::SmallVectorImpl<Operation *> *selectionUses) {
   auto rejectSelection = [&](StringRef reason) -> FailureOr<GeneratedSelectionProof> {
     (void)reject(operation, reason);
     return failure();
@@ -246,7 +248,7 @@ FailureOr<GeneratedSelectionProof> inspectSelection(Value handle, Value ordinal,
   Operation *family = handle.getDefiningOp();
   llvm::SmallVector<GeneratedSelection, 2> selections;
   if (llvm::isa_and_nonnull<GeneratedMemberOp>(family)) {
-    auto parent = inspectMember(family, depth + 1, work);
+    auto parent = inspectMember(family, depth + 1, work, selectionUses);
     if (failed(parent) || !parent->familyView)
       return rejectSelection("nested family selection requires a checked immutable family view");
     selections = std::move(parent->selections);
@@ -270,13 +272,18 @@ FailureOr<GeneratedSelectionProof> inspectSelection(Value handle, Value ordinal,
   if (!exported)
     return rejectSelection(
         "generated member key is absent from the actual closed export inventory");
-  auto coordinate = resolveGeneratedOrdinal(family, ordinal, operation, selections);
+  auto coordinate = selectionUses
+                        ? resolveGeneratedOrdinal(family, ordinal, operation, selections, work)
+                        : resolveGeneratedOrdinal(family, ordinal, operation, selections);
   if (failed(coordinate))
     return rejectSelection("generated ordinal lacks an all-legal existence proof");
   selections.push_back({family, ordinal, *coordinate});
+  if (selectionUses)
+    selectionUses->push_back(operation);
   return GeneratedSelectionProof{family, exported, std::move(selections)};
 }
-FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work) {
+FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, unsigned &work,
+                                         llvm::SmallVectorImpl<Operation *> *selectionUses) {
   auto rejectMember = [&](StringRef reason) -> FailureOr<GeneratedMember> {
     (void)reject(operation, reason);
     return failure();
@@ -292,7 +299,7 @@ FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, u
                             attribute.getName().getValue()))
       return rejectMember("generated member has unsupported proof metadata");
   auto proof = inspectSelection(operation->getOperand(0), operation->getOperand(1),
-                                text(operation, "member"), operation, depth, work);
+                                text(operation, "member"), operation, depth, work, selectionUses);
   if (failed(proof))
     return failure();
   Operation *family = proof->family, *exported = proof->exportOperation;
@@ -334,12 +341,32 @@ FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, u
 FailureOr<GeneratedSelectionProof> inspectGeneratedSelection(Value familyHandle, Value ordinal,
                                                              StringRef member, Operation *use) {
   unsigned work = 65536;
-  return inspectSelection(familyHandle, ordinal, member, use, 0, work);
+  return inspectSelection(familyHandle, ordinal, member, use, 0, work, nullptr);
 }
 
 FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation) {
   unsigned work = 65536;
-  return inspectMember(operation, 0, work);
+  return inspectMember(operation, 0, work, nullptr);
+}
+
+FailureOr<GeneratedSelectionProof>
+inspectGeneratedSelection(Value familyHandle, Value ordinal, StringRef member, Operation *use,
+                          llvm::SmallVectorImpl<Operation *> &selectionUses,
+                          unsigned &remainingWork) {
+  llvm::SmallVector<Operation *, 2> checked;
+  auto result = inspectSelection(familyHandle, ordinal, member, use, 0, remainingWork, &checked);
+  if (succeeded(result))
+    selectionUses.assign(checked.begin(), checked.end());
+  return result;
+}
+FailureOr<GeneratedMember> inspectGeneratedMember(Operation *operation,
+                                                  llvm::SmallVectorImpl<Operation *> &selectionUses,
+                                                  unsigned &remainingWork) {
+  llvm::SmallVector<Operation *, 2> checked;
+  auto result = inspectMember(operation, 0, remainingWork, &checked);
+  if (succeeded(result))
+    selectionUses.assign(checked.begin(), checked.end());
+  return result;
 }
 
 LogicalResult verifyDigitalStorageModel(Operation *module) {

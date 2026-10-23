@@ -8,6 +8,7 @@
 #include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
@@ -394,6 +395,7 @@ LogicalResult collectArraySelections(Operation *scope,
   auto ownedPath = [&](llvm::StringRef path) {
     return isCanonicalText(path) && path.starts_with(prefix) && path.size() > prefix.size();
   };
+  unsigned identityWork = 16384;
   for (Operation &operation : *body) {
     if (!nodal::isNodeArraySelection(&operation))
       continue;
@@ -441,11 +443,26 @@ LogicalResult collectArraySelections(Operation *scope,
         token = "parameter:" + path.str();
       } else {
         llvm::StringRef path = metadataText(definition, "semantic_path");
+        // A generated compound index belongs to its exact lexical body. Its
+        // independently proved root must not be rediscovered by a Module-wide
+        // spelling search or conflated with an identically named sibling root.
+        Block *owner = definition ? definition->getBlock() : nullptr;
+        const bool lexical = definition && definition->getParentOp() == scope &&
+                             llvm::isa<nodal::GenerateOp>(scope);
+        if (!lexical && owner != moduleBody(module))
+          owner = nullptr;
         unsigned matches = 0;
-        for (Operation &candidate : *moduleBody(module))
-          if (metadataText(&candidate, "semantic_path") == path)
-            ++matches;
-        if (!llvm::isa<nodal::ConstExprOp>(definition) || !ownedPath(path) || matches != 1)
+        if (owner)
+          for (Operation &candidate : *owner) {
+            if (!identityWork)
+              return operation.emitOpError(
+                  "NODAL-SHAPE-043-006: compound index identity resource limit exceeded");
+            --identityWork;
+            if (metadataText(&candidate, "semantic_path") == path)
+              ++matches;
+          }
+        if (!llvm::isa_and_nonnull<nodal::ConstExprOp>(definition) ||
+            proof->identity.root != definition || !ownedPath(path) || matches != 1)
           return operation.emitOpError(
               "NODAL-SHAPE-043-006: compound index requires a unique owned root");
         token = "expression:" + path.str();
@@ -1528,6 +1545,78 @@ LogicalResult nodal::verifyConservativeInstanceArray(Operation *operation) {
   return success();
 }
 
+FailureOr<nodal::ConservativeGeneratedSelection>
+nodal::resolveConservativeGeneratedSelection(Operation *operation) {
+  // Low-level structural fact query: never enter the Interface model or
+  // conservative connectivity, since declaration inventory also consumes it.
+  if (!llvm::isa_and_nonnull<InterfaceBoundaryOp>(operation) ||
+      operation->getNumOperands() != 2 ||
+      !llvm::isa<ModuleOp>(operation->getParentOp()))
+    return failure();
+  auto key = operation->getAttrOfType<StringAttr>("member");
+  auto proof = key ? inspectGeneratedSelection(operation->getOperand(0),
+                    operation->getOperand(1), key.getValue(), operation)
+                   : FailureOr<GeneratedSelectionProof>(failure());
+  auto target = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
+                                : FailureOr<Operation *>(failure());
+  if (failed(proof) || failed(target) || proof->selections.size() != 1 ||
+      proof->family != (*target)->getParentOp() ||
+      proof->family->getParentOp() != operation->getParentOp() ||
+      proof->family->getNumOperands() != 3)
+    return failure();
+  Operation *declaration = *target;
+  const bool child = textAttr(proof->exportOperation, "kind") == "instance";
+  if (child) {
+    auto instance = llvm::dyn_cast<InstanceOp>(*target);
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+    if (!instance || !reference || reference.getValue() != textAttr(instance, "sym_name"))
+      return failure();
+    auto bindings = instance->getAttrOfType<DictionaryAttr>("parameter_bindings");
+    Operation *module = resolveInstanceModuleDefinition(instance);
+    if (!bindings || !bindings.empty() || !module || module->hasAttr("external_name"))
+      return failure();
+    Block *body = moduleBody(module);
+    if (!body || llvm::any_of(*body, [](Operation &operation) {
+          return llvm::isa<ParameterOp>(operation);
+        }))
+      return failure();
+    declaration = SymbolTable::lookupSymbolIn(module, textAttr(operation, "endpoint"));
+    if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(declaration) ||
+        declaration->getParentOp() != module)
+      return failure();
+    // Original exact one-step family only. No parameterized domain is silently
+    // specialized and no nested/guarded prefix is truncated by this profile.
+    for (Value bound : proof->family->getOperands())
+      if (!bound.getDefiningOp<ConstLiteralOp>()) return failure();
+  } else if (operation->hasAttr("instance") ||
+             textAttr(proof->exportOperation, "kind") != "interface" ||
+             !llvm::isa<InterfaceInstanceOp>(*target) ||
+             textAttr(operation, "endpoint") != textAttr(*target, "sym_name")) {
+    return failure();
+  }
+  auto literal = [](Value value) -> std::optional<int64_t> {
+    auto op = value.getDefiningOp<ConstLiteralOp>();
+    auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+    if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+      return std::nullopt;
+    return attr.getValue().getSExtValue();
+  };
+  unsigned remaining = 16384;
+  auto domain = resolveGeneratedDomain(proof->family, remaining);
+  InstantiatedIntegerExpression normalized;
+  if (failed(domain) || !domain->induction ||
+      resolveGeneratedInductionOrdinal(proof->family, domain->induction, *target,
+                                       normalized, remaining) != ShapeRegionProofStatus::Proved)
+    return failure();
+  auto ordinal = literal(operation->getOperand(1));
+  if (!ordinal || *ordinal < 0 || !domain->maximumTripCount ||
+      domain->maximumTripCount > 2147483647 ||
+      uint64_t(*ordinal) >= domain->maximumTripCount)
+    return failure();
+  return ConservativeGeneratedSelection{declaration, proof->family,
+                                         operation->getOperand(1), domain->maximumTripCount};
+}
+
 FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value value,
                                                                           Operation *use) {
   if (!value || !use)
@@ -1560,8 +1649,10 @@ FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value 
   if (llvm::isa<MemberAccessOp>(definition)) {
     auto access = resolveDigitalInterfaceAccess(value);
     if (failed(access) || !llvm::isa<TerminalType>(value.getType()) ||
-        access->leaf.protocol.getValue() != "conservative" ||
-        definition->getParentOp() != module || scope != module)
+        access->leaf.protocol.getValue() != "conservative" || definition->getParentOp() != scope ||
+        (!llvm::isa<ModuleOp, GenerateOp>(scope)) ||
+        (access->identity.selection && failed(resolveConservativeGeneratedSelection(access->projection))) ||
+        access->projection->getParentOp() != scope)
       return failure();
     // Access rights are per selected view, never inherited from the first alias.
     if (llvm::isa<ConnectOp, AliasOp, ConnectArrayOp>(use) &&
@@ -1574,9 +1665,14 @@ FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value 
       return failure();
     endpoint.shape = ConservativeShape{access->canonicalValue.getDefiningOp(),
                                        std::move(*projection)};
-    endpoint.declarationScope = module;
+    endpoint.declarationScope = access->identity.selection
+                                    ? access->identity.endpoint->getParentOp() : scope;
     endpoint.instance = access->identity.instance;
-    endpoint.port = access->identity.endpoint;
+    // A body-local Interface is a local node, not an exported component
+    // terminal. Only an actual child boundary or module boundary has incidence.
+    endpoint.port =
+        endpoint.instance || llvm::isa<ModuleOp>(endpoint.declarationScope)
+            ? access->identity.endpoint : nullptr;
     return endpoint;
   }
   if (!llvm::isa<TerminalType>(value.getType()) ||
@@ -1682,207 +1778,224 @@ FailureOr<nodal::ConservativeRelation> nodal::resolveConservativeRelation(Operat
 }
 
 namespace {
+using BoundaryPortKey = std::pair<Operation *, StringAttr>;
 struct BoundaryAliasSummary {
-  llvm::DenseMap<Operation *, unsigned> groups;
-  llvm::SmallPtrSet<Operation *, 8> touched;
+  llvm::DenseMap<BoundaryPortKey, unsigned> groups;
+  llvm::DenseSet<BoundaryPortKey> touched;
 };
 
-// An over-approximation used only to prevent false Distinct results across a
-// child boundary. It never proves Equal, evaluates device equations, or expands
-// a generated family. Exact per-point mapping remains in ShapeModel.
+// This existing query-local over-approximation only prevents false Distinct.
+// Interface keys retain the actual endpoint and ordered member path; parent
+// incidences are grouped by their actual instance, never by child definition.
 LogicalResult
 collectChildBoundaryUncertainty(Operation *module,
-                                llvm::SmallVectorImpl<std::pair<Value, Value>> &uncertain) {
+                                llvm::SmallVectorImpl<std::pair<Value, Value>> &uncertain,
+                                unsigned &remaining) {
+  using namespace nodal;
+  auto charge = [&]() { if (!remaining) return false; --remaining; return true; };
+  auto key = [&](const nodal::ConservativeEndpoint &endpoint)
+      -> std::optional<BoundaryPortKey> {
+    if (!charge() || !endpoint.port)
+      return std::nullopt;
+    if (!llvm::isa<MemberAccessOp>(endpoint.value.getDefiningOp()))
+      return BoundaryPortKey{endpoint.port, StringAttr()};
+    auto member = inspectDigitalInterfaceMember(endpoint.value.getDefiningOp());
+    if (failed(member) || member->instance != endpoint.instance ||
+        member->endpoint != endpoint.port || !member->path)
+      return std::nullopt;
+    return BoundaryPortKey{member->endpoint, member->path};
+  };
   llvm::DenseMap<Operation *, BoundaryAliasSummary> summaries;
   llvm::DenseMap<Operation *, unsigned> visiting;
   llvm::SmallVector<std::pair<Operation *, bool>, 8> pending{{module, false}};
   auto active = [&](Operation *operation, Operation *definition) -> FailureOr<bool> {
     for (Operation *scope = operation->getParentOp(); scope && scope != definition;
-         scope = scope->getParentOp())
+         scope = scope->getParentOp()) {
+      if (!charge()) return failure();
       if (llvm::isa<nodal::GenerateOp>(scope)) {
-        auto domain = nodal::resolveGeneratedDomain(scope);
-        if (failed(domain))
-          return failure();
-        if (!domain->maximumTripCount)
-          return false;
+        auto domain = nodal::resolveGeneratedDomain(scope, remaining);
+        if (failed(domain)) return failure();
+        if (!domain->maximumTripCount) return false;
       }
+    }
     return true;
   };
-  auto references =
-      [&](Operation *definition,
-          llvm::DenseMap<Operation *, llvm::SmallVector<nodal::ConservativeEndpoint, 2>> &refs) {
-        LogicalResult status = success();
-        definition->walk([&](Operation *operation) {
-          if (failed(status) || enclosingNodalModule(operation) != definition ||
-              !llvm::isa<nodal::InstanceTerminalOp, nodal::InstanceTerminalArrayOp>(operation))
-            return;
-          auto exists = active(operation, definition);
-          if (failed(exists)) {
-            status = failure();
-            return;
-          }
-          if (!*exists)
-            return;
-          if (operation->getNumResults() != 1) {
-            status = failure();
-            return;
-          }
-          auto endpoint = nodal::resolveConservativeEndpoint(operation->getResult(0), operation);
-          if (failed(endpoint) || !endpoint->instance || !endpoint->port) {
-            status = failure();
-            return;
-          }
-          refs[endpoint->instance].push_back(std::move(*endpoint));
-        });
-        return status;
-      };
+  auto references = [&](Operation *definition,
+      llvm::DenseMap<Operation *, llvm::SmallVector<nodal::ConservativeEndpoint, 2>> &refs) {
+    LogicalResult status = success();
+    definition->walk([&](Operation *operation) {
+      if (failed(status)) return;
+      if (!charge()) { status = failure(); return; }
+      if (enclosingNodalModule(operation) != definition ||
+          !llvm::isa<InstanceTerminalOp, InstanceTerminalArrayOp, MemberAccessOp>(operation))
+        return;
+      if (llvm::isa<MemberAccessOp>(operation)) {
+        auto member = inspectDigitalInterfaceMember(operation);
+        if (failed(member)) { status = failure(); return; }
+        if (!member->instance || !llvm::isa<TerminalType>(operation->getResult(0).getType()))
+          return;
+      }
+      auto exists = active(operation, definition);
+      if (failed(exists)) { status = failure(); return; }
+      if (!*exists) return;
+      if (operation->getNumResults() != 1) { status = failure(); return; }
+      auto endpoint = nodal::resolveConservativeEndpoint(operation->getResult(0), operation);
+      if (failed(endpoint) || !endpoint->instance || !endpoint->port) {
+        status = failure(); return;
+      }
+      refs[endpoint->instance].push_back(std::move(*endpoint));
+    });
+    return status;
+  };
+  auto appendChild = [&](Operation *instance,
+                        ArrayRef<nodal::ConservativeEndpoint> endpoints,
+                        auto append) -> LogicalResult {
+    auto child = summaries.find(nodal::resolveInstanceModuleDefinition(instance));
+    if (child == summaries.end()) return failure();
+    llvm::SmallVector<std::optional<BoundaryPortKey>, 4> keys;
+    for (const auto &endpoint : endpoints) {
+      auto port = key(endpoint);
+      if (!remaining) return failure();
+      keys.push_back(port && child->second.groups.count(*port) ? port : std::nullopt);
+    }
+    for (unsigned i = 0; i < endpoints.size(); ++i) {
+      if (!charge()) return failure();
+      if (!keys[i] || child->second.touched.contains(*keys[i]))
+        append(endpoints[i].shape.projection.root, endpoints[i].shape.projection.root);
+      for (unsigned j = 0; j < i; ++j) {
+        if (!charge()) return failure();
+        if (!keys[i] || !keys[j] ||
+            child->second.groups.lookup(*keys[j]) == child->second.groups.lookup(*keys[i])) {
+          append(endpoints[i].shape.projection.root, endpoints[j].shape.projection.root);
+          if (keys[i] && keys[j]) break; // Exact group needs only a spanning edge.
+        }
+      }
+    }
+    return success();
+  };
   while (!pending.empty()) {
+    if (!charge()) return failure();
     auto [definition, expanded] = pending.pop_back_val();
-    if (summaries.count(definition))
-      continue;
+    if (summaries.count(definition)) continue;
     if (!expanded) {
-      if (visiting.lookup(definition))
-        return failure();
+      if (visiting.lookup(definition)) return failure();
       visiting[definition] = 1;
       pending.push_back({definition, true});
       bool valid = true;
       definition->walk([&](nodal::InstanceOp instance) {
-        if (enclosingNodalModule(instance.getOperation()) != definition)
-          return;
-        Operation *target = nodal::resolveInstanceModuleDefinition(instance.getOperation());
-        if (!target) {
-          valid = false;
-          return;
-        }
-        if (!summaries.count(target))
-          pending.push_back({target, false});
+        if (!valid) return;
+        if (!charge()) { valid = false; return; }
+        if (enclosingNodalModule(instance) != definition) return;
+        Operation *target = nodal::resolveInstanceModuleDefinition(instance);
+        if (!target) { valid = false; return; }
+        if (!summaries.count(target)) pending.push_back({target, false});
       });
-      if (!valid)
-        return failure();
+      if (!valid) return failure();
       continue;
     }
     llvm::DenseMap<Value, unsigned> indices;
+    llvm::DenseMap<BoundaryPortKey, unsigned> ports;
     llvm::SmallVector<std::pair<Value, Value>, 8> edges;
-    auto add = [&](Value a, Value b) {
-      indices.try_emplace(a, indices.size());
-      indices.try_emplace(b, indices.size());
-      edges.push_back({a, b});
+    unsigned nextIndex = 0;
+    auto index = [&](Value value) {
+      auto [entry, inserted] = indices.try_emplace(value, nextIndex);
+      if (inserted) ++nextIndex;
+      return entry->second;
     };
-    llvm::SmallVector<Operation *, 4> ports;
+    auto add = [&](Value a, Value b) { index(a); index(b); edges.push_back({a,b}); };
     if (Block *body = moduleBody(definition))
-      for (Operation &operation : *body)
-        if (llvm::isa<nodal::TerminalOp, nodal::TerminalArrayOp>(operation) &&
-            operation.getNumResults() == 1) {
-          ports.push_back(&operation);
-          indices.try_emplace(operation.getResult(0), indices.size());
-        }
+      for (Operation &operation : *body) {
+        if (!charge()) return failure();
+        if (llvm::isa<TerminalOp, TerminalArrayOp>(operation) && operation.getNumResults() == 1)
+          ports.try_emplace({&operation, StringAttr()}, index(operation.getResult(0)));
+      }
+    llvm::SmallVector<DigitalInterfaceEndpoint, 4> logical;
+    llvm::SmallVector<DigitalInterfaceAccess, 4> accesses;
+    if (failed(collectDigitalInterfaceEndpoints(definition, logical, &accesses))) return failure();
+    for (const auto &endpoint : logical) {
+      if (!charge()) return failure();
+      if (endpoint.instance || endpoint.selection || endpoint.operation->getParentOp() != definition)
+        continue;
+      for (const auto &leaf : endpoint.leaves) {
+        if (!charge()) return failure();
+        if (leaf.protocol.getValue() != "conservative" || !llvm::isa<TerminalType>(leaf.type))
+          continue;
+        auto [entry, inserted] = ports.try_emplace({endpoint.declaration, leaf.path}, nextIndex);
+        if (inserted) ++nextIndex;
+      }
+    }
+    for (const auto &access : accesses) {
+      if (!charge()) return failure();
+      if (access.identity.instance || access.identity.selection ||
+          access.value.getDefiningOp()->getParentOp() != definition) continue;
+      auto port = ports.find({access.identity.endpoint, access.identity.path});
+      if (port != ports.end()) indices.try_emplace(access.canonicalValue, port->second);
+    }
     LogicalResult valid = success();
     definition->walk([&](Operation *operation) {
-      if (failed(valid) || enclosingNodalModule(operation) != definition ||
-          !llvm::isa<nodal::ConnectOp, nodal::ConnectArrayOp, nodal::AliasOp>(operation))
-        return;
+      if (failed(valid)) return;
+      if (!charge()) { valid = failure(); return; }
+      if (enclosingNodalModule(operation) != definition ||
+          !llvm::isa<ConnectOp, ConnectArrayOp, AliasOp>(operation)) return;
       auto exists = active(operation, definition);
-      if (failed(exists)) {
-        valid = failure();
-        return;
-      }
-      if (!*exists)
-        return;
-      if (operation->getNumOperands() < 2) {
-        valid = failure();
-        return;
-      }
+      if (failed(exists)) { valid = failure(); return; }
+      if (!*exists) return;
+      if (operation->getNumOperands() < 2) { valid = failure(); return; }
       auto first = nodal::resolveConservativeEndpoint(operation->getOperand(0), operation);
-      if (failed(first)) {
-        valid = failure();
-        return;
-      }
+      if (failed(first)) { valid = failure(); return; }
       for (Value operand : operation->getOperands().drop_front()) {
+        if (!charge()) { valid = failure(); return; }
         auto next = nodal::resolveConservativeEndpoint(operand, operation);
-        if (failed(next)) {
-          valid = failure();
-          return;
-        }
-        if (first->shape.projection.root != next->shape.projection.root ||
-            first->shape.projection.canonicalKey != next->shape.projection.canonicalKey) {
-          add(first->shape.projection.root, next->shape.projection.root);
-          for (Operation *scope = operation->getParentOp(); scope && scope != definition;
-               scope = scope->getParentOp())
-            if (llvm::isa<nodal::GenerateOp>(scope)) {
-              auto domain = nodal::resolveGeneratedDomain(scope);
-              if (failed(domain)) {
-                valid = failure();
-                return;
-              }
-              if (domain->maximumTripCount > 1) {
-                add(first->shape.projection.root, first->shape.projection.root);
-                add(next->shape.projection.root, next->shape.projection.root);
-                break;
-              }
+        if (failed(next)) { valid = failure(); return; }
+        if (first->shape.projection.root == next->shape.projection.root &&
+            first->shape.projection.canonicalKey == next->shape.projection.canonicalKey) continue;
+        add(first->shape.projection.root, next->shape.projection.root);
+        for (Operation *scope = operation->getParentOp(); scope && scope != definition;
+             scope = scope->getParentOp()) {
+          if (!charge()) { valid = failure(); return; }
+          if (llvm::isa<GenerateOp>(scope)) {
+            auto domain = nodal::resolveGeneratedDomain(scope, remaining);
+            if (failed(domain)) { valid = failure(); return; }
+            if (domain->maximumTripCount > 1) {
+              add(first->shape.projection.root, first->shape.projection.root);
+              add(next->shape.projection.root, next->shape.projection.root);
+              break;
             }
+          }
         }
       }
     });
-    if (failed(valid))
-      return failure();
+    if (failed(valid)) return failure();
     llvm::DenseMap<Operation *, llvm::SmallVector<nodal::ConservativeEndpoint, 2>> refs;
-    if (failed(references(definition, refs)))
-      return failure();
-    for (const auto &[instance, endpoints] : refs) {
-      Operation *target = nodal::resolveInstanceModuleDefinition(instance);
-      auto child = summaries.find(target);
-      if (child == summaries.end())
-        return failure();
-      for (unsigned i = 0; i < endpoints.size(); ++i) {
-        auto group = child->second.groups.find(endpoints[i].port);
-        if (group == child->second.groups.end())
-          return failure();
-        if (child->second.touched.contains(endpoints[i].port))
-          add(endpoints[i].shape.projection.root, endpoints[i].shape.projection.root);
-        for (unsigned j = 0; j < i; ++j)
-          if (child->second.groups.lookup(endpoints[j].port) == group->second) {
-            add(endpoints[i].shape.projection.root, endpoints[j].shape.projection.root);
-            break; // One spanning edge, not an artificial summary clique.
-          }
-      }
-    }
-    UnionFind groups(indices.size());
+    if (failed(references(definition, refs))) return failure();
+    for (const auto &[instance, endpoints] : refs)
+      if (failed(appendChild(instance, endpoints, add))) return failure();
+    UnionFind groups(nextIndex);
     llvm::SmallVector<Value, 4> possibleShorts;
-    for (auto [a, b] : edges) {
-      if (groups.find(indices.lookup(a)) == groups.find(indices.lookup(b)))
-        possibleShorts.push_back(a);
-      groups.unite(indices.lookup(a), indices.lookup(b));
+    for (auto [a,b] : edges) {
+      if (!charge()) return failure();
+      if (groups.find(indices.lookup(a)) == groups.find(indices.lookup(b))) possibleShorts.push_back(a);
+      groups.unite(indices.lookup(a),indices.lookup(b));
     }
     llvm::DenseSet<unsigned> touched;
-    for (Value root : possibleShorts)
+    for (Value root : possibleShorts) {
+      if (!charge()) return failure();
       touched.insert(groups.find(indices.lookup(root)));
-    BoundaryAliasSummary summary;
-    for (Operation *port : ports) {
-      unsigned group = groups.find(indices.lookup(port->getResult(0)));
-      summary.groups[port] = group;
-      if (touched.contains(group))
-        summary.touched.insert(port);
     }
-    summaries.try_emplace(definition, std::move(summary));
-    visiting[definition] = 0;
+    BoundaryAliasSummary summary;
+    for (auto [port, index] : ports) {
+      if (!charge()) return failure();
+      unsigned group = groups.find(index);
+      summary.groups[port] = group;
+      if (touched.contains(group)) summary.touched.insert(port);
+    }
+    summaries.try_emplace(definition,std::move(summary));visiting[definition]=0;
   }
   llvm::DenseMap<Operation *, llvm::SmallVector<nodal::ConservativeEndpoint, 2>> refs;
-  if (failed(references(module, refs)))
-    return failure();
-  for (const auto &[instance, endpoints] : refs) {
-    auto &child = summaries.find(nodal::resolveInstanceModuleDefinition(instance))->second;
-    for (unsigned i = 0; i < endpoints.size(); ++i) {
-      if (child.touched.contains(endpoints[i].port))
-        uncertain.push_back(
-            {endpoints[i].shape.projection.root, endpoints[i].shape.projection.root});
-      for (unsigned j = 0; j < i; ++j)
-        if (child.groups.lookup(endpoints[j].port) == child.groups.lookup(endpoints[i].port)) {
-          uncertain.push_back(
-              {endpoints[i].shape.projection.root, endpoints[j].shape.projection.root});
-          break;
-        }
-    }
-  }
+  if (failed(references(module, refs))) return failure();
+  for (const auto &[instance,endpoints] : refs)
+    if (failed(appendChild(instance,endpoints,[&](Value a,Value b){uncertain.push_back({a,b});})))
+      return failure();
   return success();
 }
 
@@ -1977,7 +2090,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     std::optional<StaticShapeRegion> leftRegion, rightRegion;
   };
   llvm::SmallVector<Edge, 4> edges;
-  auto add = [&](ConservativeEndpoint a, ConservativeEndpoint b, Operation *site) {
+  auto makeEdge = [&](ConservativeEndpoint a, ConservativeEndpoint b, Operation *site) {
     Edge edge{site, std::move(a), std::move(b), {}, {}};
     StaticShapeRegion x, y;
     if (resolveStaticShapeRegion(edge.left.shape.projection, site, x) ==
@@ -1986,7 +2099,10 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     if (resolveStaticShapeRegion(edge.right.shape.projection, site, y) ==
         ShapeRegionProofStatus::Proved)
       edge.rightRegion = std::move(y);
-    edges.push_back(std::move(edge));
+    return edge;
+  };
+  auto add = [&](ConservativeEndpoint a, ConservativeEndpoint b, Operation *site) {
+    edges.push_back(makeEdge(std::move(a), std::move(b), site));
   };
   llvm::SmallVector<Operation *, 4> visibleScopes;
   for (Operation *scope = lhs->useScope; scope; scope = scope->getParentOp()) {
@@ -2021,6 +2137,9 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   // concrete union-find edge. Retain their possible root connectivity so an
   // outside consumer cannot infer distinctness from an omitted family.
   llvm::SmallVector<std::pair<Value, Value>, 4> families;
+  llvm::SmallVector<Operation *, 4> familyScopes;
+  llvm::SmallVector<bool, 4> certifiedFamilies;
+  llvm::DenseMap<Operation *, llvm::SmallVector<Edge, 4>> hiddenEdges;
   bool malformedFamily = false;
   Operation *module = enclosingNodalModule(leftUse);
   module->walk([&](Operation *operation) {
@@ -2057,18 +2176,133 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
         return;
       }
       families.push_back({first->shape.projection.root, next->shape.projection.root});
+      familyScopes.push_back(scope);
+      certifiedFamilies.push_back(false);
+      hiddenEdges[scope].push_back(makeEdge(*first, *next, operation));
     }
   });
   llvm::SmallVector<std::pair<Value, Value>, 4> childUncertainty;
-  if (malformedFamily || failed(collectChildBoundaryUncertainty(module, childUncertainty)))
-    return Alias::Invalid;
-  // Repeating an injective tree attached to only one shared root cannot join
-  // distinct lanes of that root: every other vertex is fresh per occurrence.
-  // Derive that fact once per repeated scope from actual root incidence, not
-  // from operation count or endpoint spelling. Child shortcut uncertainty and
-  // cycles/parallel paths deliberately prevent this sufficient proof.
+  constexpr uint64_t maximumWork = 16384, maximumStates = 1024;
+  unsigned remainingSummaryWork = maximumWork;
+  if (malformedFamily ||
+      failed(collectChildBoundaryUncertainty(module, childUncertainty, remainingSummaryWork)))
+    return remainingSummaryWork ? Alias::Invalid : Alias::ResourceLimit;
+  uint64_t work = maximumWork - remainingSummaryWork;
+  // Prove only an actual path in one inspected selected occurrence. Reuse the
+  // original hidden relation records; never turn coordinate disjointness into
+  // electrical disjointness or manufacture occurrence-local SSA roots.
+  auto selectedContext = [&](Value root) -> FailureOr<GeneratedSelectionProof> {
+    auto member = inspectDigitalInterfaceMember(root.getDefiningOp());
+    if (failed(member) || !member->selection)
+      return failure();
+    Operation *selection = member->selection;
+    auto key = selection->getAttrOfType<StringAttr>("member");
+    if (!key || selection->getNumOperands() != 2)
+      return failure();
+    unsigned remaining = maximumWork - work;
+    llvm::SmallVector<Operation *, 2> uses;
+    auto result = inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
+                                            key.getValue(), selection, uses, remaining);
+    work = maximumWork - remaining;
+    return result;
+  };
+  auto leftContext = selectedContext(lhs->shape.projection.root);
+  auto rightContext = selectedContext(rhs->shape.projection.root);
+  if (work >= maximumWork)
+    return Alias::ResourceLimit;
+  bool commonContext = succeeded(leftContext) && succeeded(rightContext) &&
+      leftContext->family == rightContext->family &&
+      leftContext->selections.size() == rightContext->selections.size();
+  if (commonContext)
+    for (auto [a, b] : llvm::zip(leftContext->selections, rightContext->selections))
+      commonContext &= a.family == b.family &&
+          equivalentInstantiatedIntegerExpressions(a.coordinate, b.coordinate);
+  auto scalarRoot = [](const StaticShapeProjection &projection) {
+    return llvm::isa<TerminalType>(projection.root.getType()) && projection.projections.empty();
+  };
+  if (commonContext && left.getType() == right.getType() &&
+      scalarRoot(lhs->shape.projection) && scalarRoot(rhs->shape.projection)) {
+    Operation *family = leftContext->family;
+    auto found = hiddenEdges.find(family);
+    // Direct family scalar topology first. Nested/array maps remain governed by
+    // the original uncertainty path until their contextual maps are proved.
+    if (llvm::isa<ModuleOp>(family->getParentOp()) && found != hiddenEdges.end()) {
+      auto leftMember = inspectDigitalInterfaceMember(lhs->shape.projection.root.getDefiningOp());
+      auto rightMember = inspectDigitalInterfaceMember(rhs->shape.projection.root.getDefiningOp());
+      llvm::SmallVector<Value, 4> startRoots, targetRoots;
+      llvm::DenseSet<Value> inspectedRoots;
+      auto anchor = [&](const StaticShapeProjection &candidate) {
+        if (++work >= maximumWork || !inspectedRoots.insert(candidate.root).second ||
+            !scalarRoot(candidate) || candidate.root.getType() != left.getType() ||
+            !llvm::isa_and_nonnull<MemberAccessOp>(candidate.root.getDefiningOp()))
+          return;
+        auto original = inspectDigitalInterfaceMember(candidate.root.getDefiningOp());
+        if (failed(original) || original->selection)
+          return;
+        auto match = [&](const DigitalInterfaceMember &selected,
+                         const StaticShapeProjection &projection,
+                         llvm::SmallVectorImpl<Value> &roots) {
+          // An exact owner/member key only filters candidates. Shape still
+          // independently proves each actual selected-to-template anchor.
+          if (original->endpoint != selected.endpoint || original->instance != selected.instance ||
+              original->module != selected.module || original->path != selected.path)
+            return;
+          constexpr uint64_t allowance = 256;
+          if (work + allowance > maximumWork) {
+            work = maximumWork;
+            return;
+          }
+          work += allowance;
+          auto overlap = compareStaticShapeContextualProjections(
+              projection, leftContext->selections, candidate, rightContext->selections, leftUse,
+              ShapeRegionProofLimits{allowance, 64});
+          if (overlap.status == ShapeRegionProofStatus::Proved &&
+              overlap.overlap == ShapeRegionOverlap::Overlapping)
+            roots.push_back(candidate.root);
+        };
+        if (succeeded(leftMember))
+          match(*leftMember, lhs->shape.projection, startRoots);
+        if (succeeded(rightMember))
+          match(*rightMember, rhs->shape.projection, targetRoots);
+      };
+      for (const auto &edge : found->second) {
+        anchor(edge.left.shape.projection);
+        anchor(edge.right.shape.projection);
+      }
+      // These are existing canonical scalar roots under one common checked
+      // context, not fabricated SSA occurrences. Preserve that same context
+      // along every actual edge; do not cross to a sibling/other iteration.
+      llvm::SmallVector<Value, 8> pending(startRoots.begin(), startRoots.end());
+      for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
+        if (++work >= maximumWork || pending.size() > maximumStates)
+          return Alias::ResourceLimit;
+        if (llvm::is_contained(targetRoots, pending[cursor]))
+          return Alias::Equal;
+        for (const auto &edge : found->second) {
+          if (++work >= maximumWork)
+            return Alias::ResourceLimit;
+          if (!scalarRoot(edge.left.shape.projection) || !scalarRoot(edge.right.shape.projection) ||
+              edge.left.value.getType() != left.getType() || edge.right.value.getType() != left.getType())
+            continue;
+          for (bool reverse : {false, true}) {
+            Value from = (reverse ? edge.right : edge.left).shape.projection.root;
+            Value to = (reverse ? edge.left : edge.right).shape.projection.root;
+            if (pending[cursor] == from && !llvm::is_contained(pending, to))
+              pending.push_back(to);
+          }
+        }
+      }
+      if (work >= maximumWork)
+        return Alias::ResourceLimit;
+    }
+  }
+  // A repeated tree with one shared root and otherwise fresh vertices cannot
+  // join distinct shared lanes. Multiple shared roots additionally require
+  // checked injective maps with identical coordinates in one actual Generate.
+  // Retain all root connectivity even for certified families. Child uncertainty,
+  // cycles, parallel paths and unproved maps prevent this sufficient proof.
   llvm::DenseMap<Operation *, llvm::DenseMap<Value, bool>> familyTrees;
-  auto isolatedFreshTree = [&](Operation *scope, Value root) {
+  auto certifiedOccurrenceTree = [&](Operation *scope, Value root, llvm::ArrayRef<Edge> proofEdges) {
     auto cached = familyTrees.find(scope);
     if (cached == familyTrees.end()) {
       struct Vertex {
@@ -2076,7 +2310,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
         const std::optional<StaticShapeRegion> *region;
       };
       llvm::SmallVector<Vertex, 8> vertices;
-      for (const auto &edge : edges) {
+      for (const auto &edge : proofEdges) {
         vertices.push_back({&edge.left, &edge.leftRegion});
         vertices.push_back({&edge.right, &edge.rightRegion});
       }
@@ -2100,7 +2334,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
         }
       }
       llvm::SmallVector<unsigned, 4> cyclic;
-      for (auto [index, edge] : llvm::enumerate(edges)) {
+      for (auto [index, edge] : llvm::enumerate(proofEdges)) {
         const auto &a = edge.left.shape.projection, &b = edge.right.shape.projection;
         if (a.root == b.root && a.canonicalKey == b.canonicalKey)
           continue;
@@ -2131,11 +2365,46 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
           if (vertex.endpoint->shape.projection.root == a ||
               vertex.endpoint->shape.projection.root == b)
             unsupported.insert(tree.find(index));
+      // Multiple shared roots are safe only with independently checked
+      // injective scalar maps for this same direct actual Generate. Keep the
+      // original one-shared-root fresh-tree proof unchanged. This sufficient
+      // profile deliberately refuses shifted, permuted, nested and invariant
+      // shared mappings rather than interpreting expressions here.
+      llvm::DenseMap<unsigned, bool> exactMaps;
+      llvm::DenseMap<unsigned, StaticShapePoint> referencePoints;
+      for (auto [index, vertex] : llvm::enumerate(vertices)) {
+        const auto &endpoint = *vertex.endpoint;
+        unsigned component = tree.find(index);
+        if (!endpoint.declarationScope || !endpoint.declarationScope->isProperAncestor(scope))
+          continue;
+        auto [flag, inserted] = exactMaps.try_emplace(component, true);
+        StaticShapeRegion image;
+        StaticShapePoint point;
+        Operation *site = proofEdges[index / 2].site;
+        bool valid = llvm::isa<GenerateOp>(scope) && llvm::isa<ModuleOp>(scope->getParentOp()) &&
+            resolveStaticShapeIterationImage(endpoint.shape.projection, site, image) ==
+                ShapeRegionProofStatus::Proved && image.iterationCount() == 1 &&
+            image.iteration->loop == scope &&
+            resolveStaticShapePoint(endpoint.shape.projection, site, point) ==
+                ShapeRegionProofStatus::Proved && !point.coordinates.empty();
+        flag->second &= valid;
+        if (!valid)
+          continue;
+        auto [reference, first] = referencePoints.try_emplace(component, point);
+        if (!first) {
+          valid = reference->second.coordinates.size() == point.coordinates.size();
+          if (valid)
+            for (auto [a, b] : llvm::zip(reference->second.coordinates, point.coordinates))
+              valid &= equivalentInstantiatedIntegerExpressions(a, b);
+          flag->second &= valid;
+        }
+      }
       llvm::DenseMap<Value, bool> safe;
       for (auto [index, vertex] : llvm::enumerate(vertices)) {
         Value value = vertex.endpoint->shape.projection.root;
         unsigned component = tree.find(index);
-        bool proved = shared[component].size() == 1 && !unsupported.contains(component);
+        bool proved = !shared[component].empty() && !unsupported.contains(component) &&
+            (shared[component].size() == 1 || exactMaps.lookup(component));
         auto [entry, inserted] = safe.try_emplace(value, proved);
         if (!inserted)
           entry->second &= proved;
@@ -2144,6 +2413,9 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     }
     return cached->second.lookup(root);
   };
+  for (unsigned i = 0; i < families.size(); ++i)
+    certifiedFamilies[i] = certifiedOccurrenceTree(familyScopes[i], families[i].first,
+                                             hiddenEdges.find(familyScopes[i])->second);
   // Other occurrences of a visible repeated template can join shared roots
   // too. Retain the exact current edge for Equal proofs, but never treat that
   // one occurrence as a global injective family.
@@ -2166,9 +2438,11 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
       };
       if (domain->maximumTripCount > 1 &&
           (sharedAcross(edge.left.declarationScope) || sharedAcross(edge.right.declarationScope))) {
-        if (isolatedFreshTree(scope, edge.left.shape.projection.root))
+        if (certifiedOccurrenceTree(scope, edge.left.shape.projection.root, edges))
           continue;
         families.push_back({edge.left.shape.projection.root, edge.right.shape.projection.root});
+        familyScopes.push_back(scope);
+        certifiedFamilies.push_back(false);
         break;
       }
     }
@@ -2177,6 +2451,50 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   if (malformedFamily)
     return Alias::Invalid;
   families.append(childUncertainty.begin(), childUncertainty.end());
+  // A selected Interface projection is not a disconnected electrical root.
+  // Its original member may participate in generated relations, including a
+  // shared scalar that couples otherwise distinct coordinates. These links
+  // carry possible connectivity only, never an occurrence-coordinate mapping.
+  llvm::SmallVector<Value, 8> originalRoots;
+  auto rememberRoot = [&](Value root) {
+    if (++work > maximumWork || originalRoots.size() > maximumStates)
+      return;
+    if (!llvm::is_contained(originalRoots, root))
+      originalRoots.push_back(root);
+  };
+  rememberRoot(lhs->shape.projection.root);
+  rememberRoot(rhs->shape.projection.root);
+  for (const auto &edge : edges) {
+    rememberRoot(edge.left.shape.projection.root);
+    rememberRoot(edge.right.shape.projection.root);
+  }
+  for (auto [a, b] : families) {
+    rememberRoot(a);
+    rememberRoot(b);
+  }
+  if (work > maximumWork || originalRoots.size() > maximumStates)
+    return Alias::ResourceLimit;
+  llvm::SmallVector<std::pair<Value, DigitalInterfaceMember>, 8> members;
+  for (Value root : originalRoots) {
+    if (++work > maximumWork)
+      return Alias::ResourceLimit;
+    if (!llvm::isa_and_nonnull<MemberAccessOp>(root.getDefiningOp()))
+      continue;
+    auto member = inspectDigitalInterfaceMember(root.getDefiningOp());
+    if (failed(member))
+      return Alias::Invalid;
+    members.push_back({root, *member});
+  }
+  for (unsigned i = 0; i < members.size(); ++i)
+    for (unsigned j = 0; j < i; ++j) {
+      if (++work > maximumWork)
+        return Alias::ResourceLimit;
+      const auto &a = members[i].second;
+      const auto &b = members[j].second;
+      if ((a.selection || b.selection) && a.endpoint == b.endpoint &&
+          a.instance == b.instance && a.module == b.module && a.path == b.path)
+        families.push_back({members[i].first, members[j].first});
+    }
   // First establish which actual roots can participate. Uncertain coordinates
   // on an unrelated component cannot make a disconnected root possibly equal.
   llvm::SmallVector<Value, 8> roots{lhs->shape.projection.root};
@@ -2218,8 +2536,16 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
       if (a.root != b.root || a.canonicalKey != b.canonicalKey)
         edge(a.root, b.root);
     }
+    Operation *certifiedScope = nullptr;
     for (auto [index, family] : llvm::enumerate(families)) {
       if (index < generatedFamilyCount &&
+          (indices.count(family.first) || indices.count(family.second))) {
+        if (!certifiedFamilies[index] ||
+            (certifiedScope && certifiedScope != familyScopes[index]))
+          injectiveTree = false;
+        certifiedScope = familyScopes[index];
+      }
+      if (index >= generatedFamilyCount &&
           (indices.count(family.first) || indices.count(family.second)))
         injectiveTree = false;
       edge(family.first, family.second);
@@ -2229,8 +2555,6 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   }
   llvm::SmallVector<StaticShapePoint, 8> pending{std::move(start)};
   bool uncertain = false;
-  uint64_t work = 0;
-  constexpr uint64_t maximumWork = 16384, maximumStates = 1024;
   for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
     if (++work > maximumWork || pending.size() > maximumStates)
       return Alias::ResourceLimit;
@@ -2242,6 +2566,39 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     StaticShapePoint point = pending[cursor];
     for (auto [a, b] : families)
       uncertain |= point.root == a || point.root == b;
+    llvm::SmallPtrSet<Operation *, 4> mappedScopes;
+    for (Operation *scope : familyScopes) {
+      if (!mappedScopes.insert(scope).second)
+        continue;
+      auto found = hiddenEdges.find(scope);
+      if (found == hiddenEdges.end())
+        continue;
+      for (const auto &edge : found->second)
+        for (bool reverse : {false, true}) {
+          if (++work > maximumWork)
+            return Alias::ResourceLimit;
+          const auto &from = reverse ? edge.right : edge.left;
+          const auto &to = reverse ? edge.left : edge.right;
+          if (point.root != from.shape.projection.root)
+            continue;
+          constexpr uint64_t allowance = 512;
+          if (work + allowance > maximumWork)
+            return Alias::ResourceLimit;
+          work += allowance;
+          StaticShapePoint mapped;
+          auto status = mapStaticShapeSameOccurrencePoint(
+              from.shape.projection, point, to.shape.projection, edge.site, mapped,
+              ShapeRegionProofLimits{allowance, 64});
+          if (status == ShapeRegionProofStatus::ResourceLimit)
+            return Alias::ResourceLimit;
+          if (status != ShapeRegionProofStatus::Proved)
+            continue; // Existing family uncertainty remains; never infer Distinct.
+          if (!llvm::any_of(pending, [&](const StaticShapePoint &old) {
+                return comparePoints(old, mapped) == Alias::Equal;
+              }))
+            pending.push_back(std::move(mapped));
+        }
+    }
     for (const auto &edge : edges) {
       for (bool reverse : {false, true}) {
         if (++work > maximumWork)
@@ -2251,6 +2608,22 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
         const auto &destination = reverse ? edge.leftRegion : edge.rightRegion;
         if (point.root != from.shape.projection.root)
           continue;
+        // A scalar relation in this exact occurrence directly connects its two
+        // checked points. Aggregate iteration-image remapping is neither needed
+        // nor permission to identify a different occurrence of the template.
+        const auto &to = reverse ? edge.left : edge.right;
+        StaticShapePoint fromPoint, toPoint;
+        if (resolveStaticShapePoint(from.shape.projection, edge.site, fromPoint) ==
+                ShapeRegionProofStatus::Proved &&
+            comparePoints(point, fromPoint) == Alias::Equal &&
+            resolveStaticShapePoint(to.shape.projection, edge.site, toPoint) ==
+                ShapeRegionProofStatus::Proved) {
+          if (!llvm::any_of(pending, [&](const StaticShapePoint &old) {
+                return comparePoints(old, toPoint) == Alias::Equal;
+              }))
+            pending.push_back(std::move(toPoint));
+          continue;
+        }
         if (!region || !destination) {
           uncertain = true;
           continue;
@@ -2524,9 +2897,12 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
             return reject(&operation, "boundary terminal must be module-owned");
         } else if (llvm::isa<MemberAccessOp>(endpoint)) {
           const auto *access = interfaceValues.lookup(value);
-          if (generated || !access || access->leaf.protocol.getValue() != "conservative" ||
+          if (!access || (access->identity.selection &&
+                         failed(resolveConservativeGeneratedSelection(access->projection))) ||
+              access->leaf.protocol.getValue() != "conservative" ||
               access->leaf.access.getValue() != "connect" ||
-              !llvm::isa<TerminalType>(value.getType()) || endpoint->getParentOp() != module)
+              !llvm::isa<TerminalType>(value.getType()) || endpoint->getParentOp() != scope ||
+              access->projection->getParentOp() != scope)
             return reject(&operation, "Interface connection requires an exact conservative capability");
         } else if (llvm::isa<NodeOp>(endpoint)) {
           if (!structuralBody(endpoint->getParentOp()))
@@ -2544,6 +2920,10 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
     return failure();
   if (failed(verifyConservativeArrayBindings(scope)))
     return failure();
+  UnionFind groups(endpoints.size());
+  for (Operation *connection : connections)
+    for (Value value : connection->getOperands().drop_front())
+      groups.unite(endpointIndex.lookup(connection->getOperand(0)), endpointIndex.lookup(value));
   if (generated) {
     for (Operation *instance : result.instances) {
       Operation *definition = resolveInstanceModuleDefinition(instance);
@@ -2563,16 +2943,33 @@ nodal::resolveConservativeStructuralScope(Operation *scope) {
         if (!occurrences)
           return reject(instance, "every generated child scalar port requires an actual connection",
                         "NODAL-VERIFY-HIERARCHY-012");
-        if (occurrences != 1)
-          return reject(instance, "generated child scalar port has duplicate connection bindings",
-                        "NODAL-VERIFY-HIERARCHY-010");
+        if (occurrences != 1) {
+          // Reusing one checked scalar incidence across junction edges does not
+          // create another child port binding. All such edges must belong to
+          // the same canonical scalar group; array relations retain their
+          // separate one-binding rule and cannot borrow this scalar proof.
+          auto index = endpointIndex.find(found->second);
+          bool oneGroup = index != endpointIndex.end();
+          for (Operation *connection : allScalarConnections) {
+            if (!llvm::is_contained(connection->getOperands(), found->second))
+              continue;
+            if (!llvm::is_contained(connections, connection)) {
+              oneGroup = false;
+              break;
+            }
+            for (Value operand : connection->getOperands()) {
+              auto other = endpointIndex.find(operand);
+              oneGroup &= other != endpointIndex.end() && index != endpointIndex.end() &&
+                  groups.find(other->second) == groups.find(index->second);
+            }
+          }
+          if (!oneGroup)
+            return reject(instance, "generated child scalar port has duplicate connection bindings",
+                          "NODAL-VERIFY-HIERARCHY-010");
+        }
       }
     }
   }
-  UnionFind groups(endpoints.size());
-  for (Operation *connection : connections)
-    for (Value value : connection->getOperands().drop_front())
-      groups.unite(endpointIndex.lookup(connection->getOperand(0)), endpointIndex.lookup(value));
   std::map<unsigned, unsigned> groupIndices;
   for (unsigned index = 0; index < endpoints.size(); ++index) {
     unsigned root = groups.find(index);
@@ -2598,7 +2995,8 @@ nodal::resolveConservativePortIncidence(Value value, Operation *use) {
     return ConservativePortIncidence{definition, value, std::nullopt};
   if (llvm::isa_and_nonnull<MemberAccessOp>(definition)) {
     auto endpoint = resolveConservativeEndpoint(value, use);
-    if (succeeded(endpoint) && llvm::isa<MemberAccessOp>(endpoint->shape.declaration) && !endpoint->instance)
+    if (succeeded(endpoint) && llvm::isa<MemberAccessOp>(endpoint->shape.declaration) &&
+        !endpoint->instance && endpoint->port)
       return ConservativePortIncidence{definition, value, std::nullopt};
     return failure();
   }

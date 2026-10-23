@@ -1233,6 +1233,228 @@ int main() {
   check("selected-joint-original-all-lane-invalid", jointBadArithmetic, false);
   check("selected-joint-child-selection-outside-domain", jointChildFormal(0, 2), false);
 
+  // The actual child formal and the selected coordinate must share one actual
+  // hierarchy environment. Original all-lane existence remains independent.
+  auto symbolicChildCoordinate = [&](unsigned lane, bool inverse = false, unsigned outer = 2,
+                                     bool broad = false) {
+    auto source = jointChildFormal(lane, 0, false, outer);
+    if (!broad)
+      source =
+          replace(source, "value = 4 : i64, spelling = \"4\"", "value = 1 : i64, spelling = \"1\"");
+    source = replace(source, ", %child_ordinal) <{member = \"value\"",
+                     ", %child_parameter) <{member = \"value\"");
+    if (inverse) {
+      source = replace(source, "%child_selected =",
+                       "%inverse_coordinate = \"nodal.const_expr\"(%child_high, %child_parameter) "
+                       "<{operator_name = \"sub\", metadata = {}}> : (i64, i64) -> i64\n"
+                       "%child_selected =");
+      source = replace(source, ", %child_parameter) <{member = \"value\"",
+                       ", %inverse_coordinate) <{member = \"value\"");
+    }
+    return source;
+  };
+  check("selected-symbolic-coordinate-parent0", symbolicChildCoordinate(0), true);
+  check("selected-symbolic-coordinate-parent1", symbolicChildCoordinate(1), true);
+  check("selected-symbolic-coordinate-inverse-parent0", symbolicChildCoordinate(0, true), false,
+        "NODAL-CDC-001");
+  check("selected-symbolic-coordinate-inverse-parent1", symbolicChildCoordinate(1, true), false,
+        "NODAL-CDC-001");
+  check("selected-symbolic-coordinate-original-existence",
+        symbolicChildCoordinate(0, false, 2, true), false, "all-legal existence");
+  check("selected-symbolic-coordinate-nested-prefix", symbolicChildCoordinate(1, false, 0), true);
+  check("selected-symbolic-coordinate-nested-foreign", symbolicChildCoordinate(1, false, 1), false,
+        "NODAL-CDC-001");
+  auto symbolicCoordinateQuery = [&](StringRef name, unsigned mutation) {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(symbolicChildCoordinate(0),
+                                                    ParserConfig(&context, false));
+    Operation *root = nullptr, *instance = nullptr, *parent = nullptr, *selected = nullptr;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        if (isa<nodal::ModuleOp>(op) &&
+            op->getAttrOfType<StringAttr>("sym_name").getValue() == "Top")
+          root = op;
+        if (isa<nodal::InstanceOp>(op))
+          instance = op;
+        if (isa<nodal::GenerateOp>(op) &&
+            op->getAttrOfType<StringAttr>("region_id").getValue() == "Top.lanes")
+          parent = op;
+        if (isa<nodal::GeneratedMemberOp>(op))
+          selected = op;
+      });
+    bool ok = root && instance && parent && selected;
+    if (ok) {
+      SmallVector<Operation *, 2> uses;
+      unsigned budget = mutation == 1 ? 0 : mutation == 2 ? 3 : 65536;
+      const unsigned initial = budget;
+      auto member = nodal::inspectGeneratedMember(selected, uses, budget);
+      if (mutation <= 2) {
+        ok = mutation ? failed(member) && budget <= initial
+                      : succeeded(member) && uses.size() == member->selections.size() &&
+                            uses.back() == selected && budget < initial;
+      } else {
+        ok = succeeded(member);
+        if (ok) {
+          SmallVector<std::pair<Value, nodal::InstantiatedIntegerExpression>, 2> coordinates{
+              {parent->getRegion(0).front().getArgument(0),
+               nodal::makeLiteralIntegerExpression(0)}};
+          SmallVector<nodal::SelectedIntegerInstanceStep, 2> path{{instance, coordinates}};
+          Operation *actualUse = mutation == 4    ? instance
+                                 : mutation == 10 ? selected->getNextNode()
+                                                  : selected;
+          if (mutation == 5)
+            coordinates.front().first = member->family->getRegion(0).front().getArgument(0);
+          if (mutation == 6)
+            path.push_back(path.front());
+          if (mutation == 7)
+            root = instance->getParentOfType<nodal::ModuleOp>()->getNextNode();
+          if (mutation == 8)
+            budget = 0;
+          if (mutation == 9)
+            budget = 2;
+          auto actual = nodal::resolveSelectedInstancePathGeneratedOrdinal(
+              root, path, member->family, selected->getOperand(1), actualUse, {}, {}, {}, budget);
+          ok = mutation == 3
+                   ? succeeded(actual) && actual->bounds.lower == 0 && actual->bounds.upper == 0
+                   : failed(actual);
+        }
+      }
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  symbolicCoordinateQuery("selected-symbolic-inspector-real-use", 0);
+  symbolicCoordinateQuery("selected-symbolic-inspector-zero-work", 1);
+  symbolicCoordinateQuery("selected-symbolic-inspector-exhausted-work", 2);
+  symbolicCoordinateQuery("selected-symbolic-actual-coordinate", 3);
+  symbolicCoordinateQuery("selected-symbolic-foreign-use", 4);
+  symbolicCoordinateQuery("selected-symbolic-foreign-induction", 5);
+  symbolicCoordinateQuery("selected-symbolic-repeated-path-edge", 6);
+  symbolicCoordinateQuery("selected-symbolic-wrong-root-anchor", 7);
+  symbolicCoordinateQuery("selected-symbolic-actual-zero-work", 8);
+  symbolicCoordinateQuery("selected-symbolic-actual-exhausted-work", 9);
+  symbolicCoordinateQuery("selected-symbolic-later-use-is-not-selection", 10);
+
+  auto sharedCoordinateBudget = [&](StringRef name, bool zero) {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(symbolicChildCoordinate(0),
+                                                    ParserConfig(&context, false));
+    Operation *selected = nullptr;
+    if (parsed)
+      parsed->walk([&](nodal::GeneratedMemberOp op) { selected = op; });
+    bool ok = selected;
+    if (ok) {
+      auto original = nodal::inspectGeneratedMember(selected);
+      unsigned budget = zero ? 0 : 65536;
+      auto domain = succeeded(original) ? nodal::resolveGeneratedDomain(original->family, budget)
+                                        : FailureOr<nodal::GeneratedDomain>(failure());
+      unsigned afterDomain = budget;
+      auto value =
+          nodal::resolveStructuralIntegerExpression(selected->getOperand(1), selected, budget);
+      unsigned afterValue = budget;
+      auto order = nodal::proveStructuralIntegerLessAtUse(nodal::makeLiteralIntegerExpression(0),
+                                                          nodal::makeLiteralIntegerExpression(1),
+                                                          selected, false, budget);
+      if (zero) {
+        ok = failed(domain) && failed(value) && failed(order) && budget == 0;
+      } else {
+        auto oldDomain = nodal::resolveGeneratedDomain(original->family);
+        auto oldValue =
+            nodal::resolveStructuralIntegerExpression(selected->getOperand(1), selected);
+        auto oldOrder = nodal::proveStructuralIntegerLessAtUse(
+            nodal::makeLiteralIntegerExpression(0), nodal::makeLiteralIntegerExpression(1),
+            selected);
+        ok = succeeded(domain) && succeeded(oldDomain) && succeeded(value) && succeeded(oldValue) &&
+             value->expression && oldValue->expression && succeeded(order) && succeeded(oldOrder) &&
+             *order == *oldOrder && afterDomain < 65536 && afterValue < afterDomain &&
+             budget < afterValue &&
+             nodal::equivalentInstantiatedIntegerExpressions(domain->lower, oldDomain->lower) &&
+             nodal::equivalentInstantiatedIntegerExpressions(*value->expression,
+                                                             *oldValue->expression);
+      }
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  sharedCoordinateBudget("selected-coordinate-shared-budget-equivalent-monotonic", false);
+  sharedCoordinateBudget("selected-coordinate-shared-budget-never-replenishes-zero", true);
+
+  auto relayCoordinate = [&](unsigned parentLane, unsigned relayLane, bool symbolic = false) {
+    auto source =
+        symbolic ? symbolicChildCoordinate(parentLane) : jointChildFormal(parentLane, relayLane);
+    auto relay = generatedFamily(
+        "relay", "2",
+        "%relay_wire = \"nodal.digital_storage\"() <{name = \"relay_wire\", kind = \"wire\", "
+        "metadata = {}}> : () -> " +
+            bit +
+            "\n"
+            "%relay_ordinal = \"nodal.const_expr\"(%relay_index, %child_zero) <{operator_name = "
+            "\"add\", metadata = {}}> : (i64, i64) -> i64\n"
+            "%relayed = \"nodal.generated_member\"(%child_cells, %relay_ordinal) <{member = "
+            "\"value\", access = \"read\", metadata = {}}> : (!nodal.generated_family, i64) -> " +
+            bit + "\n" + assign("relay_wire", "relayed") +
+            "\"nodal.generated_export\"(%relay_wire) <{member = \"value\", access = \"read\", "
+            "metadata = {}}> : (" +
+            bit + ") -> ()\n");
+    for (size_t at = 0; (at = relay.find("Top.relay", at)) != std::string::npos; at += 10)
+      relay.replace(at, 9, "Lane.relay");
+    source = replace(source, "%child_selected =", relay + "%child_selected =");
+    source = replace(source, "%child_selected = \"nodal.generated_member\"(%child_cells,",
+                     "%child_selected = \"nodal.generated_member\"(%relay,");
+    return source;
+  };
+  check("selected-coordinate-relay-old-predecessor0", relayCoordinate(0, 0), true);
+  check("selected-coordinate-relay-old-predecessor1", relayCoordinate(1, 1), true);
+  check("selected-coordinate-relay-foreign0", relayCoordinate(0, 1), false, "NODAL-CDC-001");
+  check("selected-coordinate-relay-foreign1", relayCoordinate(1, 0), false, "NODAL-CDC-001");
+  check("selected-coordinate-relay-symbolic0", relayCoordinate(0, 0, true), true);
+  check("selected-coordinate-relay-symbolic1", relayCoordinate(1, 0, true), true);
+  auto invalidRelayContext = [&](StringRef name, unsigned mutation) {
+    ++count;
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(relayCoordinate(0, 0), ParserConfig(&context, false));
+    Operation *relay = nullptr, *selected = nullptr, *family = nullptr;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        if (isa<nodal::GenerateOp>(op)) {
+          auto region = op->getAttrOfType<StringAttr>("region_id");
+          if (region.getValue() == "Lane.relay")
+            relay = op;
+          if (region.getValue() == "Lane.child_cells")
+            family = op;
+        }
+        if (isa<nodal::GeneratedMemberOp>(op) && isa<nodal::GenerateOp>(op->getParentOp()) &&
+            op->getParentOp()->getAttrOfType<StringAttr>("region_id").getValue() == "Lane.relay")
+          selected = op;
+      });
+    bool ok = relay && selected && family;
+    if (ok) {
+      if (mutation == 0) {
+        Operation *ordinal = selected->getOperand(1).getDefiningOp();
+        ordinal->setOperand(0, ordinal->getResult(0));
+      } else {
+        family->moveAfter(relay);
+      }
+      SmallVector<Operation *, 2> uses;
+      unsigned budget = 65536;
+      ok = failed(nodal::inspectGeneratedMember(selected, uses, budget)) && uses.empty() &&
+           budget < 65536;
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  invalidRelayContext("selected-coordinate-relay-cyclic-ordinal-rejected", 0);
+  invalidRelayContext("selected-coordinate-relay-forward-family-rejected", 1);
+
   auto jointPredicateQuery = [&](StringRef name, unsigned mutation,
                                  std::optional<Activity> expected) {
     ++count;
@@ -1422,6 +1644,29 @@ int main() {
       "%bad_binding = \"nodal.const_expr\"(%child_high, %child_parameter) <{operator_name = "
       "\"div\", metadata = {}}> : (i64, i64) -> i64\n\"nodal.parameter_override\"(%bad_binding)");
   check("selected-descendant-keeps-original-all-lane-arithmetic", descendantDivision, false);
+
+  auto symbolicDescendant = [&](unsigned lane, unsigned variant) {
+    auto source = descendantFormal(lane, variant);
+    auto symbolic = symbolicChildCoordinate(lane);
+    auto begin = symbolic.find("%child_cells_lo =");
+    auto end = symbolic.rfind("}) : () -> ()\n");
+    auto body = symbolic.substr(begin, end - begin);
+    for (size_t at = 0; (at = body.find("Lane.", at)) != std::string::npos; at += 5)
+      body.replace(at, 5, "Leaf.");
+    auto leaf = source.find("\"nodal.module\"() <{sym_name = \"Leaf\"");
+    auto branch = source.find("%child_predicate =", leaf);
+    auto last = source.rfind("}) : () -> ()\n");
+    source.replace(branch, last - branch, body);
+    return source;
+  };
+  check("selected-symbolic-two-edge-parent0", symbolicDescendant(0, 0), true);
+  check("selected-symbolic-two-edge-parent1", symbolicDescendant(1, 0), true);
+  check("selected-symbolic-three-edge", symbolicDescendant(1, 4), true);
+  check("selected-symbolic-derived-descendant", symbolicDescendant(1, 1), true);
+  check("selected-symbolic-same-spelling-sibling-environments-parent0", symbolicDescendant(0, 7),
+        false, "NODAL-CDC-001");
+  check("selected-symbolic-same-spelling-sibling-environments-parent1", symbolicDescendant(1, 7),
+        false, "NODAL-CDC-001");
 
   auto descendantPredicateQuery = [&](StringRef name, unsigned mutation,
                                       std::optional<Activity> expected) {

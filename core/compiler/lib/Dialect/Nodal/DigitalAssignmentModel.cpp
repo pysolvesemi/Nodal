@@ -1523,6 +1523,17 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   for (unsigned i = 0; i != baseNodes.size(); ++i)
     baseIds.push_back(i);
   graph.selectionContexts.push_back({});
+  // Provenance is query-local, not another physical identity or graph layout.
+  // Each operation came from the canonical recursive selection inspector.
+  struct SelectionOrigin {
+    std::pair<unsigned, Operation *> identity;
+    Operation *use;
+    unsigned context;
+  };
+  using SelectionOrigins = SmallVector<SelectionOrigin, 2>;
+  SmallVector<SelectionOrigins, 4> selectionOrigins(1);
+  DenseMap<unsigned, DigitalDependencySelectionContext> evaluatedContexts;
+  DenseSet<unsigned> activeEvaluations;
   DenseMap<std::pair<unsigned, unsigned>, unsigned> contextualNodes;
   uint64_t selectionWork = guardCopies;
   auto spendSelection = [&](Operation *use, uint64_t work = 1) {
@@ -1531,7 +1542,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     selectionWork += work;
     return success();
   };
-  auto internContext = [&](DigitalDependencySelectionContext candidate,
+  auto internContext = [&](DigitalDependencySelectionContext candidate, SelectionOrigins origins,
                            Operation *use) -> FailureOr<unsigned> {
     llvm::sort(candidate.selections, [](const auto &a, const auto &b) {
       if (a.occurrence != b.occurrence)
@@ -1557,13 +1568,27 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     }
     unsigned id = graph.selectionContexts.size();
     graph.selectionContexts.push_back(std::move(candidate));
+    selectionOrigins.push_back(std::move(origins));
     return id;
   };
   auto extendContext = [&](unsigned original, unsigned occurrence,
-                           ArrayRef<GeneratedSelection> selections,
+                           ArrayRef<GeneratedSelection> selections, ArrayRef<Operation *> uses,
                            Operation *use) -> FailureOr<unsigned> {
+    if (selections.size() != uses.size())
+      return failure();
     DigitalDependencySelectionContext candidate = graph.selectionContexts[original];
-    for (auto selection : selections) {
+    auto origins = selectionOrigins[original];
+    for (auto [originalSelection, selectedUse] : llvm::zip(selections, uses)) {
+      auto selection = originalSelection;
+      auto identity = std::make_pair(occurrence, selection.family);
+      auto origin =
+          llvm::find_if(origins, [&](const auto &entry) { return entry.identity == identity; });
+      if (origin == origins.end())
+        origins.push_back({identity, selectedUse, original});
+      else {
+        origin->use = selectedUse;
+        origin->context = original;
+      }
       if (failed(spendSelection(use, 1 + candidate.selections.size())) || !selection.family ||
           selection.family->getNumRegions() != 1 || !selection.family->getRegion(0).hasOneBlock())
         return failure();
@@ -1584,19 +1609,22 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       else
         known->selection = std::move(selection);
     }
-    return internContext(std::move(candidate), use);
+    return internContext(std::move(candidate), std::move(origins), use);
   };
   auto selectedContext = [&](Operation *selection, unsigned original,
                              unsigned occurrence) -> FailureOr<unsigned> {
     if (!selection)
       return original;
     auto member = selection->getAttrOfType<StringAttr>("member");
+    SmallVector<Operation *, 2> uses;
+    unsigned remaining = limits.maximumGuardWork - selectionWork, before = remaining;
     auto proof = member && selection->getNumOperands() == 2
                      ? inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
-                                                 member.getValue(), selection)
+                                                 member.getValue(), selection, uses, remaining)
                      : FailureOr<GeneratedSelectionProof>(failure());
+    selectionWork += before - remaining;
     return failed(proof) ? FailureOr<unsigned>(failure())
-                         : extendContext(original, occurrence, proof->selections, selection);
+                         : extendContext(original, occurrence, proof->selections, uses, selection);
   };
   auto contextNode = [&](unsigned base, unsigned context, Operation *use) -> FailureOr<unsigned> {
     if (!context)
@@ -1608,6 +1636,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       if (auto argument = dyn_cast<BlockArgument>(original.value))
         owner = argument.getOwner()->getParentOp();
     DigitalDependencySelectionContext relevant;
+    SelectionOrigins origins;
     for (const auto &selection : graph.selectionContexts[context].selections) {
       if (failed(spendSelection(use, 1 + occurrence.generatedScopes.size())))
         return failure();
@@ -1617,10 +1646,17 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       });
       bool lexical = original.occurrence == selection.occurrence && owner &&
                      selection.selection.family->isProperAncestor(owner);
-      if (inherited || lexical)
+      if (inherited || lexical) {
         relevant.selections.push_back(selection);
+        auto identity = std::make_pair(selection.occurrence, selection.selection.family);
+        auto origin = llvm::find_if(selectionOrigins[context],
+                                    [&](const auto &entry) { return entry.identity == identity; });
+        if (origin == selectionOrigins[context].end())
+          return failure();
+        origins.push_back(*origin);
+      }
     }
-    auto canonical = internContext(std::move(relevant), use);
+    auto canonical = internContext(std::move(relevant), std::move(origins), use);
     if (failed(canonical))
       return failure();
     if (!*canonical)
@@ -1669,6 +1705,142 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     }
     return true;
   };
+  auto evaluateContext =
+      [&](auto &&contextSelf, unsigned context, Operation *use,
+          unsigned contextDepth) -> FailureOr<const DigitalDependencySelectionContext *> {
+    if (failed(spendSelection(use)) || contextDepth >= limits.maximumGuardDepth)
+      return failure();
+    if (auto known = evaluatedContexts.find(context); known != evaluatedContexts.end())
+      return &known->second;
+    if (!activeEvaluations.insert(context).second)
+      return failure();
+    auto releaseEvaluation = llvm::scope_exit([&] { activeEvaluations.erase(context); });
+    const auto &entries = graph.selectionContexts[context].selections;
+    // Walk only the existing context's canonical lexical/occurrence ancestors.
+    // No coordinate edge graph, pointer-order inference or lane expansion.
+    SmallVector<unsigned char, 4> state(entries.size(), 0);
+    DigitalDependencySelectionContext evaluated;
+    auto evaluateSelection = [&](auto &&self, unsigned index, unsigned depth) -> LogicalResult {
+      if (failed(spendSelection(use)) || depth >= limits.maximumGuardDepth)
+        return failure();
+      if (state[index] == 2)
+        return success();
+      if (state[index] == 1)
+        return reject(use, "selected coordinate contexts have cyclic actual-use ancestry");
+      state[index] = 1;
+      const auto &entry = entries[index];
+      if (failed(spendSelection(use, 1 + selectionOrigins[context].size())))
+        return failure();
+      auto identity = std::make_pair(entry.occurrence, entry.selection.family);
+      auto origin = llvm::find_if(selectionOrigins[context],
+                                  [&](const auto &item) { return item.identity == identity; });
+      if (origin == selectionOrigins[context].end())
+        return failure();
+      Operation *selectedUse = origin->use;
+      auto member = selectedUse->getAttrOfType<StringAttr>("member");
+      SmallVector<Operation *, 2> checkedUses;
+      unsigned remaining = limits.maximumGuardWork - selectionWork, before = remaining;
+      auto proof =
+          member && selectedUse->getNumOperands() == 2
+              ? inspectGeneratedSelection(selectedUse->getOperand(0), selectedUse->getOperand(1),
+                                          member.getValue(), selectedUse, checkedUses, remaining)
+              : FailureOr<GeneratedSelectionProof>(failure());
+      selectionWork += before - remaining;
+      if (failed(proof) || proof->family != entry.selection.family || proof->selections.empty() ||
+          checkedUses.back() != selectedUse)
+        return failure();
+      const auto &occurrence = hierarchy->occurrences()[entry.occurrence];
+      for (auto [otherIndex, prerequisite] : llvm::enumerate(entries)) {
+        if (failed(spendSelection(use, 1 + occurrence.generatedScopes.size())))
+          return failure();
+        if (otherIndex == index)
+          continue;
+        bool lexical = prerequisite.occurrence == entry.occurrence &&
+                       (prerequisite.selection.family->isProperAncestor(entry.selection.family) ||
+                        prerequisite.selection.family->isProperAncestor(selectedUse));
+        bool inherited = llvm::any_of(occurrence.generatedScopes, [&](const auto &scope) {
+          return scope.occurrence == prerequisite.occurrence &&
+                 scope.family == prerequisite.selection.family;
+        });
+        if ((lexical || inherited) && failed(self(self, otherIndex, depth + 1)))
+          return failure();
+      }
+      // Physical relevance filtering may legitimately inline and drop a relay
+      // family. Its original selected-use environment remains an existing
+      // canonical context reference, not a new physical key or capture registry.
+      auto originEnvironment =
+          contextSelf(contextSelf, origin->context, selectedUse, contextDepth + 1);
+      if (failed(originEnvironment))
+        return failure();
+      SmallVector<unsigned, 4> ancestors;
+      for (unsigned at = entry.occurrence; at; at = hierarchy->occurrences()[at].parent) {
+        if (failed(spendSelection(use)) || ancestors.size() >= 128)
+          return failure();
+        ancestors.push_back(at);
+      }
+      std::reverse(ancestors.begin(), ancestors.end());
+      SmallVector<SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2>, 4> storage(
+          ancestors.size());
+      for (unsigned index = 0; index < ancestors.size(); ++index) {
+        const auto &actual = hierarchy->occurrences()[ancestors[index]];
+        for (const auto &prefix : (*originEnvironment)->selections) {
+          if (failed(spendSelection(use)))
+            return failure();
+          if (prefix.occurrence == actual.parent &&
+              prefix.selection.family->isProperAncestor(actual.instance))
+            storage[index].emplace_back(
+                prefix.selection.family->getRegion(0).front().getArgument(0),
+                prefix.selection.coordinate);
+        }
+      }
+      SmallVector<SelectedIntegerInstanceStep, 4> path;
+      for (unsigned index = 0; index < ancestors.size(); ++index)
+        path.push_back({hierarchy->occurrences()[ancestors[index]].instance, storage[index]});
+      auto originalPrefix = ArrayRef<GeneratedSelection>(proof->selections).drop_back();
+      SmallVector<GeneratedSelection, 2> actualPrefix;
+      for (const auto &prefix : originalPrefix) {
+        if (failed(spendSelection(use, 1 + evaluated.selections.size())))
+          return failure();
+        auto found = llvm::find_if(evaluated.selections, [&](const auto &candidate) {
+          return candidate.occurrence == entry.occurrence &&
+                 candidate.selection.family == prefix.family;
+        });
+        if (found == evaluated.selections.end())
+          return failure();
+        auto actual = found->selection;
+        // The coordinate is contextual, but the exact prefix ordinal/use remains original.
+        actual.ordinal = prefix.ordinal;
+        actualPrefix.push_back(std::move(actual));
+      }
+      SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2> lexicalCoordinates;
+      for (const auto &prefix : (*originEnvironment)->selections) {
+        if (failed(spendSelection(use)))
+          return failure();
+        if (prefix.occurrence == entry.occurrence &&
+            prefix.selection.family->isProperAncestor(selectedUse))
+          lexicalCoordinates.emplace_back(
+              prefix.selection.family->getRegion(0).front().getArgument(0),
+              prefix.selection.coordinate);
+      }
+      remaining = limits.maximumGuardWork - selectionWork;
+      before = remaining;
+      auto coordinate = resolveSelectedInstancePathGeneratedOrdinal(
+          hierarchy->occurrences().front().module, path, proof->family, selectedUse->getOperand(1),
+          selectedUse, originalPrefix, actualPrefix, lexicalCoordinates, remaining);
+      selectionWork += before - remaining;
+      if (failed(coordinate))
+        return failure();
+      auto actual = entry;
+      actual.selection.coordinate = *coordinate;
+      evaluated.selections.push_back(std::move(actual));
+      state[index] = 2;
+      return success();
+    };
+    for (unsigned index = 0; index < entries.size(); ++index)
+      if (failed(evaluateSelection(evaluateSelection, index, 0)))
+        return failure();
+    return &evaluatedContexts.try_emplace(context, std::move(evaluated)).first->second;
+  };
   std::map<std::tuple<unsigned, Operation *, unsigned>, StaticPredicateActivity> selectedGuards;
   auto guardActive = [&](unsigned base, unsigned context, Operation *use) -> FailureOr<bool> {
     if (!context)
@@ -1680,6 +1852,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       auto key = std::make_tuple(occurrence, condition, context);
       auto known = selectedGuards.find(key);
       if (known == selectedGuards.end()) {
+        auto evaluated = evaluateContext(evaluateContext, context, use, 0);
+        if (failed(evaluated)) {
+          (void)reject(
+              use,
+              "selected coordinates require their exact original use and full actual ancestry");
+          return failure();
+        }
         SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2> substitutions;
         SmallVector<unsigned, 4> ancestors;
         for (unsigned at = occurrence; at; at = hierarchy->occurrences()[at].parent) {
@@ -1691,7 +1870,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         SmallVector<SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2>, 4>
             coordinateStorage;
         coordinateStorage.resize(ancestors.size());
-        for (const auto &selection : graph.selectionContexts[context].selections) {
+        for (const auto &selection : (*evaluated)->selections) {
           if (failed(spendSelection(use)))
             return failure();
           if (selection.occurrence == occurrence &&
@@ -1748,12 +1927,15 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     node.dependencies.clear();
     unsigned dependencyContext = node.selectedContext;
     if (node.value && isa_and_nonnull<GeneratedMemberOp>(node.value.getDefiningOp())) {
-      auto member = inspectGeneratedMember(node.value.getDefiningOp());
+      SmallVector<Operation *, 2> uses;
+      unsigned remaining = limits.maximumGuardWork - selectionWork, before = remaining;
+      auto member = inspectGeneratedMember(node.value.getDefiningOp(), uses, remaining);
+      selectionWork += before - remaining;
       if (failed(member))
         return failure();
       if (!member->familyView) {
         auto context =
-            extendContext(dependencyContext, node.occurrence, member->selections, node.use);
+            extendContext(dependencyContext, node.occurrence, member->selections, uses, node.use);
         if (failed(context))
           return failure();
         dependencyContext = *context;

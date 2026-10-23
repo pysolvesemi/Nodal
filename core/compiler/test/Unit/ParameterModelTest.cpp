@@ -1850,6 +1850,69 @@ int main() {
   if (!sawBooleanDag)
     return fail("Boolean comparison and logical expression did not retain structure");
 
+  {
+    mlir::Operation *count = nullptr;
+    valid->walk([&](nodal::ParameterOp op) {
+      if (op->getAttrOfType<mlir::StringAttr>("sym_name").getValue() == "COUNT")
+        count = op;
+    });
+    if (!count)
+      return fail("shared-work parameter fixture absent");
+    auto *owner = count->getParentOp();
+    auto old = nodal::resolveOwnedIntegerParameter(owner, count);
+    unsigned remaining = 65536;
+    auto shared = nodal::resolveOwnedIntegerParameter(owner, count, remaining);
+    unsigned cost = 65536 - remaining;
+    if (mlir::failed(old) || mlir::failed(shared) || cost < 2 ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*old, *shared))
+      return fail("shared-work parameter changed original semantic facts");
+    unsigned zero = 0, shortWork = cost - 1;
+    if (mlir::succeeded(nodal::resolveOwnedIntegerParameter(owner, count, zero)) || zero ||
+        mlir::succeeded(nodal::resolveOwnedIntegerParameter(owner, count, shortWork)) || shortWork)
+      return fail("shared-work parameter replenished an exhausted leaf budget");
+    auto bounds = nodal::inferParameterIntegerBounds(count, remaining);
+    auto ordinary = nodal::inferParameterIntegerBounds(count);
+    if (mlir::failed(bounds) || mlir::failed(ordinary) || remaining >= 65536 - cost ||
+        bounds->lower != ordinary->lower || bounds->upper != ordinary->upper)
+      return fail("shared bound interpreter changed ordinary range or reset work");
+  }
+
+  {
+    auto repeated = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(module {
+      "nodal.module"() <{sym_name="Budget", metadata={}}> ({
+        "nodal.parameter"() <{sym_name="N", type=i64, default_value=1:i64, classification="ordinary", parameter_kind="integer", variability="symbolic", metadata={}}> : () -> ()
+        %lo = "nodal.const_literal"() <{value=1:i64, spelling="1", metadata={}}> : () -> i64
+        %hi = "nodal.const_literal"() <{value=4:i64, spelling="4", metadata={}}> : () -> i64
+        "nodal.parameter_constraint"(%lo,%hi) <{parameter=@N, constraint_kind="range", lower_inclusive=true, upper_inclusive=true, metadata={}}> : (i64,i64) -> ()
+        %n = "nodal.const_parameter_ref"() <{parameter=@N, metadata={}}> : () -> i64
+        %other = "nodal.const_parameter_ref"() <{parameter=@N, metadata={}}> : () -> i64
+        %twice = "nodal.const_expr"(%n,%n) <{operator_name="add", metadata={semantic_path="Budget.twice"}}> : (i64,i64) -> i64
+      }) : () -> ()
+    })mlir",
+                                                            mlir::ParserConfig(&context, false));
+    if (!repeated)
+      return fail("repeated-DAG budget fixture absent");
+    nodal::ConstExprOp twice;
+    mlir::Value other;
+    repeated->walk([&](nodal::ConstExprOp op) { twice = op; });
+    repeated->walk([&](nodal::ConstParameterRefOp op) { other = op->getResult(0); });
+    auto *owner = twice->getParentOp();
+    unsigned sharedWork = 65536, separateWork = 65536;
+    auto shared = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), sharedWork);
+    auto ordinary = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0));
+    twice->setOperand(1, other);
+    auto separate = nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), separateWork);
+    if (mlir::failed(shared) || mlir::failed(ordinary) || mlir::failed(separate) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*shared, *ordinary) ||
+        !nodal::equivalentInstantiatedIntegerExpressions(*shared, *separate) ||
+        sharedWork <= separateWork || sharedWork == 65536)
+      return fail("repeated actual DAG did not retain bounded charged memo reuse");
+    unsigned before = sharedWork;
+    if (mlir::failed(
+            nodal::resolveOwnedIntegerExpression(owner, twice->getResult(0), sharedWork)) ||
+        sharedWork >= before)
+      return fail("nested ordinary query replenished shared remaining work");
+  }
   auto badConstraint = mlir::parseSourceString<mlir::ModuleOp>(kBadConstraint, &context);
   if (!badConstraint || mlir::succeeded(nodal::verifyParameterModel(*badConstraint)))
     return fail("range or exclusion constraint was not enforced");

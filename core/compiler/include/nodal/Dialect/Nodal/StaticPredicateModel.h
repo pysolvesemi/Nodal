@@ -57,6 +57,16 @@ mlir::FailureOr<bool> proveBehavioralGuardsDisjoint(mlir::Value left, mlir::Valu
 mlir::FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
                                                       const InstantiatedIntegerExpression &right,
                                                       mlir::Operation *use, bool inclusive = false);
+/// Same ordering proof with caller-owned remaining work.
+mlir::FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
+                                                      const InstantiatedIntegerExpression &right,
+                                                      mlir::Operation *use, bool inclusive,
+                                                      unsigned &remainingWork);
+/// Validate exact original Generate induction identities and bounded coordinate
+/// DAGs in an actual lexical scope. This is not selection/existence authority.
+mlir::LogicalResult verifySelectedStructuralCoordinates(
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> coordinates,
+    mlir::Operation *scope, unsigned &remainingWork);
 mlir::LogicalResult verifyStaticPredicateOperation(mlir::Operation *operation);
 } // namespace nodal
 #endif

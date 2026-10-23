@@ -1668,3 +1668,43 @@ cases. These counts are not retroactively attributed to checkpoint 47's later
 source engine. Endpoint identity ownership is already retained there, but no
 new whole-testkit compilation is claimed. The broader selected Interface target
 runner's nested/nonunit/refusal input mapping remains separately audited.
+
+## Checkpoint 52: composed native query and conservative adapter proof
+
+This checkpoint promotes twenty native owner changes and five matching query
+regressions without replacing the hierarchy, Shape, Parameter, Collection or
+conservative-connectivity owners. Selected occurrence and capture/type queries,
+non-unit generated conservative endpoints and selected-child materialization
+retain bounded proofs and causal refusals. The checkpoint-50 digital target
+source is unchanged.
+
+A fresh serialized combined-link run passed thirteen affected query suites and
+323 direct target-IR cases: hierarchy 91, sequential 157, symbolic 31, occurrence
+20, selected Interface 7, direct Interface 10 and typed fill 7. Query observations
+were ShapeRegion 75, ShapeIteration 173, Storage 223, AssignmentGuard 41,
+Collection 110, DigitalType 186, Interface 545, Observation 25, StructuralIf 95,
+Hierarchy 314, Boundary 56 and Crossing 273. Parameter reported constructor 38,
+dependent-bound 7 and 23 symbolic pass lines; these are not invented into an
+unreported whole-suite total.
+
+The composed conservative adapter passed 125 executions: 111 retained parity
+rows, verify/emit pairs for five public-source profiles, duplicate refusal,
+adjacent budget 49912 success / 49913 refusal and transactional refusal. All
+five Verilog-A outputs byte-match the accepted public-source supplement,
+including two distinct selected ordinals 1 and 2. This is adapter-first emission,
+not numerical simulation, external-parser acceptance or general digital target
+qualification. Source-generation fixtures follow in their own checkpoint.
+
+The exact link reused accepted objects and archives; it did not recompile the
+target. Seven changed headers were audited as additive declarations or new
+standalone types, and thirteen ABI-facing/generated files matched exactly.
+Overlay precedence, configured Version provenance, all link input hashes and
+source mappings remain recorded. Combined nodalc SHA-256 begins `8e5da176`,
+probe `9f3cc30b`; the immutable acceptance receipt is
+`1209b36ced9ca16c2146a391068638b4030578232c4737ed7f331aadea92ffdf`.
+The unchanged seven target and eight other query test sources were checked
+against the predecessor; the five changed query sources are included here.
+
+No firtool, comparator, held consumer repair, CI or full suite was invoked.
+Pending geometry lifecycle, broader generated/selected Interface routing and
+remaining physical/backend profiles stay open. Foundation 58 is incomplete.

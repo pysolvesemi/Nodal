@@ -2,6 +2,7 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
@@ -47,6 +48,7 @@ namespace {
 struct GeneratedQueryContext {
   unsigned work = 0;
   unsigned maximumWork = 65536;
+  bool sharedWork = false;
   llvm::DenseSet<Operation *> activeDomains;
   llvm::DenseMap<Operation *, nodal::GeneratedDomain> domains;
   bool charge() { return ++work <= maximumWork; }
@@ -1124,11 +1126,12 @@ FailureOr<IntegerBounds> integerOperationBounds(llvm::StringRef operationName,
 
 class IntegerBoundsAnalysis {
 public:
-  explicit IntegerBoundsAnalysis(Operation *owner, bool generatedI64 = false)
-      : owner(owner), generatedI64(generatedI64) {}
+  explicit IntegerBoundsAnalysis(Operation *owner, bool generatedI64 = false,
+                                 GeneratedQueryContext *query = nullptr)
+      : owner(owner), generatedI64(generatedI64), query(query) {}
 
   FailureOr<IntegerBounds> value(Value input) {
-    if (!input)
+    if (!input || (query && (!query->charge() || !moduleBody(owner))))
       return failure();
     auto cached = values.find(input);
     if (cached != values.end()) {
@@ -1138,6 +1141,10 @@ public:
     }
     if (activeValues.size() + activeParameters.size() >= 512 || !activeValues.insert(input).second)
       return failure();
+    if (query && isNamed(input.getDefiningOp(), "nodal.const_parameter_ref"))
+      for (Operation &unused : *moduleBody(owner))
+        if (!query->charge())
+          return failure();
     auto result = analyzeValue(input);
     activeValues.erase(input);
     values.try_emplace(input,
@@ -1146,7 +1153,7 @@ public:
   }
 
   FailureOr<IntegerBounds> parameter(Operation *input) {
-    if (!input)
+    if (!input || (query && (!query->charge() || !moduleBody(owner))))
       return failure();
     auto cached = parameters.find(input);
     if (cached != parameters.end()) {
@@ -1157,6 +1164,12 @@ public:
     if (activeValues.size() + activeParameters.size() >= 512 ||
         !activeParameters.insert(input).second)
       return failure();
+    // Existing duplicate/default/constraint inventories remain in this owner.
+    // Charge their bounded module scans, then each actual recursively visited DAG node.
+    if (query)
+      for (Operation &unused : *moduleBody(owner))
+        if (!query->charge() || !query->charge())
+          return failure();
     auto result = analyzeParameter(input);
     activeParameters.erase(input);
     parameters.try_emplace(input, succeeded(result) ? std::optional<IntegerBounds>(*result)
@@ -1323,6 +1336,7 @@ private:
 
   Operation *owner;
   bool generatedI64;
+  GeneratedQueryContext *query;
   llvm::DenseMap<Value, std::optional<IntegerBounds>> values;
   llvm::DenseMap<Operation *, std::optional<IntegerBounds>> parameters;
   llvm::DenseSet<Value> activeValues;
@@ -1663,8 +1677,9 @@ public:
       GeneratedQueryContext *query = nullptr, InstanceIntegerAnalysis *enclosing = nullptr,
       InstanceIntegerAnalysis *original = nullptr)
       : parent(owner), instance(instance), evaluateParentDefaults(evaluateParentDefaults),
-        generatedI64(generatedI64), parentBounds(owner, generatedI64), environment(environment),
-        selected(selected), structuralOverrides(structuralOverrides),
+        generatedI64(generatedI64),
+        parentBounds(owner, generatedI64, query && query->sharedWork ? query : nullptr),
+        environment(environment), selected(selected), structuralOverrides(structuralOverrides),
         allowUnattained(allowUnattained), query(query), enclosing(enclosing), original(original) {
     if (!moduleBody(parent))
       return;
@@ -2151,6 +2166,38 @@ LogicalResult verifyGeneratedCountContract(Operation *operation, IntegerBounds l
   return success();
 }
 
+template <typename Query> auto sharedRegionWork(GeneratedQueryContext &context, Query query) {
+  unsigned remaining = context.maximumWork - std::min(context.work, context.maximumWork);
+  const unsigned before = remaining;
+  auto result = query(remaining);
+  context.work += before - remaining;
+  return result;
+}
+FailureOr<nodal::DigitalRegionHeader> integerRegionHeader(Block *body,
+                                                          GeneratedQueryContext &query) {
+  return query.sharedWork ? sharedRegionWork(query,
+                                             [&](unsigned &remaining) {
+                                               return nodal::inspectDigitalRegion(body, remaining);
+                                             })
+                          : nodal::inspectDigitalRegion(body);
+}
+LogicalResult integerValueScope(Value value, Operation *use, GeneratedQueryContext &query) {
+  return query.sharedWork
+             ? sharedRegionWork(query,
+                                [&](unsigned &remaining) {
+                                  return nodal::verifyDigitalValueScope(value, use, remaining);
+                                })
+             : nodal::verifyDigitalValueScope(value, use);
+}
+FailureOr<Value> integerCaptureSource(BlockArgument argument, GeneratedQueryContext &query) {
+  return query.sharedWork
+             ? sharedRegionWork(query,
+                                [&](unsigned &remaining) {
+                                  return nodal::digitalRegionCaptureSource(argument, remaining);
+                                })
+             : nodal::digitalRegionCaptureSource(argument);
+}
+
 LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Operation *diagnostic,
                                                llvm::DenseSet<Value> &active,
                                                llvm::DenseSet<Value> &visited,
@@ -2162,9 +2209,9 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
         "NODAL-ITERATION-043-001: generated SSA bound has no value or exceeds query work budget");
   // Cached dependency facts never substitute for the actual use's lexical scope.
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-    auto header = nodal::inspectDigitalRegion(argument.getOwner());
+    auto header = integerRegionHeader(argument.getOwner(), query);
     if (failed(header) || header->module != owner ||
-        failed(nodal::verifyDigitalValueScope(value, diagnostic)) ||
+        failed(integerValueScope(value, diagnostic, query)) ||
         (header->kind == nodal::DigitalRegionKind::Generate &&
          (argument.getArgNumber() != 0 || !header->operation->isProperAncestor(diagnostic))))
       return diagnostic->emitOpError(
@@ -2172,7 +2219,7 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
   }
   if (Operation *definition = value.getDefiningOp();
       definition && definition != diagnostic && definition->getParentOp() != owner &&
-      failed(nodal::verifyDigitalValueScope(value, diagnostic)))
+      failed(integerValueScope(value, diagnostic, query)))
     return diagnostic->emitOpError(
         "NODAL-ITERATION-043-001: generated bound expression escapes its actual use scope");
   if (visited.contains(value))
@@ -2194,18 +2241,18 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
         "NODAL-ITERATION-043-001: generated SSA bounds require signless i64 values"));
 
   if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-    auto header = nodal::inspectDigitalRegion(argument.getOwner());
+    auto header = integerRegionHeader(argument.getOwner(), query);
     if (succeeded(header) && header->kind == nodal::DigitalRegionKind::Generate &&
         header->module == owner && argument.getArgNumber() == 0 &&
         header->operation->isProperAncestor(diagnostic) &&
-        succeeded(nodal::verifyDigitalValueScope(value, diagnostic))) {
+        succeeded(integerValueScope(value, diagnostic, query))) {
       auto domain = generatedDomain(header->operation, query);
       return finish(success(succeeded(domain) && domain->induction == argument));
     }
-    auto source = nodal::digitalRegionCaptureSource(argument);
+    auto source = integerCaptureSource(argument, query);
     if (failed(header) || header->kind != nodal::DigitalRegionKind::StructuralArm ||
         header->module != owner || failed(source) || !*source ||
-        failed(nodal::verifyDigitalValueScope(value, diagnostic)))
+        failed(integerValueScope(value, diagnostic, query)))
       return finish(diagnostic->emitOpError(
           "NODAL-ITERATION-043-001: generated bound requires an exact structural capture"));
     return finish(verifyGeneratedBoundDependencies(*source, owner, header->operation, active,
@@ -2217,11 +2264,10 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
   unsigned scopeDepth = 0;
   for (Operation *scope = operation ? operation->getParentOp() : nullptr;
        structuralScope && scope != owner; scope = scope ? scope->getParentOp() : nullptr)
-    structuralScope = scope && ++scopeDepth <= 128 &&
+    structuralScope = scope && (!query.sharedWork || query.charge()) && ++scopeDepth <= 128 &&
                       (isNamed(scope, "nodal.generate") || isNamed(scope, "nodal.structural_if"));
   if (!structuralScope || operation->hasAttr("unit") ||
-      (operation->getParentOp() != owner &&
-       failed(nodal::verifyDigitalValueScope(value, diagnostic))))
+      (operation->getParentOp() != owner && failed(integerValueScope(value, diagnostic, query))))
     return finish(diagnostic->emitOpError(
         "NODAL-ITERATION-043-001: generated SSA bound escapes its owning module"));
 
@@ -2230,6 +2276,10 @@ LogicalResult verifyGeneratedBoundDependencies(Value value, Operation *owner, Op
     return finish(success());
 
   if (name == "nodal.const_parameter_ref") {
+    if (query.sharedWork)
+      for (Operation &unused : *moduleBody(owner))
+        if (!query.charge())
+          return finish(failure());
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
     Operation *parameter =
         reference ? findDirectSymbol(owner, reference.getValue(), "nodal.parameter") : nullptr;
@@ -2539,6 +2589,37 @@ private:
   llvm::DenseSet<Operation *> active;
 };
 
+// One formatter shared by authored parameter SSA and checked proof DAGs.
+// Arithmetic/type/provenance validation remains with their canonical owners.
+FailureOr<std::string> formatParameterOperator(llvm::StringRef operatorName,
+                                               ArrayRef<std::string> operands) {
+  unsigned arity = operatorName == "choose_zero" ? 3
+                   : oneOf(operatorName, {"neg", "not", "ceil_log2"}) ? 1 : 2;
+  if (operands.size() != arity)
+    return failure();
+  if (operatorName == "neg")
+    return "(-" + operands[0] + ")";
+  if (operatorName == "not")
+    return "(!" + operands[0] + ")";
+  if (operatorName == "choose_zero")
+    return "((" + operands[0] + ") == 0 ? (" + operands[1] + ") : (" + operands[2] + "))";
+  if (operatorName == "ceil_log2") {
+    std::string result;
+    for (unsigned exponent = 0; exponent != 63; ++exponent)
+      result += "((" + operands[0] + ") <= " + ceilLog2Threshold(exponent) + " ? " +
+                std::to_string(exponent) + " : ";
+    result += "63";
+    result.append(63, ')');
+    return result;
+  }
+  if (operatorName == "max")
+    return "(" + operands[0] + " > " + operands[1] + " ? " + operands[0] + " : " + operands[1] + ")";
+  llvm::StringRef spelling = parameterBinarySpelling(operatorName);
+  if (spelling.empty())
+    return failure();
+  return "(" + operands[0] + " " + spelling.str() + " " + operands[1] + ")";
+}
+
 FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &visited) {
   Operation *operation = value.getDefiningOp();
   if (!operation || !visited.insert(operation).second)
@@ -2569,38 +2650,14 @@ FailureOr<std::string> renderValue(Value value, llvm::DenseSet<Operation *> &vis
       }
       operands.push_back(*rendered);
     }
-    std::string result;
-    if (operatorName == "neg")
-      result = "(-" + operands[0] + ")";
-    else if (operatorName == "not")
-      result = "(!" + operands[0] + ")";
-    else if (operatorName == "choose_zero")
-      result = "((" + operands[0] + ") == 0 ? (" + operands[1] + ") : (" + operands[2] + "))";
-    else if (operatorName == "ceil_log2") {
-      // Each owned child DAG was rendered once above. Copy only its bounded
-      // spelling, rather than traversing a shared operand again for each level.
-      for (unsigned exponent = 0; exponent != 63; ++exponent)
-        result += "((" + operands[0] + ") <= " + ceilLog2Threshold(exponent) + " ? " +
-                  std::to_string(exponent) + " : ";
-      result += "63";
-      result.append(63, ')');
-    } else if (operatorName == "max") {
-      if (operands.size() != 2 || !value.getType().isSignlessInteger(64) ||
-          llvm::any_of(operation->getOperands(),
-                       [&](Value operand) { return operand.getType() != value.getType(); })) {
-        visited.erase(operation);
-        return failure();
-      }
-      result =
-          "(" + operands[0] + " > " + operands[1] + " ? " + operands[0] + " : " + operands[1] + ")";
-    } else {
-      llvm::StringRef spelling = parameterBinarySpelling(operatorName);
-      if (spelling.empty()) {
-        visited.erase(operation);
-        return failure();
-      }
-      result = "(" + operands[0] + " " + spelling.str() + " " + operands[1] + ")";
+    if (operatorName == "max" &&
+        (operands.size() != 2 || !value.getType().isSignlessInteger(64) ||
+         llvm::any_of(operation->getOperands(),
+                      [&](Value operand) { return operand.getType() != value.getType(); }))) {
+      visited.erase(operation);
+      return failure();
     }
+    auto result = formatParameterOperator(operatorName, operands);
     visited.erase(operation);
     return result;
   }
@@ -3386,6 +3443,16 @@ FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *opera
   return generatedDomain(operation, query);
 }
 
+FailureOr<nodal::GeneratedDomain> nodal::resolveGeneratedDomain(Operation *operation,
+                                                                unsigned &remainingWork) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  return generatedDomain(operation, query);
+}
+
 FailureOr<nodal::GeneratedDomain> nodal::resolveBoundedIterationDomain(Operation *operation) {
   GeneratedQueryContext query;
   auto reject = [&](llvm::StringRef message) -> FailureOr<GeneratedDomain> {
@@ -3490,6 +3557,39 @@ nodal::inferParameterIntegerBounds(Operation *parameter, ParameterIntegerMode mo
   if (!owner)
     return failure();
   return IntegerBoundsAnalysis(owner, mode == ParameterIntegerMode::MathematicalSigned64)
+      .parameter(parameter);
+}
+
+FailureOr<nodal::ParameterIntegerBounds>
+nodal::inferParameterIntegerBounds(Value value, unsigned &remainingWork,
+                                   ParameterIntegerMode mode) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  if (!query.charge() || !value)
+    return failure();
+  Operation *owner = enclosingNodalModule(value.getDefiningOp());
+  if (!owner)
+    return failure();
+  return IntegerBoundsAnalysis(owner, mode == ParameterIntegerMode::MathematicalSigned64, &query)
+      .value(value);
+}
+FailureOr<nodal::ParameterIntegerBounds>
+nodal::inferParameterIntegerBounds(Operation *parameter, unsigned &remainingWork,
+                                   ParameterIntegerMode mode) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  if (!query.charge())
+    return failure();
+  Operation *owner = enclosingNodalModule(parameter);
+  if (!owner)
+    return failure();
+  return IntegerBoundsAnalysis(owner, mode == ParameterIntegerMode::MathematicalSigned64, &query)
       .parameter(parameter);
 }
 
@@ -3623,6 +3723,40 @@ nodal::resolveOwnedIntegerExpression(Operation *module, Value expression,
   return instanceExpression(
       InstanceIntegerAnalysis(module, nullptr, false,
                               mode == ParameterIntegerMode::MathematicalSigned64)
+          .value(expression));
+}
+
+FailureOr<nodal::InstantiatedIntegerExpression>
+nodal::resolveOwnedIntegerParameter(Operation *module, Operation *parameter,
+                                    unsigned &remainingWork, ParameterIntegerMode mode) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  if (!query.charge() || !module || !parameter || parameter->getParentOp() != module)
+    return failure();
+  return instanceExpression(
+      InstanceIntegerAnalysis(module, nullptr, false,
+                              mode == ParameterIntegerMode::MathematicalSigned64, nullptr, {},
+                              false, false, &query)
+          .parameter(parameter));
+}
+FailureOr<nodal::InstantiatedIntegerExpression>
+nodal::resolveOwnedIntegerExpression(Operation *module, Value expression, unsigned &remainingWork,
+                                     ParameterIntegerMode mode) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  if (!query.charge() || !module || !expression ||
+      enclosingNodalModule(expression.getDefiningOp()) != module)
+    return failure();
+  return instanceExpression(
+      InstanceIntegerAnalysis(module, nullptr, false,
+                              mode == ParameterIntegerMode::MathematicalSigned64, nullptr, {},
+                              false, false, &query)
           .value(expression));
 }
 
@@ -4274,7 +4408,7 @@ public:
   }
   FailureOr<StructuralIntegerFacts> resolve(Value value, Operation *use, unsigned depth = 0) {
     if (depth >= 128 || !query.charge() || !value || !value.getType().isSignlessInteger(64) ||
-        !use || failed(verifyDigitalValueScope(value, use)))
+        !use || failed(integerValueScope(value, use, query)))
       return failure();
     if (auto found = memo.find(value); found != memo.end())
       return found->second;
@@ -4293,8 +4427,26 @@ public:
 private:
   FailureOr<StructuralIntegerFacts> compute(Value value, Operation *use, unsigned depth) {
     Operation *module = use->getParentOfType<ModuleOp>();
+    auto ownedValue = [&](Value original) -> FailureOr<InstantiatedIntegerExpression> {
+      if (!query.sharedWork)
+        return resolveOwnedIntegerExpression(module, original, mode);
+      return instanceExpression(
+          InstanceIntegerAnalysis(module, nullptr, false,
+                                  mode == ParameterIntegerMode::MathematicalSigned64, nullptr, {},
+                                  false, false, &query)
+              .value(original));
+    };
+    auto ownedParameter = [&](Operation *original) -> FailureOr<InstantiatedIntegerExpression> {
+      if (!query.sharedWork)
+        return resolveOwnedIntegerParameter(module, original, mode);
+      return instanceExpression(
+          InstanceIntegerAnalysis(module, nullptr, false,
+                                  mode == ParameterIntegerMode::MathematicalSigned64, nullptr, {},
+                                  false, false, &query)
+              .parameter(original));
+    };
     if (auto arg = llvm::dyn_cast<BlockArgument>(value)) {
-      auto h = inspectDigitalRegion(arg.getOwner());
+      auto h = integerRegionHeader(arg.getOwner(), query);
       if (failed(h))
         return failure();
       if (h->kind == DigitalRegionKind::Generate) {
@@ -4310,7 +4462,7 @@ private:
         return StructuralIntegerFacts{
             makeOpaqueIntegerExpression(arg, *domain->attainedInductionBounds)};
       }
-      auto source = digitalRegionCaptureSource(arg);
+      auto source = integerCaptureSource(arg, query);
       if (failed(source) || !*source)
         return failure();
       return resolve(*source, h->operation, depth + 1);
@@ -4324,7 +4476,7 @@ private:
       if (captureProbe) {
         // Capture classification must not diagnose a valid runtime Integer as
         // an invalid static bound. The actual static-use path below is unchanged.
-        expression = resolveOwnedIntegerExpression(module, value, mode);
+        expression = ownedValue(value);
         if (failed(expression))
           return failure();
       }
@@ -4338,7 +4490,7 @@ private:
         expression = leaves     ? leaves->value(value)
                      : instance ? resolveSelectedInstanceIntegerExpression(instance, value,
                                                                            parentCoordinates, mode)
-                                : resolveOwnedIntegerExpression(module, value, mode);
+                                : ownedValue(value);
       return failed(expression)
                  ? FailureOr<StructuralIntegerFacts>(failure())
                  : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
@@ -4379,7 +4531,7 @@ private:
       auto expression = leaves     ? leaves->parameter(parameter)
                         : instance ? resolveSelectedInstanceIntegerParameter(
                                          instance, parameter, parentCoordinates, mode)
-                                   : resolveOwnedIntegerParameter(module, parameter, mode);
+                                   : ownedParameter(parameter);
       return failed(expression)
                  ? FailureOr<StructuralIntegerFacts>(failure())
                  : FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression});
@@ -4570,11 +4722,23 @@ FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(Value value
   return StructuralIntegerQuery(query, IntegerQueryPurpose::Structural, false, mode)
       .resolve(value, use);
 }
+FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(Value value, Operation *use,
+                                                                     unsigned &remainingWork,
+                                                                     ParameterIntegerMode mode) {
+  GeneratedQueryContext query;
+  query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
+  auto release =
+      llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
+  return StructuralIntegerQuery(query, IntegerQueryPurpose::Structural, false, mode)
+      .resolve(value, use);
+}
 FailureOr<StructuralIntegerFacts> resolveSelectedInstancePathStructuralIntegerExpression(
     Operation *rootModule, ArrayRef<SelectedIntegerInstanceStep> path, Value value, Operation *use,
     unsigned &remainingWork, ParameterIntegerMode mode) {
   GeneratedQueryContext query;
   query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
   auto release =
       llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
   Operation *outer = rootModule ? rootModule->getParentOp() : nullptr;
@@ -4632,6 +4796,7 @@ FailureOr<StructuralIntegerFacts> resolveSelectedInstanceStructuralIntegerExpres
     unsigned &remainingWork, ParameterIntegerMode mode) {
   GeneratedQueryContext query;
   query.maximumWork = std::min(remainingWork, 65536u);
+  query.sharedWork = true;
   auto release =
       llvm::scope_exit([&] { remainingWork -= std::min(query.work, query.maximumWork); });
   Operation *child = instance ? resolveInstanceModuleDefinition(instance) : nullptr;
@@ -4677,3 +4842,224 @@ structuralIntegerWithLeaves(Value value, Operation *use, GeneratedQueryContext &
       .resolve(value, use);
 }
 } // namespace
+
+namespace nodal {
+namespace {
+using EmissionStatus = IntegerExpressionEmissionStatus;
+struct CheckedIntegerEmission {
+  Operation *use;
+  ArrayRef<Value> bindings;
+  unsigned &work;
+  EmissionStatus status = EmissionStatus::Proved;
+  llvm::DenseMap<const InstantiatedIntegerNode *, unsigned> states;
+  llvm::DenseMap<const InstantiatedIntegerNode *, InstantiatedIntegerExpression> checked;
+  llvm::DenseSet<Value> used;
+  SmallVector<const InstantiatedIntegerNode *, 16> order;
+  CheckedIntegerEmission(Operation *use, ArrayRef<Value> bindings, unsigned &work)
+      : use(use), bindings(bindings), work(work) {}
+
+  bool reject(EmissionStatus why) { status = why; return false; }
+  bool charge() {
+    if (!work)
+      return reject(EmissionStatus::ResourceLimit);
+    --work;
+    return true;
+  }
+  bool visit(const InstantiatedIntegerNode *node, unsigned depth = 0) {
+    if (!charge())
+      return false;
+    if (!node || depth > 128)
+      return reject(node ? EmissionStatus::ResourceLimit : EmissionStatus::Invalid);
+    if (states.lookup(node) == 2)
+      return true;
+    if (states.lookup(node) == 1)
+      return reject(EmissionStatus::Invalid);
+    states[node] = 1;
+    InstantiatedIntegerExpression value;
+    switch (node->kind) {
+    case InstantiatedIntegerNode::Kind::Literal:
+      if (!node->operands.empty())
+        return reject(EmissionStatus::Invalid);
+      value = makeLiteralIntegerExpression(node->literal);
+      break;
+    case InstantiatedIntegerNode::Kind::OpaqueValue: {
+      if (!node->identity || !node->identity.getType().isSignlessInteger(64) ||
+          !node->operands.empty() || !llvm::is_contained(bindings, node->identity))
+        return reject(EmissionStatus::Invalid);
+      auto facts = resolveStructuralIntegerExpression(node->identity, use, work);
+      if (failed(facts) || !facts->expression)
+        return reject(work ? EmissionStatus::Invalid : EmissionStatus::ResourceLimit);
+      value = *facts->expression;
+      used.insert(node->identity);
+      if (!equivalentInstantiatedIntegerExpressions(
+              value, makeOpaqueIntegerExpression(node->identity, node->bounds)))
+        return reject(EmissionStatus::Invalid);
+      break;
+    }
+    case InstantiatedIntegerNode::Kind::ParentParameter:
+      return reject(EmissionStatus::Unsupported);
+    case InstantiatedIntegerNode::Kind::Apply: {
+      if (!oneOf(node->opcode, {"add", "sub", "mul", "div"}))
+        return reject(EmissionStatus::Unsupported);
+      if (node->operands.size() != 2)
+        return reject(EmissionStatus::Invalid);
+      SmallVector<InstantiatedIntegerExpression, 2> operands;
+      for (const auto &operand : node->operands) {
+        if (!visit(operand.get(), depth + 1))
+          return false;
+        operands.push_back(checked.lookup(operand.get()));
+      }
+      auto composed = composeIntegerExpression(node->opcode, operands);
+      if (failed(composed))
+        return reject(EmissionStatus::Invalid);
+      value = *composed;
+      break;
+    }
+    }
+    if (value.bounds.lower != node->bounds.lower || value.bounds.upper != node->bounds.upper)
+      return reject(EmissionStatus::Invalid);
+    checked[node] = value;
+    states[node] = 2;
+    order.push_back(node);
+    return true;
+  }
+  bool run(const InstantiatedIntegerExpression &expression) {
+    if (!use || !use->getBlock() || !expression.root)
+      return reject(EmissionStatus::Invalid);
+    llvm::DenseSet<Value> unique;
+    for (Value value : bindings) {
+      if (!charge())
+        return false;
+      if (!value || !unique.insert(value).second)
+        return reject(EmissionStatus::Invalid);
+    }
+    if (!visit(expression.root.get()))
+      return false;
+    if (expression.bounds.lower != expression.root->bounds.lower ||
+        expression.bounds.upper != expression.root->bounds.upper || used.size() != unique.size())
+      return reject(EmissionStatus::Invalid);
+    return true;
+  }
+};
+} // namespace
+
+IntegerExpressionEmissionStatus materializeStructuralIntegerExpression(
+    const InstantiatedIntegerExpression &expression, Operation *use,
+    ArrayRef<Value> bindings, llvm::StringRef prefix, Value &result, unsigned &work) {
+  CheckedIntegerEmission proof{use, bindings, work};
+  if (!proof.run(expression))
+    return proof.status;
+  if (prefix.empty())
+    return EmissionStatus::Invalid;
+  if (prefix.size() > 4096)
+    return EmissionStatus::ResourceLimit;
+  const std::string pathPrefix = (prefix + ".integer_").str();
+  for (Operation &operation : *use->getBlock()) {
+    if (!proof.charge())
+      return proof.status;
+    auto metadata = operation.getAttrOfType<DictionaryAttr>("metadata");
+    auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+    if (path && path.getValue().starts_with(pathPrefix))
+      return EmissionStatus::Invalid;
+  }
+  OpBuilder builder(use);
+  SmallVector<Operation *, 16> created;
+  bool commit = false;
+  auto rollback = llvm::scope_exit([&] {
+    if (!commit)
+      for (Operation *operation : llvm::reverse(created))
+        operation->erase();
+  });
+  llvm::DenseMap<const InstantiatedIntegerNode *, Value> values;
+  for (const auto *node : proof.order) {
+    if (!proof.charge())
+      return proof.status;
+    if (node->kind == InstantiatedIntegerNode::Kind::OpaqueValue) {
+      values[node] = node->identity;
+      continue;
+    }
+    OperationState state(use->getLoc(), node->kind == InstantiatedIntegerNode::Kind::Literal
+                                           ? ConstLiteralOp::getOperationName()
+                                           : ConstExprOp::getOperationName());
+    state.addTypes(builder.getI64Type());
+    state.addAttribute("metadata", builder.getDictionaryAttr({builder.getNamedAttr(
+        "semantic_path", builder.getStringAttr(pathPrefix + std::to_string(created.size())))}));
+    if (node->kind == InstantiatedIntegerNode::Kind::Literal) {
+      state.addAttribute("value", builder.getI64IntegerAttr(node->literal));
+      state.addAttribute("spelling", builder.getStringAttr(std::to_string(node->literal)));
+    } else {
+      state.addAttribute("operator_name", builder.getStringAttr(node->opcode));
+      for (const auto &operand : node->operands)
+        state.addOperands(values.lookup(operand.get()));
+    }
+    Operation *operation = builder.create(state);
+    created.push_back(operation);
+    values[node] = operation->getResult(0);
+  }
+  Value candidate = values.lookup(expression.root.get());
+  auto facts = resolveStructuralIntegerExpression(candidate, use, work);
+  if (failed(facts) || !facts->expression ||
+      !equivalentInstantiatedIntegerExpressions(*facts->expression, expression) ||
+      facts->expression->bounds.lower != expression.bounds.lower ||
+      facts->expression->bounds.upper != expression.bounds.upper)
+    return work ? EmissionStatus::Invalid : EmissionStatus::ResourceLimit;
+  result = candidate;
+  commit = true;
+  return EmissionStatus::Proved;
+}
+
+IntegerExpressionEmissionStatus renderStructuralIntegerExpression(
+    const InstantiatedIntegerExpression &expression, Operation *use,
+    ArrayRef<std::pair<Value, std::string>> bindings, std::string &result,
+    unsigned &work, uint64_t maximumBytes) {
+  if (bindings.size() > work)
+    return EmissionStatus::ResourceLimit;
+  SmallVector<Value, 4> originals;
+  llvm::DenseMap<Value, StringRef> names;
+  for (const auto &binding : bindings) {
+    originals.push_back(binding.first);
+    names[binding.first] = binding.second;
+  }
+  CheckedIntegerEmission proof{use, originals, work};
+  if (!proof.run(expression))
+    return proof.status;
+  llvm::DenseMap<const InstantiatedIntegerNode *, std::string> text;
+  uint64_t bytes = 0;
+  for (const auto *node : proof.order) {
+    if (!proof.charge())
+      return proof.status;
+    std::string value;
+    if (node->kind == InstantiatedIntegerNode::Kind::Literal) {
+      value = std::to_string(node->literal);
+    } else if (node->kind == InstantiatedIntegerNode::Kind::OpaqueValue) {
+      StringRef name = names.lookup(node->identity);
+      if (name.empty())
+        return EmissionStatus::Invalid;
+      if (name.size() > maximumBytes - bytes)
+        return EmissionStatus::ResourceLimit;
+      value = name.str();
+    } else {
+      SmallVector<std::string, 2> operands;
+      uint64_t required = 5; // binary formatter punctuation and one-char operator
+      for (const auto &operand : node->operands) {
+        const auto &child = text[operand.get()];
+        if (child.size() > maximumBytes - bytes ||
+            required > maximumBytes - bytes - child.size())
+          return EmissionStatus::ResourceLimit;
+        required += child.size();
+        operands.push_back(child);
+      }
+      auto formatted = formatParameterOperator(node->opcode, operands);
+      if (failed(formatted))
+        return EmissionStatus::Unsupported;
+      value = std::move(*formatted);
+    }
+    if (value.size() > maximumBytes - bytes)
+      return EmissionStatus::ResourceLimit;
+    bytes += value.size();
+    text[node] = std::move(value);
+  }
+  result = text[expression.root.get()];
+  return EmissionStatus::Proved;
+}
+} // namespace nodal

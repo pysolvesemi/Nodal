@@ -18,6 +18,17 @@ mlir::LogicalResult materializeConservativeConnectivity(mlir::ModuleOp module);
 /// do not claim a complete local equation boundary.
 bool isPartialPhysicalComponent(mlir::Operation *module);
 
+/// Bounded checked view of an actual direct exported local conservative family.
+/// This is a query result over source SSA, not a physical endpoint registry.
+struct ConservativeGeneratedSelection {
+  mlir::Operation *declaration = nullptr;
+  mlir::Operation *family = nullptr;
+  mlir::Value ordinal;
+  uint64_t cardinality = 0;
+};
+mlir::FailureOr<ConservativeGeneratedSelection>
+resolveConservativeGeneratedSelection(mlir::Operation *boundary);
+
 /// Actual conservative capability over the shared element-neutral map.
 struct ConservativeShape {
   mlir::Operation *declaration = nullptr;

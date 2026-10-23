@@ -30,6 +30,11 @@ mlir::FailureOr<GeneratedSelectionProof> inspectGeneratedSelection(mlir::Value f
                                                                    mlir::Value ordinal,
                                                                    llvm::StringRef member,
                                                                    mlir::Operation *use);
+/// Optional provenance from the same recursive inspector, ordered with selections.
+/// Only successful queries expose checked actual selection operations.
+mlir::FailureOr<GeneratedSelectionProof> inspectGeneratedSelection(
+    mlir::Value familyHandle, mlir::Value ordinal, llvm::StringRef member, mlir::Operation *use,
+    llvm::SmallVectorImpl<mlir::Operation *> &selectionUses, unsigned &remainingWork);
 /// Exact preceding direct symbol only; does not recursively verify the instance graph.
 mlir::FailureOr<mlir::Operation *> inspectGeneratedExportSymbol(mlir::Operation *exportOperation);
 struct GeneratedMember {
@@ -48,6 +53,10 @@ mlir::Operation *resolveGeneratedLocalRootFamily(mlir::Operation *root);
 mlir::LogicalResult verifyGeneratedFamilyOperation(mlir::Operation *operation);
 mlir::LogicalResult verifyGeneratedExportOperation(mlir::Operation *operation);
 mlir::FailureOr<GeneratedMember> inspectGeneratedMember(mlir::Operation *operation);
+mlir::FailureOr<GeneratedMember>
+inspectGeneratedMember(mlir::Operation *operation,
+                       llvm::SmallVectorImpl<mlir::Operation *> &selectionUses,
+                       unsigned &remainingWork);
 
 /// Verify module-local storage names, ordinary assignment drivers and shared
 /// combinational dependencies, including actual typed Interface/net roots,

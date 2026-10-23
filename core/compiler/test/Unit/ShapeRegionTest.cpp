@@ -2,6 +2,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -479,6 +480,155 @@ int main() {
       check(nodal::verifyStaticShapeRegionPartition(argument, {}, use(*module)) == Status::Invalid,
             "block-argument-root-rejected-without-dereference");
       block->eraseArgument(block->getNumArguments() - 1);
+    }
+  }
+
+  {
+    auto family = [&](const std::string &id, unsigned add, unsigned count = 3) {
+      auto selected = slice(id, "nodes", "4", 0, "zero", "width", "width", "Fixture.width");
+      auto attributes = selected.find("<{axis");
+      selected.insert(attributes + 2, "generated_owner = \"Fixture." + id +
+                                          "\", generated_induction = \"Fixture." + id + ".i\", ");
+      return literal("lo_" + id, 0) + literal("hi_" + id, count) + literal("step_" + id, 1) +
+             "%family_" + id + " = \"nodal.generate\"(%lo_" + id + ", %hi_" + id + ", %step_" + id +
+             ") <{induction = \"i\", region_id = \"Fixture." + id +
+             "\", induction_path = \"Fixture." + id +
+             ".i\", metadata = {maximum_trip_count = " + std::to_string(count) +
+             " : i64}}> ({^bb0(%i: i64):\n" + literal("one", add) + literal("zero", 0) +
+             expression("width", "add", "i", "one") + selected +
+             "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+    };
+    auto module = parse(array("4") + family("first", 1) + family("second", 2), false);
+    check(bool(module), "typed-use-generated-fixture");
+    if (module) {
+      auto first = value(*module, "first"), second = value(*module, "second");
+      auto *firstUse = first.getDefiningOp();
+      auto *secondUse = second.getDefiningOp();
+      auto a = nodal::resolveStaticShapeProjection(first, firstUse);
+      auto b = nodal::resolveStaticShapeProjection(second, secondUse);
+      check(first.getType() == second.getType() && mlir::succeeded(a) && mlir::succeeded(b),
+            "same-type-sibling-dimensions-resolve-at-actual-producers");
+      unsigned remaining = 65536;
+      auto old = nodal::resolveGeneratedTypeDimension(firstUse, "Fixture.width");
+      auto shared =
+          nodal::resolveGeneratedTypeDimension(firstUse, "Fixture.width", "shape", remaining);
+      const unsigned cost = 65536 - remaining;
+      check(mlir::succeeded(old) && mlir::succeeded(shared) &&
+                old->bounds.lower == shared->bounds.lower &&
+                old->bounds.upper == shared->bounds.upper && cost > 1,
+            "generated-dimension-shared-work-matches-original");
+      auto other =
+          nodal::resolveGeneratedTypeDimension(secondUse, "Fixture.width", "shape", remaining);
+      check(mlir::succeeded(other) && other->bounds.lower == 2 && other->bounds.upper == 4 &&
+                shared->bounds.lower == 1 && shared->bounds.upper == 3 && remaining < 65536 - cost,
+            "same-spelled-sibling-extent-has-independent-environment");
+      unsigned zero = 0, shortWork = cost - 1;
+      check(mlir::failed(
+                nodal::resolveGeneratedTypeDimension(firstUse, "Fixture.width", "shape", zero)) &&
+                zero == 0,
+            "generated-dimension-zero-budget-refuses-before-work");
+      check(mlir::failed(nodal::resolveGeneratedTypeDimension(firstUse, "Fixture.width", "shape",
+                                                              shortWork)) &&
+                shortWork == 0,
+            "generated-dimension-near-exhaustion-does-not-replenish");
+      if (mlir::succeeded(a) && mlir::succeeded(b)) {
+        nodal::StaticShapeRegion region;
+        auto status = nodal::resolveStaticShapeRegion(*a, firstUse, region);
+        check(status == Status::Proved, "generated-dimension-region-retains-original-DAG");
+        check(nodal::proveStaticShapeProjectionIdentity(*a, *b, secondUse) != Status::Proved,
+              "same-type-sibling-projections-do-not-share-dimension-cache");
+        nodal::StaticShapeRegion unchanged;
+        unchanged.root = second;
+        check(nodal::resolveStaticShapeRegion(*a, firstUse, unchanged, {0, 16384}) ==
+                      Status::ResourceLimit &&
+                  unchanged.root == second,
+              "projection-to-dimension-zero-budget-is-transactional");
+        check(nodal::resolveStaticShapeRegion(*a, firstUse, unchanged, {32, 16384}) ==
+                      Status::ResourceLimit &&
+                  unchanged.root == second,
+              "projection-to-dimension-shared-budget-is-not-reset");
+      }
+      // A present invalid local expression must never fall back to a same-spelled
+      // valid parameter or the successful first sibling's cached type.
+      auto *width = secondUse->getOperand(2).getDefiningOp();
+      auto oldOpcode = width->getAttr("operator_name");
+      width->setAttr("operator_name", mlir::StringAttr::get(&context, "invalid"));
+      unsigned work = 65536;
+      check(mlir::failed(
+                nodal::resolveGeneratedTypeDimension(secondUse, "Fixture.width", "shape", work)) &&
+                mlir::failed(nodal::resolveStaticShapeProjection(second, secondUse)),
+            "invalid-sibling-token-cannot-borrow-valid-type-proof");
+      width->setAttr("operator_name", oldOpcode);
+    }
+    auto collision =
+        parse(parameter("Fixture.width", 1, 4) + array("4") + family("collision", 1), false);
+    check(bool(collision), "same-spelled-module-parameter-fixture");
+    if (collision) {
+      auto selected = value(*collision, "collision");
+      auto *at = selected.getDefiningOp();
+      auto *width = at->getOperand(2).getDefiningOp();
+      width->setAttr("operator_name", mlir::StringAttr::get(&context, "invalid"));
+      unsigned work = 65536;
+      auto *owner = at->getParentOfType<nodal::ModuleOp>().getOperation();
+      check(mlir::succeeded(nodal::resolveStaticShapeDimension(owner, "Fixture.width")) &&
+                mlir::failed(
+                    nodal::resolveGeneratedTypeDimension(at, "Fixture.width", "shape", work)),
+            "invalid-local-token-cannot-fall-back-to-same-spelled-module-parameter");
+    }
+    auto empty = parse(array("4") + family("empty", 1, 0), false);
+    check(bool(empty), "typed-use-empty-fixture");
+    if (empty) {
+      auto selected = value(*empty, "empty");
+      auto *at = selected.getDefiningOp();
+      unsigned work = 65536;
+      auto facts = nodal::resolveGeneratedTypeDimensionFacts(at, "Fixture.width", "shape", work);
+      check(mlir::succeeded(facts) && !facts->expression &&
+                mlir::failed(nodal::resolveStaticShapeProjection(selected, at)),
+            "checked-absence-does-not-invent-physical-dimension");
+    }
+  }
+
+  {
+    std::string operands = "%input", types = "!nodal.shaped<\"4\", !nodal.bits<1>>",
+                args = "%element: !nodal.bits<1>";
+    for (unsigned i = 0; i < 64; ++i) {
+      operands += ", %capture";
+      types += ", i64";
+      args += ", %c" + std::to_string(i) + ": i64";
+    }
+    auto body =
+        literal("capture", 1) +
+        "%input = \"nodal.constant\"() <{value=0:i64, metadata={}}> : () -> !nodal.shaped<\"4\", "
+        "!nodal.bits<1>>\n"
+        "%mapped = \"nodal.collection\"(" +
+        operands +
+        ") <{kind=\"map\", region_id=\"Fixture.captures\", operandSegmentSizes=array<i32:1,0,64>, "
+        "metadata={semantic_path=\"Fixture.captures\"}}> ({^bb0(" +
+        args +
+        "):\n"
+        "\"nodal.collection_yield\"(%element) <{metadata={}}> : (!nodal.bits<1>) -> ()\n"
+        "}) : (" +
+        types + ") -> !nodal.shaped<\"4\", !nodal.bits<1>>\n";
+    auto module = parse(body, false);
+    check(bool(module), "large-capture-signature-fixture");
+    if (module) {
+      auto *op = value(*module, "captures").getDefiningOp();
+      auto *block = &op->getRegion(0).front();
+      unsigned sufficient = 65536, small = 32;
+      auto original = nodal::inspectDigitalRegion(block);
+      auto checked = nodal::inspectDigitalRegion(block, sufficient);
+      check(mlir::succeeded(original) && mlir::succeeded(checked) &&
+                original->body == checked->body && sufficient < 65536 - 64,
+            "header-signature-budget-charges-actual-capture-scan");
+      check(mlir::failed(nodal::inspectDigitalRegion(block, small)) && small == 0,
+            "large-capture-signature-refuses-before-over-budget-scan");
+      unsigned near = 65536 - sufficient - 1;
+      check(mlir::failed(nodal::inspectDigitalRegion(block, near)) && near == 0,
+            "header-near-limit-does-not-reset-work");
+      unsigned captureWork = 65536;
+      auto source = nodal::digitalRegionCaptureSource(block->getArgument(64), captureWork);
+      check(mlir::succeeded(source) && *source == op->getOperand(64) && captureWork < sufficient,
+            "capture-proof-shares-original-header-work");
     }
   }
   llvm::outs() << "SHAPE_REGION_SUMMARY cases=" << cases << " failures=" << failures << '\n';

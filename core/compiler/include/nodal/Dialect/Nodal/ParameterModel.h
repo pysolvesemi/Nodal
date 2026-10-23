@@ -58,6 +58,14 @@ mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operat
 mlir::FailureOr<ParameterIntegerBounds> inferParameterIntegerBounds(mlir::Operation *parameter,
                                                                     ParameterIntegerMode mode);
 
+/// Same canonical bound interpreter, charged to shared caller work.
+mlir::FailureOr<ParameterIntegerBounds>
+inferParameterIntegerBounds(mlir::Value value, unsigned &remainingWork,
+                            ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+mlir::FailureOr<ParameterIntegerBounds>
+inferParameterIntegerBounds(mlir::Operation *parameter, unsigned &remainingWork,
+                            ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+
 /// Finite zero-admissibility facts for numeric denominator lint. ZeroPermitted
 /// means a checked constant is zero or every invariant explicit constraint on a
 /// symbolic declaration admits zero; it is not a claim about runtime reachability.
@@ -98,6 +106,23 @@ struct InstantiatedIntegerExpression {
   std::shared_ptr<const InstantiatedIntegerNode> root;
   ParameterIntegerBounds bounds;
 };
+
+/// Mechanical emission of canonical checked structural integer DAGs. These do
+/// not prove congruence, topology or target capability. Exact bindings are actual
+/// original Values, never textual names or value substitutions. Outputs and IR
+/// remain unchanged on failure; work is charged even on a refused query.
+enum class IntegerExpressionEmissionStatus { Proved, Unsupported, Invalid, ResourceLimit };
+IntegerExpressionEmissionStatus materializeStructuralIntegerExpression(
+    const InstantiatedIntegerExpression &expression, mlir::Operation *actualUse,
+    llvm::ArrayRef<mlir::Value> exactBindings, llvm::StringRef uniquePathPrefix,
+    mlir::Value &result, unsigned &remainingWork);
+/// Binding text belongs to the target caller's already checked Value/name map.
+/// It is not interpreted or used as proof. Initial DAG profile is literal,
+/// exact opaque Value and add/sub/mul/div; parent parameters remain unsupported.
+IntegerExpressionEmissionStatus renderStructuralIntegerExpression(
+    const InstantiatedIntegerExpression &expression, mlir::Operation *actualUse,
+    llvm::ArrayRef<std::pair<mlir::Value, std::string>> exactBindings,
+    std::string &result, unsigned &remainingWork, uint64_t maximumBytes = 65536);
 
 namespace detail {
 class CollectionIntegerEnvironmentAdmission;
@@ -228,6 +253,15 @@ resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression);
 mlir::FailureOr<InstantiatedIntegerExpression>
 resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression,
                               ParameterIntegerMode mode);
+/// Same owned DAG interpreter with shared finite work, no added applicability.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerParameter(mlir::Operation *module, mlir::Operation *parameter,
+                             unsigned &remainingWork,
+                             ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveOwnedIntegerExpression(mlir::Operation *module, mlir::Value expression,
+                              unsigned &remainingWork,
+                              ParameterIntegerMode mode = ParameterIntegerMode::Storage);
 InstantiatedIntegerExpression makeLiteralIntegerExpression(int64_t value);
 /// Query-only identity atom. The caller must independently prove the value's
 /// ownership and bounds; ordinary parameter interpretation never creates these.
@@ -294,6 +328,10 @@ mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir:
 mlir::FailureOr<StructuralIntegerFacts>
 resolveStructuralIntegerExpression(mlir::Value value, mlir::Operation *use,
                                    ParameterIntegerMode mode);
+/// Same use-scoped interpreter, charged to the caller's shared finite work.
+mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(
+    mlir::Value value, mlir::Operation *use, unsigned &remainingWork,
+    ParameterIntegerMode mode = ParameterIntegerMode::MathematicalSigned64);
 /// Borrowed query-local view of one original actual hierarchy edge. The
 /// coordinate storage must outlive the query; no environment survives it.
 struct SelectedIntegerInstanceStep {
@@ -350,6 +388,9 @@ struct GeneratedDomain {
   std::optional<ParameterIntegerBounds> attainedInductionBounds;
 };
 mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation);
+/// Same canonical proof, charged to the caller's shared finite query work.
+mlir::FailureOr<GeneratedDomain> resolveGeneratedDomain(mlir::Operation *operation,
+                                                        unsigned &remainingWork);
 /// Shared positive half-open domain arithmetic for a checked SSA iteration
 /// header. Exactly the first three operands are bounds; remaining operands are
 /// captures. This query independently proves finite owned bounds and direction.

@@ -591,6 +591,52 @@ int main() {
   generatedQuery("generated-type-capture-cannot-be-bypassed",
                  generated(regionalWidth + guarded(typedUse(digital("Fixture.width")))),
                  "Fixture.width", "width", false);
+
+  auto collectionCapture = [&](StringRef body, StringRef type, StringRef capture = "%width",
+                               StringRef id = "Fixture.c") {
+    return "%mapped = \"nodal.collection\"(%input, " + capture.str() +
+           ") <{kind = \"map\", region_id = \"" + id.str() +
+           "\", operandSegmentSizes = array<i32: 1, 0, 1>, metadata = {semantic_path = \"" +
+           id.str() + "\"}}> ({^bb0(%element: !nodal.uint<8>, %captured: i64):\n" + body.str() +
+           "\"nodal.collection_yield\"(%typed) <{metadata = {}}> : (" + type.str() +
+           ") -> ()\n}) : (!nodal.shaped<\"2\", !nodal.uint<8>>, i64) -> "
+           "!nodal.shaped<\"2\", " +
+           type.str() + ">\n";
+  };
+  const std::string generatedInput = "%input = \"builtin.unrealized_conversion_cast\"() : () -> "
+                                     "!nodal.shaped<\"2\", !nodal.uint<8>>\n";
+  const auto capturedType = digital("Fixture.c.arg1");
+  generatedQuery(
+      "generated-type-collection-actual-capture",
+      generatedInput +
+          generated(regionalWidth + collectionCapture(typedUse(capturedType), capturedType)),
+      "Fixture.c.arg1", "width", true, 1, 3);
+  generatedQuery("generated-type-collection-raw-ancestor-token-rejected",
+                 generatedInput +
+                     generated(regionalWidth + collectionCapture(typedUse(digital("Fixture.width")),
+                                                                 digital("Fixture.width"))),
+                 "Fixture.width", "width", false);
+  generatedQuery("generated-type-invalid-local-token-cannot-fall-back-to-module-parameter",
+                 parameter("W", 1, 4) + generatedInput +
+                     generated(regionalWidth +
+                               collectionCapture(localExpression("invalid", "%captured, %captured",
+                                                                 "unknown", "W") +
+                                                     typedUse(digital("W")),
+                                                 digital("W"))),
+                 "W", "width", false);
+  generatedQuery("generated-type-forward-local-token-cannot-fall-back-to-module-parameter",
+                 parameter("W", 1, 4) + generatedInput +
+                     generated(regionalWidth +
+                               collectionCapture(
+                                   typedUse(digital("W")) +
+                                       localExpression("later", "%captured, %captured", "add", "W"),
+                                   digital("W"))),
+                 "W", "width", false);
+  generatedQuery(
+      "generated-type-collection-empty-retains-absent-numeric-proof",
+      generatedInput +
+          generated(regionalWidth + collectionCapture(typedUse(capturedType), capturedType), 0, 0),
+      "Fixture.c.arg1", "width", false);
   const auto child = "\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
                      parameter("W", 1, 32) + port(digital("W"), "input") + "}) : () -> ()\n";
   auto instanceType = [&](StringRef name, const std::string &body, bool expected,

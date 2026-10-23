@@ -12,6 +12,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
@@ -87,26 +88,136 @@ FailureOr<std::string> indexKey(Operation *module, Value value, Operation *use) 
     return "l:" + std::to_string(identity->literal);
   return identityPrefix(identity->kind) + pointerKey(identity->root);
 }
-FailureOr<std::string> dimensionsKey(Operation *module, Type type) {
-  auto shape = physicalShape(type);
-  if (!shape)
+// Geometry retains the exact typed SSA use. Types are uniqued across regions,
+// but their semantic-path tokens are not an authority to choose a region.
+class TypedGeometry {
+public:
+  TypedGeometry(Operation *module, unsigned &remainingWork)
+      : module(module), remainingWork(remainingWork) {}
+  bool spend() {
+    if (!remainingWork)
+      return false;
+    --remainingWork;
+    return true;
+  }
+  FailureOr<Operation *> context(Value original) {
+    Value value = original;
+    for (unsigned depth = 0; value && depth < 128; ++depth) {
+      if (!spend())
+        return failure();
+      if (auto argument = dyn_cast<BlockArgument>(value)) {
+        auto *scope = argument.getOwner()->getParentOp();
+        if (!scope || scope->getParentOfType<ModuleOp>() != module)
+          return failure();
+        // The canonical capture owner checks and charges the original signature.
+        auto source = digitalRegionCaptureSource(argument, remainingWork);
+        if (failed(source) || !*source || source->getType() != value.getType() ||
+            failed(verifyDigitalValueScope(*source, scope, remainingWork)))
+          return failure();
+        value = *source;
+        continue;
+      }
+      auto *producer = value.getDefiningOp();
+      if (!producer)
+        return failure();
+      bool generated = false;
+      Operation *scope = producer->getParentOp();
+      for (unsigned ancestry = 0; scope && scope != module && ancestry < 128; ++ancestry) {
+        if (!spend())
+          return failure();
+        generated |= isa<GenerateOp>(scope);
+        scope = scope->getParentOp();
+      }
+      if (scope != module || (generated && !isGeneratedTypeUse(producer, remainingWork)))
+        return failure();
+      // Ordinary regions retain their previous Module-dimension policy. Their
+      // original projection/storage verifiers own admission; digital headers
+      // must not newly exclude valid analog/procedural storage producers.
+      return producer;
+    }
     return failure();
-  if (shape->dimensions.empty())
-    return std::string("scalar");
-  const auto &tokens = shape->dimensions;
-  std::string result;
-  for (auto token : tokens) {
-    auto dimension = resolveStaticShapeDimension(module, token.trim());
-    if (failed(dimension))
+  }
+  FailureOr<SmallVector<StaticShapeDimension, 4>> dimensions(Value value) {
+    auto use = context(value);
+    if (failed(use))
       return failure();
+    auto key = std::make_pair(value, *use);
+    if (auto found = cache.find(key); found != cache.end())
+      return found->second;
+    auto shape = physicalShape(value.getType());
+    if (!shape)
+      return failure();
+    SmallVector<StaticShapeDimension, 4> result;
+    for (auto token : shape->dimensions) {
+      if (!spend())
+        return failure();
+      auto proof = !(*use)->getParentOfType<GenerateOp>()
+                       ? resolveStaticShapeDimension(module, token.trim(), "shape", remainingWork)
+                       : resolveGeneratedTypeDimension(*use, token.trim(), "shape", remainingWork);
+      if (failed(proof))
+        return failure();
+      result.push_back(*proof);
+    }
+    cache.try_emplace(key, result);
+    return result;
+  }
+  FailureOr<SmallVector<InstantiatedIntegerExpression, 4>> expressions(Value value) {
+    auto use = context(value);
+    auto proven = dimensions(value);
+    if (failed(use) || failed(proven))
+      return failure();
+    SmallVector<InstantiatedIntegerExpression, 4> result;
+    for (const auto &dimension : *proven) {
+      if (!spend())
+        return failure();
+      FailureOr<InstantiatedIntegerExpression> expression =
+          makeLiteralIntegerExpression(dimension.literal);
+      if (dimension.parameter)
+        expression = resolveOwnedIntegerParameter(module, dimension.parameter, remainingWork);
+      else if (dimension.expression) {
+        if (!(*use)->getParentOfType<GenerateOp>())
+          expression = resolveOwnedIntegerExpression(module, dimension.expression, remainingWork);
+        else {
+          auto facts =
+              resolveStructuralIntegerExpression(dimension.expression, *use, remainingWork);
+          if (failed(facts) || !facts->expression)
+            return failure();
+          expression = *facts->expression;
+        }
+      }
+      if (failed(expression) || expression->bounds.lower <= 0)
+        return failure();
+      result.push_back(*expression);
+    }
+    return result;
+  }
+  Operation *module;
+  unsigned &remainingWork;
+
+private:
+  llvm::DenseMap<std::pair<Value, Operation *>, SmallVector<StaticShapeDimension, 4>> cache;
+};
+std::string dimensionExpressionKey(Value value) {
+  if (auto *op = value.getDefiningOp())
+    return "e:" + pointerKey(op); // Preserve ordinary canonical output.
+  return "v:" + std::to_string(reinterpret_cast<uintptr_t>(value.getAsOpaquePointer()));
+}
+FailureOr<std::string> dimensionsKey(TypedGeometry &geometry, Value value) {
+  auto dimensions = geometry.dimensions(value);
+  if (failed(dimensions))
+    return failure();
+  if (dimensions->empty())
+    return std::string("scalar");
+  std::string result;
+  for (const auto &dimension : *dimensions) {
     if (!result.empty())
       result += ',';
-    if (dimension->parameter)
-      result += "p:" + pointerKey(dimension->parameter);
-    else if (dimension->expression)
-      result += "e:" + pointerKey(dimension->expression.getDefiningOp());
+    if (dimension.parameter)
+      result += "p:" + pointerKey(dimension.parameter);
+    else if (dimension.expression)
+      result += dimensionExpressionKey(dimension.expression);
     else
-      result += "l:" + std::to_string(dimension->literal);
+      result += "l:" + std::to_string(dimension.literal);
   }
   return result;
 }
@@ -128,25 +239,21 @@ std::optional<StaticProduct> multiplyProduct(StaticProduct left, const StaticPro
   std::sort(left.factors.begin(), left.factors.end());
   return left;
 }
-std::optional<StaticProduct> dimensionProduct(Operation *module, Type type, unsigned first = 0) {
+std::optional<StaticProduct> dimensionProduct(TypedGeometry &geometry, Value value,
+                                              unsigned first = 0) {
   StaticProduct result;
-  auto shape = physicalShape(type);
-  if (!shape)
+  auto dimensions = geometry.dimensions(value);
+  if (failed(dimensions) || first > dimensions->size())
     return std::nullopt;
-  const auto &dimensions = shape->dimensions;
-  if (first > dimensions.size())
-    return std::nullopt;
-  for (auto token : llvm::ArrayRef<llvm::StringRef>(dimensions).drop_front(first)) {
-    auto dimension = resolveStaticShapeDimension(module, token.trim());
-    if (failed(dimension))
-      return std::nullopt;
+  for (const auto &dimension :
+       llvm::ArrayRef<StaticShapeDimension>(*dimensions).drop_front(first)) {
     StaticProduct factor;
-    if (dimension->parameter)
-      factor.factors.push_back("p:" + pointerKey(dimension->parameter));
-    else if (dimension->expression)
-      factor.factors.push_back("e:" + pointerKey(dimension->expression.getDefiningOp()));
+    if (dimension.parameter)
+      factor.factors.push_back("p:" + pointerKey(dimension.parameter));
+    else if (dimension.expression)
+      factor.factors.push_back(dimensionExpressionKey(dimension.expression));
     else
-      factor.coefficient = dimension->literal;
+      factor.coefficient = dimension.literal;
     auto multiplied = multiplyProduct(result, factor);
     if (!multiplied)
       return std::nullopt;
@@ -154,32 +261,28 @@ std::optional<StaticProduct> dimensionProduct(Operation *module, Type type, unsi
   }
   return result;
 }
-std::optional<ParameterIntegerBounds> dimensionProductBounds(Operation *module, Type type,
+std::optional<ParameterIntegerBounds> dimensionProductBounds(TypedGeometry &geometry, Value value,
                                                              unsigned first) {
   ParameterIntegerBounds result{1, 1};
-  auto shape = physicalShape(type);
-  if (!shape)
+  auto dimensions = geometry.dimensions(value);
+  if (failed(dimensions) || first > dimensions->size())
     return std::nullopt;
-  const auto &dimensions = shape->dimensions;
-  if (first > dimensions.size())
-    return std::nullopt;
-  for (auto token : llvm::ArrayRef<llvm::StringRef>(dimensions).drop_front(first)) {
-    auto dimension = resolveStaticShapeDimension(module, token.trim());
-    if (failed(dimension) || dimension->bounds.lower <= 0 ||
-        dimension->bounds.upper < dimension->bounds.lower ||
-        result.upper > std::numeric_limits<int64_t>::max() / dimension->bounds.upper)
+  for (const auto &dimension :
+       llvm::ArrayRef<StaticShapeDimension>(*dimensions).drop_front(first)) {
+    if (dimension.bounds.lower <= 0 || dimension.bounds.upper < dimension.bounds.lower ||
+        result.upper > std::numeric_limits<int64_t>::max() / dimension.bounds.upper)
       return std::nullopt;
-    result.lower *= dimension->bounds.lower;
-    result.upper *= dimension->bounds.upper;
+    result.lower *= dimension.bounds.lower;
+    result.upper *= dimension.bounds.upper;
   }
   return result;
 }
 void addOffsetBounds(std::optional<ParameterIntegerBounds> &offset, Operation *module, Value index,
-                     Type inputType, unsigned strideAxis, Operation *use) {
+                     Value input, unsigned strideAxis, Operation *use, TypedGeometry &geometry) {
   if (!offset)
     return;
   auto position = indexBounds(module, index, use);
-  auto stride = dimensionProductBounds(module, inputType, strideAxis);
+  auto stride = dimensionProductBounds(geometry, input, strideAxis);
   if (failed(position) || !stride || position->lower < 0 ||
       position->upper > (std::numeric_limits<int64_t>::max() - offset->upper) / stride->upper) {
     offset.reset();
@@ -229,16 +332,15 @@ std::optional<int64_t> product(llvm::ArrayRef<int64_t> dimensions) {
   }
   return value;
 }
-std::optional<llvm::SmallVector<int64_t>> fixedDimensions(Operation *module, Type type) {
+std::optional<llvm::SmallVector<int64_t>> fixedDimensions(TypedGeometry &geometry, Value value) {
   llvm::SmallVector<int64_t> result;
-  auto shape = physicalShape(type);
-  if (!shape)
+  auto dimensions = geometry.dimensions(value);
+  if (failed(dimensions))
     return std::nullopt;
-  for (auto token : shape->dimensions) {
-    auto dimension = resolveStaticShapeDimension(module, token.trim());
-    if (failed(dimension) || dimension->bounds.lower != dimension->bounds.upper)
+  for (const auto &dimension : *dimensions) {
+    if (dimension.bounds.lower != dimension.bounds.upper)
       return std::nullopt;
-    result.push_back(dimension->bounds.lower);
+    result.push_back(dimension.bounds.lower);
   }
   return result;
 }
@@ -276,12 +378,12 @@ std::optional<int64_t> ordinal(llvm::ArrayRef<int64_t> coordinates,
 // Evaluate a single logical ordinal through the verified chain. No lane
 // enumeration and no symbolic expression expansion are involved.
 std::optional<int64_t> mapLiteralOrdinal(Operation *module, llvm::ArrayRef<Operation *> projections,
-                                         int64_t value) {
+                                         int64_t value, TypedGeometry &geometry) {
   for (Operation *projection : llvm::reverse(projections)) {
     if (llvm::isa<ShapeViewOp>(projection))
       continue; // Reshape preserves the immediate-input logical ordinal.
-    auto input = fixedDimensions(module, projection->getOperand(0).getType());
-    auto output = fixedDimensions(module, projection->getResult(0).getType());
+    auto input = fixedDimensions(geometry, projection->getOperand(0));
+    auto output = fixedDimensions(geometry, projection->getResult(0));
     if (!input || !output)
       return std::nullopt;
     auto indices = coordinates(value, *output);
@@ -317,11 +419,12 @@ std::optional<int64_t> mapLiteralOrdinal(Operation *module, llvm::ArrayRef<Opera
 // their radix interpretation. Prefixes concatenate coordinates; slices add
 // their actual lower atom. This is derived mapping arithmetic, not equivalence
 // between independently authored constant-expression roots.
-void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProjection &result) {
+void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProjection &result,
+                             TypedGeometry &geometry) {
   auto rootType = llvm::dyn_cast<ShapedType>(result.root.getType());
   if (!rootType || llvm::isa<ShapedType>(reference.getType()))
     return;
-  auto cardinality = dimensionProductBounds(module, result.root.getType(), 0);
+  auto cardinality = dimensionProductBounds(geometry, result.root, 0);
   if (!cardinality)
     return;
   if (!result.rootFlatBounds)
@@ -334,19 +437,19 @@ void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProj
   for (size_t cursor = result.projections.size(); cursor > 0;) {
     Operation *projection = result.projections[--cursor];
     if (llvm::isa<ShapeViewOp>(projection)) {
-      Type outputType = projection->getResult(0).getType();
-      auto output = dimensionsKey(module, projection->getResult(0).getType());
+      Value outputValue = projection->getResult(0);
+      auto output = dimensionsKey(geometry, projection->getResult(0));
       while (cursor > 0 && llvm::isa<ShapeViewOp>(result.projections[cursor - 1]))
         projection = result.projections[--cursor];
-      auto input = dimensionsKey(module, projection->getOperand(0).getType());
+      auto input = dimensionsKey(geometry, projection->getOperand(0));
       if (failed(input) || failed(output))
         return;
       if (*input != *output) {
         // Literal coordinates can be re-radixed through fixed intermediate
         // shapes even when an earlier slice's root extent remains symbolic.
         // Never substitute singleton parameter/index bounds for opaque atoms.
-        auto inputDimensions = fixedDimensions(module, projection->getOperand(0).getType());
-        auto outputDimensions = fixedDimensions(module, outputType);
+        auto inputDimensions = fixedDimensions(geometry, projection->getOperand(0));
+        auto outputDimensions = fixedDimensions(geometry, outputValue);
         if (!inputDimensions || !outputDimensions)
           return;
         llvm::SmallVector<int64_t> literalCoordinates;
@@ -410,8 +513,11 @@ void deriveScalarCoordinates(Operation *module, Value reference, StaticShapeProj
   StaticSum offset;
   ParameterIntegerBounds flat{0, 0};
   for (unsigned axis = 0; axis < dimensions.size(); ++axis) {
-    auto stride = dimensionProduct(module, result.root.getType(), axis + 1);
-    auto dimension = resolveStaticShapeDimension(module, dimensions[axis].trim());
+    auto stride = dimensionProduct(geometry, result.root, axis + 1);
+    auto rootDimensions = geometry.dimensions(result.root);
+    if (failed(rootDimensions))
+      return;
+    auto dimension = FailureOr<StaticShapeDimension>((*rootDimensions)[axis]);
     if (!stride || failed(dimension))
       return;
     // The verified mapping already proves bounds. Intersect coarse independent
@@ -461,6 +567,12 @@ LogicalResult verifyInstanceShapeDimension(Operation *instance, const StaticShap
   return success();
 }
 
+namespace {
+FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinalImpl(Operation *family, Value ordinal, Operation *use,
+                            ArrayRef<GeneratedSelection> prefix, unsigned *remainingWork);
+} // namespace
+
 FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *family, Value ordinal,
                                                                  Operation *use) {
   return resolveGeneratedOrdinal(family, ordinal, use, {});
@@ -469,9 +581,51 @@ FailureOr<InstantiatedIntegerExpression> resolveGeneratedOrdinal(Operation *fami
 FailureOr<InstantiatedIntegerExpression>
 resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
                         llvm::ArrayRef<GeneratedSelection> prefix) {
-  if (!family || !ordinal || !use || prefix.size() > 128)
+  return resolveGeneratedOrdinalImpl(family, ordinal, use, prefix, nullptr);
+}
+
+namespace {
+FailureOr<InstantiatedIntegerExpression>
+generatedOrdinalCoordinate(const InstantiatedIntegerExpression &index,
+                           const InstantiatedIntegerExpression &lower,
+                           const InstantiatedIntegerExpression &step) {
+  auto displacement = composeIntegerExpression("mul", {index, step});
+  return succeeded(displacement) ? composeIntegerExpression("add", {lower, *displacement})
+                                 : FailureOr<InstantiatedIntegerExpression>(failure());
+}
+LogicalResult chargeCoordinate(const InstantiatedIntegerExpression &expression, unsigned &work) {
+  llvm::DenseSet<const InstantiatedIntegerNode *> visited;
+  SmallVector<std::pair<const InstantiatedIntegerNode *, unsigned>, 8> pending{
+      {expression.root.get(), 0}};
+  while (!pending.empty()) {
+    auto [node, depth] = pending.pop_back_val();
+    if (!work || !node || depth >= 128)
+      return failure();
+    --work;
+    if (!visited.insert(node).second)
+      continue;
+    for (const auto &operand : node->operands)
+      pending.emplace_back(operand.get(), depth + 1);
+  }
+  return success();
+}
+} // namespace
+
+FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
+                        llvm::ArrayRef<GeneratedSelection> prefix, unsigned &work) {
+  return resolveGeneratedOrdinalImpl(family, ordinal, use, prefix, &work);
+}
+
+namespace {
+FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinalImpl(Operation *family, Value ordinal, Operation *use,
+                            ArrayRef<GeneratedSelection> prefix, unsigned *work) {
+  if (!family || !ordinal || !use || prefix.size() > 128 || (work && !*work))
     return failure();
-  auto domain = resolveGeneratedDomain(family);
+  if (work)
+    --*work;
+  auto domain = work ? resolveGeneratedDomain(family, *work) : resolveGeneratedDomain(family);
   if (failed(domain) || !ordinal.getType().isSignlessInteger(64) ||
       family->getParentOfType<ModuleOp>() != use->getParentOfType<ModuleOp>() ||
       failed(verifyDigitalValueScope(ordinal, use)))
@@ -489,6 +643,8 @@ resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
         !llvm::hasSingleElement(ancestor->getRegion(0)) ||
         ancestor->getRegion(0).front().getNumArguments() == 0 || !selection.coordinate.root)
       return failure();
+    if (work && failed(chargeCoordinate(selection.coordinate, *work)))
+      return failure();
     substitutions.emplace_back(ancestor->getRegion(0).front().getArgument(0), selection.coordinate);
     previous = ancestor;
   }
@@ -504,33 +660,194 @@ resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
   }
   // Selecting a family member is a structural/topology use, not a width or
   // array-extent effect. Preserve the actual static DAG and bounded ownership.
-  auto structural = resolveStructuralIntegerExpression(ordinal, use);
+  auto structural = work ? resolveStructuralIntegerExpression(ordinal, use, *work)
+                         : resolveStructuralIntegerExpression(ordinal, use);
   if (failed(structural) || !structural->expression)
     return failure();
   // Reuse the canonical lexical structural proof above. Re-resolving through
   // a module-only query would discard valid enclosing Generate ownership.
   const auto &index = *structural->expression;
   auto nonnegative =
-      proveStructuralIntegerLessAtUse(makeLiteralIntegerExpression(0), index, use, true);
+      work ? proveStructuralIntegerLessAtUse(makeLiteralIntegerExpression(0), index, use, true,
+                                             *work)
+           : proveStructuralIntegerLessAtUse(makeLiteralIntegerExpression(0), index, use, true);
   if (failed(nonnegative) || !*nonnegative)
     return failure();
-  auto displacement = composeIntegerExpression("mul", {index, domain->step});
-  auto coordinate = succeeded(displacement)
-                        ? composeIntegerExpression("add", {domain->lower, *displacement})
-                        : FailureOr<InstantiatedIntegerExpression>(failure());
+  auto coordinate = generatedOrdinalCoordinate(index, domain->lower, domain->step);
   if (failed(coordinate))
     return failure();
-  auto exists = proveStructuralIntegerLessAtUse(*coordinate, domain->upperExclusive, use);
+  auto exists =
+      work ? proveStructuralIntegerLessAtUse(*coordinate, domain->upperExclusive, use, false, *work)
+           : proveStructuralIntegerLessAtUse(*coordinate, domain->upperExclusive, use);
   if (failed(exists) || !*exists)
     return failure();
   return *coordinate;
 }
 
-FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, Operation *use) {
+} // namespace
+
+static ShapeRegionProofStatus resolveGeneratedInductionOrdinalImpl(
+    Operation *family, Value induction, Operation *use,
+    InstantiatedIntegerExpression &result, unsigned &work,
+    const GeneratedDomain *checkedDomain) {
+  using Status = ShapeRegionProofStatus;
+  auto unsupported = [&]() { return work ? Status::Unsupported : Status::ResourceLimit; };
+  if (!work)
+    return Status::ResourceLimit;
+  --work;
+  if (!isa_and_nonnull<GenerateOp>(family) || !use ||
+      use->getParentOp() != family ||
+      family->getNumRegions() != 1 || !llvm::hasSingleElement(family->getRegion(0)) ||
+      family->getRegion(0).front().getNumArguments() != 1 ||
+      induction != family->getRegion(0).front().getArgument(0))
+    return Status::Invalid;
+  if (!isa<ModuleOp>(family->getParentOp()))
+    return Status::Unsupported;
+  FailureOr<GeneratedDomain> domain = checkedDomain
+      ? FailureOr<GeneratedDomain>(*checkedDomain) : resolveGeneratedDomain(family, work);
+  if (failed(domain))
+    return work ? Status::Invalid : Status::ResourceLimit;
+  if (domain->induction != induction || !domain->attainedInductionBounds ||
+      !domain->maximumTripCount || domain->maximumTripCount > uint64_t(INT64_MAX))
+    return unsupported();
+  auto literal = [](const InstantiatedIntegerExpression &e) {
+    return e.root && e.root->kind == InstantiatedIntegerNode::Kind::Literal;
+  };
+  if (!literal(domain->lower) || !literal(domain->upperExclusive) ||
+      !literal(domain->step) || domain->step.bounds.lower <= 0)
+    return unsupported();
+  auto facts = resolveStructuralIntegerExpression(induction, use, work);
+  if (failed(facts) || !facts->expression)
+    return unsupported();
+  // The certificate is the actual original Generate progression, not the atom's
+  // interval. Its kth occurrence is lower+k*step for every 0 <= k < count.
+  // Check the retained first/last witnesses against that same domain, then the
+  // positive-step progression guarantees exact divisibility at every occurrence.
+  auto lastRank = makeLiteralIntegerExpression(int64_t(domain->maximumTripCount - 1));
+  auto last = generatedOrdinalCoordinate(lastRank, domain->lower, domain->step);
+  if (failed(last) || !literal(*last) ||
+      domain->attainedInductionBounds->lower != domain->lower.bounds.lower ||
+      domain->attainedInductionBounds->upper != last->bounds.lower ||
+      facts->expression->bounds.lower != domain->attainedInductionBounds->lower ||
+      facts->expression->bounds.upper != domain->attainedInductionBounds->upper)
+    return unsupported();
+  auto distance = composeIntegerExpression("sub", {*facts->expression, domain->lower});
+  auto rank = succeeded(distance)
+                  ? composeIntegerExpression("div", {*distance, domain->step})
+                  : FailureOr<InstantiatedIntegerExpression>(failure());
+  if (failed(rank) || rank->bounds.lower != 0 ||
+      rank->bounds.upper != int64_t(domain->maximumTripCount - 1) ||
+      failed(chargeCoordinate(*rank, work)))
+    return unsupported();
+  // Check the inverse arithmetic at the retained canonical endpoint as well.
+  // No lane enumeration or invented normalized induction atom is involved.
+  auto lastDistance = composeIntegerExpression("sub", {*last, domain->lower});
+  auto residue = succeeded(lastDistance)
+                     ? composeIntegerExpression("mod", {*lastDistance, domain->step})
+                     : FailureOr<InstantiatedIntegerExpression>(failure());
+  auto recovered = succeeded(lastDistance)
+                       ? composeIntegerExpression("div", {*lastDistance, domain->step})
+                       : FailureOr<InstantiatedIntegerExpression>(failure());
+  if (failed(residue) || failed(recovered) || !literal(*residue) ||
+      residue->bounds.lower != 0 ||
+      !equivalentInstantiatedIntegerExpressions(*recovered, lastRank))
+    return unsupported();
+  result = *rank;
+  return Status::Proved;
+}
+
+ShapeRegionProofStatus resolveGeneratedInductionOrdinal(
+    Operation *family, Value induction, Operation *use,
+    InstantiatedIntegerExpression &result, unsigned &work) {
+  return resolveGeneratedInductionOrdinalImpl(family, induction, use, result, work, nullptr);
+}
+
+
+FailureOr<InstantiatedIntegerExpression> resolveSelectedInstancePathGeneratedOrdinal(
+    Operation *rootModule, ArrayRef<SelectedIntegerInstanceStep> path, Operation *family,
+    Value ordinal, Operation *use, ArrayRef<GeneratedSelection> originalPrefix,
+    ArrayRef<GeneratedSelection> evaluatedPrefix,
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> lexicalCoordinates, unsigned &work) {
+  // Reuse the actual selection inspector, not caller-chosen scope or copied
+  // proof labels. It independently proves all-lane existence before specializing.
+  if (!llvm::isa_and_nonnull<GeneratedMemberOp, InstancePortOp, InterfaceBoundaryOp>(use) ||
+      use->getNumOperands() != 2 || use->getOperand(1) != ordinal)
+    return failure();
+  auto member = use->getAttrOfType<StringAttr>("member");
+  SmallVector<Operation *, 2> uses;
+  auto original = member ? inspectGeneratedSelection(use->getOperand(0), ordinal, member.getValue(),
+                                                     use, uses, work)
+                         : FailureOr<GeneratedSelectionProof>(failure());
+  if (failed(original) || original->family != family || uses.empty() || uses.back() != use ||
+      original->selections.size() != originalPrefix.size() + 1 ||
+      originalPrefix.size() != evaluatedPrefix.size() || family->getNumOperands() != 3)
+    return failure();
+  for (auto [expected, supplied] :
+       llvm::zip(ArrayRef<GeneratedSelection>(original->selections).drop_back(), originalPrefix)) {
+    if (expected.family != supplied.family || expected.ordinal != supplied.ordinal ||
+        failed(chargeCoordinate(expected.coordinate, work)) ||
+        failed(chargeCoordinate(supplied.coordinate, work)) ||
+        !equivalentInstantiatedIntegerExpressions(expected.coordinate, supplied.coordinate))
+      return failure();
+  }
+  for (const auto &edge : path)
+    if (failed(verifySelectedStructuralCoordinates(edge.coordinates, edge.instance, work)))
+      return failure();
+  SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2> substitutions;
+  for (auto [before, after] : llvm::zip(originalPrefix, evaluatedPrefix)) {
+    if (before.family != after.family || before.ordinal != after.ordinal ||
+        failed(chargeCoordinate(after.coordinate, work)))
+      return failure();
+    substitutions.emplace_back(before.family->getRegion(0).front().getArgument(0),
+                               after.coordinate);
+  }
+  if (failed(verifySelectedStructuralCoordinates(substitutions, family, work)))
+    return failure();
+  if (failed(verifySelectedStructuralCoordinates(lexicalCoordinates, use, work)))
+    return failure();
+  for (const auto &coordinate : lexicalCoordinates) {
+    if (1 + substitutions.size() > work)
+      return failure();
+    work -= 1 + substitutions.size();
+    auto previous = llvm::find_if(
+        substitutions, [&](const auto &entry) { return entry.first == coordinate.first; });
+    if (previous == substitutions.end()) {
+      substitutions.push_back(coordinate);
+    } else if (failed(chargeCoordinate(previous->second, work)) ||
+               failed(chargeCoordinate(coordinate.second, work)) ||
+               !equivalentInstantiatedIntegerExpressions(previous->second, coordinate.second)) {
+      return failure();
+    }
+  }
+  auto resolve = [&](Value value,
+                     Operation *actualUse) -> FailureOr<InstantiatedIntegerExpression> {
+    auto facts = path.empty() ? resolveStructuralIntegerExpression(value, actualUse, work)
+                              : resolveSelectedInstancePathStructuralIntegerExpression(
+                                    rootModule, path, value, actualUse, work);
+    if (failed(facts) || !facts->expression || failed(chargeCoordinate(*facts->expression, work)))
+      return failure();
+    return substituteIntegerExpression(*facts->expression, substitutions);
+  };
+  auto lower = resolve(family->getOperand(0), family);
+  auto upper = resolve(family->getOperand(1), family);
+  auto step = resolve(family->getOperand(2), family);
+  auto index = resolve(ordinal, use);
+  if (failed(lower) || failed(upper) || failed(step) || failed(index) || step->bounds.lower <= 0)
+    return failure();
+  // Existence was proved independently above. Preserve its original actual-use
+  // guards instead of inventing a contextual representative-lane guard proof.
+  return generatedOrdinalCoordinate(*index, *lower, *step);
+}
+
+static FailureOr<StaticShapeProjection>
+resolveStaticShapeProjectionImpl(Value reference, Operation *use, unsigned &remainingWork) {
   if (!reference || !use)
     return failure();
   auto module = use->getParentOfType<nodal::ModuleOp>();
   if (!module)
+    return failure();
+  TypedGeometry geometry(module, remainingWork);
+  if (!geometry.spend())
     return failure();
   StaticShapeProjection result;
   const Type element = shapeElement(reference.getType());
@@ -540,6 +857,8 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
   Value current = reference;
   unsigned captureDepth = 0;
   while (current) {
+    if (!geometry.spend())
+      return failure();
     if (auto argument = llvm::dyn_cast<BlockArgument>(current)) {
       if (++captureDepth > 512 || !argument.getOwner()->getParentOp()->isProperAncestor(use))
         return failure();
@@ -570,6 +889,8 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
   std::reverse(result.projections.begin(), result.projections.end());
   Operation *previous = result.root.getDefiningOp();
   for (Operation *projection : result.projections) {
+    if (!geometry.spend())
+      return failure();
     if (!precedesLexically(previous, projection))
       return failure();
     auto valid = llvm::isa<ShapeIndexOp>(projection)  ? verifyShapeIndexMapping(projection)
@@ -579,9 +900,9 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
       return failure();
     previous = projection;
   }
-  if (!dimensionProductBounds(module, result.root.getType(), 0))
+  if (!dimensionProductBounds(geometry, result.root, 0))
     return failure();
-  auto rootDimensions = fixedDimensions(module, result.root.getType());
+  auto rootDimensions = fixedDimensions(geometry, result.root);
   if (rootDimensions)
     result.exactFixedCardinality = product(*rootDimensions);
   result.wholeRoot = true;
@@ -594,8 +915,8 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
   llvm::SmallVector<Operation *, 4> prefix;
   for (Operation *projection : result.projections) {
     result.ancestorKeys.push_back(result.canonicalKey);
-    auto inputKey = dimensionsKey(module, projection->getOperand(0).getType());
-    auto outputKey = dimensionsKey(module, projection->getResult(0).getType());
+    auto inputKey = dimensionsKey(geometry, projection->getOperand(0));
+    auto outputKey = dimensionsKey(geometry, projection->getResult(0));
     if (failed(inputKey) || failed(outputKey))
       return failure();
     std::string step;
@@ -603,7 +924,7 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     if (llvm::isa<ShapeIndexOp>(projection)) {
       step = "/index[" + *inputKey + "](";
       bool singletonPrefix = true;
-      auto fixed = fixedDimensions(module, projection->getOperand(0).getType());
+      auto fixed = fixedDimensions(geometry, projection->getOperand(0));
       unsigned axis = 0;
       for (Value index : projection->getOperands().drop_front()) {
         auto key = indexKey(module, index, projection);
@@ -620,9 +941,9 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
         unsigned axis = 0;
         for (Value index : projection->getOperands().drop_front()) {
           auto position = indexProduct(module, index, projection);
-          auto stride = dimensionProduct(module, projection->getOperand(0).getType(), ++axis);
-          addOffsetBounds(exactOffsetBounds, module, index, projection->getOperand(0).getType(),
-                          axis, projection);
+          auto stride = dimensionProduct(geometry, projection->getOperand(0), ++axis);
+          addOffsetBounds(exactOffsetBounds, module, index, projection->getOperand(0), axis,
+                          projection, geometry);
           auto term = position && stride ? multiplyProduct(*position, *stride) : std::nullopt;
           if (!term || !addProduct(offset, *term) || !addProduct(exactOffset, *term)) {
             linear = false;
@@ -646,15 +967,15 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
       if (linear && !identityMap) {
         auto axis = projection->getAttrOfType<IntegerAttr>("axis").getInt();
         bool leading = axis == 0;
-        auto fixed = fixedDimensions(module, projection->getOperand(0).getType());
+        auto fixed = fixedDimensions(geometry, projection->getOperand(0));
         if (!leading && fixed)
           leading = llvm::all_of(llvm::ArrayRef<int64_t>(*fixed).take_front(axis),
                                  [](int64_t extent) { return extent == 1; });
         auto lowerProduct = indexProduct(module, projection->getOperand(1), projection);
-        auto stride = dimensionProduct(module, projection->getOperand(0).getType(), axis + 1);
+        auto stride = dimensionProduct(geometry, projection->getOperand(0), axis + 1);
         auto term = lowerProduct && stride ? multiplyProduct(*lowerProduct, *stride) : std::nullopt;
         addOffsetBounds(exactOffsetBounds, module, projection->getOperand(1),
-                        projection->getOperand(0).getType(), axis + 1, projection);
+                        projection->getOperand(0), axis + 1, projection, geometry);
         if (!leading || !term || !addProduct(offset, *term) || !addProduct(exactOffset, *term))
           linear = false;
       }
@@ -677,7 +998,7 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     if (result.wholeRoot)
       offset.clear();
     if (linear && !result.wholeRoot) {
-      auto count = dimensionProduct(module, projection->getResult(0).getType());
+      auto count = dimensionProduct(geometry, projection->getResult(0));
       if (count)
         result.canonicalKey = linearKey(offset, *count);
       else
@@ -686,15 +1007,15 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
     if (result.wholeRoot)
       result.canonicalKey = "whole";
     if (!llvm::isa<ShapedType>(projection->getResult(0).getType())) {
-      if (auto offset = mapLiteralOrdinal(module, prefix, 0))
+      if (auto offset = mapLiteralOrdinal(module, prefix, 0, geometry))
         result.canonicalKey = "offset:" + std::to_string(*offset);
     }
   }
-  auto selectedDimensions = fixedDimensions(module, reference.getType());
+  auto selectedDimensions = fixedDimensions(geometry, reference);
   auto count = selectedDimensions ? product(*selectedDimensions) : std::nullopt;
   if (count) {
-    result.literalFirstOffset = mapLiteralOrdinal(module, result.projections, 0);
-    result.literalLastOffset = mapLiteralOrdinal(module, result.projections, *count - 1);
+    result.literalFirstOffset = mapLiteralOrdinal(module, result.projections, 0, geometry);
+    result.literalLastOffset = mapLiteralOrdinal(module, result.projections, *count - 1, geometry);
     if (result.literalFirstOffset && result.literalLastOffset) {
       result.contiguousLiteralRegion =
           *result.literalLastOffset >= *result.literalFirstOffset &&
@@ -713,8 +1034,15 @@ FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, O
   }
   if (result.literalRootFlatOffset)
     result.canonicalScalarKey = "offset:" + std::to_string(*result.literalRootFlatOffset);
-  deriveScalarCoordinates(module, reference, result);
+  deriveScalarCoordinates(module, reference, result, geometry);
+  if (!remainingWork)
+    return failure();
   return result;
+}
+
+FailureOr<StaticShapeProjection> resolveStaticShapeProjection(Value reference, Operation *use) {
+  unsigned remainingWork = 65536;
+  return resolveStaticShapeProjectionImpl(reference, use, remainingWork);
 }
 
 namespace {
@@ -797,31 +1125,53 @@ public:
     }
     return true;
   }
-  std::optional<llvm::SmallVector<IntegerExpression, 4>> dimensions(Type type) {
-    auto found = dimensionCache.find(type);
-    if (found != dimensionCache.end())
-      return found->second;
-    llvm::SmallVector<IntegerExpression, 4> result;
-    auto shape = physicalShape(type);
-    if (!shape)
+  unsigned remainingTypeWork() const {
+    return static_cast<unsigned>(
+        std::min<uint64_t>(65536, limits.maximumWork - std::min(work, limits.maximumWork)));
+  }
+  std::optional<GeneratedDomain> generatedDomain(Operation *family) {
+    if (!spend())
       return std::nullopt;
-    for (auto token : shape->dimensions) {
-      if (!spend())
-        return std::nullopt;
-      auto dimension = resolveStaticShapeDimension(module, token.trim());
-      if (failed(dimension))
-        return std::nullopt;
-      auto expression =
-          dimension->parameter ? resolveOwnedIntegerParameter(module, dimension->parameter)
-          : dimension->expression
-              ? resolveOwnedIntegerExpression(module, dimension->expression)
-              : FailureOr<IntegerExpression>(makeLiteralIntegerExpression(dimension->literal));
-      if (failed(expression) || expression->bounds.lower <= 0)
-        return std::nullopt;
-      result.push_back(*expression);
-    }
-    dimensionCache.try_emplace(type, result);
+    if (auto found = domains.find(family); found != domains.end())
+      return found->second;
+    unsigned remaining = remainingTypeWork(), before = remaining;
+    auto domain = resolveGeneratedDomain(family, remaining);
+    spend(before - remaining);
+    if (failed(domain) && !remaining)
+      status = RegionStatus::ResourceLimit;
+    auto result = succeeded(domain) ? std::optional<GeneratedDomain>(*domain) : std::nullopt;
+    domains.emplace(family, result);
     return result;
+  }
+  FailureOr<StaticShapeProjection> projection(Value selected, Operation *proofUse) {
+    unsigned remaining = remainingTypeWork(), before = remaining;
+    auto result = resolveStaticShapeProjectionImpl(selected, proofUse, remaining);
+    spend(before - remaining);
+    if (failed(result) && !remaining)
+      status = RegionStatus::ResourceLimit;
+    return result;
+  }
+  std::optional<llvm::SmallVector<IntegerExpression, 4>> dimensions(Value value) {
+    unsigned remaining = remainingTypeWork(), before = remaining;
+    auto release = llvm::scope_exit([&] { spend(before - remaining); });
+    TypedGeometry geometry(module, remaining);
+    auto context = geometry.context(value);
+    if (failed(context)) {
+      if (!remaining)
+        status = RegionStatus::ResourceLimit;
+      return std::nullopt;
+    }
+    auto key = std::make_pair(value, *context);
+    if (auto found = dimensionCache.find(key); found != dimensionCache.end())
+      return found->second;
+    auto result = geometry.expressions(value);
+    if (failed(result)) {
+      if (!remaining)
+        status = RegionStatus::ResourceLimit;
+      return std::nullopt;
+    }
+    dimensionCache.try_emplace(key, *result);
+    return *result;
   }
   std::optional<IntegerExpression> selector(Value value, Operation *at, bool opaque) {
     if (!spend())
@@ -984,7 +1334,8 @@ public:
   IntegerExpression one = makeLiteralIntegerExpression(1);
 
 private:
-  llvm::DenseMap<Type, llvm::SmallVector<IntegerExpression, 4>> dimensionCache;
+  llvm::DenseMap<std::pair<Value, Operation *>, llvm::SmallVector<IntegerExpression, 4>>
+      dimensionCache;
   std::map<Operation *, std::optional<GeneratedDomain>> domains;
   std::map<std::pair<std::shared_ptr<const InstantiatedIntegerNode>,
                      std::shared_ptr<const InstantiatedIntegerNode>>,
@@ -1098,11 +1449,11 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
     if (definition && !precedesLexically(definition, proofUse))
       proofUse = definition;
   }
-  auto verified = resolveStaticShapeProjection(selected, proofUse);
+  auto verified = query.projection(selected, proofUse);
   if (failed(verified) || verified->root != projection.root ||
       verified->projections != projection.projections)
-    return RegionStatus::Invalid;
-  auto selectedDimensions = query.dimensions(selected.getType());
+    return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
+  auto selectedDimensions = query.dimensions(selected);
   if (!selectedDimensions)
     return query.failedStatus();
   RegionBox currentBox = query.full(*selectedDimensions);
@@ -1155,8 +1506,8 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
     }
   }
   for (Operation *operation : llvm::reverse(projection.projections)) {
-    auto input = query.dimensions(operation->getOperand(0).getType());
-    auto output = query.dimensions(operation->getResult(0).getType());
+    auto input = query.dimensions(operation->getOperand(0));
+    auto output = query.dimensions(operation->getResult(0));
     if (!input || !output || !query.spend())
       return query.failedStatus();
     if (llvm::isa<ShapeViewOp>(operation)) {
@@ -1252,8 +1603,53 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
             addedIteration = true;
           }
         } else {
-          position = query.selector(index, operation, true);
-          end = position ? query.apply("add", *position, query.one) : std::nullopt;
+          // Recognize only the checked canonical rank of this original family.
+          // Its physical stride is one; its original domain and induction are
+          // not rebased into a fictitious zero-based Generate.
+          Operation *family = operation->getParentOp();
+          Operation *definition = index.getDefiningOp();
+          if ((iterationImages || iterationStart) && isa<GenerateOp>(family) &&
+              isa<ModuleOp>(family->getParentOp()) &&
+              isa_and_nonnull<ConstExprOp>(definition) && definition->getParentOp() == family) {
+            auto domain = query.generatedDomain(family);
+            if (!domain)
+              return query.status == RegionStatus::ResourceLimit
+                         ? RegionStatus::ResourceLimit : RegionStatus::Invalid;
+            unsigned available = unsigned(std::min<uint64_t>(
+                UINT_MAX, query.limits.maximumWork - std::min(query.work, query.limits.maximumWork)));
+            unsigned remaining = available;
+            IntegerExpression ordinal;
+            auto proof = resolveGeneratedInductionOrdinalImpl(
+                family, family->getRegion(0).front().getArgument(0), operation, ordinal, remaining,
+                &*domain);
+            auto actual = resolveStructuralIntegerExpression(index, operation, remaining);
+            if (!query.spend(available - remaining) || !remaining)
+              return RegionStatus::ResourceLimit;
+            if (proof == RegionStatus::Invalid || failed(actual))
+              return RegionStatus::Invalid;
+            if (proof == RegionStatus::Proved && actual->expression &&
+                query.equal(*actual->expression, ordinal)) {
+              position = query.zero;
+              end = makeLiteralIntegerExpression(int64_t(domain->maximumTripCount));
+              auto offset = query.apply("sub", query.zero, domain->lower);
+              if (!offset)
+                return query.failedStatus();
+              if (iterationStart)
+                end = query.one;
+              else {
+                if (!addIteration(StaticShapeIterationImage{
+                        family, *domain, *offset,
+                        makeLiteralIntegerExpression(int64_t(domain->maximumTripCount)),
+                        query.one, axis, 1, false}))
+                  return query.failedStatus();
+                addedIteration = true;
+              }
+            }
+          }
+          if (!position) {
+            position = query.selector(index, operation, true);
+            end = position ? query.apply("add", *position, query.one) : std::nullopt;
+          }
         }
         if (!position || !end || axis >= input->size())
           return query.failedStatus();
@@ -1312,7 +1708,7 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
       currentBox[axis] = {*low, *high};
     }
   }
-  auto rootDimensions = query.dimensions(projection.root.getType());
+  auto rootDimensions = query.dimensions(projection.root);
   if (!rootDimensions)
     return query.failedStatus();
   if (!outerIterations.empty()) {
@@ -1470,10 +1866,23 @@ std::optional<int64_t> constantDifference(const IntegerExpression &a, const Inte
   return std::nullopt;
 }
 
+// Shared exact scalar progression membership. Bounds are the already checked
+// all-lane trip-count envelope; holes are never filled by the enclosing interval.
+std::pair<ShapeRegionMembership, std::optional<int64_t>>
+locateScalarProgression(int64_t delta, int64_t stride, ParameterIntegerBounds trips) {
+  if (stride <= 0)
+    return {ShapeRegionMembership::Unknown, std::nullopt};
+  if (delta < 0 || delta % stride || delta / stride >= trips.upper)
+    return {ShapeRegionMembership::Outside, std::nullopt};
+  int64_t ordinal = delta / stride;
+  return {ordinal < trips.lower ? ShapeRegionMembership::Inside : ShapeRegionMembership::Unknown,
+          ordinal};
+}
+
 std::optional<RegionBox> imageAxes(const StaticShapeRegion &region, RegionQuery &query) {
   if (region.iteration && !region.iteration->varyingAxis)
     return RegionBox{region.interval};
-  auto dimensions = query.dimensions(region.root.getType());
+  auto dimensions = query.dimensions(region.root);
   if (!dimensions)
     return std::nullopt;
   if (region.kind == StaticShapeRegion::Kind::Whole && !region.iteration)
@@ -1616,9 +2025,10 @@ compareStridedImages(const StaticShapeRegion &a, const StaticShapeRegion &b, Reg
       query.apply("sub", (*otherAxes)[varying].upperExclusive, (*otherAxes)[varying].lower);
   if (!width || !query.equal(*width, query.one))
     return ShapeRegionOverlap::Unknown;
-  if (*delta % stride || *delta < 0 || *delta / stride >= family.iteration->tripCount.bounds.upper)
+  auto location = locateScalarProgression(*delta, stride, family.iteration->tripCount.bounds);
+  if (location.first == ShapeRegionMembership::Outside)
     return ShapeRegionOverlap::Disjoint;
-  return invariantIntersection && *delta / stride < family.iteration->tripCount.bounds.lower
+  return invariantIntersection && location.first == ShapeRegionMembership::Inside
              ? ShapeRegionOverlap::Overlapping
              : ShapeRegionOverlap::Unknown;
 }
@@ -1798,10 +2208,9 @@ ShapeRegionProofStatus resolveStaticShapeRegion(const StaticShapeProjection &pro
   return deriveRegion(projection, query, result, false, std::nullopt, true);
 }
 
-ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProjection &projection,
-                                                        Operation *use, StaticShapeRegion &result,
-                                                        ShapeRegionProofLimits limits) {
-  RegionQuery query(use, limits);
+namespace {
+RegionStatus deriveCheckedIterationImage(const StaticShapeProjection &projection,
+                                         RegionQuery &query, StaticShapeRegion &result) {
   StaticShapeRegion candidate;
   auto status = deriveRegion(projection, query, candidate, true, std::nullopt, true);
   if (status != RegionStatus::Proved)
@@ -1812,7 +2221,7 @@ ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProject
   // the root's declaration, not merely each selector considered separately.
   // A root declared in a family is already fresh in its enclosing occurrences.
   Operation *rootScope = candidate.root.getDefiningOp()->getParentOp();
-  for (Operation *scope = use->getParentOp(); scope && scope != rootScope;
+  for (Operation *scope = query.use->getParentOp(); scope && scope != rootScope;
        scope = scope->getParentOp()) {
     if (!query.spend(candidate.iterationCount() + 1))
       return query.failedStatus();
@@ -1830,6 +2239,14 @@ ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProject
   }
   result = std::move(candidate);
   return RegionStatus::Proved;
+}
+
+} // namespace
+ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProjection &projection,
+                                                        Operation *use, StaticShapeRegion &result,
+                                                        ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  return deriveCheckedIterationImage(projection, query, result);
 }
 
 ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjection &left,
@@ -1909,7 +2326,7 @@ ShapeRegionProofStatus verifyStaticShapeIterationPredecessorSeed(const StaticSha
     return status;
   if (actual.iteration || actual.root != base.root)
     return RegionStatus::Invalid;
-  auto dimensions = query.dimensions(base.root.getType());
+  auto dimensions = query.dimensions(base.root);
   if (!dimensions)
     return query.failedStatus();
   auto first = regionBox(base, query, *dimensions), second = regionBox(actual, query, *dimensions);
@@ -1966,6 +2383,25 @@ RegionStatus specializeRegion(StaticShapeRegion &region, ArrayRef<GeneratedSelec
     }
     RegionAxis *axis = map.varyingAxis ? &region.axes[*map.varyingAxis] : &region.interval;
     auto displacement = query.apply("sub", selection->coordinate, map.domain.lower);
+    // A normalized physical image retains the original nonunit progression.
+    // Recover its occurrence rank with exact residue and round-trip proof,
+    // then advance by physical stride. Ordinary raw images retain their path.
+    if (displacement && !query.equal(map.domain.step, makeLiteralIntegerExpression(map.stride))) {
+      auto step = RegionQuery::literal(map.domain.step);
+      if (!step || *step <= 0 || map.stride <= 0)
+        return query.failedStatus();
+      auto rank = query.apply("div", *displacement, map.domain.step);
+      auto residue = query.apply("mod", *displacement, map.domain.step);
+      auto recoveredDelta = rank ? query.apply("mul", *rank, map.domain.step) : std::nullopt;
+      auto recovered = recoveredDelta
+                           ? query.apply("add", map.domain.lower, *recoveredDelta)
+                           : std::nullopt;
+      if (!rank || !residue || !recovered || !query.equal(*residue, query.zero) ||
+          !query.equal(*recovered, selection->coordinate) ||
+          !query.less(query.zero, *rank, true) || !query.less(*rank, map.tripCount))
+        return query.failedStatus();
+      displacement = query.apply("mul", *rank, makeLiteralIntegerExpression(map.stride));
+    }
     auto scaled =
         displacement ? query.apply("mul", *displacement, map.occurrenceWidth) : std::nullopt;
     auto lower = scaled ? query.apply("add", axis->lower, *scaled) : std::nullopt;
@@ -2057,7 +2493,7 @@ StaticShapeOverlap compareStaticShapeContextualProjections(
             : *strided == ShapeRegionOverlap::Unknown ? RegionStatus::Unsupported
                                                       : RegionStatus::Proved,
             *strided};
-  auto dimensions = query.dimensions(a.root.getType());
+  auto dimensions = query.dimensions(a.root);
   if (!dimensions)
     return unknown(query.failedStatus());
   auto compareBoxes = [&](llvm::ArrayRef<RegionAxis> first,
@@ -2150,7 +2586,7 @@ ShapeRegionProofStatus proveStaticShapeProjectionIdentity(const StaticShapeProje
   b.root = a.root;
   if (a.iteration || b.iteration)
     return sameImage(a, b, query) ? query.status : query.failedStatus();
-  auto dimensions = query.dimensions(a.root.getType());
+  auto dimensions = query.dimensions(a.root);
   if (!dimensions)
     return query.failedStatus();
   auto first = regionBox(a, query, *dimensions), second = regionBox(b, query, *dimensions);
@@ -2186,7 +2622,7 @@ static ShapeRegionProofStatus verifyRegionCoverage(Value root,
   if (!root || !query.module || !root.getDefiningOp() ||
       root.getDefiningOp()->getParentOfType<nodal::ModuleOp>() != query.module)
     return RegionStatus::Invalid;
-  auto dimensions = query.dimensions(root.getType());
+  auto dimensions = query.dimensions(root);
   if (!dimensions)
     return query.failedStatus();
   // Keep exact coordinate boundaries when they are already available. An
@@ -2495,6 +2931,60 @@ pointCoordinates(const StaticShapePoint &point, RegionQuery &query,
   }
   return result;
 }
+// Narrow inverse for a checked scalar one-loop image, not a general region
+// ordinal conversion. The caller retains the exact original relation context.
+StaticShapeScalarLocation locateStridedScalarImage(const StaticShapeRegion &region,
+                                                   const StaticShapePoint &point,
+                                                   RegionQuery &query) {
+  auto unknown = [&]() {
+    return StaticShapeScalarLocation{query.failedStatus(), ShapeRegionMembership::Unknown,
+                                     std::nullopt};
+  };
+  if (!query.spend() || region.root != point.root || region.iterationCount() != 1 ||
+      !query.equal(region.iteration->occurrenceWidth, query.one))
+    return unknown();
+  auto dimensions = query.dimensions(region.root);
+  auto axes = imageAxes(region, query);
+  if (!dimensions || !axes || imageAxis(region) >= axes->size())
+    return unknown();
+  llvm::SmallVector<IntegerExpression, 4> coordinates;
+  if (!region.iteration->varyingAxis) {
+    auto flat = pointFlat(point, query, *dimensions);
+    if (!flat)
+      return unknown();
+    coordinates.push_back(*flat);
+  } else {
+    auto values = pointCoordinates(point, query, *dimensions);
+    if (!values)
+      return unknown();
+    coordinates = std::move(*values);
+  }
+  if (coordinates.size() != axes->size())
+    return unknown();
+  for (unsigned axis = 0; axis != axes->size(); ++axis) {
+    if (!query.spend())
+      return unknown();
+    if (axis == imageAxis(region))
+      continue;
+    auto width = query.apply("sub", (*axes)[axis].upperExclusive, (*axes)[axis].lower);
+    if (!width || !query.equal(*width, query.one) ||
+        !query.equal(coordinates[axis], (*axes)[axis].lower))
+      return unknown();
+  }
+  auto delta =
+      constantDifference(coordinates[imageAxis(region)], (*axes)[imageAxis(region)].lower, query);
+  if (!delta)
+    return unknown();
+  auto location =
+      locateScalarProgression(*delta, region.iteration->stride, region.iteration->tripCount.bounds);
+  if (location.first == ShapeRegionMembership::Unknown)
+    return unknown();
+  return {RegionStatus::Proved, location.first,
+          location.second
+              ? std::optional<IntegerExpression>(makeLiteralIntegerExpression(*location.second))
+              : std::nullopt};
+}
+
 StaticShapeScalarLocation locate(const StaticShapeRegion &region, const StaticShapePoint &point,
                                  RegionQuery &query) {
   auto reject = [&](ShapeRegionMembership membership = ShapeRegionMembership::Unknown) {
@@ -2508,7 +2998,7 @@ StaticShapeScalarLocation locate(const StaticShapeRegion &region, const StaticSh
     return reject(ShapeRegionMembership::Outside);
   if (stridedImage(region))
     return reject();
-  auto dimensions = query.dimensions(region.root.getType());
+  auto dimensions = query.dimensions(region.root);
   if (!dimensions)
     return reject();
   if (region.kind == StaticShapeRegion::Kind::Interval) {
@@ -2561,7 +3051,7 @@ StaticShapeScalarLocation locate(const StaticShapeRegion &region, const StaticSh
 }
 RegionStatus pointFromRegion(const StaticShapeRegion &region, RegionQuery &query,
                              StaticShapePoint &result) {
-  auto dimensions = query.dimensions(region.root.getType());
+  auto dimensions = query.dimensions(region.root);
   if (!dimensions)
     return query.failedStatus();
   StaticShapePoint point;
@@ -2634,6 +3124,87 @@ StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &r
   return locateStaticShapeScalar(region, point, use, limits);
 }
 
+ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjection &source,
+                                                         const StaticShapePoint &point,
+                                                         const StaticShapeProjection &destination,
+                                                         Operation *actualRelationUse,
+                                                         StaticShapePoint &result,
+                                                         ShapeRegionProofLimits limits) {
+  if (!actualRelationUse || !source.root || !destination.root || !point.root)
+    return RegionStatus::Invalid;
+  auto selected = [](const StaticShapeProjection &projection) {
+    return projection.projections.empty() ? projection.root
+                                          : projection.projections.back()->getResult(0);
+  };
+  Value from = selected(source), to = selected(destination);
+  if (!llvm::is_contained(actualRelationUse->getOperands(), from) ||
+      !llvm::is_contained(actualRelationUse->getOperands(), to))
+    return RegionStatus::Invalid;
+  if (isa<ShapedType>(from.getType()) || isa<ShapedType>(to.getType()))
+    return RegionStatus::Unsupported;
+  auto checkedSource = resolveStaticShapeProjection(from, actualRelationUse);
+  auto checkedDestination = resolveStaticShapeProjection(to, actualRelationUse);
+  if (failed(checkedSource) || failed(checkedDestination) || checkedSource->root != source.root ||
+      checkedSource->projections != source.projections ||
+      checkedDestination->root != destination.root ||
+      checkedDestination->projections != destination.projections)
+    return RegionStatus::Invalid;
+  RegionQuery query(actualRelationUse, limits);
+  StaticShapeRegion a, b;
+  auto status = deriveCheckedIterationImage(source, query, a);
+  if (status != RegionStatus::Proved)
+    return status;
+  status = deriveCheckedIterationImage(destination, query, b);
+  if (status != RegionStatus::Proved)
+    return status;
+  if (a.iterationCount() != 1 || b.iterationCount() != 1 ||
+      a.iteration->loop != b.iteration->loop ||
+      a.iteration->loop != actualRelationUse->getParentOp() ||
+      !isa<GenerateOp>(a.iteration->loop) || !isa<ModuleOp>(a.iteration->loop->getParentOp()) ||
+      a.iteration->stride <= 0 || a.iteration->stride != b.iteration->stride ||
+      a.iteration->varyingAxis != b.iteration->varyingAxis ||
+      !query.equal(a.iteration->domain.step, b.iteration->domain.step) ||
+      !query.equal(a.iteration->occurrenceWidth, query.one) ||
+      !query.equal(b.iteration->occurrenceWidth, query.one) ||
+      !query.equal(a.iteration->offset, b.iteration->offset))
+    return query.failedStatus();
+  auto location =
+      stridedImage(a) ? locateStridedScalarImage(a, point, query) : locate(a, point, query);
+  if (location.status != RegionStatus::Proved)
+    return location.status;
+  if (location.membership != ShapeRegionMembership::Inside || !location.ordinal)
+    return RegionStatus::Unsupported;
+  // The checked inverse supplies the normalized occurrence rank, not a guessed
+  // induction token. Canonical arithmetic reconstructs the original coordinate.
+  auto displacement = query.apply("mul", *location.ordinal, a.iteration->domain.step);
+  auto coordinate =
+      displacement ? query.apply("add", a.iteration->domain.lower, *displacement) : std::nullopt;
+  if (!coordinate || !query.less(a.iteration->domain.lower, *coordinate, true) ||
+      !query.less(*coordinate, a.iteration->domain.upperExclusive))
+    return query.failedStatus();
+  GeneratedSelection occurrence{a.iteration->loop, Value(), *coordinate};
+  status = specializeRegion(a, {occurrence}, query);
+  if (status != RegionStatus::Proved)
+    return status;
+  StaticShapePoint roundTrip;
+  status = pointFromRegion(a, query, roundTrip);
+  if (status != RegionStatus::Proved)
+    return status;
+  auto dimensions = query.dimensions(source.root);
+  auto original = dimensions ? pointFlat(point, query, *dimensions) : std::nullopt;
+  auto recovered = dimensions ? pointFlat(roundTrip, query, *dimensions) : std::nullopt;
+  if (!original || !recovered || !query.equal(*original, *recovered))
+    return query.failedStatus();
+  status = specializeRegion(b, {occurrence}, query);
+  if (status != RegionStatus::Proved)
+    return status;
+  StaticShapePoint mapped;
+  status = pointFromRegion(b, query, mapped);
+  if (status == RegionStatus::Proved)
+    result = std::move(mapped);
+  return status;
+}
+
 ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
                                              const InstantiatedIntegerExpression &ordinal,
                                              Operation *use, StaticShapePoint &result,
@@ -2648,7 +3219,7 @@ ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
     auto status = deriveRegion(*region.projection, query, singleton, true, ordinal);
     return status == RegionStatus::Proved ? pointFromRegion(singleton, query, result) : status;
   }
-  auto dimensions = query.dimensions(region.root.getType());
+  auto dimensions = query.dimensions(region.root);
   if (!dimensions)
     return query.failedStatus();
   StaticShapePoint point;

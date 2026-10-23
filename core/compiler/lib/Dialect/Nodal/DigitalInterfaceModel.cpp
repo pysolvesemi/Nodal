@@ -2,6 +2,7 @@
 
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
@@ -790,8 +791,11 @@ LogicalResult Model::instance(Operation *operation) {
   }
   if (operation->getParentOp() != module)
     for (const auto &member : definition.members)
-      if (analog(member.second.protocol) || member.second.protocol == "resolved" ||
-          isDigitalControlBoundaryType(member.second.type))
+      if ((analog(member.second.protocol) &&
+           !(member.second.protocol == "conservative" && shape.empty() &&
+             llvm::isa<TerminalType>(member.second.type) &&
+             llvm::isa<GenerateOp>(operation->getParentOp()))) ||
+          member.second.protocol == "resolved" || isDigitalControlBoundaryType(member.second.type))
         return reject(
             operation,
             "generated Interface requires separately admitted analog/resolved/control ownership");
@@ -970,6 +974,17 @@ LogicalResult Model::boundary(Operation *operation) {
       (actualInventory && actualInventory.size() != original.definition->members.size()))
     return reject(operation,
                   "Interface boundary actual types require the complete member inventory");
+  bool scalarConservativeInventory = boundary->selection &&
+      !original.definition->members.empty();
+  if (scalarConservativeInventory)
+    for (const auto &entry : original.definition->members) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(operation, "selected conservative inventory exceeds structural budget");
+      scalarConservativeInventory &= entry.second.protocol == "conservative" &&
+          llvm::isa<TerminalType>(entry.second.type);
+    }
+  const bool selectedConservativeEndpoint = scalarConservativeInventory && shape.empty() &&
+      succeeded(resolveConservativeGeneratedSelection(operation));
   llvm::StringMap<Type> actualTypes;
   unsigned memberIndex = 0;
   for (Operation &memberOperation : original.definition->operation->getRegion(0).front()) {
@@ -982,8 +997,11 @@ LogicalResult Model::boundary(Operation *operation) {
     auto resolved = llvm::dyn_cast<ResolvedType>(member.type);
     Type payload = resolved ? resolved.getElementType() : member.type;
     const bool conservative = member.protocol == "conservative";
+    const bool selectedConservative = conservative &&
+        llvm::isa<TerminalType>(member.type) && selectedConservativeEndpoint;
     if ((boundary->selection &&
-         (analog(member.protocol) || resolved || isDigitalControlBoundaryType(member.type))) ||
+         ((analog(member.protocol) && !selectedConservative) || resolved ||
+          isDigitalControlBoundaryType(member.type))) ||
         (conservative && !shape.empty()) || member.protocol == "signal_flow" ||
         isDigitalControlBoundaryType(member.type) ||
         (!conservative &&

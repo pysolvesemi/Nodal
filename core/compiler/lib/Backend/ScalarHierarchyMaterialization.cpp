@@ -5,6 +5,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/TargetCapabilities.h"
 #include "nodal/Backend/Backend.h"
@@ -23,6 +24,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
+#include <set>
+#include <tuple>
 #include <string>
 #include <vector>
 
@@ -84,23 +88,64 @@ public:
     // construction finish. No operation is changed during admission.
     for (auto &entry : endpoints) {
       auto &endpoint = entry.endpoint;
-      if (endpoint.instance)
+      if (endpoint.selection || (endpoint.instance && !entry.family))
         continue;
       builder.setInsertionPoint(endpoint.operation);
       for (auto &leaf : entry.leaves) {
-        OperationState state(endpoint.operation->getLoc(), TerminalOp::getOperationName());
+        if (entry.family) {
+          builder.setInsertionPoint(entry.family);
+          OperationState array(endpoint.operation->getLoc(), NodeArrayOp::getOperationName());
+          array.addTypes(ShapedType::get(outer.getContext(), std::to_string(entry.cardinality), leaf.type));
+          array.addAttribute("name", builder.getStringAttr(leaf.name));
+          const std::string arrayPath = path(endpoint.domainOwner).str() + "." + leaf.name;
+          array.addAttribute("source_path", builder.getStringAttr(arrayPath));
+          auto attrs = NamedAttrList(metadata(endpoint, leaf, false));
+          attrs.set("semantic_path", builder.getStringAttr(arrayPath));
+          attrs.set("storage", builder.getStringAttr("structural"));
+          array.addAttribute("metadata", attrs.getDictionary(outer.getContext()));
+          leaf.array = builder.create(array)->getResult(0);
+          builder.setInsertionPoint(endpoint.operation);
+          Value ordinal = normalizedIndices.lookup(entry.family);
+          if (!ordinal) {
+            Value induction = entry.family->getRegion(0).front().getArgument(0);
+            InstantiatedIntegerExpression expression;
+            if (resolveGeneratedInductionOrdinal(entry.family, induction, endpoint.operation,
+                                                 expression, remainingIntegerWork) !=
+                    ShapeRegionProofStatus::Proved ||
+                materializeStructuralIntegerExpression(
+                    expression, endpoint.operation, {induction},
+                    (text(entry.family, "region_id") + ".normalized_index").str(),
+                    ordinal, remainingIntegerWork) != IntegerExpressionEmissionStatus::Proved)
+              return invalid(endpoint.operation, "generated conservative ordinal cannot be materialized safely");
+            normalizedIndices.try_emplace(entry.family, ordinal);
+          }
+          leaf.value = select(entry, leaf, ordinal, endpoint.operation);
+          record(endpoint, leaf, "local_node");
+          continue;
+        }
+        const bool local = llvm::isa<GenerateOp>(endpoint.operation->getParentOp());
+        OperationState state(endpoint.operation->getLoc(),
+                             local ? NodeOp::getOperationName() : TerminalOp::getOperationName());
         state.addTypes(leaf.type);
         state.addAttribute("name", builder.getStringAttr(leaf.name));
-        state.addAttribute("direction", builder.getStringAttr("inout"));
-        state.addAttribute("flow_orientation", builder.getStringAttr("into_component"));
+        if (local) {
+          Operation *scope = endpoint.operation->getParentOp();
+          state.addAttribute("generated_owner", scope->getAttr("region_id"));
+          state.addAttribute("generated_induction", scope->getAttr("induction_path"));
+        } else {
+          state.addAttribute("direction", builder.getStringAttr("inout"));
+          state.addAttribute("flow_orientation", builder.getStringAttr("into_component"));
+        }
         state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
         state.addAttribute("metadata", metadata(endpoint, leaf, false));
         leaf.value = builder.create(state)->getResult(0);
-        record(endpoint, leaf, "into_component");
+        record(endpoint, leaf, local ? "local_node" : "into_component");
       }
     }
     for (auto &entry : endpoints) {
       auto &endpoint = entry.endpoint;
+      if (endpoint.selection)
+        continue;
       if (!endpoint.instance)
         continue;
       builder.setInsertionPoint(endpoint.operation);
@@ -114,13 +159,49 @@ public:
         state.addAttribute("instance", FlatSymbolRefAttr::get(
             outer.getContext(), text(endpoint.instance, "sym_name")));
         state.addAttribute("port", builder.getStringAttr(port->name));
-        state.addAttribute("name", builder.getStringAttr(leaf.name));
+        state.addAttribute("name", builder.getStringAttr(
+            entry.family ? leaf.name + "_child_port" : leaf.name));
         state.addAttribute("direction", builder.getStringAttr("inout"));
         state.addAttribute("flow_orientation", builder.getStringAttr("out_of_component"));
+        if (auto scope = llvm::dyn_cast<GenerateOp>(endpoint.operation->getParentOp())) {
+          state.addAttribute("generated_owner", scope->getAttr("region_id"));
+          state.addAttribute("generated_induction", scope->getAttr("induction_path"));
+        }
         state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
         state.addAttribute("metadata", metadata(endpoint, leaf, true));
-        leaf.value = builder.create(state)->getResult(0);
-        record(endpoint, leaf, "out_of_component");
+        Value terminal = builder.create(state)->getResult(0);
+        if (entry.family) {
+          OperationState connection(endpoint.operation->getLoc(), ConnectOp::getOperationName());
+          connection.addOperands({terminal, leaf.value});
+          const std::string identity = leaf.logical + ".selected_child_binding";
+          connection.addAttribute("connection_id", builder.getStringAttr(identity));
+          connection.addAttribute("source_path", builder.getStringAttr(identity));
+          connection.addAttribute("generated_owner", entry.family->getAttr("region_id"));
+          connection.addAttribute("generated_induction", entry.family->getAttr("induction_path"));
+          connection.addAttribute("metadata", builder.getDictionaryAttr({}));
+          builder.create(connection);
+        } else {
+          leaf.value = terminal;
+        }
+        Leaf incidence = leaf;
+        if (entry.family) incidence.name += "_child_port";
+        record(endpoint, incidence, "out_of_component");
+      }
+    }
+    for (auto &entry : endpoints) {
+      auto &endpoint = entry.endpoint;
+      if (endpoint.selection) {
+        auto &original = endpoints[selectedPlans.lookup(endpoint.operation)];
+        builder.setInsertionPoint(endpoint.operation);
+        for (auto &leaf : entry.leaves) {
+          auto source = llvm::find_if(original.leaves, [&](const Leaf &item) { return item.path == leaf.path; });
+          leaf.value = select(original, *source, endpoint.selection->getOperand(1), endpoint.operation);
+          // Correspondence names the same physical array root as the checked view.
+          leaf.name = source->name;
+          record(endpoint, leaf, endpoint.instance ? "out_of_component" : "local_node");
+          if (endpoint.instance) selectedPhysical.push_back(leaf.value);
+        }
+        continue;
       }
     }
     for (auto &access : accesses) {
@@ -132,20 +213,39 @@ public:
     }
     // Canonical proof-only domain records are removed only after every actual
     // SSA and symbol use has been shown to belong to this closed erase set.
-    for (Operation *module : modules)
-      for (Operation &operation : llvm::make_early_inc_range(
-               llvm::reverse(module->getRegion(0).front().getOperations())))
-        if (erase.contains(&operation))
-          operation.erase();
-    for (Operation *module : modules)
-      for (Operation &operation : module->getRegion(0).front())
-        if (llvm::isa<InstanceOp>(operation))
-          operation.setAttr("domain_bindings", builder.getDictionaryAttr({}));
+    for (Operation *module : modules) {
+      llvm::SmallVector<Operation *> ordered;
+      module->walk<WalkOrder::PostOrder>([&](Operation *operation) {
+        if (!erase.contains(operation))
+          return;
+        for (Operation *owner = operation->getParentOp(); owner && owner != module;
+             owner = owner->getParentOp())
+          if (erase.contains(owner))
+            return;
+        ordered.push_back(operation);
+      });
+      for (Operation *operation : llvm::reverse(ordered))
+        operation->erase();
+    }
+    for (Operation *instance : structuralInstances)
+      instance->setAttr("domain_bindings", builder.getDictionaryAttr({}));
     outer->setAttr("nodal.backend.interface_correspondence", builder.getArrayAttr(correspondence));
     if (Attribute profile = outer->getAttr("nodal.target.profile"))
       outer->setAttr("nodal.backend.interface_source_profile", profile);
     outer->setAttr("nodal.target.profile", builder.getStringAttr("analog"));
-    return mlir::verify(outer);
+    if (failed(mlir::verify(outer))) return failure();
+    // Real resulting electrical topology, not ordinal separation, authorizes routing.
+    for (unsigned i = 0; i < selectedPhysical.size(); ++i)
+      for (unsigned j = 0; j < i; ++j) {
+        if (!remainingIntegerWork) return invalid(outer, "selected child relation budget exhausted");
+        --remainingIntegerWork;
+        auto value = selectedPhysical[i];
+        Operation *use = &value.getDefiningOp()->getBlock()->back();
+        auto relation = compareConservativeEndpoints(selectedPhysical[j], value, use);
+        if (relation != ConservativeAlias::Equal && relation != ConservativeAlias::Distinct)
+          return invalid(use, "selected child physical coupling is not proved");
+      }
+    return success();
   }
 
 private:
@@ -156,10 +256,13 @@ private:
     StringAttr role, access;
     ArrayAttr nestedRoles, nestedInterfaces;
     Value value;
+    Value array;
   };
   struct Endpoint {
     DigitalInterfaceEndpoint endpoint;
     llvm::SmallVector<Leaf> leaves;
+    Operation *family = nullptr;
+    uint64_t cardinality = 0;
   };
   LogicalResult invalid(Operation *site, llvm::StringRef message) {
     return emitMappedFailure(site, "NODAL-BACKEND-INTERFACE-CONSERVATIVE-001", message);
@@ -206,9 +309,41 @@ private:
         builder.getNamedAttr("analog", leaf.analog),
         builder.getNamedAttr("analog_refs", leaf.references)}));
   }
+  Value select(const Endpoint &entry, const Leaf &leaf, Value ordinal, Operation *site) {
+    Operation *scope = site->getParentOp();
+    std::string token;
+    if (llvm::isa<BlockArgument>(ordinal))
+      token = "induction:" + text(entry.family, "induction_path").str();
+    else if (llvm::isa<ConstExprOp>(ordinal.getDefiningOp()))
+      token = "expression:" + path(ordinal.getDefiningOp()).str();
+    else
+      token = "literal:" + std::to_string(
+          ordinal.getDefiningOp()->getAttrOfType<IntegerAttr>("value").getInt());
+    const std::string arrayPath = path(entry.endpoint.domainOwner).str() + "." + leaf.name;
+    std::string selectedPath = arrayPath + ".at(" + token + ")";
+    if (llvm::isa<GenerateOp>(scope))
+      selectedPath += ".in(" + text(scope, "region_id").str() + ")";
+    OperationState state(site->getLoc(), ShapeIndexOp::getOperationName());
+    state.addOperands({leaf.array, ordinal});
+    state.addTypes(leaf.type);
+    if (llvm::isa<GenerateOp>(scope)) {
+      state.addAttribute("generated_owner", scope->getAttr("region_id"));
+      state.addAttribute("generated_induction", scope->getAttr("induction_path"));
+    }
+    auto attrs = NamedAttrList(metadata(entry.endpoint, leaf, false));
+    attrs.set("input_path", builder.getStringAttr(arrayPath));
+    attrs.set("semantic_path", builder.getStringAttr(selectedPath));
+    attrs.set("source_uses", builder.getStrArrayAttr({path(site).str() + "." + leaf.path}));
+    attrs.set("storage", builder.getStringAttr("structural"));
+    attrs.set("selection_kind", builder.getStringAttr("node_array"));
+    state.addAttribute("metadata", attrs.getDictionary(outer.getContext()));
+    return builder.create(state)->getResult(0);
+  }
   LogicalResult preflight() {
     uint64_t work = 0;
     WalkResult bounded = outer.walk([&](Operation *operation) {
+      if (llvm::isa<InstanceOp>(operation))
+        structuralInstances.push_back(operation);
       if (++work <= kOperations)
         return WalkResult::advance();
       (void)invalid(operation, "conservative Interface physical plan exceeds finite operation budget");
@@ -227,12 +362,17 @@ private:
           failed(resolveConservativeStructuralScope(&module)))
         return failure();
       llvm::StringSet<> names;
-      for (Operation &operation : module.getRegion(0).front())
+      // The initial bounded walk already counted every authored operation.
+      // Inventory all lexical names in source order before allocating adapters;
+      // suffix selection uses membership only, never hash iteration order.
+      module.walk([&](Operation *operation) {
         for (llvm::StringRef key : {"name", "sym_name"})
-          if (!text(&operation, key).empty())
-            names.insert(text(&operation, key));
+          if (!text(operation, key).empty())
+            names.insert(text(operation, key));
+      });
       for (auto &endpoint : logical) {
-        if (endpoint.selection || !llvm::isa<ModuleOp>(endpoint.operation->getParentOp()))
+        if ((endpoint.selection && failed(resolveConservativeGeneratedSelection(endpoint.operation))) ||
+            !llvm::isa<ModuleOp, GenerateOp>(endpoint.operation->getParentOp()))
           return invalid(endpoint.operation, "generated conservative Interface requires selected occurrence routing");
         if (!endpoint.dimensions.empty())
           return invalid(endpoint.operation, "conservative Interface emission requires scalar endpoints");
@@ -240,6 +380,8 @@ private:
         for (const auto &leaf : endpoint.leaves) {
           if (++leaves > kOperations)
             return invalid(endpoint.operation, "conservative Interface leaf plan exceeds finite budget");
+          if (endpoint.selection && endpoint.instance && leaf.access.getValue() != "connect")
+            return invalid(endpoint.operation, "selected child requires its exact connect role");
           if (leaf.protocol.getValue() != "conservative" ||
               !llvm::isa<TerminalType>(leaf.type))
             return invalid(endpoint.operation, "mixed/digital/signal-flow Interface emission is unsupported");
@@ -262,10 +404,112 @@ private:
         domains.insert(domain);
       }
       accesses.append(represented.begin(), represented.end());
-      for (Operation &operation : module.getRegion(0).front()) {
+      module.walk([&](Operation *operation) {
         if (llvm::isa<InterfaceOp, InterfaceAbiOp, MemberAccessOp>(operation))
-          erase.insert(&operation);
+          erase.insert(operation);
+      });
+    }
+    // Index original incidence once. Selection lookup must not rescan every
+    // endpoint and bypass the authored-operation budget.
+    using ChildKey = std::tuple<Operation *, Operation *, Operation *>;
+    std::map<ChildKey, unsigned> bodyIncidences;
+    std::set<ChildKey> ambiguousIncidences;
+    for (auto [index, entry] : llvm::enumerate(endpoints)) {
+      if (++work > kOperations)
+        return invalid(entry.endpoint.operation, "selected child incidence inventory exceeds operation budget");
+      const auto &candidate = entry.endpoint;
+      if (candidate.selection || !candidate.instance ||
+          !llvm::isa<GenerateOp>(candidate.operation->getParentOp()))
+        continue;
+      ChildKey key{candidate.operation->getParentOp(), candidate.instance, candidate.declaration};
+      if (!bodyIncidences.emplace(key, index).second)
+        ambiguousIncidences.insert(key);
+    }
+    for (const auto &entry : endpoints) {
+      if (!entry.endpoint.selection)
+        continue;
+      if (++work > kOperations)
+        return invalid(entry.endpoint.operation, "selected child incidence lookup exceeds operation budget");
+      auto proof = resolveConservativeGeneratedSelection(entry.endpoint.operation);
+      if (failed(proof) || entry.leaves.empty() || !positions.count(proof->declaration))
+        return invalid(entry.endpoint.operation, "selected conservative endpoint lacks exact scalar export plan");
+      unsigned originalIndex = positions.lookup(proof->declaration);
+      if (entry.endpoint.instance) {
+        ChildKey key{proof->family, entry.endpoint.instance, proof->declaration};
+        if (ambiguousIncidences.count(key))
+          return invalid(entry.endpoint.operation, "selected child has multiple body incidence plans");
+        auto found = bodyIncidences.find(key);
+        if (found == bodyIncidences.end())
+          return invalid(entry.endpoint.operation, "selected child requires its actual original body incidence");
+        originalIndex = found->second;
       }
+      selectedPlans.try_emplace(entry.endpoint.operation, originalIndex);
+      auto &original = endpoints[originalIndex];
+      if (original.leaves.size() != entry.leaves.size())
+        return invalid(entry.endpoint.operation, "selected conservative leaves require complete original inventory");
+      for (auto [source, selected] : llvm::zip(original.leaves, entry.leaves)) {
+        if (++work > kOperations)
+          return invalid(entry.endpoint.operation, "selected conservative leaf proof exceeds operation budget");
+        if (source.path != selected.path || source.type != selected.type ||
+            source.analog != selected.analog || source.references != selected.references ||
+            source.role != selected.role || source.access != selected.access ||
+            source.nestedRoles != selected.nestedRoles ||
+            source.nestedInterfaces != selected.nestedInterfaces)
+          return invalid(entry.endpoint.operation,
+                         "selected conservative leaf changes original ordered typed role identity");
+      }
+      original.family = proof->family;
+      original.cardinality = proof->cardinality;
+    }
+    llvm::StringSet<> physicalNames;
+    bool namingBudget = false;
+    outer.walk([&](Operation *op) {
+      if (++work > kOperations) { namingBudget = true; return; }
+      for (StringRef key : {"name", "sym_name"})
+        if (!text(op, key).empty()) physicalNames.insert(text(op, key));
+    });
+    if (namingBudget) return invalid(outer, "selected child name inventory exceeds operation budget");
+    for (const auto &entry : endpoints)
+      for (const auto &leaf : entry.leaves) physicalNames.insert(leaf.name);
+    for (const auto &entry : endpoints) {
+      if (!entry.family || !entry.endpoint.instance) continue;
+      for (const auto &leaf : entry.leaves) {
+        if (++work > kOperations || !physicalNames.insert(leaf.name + "_child_port").second)
+          return invalid(entry.endpoint.operation, "selected child port spelling collides or exceeds budget");
+      }
+    }
+    // Authored exports are proof witnesses even when no selected view exists.
+    // Resolve their exact original target and close every actual family user;
+    // spelling alone never grants permission to discard a symbol consumer.
+    for (Operation *module : modules) {
+      WalkResult exports = module->walk([&](GeneratedExportOp exported) {
+        if (text(exported, "kind") != "interface")
+          return WalkResult::advance();
+        if (++work > kOperations) {
+          (void)invalid(exported, "conservative export inventory exceeds operation budget");
+          return WalkResult::interrupt();
+        }
+        auto target = inspectGeneratedExportSymbol(exported);
+        Operation *family = exported->getParentOp();
+        if (failed(target) || !positions.count(*target) ||
+            !llvm::isa<GenerateOp>(family) || (*target)->getParentOp() != family ||
+            text(exported, "kind") != "interface") {
+          (void)invalid(exported, "generated export lacks exact conservative endpoint plan");
+          return WalkResult::interrupt();
+        }
+        for (Value result : family->getResults())
+          for (Operation *user : result.getUsers()) {
+            if (++work > kOperations || !positions.count(user) ||
+                !endpoints[positions.lookup(user)].endpoint.selection) {
+              (void)invalid(exported, "generated conservative family has an unplanned consumer");
+              return WalkResult::interrupt();
+            }
+          }
+        erase.insert(exported);
+        return WalkResult::advance();
+      });
+      if (exports.wasInterrupted())
+        return failure();
     }
     for (const auto &entry : endpoints)
       if (entry.endpoint.instance && !positions.count(entry.endpoint.declaration))
@@ -282,7 +526,8 @@ private:
     for (Operation *domain : domains)
       erase.insert(domain);
     for (Operation *module : modules) {
-      for (Operation &operation : module->getRegion(0).front()) {
+      module->walk([&](Operation *site) {
+        Operation &operation = *site;
         auto reference = [&](llvm::StringRef key) {
           auto ref = operation.getAttrOfType<FlatSymbolRefAttr>(key);
           return ref ? SymbolTable::lookupSymbolIn(module, ref) : nullptr;
@@ -292,11 +537,16 @@ private:
             (llvm::isa<DomainBindOp, RequirementClockOp, RequirementResetOp>(operation) &&
              domains.contains(reference("requirement"))))
           erase.insert(&operation);
-      }
+      });
     }
     llvm::SmallVector<Operation *> pending(erase.begin(), erase.end());
     while (!pending.empty()) {
       Operation *operation = pending.pop_back_val();
+      // Selected family/ordinal operands belong to the retained structural
+      // program, not the erased domain-witness closure. The complete selected
+      // endpoint plan above independently checked both operands.
+      if (positions.count(operation) && endpoints[positions.lookup(operation)].endpoint.selection)
+        continue;
       for (Value operand : operation->getOperands()) {
         Operation *producer = operand.getDefiningOp();
         if (!producer || (!erase.contains(producer) &&
@@ -318,32 +568,32 @@ private:
     // Instance domain_bindings are cleared below, but no other attribute on
     // that operation may retain a reference to an erased proof-domain symbol.
     // Validate once per instance rather than rescanning attributes per use.
-    for (Operation *module : modules)
-      for (Operation &operation : module->getRegion(0).front()) {
-        if (!llvm::isa<InstanceOp>(operation))
+    for (Operation *instance : structuralInstances) {
+      Operation &operation = *instance;
+      Operation *module = instance->getParentOfType<ModuleOp>();
+      for (NamedAttribute named : operation.getAttrs()) {
+        if (named.getName() == "domain_bindings")
           continue;
-        for (NamedAttribute named : operation.getAttrs()) {
-          if (named.getName() == "domain_bindings")
-            continue;
-          Attribute value = named.getValue();
-          WalkResult uses = value.walk<WalkOrder::PreOrder>([&](Attribute nested) {
-            if (++work > kOperations) {
-              (void)invalid(&operation, "Interface domain attribute inventory exceeds finite budget");
-              return WalkResult::interrupt();
-            }
-            auto reference = llvm::dyn_cast<SymbolRefAttr>(nested);
-            if (reference && domains.contains(SymbolTable::lookupSymbolIn(
-                                 module, reference.getRootReference()))) {
-              (void)invalid(&operation,
-                            "Interface domain symbol survives outside exact instance domain_bindings");
-              return WalkResult::interrupt();
-            }
-            return WalkResult::advance();
-          });
-          if (uses.wasInterrupted())
-            return failure();
-        }
+        Attribute value = named.getValue();
+        WalkResult uses = value.walk<WalkOrder::PreOrder>([&](Attribute nested) {
+          if (++work > kOperations) {
+            (void)invalid(&operation, "Interface domain attribute inventory exceeds finite budget");
+            return WalkResult::interrupt();
+          }
+          auto reference = llvm::dyn_cast<SymbolRefAttr>(nested);
+          if (reference &&
+              domains.contains(SymbolTable::lookupSymbolIn(module, reference.getRootReference()))) {
+            (void)invalid(
+                &operation,
+                "Interface domain symbol survives outside exact instance domain_bindings");
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        });
+        if (uses.wasInterrupted())
+          return failure();
       }
+    }
     for (Operation *operation : erase) {
       for (Value value : operation->getResults())
         for (Operation *user : value.getUsers())
@@ -372,14 +622,18 @@ private:
       if (digital.wasInterrupted())
         return failure();
     }
+    remainingIntegerWork = unsigned(kOperations - work);
     return success();
   }
+  unsigned remainingIntegerWork = 0;
+  llvm::DenseMap<Operation *, Value> normalizedIndices;
   mlir::ModuleOp outer;
   OpBuilder builder;
-  llvm::SmallVector<Operation *> modules;
+  llvm::SmallVector<Operation *> modules, structuralInstances;
   llvm::SmallVector<Endpoint, 0> endpoints;
   llvm::SmallVector<DigitalInterfaceAccess> accesses;
-  llvm::DenseMap<Operation *, unsigned> positions;
+  llvm::DenseMap<Operation *, unsigned> positions, selectedPlans;
+  llvm::SmallVector<Value, 8> selectedPhysical;
   llvm::DenseSet<Operation *> domains, erase;
   llvm::SmallVector<Attribute> correspondence;
 };

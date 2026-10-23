@@ -104,7 +104,7 @@ LogicalResult chargeIntegerGraph(const InstantiatedIntegerExpression &expression
 }
 LogicalResult
 validateSelectedCoordinates(ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> substitutions,
-                            Operation *scope, unsigned &budget) {
+                            Operation *scope, unsigned &budget, bool sharedDomainWork = false) {
   if (!scope || substitutions.size() > maximumGuardDepth)
     return failure();
   llvm::DenseSet<Value> identities;
@@ -117,7 +117,8 @@ validateSelectedCoordinates(ArrayRef<std::pair<Value, InstantiatedIntegerExpress
         replacement.bounds.lower != replacement.root->bounds.lower ||
         replacement.bounds.upper != replacement.root->bounds.upper)
       return failure();
-    auto domain = resolveGeneratedDomain(family);
+    auto domain =
+        sharedDomainWork ? resolveGeneratedDomain(family, budget) : resolveGeneratedDomain(family);
     if (failed(domain) || domain->induction != identity || !domain->attainedInductionBounds ||
         replacement.bounds.lower < domain->attainedInductionBounds->lower ||
         replacement.bounds.upper > domain->attainedInductionBounds->upper)
@@ -776,9 +777,14 @@ FailureOr<bool> proveBehavioralGuardsDisjoint(Value left, Value right, Operation
 FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
                                                 const InstantiatedIntegerExpression &right,
                                                 Operation *use, bool inclusive) {
+  unsigned budget = maximumGuardWork;
+  return proveStructuralIntegerLessAtUse(left, right, use, inclusive, budget);
+}
+FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpression &left,
+                                                const InstantiatedIntegerExpression &right,
+                                                Operation *use, bool inclusive, unsigned &budget) {
   if (!use || !left.root || !right.root)
     return failure();
-  unsigned budget = maximumGuardWork;
   llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>> pairs;
   if (failed(chargeIntegerPairs(left.root.get(), right.root.get(), budget, pairs)))
     return failure();
@@ -804,6 +810,12 @@ FailureOr<bool> proveStructuralIntegerLessAtUse(const InstantiatedIntegerExpress
       return result;
   }
   return false;
+}
+
+LogicalResult verifySelectedStructuralCoordinates(
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> coordinates, Operation *scope,
+    unsigned &remainingWork) {
+  return validateSelectedCoordinates(coordinates, scope, remainingWork, true);
 }
 
 LogicalResult verifyStaticPredicateOperation(Operation *operation) {

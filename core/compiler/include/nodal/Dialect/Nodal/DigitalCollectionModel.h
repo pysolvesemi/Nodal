@@ -11,6 +11,11 @@
 namespace nodal {
 /// Collection-specific raw roles, used only by the neutral lexical dispatcher.
 mlir::LogicalResult inspectDigitalCollectionRegion(mlir::Block *body);
+/// Raw applicability only: true means every static argument is an actual checked
+/// capture; false preserves the ordinary reducer-formal environment. Malformed
+/// capture/header or exhausted caller work is failure, never ordinary fallback.
+mlir::FailureOr<bool> inspectGeneratedCollectionTypeApplicability(mlir::Block *body,
+                                                                  unsigned &remainingWork);
 mlir::FailureOr<mlir::Value> collectionCaptureSource(mlir::BlockArgument argument);
 mlir::LogicalResult
 collectionArgumentDependencies(mlir::BlockArgument argument,

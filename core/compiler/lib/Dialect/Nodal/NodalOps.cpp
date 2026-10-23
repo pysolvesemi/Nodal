@@ -157,10 +157,22 @@ unsigned shapedRank(llvm::StringRef dimensions) {
   return rank;
 }
 
-Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol) {
+bool chargeShapeTypeWork(unsigned *remainingWork) {
+  if (!remainingWork)
+    return true;
+  if (!*remainingWork)
+    return false;
+  --*remainingWork;
+  return true;
+}
+
+Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol,
+                                     unsigned *remainingWork = nullptr) {
   if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
     return nullptr;
   for (Operation &operation : module->getRegion(0).front()) {
+    if (!chargeShapeTypeWork(remainingWork))
+      return {};
     if (!llvm::isa<nodal::ParameterOp>(operation))
       continue;
     auto name = operation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
@@ -171,20 +183,26 @@ Operation *findDirectModuleParameter(Operation *module, llvm::StringRef symbol) 
 }
 
 bool parameterHasShapeEnvelope(Operation *module, llvm::StringRef symbol,
-                               llvm::StringRef requiredEffect = "shape") {
+                               llvm::StringRef requiredEffect = "shape",
+                               unsigned *remainingWork = nullptr) {
   if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
     return false;
   for (Operation &operation : module->getRegion(0).front()) {
+    if (!chargeShapeTypeWork(remainingWork))
+      return {};
     if (!llvm::isa<nodal::ParameterEnvelopeOp>(operation))
       continue;
     auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
     auto effects = operation.getAttrOfType<ArrayAttr>("effects");
     if (!parameter || parameter.getValue() != symbol || !effects)
       continue;
-    for (Attribute effect : effects)
+    for (Attribute effect : effects) {
+      if (!chargeShapeTypeWork(remainingWork))
+        return false;
       if (auto value = llvm::dyn_cast<StringAttr>(effect);
           value && value.getValue() == requiredEffect)
         return true;
+    }
   }
   return false;
 }
@@ -206,24 +224,30 @@ bool hasStaticShapeIndexDependencies(
     Value value, Operation *module, llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
     bool directModule = false, llvm::StringRef requiredEffect = "shape",
     const nodal::ParameterIntegerEnvironment *environment = nullptr, unsigned *work = nullptr,
-    Operation *generatedUse = nullptr) {
-  if (!value || depth >= 512 || (work && ++*work > nodal::digitalTypeMaximumNodes))
+    Operation *generatedUse = nullptr, unsigned *remainingWork = nullptr) {
+  if (!chargeShapeTypeWork(remainingWork) || !value || depth >= 512 ||
+      (work && ++*work > nodal::digitalTypeMaximumNodes))
     return false;
   if (generatedUse) {
-    if (failed(nodal::verifyDigitalValueScope(value, generatedUse)))
+    if (failed(remainingWork ? nodal::verifyDigitalValueScope(value, generatedUse, *remainingWork)
+                             : nodal::verifyDigitalValueScope(value, generatedUse)))
       return false;
     if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
-      auto header = nodal::inspectDigitalRegion(argument.getOwner());
+      auto header = remainingWork ? nodal::inspectDigitalRegion(argument.getOwner(), *remainingWork)
+                                  : nodal::inspectDigitalRegion(argument.getOwner());
       if (failed(header))
         return false;
       if (header->kind == nodal::DigitalRegionKind::Generate)
         return true; // Exact domain/arithmetic proof belongs to ParameterModel below.
-      if (header->kind != nodal::DigitalRegionKind::StructuralArm)
+      if (header->kind != nodal::DigitalRegionKind::StructuralArm &&
+          header->kind != nodal::DigitalRegionKind::Collection)
         return false;
-      auto capture = nodal::digitalRegionCaptureSource(argument);
+      auto capture = remainingWork ? nodal::digitalRegionCaptureSource(argument, *remainingWork)
+                                   : nodal::digitalRegionCaptureSource(argument);
       return succeeded(capture) && *capture &&
              hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, false,
-                                             requiredEffect, nullptr, work, header->operation);
+                                             requiredEffect, nullptr, work, header->operation,
+                                             remainingWork);
     }
     if (value.getDefiningOp() && value.getDefiningOp()->getParentOp() == module) {
       generatedUse = nullptr;
@@ -248,11 +272,12 @@ bool hasStaticShapeIndexDependencies(
       Operation *source = capture->getDefiningOp();
       if (source && source->getParentOp() == module)
         return hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, true,
-                                               requiredEffect, nullptr, work);
+                                               requiredEffect, nullptr, work, nullptr,
+                                               remainingWork);
       auto enclosing = environment->enclosingAtUse(argument.getOwner()->getParentOp());
-      return succeeded(enclosing) &&
-             hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, false,
-                                             requiredEffect, &*enclosing, work);
+      return succeeded(enclosing) && hasStaticShapeIndexDependencies(
+                                         *capture, module, active, depth + 1, false, requiredEffect,
+                                         &*enclosing, work, nullptr, remainingWork);
     }
   }
   Operation *operation = value.getDefiningOp();
@@ -265,38 +290,47 @@ bool hasStaticShapeIndexDependencies(
   if (llvm::isa<nodal::ConstParameterRefOp>(operation)) {
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
     Operation *parameter =
-        reference ? findDirectModuleParameter(module, reference.getValue()) : nullptr;
+        reference ? findDirectModuleParameter(module, reference.getValue(), remainingWork)
+                  : nullptr;
     return parameter && nodal::isStructuralParameter(parameter) &&
-           parameterHasShapeEnvelope(module, reference.getValue(), requiredEffect);
+           parameterHasShapeEnvelope(module, reference.getValue(), requiredEffect, remainingWork);
   }
   if (!llvm::isa<nodal::ConstExprOp>(operation))
     return false;
   return llvm::all_of(operation->getOperands(), [&](Value operand) {
     if (generatedUse)
       return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, false,
-                                             requiredEffect, nullptr, work, operation);
+                                             requiredEffect, nullptr, work, operation,
+                                             remainingWork);
     if (!environment)
       return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule,
-                                             requiredEffect, nullptr, work);
+                                             requiredEffect, nullptr, work, nullptr, remainingWork);
     auto atProducer = environment->atUse(operation);
-    return succeeded(atProducer) &&
-           hasStaticShapeIndexDependencies(operand, module, active, depth + 1, false,
-                                           requiredEffect, &*atProducer, work);
+    return succeeded(atProducer) && hasStaticShapeIndexDependencies(
+                                        operand, module, active, depth + 1, false, requiredEffect,
+                                        &*atProducer, work, nullptr, remainingWork);
   });
 }
 
-bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol) {
+bool parameterHasPositiveFiniteRange(Operation *module, llvm::StringRef symbol,
+                                     unsigned *remainingWork = nullptr) {
   if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)))
     return false;
   for (Operation &operation : module->getRegion(0).front()) {
+    if (!chargeShapeTypeWork(remainingWork))
+      return false;
     if (!llvm::isa<nodal::ParameterConstraintOp>(operation) ||
         textAttr(&operation, "constraint_kind") != "range" || operation.getNumOperands() != 2)
       continue;
     auto parameter = operation.getAttrOfType<FlatSymbolRefAttr>("parameter");
     if (!parameter || parameter.getValue() != symbol)
       continue;
-    auto lower = nodal::inferParameterIntegerBounds(operation.getOperand(0));
-    auto upper = nodal::inferParameterIntegerBounds(operation.getOperand(1));
+    auto lower = remainingWork
+                     ? nodal::inferParameterIntegerBounds(operation.getOperand(0), *remainingWork)
+                     : nodal::inferParameterIntegerBounds(operation.getOperand(0));
+    auto upper = remainingWork
+                     ? nodal::inferParameterIntegerBounds(operation.getOperand(1), *remainingWork)
+                     : nodal::inferParameterIntegerBounds(operation.getOperand(1));
     return succeeded(lower) && succeeded(upper) && lower->lower == lower->upper &&
            upper->lower == upper->upper && lower->lower > 0 && lower->lower <= upper->upper;
   }
@@ -310,12 +344,15 @@ llvm::StringRef metadataSemanticPath(Operation *operation) {
   return path ? path.getValue() : llvm::StringRef();
 }
 
-Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath) {
+Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath,
+                                  unsigned *remainingWork = nullptr) {
   if (!module || module->getNumRegions() != 1 || !llvm::hasSingleElement(module->getRegion(0)) ||
       sourcePath.empty())
     return {};
   Value result;
   for (Operation &operation : module->getRegion(0).front()) {
+    if (!chargeShapeTypeWork(remainingWork))
+      return {};
     if (!llvm::isa<nodal::ConstLiteralOp, nodal::ConstParameterRefOp, nodal::ConstExprOp>(
             operation) ||
         metadataSemanticPath(&operation) != sourcePath || operation.getNumResults() != 1)
@@ -329,7 +366,10 @@ Value findDirectModuleStaticValue(Operation *module, llvm::StringRef sourcePath)
 
 FailureOr<nodal::ParameterIntegerBounds>
 inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool directModule = false,
-                          llvm::StringRef requiredEffect = "shape") {
+                          llvm::StringRef requiredEffect = "shape",
+                          unsigned *remainingWork = nullptr) {
+  if (!chargeShapeTypeWork(remainingWork))
+    return failure();
   int64_t literal = 0;
   if (!dimension.getAsInteger(10, literal)) {
     if (literal <= 0)
@@ -337,29 +377,33 @@ inferShapeDimensionBounds(Operation *module, llvm::StringRef dimension, bool dir
     return nodal::ParameterIntegerBounds{literal, literal};
   }
 
-  if (Operation *parameter = findDirectModuleParameter(module, dimension)) {
+  if (Operation *parameter = findDirectModuleParameter(module, dimension, remainingWork)) {
     auto type = parameter->getAttrOfType<TypeAttr>("type");
-    auto bounds = nodal::inferParameterIntegerBounds(parameter);
+    auto bounds = remainingWork ? nodal::inferParameterIntegerBounds(parameter, *remainingWork)
+                                : nodal::inferParameterIntegerBounds(parameter);
     if (!type || !type.getValue().isInteger(64) || !nodal::isStructuralParameter(parameter) ||
-        !parameterHasShapeEnvelope(module, dimension, requiredEffect) ||
-        !parameterHasPositiveFiniteRange(module, dimension) || failed(bounds) || bounds->lower <= 0)
+        !parameterHasShapeEnvelope(module, dimension, requiredEffect, remainingWork) ||
+        !parameterHasPositiveFiniteRange(module, dimension, remainingWork) || failed(bounds) ||
+        bounds->lower <= 0)
       return failure();
     return *bounds;
   }
 
-  Value value = findDirectModuleStaticValue(module, dimension);
+  Value value = findDirectModuleStaticValue(module, dimension, remainingWork);
   if (!value || !value.getType().isInteger(64) ||
       !llvm::isa_and_nonnull<nodal::ConstExprOp>(value.getDefiningOp()))
     return failure();
   llvm::SmallPtrSet<Operation *, 16> active;
-  if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule, requiredEffect))
+  if (!hasStaticShapeIndexDependencies(value, module, active, 0, directModule, requiredEffect,
+                                       nullptr, nullptr, nullptr, remainingWork))
     return failure();
   // Derived digital widths are mathematical i64 metadata: an intermediate
   // may be negative even though the final width must be strictly positive.
   // Ordinary shape/index/storage callers retain their existing interpretation.
   auto mode = requiredEffect == "width" ? nodal::ParameterIntegerMode::MathematicalSigned64
                                         : nodal::ParameterIntegerMode::Storage;
-  auto bounds = nodal::inferParameterIntegerBounds(value, mode);
+  auto bounds = remainingWork ? nodal::inferParameterIntegerBounds(value, *remainingWork, mode)
+                              : nodal::inferParameterIntegerBounds(value, mode);
   if (failed(bounds) || bounds->lower <= 0)
     return failure();
   return *bounds;
@@ -1943,17 +1987,43 @@ nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension,
   return result;
 }
 
+FailureOr<nodal::StaticShapeDimension> nodal::resolveStaticShapeDimension(Operation *module,
+                                                                          StringRef dimension,
+                                                                          StringRef effect,
+                                                                          unsigned &remainingWork) {
+  if (!chargeShapeTypeWork(&remainingWork) || (effect != "shape" && effect != "width") ||
+      !isa_and_nonnull<nodal::ModuleOp>(module) || dimension.empty() ||
+      dimension != dimension.trim())
+    return failure();
+  auto bounds = inferShapeDimensionBounds(module, dimension, true, effect, &remainingWork);
+  if (failed(bounds))
+    return failure();
+  StaticShapeDimension result{*bounds};
+  if (!dimension.getAsInteger(10, result.literal))
+    return result;
+  result.parameter = findDirectModuleParameter(module, dimension, &remainingWork);
+  if (!result.parameter)
+    result.expression = findDirectModuleStaticValue(module, dimension, &remainingWork);
+  return (result.parameter || result.expression) ? FailureOr<StaticShapeDimension>(result)
+                                                 : FailureOr<StaticShapeDimension>(failure());
+}
+
 namespace {
 FailureOr<std::optional<nodal::StaticShapeDimension>>
-inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef effect) {
+inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef effect,
+                              unsigned *remainingWork = nullptr) {
   using namespace nodal;
-  if (!isGeneratedTypeUse(use) || (effect != "shape" && effect != "width") || dimension.empty() ||
+  if (!chargeShapeTypeWork(remainingWork) ||
+      !(remainingWork ? isGeneratedTypeUse(use, *remainingWork) : isGeneratedTypeUse(use)) ||
+      (effect != "shape" && effect != "width") || dimension.empty() ||
       dimension != dimension.trim())
     return failure();
   Operation *module = use->getParentOfType<nodal::ModuleOp>();
   int64_t literal = 0;
   if (!dimension.getAsInteger(10, literal)) {
-    auto proof = resolveStaticShapeDimension(module, dimension, effect);
+    auto proof = remainingWork
+                     ? resolveStaticShapeDimension(module, dimension, effect, *remainingWork)
+                     : resolveStaticShapeDimension(module, dimension, effect);
     return succeeded(proof) ? FailureOr<std::optional<StaticShapeDimension>>(*proof)
                             : FailureOr<std::optional<StaticShapeDimension>>(failure());
   }
@@ -1963,9 +2033,11 @@ inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef eff
   unsigned work = 0;
   Operation *visible = use;
   for (unsigned depth = 0; visible && depth < 128; ++depth) {
-    if (++work > digitalTypeMaximumNodes)
+    if (!chargeShapeTypeWork(remainingWork) || ++work > digitalTypeMaximumNodes)
       return failure();
-    auto found = lookupDigitalRegionToken(visible->getBlock(), dimension, &work);
+    auto found = remainingWork
+                     ? lookupDigitalRegionToken(visible->getBlock(), dimension, *remainingWork)
+                     : lookupDigitalRegionToken(visible->getBlock(), dimension, &work);
     if (failed(found))
       return failure();
     if (*found) {
@@ -1974,7 +2046,8 @@ inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef eff
     }
     if (visible->getParentOp() == module)
       break;
-    auto header = inspectDigitalRegion(visible->getBlock());
+    auto header = remainingWork ? inspectDigitalRegion(visible->getBlock(), *remainingWork)
+                                : inspectDigitalRegion(visible->getBlock());
     if (failed(header))
       return failure();
     if (header->isolated)
@@ -1984,20 +2057,22 @@ inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef eff
   if (!value) {
     // A Module parameter name is an existing implicit structural identity, not
     // an ancestor SSA read. Keep its ordinary effect/range contract unchanged.
-    auto ordinary = resolveStaticShapeDimension(module, dimension, effect);
+    auto ordinary = remainingWork
+                        ? resolveStaticShapeDimension(module, dimension, effect, *remainingWork)
+                        : resolveStaticShapeDimension(module, dimension, effect);
     return succeeded(ordinary) && ordinary->parameter
                ? FailureOr<std::optional<StaticShapeDimension>>(*ordinary)
                : FailureOr<std::optional<StaticShapeDimension>>(failure());
   }
   llvm::SmallPtrSet<Operation *, 16> active;
   if (!value.getType().isSignlessInteger(64) ||
-      !hasStaticShapeIndexDependencies(value, module, active, 0, false, effect, nullptr, &work,
-                                       use))
+      !hasStaticShapeIndexDependencies(value, module, active, 0, false, effect, nullptr,
+                                       remainingWork ? nullptr : &work, use, remainingWork))
     return failure();
-  auto facts = resolveStructuralIntegerExpression(value, use,
-                                                  effect == "width"
-                                                      ? ParameterIntegerMode::MathematicalSigned64
-                                                      : ParameterIntegerMode::Storage);
+  auto mode = effect == "width" ? ParameterIntegerMode::MathematicalSigned64
+                                : ParameterIntegerMode::Storage;
+  auto facts = remainingWork ? resolveStructuralIntegerExpression(value, use, *remainingWork, mode)
+                             : resolveStructuralIntegerExpression(value, use, mode);
   if (failed(facts))
     return failure();
   if (!facts->expression)
@@ -2040,6 +2115,44 @@ FailureOr<nodal::InstantiatedIntegerExpression>
 nodal::resolveGeneratedTypeDimensionExpression(Operation *use, StringRef dimension,
                                                StringRef effect) {
   auto proof = resolveGeneratedTypeDimensionFacts(use, dimension, effect);
+  return succeeded(proof) && proof->expression
+             ? FailureOr<InstantiatedIntegerExpression>(*proof->expression)
+             : FailureOr<InstantiatedIntegerExpression>(failure());
+}
+
+FailureOr<nodal::StaticShapeDimension>
+nodal::resolveGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef effect,
+                                     unsigned &remainingWork) {
+  auto proof = inspectGeneratedTypeDimension(use, dimension, effect, &remainingWork);
+  return succeeded(proof) && *proof ? FailureOr<StaticShapeDimension>(**proof)
+                                    : FailureOr<StaticShapeDimension>(failure());
+}
+FailureOr<nodal::StructuralIntegerFacts>
+nodal::resolveGeneratedTypeDimensionFacts(Operation *use, StringRef dimension, StringRef effect,
+                                          unsigned &remainingWork) {
+  auto proof = inspectGeneratedTypeDimension(use, dimension, effect, &remainingWork);
+  if (failed(proof))
+    return failure();
+  if (!*proof)
+    return StructuralIntegerFacts{};
+  const auto &attained = **proof;
+  auto mode = effect == "width" ? ParameterIntegerMode::MathematicalSigned64
+                                : ParameterIntegerMode::Storage;
+  if (attained.expression)
+    return resolveStructuralIntegerExpression(attained.expression, use, remainingWork, mode);
+  auto expression = attained.parameter
+                        ? resolveOwnedIntegerParameter(use->getParentOfType<nodal::ModuleOp>(),
+                                                       attained.parameter, remainingWork, mode)
+                        : FailureOr<InstantiatedIntegerExpression>(
+                              makeLiteralIntegerExpression(attained.literal));
+  return succeeded(expression)
+             ? FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression})
+             : FailureOr<StructuralIntegerFacts>(failure());
+}
+FailureOr<nodal::InstantiatedIntegerExpression>
+nodal::resolveGeneratedTypeDimensionExpression(Operation *use, StringRef dimension,
+                                               StringRef effect, unsigned &remainingWork) {
+  auto proof = resolveGeneratedTypeDimensionFacts(use, dimension, effect, remainingWork);
   return succeeded(proof) && proof->expression
              ? FailureOr<InstantiatedIntegerExpression>(*proof->expression)
              : FailureOr<InstantiatedIntegerExpression>(failure());
@@ -2205,6 +2318,45 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
     if (isBoundedDigitalLoop(use->getParentOp()))
       return failure();
   }
+  if (Operation *definition = value.getDefiningOp();
+      definition && llvm::isa<GenerateOp>(definition->getParentOp())) {
+    // Keep the actual lexical root, never a spelling-derived or rebased index.
+    // Compound carriers use the canonical all-lane integer proof at this use;
+    // the shape-effect walk independently excludes runtime/unitful dependencies.
+    if (llvm::isa<ConstExprOp>(definition)) {
+      Operation *family = definition->getParentOp();
+      if (family->getParentOp() != module)
+        return failure(); // Enclosing specialization needs its own checked ingress.
+      if (environment) {
+        auto context = environment->atUse(use);
+        if (failed(context) || context->module() != module || context->scope() != use->getBlock() ||
+            context->use() != use || context->instance())
+          return failure();
+        // The sealed direct-Module Generate admission creates no bindings or
+        // domains. Never discard an induction specialization if that changes.
+        for (BlockArgument argument : use->getBlock()->getArguments())
+          if (context->binding(argument) || context->domain(argument))
+            return failure();
+      }
+      if (definition->getParentOp() != use->getParentOp() ||
+          definition->getParentOfType<ModuleOp>() != module ||
+          !isDeclaredBeforeStructuredUse(definition, use) ||
+          !value.getType().isSignlessInteger(64))
+        return failure();
+      llvm::SmallPtrSet<Operation *, 16> active;
+      unsigned spent = 0;
+      if (!hasStaticShapeIndexDependencies(value, module, active, 0, false, "shape", nullptr,
+                                          &spent, use) || spent >= digitalTypeMaximumNodes)
+        return failure();
+      unsigned remaining = digitalTypeMaximumNodes - spent;
+      auto facts = resolveStructuralIntegerExpression(value, use, remaining,
+                                                      ParameterIntegerMode::Storage);
+      if (failed(facts) || !facts->expression)
+        return failure();
+      return ShapeIndexProof{{StaticShapeIndexIdentity::Expression, 0, definition},
+                             facts->expression->bounds};
+    }
+  }
   if (environment) {
     auto context = environment->atUse(use);
     if (failed(context))
@@ -2248,9 +2400,7 @@ nodal::resolveShapeIndexProof(Value value, Operation *use,
   }
   Operation *definition = value.getDefiningOp();
   if (definition && llvm::isa<GenerateOp>(definition->getParentOp())) {
-    // Literal carriers may be emitted beside their generated use. Only the
-    // actual pure literal and lexical dominance establish this narrow proof;
-    // parameter and compound static dependencies retain module ownership.
+    // Literal carriers retain the existing direct lexical proof.
     auto number = staticShapeLiteral(value);
     if (failed(number) || definition->getParentOfType<ModuleOp>() != module ||
         !isDeclaredBeforeStructuredUse(definition, use))
@@ -3206,7 +3356,40 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
     auto reference = definition->getAttrOfType<FlatSymbolRefAttr>("parameter");
     return reference ? findDirectModuleParameter(owner, reference.getValue()) : nullptr;
   };
+  // Generated endpoints retain the same actual-use/capture and all-lane proof
+  // as generated dimensions. An ordinary reducer environment cannot supply an
+  // induction binding, and failed generated proof must never fall back to it.
+  const bool generatedUse = isGeneratedTypeUse(operation);
+  unsigned remainingWork = digitalTypeMaximumNodes;
+  llvm::DenseMap<Value, InstantiatedIntegerExpression> generatedEndpoints;
+  auto generatedEndpoint = [&](Value value) -> FailureOr<InstantiatedIntegerExpression> {
+    if (!remainingWork)
+      return failure();
+    --remainingWork;
+    auto known = generatedEndpoints.find(value);
+    if (known != generatedEndpoints.end())
+      return known->second;
+    if (!value || !value.getType().isSignlessInteger(64))
+      return failure();
+    llvm::SmallPtrSet<Operation *, 16> active;
+    unsigned work = digitalTypeMaximumNodes - remainingWork;
+    bool effects = hasStaticShapeIndexDependencies(value, owner, active, 0, false, "shape", nullptr,
+                                                   &work, operation);
+    remainingWork = work < digitalTypeMaximumNodes ? digitalTypeMaximumNodes - work : 0;
+    if (!effects)
+      return failure();
+    auto facts = resolveStructuralIntegerExpression(value, operation, remainingWork,
+                                                    ParameterIntegerMode::Storage);
+    if (failed(facts) || !facts->expression)
+      return failure();
+    generatedEndpoints.try_emplace(value, *facts->expression);
+    return *facts->expression;
+  };
   auto sameIdentity = [&](Value left, Value right) {
+    if (generatedUse) {
+      auto a = generatedEndpoint(left), b = generatedEndpoint(right);
+      return succeeded(a) && succeeded(b) && equivalentInstantiatedIntegerExpressions(*a, *b);
+    }
     if (environment) {
       auto a = resolveOwnedIntegerExpression(owner, left, *environment);
       auto b = resolveOwnedIntegerExpression(owner, right, *environment);
@@ -3219,6 +3402,11 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
     return left == right;
   };
   auto dimensionMatches = [&](llvm::StringRef dimension, Value value) {
+    if (generatedUse) {
+      auto a = resolveGeneratedTypeDimensionExpression(operation, dimension, "shape");
+      auto b = generatedEndpoint(value);
+      return succeeded(a) && succeeded(b) && equivalentInstantiatedIntegerExpressions(*a, *b);
+    }
     if (environment) {
       auto a = resolveCollectionIntegerToken(owner, dimension, "shape", *environment);
       auto b = resolveOwnedIntegerExpression(owner, value, *environment);
@@ -3233,6 +3421,11 @@ LogicalResult nodal::verifyShapeSliceMapping(Operation *operation,
            findDirectModuleStaticValue(owner, dimension) == value;
   };
   auto staticBounds = [&](Value value) -> FailureOr<nodal::ParameterIntegerBounds> {
+    if (generatedUse) {
+      auto expression = generatedEndpoint(value);
+      return succeeded(expression) ? FailureOr<ParameterIntegerBounds>(expression->bounds)
+                                   : FailureOr<ParameterIntegerBounds>(failure());
+    }
     if (environment)
       return inferStaticShapeIndexBounds(owner, value, environment);
     llvm::SmallPtrSet<Operation *, 16> active;

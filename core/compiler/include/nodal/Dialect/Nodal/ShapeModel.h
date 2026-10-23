@@ -56,6 +56,22 @@ mlir::FailureOr<InstantiatedIntegerExpression>
 resolveGeneratedTypeDimensionExpression(mlir::Operation *use, llvm::StringRef dimension,
                                         llvm::StringRef requiredEffect = "shape");
 
+/// Additive shared-work forms of the same dimension interpreters.
+mlir::FailureOr<StaticShapeDimension> resolveStaticShapeDimension(mlir::Operation *module,
+                                                                  llvm::StringRef dimension,
+                                                                  llvm::StringRef requiredEffect,
+                                                                  unsigned &remainingWork);
+mlir::FailureOr<StaticShapeDimension> resolveGeneratedTypeDimension(mlir::Operation *use,
+                                                                    llvm::StringRef dimension,
+                                                                    llvm::StringRef requiredEffect,
+                                                                    unsigned &remainingWork);
+mlir::FailureOr<StructuralIntegerFacts>
+resolveGeneratedTypeDimensionFacts(mlir::Operation *use, llvm::StringRef dimension,
+                                   llvm::StringRef requiredEffect, unsigned &remainingWork);
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedTypeDimensionExpression(mlir::Operation *use, llvm::StringRef dimension,
+                                        llvm::StringRef requiredEffect, unsigned &remainingWork);
+
 /// Prove a nonempty shape's worst-case cardinality fits positive signed i64.
 mlir::FailureOr<int64_t>
 inferStaticShapeMaximumCardinality(mlir::Operation *module, llvm::StringRef dimensions,
@@ -120,6 +136,23 @@ mlir::FailureOr<InstantiatedIntegerExpression>
 resolveGeneratedOrdinal(mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use,
                         llvm::ArrayRef<GeneratedSelection> prefix);
 
+/// Same original all-lane proof using caller-owned remaining work.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedOrdinal(mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use,
+                        llvm::ArrayRef<GeneratedSelection> prefix, unsigned &remainingWork);
+/// Evaluate a previously inspected selection in its exact actual hierarchy path.
+/// Original all-lane validity is independently retained before actual substitution.
+/// Prefixes must be the complete original/evaluated chains from the same inspector.
+/// Lexical coordinates retain actual Generate ancestors of that selection use;
+/// they do not rename or replace sibling atoms or original physical identities.
+mlir::FailureOr<InstantiatedIntegerExpression> resolveSelectedInstancePathGeneratedOrdinal(
+    mlir::Operation *rootModule, llvm::ArrayRef<SelectedIntegerInstanceStep> path,
+    mlir::Operation *family, mlir::Value ordinal, mlir::Operation *use,
+    llvm::ArrayRef<GeneratedSelection> originalPrefix,
+    llvm::ArrayRef<GeneratedSelection> evaluatedPrefix,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> lexicalCoordinates,
+    unsigned &remainingWork);
+
 /// Element-neutral facts derived from an actual acyclic SSA projection chain.
 /// These establish shape/ordinal mapping, never storage or conservative rights.
 struct StaticShapeProjection {
@@ -182,6 +215,13 @@ struct StaticShapeRegion {
   }
 };
 enum class ShapeRegionProofStatus { Proved, Unsupported, Invalid, ResourceLimit };
+/// Exact original direct fixed nonempty Generate progression to normalized rank.
+/// The induction must be the actual family argument, not an equal-bound atom.
+/// No arbitrary expression inversion or selected/nested rebasing is admitted.
+ShapeRegionProofStatus resolveGeneratedInductionOrdinal(
+    mlir::Operation *family, mlir::Value induction, mlir::Operation *actualUse,
+    InstantiatedIntegerExpression &result, unsigned &remainingWork);
+
 struct ShapeRegionProofLimits {
   uint64_t maximumWork = 200000;
   uint64_t maximumStates = 16384;
@@ -295,6 +335,18 @@ StaticShapeScalarLocation locateStaticShapeScalar(const StaticShapeProjection &r
                                                   const StaticShapeProjection &scalarProjection,
                                                   mlir::Operation *use,
                                                   ShapeRegionProofLimits limits = {});
+/// Map one checked scalar point through two original injective maps in the same
+/// actual direct Generate occurrence. The supplied relation use must consume
+/// both original projections; element/capability and relation semantics remain
+/// the caller's responsibility. Unsupported maps never imply disjointness.
+/// Output is assigned only after source inversion and round-trip proof succeed.
+ShapeRegionProofStatus mapStaticShapeSameOccurrencePoint(const StaticShapeProjection &source,
+                                                         const StaticShapePoint &point,
+                                                         const StaticShapeProjection &destination,
+                                                         mlir::Operation *actualRelationUse,
+                                                         StaticShapePoint &result,
+                                                         ShapeRegionProofLimits limits = {});
+
 ShapeRegionProofStatus mapStaticShapeOrdinal(const StaticShapeRegion &region,
                                              const InstantiatedIntegerExpression &ordinal,
                                              mlir::Operation *use, StaticShapePoint &result,

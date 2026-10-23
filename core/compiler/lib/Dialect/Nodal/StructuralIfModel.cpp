@@ -1,6 +1,7 @@
 #include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "mlir/IR/Verifier.h"
+#include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
@@ -302,6 +303,14 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                : success();
   }
   if (!pure && generatedStorage && op->getParentOp() == family) {
+    if (llvm::isa<NodeOp, InstanceTerminalOp, ConnectOp>(op)) {
+      // This admits only the exact scalar lexical carrier. Complete topology,
+      // actual Interface permissions and child incidence remain conservative-
+      // owner checks, performed once for the whole body below.
+      if (failed(verifyGeneratedStructuralOwnership(op)))
+        return failure();
+      return mlir::verify(op, false);
+    }
     if (llvm::isa<InstanceOp>(op))
       return verifyHierarchyInstanceOperation(op);
     if (llvm::isa<ParameterOverrideOp>(op)) {
@@ -668,6 +677,12 @@ LogicalResult verifyGenerateBody(Operation *op, Budget &budget, unsigned depth) 
     if (failed(context) || failed(verifyBody(&child, *context, false, budget, depth)))
       return failure();
   }
+  if (llvm::any_of(op->getRegion(0).front(),
+                   [](Operation &child) {
+                     return llvm::isa<NodeOp, InstanceTerminalOp, ConnectOp>(child);
+                   }) &&
+      failed(resolveConservativeStructuralScope(op)))
+    return failure();
   return success();
 }
 } // namespace

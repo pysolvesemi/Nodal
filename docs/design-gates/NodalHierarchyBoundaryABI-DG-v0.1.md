@@ -526,7 +526,54 @@ exact commands, physical pin checks and the explicit boundary ABI.
 This checkpoint excludes symbolic resolved widths, resolved Interface arrays,
 internal/hierarchy-pass-through/technology-specific placements, generated
 resolved occurrence transport and analog/control pins. Local and cross-occurrence
-split data/enable sidebands remain an explicit target refusal and a required next
-consumer, not permission to substitute resolved reads. Ordinary Interface, named
+split data/enable sidebands were an explicit refusal at the scalar-pin checkpoint;
+the separate fixed-scalar consumer below does not substitute resolved reads. Ordinary Interface, named
 Struct CDC and generated storage target predecessors remain unchanged. No
 physical timing/electrical certification or broader resolved profile is claimed.
+
+## Fixed scalar resolved split transport
+
+The physical consumer now also consumes the successful, transactional
+`DigitalResolvedSplitBinding` facts from the existing occurrence dependency
+composer. Exact actual driver identity, component/domain closure, and uniqueness
+remain native-model obligations. Opaque external contributors and zero or multiple
+actual conditional drivers cannot establish a split. The target does not count
+physical assignments to infer uniqueness or create a second connectivity graph.
+
+A bounded derived route walks the existing occurrence parent links to their least
+common ancestor. It transports the original driver data and enable on ordinary
+logical ports through the same module/instance planner; a level driver supplies
+its exact low/high value and actual enable. No pin read, register, latency, or
+foreign SSA value replaces a sideband. The physical inout and four-state read
+continue independently. Local split views use the same route without unnecessary
+boundary ports. The operation inventory is indexed once per actual definition;
+route paths, operation costs, and total relative signature bytes are bounded.
+
+Material signatures include each definition-relative route and selected child
+ABI. Incoming routes are keyed by local split uses, not an arbitrary first
+occurrence or a globally numbered driver. Two independently driven instances of
+one reader reuse one body when their relative routes agree. When one occurrence
+of a two-pin reader has both pins connected to one driver and another has two
+independent drivers, the target emits the required two sideband ABI variants.
+Neither variant shorts the original reader's pins internally. Actual local alias
+facts, not global joins, still own local electrical connections.
+
+The standalone public fixtures under
+`tests/scala/domain-hierarchy/fixtures/fixed-split/` and maintained
+`run_split_target.py` reproduce parent-to-child, child-to-parent, sibling-LCA,
+independent reuse, and different-relative-ABI routes. Strict source replay uses
+the real constructor plugin and matched shared classes, followed by the full
+native gate, CIRCT, unchanged SystemVerilog, and four-state simulation. Independent
+checks compare `split.write` and `split.enable` with the original driver while
+`split.read` follows a separate reference net, including Z, full and partial X,
+release, and asymmetric independent inputs. The five profiles retain exactly
+2/2/3/2/3 physical module bodies and add no state. Focused native cases include
+64 independent readers sharing one implementation, exact independent actuals,
+transactional type/zero-driver/two-driver refusal, and opaque external refusal.
+
+This is the fixed Bits/UInt/SInt scalar profile. Existing symbolic split sources
+remain required next, unchanged; no default or maximum width is substituted.
+Symbolic/array resolved payloads, generated selection-qualified routes,
+internal/hierarchy-pass-through placements, and technology-specific electrical
+profiles remain open. The successful fixed subset does not close those broader
+requirements or claim physical timing/electrical certification.

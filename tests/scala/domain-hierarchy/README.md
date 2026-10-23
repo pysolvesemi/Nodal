@@ -183,8 +183,9 @@ contributions and declared local pin identity. The runner checks both directions
 all four-bit patterns, Z release, opposing/partial X, open-drain pullups, and
 independence of two occurrences of one reused external declaration. The fixed
 Interface profile retains the nested `bus.pad` member and canonical `connect`
-role. The `local-tag` source input contains a split and is deliberately not a
-passing physical target profile in this slice.
+role. The `local-tag` source input contains a split and is excluded from this
+initial scalar-pin runner; the fixed split continuation below separately checks
+original driver sidebands.
 
 The emitted DUT is never modified. A separate handwritten external model is the
 opaque environment for true `hw.module.extern` declarations, not a generated or
@@ -203,4 +204,68 @@ controls independently cover complete unaccessed pins, external-root and profile
 refusals, generated-lane refusal, opaque uniqueness rejection and 64 separately
 represented reused external instances. Symbolic/array resolved payloads,
 internal/hierarchy-pass-through placements, generated resolved pins and exact
-split sideband routes remain required continuations, not accepted by these runs.
+symbolic/generated split sideband routes remain required continuations. The
+fixed sideband consumer is checked separately below.
+
+## Fixed local and hierarchy split sidebands
+
+The maintained standalone source is
+`fixtures/fixed-split/Increment58FixedSplitSource.scala`, with its adjacent replay.
+It deliberately uses fixed four-bit data; the original symbolic split fixtures
+are not modified or relabeled as fixed acceptance. With the shared API/bridge and
+constructor plugin already built, the runner can strictly compile only these
+fixtures into private output and perform all five four-state checks:
+
+```sh
+python3 tests/scala/domain-hierarchy/run_split_target.py \
+  --replay --java "$JAVA_HOME/bin/java" \
+  --source tests/scala/domain-hierarchy/fixtures/fixed-split/Increment58FixedSplitSource.scala \
+  --out .work/f58-split-target-run \
+  --nodalc .work/native-build/bin/nodalc \
+  --firtool .work/circt-toolchain/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog \
+  --vvp .work/tools/iverilog/bin/vvp
+```
+
+With `--replay`, the runner uses freshly generated private
+`source-replay` inputs. Without it, `--input` selects existing exact replay files
+at `<profile>/input.mlir`. `--profiles down sibling` narrows the run. Replays use
+actual shared classpath metadata and serialize on the existing Mill lock; they
+do not rebuild or overwrite the shared classes. Direct compilation uses the
+pinned compiler's matching Scala standard library rather than an older transitive
+test-runtime jar; exact classpath inputs and that choice are recorded.
+
+Profiles `down`, `up`, and `sibling` test both sideband directions and their least
+common ancestor. `reused` drives two occurrences independently over all 256 data
+pairs. `variants` reuses one original two-pin reader with one joined-driver
+occurrence and one independently driven occurrence. The expected physical body
+counts are 2, 2, 3, 2, and 3 respectively, not per-value cloning. In all cases the
+original data/enable remain visible when the actual pin is released, externally
+driven, or contended. Separately observed reads and public inout pins must agree
+with an independent four-state reference net. The generated DUT is never edited.
+
+The actual `Increment58FixedSplitReader` uses these public statements:
+
+```scala
+val view = pad.split
+written := view.write
+enabled := view.enable
+observed := view.read
+```
+
+With the driver in its parent, the actual emitted `reader` body keeps read and
+sidebands distinct:
+
+```systemverilog
+assign enabled = __nodal_split_0_enable;
+assign observed = pad;
+assign written = __nodal_split_0_data;
+```
+
+The original driver data remains available even when `observed` is Z or X.
+Ordinary
+sideband ports pass this data/enable through real instances with no added
+registers or latency. Receipts record source/plugin/classpath, native compiler,
+exporter, simulator, commands, output hashes, exact relative module counts, and
+unchanged-SV checks. Symbolic/array payloads and generated selection-qualified
+physical split routes are separate required continuations.

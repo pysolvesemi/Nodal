@@ -1396,3 +1396,21 @@ checks retain provenance/category, eight-hex generated suffix and repeatability
 invariants rather than a stale hardcoded suffix. Guarded/selected child
 Interface and physical target continuations remain separate; this checkpoint
 does not complete generated hierarchy execution or Foundation 58.
+
+## Checkpoint 38 — fixed scalar resolved split transport
+
+The exact 233-file native snapshot in `.work/f58-split-target/shared`
+(manifest `0c4e7758`) changes two target/test paths. Compiler `6813d044` passed
+Hierarchy 67, Sequential 157 and Symbolic 31 checks, 255 total. Five actual
+four-state profiles cover down/up/sibling/reused/variant routes; three local
+split and seven physical predecessors remain separately recorded. Exact
+standalone fixtures and runner are included. ABI/README sections are composed
+freshly from accepted split text while preserving joins/CDC and excluding
+unrelated arithmetic-runner references. No tests are newly executed here.
+
+Existing transactional resolved-split facts and occurrence parent links retain
+original data/enable sidebands through canonical logical ports, without reading
+back the physical pin or adding state/latency. Relative ABI variants preserve
+independent actual drivers. Fixed scalar Bits/UInt/SInt only is admitted here;
+symbolic, array and generated routes remain required continuations. Unchanged
+emitted SystemVerilog and four-state behavior are not electrical certification.

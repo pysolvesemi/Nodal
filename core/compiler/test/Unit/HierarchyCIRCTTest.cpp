@@ -338,11 +338,6 @@ std::string member(StringRef name, StringRef endpoint, StringRef type = bits, St
          (role.empty() ? "" : ", role = \"" + role.str() + "\"") + "}}> : () -> " + type.str() +
          "\n";
 }
-std::string literal(StringRef name, StringRef type = bits, StringRef value = "1") {
-  return "%" + name.str() + " = \"nodal.const_literal\"() <{kind = \"integer\", spelling = \"" +
-         value.str() + "\", value = " + value.str() + " : i64, metadata = {}}> : () -> " +
-         type.str() + "\n";
-}
 std::string port(StringRef name, StringRef type, StringRef direction = "input",
                  StringRef clock = "clock") {
   return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + type.str() +
@@ -454,6 +449,108 @@ std::string externalFixture(bool drive = false, bool repeated = false, bool unpr
   return "module attributes {nodal.root.module = @Top} {\n" + module("Top", body) +
          module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}\n";
 }
+std::string typedRoute(StringRef target, StringRef value, StringRef type) {
+  return "\"nodal.digital_assign\"(%" + target.str() + ", %" + value.str() +
+         ") <{kind = \"continuous\", metadata = {}}> : (" + type.str() + ", " + type.str() +
+         ") -> ()\n";
+}
+std::string requirement() {
+  return "\"nodal.domain_requirement\"() <{sym_name = \"req\", metadata = {}}> : () -> ()\n";
+}
+std::string boundChild(StringRef name, StringRef target) {
+  return replace(child(name, target), "domain_bindings = {}", "domain_bindings = {req = @clock}") +
+         "\"nodal.instance_domain_binding\"(%clock_pin, %reset_pin) <{instance = @" + name.str() +
+         ", requirement = @req, actual = @clock, origin = \"named\", metadata = {}}> : "
+         "(!nodal.capability<\"clock\">, !nodal.capability<\"reset\">) -> ()\n";
+}
+std::string childPort(StringRef value, StringRef instance, StringRef pin, StringRef direction,
+                      StringRef type) {
+  return "%" + value.str() + " = \"nodal.instance_port\"() <{instance = @" + instance.str() +
+         ", port = \"" + pin.str() + "\", direction = \"" + direction.str() +
+         "\", metadata = {}}> : () -> " + type.str() + "\n";
+}
+std::string localBoundary(StringRef value, StringRef instance, StringRef endpoint = "pin") {
+  return replace(replace(boundary(value, instance), "black_box_pin", "top_level_pin"),
+                 "endpoint = \"pin\"", "endpoint = \"" + endpoint.str() + "\"");
+}
+std::string splitReader(bool two = false) {
+  std::string body = requirement();
+  for (unsigned i = 0; i < (two ? 2u : 1u); ++i) {
+    std::string s = std::to_string(i), pin = i ? "other" : "pin";
+    std::string query = replace(split(pin), "<{metadata", "<{hierarchy_driver = unit, metadata");
+    query =
+        replace(replace(query, "%write,", "%write" + s + ","), "%enabled =", "%enabled" + s + " =");
+    body += net(pin) + port("written" + s, bits, "output", "req") +
+            port("active" + s, boolean, "output", "req") + query +
+            route("written" + s, "write" + s) + typedRoute("active" + s, "enabled" + s, boolean);
+  }
+  return module("Reader", body);
+}
+std::string splitWriter() {
+  return module("Writer", requirement() + port("value", bits, "input", "req") +
+                              port("enable", boolean, "input", "req") + net("pin") +
+                              driver("driver", "pin") + netDrive("driver", "pin"));
+}
+std::string observeReader(StringRef inst, StringRef prefix, unsigned pins = 1) {
+  std::string result;
+  for (unsigned i = 0; i < pins; ++i) {
+    std::string s = std::to_string(i), out = prefix.str() + s;
+    result += port(out, bits, "output") + port(out + "_enabled", boolean, "output") +
+              childPort(out + "_value", inst, "written" + s, "output", bits) +
+              childPort(out + "_active", inst, "active" + s, "output", boolean) +
+              route(out, out + "_value") + typedRoute(out + "_enabled", out + "_active", boolean);
+  }
+  return result;
+}
+std::string driveLocal(StringRef suffix, StringRef target) {
+  std::string value = "value" + suffix.str(), enable = "enable" + suffix.str(),
+              id = "driver" + suffix.str();
+  std::string drive = replace(replace(netDrive(id, target), "%value,", "%" + value + ","),
+                              "%enable)", "%" + enable + ")");
+  return port(value, bits) + port(enable, boolean) + driver(id, target) + drive;
+}
+std::string feedWriter(StringRef inst) {
+  return port("value", bits) + port("enable", boolean) +
+         childPort("to_value", inst, "value", "input", bits) +
+         childPort("to_enable", inst, "enable", "input", boolean) + route("to_value", "value") +
+         typedRoute("to_enable", "enable", boolean);
+}
+std::string splitHierarchy(StringRef mode) {
+  std::string body = boundDomain(), definitions;
+  if (mode == "down") {
+    body += boundChild("reader", "Reader") + localBoundary("view", "reader") +
+            driveLocal("", "view") + observeReader("reader", "out");
+    definitions = splitReader();
+  } else if (mode == "up") {
+    body += boundChild("writer", "Writer") + localBoundary("view", "writer") +
+            feedWriter("writer") + port("written", bits, "output") +
+            port("active", boolean, "output") +
+            replace(split("view"), "<{metadata", "<{hierarchy_driver = unit, metadata") +
+            route("written", "write") + typedRoute("active", "enabled", boolean);
+    definitions = splitWriter();
+  } else if (mode == "sibling") {
+    body += boundChild("writer", "Writer") + boundChild("reader", "Reader") +
+            localBoundary("write_view", "writer") + localBoundary("read_view", "reader") +
+            through("write_view", "read_view") + feedWriter("writer") +
+            observeReader("reader", "out");
+    definitions = splitReader() + splitWriter();
+  } else {
+    bool different = mode == "different";
+    for (unsigned i = 0; i < 2; ++i) {
+      std::string s = std::to_string(i), inst = "reader" + s, view = "view" + s;
+      body += boundChild(inst, "Reader") + localBoundary(view, inst) + driveLocal(s, view) +
+              observeReader(inst, "out" + s + "_", different ? 2u : 1u);
+      if (different) {
+        body += localBoundary(view + "_other", inst, "other");
+        body += i ? driveLocal("2", view + "_other") : through(view, view + "_other");
+      }
+    }
+    definitions = splitReader(different);
+  }
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", body) + definitions +
+         "}\n";
+}
+
 std::string print(Operation *op) {
   std::string out;
   llvm::raw_string_ostream stream(out);
@@ -563,10 +660,89 @@ std::pair<unsigned, unsigned> run() {
              op.walk([&](circt::sv::WireOp) { ++wires; });
              return wires == 0 && StringRef(print(op)).contains("true-inout");
            });
-  negative("local-split-sideband-remains-explicit",
-           model(net() + literal("value") + literal("enable", boolean) + driver() + netDrive() +
-                 split()),
-           "resolved split target requires exact driver sideband transport");
+  positive("local-split-retains-exact-driver-data-and-enable",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                 port("written", bits, "output") + port("active", boolean, "output") + driver() +
+                 netDrive() + split() + route("written", "write") +
+                 "\"nodal.digital_assign\"(%active, %enabled) <{kind = \"continuous\", metadata = "
+                 "{}}> : (" +
+                 boolean + ", " + boolean + ") -> ()\n"),
+           [](mlir::ModuleOp op) {
+             unsigned registers = 0, reads = 0;
+             op.walk([&](circt::seq::CompRegOp) { ++registers; });
+             op.walk([&](circt::sv::ReadInOutOp) { ++reads; });
+             return !registers && !reads && StringRef(print(op)).contains("sv.constantZ");
+           });
+  for (auto mode : {"down", "up", "sibling", "reuse", "different"}) {
+    unsigned expectedModules =
+        (StringRef(mode) == "sibling" || StringRef(mode) == "different") ? 3 : 2;
+    positive("fixed-split-route-" + std::string(mode), splitHierarchy(mode),
+             [=](mlir::ModuleOp op) {
+               unsigned modules = 0, state = 0, reads = 0, dataPorts = 0, enablePorts = 0;
+               op.walk([&](circt::hw::HWModuleOp m) {
+                 ++modules;
+                 auto ports = m.getPortList();
+                 for (auto &port : ports) {
+                   auto fact = port.attrs.getAs<DictionaryAttr>("nodal.split_sideband");
+                   if (fact) {
+                     auto role = fact.getAs<StringAttr>("role");
+                     dataPorts += role && role.getValue() == "data";
+                     enablePorts += role && role.getValue() == "enable";
+                   }
+                 }
+               });
+               op.walk([&](circt::seq::CompRegOp) { ++state; });
+               op.walk([&](circt::sv::ReadInOutOp) { ++reads; });
+               return modules == expectedModules && !state && !reads && dataPorts &&
+                      dataPorts == enablePorts;
+             });
+  }
+  positive("reused-split-reader-actual-inputs-remain-independent", splitHierarchy("reuse"),
+           [](mlir::ModuleOp op) {
+             SmallVector<circt::hw::InstanceOp> children;
+             op.walk([&](circt::hw::InstanceOp instance) { children.push_back(instance); });
+             if (children.size() != 2 || children[0].getModuleName() != children[1].getModuleName())
+               return false;
+             SmallVector<Value> data, enables;
+             for (auto instance : children)
+               for (auto [index, name] : llvm::enumerate(instance.getArgNames())) {
+                 StringRef label = cast<StringAttr>(name).getValue();
+                 if (label == "__nodal_split_0_data")
+                   data.push_back(instance.getOperand(index));
+                 if (label == "__nodal_split_0_enable")
+                   enables.push_back(instance.getOperand(index));
+               }
+             return data.size() == 2 && enables.size() == 2 && data[0] != data[1] &&
+                    enables[0] != enables[1];
+           });
+  negative("split-zero-actual-driver-rejects-transactionally",
+           replace(splitHierarchy("down"), driveLocal("", "view"), ""),
+           "resolved hierarchy split requires exactly one actual conditional driver");
+  negative("split-two-actual-drivers-reject-transactionally",
+           replace(splitHierarchy("down"), driveLocal("", "view"),
+                   driveLocal("", "view") + driveLocal("second", "view")),
+           "resolved hierarchy split requires exactly one actual conditional driver");
+  negative("split-width-forgery-rejects-before-transport",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) + driver() +
+                 netDrive() +
+                 replace(split(), ") -> (!nodal.bits<8>, !nodal.bits<1>)",
+                         ") -> (!nodal.bits<7>, !nodal.bits<1>)")),
+           "net read/split must retain exact value and canonical Bool result types");
+  std::string splitScale = boundDomain();
+  for (unsigned i = 0; i < 64; ++i) {
+    std::string suffix = std::to_string(i), inst = "reader" + suffix, view = "view" + suffix;
+    splitScale += boundChild(inst, "Reader") + localBoundary(view, inst) +
+                  driveLocal(suffix, view) + observeReader(inst, "out" + suffix + "_");
+  }
+  positive("64-independent-split-readers-share-one-relative-ABI",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", splitScale) +
+               splitReader() + "}",
+           [](mlir::ModuleOp op) {
+             unsigned modules = 0, instances = 0;
+             op.walk([&](circt::hw::HWModuleOp) { ++modules; });
+             op.walk([&](circt::hw::InstanceOp) { ++instances; });
+             return modules == 2 && instances == 64;
+           });
   negative("unsupported-internal-placement",
            model(net("net", "push_pull", "internal_resolved_net", "full_resolved_simulation")),
            "resolved physical target requires exact fixed scalar portable boundary pins");

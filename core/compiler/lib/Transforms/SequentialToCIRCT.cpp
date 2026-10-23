@@ -153,6 +153,8 @@ struct LogicalPortPlan {
   bool inout = false;
   DictionaryAttr interfaceContract;
   DictionaryAttr resolvedContract;
+  std::optional<unsigned> splitRoute;
+  bool splitEnable = false;
   SmallVector<Value> references;
   SmallVector<StringAttr> pins;
 };
@@ -162,6 +164,8 @@ struct LogicalPortSignature {
   unsigned pins;
   bool inout = false;
   Type resolvedElement;
+  std::optional<unsigned> splitRoute;
+  bool splitEnable = false;
 };
 struct ModuleVariantPlan {
   nodal::ModuleOp source;
@@ -182,6 +186,195 @@ struct HierarchyTargetPlan {
   // Borrowed endpoint facts are collected once per original definition, even
   // when material clock/reset variants emit separate physical module bodies.
   llvm::DenseMap<Operation *, std::unique_ptr<SmallVector<DigitalInterfaceEndpoint>>> interfaces;
+
+  // Derived physical routes only. The successful semantic query owns unique
+  // driver/component/domain proof, and the existing occurrence tree owns paths.
+  struct SplitRoute {
+    const DigitalResolvedSplitBinding *binding = nullptr;
+    unsigned bits = 0, canonical = 0;
+    bool incoming = false, outgoing = false;
+    Operation *sourceChild = nullptr;
+    unsigned sourceChildOccurrence = 0, sourceChildRoute = 0;
+    SmallVector<std::pair<unsigned, unsigned>, 2> destinations;
+    SmallVector<Operation *, 2> splits;
+    std::string signature;
+  };
+  struct SplitOccurrencePlan {
+    SmallVector<SplitRoute, 2> routes;
+    SmallVector<unsigned, 2> ordered;
+    llvm::DenseMap<std::pair<unsigned, Operation *>, unsigned> driverRoutes;
+    llvm::DenseMap<Operation *, unsigned> splitRoutes;
+    std::string signature;
+  };
+  SmallVector<SplitOccurrencePlan, 0> splitPlans;
+
+  LogicalResult planSplitRoutes(mlir::ModuleOp input) {
+    auto occurrences = proof->occurrences();
+    splitPlans.resize(occurrences.size());
+    if (resolvedSplits.empty())
+      return success();
+    llvm::DenseMap<Operation *, unsigned> ordinals;
+    llvm::DenseSet<Operation *> indexedDefinitions;
+    uint64_t work = 0;
+    for (const auto &occurrence : occurrences) {
+      if (!indexedDefinitions.insert(occurrence.module).second)
+        continue;
+      unsigned index = 0;
+      for (Operation &op : occurrence.module->getRegion(0).front()) {
+        if (++work > maximumGeneratedOperations)
+          return reject(input, "split route operation inventory exceeds finite target budget");
+        ordinals.try_emplace(&op, index++);
+      }
+    }
+    auto route = [&](unsigned occurrence, const DigitalResolvedSplitBinding &binding,
+                     unsigned bits) -> FailureOr<unsigned> {
+      if (occurrence >= occurrences.size() || !occurrences[occurrence].generatedScopes.empty() ||
+          ++work > maximumGeneratedOperations)
+        return failure();
+      auto &plan = splitPlans[occurrence];
+      auto found = plan.driverRoutes.try_emplace(
+          std::make_pair(binding.driverOccurrence, binding.driver), plan.routes.size());
+      unsigned index = found.first->second;
+      if (found.second) {
+        SplitRoute node;
+        node.binding = &binding;
+        node.bits = bits;
+        plan.routes.push_back(std::move(node));
+      } else if (plan.routes[index].bits != bits)
+        return failure();
+      return index;
+    };
+    for (const auto &binding : resolvedSplits) {
+      if (binding.driverOccurrence >= occurrences.size() ||
+          binding.splitOccurrence >= occurrences.size() || !binding.driver || !binding.split ||
+          binding.driver->getParentOp() != occurrences[binding.driverOccurrence].module ||
+          binding.split->getParentOp() != occurrences[binding.splitOccurrence].module)
+        return reject(input, "split physical route requires exact direct owned operations");
+      Type original = binding.split->getResult(0).getType();
+      auto mapped = dyn_cast_or_null<IntegerType>(targetType(original));
+      if (!mapped || !mapped.getWidth() || mapped.getWidth() > maximumWidth ||
+          (binding.data && binding.data.getType() != original) || !binding.enable ||
+          width(binding.enable.getType()) != 1 ||
+          (!binding.data &&
+           (!binding.level ||
+            !llvm::is_contained(ArrayRef<StringRef>{"low", "high"}, binding.level.getValue()))))
+        return reject(binding.split,
+                      "split physical route requires exact fixed scalar data/enable");
+      SmallVector<unsigned> ancestors;
+      for (unsigned at = binding.driverOccurrence;; at = occurrences[at].parent) {
+        if (ancestors.size() >= 128)
+          return reject(binding.split, "split route ancestry exceeds target depth");
+        ancestors.push_back(at);
+        if (at == 0)
+          break;
+      }
+      SmallVector<unsigned> descending;
+      unsigned lca = binding.splitOccurrence;
+      while (!llvm::is_contained(ancestors, lca)) {
+        if (descending.size() >= 128 || lca == 0)
+          return reject(binding.split, "split route has no exact shared occurrence ancestor");
+        descending.push_back(lca);
+        lca = occurrences[lca].parent;
+      }
+      auto current = route(binding.driverOccurrence, binding, mapped.getWidth());
+      if (failed(current))
+        return reject(binding.split, "split physical routes exceed their checked bounded profile");
+      unsigned at = binding.driverOccurrence;
+      while (at != lca) {
+        unsigned parent = occurrences[at].parent;
+        auto next = route(parent, binding, mapped.getWidth());
+        if (failed(next))
+          return reject(binding.split,
+                        "split physical routes exceed their checked bounded profile");
+        splitPlans[at].routes[*current].outgoing = true;
+        auto &up = splitPlans[parent].routes[*next];
+        Operation *instance = occurrences[at].instance;
+        if (!instance || instance->getParentOp() != occurrences[parent].module || up.incoming ||
+            (up.sourceChild && (up.sourceChild != instance || up.sourceChildRoute != *current)))
+          return reject(binding.split, "split upward route lost its exact child edge");
+        up.sourceChild = instance;
+        up.sourceChildOccurrence = at;
+        up.sourceChildRoute = *current;
+        current = next;
+        at = parent;
+      }
+      for (unsigned child : llvm::reverse(descending)) {
+        auto next = route(child, binding, mapped.getWidth());
+        if (failed(next))
+          return reject(binding.split,
+                        "split physical routes exceed their checked bounded profile");
+        auto &down = splitPlans[child].routes[*next];
+        if (down.sourceChild || down.outgoing || child == binding.driverOccurrence ||
+            !occurrences[child].instance ||
+            occurrences[child].instance->getParentOp() != occurrences[at].module)
+          return reject(binding.split, "split downward route lost its exact parent edge");
+        down.incoming = true;
+        auto edge = std::make_pair(child, *next);
+        auto &destinations = splitPlans[at].routes[*current].destinations;
+        if (!llvm::is_contained(destinations, edge))
+          destinations.push_back(edge);
+        at = child;
+        current = next;
+      }
+      auto &local = splitPlans[at];
+      if (!local.splitRoutes.try_emplace(binding.split, *current).second)
+        return reject(binding.split, "split route has duplicate successful binding facts");
+      local.routes[*current].splits.push_back(binding.split);
+    }
+    // Canonicalize bottom-up from local operation identity and child route ABI.
+    // Absolute occurrence/driver IDs never become specialization keys or names.
+    uint64_t signatureBytes = 0;
+    for (unsigned cursor = occurrences.size(); cursor; --cursor) {
+      unsigned occurrence = cursor - 1;
+      auto &plan = splitPlans[occurrence];
+      for (auto [index, node] : llvm::enumerate(plan.routes)) {
+        llvm::sort(node.splits, [&](Operation *a, Operation *b) {
+          return ordinals.lookup(a) < ordinals.lookup(b);
+        });
+        llvm::sort(node.destinations, [&](auto a, auto b) {
+          auto left = std::make_pair(ordinals.lookup(occurrences[a.first].instance),
+                                     splitPlans[a.first].routes[a.second].canonical);
+          auto right = std::make_pair(ordinals.lookup(occurrences[b.first].instance),
+                                      splitPlans[b.first].routes[b.second].canonical);
+          return left < right;
+        });
+        llvm::raw_string_ostream out(node.signature);
+        out << node.bits << ':';
+        if (node.incoming)
+          out << 'I';
+        else if (node.sourceChild)
+          out << 'C' << ordinals.lookup(node.sourceChild) << '.'
+              << splitPlans[node.sourceChildOccurrence].routes[node.sourceChildRoute].canonical;
+        else {
+          if (node.binding->driverOccurrence != occurrence)
+            return reject(input, "split route would capture a foreign driver value");
+          out << 'L' << ordinals.lookup(node.binding->driver);
+        }
+        out << (node.outgoing ? 'O' : '-') << '[';
+        for (Operation *split : node.splits)
+          out << 'S' << ordinals.lookup(split) << ',';
+        for (auto edge : node.destinations)
+          out << 'C' << ordinals.lookup(occurrences[edge.first].instance) << '.'
+              << splitPlans[edge.first].routes[edge.second].canonical << ',';
+        out << ']';
+        plan.ordered.push_back(index);
+      }
+      llvm::sort(plan.ordered, [&](unsigned a, unsigned b) {
+        return plan.routes[a].signature < plan.routes[b].signature;
+      });
+      for (auto [index, raw] : llvm::enumerate(plan.ordered)) {
+        auto &node = plan.routes[raw];
+        if (index && node.signature == plan.routes[plan.ordered[index - 1]].signature)
+          return reject(input, "different split drivers have indistinguishable relative routes");
+        node.canonical = index;
+        if (node.signature.size() + 1 > maximumGeneratedOperations - signatureBytes)
+          return reject(input, "split route signature exceeds finite target budget");
+        signatureBytes += node.signature.size() + 1;
+        plan.signature += node.signature + ';';
+      }
+    }
+    return success();
+  }
 
   LogicalResult build(mlir::ModuleOp input) {
     auto checked = HierarchyModel::create(input);
@@ -216,6 +409,8 @@ struct HierarchyTargetPlan {
           return reject(input, "resolved physical endpoint plan exceeds finite target budget");
         resolvedEndpoints[qualified.occurrence].push_back(&qualified.endpoint);
       }
+    if (failed(planSplitRoutes(input)))
+      return failure();
     occurrenceVariants.resize(occurrences.size());
     llvm::DenseMap<Operation *, llvm::StringMap<unsigned>> variantLookup;
     llvm::DenseMap<Operation *, SmallVector<unsigned>> variantsBySource;
@@ -300,6 +495,15 @@ struct HierarchyTargetPlan {
                                (port.reset ? port.policy.getValue().str() : "none") + ":" +
                                (port.reset ? port.polarity.getValue().str() : "") + ";";
         candidate.domains.push_back(std::move(port));
+      }
+      if (!resolvedSplits.empty()) {
+        candidate.signature += "|split:" + splitPlans[index].signature;
+        // A parent implementation includes the actual relative child ABI.
+        // Do not merge equal local domains with differing sideband children.
+        for (Operation &op : context.module->getRegion(0).front())
+          if (auto child = candidate.children.find(&op); child != candidate.children.end())
+            candidate.signature +=
+                "|child:" + text(&op, "sym_name").str() + ":" + std::to_string(child->second);
       }
       auto inserted =
           variantLookup[context.module].try_emplace(candidate.signature, variants.size());
@@ -445,8 +649,10 @@ public:
       uint64_t expansion = 1;
       if (resolvedOperations.contains(&op)) {
         expansion = 4;
-        if (isa<NetSplitOp>(op))
-          return reject(&op, "resolved split target requires exact driver sideband transport");
+        if (isa<NetSplitOp>(op) &&
+            (!hierarchy || !variant ||
+             !hierarchy->splitPlans[variant->occurrence].splitRoutes.count(&op)))
+          return reject(&op, "resolved split lost its exact successful driver-sideband proof");
         if (isa<NetDriverOp>(op))
           staticOperations.insert(&op); // Capability identity, never a runtime value.
         if (isa<NetDriveOp, NetDriveLevelOp, NetReleaseOp>(op) ||
@@ -666,15 +872,16 @@ public:
     for (Operation *reg : registers)
       if (!updates.count(reg->getResult(0)))
         return reject(reg, "declaration-only register lacks an executable physical binding/update");
-    if (failed(planLogicalPorts()))
+    if (failed(planLogicalPorts()) || failed(planSplitPorts()))
       return failure();
     for (const auto &port : logicalPorts)
-      if (!port.input && port.references.empty())
+      if (!port.input && !port.splitRoute && port.references.empty())
         return reject(port.key.first, "output has no actual value/driver; no output is invented");
     for (Operation *instance : instances) {
       const auto &child = hierarchy->variants[variant->children.lookup(instance)];
       for (const auto &port : child.ports)
-        if (port.input && !port.inout && !instancePortValues.count({instance, port.key}))
+        if (port.input && !port.inout && !port.splitRoute &&
+            !instancePortValues.count({instance, port.key}))
           return reject(instance, "target instance input requires an explicit typed connection");
       for (const auto &port : child.domains)
         if (!instanceBindings.count({instance, port.requirement}))
@@ -732,10 +939,11 @@ public:
     }
     llvm::StringSet<> targetNames;
     for (const auto &port : logicalPorts)
-      if (!port.interfaceContract && !targetNames.insert(port.name.getValue()).second)
+      if (!port.interfaceContract && !port.splitRoute &&
+          !targetNames.insert(port.name.getValue()).second)
         return reject(port.key.first, "authored target port names collide");
     for (auto &port : logicalPorts)
-      if (port.interfaceContract) {
+      if (port.interfaceContract || port.splitRoute) {
         std::string base = port.name.getValue().str(), name = base;
         unsigned collision = 0;
         while (!targetNames.insert(name).second)
@@ -747,13 +955,13 @@ public:
           aliases.count(port.references.front()))
         return reject(port.key.first, "ordinary Interface input pin cannot have a local driver");
     for (const auto &port : logicalPorts)
-      if (!port.input && !aliases.count(port.references.front()) &&
+      if (!port.input && !port.splitRoute && !aliases.count(port.references.front()) &&
           !eventUpdates.count(port.key.first) && !generatedOutputPorts.count(port.key.first))
         return reject(port.key.first, "output has no canonical driver; no output is invented");
     for (Operation *instance : instances) {
       const auto &child = hierarchy->variants[variant->children.lookup(instance)];
       for (const auto &port : child.ports)
-        if (port.input && !port.inout &&
+        if (port.input && !port.inout && !port.splitRoute &&
             !aliases.count(instancePortValues.find({instance, port.key})->second.front()))
           return reject(instance, "target instance input has no canonical driver");
     }
@@ -804,7 +1012,12 @@ public:
       for (const auto &port : logicalPorts)
         variant->ports.push_back(
             {port.key, port.input, unsigned(port.pins.size()), port.inout,
-             port.inout ? cast<circt::hw::InOutType>(port.targetType).getElementType() : Type()});
+             port.inout ? cast<circt::hw::InOutType>(port.targetType).getElementType() : Type(),
+             port.splitRoute ? std::optional<unsigned>(hierarchy->splitPlans[variant->occurrence]
+                                                           .routes[*port.splitRoute]
+                                                           .canonical)
+                             : std::nullopt,
+             port.splitEnable});
     auto reserveResolvedName = [&](std::string base) {
       std::string name = base;
       for (unsigned n = 0; !targetNames.insert(name).second;)
@@ -1047,6 +1260,19 @@ public:
       correlate(comment, port.key.first);
     }
     circt::BackedgeBuilder backedges(builder, source.getLoc());
+    SmallVector<std::pair<unsigned, std::pair<circt::Backedge, circt::Backedge>>> splitEdges;
+    if (hierarchy && variant) {
+      const auto &plan = hierarchy->splitPlans[variant->occurrence];
+      splitValues.resize(plan.routes.size());
+      for (auto [index, route] : llvm::enumerate(plan.routes)) {
+        if (route.incoming)
+          continue;
+        auto data = backedges.get(builder.getIntegerType(route.bits), source.getLoc());
+        auto enable = backedges.get(builder.getI1Type(), source.getLoc());
+        splitValues[index] = {data, enable};
+        splitEdges.push_back({unsigned(index), {data, enable}});
+      }
+    }
     inputIndex = 0;
     for (const auto &port : logicalPorts) {
       if (!port.input)
@@ -1055,6 +1281,10 @@ public:
       for (unsigned index = 0; index < port.pins.size(); ++index)
         leaves.push_back(body->getArgument(inputIndex++));
       Value joined = joinBoundary(port.key.first, port.targetType, leaves);
+      if (port.splitRoute) {
+        auto &pair = splitValues[*port.splitRoute];
+        (port.splitEnable ? pair.second : pair.first) = joined;
+      }
       if (port.inout)
         resolvedPortCarriers.try_emplace(port.key, joined);
       for (Value value : port.references)
@@ -1150,6 +1380,14 @@ public:
       SmallVector<Value> inputs;
       for (const auto &port : child.ports)
         if (port.input) {
+          if (port.splitRoute) {
+            auto found = splitChildInputs.find({instance, *port.splitRoute});
+            if (found == splitChildInputs.end())
+              return reject(instance, "split child input lost its exact parent route");
+            const auto &pair = splitValues[found->second];
+            inputs.push_back(port.splitEnable ? pair.second : pair.first);
+            continue;
+          }
           if (port.inout) {
             auto found = resolvedChildCarriers.find({instance, port.key});
             if (found == resolvedChildCarriers.end())
@@ -1180,6 +1418,14 @@ public:
       unsigned result = 0;
       for (const auto &port : child.ports)
         if (!port.input) {
+          if (port.splitRoute) {
+            auto found = splitChildOutputs.find({instance, *port.splitRoute});
+            if (found == splitChildOutputs.end())
+              return reject(instance, "split child output lost its exact parent route");
+            auto &pair = splitValues[found->second];
+            (port.splitEnable ? pair.second : pair.first) = targetInstance.getResult(result++);
+            continue;
+          }
           auto references = instancePortValues.find({instance, port.key});
           if (references == instancePortValues.end()) {
             result += port.pins;
@@ -1521,6 +1767,18 @@ public:
               RequirementClockOp, RequirementResetOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp,
               ResetSyncOp, ResetCombineOp>(op))
         continue;
+      if (isa<NetSplitOp>(op)) {
+        auto route = hierarchy->splitPlans[variant->occurrence].splitRoutes.find(&op);
+        if (route == hierarchy->splitPlans[variant->occurrence].splitRoutes.end())
+          return reject(&op, "split result lost its exact route identity");
+        auto pair = splitValues[route->second];
+        if (!pair.first || !pair.second)
+          return reject(&op, "split data/enable have no target-local route");
+        // Keep real SSA uses across later route-backedge replacement.
+        values[op.getResult(0)] = circt::hw::WireOp::create(builder, op.getLoc(), pair.first);
+        values[op.getResult(1)] = circt::hw::WireOp::create(builder, op.getLoc(), pair.second);
+        continue;
+      }
       if (isa<NetReadOp>(op)) {
         Value carrier = values.lookup(op.getOperand(0));
         auto expected = targetValueType(op.getResult(0).getType());
@@ -1606,6 +1864,28 @@ public:
         pending.pop_back();
       }
     }
+    for (auto &[index, edges] : splitEdges) {
+      const auto &route = hierarchy->splitPlans[variant->occurrence].routes[index];
+      auto actual = splitValues[index];
+      if (!route.sourceChild) {
+        const auto &binding = *route.binding;
+        actual.first = binding.data ? values.lookup(binding.data)
+                                    : constant(binding.driver, route.bits,
+                                               binding.level.getValue() == "high"
+                                                   ? APInt::getAllOnes(route.bits)
+                                                   : APInt(route.bits, 0));
+        actual.second = values.lookup(binding.enable);
+      }
+      if (!actual.first || !actual.second || actual.first == Value(edges.first) ||
+          actual.second == Value(edges.second) || !actual.first.getType().isInteger(route.bits) ||
+          !actual.second.getType().isInteger(1)) {
+        backedges.abandon();
+        return reject(source, "split route did not resolve exact driver data/enable");
+      }
+      edges.first.setValue(actual.first);
+      edges.second.setValue(actual.second);
+      splitValues[index] = actual;
+    }
     if (failed(lowerResolvedEffects())) {
       backedges.abandon();
       return failure();
@@ -1660,6 +1940,11 @@ public:
     SmallVector<Value> outputs;
     for (const auto &port : logicalPorts)
       if (!port.input) {
+        if (port.splitRoute) {
+          const auto &pair = splitValues[*port.splitRoute];
+          outputs.push_back(port.splitEnable ? pair.second : pair.first);
+          continue;
+        }
         auto leaves = splitBoundary(port.key.first, values.lookup(port.references.front()));
         llvm::append_range(outputs, leaves);
       }
@@ -2548,6 +2833,51 @@ private:
     return success();
   }
 
+  SmallVector<std::pair<Value, Value>> splitValues;
+  llvm::DenseMap<std::pair<Operation *, unsigned>, unsigned> splitChildInputs, splitChildOutputs;
+  LogicalResult planSplitPorts() {
+    if (!hierarchy || !variant)
+      return success();
+    const auto &plan = hierarchy->splitPlans[variant->occurrence];
+    auto occurrences = hierarchy->proof->occurrences();
+    for (unsigned raw : plan.ordered) {
+      const auto &route = plan.routes[raw];
+      if (8 > maximumGeneratedOperations - cost)
+        return reject(source, "split route transport exceeds target operation budget");
+      cost += 8;
+      if (route.sourceChild) {
+        unsigned canonical = hierarchy->splitPlans[route.sourceChildOccurrence]
+                                 .routes[route.sourceChildRoute]
+                                 .canonical;
+        if (!splitChildOutputs.try_emplace(std::make_pair(route.sourceChild, canonical), raw)
+                 .second)
+          return reject(source, "split child output has conflicting routes");
+      }
+      for (auto edge : route.destinations) {
+        unsigned canonical = hierarchy->splitPlans[edge.first].routes[edge.second].canonical;
+        if (!splitChildInputs
+                 .try_emplace(std::make_pair(occurrences[edge.first].instance, canonical), raw)
+                 .second)
+          return reject(source, "split child input has conflicting routes");
+      }
+      if (!route.incoming && !route.outgoing)
+        continue;
+      for (bool enable : {false, true}) {
+        LogicalPortPlan port;
+        std::string name =
+            "__nodal_split_" + std::to_string(route.canonical) + (enable ? "_enable" : "_data");
+        port.key = {source.getOperation(), builder.getStringAttr(name)};
+        port.name = builder.getStringAttr(name);
+        port.originalType = route.binding->split->getResult(enable ? 1 : 0).getType();
+        port.targetType = builder.getIntegerType(enable ? 1 : route.bits);
+        port.input = route.incoming;
+        port.splitRoute = raw;
+        port.splitEnable = enable;
+        logicalPorts.push_back(std::move(port));
+      }
+    }
+    return success();
+  }
   LogicalResult planResolved() {
     if (!hierarchy || !variant)
       return success();
@@ -2778,6 +3108,17 @@ private:
           attributes.set("nodal.packed_abi", packedLayout(port.originalType));
         if (port.resolvedContract)
           attributes.set("nodal.resolved", port.resolvedContract);
+        if (port.splitRoute) {
+          const auto &route = hierarchy->splitPlans[variant->occurrence].routes[*port.splitRoute];
+          attributes.set(
+              "nodal.split_sideband",
+              builder.getDictionaryAttr(
+                  {builder.getNamedAttr("route", builder.getI32IntegerAttr(route.canonical)),
+                   builder.getNamedAttr(
+                       "role", builder.getStringAttr(port.splitEnable ? "enable" : "data")),
+                   builder.getNamedAttr("relative_route",
+                                        builder.getStringAttr(route.signature))}));
+        }
         if (port.interfaceContract || isa<circt::hw::StructType>(port.targetType)) {
           attributes.set("nodal.logical_port", port.name);
           attributes.set("nodal.logical_leaf", builder.getI32IntegerAttr(index));

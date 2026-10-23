@@ -1265,3 +1265,18 @@ up to 4096 bits, explicit named fields and actual fixed contiguous ShapeIndex.
 Symbolic CDC, dynamic and noncontiguous selection remain unsupported. Existing
 source and generated-header provenance limits remain explicit; this partial
 checkpoint neither completes Foundation 58 nor resumes held consumer repairs.
+
+## Checkpoint 31 — lexical deferred explicit-storage finalization
+
+The exact 421-file Scala source snapshot in `.work/f58-lexical-shared`
+(manifest `ca94c05a`) adds four paths after the CDC fixtures. Its 23 focused
+groups pass: lexical 8, arithmetic 4, deferred hierarchy 5 and deferred values 6.
+Eight actual direct/family/structural/when early-late gate replays use the now
+preserved `93a1af6b` native prerequisite; each early-late pair has identical
+input hashes. The exact contract addition is retained with its original hash.
+These are matched historical checks, not a newly executed run.
+
+Scope remains existing explicit-storage result finalization in canonical lexical
+contexts. Pure collections, procedural loops, branch-result joins and inferred
+storage lifecycles are excluded from this checkpoint and remain required where
+applicable. No broader target or full pending-construction completion is claimed.

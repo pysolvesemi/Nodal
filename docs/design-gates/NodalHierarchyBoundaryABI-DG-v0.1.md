@@ -428,3 +428,23 @@ emitted DUT or assertion is edited to obtain the passing runs. Commands and the
 small actual-output demonstration are documented beside the runner. Electrical
 CDC timing/skew obligations and all broader unresolved boundary profiles remain
 unchanged.
+
+### Lexical statement-result finalization
+
+The same bounded result-type finalizer admits existing pending finite digital
+value intents in ordinary structural statements, behavioral arms and actual
+Generate bodies. Capture arguments copy only the exact immediate parent edge's
+final type through the existing capture registry. Finalization revisits the real
+lexical ancestry and complete type dependencies, seals each result once, and
+rechecks affected assignments with the same exact recursive-type rule used for
+eager assignments. No source body is replayed, provisional type is published,
+parameter envelope is substituted for identity, or second inference engine exists.
+The existing depth 128 and work 65536 limits remain authoritative; capture-edge
+lookup uses the existing identity key rather than a reverse scan per argument.
+
+The bounded profile uses explicit storage types. Early/late child binding must
+produce identical source transport. Equal-default, equal-envelope foreign widths,
+forged capture edges, pure collection and procedural-loop contexts still reject.
+Structural branch-result joins, collection result inference and inferred-storage
+lifecycles remain separate required continuations. Source/native acceptance does
+not claim target support for every operation that can carry an intent.

@@ -2469,18 +2469,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def newCollectionArgument(
       region: DigitalValueRegionRecord,
       dataType: DataType[?],
-      role: String
+      role: String,
+      capture: Option[Expr[?]] = None
   ): KernelExpr[?] =
     if region.arguments.size >= DigitalReductionContract.MaximumArguments then
       collectionFailure("collection signature exceeds the 4098 argument budget")
-    if sequentialRegion(region) then
+    val intent = DeferredResultType.intent(capture.toVector):
+      CandidateRuntime.typeDescriptor(CandidateRuntime.expressionDataType(capture.get).get)
+    if intent.nonEmpty then requireDeferredValueScope(Some(region), region.reference.module)
+    else if sequentialRegion(region) then
       validateSequentialValueType(dataType, region.reference.module)
     else if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
       DigitalCombinationalContract.validateValueType(CandidateRuntime.typeDescriptor(dataType))
     val argument = new KernelExpr[Data](
       Vector.empty,
       resultType = Some(CandidateRuntime.typeDescriptor(dataType)),
-      operation = Some(DigitalCollectionContract.Argument)
+      operation = Some(DigitalCollectionContract.Argument),
+      typeIntent = intent
     )
     val module = records(region.reference.module)
     val scaffold = role == "induction" && region.loop.exists(_.generated.nonEmpty)
@@ -2572,9 +2577,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               val isStatic = integer && !runtimeInteger
               val proceduralIndex = isStatic && loopAffine(parentValue)
                 .exists(_._1.loop.get.generated.isEmpty)
-              if !isStatic then
+              val pending = DeferredResultType.pending(parentValue)
+              if pending then requireDeferredValueScope(Some(region), owner)
+              if !isStatic && !pending then
                 validateShapeType(dataType, owner, cardinality = true, storageContext = true)
-              else if !proceduralIndex || predicateUse then
+              else if isStatic && (!proceduralIndex || predicateUse) then
                 val analysis = new StructuralBoundAnalysis(owner, signed64Literals = true)
                 if predicateUse || (admitsPredicateStatics(region) && reductionExact.isEmpty &&
                     reductionDomains.isEmpty && !reductionChecking)
@@ -2596,10 +2603,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 region,
                 dataType,
                 if proceduralIndex then "index_capture"
-                else if isStatic then "static_capture" else "capture"
+                else if isStatic then "static_capture" else "capture",
+                capture = Some(parentValue)
               )
               region.captures.update(parentReference, parentValue -> argument)
-              if !isStatic then
+              if !isStatic && !pending then
                 bindCollectionType(CandidateRuntime.typeDescriptor(dataType), Some(region), owner)
               argument
             case None => collectionFailure("collection free edge has no explicit capture argument")
@@ -2825,6 +2833,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       None
     else
       val operation = expression.operation.getOrElse("")
+      if expression.typeIntent.nonEmpty then
+        val _ = requireDeferredValueScope(current, currentModule.handle)
+        if !expression.resultDescriptor.exists(DigitalCombinationalContract.isValueTypeKind) then
+          collectionFailure("deferred lexical result requires a finite digital payload kind")
       val generatedAnalog =
         current.exists(region => region.isLoop && region.loop.get.generated.nonEmpty) &&
           (analogStack.nonEmpty || AnalogProceduralConstruction.generatedProcedureActive ||
@@ -2861,7 +2873,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           requireNoCollectionEffect(s"unsupported hardware expression '$operation'")
           requireLoopEffect(s"unsupported hardware expression '$operation'")
           collectionFailure(s"unsupported iteration expression '$operation'")
-        if !staticInteger && !knownArgument then
+        if !staticInteger && !knownArgument && expression.typeIntent.isEmpty then
           val dataType = expression.resultDescriptor.getOrElse(
             collectionFailure("region body expression requires an exact type")
           )
@@ -2891,7 +2903,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val destination = generatedMemberRecord(expression) match
           case Some(member) => generatedMemberScope(expression, member)
           case None => if moduleStatic then None else current
-        if !knownArgument then
+        if !knownArgument && expression.typeIntent.isEmpty then
           expression.resultDescriptor.foreach(bindCollectionType(
             _,
             destination,
@@ -6049,13 +6061,32 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       moduleStack.clear()
       moduleStack ++= previousModules
 
-  /** Seal exact result types through the already captured value DAG. There is no second expression
-    * registry and no callback/body replay. Operation owners retain their inference.
-    */
+  private def requireDeferredValueScope(scope: Option[DigitalValueRegionRecord], owner: Long)
+      : Vector[DigitalValueRegionRecord] =
+    val chain = mutable.ArrayBuffer.empty[DigitalValueRegionRecord]
+    var current = scope
+    while current.nonEmpty do
+      val region = current.get
+      if chain.size >= 128 || chain.contains(region) || region.reference.module != owner ||
+        !(region.behavioralArm.nonEmpty || region.structuralArm.nonEmpty ||
+          region.loop.exists(_.generated.nonEmpty))
+      then fail("NODAL-HIERARCHY-058-TYPE", "deferred value requires actual structural or behavioral lexical ancestry")
+      chain += region
+      current = region.parent
+    chain.reverse.toVector
+
+  /** Seal the existing captured DAG once, including exact capture-edge type-copy intents. */
   private def materializeDeferredResultTypes(): Unit =
     val state = new java.util.IdentityHashMap[KernelExpr[?], java.lang.Integer]()
     var work = 0
     val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    def context(owner: Long, scope: Option[DigitalValueRegionRecord]): Unit =
+      val chain = requireDeferredValueScope(scope, owner)
+      moduleStack.clear(); moduleStack += records(owner)
+      collectionStack.clear(); collectionStack ++= chain
+      generationStack.clear(); generationStack ++= chain.flatMap(_.loop.flatMap(_.generated))
     def visit(expression: KernelExpr[?], depth: Int): Unit =
       if depth > 128 || Option(state.get(expression)).contains(1) then
         fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph is cyclic or too deep")
@@ -6064,23 +6095,29 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if work > 65536 then
           fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph exceeds its finite budget")
         val reference = Option(expressionIds.get(expression)).getOrElse(
-          fail("NODAL-HIERARCHY-058-TYPE", "deferred expression has no captured owner")
-        )
-        if expressionRegions.contains(reference) then
-          fail(
-            "NODAL-HIERARCHY-058-TYPE",
-            "deferred boundary expressions require direct module scope"
-          )
+          fail("NODAL-HIERARCHY-058-TYPE", "deferred expression has no captured owner"))
+        val scope = expressionRegions.get(reference)
+        val _ = requireDeferredValueScope(scope, reference.module)
         state.put(expression, 1)
         val intent = expression.typeIntent.get
         work += expression.operands.size + intent.dependencies.size
         if work > 65536 then
           fail("NODAL-HIERARCHY-058-TYPE", "deferred result type edges exceed their finite budget")
+        val capture = collectionArguments.get(reference).map: (region, position) =>
+          val source = intent.dependencies match
+            case Vector(value: Expr[?]) => value
+            case _ => fail("NODAL-HIERARCHY-058-TYPE", "deferred capture requires one exact parent value")
+          val edge = region.captures.get(valueReference(source))
+          if !scope.contains(region) || region.arguments(position)._1.ne(expression) ||
+            region.arguments(position)._2 != "capture" ||
+            !edge.exists((value, argument) => value.eq(source) && argument.eq(expression)) ||
+            valueRegion(valueReference(source)) != region.parent
+          then fail("NODAL-HIERARCHY-058-TYPE", "deferred capture intent differs from its exact parent edge")
+          source
         val operands = new java.util.IdentityHashMap[AnyRef, java.lang.Boolean]()
-        expression.operands.foreach(value => operands.put(value.asInstanceOf[AnyRef], true))
+        (expression.operands ++ capture).foreach(value => operands.put(value.asInstanceOf[AnyRef], true))
         if intent.dependencies.isEmpty || intent.dependencies.exists(dependency =>
-            !operands.containsKey(dependency.asInstanceOf[AnyRef])
-          )
+            !operands.containsKey(dependency.asInstanceOf[AnyRef]))
         then fail("NODAL-HIERARCHY-058-TYPE", "type intent lost its exact operand dependency")
         intent.dependencies.foreach: dependency =>
           if !digitalOwnerOf(dependency).contains(modulePath(reference.module)) then
@@ -6088,21 +6125,38 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           dependency match
             case value: KernelExpr[?] => visit(value, depth + 1)
             case _ => ()
+          if capture.isEmpty then dependency match
+            case value: Expr[?] =>
+              val local = bindCollectionValue(value, scope, reference.module, create = false)
+              local match
+                case argument: KernelExpr[?] if !(argument eq value) => visit(argument, depth + 1)
+                case _ => ()
+            case _ => ()
         DeferredResultType.requireFinal(intent.dependencies, "result type materialization")
-        moduleStack.clear()
-        moduleStack += records(reference.module)
+        context(reference.module, scope)
         val actual = intent.resolve()
-        validateShapeType(
-          CandidateRuntime.dataTypeFromDescriptor(actual),
-          reference.module,
-          cardinality = true
-        )
+        validateShapeType(CandidateRuntime.dataTypeFromDescriptor(actual), reference.module,
+          cardinality = true, storageContext = scope.nonEmpty)
+        bindCollectionType(actual, scope, reference.module)
         expression.sealResultType(actual)
         state.put(expression, 2)
-    try expressionValues.valuesIterator.toVector.foreach(visit(_, 0))
+    try
+      expressionValues.valuesIterator.toVector.foreach(visit(_, 0))
+      operations.iterator.filter(operation =>
+        operation.digitalRegion.nonEmpty && Set("assignment", "value-connect")(operation.kind)
+      ).foreach: operation =>
+        val hadIntent = operation.values.collect { case value: Expr[?] => value }.exists: value =>
+          bindCollectionValue(value, operation.digitalRegion, operation.owner, create = false) match
+            case argument: KernelExpr[?] => argument.typeIntent.nonEmpty
+            case _ => false
+        if hadIntent then
+          context(operation.owner, operation.digitalRegion)
+          DeferredResultType.requireFinal(operation.values, "regional assignment materialization")
+          validateRegionalAssignmentTypes(operation.values)
     finally
-      moduleStack.clear()
-      moduleStack ++= previousModules
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
     if expressionValues.valuesIterator.exists(!_.typeFinalized) then
       fail("NODAL-HIERARCHY-058-TYPE", "unresolved result type cannot leave construction")
 
@@ -9489,6 +9543,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def operation(kind: String, values: Any*): Unit =
     captureOperation(kind, values.toVector, permitMemory = false)
 
+  private def validateRegionalAssignmentTypes(values: Vector[Any]): Unit =
+    val exactType =
+      for
+        target <- values.headOption.collect { case value: Expr[?] => value }
+        source <- values.lift(1).collect { case value: Expr[?] => value }
+        targetType <- CandidateRuntime.expressionDataType(target)
+        sourceType <- CandidateRuntime.expressionDataType(source)
+      yield DigitalEnumContract.sameType(
+        CandidateRuntime.typeDescriptor(targetType),
+        CandidateRuntime.typeDescriptor(sourceType)
+      )
+    if !exactType.contains(true) then
+      collectionFailure("digital loop assignment requires exactly matching recursive types")
+
   private def captureOperation(kind: String, values: Vector[Any], permitMemory: Boolean): Unit =
     validateCollectionDependencies(values)
     val digitalAssignment = Set("assignment", "value-connect").contains(kind) &&
@@ -9556,18 +9624,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
       if privateFsmStorage(target) then
         FlatFsmRuntime.fail("private machine state cannot be assigned by source actions")
-      val exactType =
-        for
-          target <- values.headOption.collect { case value: Expr[?] => value }
-          source <- values.lift(1).collect { case value: Expr[?] => value }
-          targetType <- CandidateRuntime.expressionDataType(target)
-          sourceType <- CandidateRuntime.expressionDataType(source)
-        yield DigitalEnumContract.sameType(
-          CandidateRuntime.typeDescriptor(targetType),
-          CandidateRuntime.typeDescriptor(sourceType)
-        )
-      if !exactType.contains(true) then
-        collectionFailure("digital loop assignment requires exactly matching recursive types")
+      if values.exists(DeferredResultType.pending) then
+        val _ = requireDeferredValueScope(Some(region), currentModule.handle)
+      else validateRegionalAssignmentTypes(values)
       values.foreach:
         case expression: Expr[?] =>
           val _ = bindCollectionValue(expression, Some(region), currentModule.handle)

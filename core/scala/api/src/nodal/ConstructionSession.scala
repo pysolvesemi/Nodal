@@ -6824,13 +6824,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         _.parent.nonEmpty
       ) ||
       selection.reference.family.selectionPrefix.nonEmpty || !literalOrdinal ||
-      !instance.generatedScope.contains(family) || instance.parameterOverrides.nonEmpty ||
-      child.declarations.exists(_.kind == KernelSignalKind.Parameter) ||
+      !instance.generatedScope.contains(family) ||
       leaves.isEmpty || !leaves.forall(leaf =>
         leaf.protocol == "conservative" && leaf.mode.isEmpty && leaf.analogType.nonEmpty &&
           leaf.dataType.isEmpty && leaf.access == "connect"
       )
     then invalid("selected conservative child requires its exact constant scalar connect profile")
+    // This is profile admission only. The existing override policy owns binding,
+    // type, ownership and duplicate validation; the scalar materializer owns substitution.
+    def realLiteral(value: Any): Boolean = value match
+      case expression: KernelExpr[?] =>
+        expression.literal.exists(literal =>
+          literal.kind == "real" && literal.value.toDoubleOption.exists(_.isFinite)
+        ) && CandidateRuntime.expressionUnit(expression).forall(_.isEmpty)
+      case _ => false
+    val parameters = child.declarations.filter(_.kind == KernelSignalKind.Parameter)
+    if !parameters.forall(parameter =>
+        parameter.dataType.exists(
+          CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Real")
+        ) &&
+          parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2)) &&
+          parameter.attributes.find(_._1 == "classification").forall(_._2 == "ordinary") &&
+          parameter.attributes.find(_._1 == "unit").forall(_._2 == "")
+      ) || !instance.parameterOverrides.forall((_, value) => realLiteral(value))
+    then
+      invalid("selected conservative child parameters require ordinary dimensionless Real literals")
     val analysis = new StructuralBoundAnalysis(
       currentModule.handle,
       "NODAL-INTERFACE-058-ANALOG",

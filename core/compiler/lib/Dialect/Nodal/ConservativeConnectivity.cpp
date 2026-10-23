@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -1573,14 +1574,47 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       return failure();
     auto bindings = instance->getAttrOfType<DictionaryAttr>("parameter_bindings");
     Operation *module = resolveInstanceModuleDefinition(instance);
-    if (!bindings || !bindings.empty() || !module || module->hasAttr("external_name"))
+    if (!bindings || !module || module->hasAttr("external_name"))
       return failure();
     Block *body = moduleBody(module);
-    if (!body || llvm::any_of(*body, [](Operation &operation) {
-          return llvm::isa<ParameterOp>(operation);
-        }))
+    if (!body)
       return failure();
-    declaration = SymbolTable::lookupSymbolIn(module, textAttr(operation, "endpoint"));
+    // Restrict selection admission, not binding semantics: ParameterModel and
+    // the instance verifier still independently validate names, types and constraints.
+    for (Operation &parameter : *body) {
+      if (!llvm::isa<ParameterOp>(parameter))
+        continue;
+      auto type = parameter.getAttrOfType<TypeAttr>("type");
+      auto value = parameter.getAttrOfType<FloatAttr>("default_value");
+      if (!type || !type.getValue().isF64() || !value || !value.getValue().isFinite() ||
+          parameter.hasAttr("unit") || getParameterKind(&parameter) != "real" ||
+          getParameterClassification(&parameter) != "ordinary")
+        return failure();
+    }
+    for (Operation &attachment : *body) {
+      if (!llvm::isa<ParameterValueOp>(attachment))
+        continue;
+      if (attachment.getNumOperands() != 1)
+        return failure();
+      Operation *literal = attachment.getOperand(0).getDefiningOp();
+      auto value = literal ? literal->getAttrOfType<FloatAttr>("value") : FloatAttr();
+      if (!llvm::isa_and_nonnull<ConstLiteralOp>(literal) || literal->hasAttr("unit") || !value ||
+          !value.getType().isF64() || !value.getValue().isFinite())
+        return failure();
+    }
+    SymbolTable childSymbols(module);
+    for (NamedAttribute binding : bindings) {
+      Operation *parameter = childSymbols.lookup(binding.getName().getValue());
+      auto value = llvm::dyn_cast<FloatAttr>(binding.getValue());
+      if (!llvm::isa_and_nonnull<ParameterOp>(parameter) || !value || !value.getType().isF64() ||
+          !value.getValue().isFinite())
+        return failure();
+    }
+    for (Operation &candidate : *structuralBody(proof->family))
+      if (llvm::isa<ParameterOverrideOp>(candidate) &&
+          candidate.getAttrOfType<FlatSymbolRefAttr>("instance") == reference)
+        return failure();
+    declaration = childSymbols.lookup(textAttr(operation, "endpoint"));
     if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(declaration) ||
         declaration->getParentOp() != module)
       return failure();

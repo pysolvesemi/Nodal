@@ -153,14 +153,34 @@ private[nodal] object InterfaceMlir:
           ) &&
           family.owner == endpoint.owner && family.parent.isEmpty && family.lexicalParent.isEmpty &&
           family.digitalBody.nonEmpty && family.yieldedArea.nonEmpty && family.maximumTripCount > 0 &&
-          instance.generatedScope.contains(scope) && instance.parameterBindings.isEmpty &&
-          !modules(instance.childModule).declarations.exists(_.kind == "parameter") &&
+          instance.generatedScope.contains(scope) &&
           child.owner == instance.childModule && child.boundary.isEmpty &&
           declarations(child.path)._2.kind == "interface-port" && endpoint.dimensions.isEmpty &&
           endpoint.members.nonEmpty && endpoint.members.forall(member =>
             member.protocol == "conservative" && member.access == "connect" && member.mode.isEmpty
           ),
         "selected conservative child requires its exact constant scalar connect profile",
+        path
+      )
+      // Immutable snapshot admission only; canonical parameter transport owns binding semantics.
+      val parameters = modules(instance.childModule).declarations.filter(_.kind == "parameter")
+      val parameterNames = parameters.iterator.map(_.name).toSet
+      def literal(value: String): Boolean = value.toDoubleOption.exists(_.isFinite)
+      requireValid(
+        parameters.forall { parameter =>
+          val attributes = parameter.attributes
+          val uniqueKeys = attributes.iterator.map(_._1).toSet.size == attributes.size
+          if !uniqueKeys then false
+          else
+            val values = attributes.toMap
+            parameter.dataType.contains("Real") &&
+            values.get("default").exists(literal) &&
+            values.get("classification").forall(_ == "ordinary") &&
+            values.get("unit").forall(_.isEmpty)
+        } && instance.parameterBindings.forall((name, value) =>
+          parameterNames.contains(name) && literal(value)
+        ),
+        "selected conservative child parameters require ordinary dimensionless Real literals",
         path
       )
       val indices = Vector(

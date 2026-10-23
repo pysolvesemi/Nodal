@@ -1787,3 +1787,62 @@ retain 122 blank-line trailing-space findings and five terminal blank lines in
 42 files. The complete diff check reports these known fixture-byte exceptions;
 the non-template diff check passes. No whitespace checking configuration was
 disabled and no expected input hashes were silently regenerated.
+
+## Checkpoint 55: selected conservative literal parameters
+
+The existing selected-child occurrence/profile proof now admits ordinary,
+dimensionless finite Real/f64 literal defaults and actuals. ConstructionSession,
+immutable Interface transport and native ConservativeConnectivity independently
+check admission; ParameterModel, instance verification and scalar materialization
+continue to own parameter meaning, constraints, binding and substitution. No
+second evaluator or parameter registry was added. A local immutable name set and
+MLIR SymbolTable avoid repeated membership/body scans; expected per-query work
+is linear in child operations and bindings, not a measured speedup.
+
+The immutable boundary additionally rejects duplicate parameter attribute keys
+before map conversion. Causal tests showed that unsupported-first defaults,
+units and classifications previously disappeared through last-wins conversion;
+eight both-order cases now refuse, preserving earlier canonical diagnostics
+where applicable. Generic parameter transport is not relaxed or rewritten.
+
+Focused source/native acceptance passed on an exact 115-file source lookup root:
+three physical roots with defaults 2/1 and distinct actuals 3/7 and 11/13; six
+source refusals plus recovery; eight other forged snapshots; duplicate binding
+transport and native rejection; and eight duplicate-attribute cases. Actual
+Verilog-A retains the child's parameter-dependent equation, instance overrides,
+a nonunit generate loop and eight endpoint correspondence records. The authored two-child star topology
+still verifies but fails physical emission transactionally. It differs from the
+accepted direct leaf-to-leaf wiring, so this does not establish a child-count
+restriction.
+
+The maintained explicit-input runner and nine authored Scala fixtures passed
+six fresh Scala mains and 25 native invocations, plus six runner controls for
+output/input safety, exact mutation anchors and timeout behavior. The three
+old-native comparisons remain historical evidence, not maintained dependencies
+or additional current-profile cases. All 125 directly affected predecessor
+executions passed unchanged. These counts overlap development checks and earlier
+checkpoints; they are not a sum of newly implemented features.
+
+The runner accepts explicit matching overlay/support artifacts, compiles fixture
+paths within the supplied canonical source root, and checks their bytes against
+the maintained bundle. It records ordered inputs without claiming to prove a
+prebuilt binary's source provenance. Generated outputs remain under ignored
+root `.work`. Source relocation changed full metadata as expected; full diffs
+are retained, and three physical bodies matched when metadata comments were
+excluded solely for comparison, never by rewriting output. All nine newly
+authored fixtures subsequently passed the pinned formatter and the six-main,
+25-native-call replay passed again on the formatted source root. Formatting
+changed source spans and induction metadata; full raw diffs are retained and
+historical byte parity is not claimed for that successor.
+
+See [the maintained focused runner guide](../../tests/scala/domain-hierarchy/SELECTED_CONSERVATIVE_PARAMETERS.md)
+for commands, artifact composition and assertions. Independent scoped review,
+production/fixture Scala and new native-hunk formatting, document and diff checks passed.
+The full native formatter still reports 207 inherited replacements, each mapped
+to the predecessor; none remains in the new hunks. A narrow native rebuild after
+11 whitespace-only corrections produced a byte-identical object/probe and all
+25 replay outputs matched. No CI or full qualification ran.
+The profile remains single-level, fixed, nonempty and scalar with literal
+selection; parent-reference/expression actuals, explicit native override forms,
+arrays, nested/symbolic families and the fixture's shared-scalar star topology
+remain open. C1 and broader Foundation 58 completion are not claimed.

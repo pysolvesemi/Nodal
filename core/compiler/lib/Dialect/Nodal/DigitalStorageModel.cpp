@@ -10,6 +10,7 @@
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/StringSet.h"
 
@@ -151,7 +152,10 @@ LogicalResult verifyGeneratedFamilyOperation(Operation *operation) {
         failed(verifyGeneratedExportOperation(&child)))
       return reject(&child, "family exports must have unique verified member keys");
   }
-  for (Operation *user : operation->getResult(0).getUsers()) {
+  for (OpOperand &use : operation->getResult(0).getUses()) {
+    Operation *user = use.getOwner();
+    if (isStructuralIfFamilyCapture(use))
+      continue;
     if (llvm::isa<GeneratedExportOp>(user) && text(user, "kind") == "family" &&
         succeeded(verifyGeneratedExportOperation(user)))
       continue;
@@ -182,6 +186,23 @@ FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, u
   if (!llvm::isa<GeneratedFamilyType>(handle.getType()) ||
       failed(verifyDigitalValueScope(handle, operation)))
     return rejectMember("generated member must retain its actual dominating family");
+  Operation *captureUse = operation;
+  while (auto argument = llvm::dyn_cast<BlockArgument>(handle)) {
+    if (++depth > 128 || !work--)
+      return rejectMember("generated selection chain exceeds finite depth or work budget");
+    Operation *owner = argument.getOwner()->getParentOp();
+    auto h = inspectStructuralIfHeader(owner);
+    if (failed(h) || failed(verifyDigitalValueScope(handle, captureUse)))
+      return rejectMember("family capture must retain its exact structural arm provenance");
+    unsigned arm = argument.getOwner() == h->bodies[0] ? 0 : 1;
+    if (argument.getOwner() != h->bodies[arm] || argument.getArgNumber() >= h->captureCounts[arm])
+      return rejectMember("family capture must identify an actual structural capture slot");
+    OpOperand &capture = owner->getOpOperand(h->captureOffsets[arm] + argument.getArgNumber());
+    if (!isStructuralIfFamilyCapture(capture))
+      return rejectMember("family capture must retain exact type and structural ancestry");
+    handle = capture.get();
+    captureUse = owner;
+  }
   Operation *family = handle.getDefiningOp();
   llvm::SmallVector<GeneratedSelection, 2> selections;
   if (llvm::isa_and_nonnull<GeneratedMemberOp>(family)) {
@@ -222,10 +243,14 @@ FailureOr<GeneratedMember> inspectMember(Operation *operation, unsigned depth, u
     return rejectMember("generated ordinal lacks an all-legal existence proof");
   selections.push_back({family, operation->getOperand(1), *coordinate});
   if (familyView)
-    for (Operation *user : operation->getResult(0).getUsers())
+    for (OpOperand &use : operation->getResult(0).getUses()) {
+      Operation *user = use.getOwner();
+      if (isStructuralIfFamilyCapture(use))
+        continue;
       if (!llvm::isa<GeneratedMemberOp>(user) || user->getNumOperands() != 2 ||
           user->getOperand(0) != operation->getResult(0))
         return rejectMember("family view is immutable structure, not a runtime payload or export");
+    }
   return GeneratedMember{family,
                          exported,
                          storage,

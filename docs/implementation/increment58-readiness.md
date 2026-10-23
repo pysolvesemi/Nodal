@@ -1168,3 +1168,22 @@ target claim. The concrete all-values target does not pass: packed projection
 and named-field saturation refusals remain explicit. This source checkpoint
 therefore establishes neither that waveform nor region-owned/inferred-storage
 lifecycle support. Those consumers remain separate required work where applicable.
+
+### Accepted native prerequisite for family capture
+
+The isolated native prerequisite snapshot matches all 223 repository source
+entries of `.work/f58-generated-target/nested/third/source-before.sha256`
+(digest `cc68ac0a`), identical to its after manifest. Seven changed native paths
+are restored byte-for-byte from accepted source; unrelated files are preserved.
+The retained compiler is `237a956f`. Focused Hierarchy 35, Storage 204,
+Structural 73, DigitalType 114 and AssignmentGuard 34 checks pass separately.
+Six shared family-capture source inputs pass its native default gate. These are
+existing matched receipts, not newly executed tests or a whole F58 completion.
+
+The ODS and tracked generated registry inputs are unchanged. Historical generated
+build-directory headers and external transitive TableGen inputs are not
+independently sealed by this receipt; fresh reproduction is not claimed. Later
+prefix-map assertions and three additional negatives are not part of this exact
+snapshot. Nested lane-distinct target behavior and broader pending profiles
+remain open. No security-held consumer execution is resumed by preserving this
+previously accepted source checkpoint.

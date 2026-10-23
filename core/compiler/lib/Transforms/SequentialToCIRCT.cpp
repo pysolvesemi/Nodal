@@ -35,11 +35,13 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 
+#include <functional>
 #include <limits>
 #include <string>
 
@@ -1497,13 +1499,20 @@ public:
   }
 
 private:
+  struct GeneratedFamilyPlan;
   struct GeneratedOutput {
     Value value;
     SmallVector<Value> destinations;
-    Type busType;
+    Type laneType, busType;
+    uint64_t maximumLaneBits;
+    GeneratedFamilyPlan *child = nullptr;
+    unsigned childOutput = 0;
   };
   struct GeneratedFamilyPlan {
     Operation *operation;
+    GeneratedFamilyPlan *parent = nullptr;
+    SmallVector<GeneratedFamilyPlan *> children;
+    SmallVector<Operation *> selections;
     GeneratedDomain domain;
     TypedAttr lower, upper, step;
     StringAttr name, indexName, genvarName;
@@ -1516,9 +1525,11 @@ private:
     circt::hw::HWModuleOp target;
   };
   SmallVector<std::unique_ptr<GeneratedFamilyPlan>> generatedFamilies;
+  SmallVector<GeneratedFamilyPlan *> generatedRoots;
+  llvm::DenseMap<Operation *, GeneratedFamilyPlan *> generatedFamilyPlans;
   llvm::DenseMap<Operation *, std::pair<GeneratedFamilyPlan *, unsigned>> generatedOutputPorts;
   llvm::DenseMap<Operation *, std::pair<GeneratedFamilyPlan *, unsigned>> generatedExports;
-  llvm::DenseMap<Operation *, GeneratedMember> generatedMembers;
+  llvm::MapVector<Operation *, GeneratedMember> generatedMembers;
   llvm::DenseMap<Attribute, SmallVector<TypedAttr>> generatedExclusions;
   Value capturedValue(Value value) const {
     for (unsigned depth = 0; depth < digitalTypeMaximumDepth; ++depth) {
@@ -1555,9 +1566,10 @@ private:
         name = base + "_" + std::to_string(++suffix);
       return builder.getStringAttr(name);
     };
-    for (Operation &op : source.getBody().front()) {
-      if (!isa<GenerateOp>(op))
-        continue;
+    std::function<LogicalResult(Operation &, GeneratedFamilyPlan *, unsigned)> planFamily;
+    planFamily = [&](Operation &op, GeneratedFamilyPlan *parent, unsigned depth) -> LogicalResult {
+      if (depth >= digitalTypeMaximumDepth)
+        return reject(&op, "generated helper ancestry exceeds finite target depth");
       auto domain = resolveGeneratedDomain(&op);
       if (op.getNumResults() != 1 || failed(domain) || domain->lower.bounds.lower != 0 ||
           domain->lower.bounds.upper != 0 || domain->step.bounds.lower != 1 ||
@@ -1567,12 +1579,19 @@ private:
       if (domain->upperExclusive.bounds.lower == domain->upperExclusive.bounds.upper &&
           !preserveConstantLoops)
         return reject(&op, "concrete generated storage requires preserve-constant-loops=true");
-      if (generatedFamilies.size() >= 4096 || cost + 16 > maximumGeneratedOperations)
+      if (generatedFamilyPlans.size() >= 4096 || cost + 16 > maximumGeneratedOperations)
         return reject(&op, "generated helper templates exceed finite target budget");
       cost += 16;
       auto plan = std::make_unique<GeneratedFamilyPlan>();
       auto &family = *plan;
       family.operation = &op;
+      family.parent = parent;
+      unsigned familyIndex = generatedFamilyPlans.size();
+      generatedFamilyPlans.try_emplace(&op, &family);
+      if (parent)
+        parent->children.push_back(&family);
+      else
+        generatedRoots.push_back(&family);
       family.domain = *domain;
       family.lower = parameterExpression(domain->lower);
       family.upper = parameterExpression(domain->upperExclusive);
@@ -1580,7 +1599,7 @@ private:
       if (!family.lower || !family.upper || !family.step)
         return reject(&op, "generated bounds require checked target Integer expressions");
       family.name = unique((variant ? variant->name : text(source, "sym_name").str()) +
-                           "__family_" + std::to_string(generatedFamilies.size()));
+                           "__family_" + std::to_string(familyIndex));
       llvm::StringSet<> parameterNames;
       for (Attribute attr : targetParameters)
         parameterNames.insert(cast<circt::hw::ParamDeclAttr>(attr).getName().getValue());
@@ -1588,8 +1607,7 @@ private:
       while (!parameterNames.insert(index).second)
         index += "_";
       family.indexName = builder.getStringAttr(index);
-      family.genvarName =
-          builder.getStringAttr("__nodal_lane_" + std::to_string(generatedFamilies.size()));
+      family.genvarName = builder.getStringAttr("__nodal_lane_" + std::to_string(familyIndex));
       llvm::DenseSet<Value> captures;
       auto capture = [&](Value value) -> LogicalResult {
         value = capturedValue(value);
@@ -1606,21 +1624,28 @@ private:
           family.captures.push_back(value);
         return success();
       };
-      auto output = [&](Value value) -> FailureOr<unsigned> {
+      auto output = [&](Value value, GeneratedFamilyPlan *child = nullptr,
+                        unsigned childOutput = 0) -> FailureOr<unsigned> {
         value = capturedValue(value);
-        Type type = value ? targetValueType(value.getType()) : Type();
-        auto scalar = dyn_cast_if_present<IntegerType>(type);
-        if (!scalar || scalar.getWidth() > maximumWidth / domain->maximumTripCount)
+        Type type = child ? child->outputs[childOutput].busType
+                          : (value ? targetValueType(value.getType()) : Type());
+        uint64_t maximumBits = 0;
+        if (child) {
+          const auto &leaf = child->outputs[childOutput];
+          maximumBits = leaf.maximumLaneBits * child->domain.maximumTripCount;
+        } else if (auto scalar = dyn_cast_if_present<IntegerType>(type))
+          maximumBits = scalar.getWidth();
+        if (!maximumBits || maximumBits > maximumWidth / domain->maximumTripCount)
           return failure();
         for (auto [index, prior] : llvm::enumerate(family.outputs))
-          if (prior.value == value)
+          if (prior.value == value && prior.child == child && prior.childOutput == childOutput)
             return index;
-        TypedAttr bits = circt::hw::ParamExprAttr::get(
-            circt::hw::PEO::Mul, family.upper, builder.getI32IntegerAttr(scalar.getWidth()));
+        TypedAttr bits =
+            circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, family.upper, generatedWidth(type));
         Type bus = isa<IntegerAttr>(bits)
                        ? Type(builder.getIntegerType(cast<IntegerAttr>(bits).getInt()))
                        : Type(circt::hw::IntType::get(bits));
-        family.outputs.push_back({value, {}, bus});
+        family.outputs.push_back({value, {}, type, bus, maximumBits, child, childOutput});
         return family.outputs.size() - 1;
       };
       auto walk = op.walk<WalkOrder::PreOrder>([&](Operation *child) {
@@ -1631,6 +1656,27 @@ private:
           return WalkResult::interrupt();
         }
         cost += 16;
+        if (isa<GenerateOp>(child)) {
+          if (child->getParentOp() != &op || failed(planFamily(*child, &family, depth + 1))) {
+            (void)reject(child, "nested target family requires exact direct lexical ownership");
+            return WalkResult::interrupt();
+          }
+          auto *nested = generatedFamilyPlans.lookup(child);
+          for (Value value : nested->captures)
+            if (failed(capture(value)))
+              return WalkResult::interrupt();
+          return WalkResult::skip();
+        }
+        if (isa<GeneratedMemberOp>(child)) {
+          auto member = inspectGeneratedMember(child);
+          if (failed(member) || child->getParentOp() != &op) {
+            (void)reject(child,
+                         "generated target selection requires its exact lexical family scope");
+            return WalkResult::interrupt();
+          }
+          generatedMembers.try_emplace(child, *member);
+          return WalkResult::advance();
+        }
         if (isa<StructuralIfOp>(child)) {
           if (child->getParentOp() != &op || child->getNumResults()) {
             (void)reject(
@@ -1658,6 +1704,19 @@ private:
         if (isa<StructuralYieldOp>(child))
           return WalkResult::advance();
         if (isa<GeneratedExportOp>(child)) {
+          if (text(child, "kind") == "family") {
+            auto *nested = generatedFamilyPlans.lookup(child->getOperand(0).getDefiningOp());
+            if (!nested || nested->parent != &family) {
+              (void)reject(child, "generated family export lost its exact child template");
+              return WalkResult::interrupt();
+            }
+            for (auto [i, leaf] : llvm::enumerate(nested->outputs))
+              if (failed(output(leaf.value, nested, i))) {
+                (void)reject(child, "nested generated export exceeds finite physical bit budget");
+                return WalkResult::interrupt();
+              }
+            return WalkResult::advance();
+          }
           auto index = output(child->getOperand(0));
           if (failed(index)) {
             (void)reject(child, "generated target exports require fixed scalar storage leaves");
@@ -1732,10 +1791,9 @@ private:
         if (isa<ShapeIndexOp>(child)) {
           auto shape = dyn_cast<nodal::ShapedType>(child->getOperand(0).getType());
           auto index = resolveStaticShapeIterationIndex(child->getOperand(1), child);
-          if (child->getNumOperands() != 2 || !shape || shape.getDimensions().contains(',') ||
-              !isa_and_nonnull<IntegerType>(targetValueType(child->getResult(0).getType())) ||
-              failed(index) || index->loop != &op ||
-              capturedValue(child->getOperand(1)) != domain->induction) {
+          if (child->getNumOperands() != 2 || !shape ||
+              !generatedWidth(targetValueType(child->getResult(0).getType())) || failed(index) ||
+              index->loop != &op || capturedValue(child->getOperand(1)) != domain->induction) {
             (void)reject(child,
                          "generated scalar slice requires the exact direct family induction");
             return WalkResult::interrupt();
@@ -1800,7 +1858,7 @@ private:
       for (auto [index, value] : llvm::enumerate(family.captures))
         port(value, true, index, targetValueType(value.getType()));
       for (auto [index, out] : llvm::enumerate(family.outputs))
-        port(out.value, false, index, targetValueType(out.value.getType()));
+        port(out.value, false, index, out.laneType);
       if (cost + 8 * family.ports.size() + targetParameters.size() > maximumGeneratedOperations)
         return reject(&op, "generated logical adapters exceed target budget");
       cost += 8 * family.ports.size() + targetParameters.size();
@@ -1809,7 +1867,11 @@ private:
       cost += 12 * targetParameters.size();
       staticOperations.insert(&op);
       generatedFamilies.push_back(std::move(plan));
-    }
+      return success();
+    };
+    for (Operation &op : source.getBody().front())
+      if (isa<GenerateOp>(op) && failed(planFamily(op, nullptr, 0)))
+        return failure();
     if (!generatedFamilies.empty())
       for (Operation &op : source.getBody().front())
         if (isa<ParameterConstraintOp>(op) && text(&op, "constraint_kind") == "exclude") {
@@ -1825,13 +1887,45 @@ private:
     for (Operation &op : source.getBody().front())
       if (isa<GeneratedMemberOp>(op)) {
         auto member = inspectGeneratedMember(&op);
-        if (failed(member) || member->familyView || member->selections.size() != 1 ||
-            !generatedExports.count(member->exportOperation) ||
-            !parameterExpression(member->coordinate))
-          return reject(&op,
-                        "generated target selection requires one checked direct scalar export");
+        if (failed(member))
+          return failure();
         generatedMembers.try_emplace(&op, *member);
       }
+    for (auto &[operation, member] : generatedMembers) {
+      if (member.familyView) {
+        staticOperations.insert(operation);
+        continue;
+      }
+      if (member.selections.empty() || !generatedExports.count(member.exportOperation))
+        return reject(operation, "generated target selection requires an original scalar export");
+      auto *plan = generatedFamilyPlans.lookup(member.selections.front().family);
+      Operation *scope = plan && plan->parent ? plan->parent->operation : source.getOperation();
+      if (!plan || operation->getParentOp() != scope)
+        return reject(operation, "generated target selection prefix has a foreign lexical owner");
+      plan->selections.push_back(operation);
+      unsigned outputIndex = 0;
+      for (; outputIndex < plan->outputs.size(); ++outputIndex)
+        if (plan->outputs[outputIndex].value == member.storage)
+          break;
+      for (auto [i, selection] : llvm::enumerate(member.selections)) {
+        if (plan->operation != selection.family || outputIndex >= plan->outputs.size() ||
+            !parameterExpression(selection.coordinate))
+          return reject(operation, "generated target selection must retain every exact prefix");
+        const auto &out = plan->outputs[outputIndex];
+        if (i + 1 == member.selections.size()) {
+          if (out.child || out.value != member.storage)
+            return reject(operation, "generated target selection did not reach original storage");
+        } else {
+          if (!out.child)
+            return reject(operation, "generated target selection is missing an exported family");
+          plan = out.child;
+          outputIndex = out.childOutput;
+        }
+      }
+      cost += 8 * member.selections.size();
+      if (cost > maximumGeneratedOperations)
+        return reject(operation, "generated prefix adapters exceed finite target budget");
+    }
     return success();
   }
 
@@ -1876,18 +1970,32 @@ private:
     state.addOperands({destination, value});
     correlate(builder.create(state), at);
   }
-  Value generatedSlice(Operation *at, Value input, Value index, Type result) {
+  TypedAttr generatedWidth(Type type) {
+    if (auto scalar = dyn_cast_if_present<IntegerType>(type))
+      return builder.getI32IntegerAttr(scalar.getWidth());
+    if (auto symbolic = dyn_cast_if_present<circt::hw::IntType>(type))
+      return symbolic.getWidth();
+    return {};
+  }
+  Value generatedSlice(Operation *at, Value input, Value index, Type result,
+                       bool bitOffset = false) {
     Type element = result;
     if (auto inout = dyn_cast<circt::hw::InOutType>(element))
       element = inout.getElementType();
-    unsigned stride = cast<IntegerType>(element).getWidth();
-    // Keep the actual genvar as an SSA substitution. In particular, a comb.mul
-    // wire is not a legal elaboration-constant output connection selector.
-    std::string format =
-        "{{0}}[{{1}} * " + std::to_string(stride) + " +: " + std::to_string(stride) + "]";
-    return make(at, "sv.verbatim.expr", result, {input, index},
-                {builder.getNamedAttr("format_string", builder.getStringAttr(format)),
-                 builder.getNamedAttr("symbols", builder.getArrayAttr({}))});
+    TypedAttr width = generatedWidth(element);
+    if (!width)
+      return {};
+    // A parameter value may be outlined as a runtime wire. A localparam keeps
+    // the slice width an elaboration constant through the actual SV consumer.
+    Value stride = make(at, "sv.localparam", builder.getI32Type(), {},
+                        {builder.getNamedAttr("value", width),
+                         builder.getNamedAttr("name", builder.getStringAttr(""))});
+    return make(
+        at, "sv.verbatim.expr", result, {input, index, stride},
+        {builder.getNamedAttr("format_string",
+                              builder.getStringAttr(bitOffset ? "{{0}}[{{1}} +: {{2}}]"
+                                                              : "{{0}}[{{1}} * {{2}} +: {{2}}]")),
+         builder.getNamedAttr("symbols", builder.getArrayAttr({}))});
   }
   LogicalResult lowerGeneratedHelper(GeneratedFamilyPlan &family) {
     OpBuilder::InsertionGuard insertion(builder);
@@ -1952,6 +2060,10 @@ private:
         return failure();
       }
       values[reg->getResult(0)] = state;
+    }
+    if (failed(lowerGeneratedScope(&family))) {
+      backedges.abandon();
+      return failure();
     }
     for (Operation *op : family.operations) {
       if (!op->getNumResults() || isa<DigitalStorageOp, StaticCompareOp>(op) ||
@@ -2071,7 +2183,10 @@ private:
               builder.getStringAttr("NODAL generated family parameter outside verified range"));
         });
       }
-    for (auto &owned : generatedFamilies) {
+    return lowerGeneratedScope(nullptr);
+  }
+  LogicalResult lowerGeneratedScope(GeneratedFamilyPlan *parent) {
+    for (auto *owned : parent ? parent->children : generatedRoots) {
       auto &family = *owned;
       SmallVector<Value> wires, buses;
       for (const auto &out : family.outputs) {
@@ -2121,13 +2236,14 @@ private:
             ArrayRef<Value>(inputs), builder.getArrayAttr(parameters));
         correlate(instance, family.operation);
         for (auto [i, out] : llvm::enumerate(family.outputs)) {
-          Value destination =
-              generatedSlice(family.operation, wires[i], index,
-                             circt::hw::InOutType::get(targetValueType(out.value.getType())));
+          Value destination = generatedSlice(family.operation, wires[i], index,
+                                             circt::hw::InOutType::get(out.laneType));
           assignGenerated(family.operation, destination, instance.getResult(i));
         }
       }
       for (auto [i, out] : llvm::enumerate(family.outputs)) {
+        if (parent)
+          values[out.value] = buses[i];
         for (Value destination : out.destinations) {
           auto pin = destination.getDefiningOp<PortValueOp>();
           Operation *port =
@@ -2136,16 +2252,39 @@ private:
             values[reference] = buses[i];
         }
       }
-      for (auto &[operation, member] : generatedMembers) {
-        auto selected = generatedExports.lookup(member.exportOperation);
-        if (selected.first != &family)
-          continue;
-        Value index =
-            circt::hw::ParamValueOp::create(builder, operation->getLoc(), builder.getI32Type(),
-                                            parameterExpression(member.coordinate));
-        values[operation->getResult(0)] =
-            generatedSlice(operation, buses[selected.second], index,
-                           targetValueType(operation->getResult(0).getType()));
+      for (Operation *operation : family.selections) {
+        const auto &member = generatedMembers.find(operation)->second;
+        auto *plan = &family;
+        unsigned selected = 0;
+        while (plan->outputs[selected].value != member.storage)
+          ++selected; // Fully bounded and validated by the prefix preflight.
+        Value bus = buses[selected];
+        TypedAttr offset = builder.getI32IntegerAttr(0);
+        SmallVector<Attribute> prefixes;
+        Type selectedType;
+        for (const auto &selection : member.selections) {
+          const auto &out = plan->outputs[selected];
+          TypedAttr coordinate = parameterExpression(selection.coordinate);
+          TypedAttr stride = generatedWidth(out.laneType);
+          offset = circt::hw::ParamExprAttr::get(
+              circt::hw::PEO::Add, offset,
+              circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, coordinate, stride));
+          prefixes.push_back(builder.getDictionaryAttr(
+              {builder.getNamedAttr("family", selection.family->getAttr("region_id")),
+               builder.getNamedAttr("coordinate", coordinate),
+               builder.getNamedAttr("stride_bits", stride)}));
+          selectedType = out.laneType;
+          plan = out.child;
+          selected = out.childOutput;
+        }
+        // Compose every verified prefix stride, not just the final coordinate.
+        // A single range select avoids invalid SV select chaining even when
+        // downstream optimization removes intermediate adapter wires.
+        Value index = circt::sv::LocalParamOp::create(
+            builder, operation->getLoc(), builder.getI32Type(), offset, builder.getStringAttr(""));
+        Value value = generatedSlice(operation, bus, index, selectedType, true);
+        value.getDefiningOp()->setAttr("nodal.generated_selection", builder.getArrayAttr(prefixes));
+        values[operation->getResult(0)] = value;
       }
     }
     return success();
@@ -3307,7 +3446,8 @@ private:
         return {};
       return joinBoundary(op, resultType, leaves);
     }
-    unsigned bits = width(op->getResult(0).getType());
+    auto scalarResult = dyn_cast_or_null<IntegerType>(targetValueType(op->getResult(0).getType()));
+    unsigned bits = scalarResult ? scalarResult.getWidth() : 0;
     if (isa<ConstantOp, ConstLiteralOp>(op)) {
       auto attr = op->getAttrOfType<IntegerAttr>("value");
       bool negative =
@@ -3373,7 +3513,9 @@ private:
       return inputs[0];
     if (code == "digital_select")
       return mux(op, inputs[0], inputs[1], inputs[2]);
-    bool sign = isa<SIntType>(op->getOperand(0).getType());
+    auto parametric = dyn_cast<ParametricIntegerType>(op->getOperand(0).getType());
+    bool sign = isa<SIntType>(op->getOperand(0).getType()) ||
+                (parametric && parametric.getKind() == "sint");
     if (code == "digital_not" || code == "bool_not")
       return invert(op, inputs[0]);
     if (code == "digital_concat")
@@ -3386,8 +3528,8 @@ private:
     }
     bool comparison = code == "digital_eq" || code == "digital_ne" || code == "digital_lt" ||
                       code == "digital_le" || code == "digital_gt" || code == "digital_ge";
-    unsigned common = comparison ? std::max(width(op->getOperand(0).getType()),
-                                            width(op->getOperand(1).getType()))
+    unsigned common = comparison ? std::max(cast<IntegerType>(inputs[0].getType()).getWidth(),
+                                            cast<IntegerType>(inputs[1].getType()).getWidth())
                                  : bits;
     Value a = resize(op, inputs[0], common, sign), b = resize(op, inputs[1], common, sign);
     if (comparison)

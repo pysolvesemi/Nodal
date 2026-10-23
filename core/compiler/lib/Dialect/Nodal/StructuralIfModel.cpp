@@ -140,6 +140,25 @@ FailureOr<Value> structuralIfCaptureSource(BlockArgument arg) {
       return h->operation->getOperand(h->captureOffsets[arm] + arg.getArgNumber());
   return failure();
 }
+bool isStructuralIfFamilyCapture(OpOperand &operand) {
+  Operation *op = operand.getOwner();
+  Value source = operand.get();
+  if (!llvm::isa<GeneratedFamilyType>(source.getType()))
+    return false;
+  auto h = inspectStructuralIfHeader(op);
+  if (failed(h) || failed(verifyDigitalValueScope(source, op)))
+    return false;
+  unsigned depth = 0;
+  for (Operation *scope = op; scope != h->module; scope = scope->getParentOp())
+    if (!scope || ++depth > 128 || !llvm::isa<StructuralIfOp, GenerateOp>(scope))
+      return false;
+  unsigned index = operand.getOperandNumber();
+  for (unsigned arm = 0; arm < 2; ++arm)
+    if (index >= h->captureOffsets[arm] && index - h->captureOffsets[arm] < h->captureCounts[arm])
+      return h->bodies[arm]->getArgument(index - h->captureOffsets[arm]).getType() ==
+             source.getType();
+  return false;
+}
 namespace detail {
 class StructuralIfIntegerEnvironmentAdmission {
 public:
@@ -426,6 +445,9 @@ LogicalResult verifyIf(Operation *op, const ParameterIntegerEnvironment *outer, 
       } else if (llvm::isa<StaticPredicateType>(arg.getType())) {
         if (source.getType() != arg.getType() || failed(analyzeStaticPredicate(source, op, outer)))
           return reject(op, "predicate capture must retain its verified actual DAG");
+      } else if (llvm::isa<GeneratedFamilyType>(arg.getType())) {
+        if (!isStructuralIfFamilyCapture(op->getOpOperand(h->captureOffsets[arm] + i)))
+          return reject(op, "family capture requires an exact typed ordinary structural slot");
       } else if (!pure && isDigitalControlBoundaryType(arg.getType())) {
         if (source.getType() != arg.getType())
           return reject(op, "control capture must preserve its exact Clock/Reset capability");

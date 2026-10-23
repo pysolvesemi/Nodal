@@ -20,6 +20,10 @@ bool areOppositeStructuralArms(mlir::Operation *left, mlir::Operation *right);
 mlir::LogicalResult canonicalizeStructuralIfCaptures(mlir::Operation *operation, unsigned &work,
                                                      unsigned maximumWork);
 mlir::FailureOr<mlir::Value> structuralIfCaptureSource(mlir::BlockArgument argument);
+/// Recognize one exact typed family capture slot in ordinary structural ancestry.
+/// This admits transport only; the storage owner independently resolves the actual
+/// family/export graph at member selection.
+bool isStructuralIfFamilyCapture(mlir::OpOperand &operand);
 mlir::FailureOr<llvm::SmallVector<ParameterIntegerEnvironment, 4>>
 structuralIfIntegerContextsAtUse(mlir::Operation *use);
 mlir::LogicalResult

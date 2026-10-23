@@ -176,6 +176,79 @@ std::string generatedFixture(bool symbolic = true, bool choice = true) {
          "}\n";
 }
 
+std::string nestedGeneratedFixture(unsigned depth = 2, bool symbolic = true) {
+  std::string input = generatedFixture(symbolic, false);
+  const std::string originalPath = "Top.family";
+  std::string path = "Top";
+  for (unsigned i = 0; i < depth; ++i)
+    path += ".family";
+  for (size_t at = 0; (at = input.find(originalPath, at)) != std::string::npos; at += path.size())
+    input.replace(at, originalPath.size(), path);
+  auto begin = input.find("%family =");
+  auto end = input.find("%selected =", begin);
+  std::string body = input.substr(begin, end - begin);
+  for (unsigned i = depth - 1; i-- > 0;) {
+    std::string owner = "Top";
+    for (unsigned j = 0; j <= i; ++j)
+      owner += ".family";
+    std::string handle = i + 1 == depth - 1 ? "family" : "family" + std::to_string(i + 1);
+    body = "%family" + std::to_string(i) +
+           " = \"nodal.generate\"(%lower, %outerUpper, %step) <{induction = \"i\", "
+           "induction_path = \"" +
+           owner + ".i\", region_id = \"" + owner +
+           "\", metadata = {maximum_trip_count = 2 : i64}}> ({^bb0(%outer" + std::to_string(i) +
+           ": i64):\n" + body + "\"nodal.generated_export\"(%" + handle +
+           ") <{member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> : "
+           "(!nodal.generated_family) -> ()\n}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  }
+  std::string selection;
+  std::string handle = "family0";
+  for (unsigned i = 0; i + 1 < depth; ++i) {
+    std::string view = "view" + std::to_string(i);
+    selection += "%" + view + " = \"nodal.generated_member\"(%" + handle +
+                 ", %step) <{member = \"inner\", access = \"read\", kind = \"family\", "
+                 "metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.generated_family\n";
+    handle = view;
+  }
+  std::string suffix = input.substr(end);
+  suffix = replace(suffix, "generated_member\"(%family,", "generated_member\"(%" + handle + ",");
+  return input.substr(0, begin) +
+         "%outerUpper = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", "
+         "metadata = {}}> : () -> i64\n" +
+         body + selection + suffix;
+}
+
+std::string derivedWidthFixture() {
+  auto ty = [](unsigned bits) {
+    return "!nodal.digital<\"sint\", \"Top.width" + std::to_string(bits) + "\">";
+  };
+  std::string body = domain("a") + "%widthZero = \"nodal.const_literal\"() <{value = 0 : i64, "
+                                   "spelling = \"0\", metadata = {}}> : () -> i64\n";
+  for (unsigned bits : {4, 5, 8}) {
+    std::string name = std::to_string(bits);
+    body += "%literal" + name + " = \"nodal.const_literal\"() <{value = " + name +
+            " : i64, spelling = \"" + name + "\", metadata = {}}> : () -> i64\n" + "%width" + name +
+            " = \"nodal.const_expr\"(%literal" + name +
+            ", %widthZero) "
+            "<{operator_name = \"add\", metadata = {semantic_path = \"Top.width" +
+            name + "\"}}> : (i64, i64) -> i64\n";
+  }
+  body += port("x", "input", "a", ty(4)) + port("y", "input", "a", ty(4)) +
+          port("sum", "output", "a", ty(5)) + port("product", "output", "a", ty(8)) +
+          port("negative", "output", "a", ty(5)) + port("less", "output", "a");
+  auto expression = [&](StringRef name, StringRef code, unsigned bits, bool unary = false) {
+    const std::string type = bits == 1 ? bit : ty(bits);
+    return "%" + name.str() + "Value = \"nodal.digital_expr\"(%x" + (unary ? "" : ", %y") +
+           ") <{operator_name = \"" + code.str() + "\", metadata = {}}> : (" + ty(4) +
+           (unary ? "" : ", " + ty(4)) + ") -> " + type + "\n\"nodal.digital_assign\"(%" +
+           name.str() + ", %" + name.str() + "Value) <{kind = \"continuous\", metadata = {}}> : (" +
+           type + ", " + type + ") -> ()\n";
+  };
+  body += expression("sum", "digital_add", 5) + expression("product", "digital_mul", 8) +
+          expression("negative", "digital_neg", 5, true) + expression("less", "digital_lt", 1);
+  return "module attributes {nodal.root.module = @Top} {\n" + owner("Top", body) + "}\n";
+}
+
 std::string print(Operation *op) {
   std::string result;
   llvm::raw_string_ostream out(result);
@@ -448,7 +521,8 @@ int main() {
     malformed.erase();
   }
   auto generatedTarget = [&](StringRef name, const std::string &input, bool preserve, bool expected,
-                             StringRef diagnostic = "", int extractOffset = -1) {
+                             StringRef diagnostic = "", int extractOffset = -1,
+                             unsigned depth = 1) {
     diagnostics.clear();
     auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
     bool valid = parsed && succeeded(verify(*parsed));
@@ -473,8 +547,8 @@ int main() {
         loops += op->getName().getStringRef() == "sv.generate.for";
         leftovers += op->getDialect()->getNamespace() == "nodal";
       });
-      correct &= modules == 2 && instances == 1 && registers == 1 && loops == 1 && !leftovers &&
-                 extraction && succeeded(verify(*parsed));
+      correct &= modules == depth + 1 && instances == depth && registers == 1 && loops == depth &&
+                 !leftovers && extraction && succeeded(verify(*parsed));
       auto text = print(*parsed);
       correct &= StringRef(text).contains("nodal.generated_template") &&
                  StringRef(text).contains("nodal.preserve_constant_loops");
@@ -511,6 +585,39 @@ int main() {
                       "%step = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\""),
               "maximum_trip_count = 3", "maximum_trip_count = 2"),
       true, false, "zero-based unit-stride family");
+  generatedTarget("nested-family-two-exact-prefixes-and-reusable-bodies", nestedGeneratedFixture(),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-family-three-prefixes-retain-inverse-dimensions",
+                  nestedGeneratedFixture(3), true, true, "", -1, 3);
+  generatedTarget("nested-concrete-preserves-each-actual-loop", nestedGeneratedFixture(2, false),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-template-count-independent-of-cardinality",
+                  replace(replace(nestedGeneratedFixture(), "value = 8 : i64, spelling = \"8\"",
+                                  "value = 256 : i64, spelling = \"256\""),
+                          "maximum_trip_count = 8", "maximum_trip_count = 256"),
+                  true, true, "", -1, 2);
+  generatedTarget("nested-physical-output-budget-is-not-template-budget",
+                  replace(replace(nestedGeneratedFixture(), "value = 8 : i64, spelling = \"8\"",
+                                  "value = 4096 : i64, spelling = \"4096\""),
+                          "maximum_trip_count = 8", "maximum_trip_count = 4096"),
+                  true, false, "nested generated export exceeds finite physical bit budget");
+  {
+    diagnostics.clear();
+    auto parsed =
+        parseSourceString<mlir::ModuleOp>(derivedWidthFixture(), ParserConfig(&context, false));
+    PassManager manager(&context);
+    manager.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && succeeded(verify(*parsed)) && succeeded(manager.run(*parsed));
+    if (ok) {
+      auto output = print(*parsed);
+      ok = !StringRef(output).contains("i0") && StringRef(output).contains("comb.add") &&
+           StringRef(output).contains("comb.mul") && StringRef(output).contains("slt") &&
+           StringRef(output).contains("i5") && StringRef(output).contains("i8");
+      auto roundtrip = parseSourceString<mlir::ModuleOp>(output, &context);
+      ok &= bool(roundtrip) && succeeded(verify(*roundtrip));
+    }
+    report("fixed-derived-width-arithmetic-retains-mapped-width-and-sign", ok);
+  }
   llvm::outs() << count << " hierarchy target cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

@@ -265,8 +265,8 @@ public:
         capability |= result->containsControlCapability;
       return success(succeeded(result));
     };
-    for (Type type : use->getOperandTypes())
-      if (failed(verifyType(type)))
+    for (OpOperand &operand : use->getOpOperands())
+      if (!isStructuralIfFamilyCapture(operand) && failed(verifyType(operand.get().getType())))
         return failure();
     for (Type type : use->getResultTypes())
       if (failed(verifyType(type)))

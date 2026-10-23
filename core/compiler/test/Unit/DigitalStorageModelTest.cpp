@@ -862,9 +862,9 @@ int main() {
                                   "member = \"stored\", kind = \"family\""),
         false);
   auto guardedFamily = [&](std::string body, StringRef identity = "Fixture.guard") {
-    body = replace(body, "Fixture.family", (identity + ".then.family").str());
     // Both the Generate region and induction path retain their lexical arm.
-    body = replace(body, "Fixture.family", (identity + ".then.family").str());
+    while (body.find("Fixture.family") != std::string::npos)
+      body = replace(body, "Fixture.family", (identity + ".then.family").str());
     return parameter(true, "\"topology\"") + literal("i64", "1", "guardOne") +
            "%familyGuard = \"nodal.static_compare\"(%N, %guardOne) <{comparison = \"eq\", "
            "metadata = {semantic_path = \"" +
@@ -982,6 +982,190 @@ int main() {
         generatedDomain + foreignParameter +
             replace(conditionalExistence, "static_compare\"(%N, %guardOne)",
                     "static_compare\"(%M, %guardOne)"),
+        false);
+  // A later guard captures the actual family handle, never a synthetic Data
+  // value or an uncaptured module definition. Existence remains use-local.
+  auto captureSelection =
+      guardedFamily(replace(selected("0"), "%family, %ordinal", "%familyCapture, %ordinal"));
+  captureSelection = replace(captureSelection, "structural_if\"(%familyGuard)",
+                             "structural_if\"(%familyGuard, %family)");
+  captureSelection = replace(captureSelection, "array<i32: 1, 0, 0>", "array<i32: 1, 1, 0>");
+  captureSelection = replace(captureSelection, "}}> ({\n",
+                             "}}> ({^bb0(%familyCapture: !nodal.generated_family):\n");
+  captureSelection = replace(captureSelection, "(!nodal.static_predicate) -> ()",
+                             "(!nodal.static_predicate, !nodal.generated_family) -> ()");
+  const std::string moduleFamily =
+      replace(family("0", "4", "1"), "(%family_lo, %family_hi, %family_step)",
+              "(%family_lo, %N, %family_step)");
+  captureSelection = replace(captureSelection, literal("i64", "1", "guardOne"),
+                             moduleFamily + literal("i64", "0", "guardOne"));
+  captureSelection =
+      replace(captureSelection, literal("i64", "1", "low"), literal("i64", "0", "low"));
+  captureSelection = replace(captureSelection, "comparison = \"eq\"", "comparison = \"gt\"");
+  graph("family-capture-module-declaration-guarded-existence", generatedDomain + captureSelection);
+  {
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(generatedDomain + captureSelection),
+                                                    ParserConfig(&context, false));
+    Operation *actualFamily = nullptr, *actualStorage = nullptr, *selection = nullptr;
+    if (parsed)
+      parsed->walk([&](Operation *operation) {
+        if (llvm::isa<nodal::GenerateOp>(operation))
+          actualFamily = operation;
+        if (llvm::isa<nodal::DigitalStorageOp>(operation))
+          actualStorage = operation;
+        if (llvm::isa<nodal::GeneratedMemberOp>(operation))
+          selection = operation;
+      });
+    auto resolved = selection ? nodal::inspectGeneratedMember(selection)
+                              : FailureOr<nodal::GeneratedMember>(failure());
+    report("family-capture-retains-exact-root-and-storage",
+           succeeded(resolved) && resolved->family == actualFamily &&
+               resolved->storage.getDefiningOp() == actualStorage &&
+               resolved->selections.size() == 1 &&
+               resolved->selections.front().family == actualFamily);
+  }
+  graph("family-capture-wrong-guard",
+        generatedDomain + replace(captureSelection, "comparison = \"gt\"", "comparison = \"le\""),
+        "generated ordinal lacks an all-legal existence proof");
+  graph("family-capture-inclusive-zero",
+        generatedDomain + replace(captureSelection, "comparison = \"gt\"", "comparison = \"ge\""),
+        "generated ordinal lacks an all-legal existence proof");
+  graph("family-capture-later-ordinal-unproved",
+        generatedDomain + replace(captureSelection, literal("i64", "0", "ordinal"),
+                                  literal("i64", "1", "ordinal")),
+        "generated ordinal lacks an all-legal existence proof");
+  graph("family-capture-foreign-guard-identity",
+        generatedDomain + foreignParameter +
+            replace(captureSelection, "static_compare\"(%N, %guardOne)",
+                    "static_compare\"(%M, %guardOne)"),
+        "generated ordinal lacks an all-legal existence proof");
+  check("family-capture-raw-outer-handle-rejected",
+        generatedDomain +
+            replace(captureSelection, "(%familyCapture, %ordinal)", "(%family, %ordinal)"),
+        false);
+  check("family-capture-exact-slot-type",
+        generatedDomain + replace(captureSelection, "%familyCapture: !nodal.generated_family",
+                                  "%familyCapture: !nodal.sint<8>"),
+        false);
+  graph("family-capture-cannot-be-runtime-payload",
+        generatedDomain + replace(captureSelection, literal("i64", "0", "ordinal"),
+                                  "%payload = \"nodal.digital_expr\"(%familyCapture) "
+                                  "<{operator_name = \"identity\", metadata = {}}> : "
+                                  "(!nodal.generated_family) -> !nodal.generated_family\n" +
+                                      literal("i64", "0", "ordinal")),
+        "generated family capabilities support only");
+  auto unusedCapture =
+      replace(captureSelection,
+              replace(selected("0"), "%family, %ordinal", "%familyCapture, %ordinal"), "");
+  graph("family-capture-unused-slot-rejected", generatedDomain + unusedCapture,
+        "unused or forged arm capture");
+  auto duplicateCapture = replace(captureSelection, "structural_if\"(%familyGuard, %family)",
+                                  "structural_if\"(%familyGuard, %family, %family)");
+  duplicateCapture = replace(duplicateCapture, "array<i32: 1, 1, 0>", "array<i32: 1, 2, 0>");
+  duplicateCapture = replace(
+      duplicateCapture, "%familyCapture: !nodal.generated_family",
+      "%familyCapture: !nodal.generated_family, %duplicateCapture: !nodal.generated_family");
+  duplicateCapture =
+      replace(duplicateCapture, "(!nodal.static_predicate, !nodal.generated_family) -> ()",
+              "(!nodal.static_predicate, !nodal.generated_family, !nodal.generated_family) -> ()");
+  graph("family-capture-duplicate-actual-source-rejected", generatedDomain + duplicateCapture,
+        "captures must be unique actual dominating values");
+  graph("family-capture-pure-collection-rejected",
+        generatedDomain + family("0", "3", "1") + port(vec) +
+            collection("source", ", %family", ", !nodal.generated_family",
+                       ", %familyCapture: !nodal.generated_family", "element"),
+        "generated family capabilities support only");
+  auto falseCapture = replace(captureSelection, "comparison = \"gt\"", "comparison = \"le\"");
+  auto captureStart = falseCapture.find("^bb0(%familyCapture:");
+  auto captureEnd = falseCapture.find("\"nodal.structural_yield\"", captureStart);
+  std::string captureBody = falseCapture.substr(captureStart, captureEnd - captureStart);
+  falseCapture.erase(captureStart, captureEnd - captureStart);
+  falseCapture = replace(falseCapture, "array<i32: 1, 1, 0>", "array<i32: 1, 0, 1>");
+  falseCapture = replace(falseCapture, "}, {\n", "}, {\n" + captureBody);
+  graph("family-capture-false-arm-existence", generatedDomain + falseCapture);
+  const std::string thenYield =
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Fixture.guard.then.yield\"}}> "
+      ": () -> ()\n";
+  const std::string elseYield =
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = \"Fixture.guard.else.yield\"}}> "
+      ": () -> ()\n";
+  auto returnedCapture = replace(captureSelection, "\"nodal.structural_if\"",
+                                 "%guardedValue = \"nodal.structural_if\"");
+  returnedCapture = replace(returnedCapture, thenYield,
+                            "\"nodal.structural_yield\"(%selected) <{metadata = {semantic_path = "
+                            "\"Fixture.guard.then.yield\"}}> : (!nodal.sint<8>) -> ()\n");
+  returnedCapture =
+      replace(returnedCapture, elseYield,
+              literal(sint, "0", "fallback") +
+                  "\"nodal.structural_yield\"(%fallback) <{metadata = {semantic_path = "
+                  "\"Fixture.guard.else.yield\"}}> : (!nodal.sint<8>) -> ()\n");
+  returnedCapture =
+      replace(returnedCapture, "(!nodal.static_predicate, !nodal.generated_family) -> ()",
+              "(!nodal.static_predicate, !nodal.generated_family) -> !nodal.sint<8>");
+  graph("family-capture-finite-data-result", generatedDomain + returnedCapture);
+  graph("family-capture-real-terminal-storage-dependency",
+        generatedDomain + returnedCapture + storage(sint) +
+            assign(sint, sint, "wire", "guardedValue"));
+  check("family-capture-cannot-yield-handle",
+        generatedDomain + replace(returnedCapture, "structural_yield\"(%selected)",
+                                  "structural_yield\"(%familyCapture)"),
+        false);
+  auto capturedView = replace(captureSelection, moduleFamily, exportedNested + familyView("0"));
+  capturedView = replace(capturedView, "structural_if\"(%familyGuard, %family)",
+                         "structural_if\"(%familyGuard, %innerView)");
+  graph("family-capture-exact-selected-family-view", generatedDomain + capturedView);
+  check("family-capture-view-keeps-closed-export",
+        generatedDomain + replace(capturedView, "member = \"stored\", access = \"read\"",
+                                  "member = \"absent\", access = \"read\""),
+        false);
+  // Nested arms must forward both predicate and family through real parent
+  // captures. Capturing the same original root from outside is not a shortcut.
+  std::string innerCapture =
+      "\"nodal.structural_if\"(%capturedPredicate, %familyCapture) "
+      "<{contract_version = \"structural-if-v1\", region_id = \"Fixture.guard.then.inner\", "
+      "operandSegmentSizes = array<i32: 1, 1, 0>, metadata = {semantic_path = "
+      "\"Fixture.guard.then.inner\"}}> ({^bb0(%innerCapture: !nodal.generated_family):\n" +
+      replace(selected("0"), "%family, %ordinal", "%innerCapture, %ordinal") +
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+      "\"Fixture.guard.then.inner.then.yield\"}}> : () -> ()\n}, {\n"
+      "\"nodal.structural_yield\"() <{metadata = {semantic_path = "
+      "\"Fixture.guard.then.inner.else.yield\"}}> : () -> ()\n}) : "
+      "(!nodal.static_predicate, !nodal.generated_family) -> ()\n";
+  auto nestedCapture = replace(
+      captureSelection, replace(selected("0"), "%family, %ordinal", "%familyCapture, %ordinal"),
+      innerCapture);
+  nestedCapture = replace(nestedCapture, "structural_if\"(%familyGuard, %family)",
+                          "structural_if\"(%familyGuard, %familyGuard, %family)");
+  nestedCapture = replace(nestedCapture, "array<i32: 1, 1, 0>", "array<i32: 1, 2, 0>");
+  nestedCapture = replace(nestedCapture, "^bb0(%familyCapture:",
+                          "^bb0(%capturedPredicate: !nodal.static_predicate, %familyCapture:");
+  // The inner signature occurs first; change the outer signature at its end.
+  auto outerSignature =
+      nestedCapture.rfind("(!nodal.static_predicate, !nodal.generated_family) -> ()");
+  nestedCapture.replace(
+      outerSignature, std::string("(!nodal.static_predicate, !nodal.generated_family)").size(),
+      "(!nodal.static_predicate, !nodal.static_predicate, !nodal.generated_family)");
+  graph("family-capture-nested-explicit-chain", generatedDomain + nestedCapture);
+  auto wrongCaptureOrder =
+      replace(nestedCapture, "structural_if\"(%familyGuard, %familyGuard, %family)",
+              "structural_if\"(%familyGuard, %family, %familyGuard)");
+  wrongCaptureOrder = replace(
+      wrongCaptureOrder,
+      "%capturedPredicate: !nodal.static_predicate, %familyCapture: !nodal.generated_family",
+      "%familyCapture: !nodal.generated_family, %capturedPredicate: !nodal.static_predicate");
+  wrongCaptureOrder =
+      replace(wrongCaptureOrder,
+              "(!nodal.static_predicate, !nodal.static_predicate, !nodal.generated_family) -> ()",
+              "(!nodal.static_predicate, !nodal.generated_family, !nodal.static_predicate) -> ()");
+  graph("family-capture-interleaved-first-use-order", generatedDomain + wrongCaptureOrder,
+        "arm captures must retain deterministic first actual use order");
+  check("family-capture-nested-raw-root-bypass",
+        generatedDomain + replace(nestedCapture, "(%capturedPredicate, %familyCapture)",
+                                  "(%capturedPredicate, %family)"),
+        false);
+  check("family-capture-nested-skipped-parent-argument",
+        generatedDomain +
+            replace(nestedCapture, "(%innerCapture, %ordinal)", "(%familyCapture, %ordinal)"),
         false);
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;

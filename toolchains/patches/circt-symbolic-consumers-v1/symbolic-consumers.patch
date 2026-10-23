@@ -1,0 +1,319 @@
+--- a/lib/Dialect/HW/HWAttributes.cpp
++++ b/lib/Dialect/HW/HWAttributes.cpp
+@@ -1059,0 +1060,7 @@
++      .Case<hw::InOutType>([&](hw::InOutType inout) -> FailureOr<Type> {
++        auto element = evaluateParametricType(loc, parameters,
++                                             inout.getElementType(), emitErrors);
++        if (failed(element))
++          return failure();
++        return hw::InOutType::get(*element);
++      })
+@@ -1082,0 +1090,3 @@
++      .Case<hw::InOutType>([&](hw::InOutType inout) {
++        return isParametricType(inout.getElementType());
++      })
+--- a/test/Dialect/HW/parameters.mlir
++++ b/test/Dialect/HW/parameters.mlir
+@@ -250,0 +251,23 @@
++
++
++// CHECK-LABEL: hw.module @inoutChild<W: i32 = 4>
++hw.module @inoutChild<W: i32 = 4>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"W">>) {
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutParent<P: i32 = 7>
++hw.module @inoutParent<P: i32 = 7>
++  (inout %pad: !hw.int<#hw.param.decl.ref<"P">>) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++  hw.instance "child" @inoutChild<W: i32 = #hw.param.decl.ref<"P">>
++    (pad: %pad: !hw.inout<int<#hw.param.decl.ref<"P">>>) -> ()
++  hw.output
++}
++
++// CHECK-LABEL: hw.module @inoutFixedParent
++hw.module @inoutFixedParent(inout %pad: i7) {
++  // CHECK: hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.instance "child" @inoutChild<W: i32 = 7>(pad: %pad: !hw.inout<i7>) -> ()
++  hw.output
++}
+--- a/unittests/Dialect/HW/TypesTest.cpp
++++ b/unittests/Dialect/HW/TypesTest.cpp
+@@ -8,0 +9 @@
++#include "circt/Dialect/HW/HWAttributes.h"
+@@ -85,0 +87,55 @@
++// Instance signatures must substitute inside the capability wrapper, retaining
++// its electrical identity and rejecting absent bindings rather than defaults.
++TEST(TypesTest, EvaluateParametricInOut) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto actual =
++      ParamDeclRefAttr::get(builder.getStringAttr("P"), builder.getI32Type());
++  auto type = InOutType::get(IntType::get(formal));
++  auto parameters = builder.getArrayAttr(
++      {ParamDeclAttr::get(builder.getStringAttr("W"), actual)});
++  auto result =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(IntType::get(actual)));
++  EXPECT_TRUE(isParametricType(type));
++  EXPECT_TRUE(isParametricType(*result));
++  EXPECT_TRUE(failed(evaluateParametricType(builder.getUnknownLoc(),
++                                            builder.getArrayAttr({}), type,
++                                            /*emitErrors=*/false)));
++  auto concrete = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  result = evaluateParametricType(builder.getUnknownLoc(), concrete, type);
++  ASSERT_TRUE(succeeded(result));
++  EXPECT_EQ(*result, InOutType::get(builder.getIntegerType(7)));
++  EXPECT_FALSE(isParametricType(*result));
++}
++
++TEST(TypesTest, EvaluateParametricInOutArrayElements) {
++  MLIRContext context;
++  context.loadDialect<HWDialect>();
++  Builder builder(&context);
++  auto formal =
++      ParamDeclRefAttr::get(builder.getStringAttr("W"), builder.getI32Type());
++  auto parameters = builder.getArrayAttr({ParamDeclAttr::get(
++      builder.getStringAttr("W"), builder.getI32IntegerAttr(7))});
++  auto packed = InOutType::get(ArrayType::get(IntType::get(formal), 3));
++  auto unpacked =
++      InOutType::get(UnpackedArrayType::get(IntType::get(formal), 2));
++  auto packedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, packed);
++  auto unpackedResult =
++      evaluateParametricType(builder.getUnknownLoc(), parameters, unpacked);
++  ASSERT_TRUE(succeeded(packedResult));
++  ASSERT_TRUE(succeeded(unpackedResult));
++  EXPECT_TRUE(isParametricType(packed));
++  EXPECT_TRUE(isParametricType(unpacked));
++  EXPECT_EQ(*packedResult,
++            InOutType::get(ArrayType::get(builder.getIntegerType(7), 3)));
++  EXPECT_EQ(*unpackedResult, InOutType::get(UnpackedArrayType::get(
++                                 builder.getIntegerType(7), 2)));
++}
++
+--- a/lib/Dialect/SV/Transforms/PrettifyVerilog.cpp
++++ b/lib/Dialect/SV/Transforms/PrettifyVerilog.cpp
+@@ -27,0 +28 @@
++#include "mlir/IR/RegionKindInterface.h"
+@@ -539 +540,4 @@
+-  if (!instances.empty()) {
++  // The module body is a graph region, but nested generate blocks can have
++  // SSA dominance. Moving an instance past an earlier result use is invalid
++  // there; preserve its existing placement instead of changing dependencies.
++  if (!instances.empty() && !mlir::mayHaveSSADominance(*body.getParent())) {
+@@ -541 +545 @@
+-      if (instance != &body.back())
++      if (instance != &body.back() && instance->getNextNode() != &body.back()) {
+@@ -542,0 +547,2 @@
++        anythingChanged = true;
++      }
+--- a/lib/Conversion/ExportVerilog/PrepareForEmission.cpp
++++ b/lib/Conversion/ExportVerilog/PrepareForEmission.cpp
+@@ -28,0 +29 @@
++#include "mlir/IR/RegionKindInterface.h"
+@@ -173,2 +174,5 @@
+-        // Move assign op after instance to resolve cyclic dependencies.
+-        assign->moveAfter(op);
++        // Graph regions can contain cyclic dependencies. In an SSA region,
++        // the existing assignment already follows both the instance and its
++        // destination; moving it can introduce a forward lvalue reference.
++        if (!mlir::mayHaveSSADominance(*op->getParentRegion()))
++          assign->moveAfter(op);
+
+--- a/include/circt/Dialect/Comb/CombOps.h
++++ b/include/circt/Dialect/Comb/CombOps.h
+@@ -172,14 +172,16 @@
+ 
+     Value signBits = operands[0];
+     Value baseValue = operands[1];
+-    auto baseWidth = baseValue.getType().getIntOrFloatBitWidth();
++    auto baseWidth = hw::getBitWidth(baseValue.getType());
++    if (baseWidth <= 0)
++      return false;
+ 
+     // Check if signBits is a replicate operation
+     auto replicateOp = dyn_cast_or_null<ReplicateOp>(signBits.getDefiningOp());
+     Value signBit = replicateOp ? replicateOp.getInput() : signBits;
+ 
+     // For the single bit case, check the bitwidth of signBit == 1
+-    if (signBit.getType().getIntOrFloatBitWidth() != 1)
++    if (hw::getBitWidth(signBit.getType()) != 1)
+       return false;
+ 
+     // Check if signBit is the msb of baseValue
+--- a/lib/Dialect/Comb/CombAnalysis.cpp
++++ b/lib/Dialect/Comb/CombAnalysis.cpp
+@@ -30,6 +30,10 @@
+ 
+   // `concat(x, y, z)` has whatever is known about the operands concat'd.
+   if (auto concatOp = dyn_cast<ConcatOp>(op)) {
++    if (llvm::any_of(concatOp.getOperandTypes(), [](Type type) {
++          return !isa<IntegerType>(type);
++        }))
++      return KnownBits(v.getType().getIntOrFloatBitWidth());
+     auto result = computeKnownBits(concatOp.getOperand(0), depth + 1);
+     for (size_t i = 1, e = concatOp.getNumOperands(); i != e; ++i) {
+       auto otherBits = computeKnownBits(concatOp.getOperand(i), depth + 1);
+--- a/lib/Dialect/Comb/CombFolds.cpp
++++ b/lib/Dialect/Comb/CombFolds.cpp
+@@ -48,9 +48,18 @@
+                           value);
+ }
+ 
++// Integer bit-position optimizations require concrete operand widths. A
++// symbolic concat is still verified wiring, but is opaque to these analyses.
++static bool hasConcreteConcatOperands(ConcatOp op) {
++  return llvm::all_of(op.getOperandTypes(), [](Type type) {
++    return isa<IntegerType>(type);
++  });
++}
++
+ /// Flatten concat and mux operands into a vector.
+ static void getConcatOperands(Value v, SmallVectorImpl<Value> &result) {
+-  if (auto concat = v.getDefiningOp<ConcatOp>()) {
++  if (auto concat = v.getDefiningOp<ConcatOp>();
++      concat && hasConcreteConcatOperands(concat)) {
+     for (auto op : concat.getOperands())
+       getConcatOperands(op, result);
+   } else if (auto repl = v.getDefiningOp<ReplicateOp>()) {
+@@ -521,6 +530,8 @@
+ extractConcatToConcatExtract(ExtractOp op, ConcatOp innerCat,
+                              PatternRewriter &rewriter,
+                              ArrayRef<size_t> prefixWidths = {}) {
++  if (!hasConcreteConcatOperands(innerCat))
++    return failure();
+   auto concatInputs = innerCat.getInputs();
+   size_t numOperands = concatInputs.size();
+   size_t lowBit = op.getLowBit();
+@@ -759,6 +770,8 @@
+                                              size_t concatIdx, const APInt &cst,
+                                              PatternRewriter &rewriter) {
+   auto concatOp = logicalOp->getOperand(concatIdx).getDefiningOp<ConcatOp>();
++  if (!hasConcreteConcatOperands(concatOp))
++    return false;
+   assert((isa<AndOp, OrOp, XorOp>(logicalOp) && concatOp));
+ 
+   // Check to see if any operands can be simplified by pushing the logical op
+@@ -1796,6 +1809,8 @@
+ 
+ // Constant folding
+ OpFoldResult ConcatOp::fold(FoldAdaptor adaptor) {
++  if (!hasConcreteConcatOperands(*this))
++    return {};
+   if (isOpTriviallyRecursive(*this))
+     return {};
+ 
+@@ -1823,6 +1838,8 @@
+ }
+ 
+ LogicalResult ConcatOp::canonicalize(ConcatOp op, PatternRewriter &rewriter) {
++  if (!hasConcreteConcatOperands(op))
++    return failure();
+   if (isOpTriviallyRecursive(op))
+     return failure();
+ 
+@@ -1853,7 +1870,8 @@
+ 
+     // If an operand to the concat is itself a concat, then we can fold them
+     // together.
+-    if (auto subConcat = nextOperand.getDefiningOp<ConcatOp>()) {
++    if (auto subConcat = nextOperand.getDefiningOp<ConcatOp>();
++        subConcat && hasConcreteConcatOperands(subConcat)) {
+       pushPendingOperands(subConcat->getOperands());
+       continue;
+     }
+--- a/lib/Dialect/Comb/CombOps.cpp
++++ b/lib/Dialect/Comb/CombOps.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include "circt/Dialect/Comb/CombOps.h"
+ #include "circt/Dialect/HW/HWOps.h"
++#include "circt/Dialect/HW/HWAttributes.h"
+ #include "circt/Support/Naming.h"
+ #include "mlir/IR/Builders.h"
+ #include "mlir/IR/ImplicitLocOpBuilder.h"
+@@ -513,28 +514,39 @@
+ // ConcatOp
+ //===----------------------------------------------------------------------===//
+ 
+-static unsigned getTotalWidth(ValueRange inputs) {
+-  unsigned resultWidth = 0;
+-  for (auto input : inputs) {
+-    resultWidth += hw::type_cast<IntegerType>(input.getType()).getWidth();
+-  }
+-  return resultWidth;
++// Preserve parameter expressions instead of assuming every HW integer has a
++// concrete width. The HW parameter owner performs canonical width addition.
++static Type getConcatType(MLIRContext *context, ValueRange inputs) {
++  auto widthType = IntegerType::get(context, 32);
++  SmallVector<TypedAttr> widths;
++  for (Value input : inputs) {
++    if (auto integer = hw::type_dyn_cast<IntegerType>(input.getType()))
++      widths.push_back(IntegerAttr::get(widthType, integer.getWidth()));
++    else if (auto integer = hw::type_dyn_cast<hw::IntType>(input.getType()))
++      widths.push_back(integer.getWidth());
++    else
++      return {};
++  }
++  if (widths.empty())
++    return IntegerType::get(context, 0);
++  return hw::IntType::get(hw::ParamExprAttr::get(hw::PEO::Add, widths));
+ }
+ 
+ void ConcatOp::build(OpBuilder &builder, OperationState &result, Value hd,
+                      ValueRange tl) {
+   result.addOperands(ValueRange{hd});
+   result.addOperands(tl);
+-  unsigned hdWidth = cast<IntegerType>(hd.getType()).getWidth();
+-  result.addTypes(builder.getIntegerType(getTotalWidth(tl) + hdWidth));
++  result.addTypes(getConcatType(builder.getContext(), result.operands));
+ }
+ 
+ LogicalResult ConcatOp::inferReturnTypes(
+     MLIRContext *context, std::optional<Location> loc, ValueRange operands,
+     DictionaryAttr attrs, mlir::PropertyRef properties,
+     mlir::RegionRange regions, SmallVectorImpl<Type> &results) {
+-  unsigned resultWidth = getTotalWidth(operands);
+-  results.push_back(IntegerType::get(context, resultWidth));
++  auto resultType = getConcatType(context, operands);
++  if (!resultType)
++    return failure();
++  results.push_back(resultType);
+   return success();
+ }
+ 
+--- a/lib/Dialect/Comb/InferIntRangeInterfaceImpls.cpp
++++ b/lib/Dialect/Comb/InferIntRangeInterfaceImpls.cpp
+@@ -168,6 +168,11 @@
+ 
+ void comb::ConcatOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
+                                        SetIntRangeFn setResultRange) {
++  if (!isa<IntegerType>(getType()) ||
++      llvm::any_of(getOperandTypes(), [](Type type) {
++        return !isa<IntegerType>(type);
++      }))
++    return;
+   // Compute concat as an unsigned integer of bits
+   const auto resWidth = getResult().getType().getIntOrFloatBitWidth();
+   auto totalWidth = resWidth;
+
+--- a/lib/Conversion/ExportVerilog/ExportVerilog.cpp
++++ b/lib/Conversion/ExportVerilog/ExportVerilog.cpp
+@@ -4977,7 +4977,9 @@
+   setPendingNewline();
+   emitStatementBlock(op.getBody().getBlocks().front());
+   startStatement();
+-  ps << "end: " << PPExtString(getSymOpName(op)) << PP::newline;
++  // The opening label owns the scope name; a closing comment is equivalent
++  // and avoids redundant end-label syntax unsupported by some SV consumers.
++  ps << "end // " << PPExtString(getSymOpName(op)) << PP::newline;
+   ps << "endgenerate";
+   ps.addCallback({op, false});
+   setPendingNewline();

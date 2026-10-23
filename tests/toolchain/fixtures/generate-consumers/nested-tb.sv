@@ -1,0 +1,1 @@
+module tb;reg[7:0] data;wire[31:0] out; Nested dut(.data(data),.value(out));task check;begin if(out!=={data,data,data,data} || dut.rows.row[1].middle.family.lane[0].one.value!==data)$fatal(1,"nested helper");end endtask initial begin data=8'h39;#1;check;data=8'ha6;#1;check;data=8'bz;#1;check;data=8'bx;#1;check;$display("PASS nested");$finish;end endmodule

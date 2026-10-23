@@ -1,0 +1,1 @@
+module tb;reg[7:0] data;wire[15:0] out; LValue dut(.data(data),.output_0(out)); task check; begin if(out!=={data,data} || dut.family.lane[0].one.value!==data)$fatal(1,"late lvalue");end endtask initial begin data=8'h39;#1;check;data=8'ha6;#1;check;data=8'bz;#1;check;data=8'bx;#1;check;$display("PASS ssa-lvalue-late");$finish;end endmodule

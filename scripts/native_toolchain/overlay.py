@@ -21,7 +21,24 @@ COMPONENTS = {
     "CIRCTHW": ("lib/Dialect/HW", ("lib/Dialect/HW/", "include/circt/Dialect/HW/", "test/Dialect/HW/", "unittests/Dialect/HW/")),
     "CIRCTSVTransforms": ("lib/Dialect/SV/Transforms", ("lib/Dialect/SV/Transforms/",)),
     "CIRCTExportVerilog": ("lib/Conversion/ExportVerilog", ("lib/Conversion/ExportVerilog/",)),
+    "CIRCTComb": ("lib/Dialect/Comb", ("lib/Dialect/Comb/", "include/circt/Dialect/Comb/", "test/Dialect/Comb/", "unittests/Dialect/Comb/")),
+    "CIRCTDatapath": ("lib/Dialect/Datapath", ("lib/Dialect/Datapath/",)),
+    "CIRCTDatapathToComb": ("lib/Conversion/DatapathToComb", ("lib/Conversion/DatapathToComb/",)),
 }
+
+CATALOGS = (
+    ("CIRCTHW", "CIRCTSVTransforms", "CIRCTExportVerilog"),
+    ("CIRCTHW", "CIRCTComb", "CIRCTDatapath", "CIRCTDatapathToComb", "CIRCTSVTransforms", "CIRCTExportVerilog"),
+)
+
+
+def _installed_headers(profile: dict[str, Any]) -> dict[str, str]:
+    return {entry["path"]: entry["after"] for entry in profile["sources"]
+            if entry["path"].startswith("include/") and entry["before"] != entry["after"]}
+
+
+def _output_paths(profile: dict[str, Any]) -> set[str]:
+    return set(_base_libraries(profile)) | set(_installed_headers(profile))
 
 
 def _components(profile: dict[str, Any]) -> list[str]:
@@ -35,7 +52,7 @@ def _base_libraries(profile: dict[str, Any]) -> dict[str, str]:
 
 
 def _outputs(prefix: Path, profile: dict[str, Any]) -> str | dict[str, str]:
-    values = {relative: sha256(prefix / relative) for relative in _base_libraries(profile)}
+    values = {relative: sha256(prefix / relative) for relative in sorted(_output_paths(profile))}
     return values[OUTPUT] if profile["schema"] == 1 else values
 
 
@@ -88,10 +105,10 @@ def load_overlay(root: Path, lock: dict[str, Any], name: str) -> dict[str, Any]:
         if value["builder_sha256"] != sha256(Path(__file__)):
             raise LockError("overlay builder identity differs from checked recipe")
         entries = value["components"]
-        if (not isinstance(entries, list) or len(entries) != len(COMPONENTS) or
+        if (not isinstance(entries, list) or
                 any(not isinstance(entry, dict) or set(entry) != {"name", "base_library_sha256"} for entry in entries) or
-                [entry["name"] for entry in entries] != list(COMPONENTS)):
-            raise LockError("overlay requires the exact ordered three-component catalog")
+                tuple(entry["name"] for entry in entries) not in CATALOGS):
+            raise LockError("overlay requires the exact ordered component catalog")
     if any(not SHA256.fullmatch(str(checksum)) for checksum in _base_libraries(value).values()):
         raise LockError("overlay requires exact base library checksums")
     patch = value["patch"]
@@ -148,8 +165,11 @@ def validate_overlay(prefix: Path, root: Path, lock: dict[str, Any], value: Any)
         outputs = value["output_sha256"]
         if profile["schema"] == 1:
             outputs = {OUTPUT: outputs}
-        if not isinstance(outputs, dict) or set(outputs) != set(_base_libraries(profile)):
+        if not isinstance(outputs, dict) or set(outputs) != _output_paths(profile):
             return ["installed overlay output inventory mismatch"]
+        for relative, checksum in _installed_headers(profile).items():
+            if outputs.get(relative) != checksum:
+                return ["installed overlay header identity mismatch"]
         for relative, checksum in outputs.items():
             output = prefix / relative
             if output.is_symlink() or not output.is_file() or not isinstance(checksum, str) or not SHA256.fullmatch(checksum) or sha256(output) != checksum:
@@ -191,7 +211,7 @@ def _cmake_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace(";", "\\;")
 
 
-def _compile_component(prefix: Path, source: Path, build: Path, sources: list[str], jobs: int | None, component: str = "CIRCTHW") -> tuple[list[list[str]], dict[str, Any]]:
+def _compile_component(prefix: Path, source: Path, build: Path, sources: list[str], jobs: int | None, component: str = "CIRCTHW", overlay_headers: bool = False) -> tuple[list[list[str]], dict[str, Any]]:
     if component not in COMPONENTS:
         raise LockError("overlay build component is outside the closed catalog")
     project = build / "project"
@@ -217,10 +237,12 @@ set_target_properties(NodalPatchedCIRCTHW PROPERTIES OUTPUT_NAME CIRCTHW
   BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out")
 '''
+    if overlay_headers:
+        content += 'target_include_directories(NodalPatchedCIRCTHW BEFORE PRIVATE "${NODAL_SOURCE}/include")\n'
     content = content.replace("CIRCTHW", component).replace("@SOURCES@", "".join(f'  "{_cmake_string(str(source / name))}"\n' for name in sources))
     (project / "CMakeLists.txt").write_text(content, encoding="utf-8")
     commands = [["cmake", "-G", "Ninja", "-S", str(project), "-B", str(build / "native"),
-                 "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={prefix}", f"-DNODAL_BASE={prefix}"],
+                 "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_PREFIX_PATH={prefix}", f"-DNODAL_BASE={prefix}"] + ([f"-DNODAL_SOURCE={source}"] if overlay_headers else []),
                 ["cmake", "--build", str(build / "native"), "--target", "NodalPatched" + component, "--parallel", str(jobs or 2)]]
     for command in commands:
         subprocess.run(command, check=True)
@@ -247,6 +269,9 @@ def _component_sources(profile: dict[str, Any], source: Path) -> dict[str, list[
         directory = COMPONENTS[component][0]
         cmake = (source / directory / "CMakeLists.txt").read_text(encoding="utf-8")
         patterns = {
+            "CIRCTComb": r"add_circt_dialect_library\(CIRCTComb\s+(.*?)\s+ADDITIONAL_HEADER_DIRS",
+            "CIRCTDatapath": r"add_circt_dialect_library\(CIRCTDatapath\s+(.*?)\s+ADDITIONAL_HEADER_DIRS",
+            "CIRCTDatapathToComb": r"add_circt_conversion_library\(CIRCTDatapathToComb\s+(.*?)\s+DEPENDS",
             "CIRCTHW": r"set\(CIRCT_HW_Sources\s+([^)]*)\)",
             "CIRCTSVTransforms": r"add_circt_dialect_library\(CIRCTSVTransforms\s+(.*?)\s+DEPENDS",
             "CIRCTExportVerilog": r"add_circt_translation_library\(CIRCTExportVerilog\s+(.*?)\s+ADDITIONAL_HEADER_DIRS",
@@ -266,6 +291,11 @@ def apply_overlay(prefix: Path, profile: dict[str, Any], stage: Path, cache: Pat
     for relative, checksum in _base_libraries(profile).items():
         if sha256(prefix / relative) != checksum:
             raise LockError("overlay requires the exact unmodified pinned base libraries")
+    for entry in profile["sources"]:
+        if entry["path"] in _installed_headers(profile):
+            header = prefix / entry["path"]
+            if header.is_symlink() or not header.is_file() or sha256(header) != entry["before"]:
+                raise LockError("overlay requires the exact unmodified pinned base headers")
     source = stage / "overlay-source"
     source.mkdir()
     for entry in profile["sources"]:
@@ -294,9 +324,13 @@ def apply_overlay(prefix: Path, profile: dict[str, Any], stage: Path, cache: Pat
     commands: list[list[str]] = []
     builds = {}
     for component, sources in inventories.items():
-        component_commands, build_identity = _compile_component(prefix, source, stage / "overlay-build" / component, sources, jobs, component)
+        component_commands, build_identity = _compile_component(prefix, source, stage / "overlay-build" / component, sources, jobs, component, bool(_installed_headers(profile)))
         commands.extend(component_commands)
         builds[component] = build_identity
+    for relative, checksum in _installed_headers(profile).items():
+        shutil.copyfile(source / relative, prefix / relative)
+        if sha256(prefix / relative) != checksum:
+            raise LockError("installed overlay header checksum mismatch")
     build_identity = builds["CIRCTHW"] if profile["schema"] == 1 else builds
     receipt = prefix / "share/nodal/overlays" / profile["id"] / "build.json"
     receipt.parent.mkdir(parents=True)

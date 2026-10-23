@@ -27,3 +27,18 @@ and `check_structural_consumers.py --toolchain PREFIX --work OUTPUT` for actual
 default-optimized SSA/graph export and unchanged-SV two-state checks. Symbolic
 resolved four-state waveform checks remain separate in the domain-hierarchy
 runner; the two simulation models are not interchangeable.
+
+The optional `circt-symbolic-consumers-v1` successor adds canonical symbolic Comb
+consumers and installs the checked changed header, rebuilding all nine direct
+Comb/Datapath/DatapathToComb translation units. Its focused portable checker is
+`python tests/toolchain/check_symbolic_consumers.py --toolchain <successor-prefix>
+--predecessor <structural-prefix> --work <fresh-work-directory>
+--iverilog <iverilog-executable> --vvp <vvp-executable>`. Use jobs 2 and the native
+build lock for installation. This is selected local prototype validation, not CI
+or whole-toolchain qualification. The prior profile keeps its source/patch
+contract; only its builder checksum is updated when the canonical recipe changes.
+
+`check_generate_consumers.py` accepts the same explicit prefix, predecessor, work,
+Icarus and vvp arguments and checks named early/late, conditional and nested
+hierarchy paths with unchanged generated SV. Graph output stays byte-identical;
+other predecessor differences must be closing-label-to-comment substitutions.

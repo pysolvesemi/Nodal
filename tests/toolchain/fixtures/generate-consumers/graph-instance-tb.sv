@@ -1,0 +1,1 @@
+module tb;reg[7:0] data;wire[7:0] out; Graph dut(.data(data),.value(out));task check;begin if(out!==data)$fatal(1,"graph");end endtask initial begin data=8'h39;#1;check;data=8'ha6;#1;check;data=8'bz;#1;check;data=8'bx;#1;check;$display("PASS graph-instance");$finish;end endmodule

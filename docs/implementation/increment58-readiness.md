@@ -1528,3 +1528,26 @@ promote that target here. Baseline dominance/late-lvalue failures, incompatible
 inout types and missing-output CMake refusal are retained causal evidence.
 This commit only preserves accepted source and receipts; no new consumer
 execution, installation or retry of the separate held repair occurs.
+
+## Checkpoint 45 — coherent managed symbolic-consumer profile
+
+Thirty exact files from `.work/f58-circt-successor-profile/acceptance.json`
+(`28c750fa`) preserve the optional six-component profile. Every changed-file
+before-hash matches the preceding structural profile; runner imports and test
+module prerequisites are present. No target admission, installed prefix mutation
+or held comparator execution is part of this commit.
+
+Historical acceptance includes 51 manager checks (42 unchanged plus nine new),
+41 compiled translation units, ten symbolic verifier cases, six native API
+cases, 266 raw-bit values, five generate four-state profiles and nine inout API
+cases with two refusals. Profile identity pins builder `435a799e`, patch
+`e516eead` and installed descriptor `ecca89d2`. Unchanged SV is consumed.
+
+The predecessor keeps its ID, source/patch inventory and semantics. Its builder
+checksum is deliberately refreshed to the modified canonical installer; stale
+installed identity is refused, never silently relabelled. Exact prior manifest
+and receipt remain saved. The 42 predecessor manager checks and source/ordered
+compile-command/recipe identity parity do not claim a new v1 native install:
+compilation was mocked for recipe comparison, and output comparisons used the
+previous installed binary. Actual new native build/live checks apply only to
+the successor. Required unified-patch blank context markers remain exact.

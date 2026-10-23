@@ -1431,3 +1431,14 @@ physical clock/reset provenance for guarded children. Positive-step and
 dependent domain source cases retain actual lexical bounds. Selected/exported
 Interface routes and actual generated HDL remain separate required consumers.
 This partial checkpoint is neither new test execution nor Foundation 58 closure.
+
+## Checkpoint 40 — generated-domain target witness prerequisites
+
+The exact three-file fixture/test/replay extension in
+`.work/f58-generated-domain-extension` matches its complete 403-file inventory
+(`4dadbe93`), with seven groups and 13 retained full native gates on `660d55cb`.
+This source extension precedes the later generated-domain target receipt: its
+13 waveform inputs use source hash `e596957f`, not the earlier guarded-domain
+fixture. No production API change or target acceptance is inferred solely from
+these source checks. The remaining selected-domain target profiles retain their
+separate original source identity.

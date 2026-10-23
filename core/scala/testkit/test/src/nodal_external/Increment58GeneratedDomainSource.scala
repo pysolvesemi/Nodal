@@ -293,3 +293,31 @@ final class Increment58NestedGuardedRegisters extends Module:
         output := lanes(0).stored
       else output := data
     else output := 0.U(8)
+
+final class Increment58GuardedOutlinedNestedSelected extends Module:
+  val ROWS = param(3.integer, range = 1 to 4)
+  val mode = param(1.integer, range = 0 to 1)
+  val clock = ClockDomain.external(
+    "clock",
+    ClockEdge.Rising,
+    ResetPolicy.Sync,
+    ResetPolarity.ActiveHigh,
+    100.MHz
+  )
+  val data = in(Vec(UInt(8), 4, 4))
+  val enables = in(Vec(Bool, 4, 4))
+  val output = out(UInt(8))
+  clock:
+    val outer =
+      for i <- hdlRange(0, ROWS) yield new Area:
+        private val rowData = data.row(i)
+        private val rowEnables = enables.row(i)
+        val inner =
+          for j <- hdlRange(0, i + 1.integer) yield new Area:
+            val stored = Reg(0.U(8))
+            when(rowEnables.at(j)):
+              stored := rowData.at(j)
+    if ROWS > 1 then
+      if mode == 1 then output := outer(1).inner(1).stored
+      else output := 0.U(8)
+    else output := 0.U(8)

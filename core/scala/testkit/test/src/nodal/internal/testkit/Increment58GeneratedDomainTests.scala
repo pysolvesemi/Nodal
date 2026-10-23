@@ -74,3 +74,17 @@ object Increment58GeneratedDomainTests extends TestSuite:
       )
       assert(snapshot.digitalExpressions.flatMap(_.generatedMember).size == 1)
       val _ = ScalaToMlirBridge.fromSnapshot(snapshot)
+    test("nested outlined guard retains a dependent selection under its required existence proof"):
+      val snapshot = ConstructionKernel.inspect(new Increment58GuardedOutlinedNestedSelected)
+      assert(snapshot.structuralIfs.size == 2, snapshot.generatedRegions.size == 2)
+      val outer = snapshot.structuralIfs.find(_.parentRegion.isEmpty).get
+      val inner = snapshot.structuralIfs.find(_.parentRegion.nonEmpty).get
+      val selected = snapshot.digitalExpressions.filter(_.generatedMember.nonEmpty)
+      assert(inner.parentRegion.contains(outer.trueArm.path), selected.size == 1)
+      assert(selected.head.region.contains(outer.trueArm.path))
+      assert(selected.head.generatedMember.get.selectionPrefix.size == 1)
+      assert(snapshot.generatedRegions.forall(_.digitalBody.get.parentRegion.forall(path =>
+        snapshot.generatedRegions.exists(_.path == path)
+      )))
+      assert(snapshot.modules.flatMap(_.declarations).count(_.kind == "register") == 1)
+      val _ = ScalaToMlirBridge.fromSnapshot(snapshot)

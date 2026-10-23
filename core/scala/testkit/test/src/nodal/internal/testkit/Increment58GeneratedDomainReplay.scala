@@ -24,7 +24,8 @@ object Increment58GeneratedDomainReplay:
       "guarded-scalar" -> (() => new Increment58GeneratedGuardedScalarExpression),
       "guarded-symbolic" -> (() => new Increment58GeneratedGuardedSymbolicExpression),
       "guarded-nested" -> (() => new Increment58GeneratedGuardedNestedExpression),
-      "nested-guard" -> (() => new Increment58NestedGuardedRegisters)
+      "nested-guard" -> (() => new Increment58NestedGuardedRegisters),
+      "guarded-outlined-selected" -> (() => new Increment58GuardedOutlinedNestedSelected)
     ).foreach: (name, make) =>
       val document = ScalaToMlirBridge.fromSnapshot(ConstructionKernel.inspect(make()))
       val _ = Files.writeString(output.resolve(name + ".mlir"), document.text)

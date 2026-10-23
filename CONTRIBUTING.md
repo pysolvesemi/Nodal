@@ -41,6 +41,20 @@ Keep concise acceptance evidence and the demonstration below in the same PR;
 a separate evidence-closure PR is optional. Do not mark unknown or unexecuted
 results as passing, or reopen historical acceptance merely to impose this policy.
 
+## Increment publication and blocked pushes
+
+Commit and push each completed increment after its focused acceptance checks.
+Publish coherent tested partial checkpoints during long increments to reduce
+local-only work, without labeling them completed increments. Keep `[skip ci]`
+and `skip-checks: true` in publication commits; CI remains disabled.
+
+If publishing is blocked, preserve durable local commits and continue permitted
+independent implementation and tests. Report the unpushed commits and blocker
+at each increment completion. Do not retry a denied operation without relevant
+new authorization, bypass a restriction, or force/rewrite published ancestry to
+resolve a publication mismatch. Coordinate the canonical commit mapping before
+publishing dependent snapshots, without blocking independent local work.
+
 ## Increment and sub-checklist progress
 
 This rule applies to every roadmap track. New or revised increments should use

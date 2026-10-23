@@ -285,22 +285,7 @@ private[nodal] object ScalaToMlirBridge:
         arm: KernelStructuralArmSnapshot,
         parent: StructuralParameterBinding.Query
     ): StructuralParameterBinding.Query =
-      if parent.scope != parentRegion then
-        fail(
-          "NODAL-BRIDGE-055",
-          "conditional arm context has another lexical parent",
-          Some(arm.path)
-        )
-      new StructuralParameterBinding.Query(
-        snapshot,
-        scope = Some(arm.path),
-        enclosing = Some(parent),
-        captures = arm.arguments.zip(arm.captures).collect {
-          case (argument, capture)
-              if argument.dataType == "Integer" && argument.role == "static_capture" =>
-            argument.path -> capture
-        }.toMap
-      )
+      parent.conditionalArm(parentRegion, arm)
 
     private def generatedQuery(
         region: KernelGeneratedRegionSnapshot,
@@ -1154,7 +1139,7 @@ ${indent(body, 2)}
           boundValues(2),
           region.maximum,
           identicalBounds = if region.digitalBody.nonEmpty then
-            val query = region.parent.map(regionalQuery).getOrElse(moduleIntegerQuery)
+            val query = region.lexicalParent.map(regionalQuery).getOrElse(moduleIntegerQuery)
             query.resolve(
               module.path,
               region.lower
@@ -1212,7 +1197,7 @@ ${indent(body, 2)}
               Some(region.path)
             )
           if parent.owner != region.owner ||
-            !region.path.startsWith(s"${parent.path}.")
+            (region.digitalBody.isEmpty && !region.path.startsWith(s"${parent.path}."))
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -2466,7 +2451,7 @@ ${indent(body, 2)}
       val structuralHeaders = snapshot.generatedRegions
         .filter(region => region.owner == module.path && region.digitalBody.nonEmpty)
         .map(region =>
-          (region.parent, region.path, Vector(region.lower, region.upperExclusive, region.step))
+          (region.lexicalParent, region.path, Vector(region.lower, region.upperExclusive, region.step))
         ) ++
         snapshot.digitalLoops.filter(loop =>
           loop.owner == module.path && snapshot.structuralIfs.exists(_.owner == module.path)

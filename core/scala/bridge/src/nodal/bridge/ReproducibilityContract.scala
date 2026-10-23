@@ -713,7 +713,7 @@ private[nodal] object ReproducibilityContract:
                 "role" -> string(argument.role)
               )
             ))
-          )
+          ) ++ body.parentRegion.toVector.map(path => "body_parent_region" -> string(path))
         ) ++ value.yieldedArea.toVector.map(path => "yielded_area" -> string(path)) ++
           Option.when(value.exports.nonEmpty)(
             "exports" -> array(value.exports.map(exported =>

@@ -80,6 +80,9 @@ private[nodal] object StructuralParameterBinding:
             (value.arms :+ value.invalidArm).map(value.owner -> _)
           )
       )
+    private val conditionalArmIndex: Map[String, KernelStructuralArmSnapshot] =
+      enclosing.map(_.conditionalArmIndex).getOrElse(
+        unique(conditionalArms.map((_, arm) => arm.path -> arm), "conditional arm"))
     private val arguments
         : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
       enclosing.map(_.arguments).getOrElse(
@@ -174,9 +177,23 @@ private[nodal] object StructuralParameterBinding:
       unique(value._2.parameterBindings, "parameter override")
     ).getOrElse(Map.empty)
 
+    /** Enter one actual conditional arm through its unchanged explicit capture substitution. */
+    def conditionalArm(parentRegion: Option[String], arm: KernelStructuralArmSnapshot): Query =
+      if scope != parentRegion || !conditionalArmIndex.get(arm.path).exists: actual =>
+          actual.path == arm.path && actual.captures == arm.captures &&
+            actual.arguments.takeRight(actual.captures.size) == arm.arguments.takeRight(arm.captures.size)
+      then
+        invalid("conditional arm context requires its actual lexical parent and captures")
+      new Query(snapshot, scope = Some(arm.path), enclosing = Some(this),
+        captures = arm.arguments.takeRight(arm.captures.size).zip(arm.captures).collect {
+          case (argument, capture)
+              if argument.dataType == "Integer" && argument.role == "static_capture" =>
+            argument.path -> capture
+        }.toMap)
+
     /** Enter one actual generated body using its canonical parent bounds and capture edges. */
     def generatedBody(region: KernelGeneratedRegionSnapshot): Query =
-      if scope != region.parent || !snapshot.generatedRegions.exists(_ eq region) ||
+      if scope != region.lexicalParent || !snapshot.generatedRegions.exists(_ eq region) ||
         region.digitalBody.isEmpty
       then invalid("Generate Integer context requires its actual lexical parent and body")
       val inputs = Vector(region.lower, region.upperExclusive, region.step)

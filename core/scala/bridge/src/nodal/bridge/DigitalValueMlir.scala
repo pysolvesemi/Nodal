@@ -242,7 +242,7 @@ private[nodal] object DigitalValueMlir:
       snapshot.root
     )
     private val generatedByRegion =
-      generated.values.toVector.groupBy(value => value.owner -> value.parent)
+      generated.values.toVector.groupBy(value => value.owner -> value.lexicalParent)
     private final case class Region(
         path: String,
         owner: String,
@@ -264,7 +264,7 @@ private[nodal] object DigitalValueMlir:
       Region(
         value.path,
         value.owner,
-        value.parent,
+        value.lexicalParent,
         value.digitalBody.get.arguments,
         value.digitalBody.get.captures
       )
@@ -831,11 +831,26 @@ private[nodal] object DigitalValueMlir:
     )
     generated.valuesIterator.foreach: value =>
       requireValid(
-        !value.parent.exists(hasBehavioralAncestor),
+        !value.lexicalParent.exists(hasBehavioralAncestor),
         "behavioral body cannot create generated structure",
         value.path
       )
       val body = value.digitalBody.get
+      var lexical = value.lexicalParent
+      var nearest: Option[String] = None
+      val ancestry = mutable.HashSet(value.path)
+      while lexical.nonEmpty do
+        val path = lexical.get
+        requireValid(ancestry.add(path) && ancestry.size <= 128,
+          "generated lexical ancestry contains a cycle or exceeds depth", value.path)
+        val parent = regions.getOrElse(path, fail("generated lexical parent is absent", value.path))
+        requireValid(parent.owner == value.owner &&
+          (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
+          "generated lexical ancestry requires owned Generate or structural arms", value.path)
+        if nearest.isEmpty && generated.contains(path) then nearest = Some(path)
+        lexical = parent.parentRegion
+      requireValid(nearest == value.parent,
+        "generated ancestry differs from its actual lexical parent chain", value.path)
       requireValid(
         body.arguments.size == body.captures.size + 1 && body.arguments.size <= 4098 &&
           body.arguments.head.path == value.induction && body.arguments.head.dataType == "Integer" &&
@@ -882,15 +897,14 @@ private[nodal] object DigitalValueMlir:
                  Set("read_only", "read_write")(exported.access)
                else if exported.kind == "family" then
                  exported.access == "read_only" && generated.get(exported.target).exists(target =>
-                   target.yieldedArea.nonEmpty && target.owner == value.owner && target.parent.contains(
-                     value.path
-                   )
+                   target.yieldedArea.nonEmpty && target.owner == value.owner &&
+                     target.parent.contains(value.path) && target.lexicalParent.contains(value.path)
                  )
                else false),
             "generated export requires a canonical key, exact direct storage and attested access",
             value.path
           )
-      body.captures.foreach(requireVisible(_, value.owner, value.parent, value.path))
+      body.captures.foreach(requireVisible(_, value.owner, value.lexicalParent, value.path))
       body.arguments.drop(1).zipWithIndex.foreach: (argument, index) =>
         requireValid(
           argument.path == s"${value.path}.arg${index + 1}" &&
@@ -919,22 +933,27 @@ private[nodal] object DigitalValueMlir:
         )
         declarations(exported.target)._2.kind
 
-    private lazy val generatedBodyQueries =
+    private lazy val generatedLexicalQueries =
       mutable.HashMap.empty[String, StructuralParameterBinding.Query]
-    private lazy val activeGeneratedQueries = mutable.HashSet.empty[String]
-    private def generatedBodyQuery(path: String): StructuralParameterBinding.Query =
-      generatedBodyQueries.getOrElseUpdate(
+    private lazy val activeGeneratedLexicalQueries = mutable.HashSet.empty[String]
+    private def generatedLexicalQuery(path: String): StructuralParameterBinding.Query =
+      generatedLexicalQueries.getOrElseUpdate(
         path, {
           requireValid(
-            activeGeneratedQueries.size < 128 && activeGeneratedQueries.add(path),
+            activeGeneratedLexicalQueries.size < 128 && activeGeneratedLexicalQueries.add(path),
             "generated lexical query ancestry contains a cycle or exceeds depth",
             path
           )
           try
-            val region = generated.getOrElse(path, fail("generated query owner is absent", path))
-            val parent = region.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
-            parent.generatedBody(region)
-          finally activeGeneratedQueries.remove(path)
+            val region = regions.getOrElse(path, fail("generated lexical query owner is absent", path))
+            val parent = region.parentRegion.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+            generated.get(path) match
+              case Some(family) => parent.generatedBody(family)
+              case None => arms.get(path) match
+                case Some((conditional, arm)) if conditional.behavioralRoot.isEmpty =>
+                  parent.conditionalArm(conditional.parentRegion, arm)
+                case _ => fail("generated lexical query requires actual Generate or structural arm", path)
+          finally activeGeneratedLexicalQueries.remove(path)
         }
       )
 
@@ -963,8 +982,8 @@ private[nodal] object DigitalValueMlir:
             requireVisible(ordinal, expression.owner, expression.region, expression.path)
             requireStaticPredicateInput(ordinal, expression.owner, topology = true)
         val (header, bounds, selected) = try
-          val headerQuery = selectedFamily.parent.map(generatedBodyQuery).getOrElse(loopBoundQuery)
-          val ordinalQuery = expression.region.map(generatedBodyQuery).getOrElse(loopBoundQuery)
+          val headerQuery = selectedFamily.lexicalParent.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+          val ordinalQuery = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
           val header =
             Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
               .map(headerQuery.resolve(selectedFamily.owner, _))
@@ -989,7 +1008,7 @@ private[nodal] object DigitalValueMlir:
       val root =
         generated.getOrElse(expected, fail("selected family root is absent", expression.path))
       requireValid(
-        root.parent == expression.region,
+        root.lexicalParent == expression.region,
         "selected family root escaped handle-definition scope",
         expression.path
       )
@@ -1007,7 +1026,7 @@ private[nodal] object DigitalValueMlir:
         requireValid(
           parent.owner == expression.owner && next.kind == "family" &&
             next.access == "read_only" && generated.get(next.target).exists(child =>
-              child.owner == expression.owner && child.parent.contains(parent.path)
+              child.owner == expression.owner && child.parent.contains(parent.path) && child.lexicalParent.contains(parent.path)
             ),
           "selected family must follow an exact directly nested family export",
           expression.path
@@ -3219,15 +3238,15 @@ private[nodal] object DigitalValueMlir:
         val body = region.digitalBody.get
         val header = Vector(region.lower, region.upperExclusive, region.step).map: path =>
           if path.toLongOption.nonEmpty then
-            staticValue(path, region.parent, output, StaticPurpose.Structural)
-          else emit(path, depth + 1, region.parent, output)
+            staticValue(path, region.lexicalParent, output, StaticPurpose.Structural)
+          else emit(path, depth + 1, region.lexicalParent, output)
         requireValid(
           header.forall(_._2 == "i64"),
           "Generate bounds require three actual i64 operands",
           region.path
         )
         val captures =
-          body.captures.map(emit(_, depth + 1, region.parent, output, typeArithmetic = true))
+          body.captures.map(emit(_, depth + 1, region.lexicalParent, output, typeArithmetic = true))
         val induction = s"%generated_index_$ordinal"
         ordinal += 1
         val local = mutable.ArrayBuffer.empty[String]

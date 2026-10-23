@@ -187,3 +187,44 @@ object Increment58BoundaryArtifactTests extends TestSuite:
       assert(!canonical(
         ConstructionKernel.inspect(new Increment58GeneratedAreaScaleSource)
       ).contains("\"selection_prefix\""))
+
+    test("guarded generated artifact distinguishes family ancestry from exact lexical body edge"):
+      for make <- Vector[() => Module](
+          () => new nodal_external.Increment58GuardedFamilySource,
+          () => new nodal_external.Increment58GuardedNestedFamilySource
+        )
+      do
+        val snapshot = ConstructionKernel.inspect(make())
+        val family = snapshot.generatedRegions.find(region =>
+          region.digitalBody.exists(_.parentRegion.exists(path =>
+            snapshot.structuralIfs.exists(_.trueArm.path == path)
+          ))
+        ).get
+        val body = family.digitalBody.get
+        val lexical = body.parentRegion.get
+        val conditional = snapshot.structuralIfs.find(_.trueArm.path == lexical).get
+        assert(family.parent != body.parentRegion)
+        val artifact = canonical(snapshot)
+        val compact = artifact.replaceAll("\\s", "")
+        val parent = family.parent.map(path => s"\"$path\"").getOrElse("null")
+        assert(compact.contains(s"\"parent_region\":$parent,\"path\":\"${family.path}\""))
+        assert(compact.contains(s"\"body_parent_region\":\"$lexical\""))
+        assert(compact.sliding("\"body_parent_region\"".length)
+          .count(_ == "\"body_parent_region\"") ==
+          snapshot.generatedRegions.count(_.digitalBody.exists(_.parentRegion.nonEmpty)))
+        val changed = snapshot.copy(generatedRegions =
+          snapshot.generatedRegions.map(region =>
+            if region.path == family.path then
+              region.copy(digitalBody =
+                Some(body.copy(parentRegion = Some(conditional.falseArm.path)))
+              )
+            else region
+          )
+        )
+        assert(canonical(changed) != artifact)
+        val historical = snapshot.copy(generatedRegions =
+          snapshot.generatedRegions.map(region =>
+            region.copy(digitalBody = region.digitalBody.map(_.copy(parentRegion = None)))
+          )
+        )
+        assert(!canonical(historical).contains("\"body_parent_region\""))

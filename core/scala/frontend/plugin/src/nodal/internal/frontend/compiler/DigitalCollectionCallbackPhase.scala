@@ -47,6 +47,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   private var loops = Set.empty[Symbol]
   private var ranges = Set.empty[Symbol]
   private var areaRanges = Set.empty[Symbol]
+  private var areaRangeFactories = Set.empty[Symbol]
+  private var areaFamilyMethods = Set.empty[Symbol]
   private var loopMethods = Set.empty[Symbol]
   private var loopModules = Set.empty[Symbol]
   private var rangeMethods = Set.empty[Symbol]
@@ -73,7 +75,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
   private enum Profile:
     case Pure, Loop, Range, StructuralRange, Selection, StructuralIf, Sequential, GeneratedArea,
-      ImmutableFsm
+      ImmutableFsm, StructuralFamily
 
   private final class Budget:
     var visitedNodes = 0
@@ -411,7 +413,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
   private def initializeIterationProfiles(owner: Symbol)(using Context): Unit =
     loops = methods(owner, "loop")
-    ranges = methods(requiredModule("nodal.CandidateApi$package"), "hdlRange") ++
+    areaRangeFactories = moduleMethods("nodal.CandidateApi$package", "hdlRange").filter(
+      _.info.finalResultType.widen.dealias.derivesFrom(requiredClass("nodal.HdlRange")))
+    ranges = (methods(requiredModule("nodal.CandidateApi$package"), "hdlRange") -- areaRangeFactories) ++
       methods(requiredClass("nodal.HdlRange"), "foreach") ++
       moduleMethods("nodal.GeneratedAreaApi$package", "apply")
     iterationFactories =
@@ -422,6 +426,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         "checkedAreaRange"
       )
     factories ++= iterationFactories
+    areaFamilyMethods = methods(requiredModule("nodal.GeneratedAreaRuntime"), "bind") ++
+      methods(requiredModule("nodal.DigitalIterationCallback"), "checkedAreaRange")
     val selections = requiredModule("nodal.SignalSelection")
     loopModules += selections
     loopMethods = methods(requiredClass("nodal.LoopIndex"), "value") ++
@@ -751,6 +757,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else if symbol.is(Method) && !symbol.isConstructor && !symbol.is(Accessor) &&
       closedDispatch(symbol) && (
         symbol.info.finalResultType.derivesFrom(requiredClass("nodal.Expr")) ||
+          symbol.info.finalResultType.derivesFrom(requiredClass("nodal.GeneratedAreas")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.HwEnum")) ||
           symbol.info.finalResultType.derivesFrom(requiredClass("nodal.FsmDef")) ||
           symbol.info.finalResultType.typeSymbol.is(Enum) ||
@@ -799,7 +806,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     val fields = encoded.split("\t", -1).toList
     fields match
       case kind :: locator :: member :: signature :: profile :: Nil
-          if Set("1", "3", "4", "8", "16", "32", "64")(profile) =>
+          if Set("1", "3", "4", "8", "16", "32", "64", "128")(profile) =>
         val owner = if locator.startsWith("module:") then
           val name = locator.stripPrefix("module:")
           val direct = getModuleIfDefined(name)
@@ -833,7 +840,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       effectKind(symbol).foreach: kind =>
         effectSignature(symbol, kind).foreach: signature =>
           val profiles = if kind == "helper" then
-            List(Profile.ImmutableFsm, Profile.Pure, Profile.StructuralIf, Profile.Sequential)
+            List(Profile.ImmutableFsm, Profile.Pure, Profile.StructuralIf, Profile.StructuralFamily, Profile.Sequential)
           else if kind == "singleton" then
             List(
               Profile.ImmutableFsm,
@@ -865,6 +872,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                   case Profile.ImmutableFsm => 64
                   case Profile.Pure => 4
                   case Profile.StructuralIf => 8
+                  case Profile.StructuralFamily => 128
                   case Profile.Sequential => 16
                   case Profile.GeneratedArea => 32
                   case Profile.StructuralRange => 1
@@ -889,7 +897,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   override def transformIf(tree: If)(using Context): Tree =
     if !structural.moduleContext || !structural.symbolic(tree.cond) then tree
     else
-      val validation = new Validation(Profile.StructuralIf, new Budget)
+      val validation = new Validation(Profile.StructuralFamily, new Budget)
       if validation.structuralIf(tree, 0) then
         structural.lower(tree, structural.predicate(tree.cond).get, structural.resultType(tree).get)
       else tree
@@ -981,8 +989,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
   )(using Context):
     private val permitsStructure = profile == Profile.Range || profile == Profile.StructuralRange ||
       profile == Profile.GeneratedArea
+    private val permitsAreaFamily = permitsStructure || profile == Profile.StructuralFamily
     private val permitsWrites = profile == Profile.Loop || profile == Profile.Range ||
-      profile == Profile.StructuralIf || profile == Profile.GeneratedArea
+      profile == Profile.StructuralIf || profile == Profile.StructuralFamily || profile == Profile.GeneratedArea
     // Quotes may insert a synthetic module accessor whose name is absent from the source member table.
     // Admit only this exact compiler-owned, zero-argument accessor with its exact module result.
     private def generatedRuntimeAccessor(symbol: Symbol): Boolean =
@@ -997,11 +1006,12 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else
       pureMethods(symbol) || generatedRuntimeAccessor(symbol) ||
       sequentialMethods(symbol) ||
-      ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf) &&
+      ((profile == Profile.Sequential || profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily) &&
         (sequentialBranches(symbol) || sequentialFactories(symbol) || sequentialWrites(symbol))) ||
       structuralMethods(symbol) || structuralBranches(symbol) || structuralFactories(symbol) ||
       (permitsWrites && loopMethods(symbol)) ||
       (permitsStructure && rangeMethods(symbol)) ||
+      (permitsAreaFamily && (areaFamilyMethods(symbol) || areaRangeFactories(symbol))) ||
       (profile == Profile.Selection && selectionMethods(symbol))
     private def trustedModule(symbol: Symbol): Boolean =
       if profile == Profile.ImmutableFsm then immutableFsmModules(symbol)
@@ -1019,7 +1029,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         false
       else if profile == Profile.Pure && !structuralDiagnostic then
         DigitalCollectionCallbackPhase.this.fail(code, message, tree)
-      else if profile == Profile.StructuralIf || structuralDiagnostic then
+      else if profile == Profile.StructuralIf || profile == Profile.StructuralFamily || structuralDiagnostic then
         report.error(s"NODAL-STRUCTURAL-055-$code: $message", tree.srcPos)
         false
       else
@@ -1284,6 +1294,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       if !budget(tree, depth) then false
       else
         tree match
+          case Apply(function, List(closure))
+              if profile == Profile.GeneratedArea &&
+                function.symbol == requiredMethod("nodal.DigitalIterationCallback.checkedAreaRange") =>
+            callback(closure, depth + 1)
           case Inlined(_, bindings, expansion) =>
             bindings.forall(check(_, depth + 1)) && callback(expansion, depth + 1)
           case Typed(expression, _) => callback(expression, depth + 1)
@@ -1393,6 +1407,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                   (effects.contains(8) && permitsWrites) ||
                   (effects.contains(16) && profile == Profile.Sequential))) ||
               (effects.contains(32) && profile == Profile.GeneratedArea) ||
+                (effects.contains(128) && permitsAreaFamily) ||
               (kind != "helper" && permitsStructure &&
                 (effects.contains(1) || (effects.contains(3) && permitsWrites)))
             val expected = expectedProfile.forall(profile => effects.contains(profile))
@@ -1404,7 +1419,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             then
               fail("SUMMARY", "stale, malformed or incompatible constructor effect summary", tree)
             else
-              val profile = List(1, 3, 4, 8, 16, 32, 64).find(effects.contains).get
+              val profile = List(1, 3, 4, 8, 16, 32, 64, 128).find(effects.contains).get
               val records = if dependencyText.get.isEmpty then Nil
               else dependencyText.get.split("\n", -1).toList
               activeSummaries += symbol
@@ -1508,7 +1523,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
                 "behavioral callbacks admit only read-only structural value expressions",
                 application
               )
-            else if loops(symbol) || ((ranges(symbol) || areaRanges(symbol)) && !permitsStructure)
+            else if loops(symbol) || (ranges(symbol) && !permitsStructure) ||
+              (areaRanges(symbol) && !permitsAreaFamily)
             then
               fail("EFFECT", "nested effectful digital iteration is unsupported", application)
             else
@@ -1564,12 +1580,10 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             check(selection.qualifier, depth + 1) &&
             (collections(
               selection.symbol
-            ) || (permitsStructure && (ranges(selection.symbol) || areaRanges(selection.symbol))) ||
+            ) || ((permitsStructure && ranges(selection.symbol)) || (permitsAreaFamily && areaRanges(selection.symbol))) ||
               reference(selection, depth + 1))
           case identifier: Ident => collections(identifier.symbol) ||
-            (permitsStructure && (ranges(identifier.symbol) || areaRanges(
-              identifier.symbol
-            ))) || reference(identifier, depth + 1)
+            ((permitsStructure && ranges(identifier.symbol)) || (permitsAreaFamily && areaRanges(identifier.symbol))) || reference(identifier, depth + 1)
           case _ => fail("UNKNOWN", "unsupported callback call target", tree)
 
     private def pureOperands(trees: List[Tree], depth: Int, sequential: Boolean): Boolean =
@@ -1606,7 +1620,7 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
 
     def sequentialGuard(guard: behavioral.Guard, depth: Int): Boolean =
       if !budget(guard.original, depth) then false
-      else if profile == Profile.GeneratedArea || profile == Profile.StructuralIf then
+      else if profile == Profile.GeneratedArea || profile == Profile.StructuralIf || profile == Profile.StructuralFamily then
         val nested = new Validation(Profile.Sequential, sharedBudget, reportErrors)
         val valid = nested.sequentialGuard(guard, depth + 1)
         importedDependencies ++= nested.importedDependencies

@@ -2256,6 +2256,23 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(expressionPath(region.reference))
       )
 
+  /** Generated storage is admitted only in an actual family body. Structural arms may enclose
+    * that body, but cannot themselves acquire storage, behavioral or procedural allocation rights.
+    */
+  private def requireAreaFamilyScope(role: String, requireBody: Boolean): Unit =
+    if activeEventProcess.nonEmpty then eventFailure(s"$role is not permitted in an event process")
+    val module = currentModule.handle
+    var current = activeValueRegion
+    val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
+    if requireBody && !current.exists(_.loop.exists(_.generated.exists(_.areaFamily))) then
+      collectionFailure(s"$role requires its actual generated Area body")
+    while current.nonEmpty do
+      val region = current.get
+      if !visited.add(region) || visited.size > 128 || region.reference.module != module ||
+        !(region.structuralArm.nonEmpty || region.loop.exists(_.generated.exists(_.areaFamily)))
+      then collectionFailure(s"$role requires only actual generated and structural lexical ancestry")
+      current = region.parent
+
   private def requireLoopEffect(role: String): Unit =
     activeLoop.filter(_.loop.get.generated.isEmpty).foreach: region =>
       rejectCollection(
@@ -4638,7 +4655,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
   def allocateArea[A <: Area](source: SourceSpan)(body: () => A): A =
     if activeGeneratedRegion.exists(_.areaFamily) then
-      requireNoCollectionEffect("Area declaration")
+      requireAreaFamilyScope("Area declaration", requireBody = true)
       requireLoopEffect("Area declaration")
     else requireNoGeneratedEffect("Area declaration")
     if analogStack.nonEmpty || analogSemanticContext.nonEmpty then
@@ -4743,6 +4760,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       then fail("NODAL-AREA-058-OWNER", "generated family has no exact owned template")
     val record = value.generatedRegion
     original(record)
+    val root = value.selectionPrefix.headOption.map(_.family).getOrElse(record)
+    val lexicalParent = root.digitalRegion.getOrElse(
+      fail("NODAL-AREA-058-OWNER", "generated family has no actual body")).parent
+    var scope = activeValueRegion
+    var depth = 0
+    while scope.nonEmpty && scope != lexicalParent do
+      depth += 1
+      if depth > 128 then fail("NODAL-AREA-058-LIMIT", "generated family scope exceeds depth")
+      scope = scope.get.parent
+    if scope != lexicalParent then
+      fail("NODAL-AREA-058-OWNER", "generated family escaped its lexical existence scope")
     if value.selectionPrefix.isEmpty then
       if !record.familyHandle.exists(_ eq value) ||
         record.parentOrdinal != activeGeneratedRegion.map(_.ordinal)
@@ -5266,7 +5294,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
     closeBehavioralChain()
-    requireNoCollectionEffect(s"${kind.label} declaration")
+    if activeGeneratedRegion.exists(_.areaFamily) &&
+      Set(KernelSignalKind.Wire, KernelSignalKind.Register)(kind)
+    then requireAreaFamilyScope(s"${kind.label} declaration", requireBody = true)
+    else requireNoCollectionEffect(s"${kind.label} declaration")
     requireLoopEffect(s"${kind.label} declaration")
     validateCollectionDependencies(attributes.map(_._2))
     val activeGeneratedVariable =
@@ -8243,17 +8274,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       maximum: Option[Int],
       areaFamily: Boolean
   )(body: Expr[Integer] => A): (A, GeneratedRegionRecord) =
-    requireNoCollectionEffect("structural generation")
+    if areaFamily then requireAreaFamilyScope("generated Area family", requireBody = false)
+    else requireNoCollectionEffect("structural generation")
     if activeLoop.exists(_.loop.get.generated.isEmpty) then
       collectionFailure("nested effectful iteration is outside the bounded loop profile")
-    if areaFamily && activeValueRegion.exists(parent =>
-        !parent.loop.exists(_.generated.exists(_.areaFamily))
-      )
-    then
-      fail(
-        "NODAL-AREA-058-OWNER",
-        "generated Area family requires a direct Module or actual generated body in this profile"
-      )
     val module = currentModule
     val analysis = new StructuralBoundAnalysis(module.handle)
     val lowerBound = analysis(lower)
@@ -8303,7 +8327,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       resultType = Some(KernelTypeDescriptor("Integer")),
       operation = Some("generate_index")
     )
-    val inductionReference = captureExpression(induction).getOrElse(
+    val inductionReference = captureExpression(induction,
+      scopeOverride = Option.when(areaFamily)(None)).getOrElse(
       fail("NODAL-ITERATION-043-001", "hdlRange induction has no active construction owner")
     )
     val parentOrdinal = generationStack.lastOption
@@ -10375,11 +10400,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def generatedRegionPath(record: GeneratedRegionRecord): String =
     val module = records(record.owner)
     val local = s"generate_${record.ordinal}"
-    record.parentOrdinal match
-      case None => s"${modulePath(record.owner)}.$local"
-      case Some(parent) =>
-        val parentRecord = module.generatedRegions(parent)
-        s"${generatedRegionPath(parentRecord)}.$local"
+    record.digitalRegion.flatMap(_.parent).filter(_.structuralArm.nonEmpty) match
+      case Some(arm) => s"${expressionPath(arm.reference)}.$local"
+      case None => record.parentOrdinal match
+        case None => s"${modulePath(record.owner)}.$local"
+        case Some(parent) =>
+          val parentRecord = module.generatedRegions(parent)
+          s"${generatedRegionPath(parentRecord)}.$local"
 
   private def generatedSnapshots(): Vector[KernelGeneratedRegionSnapshot] =
     records.values.toVector
@@ -10403,7 +10430,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               KernelDigitalGeneratedBody(
                 value.captures.valuesIterator.map(capture => pathOf(capture._1).get).toVector,
                 regionArguments(value),
-                value.loop.get.sourceOrdinal
+                value.loop.get.sourceOrdinal,
+                value.parent.map(parent => expressionPath(parent.reference))
               )
             ),
             yieldedArea = region.yieldedArea.map(value =>

@@ -1047,3 +1047,39 @@ Local, sibling, wrapped foreign and descendant capabilities retain their exact
 owner checks. Logs, manifests and actual inputs are under
 `.work/f58-standalone-followup`. Typed resolved Interface member carriers and
 resolved/inout target emission remain separate required work.
+
+## Checkpoint 23 — source guarded generated-family declarations
+
+The existing generated-body record now retains its exact lexical parent separately
+from nearest enclosing Generate ancestry. Source capture and bridge follow that
+same canonical region/capture chain; guarded family declarations and local typed
+selection do not invent another hierarchy. Bounds must remain independently valid
+across their full envelope in this source slice. A maybe-empty family may be
+declared without selection; predicate-dependent member existence is the next
+source continuation against checkpoint21's native proof.
+
+A narrow additive StructuralFamily effect-summary bit 128 admits checked family
+factory/bind/map through direct and separately compiled helpers. It does not widen
+old StructuralIf bit 8 or grant declaration authority to Pure, procedural-loop or
+sequential callbacks. ImmutableFsm bit 64 remains distinct. Unknown/authored
+certificates and forbidden effects continue to fail closed. The artifact retains
+historical `parent_region` and conditionally adds `body_parent_region` for the
+actual lexical body edge, preserving old bytes when that new fact is absent.
+
+The integrated source batch passes **49/49 groups**: guarded 7, nested 7, selected
+7, generated 14, unroll 4 and structural-if 10. The final artifact/guarded batch
+passes **13/13**, with the seven guarded groups intentionally repeated after the
+serialization change. Both production manifests match. The Area separate-JAR
+harness passes seven lexical and five generated predecessor fixtures plus nine
+new guarded/effect-metadata negatives; the typed helper positive remains actual
+separate compilation, not a copied source-only example.
+
+Four promoted public replays (guarded, nested, helper and empty family) pass the
+full native gate on frozen compiler
+`83d54e05ab033664162048cd1071fea8a3b0a09db1c710447355179c0092aa53`.
+The independently compiled helper witness also passed that gate. Receipts and
+source/classpath hashes are under `.work/f58-generated-areas/n2a/shared-promoted`,
+with grouped source checks in `.work/f58-guarded-source-shared` and
+`.work/f58-guarded-artifact`. Guarded-family target execution, module-defined family
+selection under a later guard, induction-dependent bounds and generated symbol
+views remain required work, not implied by this source/native acceptance.

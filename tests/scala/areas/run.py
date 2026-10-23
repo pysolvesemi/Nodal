@@ -158,8 +158,44 @@ def main() -> None:
         if name == "MixedWhen" and (
                 "NODAL-ITERATION-CALLBACK-EFFECT" not in output or "2 errors found" not in output):
             raise RuntimeError("both pure collection and procedural loop guards must reject")
+    guarded = fixtures / "guarded"
+    guarded_producer, _ = compile_sources(
+        "guarded-producer", [guarded / "producer/Producer.scala"])
+    guarded_jar = out / "guarded-producer.jar"
+    run("guarded-producer-jar", [str(Path(args.java).with_name("jar")), "cf", str(guarded_jar),
+                                 "-C", str(guarded_producer), "."])
+    guarded_consumer, _ = compile_sources(
+        "guarded-consumer", sorted((guarded / "consumer").glob("*.scala")),
+        dependencies=[guarded_jar])
+    runtime("guarded-runtime", "nodal.GuardedJarProbe", [guarded_jar, guarded_consumer],
+            "GUARDED_SEPARATE_JAR_PASS")
+    guarded_expected = {
+        "BehavioralFamily": "NODAL-SEQUENTIAL-056-UNAVAILABLE",
+        "GuardedDirectStorage": "NODAL-STRUCTURAL-055-UNAVAILABLE",
+        "GuardedLegacyForeach": "NODAL-STRUCTURAL-055-EFFECT",
+        "GuardedModule": "NODAL-STRUCTURAL-055-UNAVAILABLE",
+        "LoopHelper": "NODAL-ITERATION-CALLBACK-SUMMARY",
+        "PureHelper": "NODAL-COLLECTION-CALLBACK-SUMMARY",
+        "SequentialHelper": "NODAL-SEQUENTIAL-056-SUMMARY",
+        "ForgedSummary": "NODAL-CONSTRUCTOR-METADATA",
+    }
+    for name, diagnostic in guarded_expected.items():
+        source = guarded / "negative" / (name + ".scala")
+        _, output = compile_sources("guarded-negative-" + name, [source], negative=True,
+                                    dependencies=[guarded_jar])
+        if f"/{source.name}:" not in output or diagnostic not in output:
+            raise RuntimeError(f"{name}: missing exact guarded diagnostic {diagnostic}\n{output}")
+    unknown, _ = compile_sources("guarded-unknown-producer",
+                                  [guarded / "raw/UnknownFactory.scala"], plugin=False,
+                                  dependencies=[guarded_jar])
+    _, output = compile_sources("guarded-unknown-mask",
+                                [guarded / "raw/UnknownConsumer.scala"], negative=True,
+                                dependencies=[guarded_jar, unknown])
+    if "NODAL-STRUCTURAL-055-SUMMARY" not in output:
+        raise RuntimeError("unknown effect profile 256 was accepted")
     print(f"PASS lexical and generated Area source/construction, {len(expected)} lexical "
           f"and {len(generated_negatives)} generated negative fixtures, "
+          f"{len(guarded_expected) + 1} guarded effect/metadata negatives, "
           f"separate producer/factory/consumer JARs, "
           f"missing/no-plugin fail-closed; logs: {out}")
 

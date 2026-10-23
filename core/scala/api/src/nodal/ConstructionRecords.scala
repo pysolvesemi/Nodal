@@ -454,7 +454,8 @@ private[nodal] final case class KernelEnumSwitchSnapshot(
 private[nodal] final case class KernelDigitalGeneratedBody(
     captures: Vector[String],
     arguments: Vector[KernelDigitalRegionArgument],
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    parentRegion: Option[String] = None
 )
 
 private[nodal] final case class KernelGeneratedRegionSnapshot(
@@ -471,7 +472,9 @@ private[nodal] final case class KernelGeneratedRegionSnapshot(
     digitalBody: Option[KernelDigitalGeneratedBody] = None,
     yieldedArea: Option[String] = None,
     exports: Vector[KernelGeneratedAreaExport] = Vector.empty
-)
+):
+  /** Legacy direct generated ancestry remains the lexical edge when no arm edge is present. */
+  def lexicalParent: Option[String] = digitalBody.flatMap(_.parentRegion).orElse(parent)
 
 private[nodal] final case class KernelShapeIndexSnapshot(
     path: String,

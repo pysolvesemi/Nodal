@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run focused scalar resolved/extern source replays through unchanged four-state HDL."""
+"""Run focused resolved/extern and ordinary Interface-array source replays through unchanged four-state HDL."""
 import argparse
 import hashlib
 import json
@@ -276,12 +276,148 @@ def inspect(profile, root, ir, sv):
     return external_names[0] if external_names else ""
 
 
+ARRAY_PROFILES = tuple("array-" + name for name in
+                       ("read", "drive", "release", "child", "split", "split-alias", "low", "high", "pass"))
+
+
+def array_pinmap(source):
+    """Read split observation names from actual source SSA, never source-line names."""
+    ports, members, roles, assignments = {}, {}, {}, []
+    for line in source.splitlines()[1:]:
+        lhs = line.split(" = ", 1)[0].strip()
+        if '"nodal.port_value"' in line:
+            ports[lhs] = re.search(r'port = @"?([A-Za-z0-9_]+)', line).group(1)
+        elif '"nodal.member_access"' in line:
+            members[lhs] = re.search(r'instance = @"?([A-Za-z0-9_]+)', line).group(1)
+        elif '"nodal.net_split"' in line:
+            results = lhs.split(", ")
+            roles[results[0]], roles[results[1]] = "write", "enable"
+        elif '"nodal.net_read"' in line:
+            operand = re.search(r'"nodal.net_read"\((%[^)]+)\)', line).group(1)
+            roles[lhs] = ("read", operand)
+        elif '"nodal.digital_assign"' in line:
+            assignments.append(re.search(r'"nodal.digital_assign"\((%[^,]+), (%[^)]+)\)', line).groups())
+    result = {}
+    for destination, value in assignments:
+        role = roles.get(value)
+        if isinstance(role, tuple):
+            role = "read" if members.get(role[1]) == "driven" else None
+        if role:
+            require(destination in ports, "split observation must assign its actual output port")
+            result.setdefault(role, []).append(ports[destination])
+    return result
+
+
+def inspect_array(profile, ir, sv, source):
+    mode = profile.removeprefix("array-")
+    require("hw.module.extern" not in ir, "ordinary array profile cannot stand in for a real extern")
+    require('!hw.inout<' in ir and 'outer_dimensions = [' in ir,
+            "original array geometry and true inout carrier must survive")
+    require('outer_dimensions = ["3"]' in ir if mode == "high" else
+            'outer_dimensions = ["count"]' in ir, "exact outer shape identity lost")
+    loops = int(mode in ("drive", "child", "split", "split-alias", "low", "high"))
+    require(sv.count("for (genvar") == loops, "one authored pointwise driver loop required, not lane cloning")
+    require('sv.alias' not in ir, "checked native tran must retain bidirectional alias semantics")
+    pins = array_pinmap(source) if mode.startswith("split") else {}
+    if pins:
+        require(len(pins.get("read", [])) == 1 and len(pins.get("enable", [])) == 1 and
+                len(pins.get("write", [])) == (2 if mode == "split-alias" else 1),
+                "independent read/write/enable source projections missing")
+        require(all(name in sv for names in pins.values() for name in names), "source observation pin missing")
+    return pins
+
+
+def array_bench(profile, root, pins):
+    mode = profile.removeprefix("array-")
+    child, level, passthrough = mode == "child", mode in ("low", "high"), mode == "pass"
+    local = not child and not level and not passthrough
+    conditional = mode in ("drive", "child", "split", "split-alias")
+    connections = ".core_clock(1'b0),.output_0(observed)"
+    parameters = "" if mode == "high" else "#(.count(L))"
+    if child:
+        parameters = "#(.count(L),.width(W),.foreignWidth(F))"
+        connections += ",.data(data),.enable(enable)"
+        a, b = "dut.child_instance.connected__m_3_pad", "dut.child_instance.driven__m_3_pad"
+    elif local:
+        connections += ",.data(data),.enable(enable),.wrongEnable(2'b0),.wrongRank(4'b0),.connected__m_3_pad(pinA),.driven__m_3_pad(pinB)"
+        a, b = "pinA", "pinB"
+    elif level:
+        connections += ",.enable(enable),.driven__m_3_pad(pinB)"
+        a, b = "pinA", "pinB"
+    else:
+        parameters = "#(.count(L),.foreignCount(F))"
+        connections += ",.left__m_3_pad(pinA),.right__m_3_pad(pinB)"
+        a, b = "pinA", "pinB"
+    checks = ""
+    if pins:
+        connections += f",.{pins['read'][0]}(readOut),.{pins['write'][0]}(writeOut),.{pins['enable'][0]}(enableOut)"
+        checks += f'if(readOut!=={b} || writeOut!==data || enableOut!==enable)$fatal(1,"source split sidebands");'
+        if len(pins["write"]) == 2:
+            connections += f",.{pins['write'][1]}(aliasOut)"
+            checks += 'if(aliasOut!==data)$fatal(1,"reconstructed monitor alias");'
+    expected_b = "assign expectedB[g*W +:W]=enable[g]?data[g*W +:W]:{W{1'bz}};" if conditional else ""
+    if level:
+        expected_b = f"assign expectedB[g*W +:W]=enable[g]?{{W{{1'b{int(mode == 'high')}}}}}:{{W{{1'bz}}}};"
+    if passthrough:
+        expected_b = "assign expectedA[g*W +:W]=extEnableB[g]?extDataB[g*W +:W]:{W{1'bz}};"
+    drive_a = "" if level else f"assign {a}[g*W +:W]=extEnableA[g]?extDataA[g*W +:W]:{{W{{1'bz}}}};"
+    drive_b = f"assign {b}[g*W +:W]=extEnableB[g]?extDataB[g*W +:W]:{{W{{1'bz}}}};"
+    pull = ""
+    if level:
+        primitive = "pullup" if mode == "low" else "pulldown"
+        pull = f"for(genvar bitIndex=0;bitIndex<B;bitIndex=bitIndex+1)begin {primitive}({b}[bitIndex]);{primitive}(expectedB[bitIndex]);end"
+    expected_output = "expectedB" if level else "expectedA"
+    electrical_checks = f'if({b}!=={"expectedA" if passthrough else "expectedB"})$fatal(1,"pointwise electrical lane identity");'
+    if not level:
+        electrical_checks += f'if({a}!==expectedA)$fatal(1,"independent connected read/alias identity");'
+    settings = [(3, 4, 2)] if mode == "high" else ([(1, 1, 7), (3, 5, 2), (8, 8, 3)] if child else [(1, 4, 7), (3, 4, 2), (8, 4, 3)])
+    instances = "\n".join(f"one #({n},{w},{f}) test{i}(done[{i}]);" for i, (n, w, f) in enumerate(settings))
+    return "", f"""module one #(parameter L=3,W=4,F=2)(output reg done=0);
+localparam B=L*W;
+reg[B-1:0] data=0,extDataA=0,extDataB=0;
+reg[L-1:0] enable=0,extEnableA=0,extEnableB=0;
+tri[B-1:0] pinA,pinB,expectedA,expectedB;
+wire[B-1:0] observed,readOut,writeOut,aliasOut;wire[L-1:0] enableOut;
+{root} {parameters} dut({connections});
+for(genvar g=0;g<L;g=g+1)begin
+ {drive_a} {drive_b}
+ assign expectedA[g*W +:W]=extEnableA[g]?extDataA[g*W +:W]:{{W{{1'bz}}}};
+ assign expectedB[g*W +:W]=extEnableB[g]?extDataB[g*W +:W]:{{W{{1'bz}}}};
+ {expected_b}
+end
+{pull}
+task check;begin #1;
+ if($bits({b})!=B || $bits(observed)!=B)$fatal(1,"exact width times count");
+ {electrical_checks}
+ if(observed!=={expected_output})$fatal(1,"source independent observation");
+ {checks}
+end endtask
+initial begin
+ for(integer i=0;i<L;i=i+1)begin data[i*W +:W]=3*i+1;extDataA[i*W +:W]=5*i+2;extDataB[i*W +:W]=7*i+3;end
+ check;
+ for(integer i=0;i<L;i=i+1)begin enable[i]=(i%2)==0;extEnableA[i]=1;end
+ check;
+ for(integer i=0;i<L;i=i+1)extEnableB[i]=!enable[i];check;
+ extEnableB[0]=1;extDataB[W-1:0]=~data[W-1:0];check;
+ enable=0;extEnableA=0;extEnableB={{L{{1'b1}}}};check;
+ extDataB={{B{{1'bx}}}};check;
+ extDataB={{B{{1'bz}}}};check;
+ extEnableB=0;check;done=1;
+end
+endmodule
+module tb;wire[{len(settings)-1}:0] done;
+{instances}
+initial begin wait(&done);$display("ARRAY_RESOLVED_PASS {profile}");$finish;end
+endmodule
+""", settings
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--profiles", nargs="+", choices=(*PROFILES, *SYMBOLIC_PROFILES), default=list(PROFILES))
+    parser.add_argument("--profiles", nargs="+", choices=(*PROFILES, *SYMBOLIC_PROFILES, *ARRAY_PROFILES), default=list(PROFILES))
     args = parser.parse_args()
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         setattr(args, name, getattr(args, name).resolve())
@@ -312,9 +448,10 @@ def main():
             directory = args.out / profile
             directory.mkdir(exist_ok=True)
             record = receipt["profiles"][profile] = {}
-            source = args.input / (profile + ".mlir")
+            input_name = profile.removeprefix("array-") if profile in ARRAY_PROFILES else profile
+            source = args.input / (input_name + ".mlir")
             if not source.exists():
-                source = args.input / profile / "input.mlir"
+                source = args.input / input_name / "input.mlir"
             shutil.copyfile(source, directory / "input.mlir")
             record["input"] = {"path": str(source), "sha256": sha(source)}
             run([args.nodalc, directory / "input.mlir", "--nodal-gate-default", "-o", directory / "gated.mlir"], directory / "gate.log", record)
@@ -323,12 +460,20 @@ def main():
             ir = (directory / "target.mlir").read_text()
             sv = (directory / "target.sv").read_text()
             root = re.search(r"nodal.root.module = @([A-Za-z_][A-Za-z_0-9]*)", ir).group(1)
-            external = inspect(profile, root, ir, sv)
+            if profile in ARRAY_PROFILES:
+                pins = inspect_array(profile, ir, sv, source.read_text())
+                external = ""
+            else:
+                external = inspect(profile, root, ir, sv)
             record["physical"] = {"root": root, "external": external, "abi": "legacy", "width": "symbolic" if profile in SYMBOLIC_PROFILES else 4}
             if profile in SYMBOLIC_PROFILES:
                 record["physical"]["settings"] = [2, 7, 8]
             original = sha(directory / "target.sv")
-            model, test = bench(profile, root, external)
+            if profile in ARRAY_PROFILES:
+                model, test, settings = array_bench(profile, root, pins)
+                record["physical"].update({"kind": "pointwise-family", "settings": settings, "split_observations": pins})
+            else:
+                model, test = bench(profile, root, external)
             (directory / "external_model.sv").write_text(model)
             (directory / "tb.sv").write_text(test)
             run([args.iverilog, "-g2012", "-s", "tb", "-o", directory / "simulation", directory / "target.sv", directory / "external_model.sv", directory / "tb.sv"], directory / "compile.log", record)

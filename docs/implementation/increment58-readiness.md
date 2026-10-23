@@ -1619,3 +1619,22 @@ This is byte-preserving source retention with disclosed path relocation, not
 new maintained-harness acceptance or a rerun. A future harness must verify
 changed source-location/origin identities. No obsolete combined-ordering or
 positive-weak-Or assumptions are copied.
+
+## Checkpoint 49 — maintained generated-target replay tools
+
+Ten exact files from the unified target manifest `e1ab313e` retain four
+generated-occurrence/selected-instance source+replay fixtures, four maintained
+runners and their two scoped guides. Both guide class references are present.
+The guarded-selected runner's only nonstandard import is supplied by the exact
+selected-instance runner; the others use the standard library. Resolved-array
+fixture bytes already match checkpoint 47. The runners consume supplied IR and
+do not silently recompile a different Scala stack.
+
+Historical unchanged-SV suites are reported separately: 22 body-local, 12
+selected-instance, four guarded-selection and 25 resolved-array configurations.
+Their compiler is the unified `fbe93efe` composition. Body exports used the
+earlier guarded-control source stack; selected exports used API `d5960770`,
+bridge `656ac392`, plugin `1d720ab5`, all recorded with exact source hashes.
+These are not asserted to be fresh compilations of checkpoint 47's 108-file
+source engine. Selected Interface/direct/typed-fill runner source mappings
+remain separate; their missing fixture provenance is not hidden by this slice.

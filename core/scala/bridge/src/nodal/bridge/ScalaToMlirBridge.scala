@@ -6230,7 +6230,7 @@ ${indent(body, 2)}
                   )
                 then invalid(s"$subject induction has no actual owned Generate body", token)
                 try
-                  val query = queryForPath(value)
+                  val query = regionalQuery(generated.path)
                   val _ = query.bounds(query.resolve(module.path, token))
                 catch
                   case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)

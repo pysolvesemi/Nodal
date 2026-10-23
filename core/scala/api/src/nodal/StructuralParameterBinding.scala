@@ -82,7 +82,8 @@ private[nodal] object StructuralParameterBinding:
       )
     private val conditionalArmIndex: Map[String, KernelStructuralArmSnapshot] =
       enclosing.map(_.conditionalArmIndex).getOrElse(
-        unique(conditionalArms.map((_, arm) => arm.path -> arm), "conditional arm"))
+        unique(conditionalArms.map((_, arm) => arm.path -> arm), "conditional arm")
+      )
     private val arguments
         : Map[String, (RegionOwner, KernelDigitalRegionArgument)] =
       enclosing.map(_.arguments).getOrElse(
@@ -181,15 +182,20 @@ private[nodal] object StructuralParameterBinding:
     def conditionalArm(parentRegion: Option[String], arm: KernelStructuralArmSnapshot): Query =
       if scope != parentRegion || !conditionalArmIndex.get(arm.path).exists: actual =>
           actual.path == arm.path && actual.captures == arm.captures &&
-            actual.arguments.takeRight(actual.captures.size) == arm.arguments.takeRight(arm.captures.size)
+            actual.arguments.takeRight(actual.captures.size) ==
+            arm.arguments.takeRight(arm.captures.size)
       then
         invalid("conditional arm context requires its actual lexical parent and captures")
-      new Query(snapshot, scope = Some(arm.path), enclosing = Some(this),
+      new Query(
+        snapshot,
+        scope = Some(arm.path),
+        enclosing = Some(this),
         captures = arm.arguments.takeRight(arm.captures.size).zip(arm.captures).collect {
           case (argument, capture)
               if argument.dataType == "Integer" && argument.role == "static_capture" =>
             argument.path -> capture
-        }.toMap)
+        }.toMap
+      )
 
     /** Enter one actual generated body using its canonical parent bounds and capture edges. */
     def generatedBody(region: KernelGeneratedRegionSnapshot): Query =
@@ -200,17 +206,24 @@ private[nodal] object StructuralParameterBinding:
         .map(resolve(region.owner, _))
       val limits = inputs.map(bounds)
       val domain = IterationDomain.structural(
-        limits(0), limits(1), limits(2), region.maximum,
+        limits(0),
+        limits(1),
+        limits(2),
+        region.maximum,
         identicalBounds = inputs(0) == inputs(1) ||
           (limits(0).lower == limits(0).upper && limits(1).lower == limits(1).upper &&
             limits(0).lower >= limits(1).upper)
       ).fold(problem => invalid(problem.message), identity)
       val body = region.digitalBody.get
-      new Query(snapshot, scope = Some(region.path), enclosing = Some(this),
+      new Query(
+        snapshot,
+        scope = Some(region.path),
+        enclosing = Some(this),
         generatedDomains = Map(region.induction -> domain),
         captures = body.arguments.drop(1).zip(body.captures).collect {
           case (argument, capture) if argument.dataType == "Integer" => argument.path -> capture
-        }.toMap)
+        }.toMap
+      )
 
     private def unique[A](values: Vector[(String, A)], role: String): Map[String, A] =
       if values.map(_._1).distinct.size != values.size then invalid(s"duplicate $role identity")
@@ -448,6 +461,65 @@ private[nodal] object StructuralParameterBinding:
         }
       )
       node(value.dimensions.head)
+
+    /** Import a checked lexical DAG at an actual selected-family use. Only exact prior family
+      * inductions may be replaced; this never admits them into generic type bindings.
+      */
+    def importGeneratedValues(
+        owner: String,
+        source: Query,
+        values: Vector[Int],
+        selected: Map[String, Int],
+        charge: () => Unit
+    ): Vector[Int] =
+      if !(source.sourceSnapshot eq sourceSnapshot) || selected.size >= 128 then
+        invalid("selected Integer import requires one snapshot and bounded actual prefix")
+      selected.foreach: (path, replacement) =>
+        val actual = snapshot.generatedRegions.find(region =>
+          region.owner == owner &&
+            region.induction == path &&
+            region.digitalBody.exists(_.arguments.headOption.exists(argument =>
+              argument.path == path && argument.role == "induction" &&
+                argument.dataType == "Integer"
+            ))
+        )
+        if actual.isEmpty || replacement < 0 || replacement >= facts.size then
+          invalid(
+            "selected substitution is not an actual Generate induction and same-query coordinate"
+          )
+      val graph = source.exportValues(values)
+      val memo = mutable.HashMap.empty[Int, Int]
+      val active = mutable.HashSet.empty[Int]
+      def visit(index: Int): Int = memo.getOrElseUpdate(
+        index, {
+          charge()
+          if index < 0 || index >= graph.nodes.size || active.size >= 128 || !active.add(index) then
+            invalid("selected Integer DAG is absent, cyclic or exceeds depth")
+          try
+            val original = graph.nodes(index)
+            (original.literal, original.parameter, original.operation) match
+              case (Some(value), None, None) if original.operands.isEmpty => literal(value)
+              case (None, Some(path), None) if original.operands.isEmpty =>
+                selected.get(path) match
+                  case Some(replacement) => replacement
+                  case None =>
+                    arguments.get(path) match
+                      case Some((collection, argument))
+                          if scope.contains(collection.path) && collection.owner == owner &&
+                            argument.role == "induction" && generatedDomains.contains(path) =>
+                        val admitted = resolve(owner, path)
+                        if bounds(admitted) != original.bounds then
+                          invalid(
+                            "selected header disagrees with its actual current induction proof"
+                          )
+                        admitted
+                      case _ => importValue(owner, graph.copy(dimensions = Vector(index)))
+              case (None, None, Some(operation)) => compose(operation, original.operands.map(visit))
+              case _ => invalid("selected Integer DAG lost its canonical definition")
+          finally active.remove(index)
+        }
+      )
+      graph.dimensions.map(visit)
 
     def resolve(owner: String, token: String, defaults: Boolean = false): Int =
       token.toLongOption match

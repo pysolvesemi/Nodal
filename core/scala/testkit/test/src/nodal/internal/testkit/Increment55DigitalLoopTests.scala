@@ -111,12 +111,20 @@ object Increment55DigitalLoopTests extends TestSuite:
       assert(waveform == ConstructionKernel.inspect(new Increment43GeneratedWaveformOperator))
       assert(waveform.digitalLoops.isEmpty)
       val expected = Map(
-        "analog_transition" -> "smoothed_1dca011e",
-        "analog_slew" -> "limited_56ecdd40",
-        "analog_absdelay" -> "delayed_76095227"
+        "analog_transition" -> "smoothed",
+        "analog_slew" -> "limited",
+        "analog_absdelay" -> "delayed"
       )
+      assert(waveform.waveformOperators.size == expected.size)
+      assert(waveform.waveformOperators.map(_.operation).toSet == expected.keySet)
       waveform.waveformOperators.foreach: value =>
-        assert(value.path == s"${waveform.root}.${expected(value.operation)}")
+        val captured = waveform.names.filter(_.semanticPath == value.path)
+        assert(captured.size == 1)
+        val name = captured.head
+        assert(name.category == "expression", name.provenance == "scala-declaration")
+        assert(value.source.nonEmpty, name.source == value.source)
+        assert(name.name.matches(s"${expected(value.operation)}_[0-9a-f]{8}"))
+        assert(value.path == s"${waveform.root}.${name.name}")
         assert(value.stateId.contains(s"${value.path}.state"))
       val induction = waveform.generatedRegions.head.induction
       assert(waveform.names.count(_.semanticPath == induction) == 1)

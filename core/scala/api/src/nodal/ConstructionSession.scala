@@ -2813,8 +2813,6 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if positions.exists(_ < 0) then
       collectionFailure("generated member handle or ordinal escaped its lexical scope")
     val candidates = ancestry.take(positions.min + 1).reverse
-    val selections = member.selectionPrefix.map(value => value.family -> value.ordinal) :+
-      (member.family -> member.ordinal)
     def capturable(scope: Option[DigitalValueRegionRecord]): Boolean =
       var current = scope
       var valid = true
@@ -2824,8 +2822,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           case _ => valid = false
       valid
     val destination = candidates.find(scope =>
-      capturable(scope) && selections.forall: (family, ordinal) =>
-        generatedOrdinalValid(family, ordinal, scope)
+      capturable(scope) &&
+        generatedOrdinalValid(member.family, member.ordinal, scope, member.selectionPrefix)
     )
       .getOrElse(collectionFailure("generated member has no dominating structural existence scope"))
     val _ = bindGeneratedFamily(firstFamily, destination)
@@ -2999,16 +2997,40 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       "NODAL-LOOP-055-001",
       "bounded loop"
     )
-    if analysis(header.step).parameters.nonEmpty then
-      collectionFailure("digital iteration step must be a parameter-independent fixed DAG")
-    val _ = IterationDomain.boundedDigital(
-      header.domain.lower,
-      header.domain.upperExclusive,
-      header.domain.step,
-      header.maximum,
-      analysis.sameIdentity(header.lower, header.upperExclusive)
-    )
-      .fold(problem => collectionFailure(problem.message), identity)
+    if region.structuralGenerate then
+      val generated = header.generated.getOrElse(
+        collectionFailure("structural loop header lacks its actual Generate owner")
+      )
+      if generated.owner != region.reference.module ||
+        !records(generated.owner).generatedRegions.exists(_ eq generated) ||
+        !generated.digitalRegion.contains(region) || header.lower != generated.lower ||
+        header.upperExclusive != generated.upperExclusive || header.step != generated.step ||
+        header.maximum != generated.maximum
+      then collectionFailure("structural loop header differs from its actual family")
+      val inputs = Vector(header.lower, header.upperExclusive, header.step).map(analysis(_))
+      val bounds = inputs.map(_.bounds)
+      val checked = IterationDomain.structural(
+        bounds(0),
+        bounds(1),
+        bounds(2),
+        header.maximum,
+        identicalBounds = inputs(0).identity == inputs(1).identity ||
+          (bounds(0).lower == bounds(0).upper && bounds(1).lower == bounds(1).upper &&
+            bounds(0).lower >= bounds(1).upper)
+      ).fold(problem => collectionFailure(problem.message), identity)
+      if checked != header.domain || checked != generated.domain then
+        collectionFailure("structural loop domain differs from its canonical family proof")
+    else
+      if analysis(header.step).parameters.nonEmpty then
+        collectionFailure("digital iteration step must be a parameter-independent fixed DAG")
+      val _ = IterationDomain.boundedDigital(
+        header.domain.lower,
+        header.domain.upperExclusive,
+        header.domain.step,
+        header.maximum,
+        analysis.sameIdentity(header.lower, header.upperExclusive)
+      )
+        .fold(problem => collectionFailure(problem.message), identity)
 
   private def retainedLoopRegions: Set[DigitalValueRegionRecord] =
     val usedRegions = operations.iterator.flatMap(_.digitalRegion).toSet ++
@@ -4980,7 +5002,6 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if selection.family ne expected then
           fail("NODAL-AREA-058-OWNER", "generated family selection chain is discontinuous")
         original(selection.family)
-        validateGeneratedOrdinal(selection.family, selection.ordinal)
         val selected = generatedAreaPath(selection.family, selection.members.dropRight(1))
         val member = selected.members.getOrElse(
           selection.members.lastOption.getOrElse(
@@ -4991,6 +5012,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         expected = generatedFamilyExportTarget(selection.family, member)
       if expected ne record then
         fail("NODAL-AREA-058-OWNER", "selected family disagrees with its actual export chain")
+      val last = value.selectionPrefix.last
+      validateGeneratedOrdinal(last.family, last.ordinal, value.selectionPrefix.dropRight(1))
     record
 
   def generatedAreas[A <: Area](
@@ -5021,66 +5044,77 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def generatedOrdinalValid(
       record: GeneratedRegionRecord,
       ordinal: Int | Expr[Integer],
-      scope: Option[DigitalValueRegionRecord]
+      scope: Option[DigitalValueRegionRecord],
+      prefix: Vector[GeneratedFamilySelectionRecord]
   ): Boolean =
     val analysis = new StructuralBoundAnalysis(record.owner, "NODAL-AREA-058-INDEX", "Area ordinal")
-    val bounds = analysis(ordinal)
-    val valid = IterationDomain.verifyOrdinal(record.domain, bounds.bounds).fold(
-      _ =>
-        val index = analysis(ordinal)
-        val zero = analysis(0)
-        val coordinate = analysis.generatedCoordinate(record, index)
-        val upper = analysis(record.upperExclusive.asInstanceOf[Dimension])
-        val proof = new StructuralPredicateOrdering.Query[StaticPredicate, StructuralBound](
-          predicate =>
-            val reference = Option(expressionIds.get(predicate)).getOrElse(
-              fail("NODAL-AREA-058-INDEX", "ordering predicate has no actual owner")
+    def check(record: GeneratedRegionRecord, ordinal: Int | Expr[Integer]): Boolean =
+      val bounds = analysis(ordinal)
+      val valid =
+        IterationDomain.verifyOrdinal(analysis.selectedGeneratedDomain(record), bounds.bounds).fold(
+          _ =>
+            val index = analysis(ordinal)
+            val zero = analysis(0)
+            val coordinate = analysis.generatedCoordinate(record, index)
+            val upper = analysis(record.upperExclusive.asInstanceOf[Dimension])
+            val proof = new StructuralPredicateOrdering.Query[StaticPredicate, StructuralBound](
+              predicate =>
+                val reference = Option(expressionIds.get(predicate)).getOrElse(
+                  fail("NODAL-AREA-058-INDEX", "ordering predicate has no actual owner")
+                )
+                if reference.module != record.owner || !staticPredicates.get(
+                    reference
+                  ).contains(predicate)
+                then
+                  fail("NODAL-AREA-058-INDEX", "ordering predicate has a foreign owner")
+                if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
+                  val operands =
+                    predicate.operands.map(value => analysis(value.asInstanceOf[Dimension]))
+                  StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
+                else
+                  StructuralPredicateOrdering.Logic(
+                    predicate.operation,
+                    predicate.operands.map(_.asInstanceOf[StaticPredicate])
+                  )
+              ,
+              _.bounds,
+              (left, right) => left.identity == right.identity
             )
-            if reference.module != record.owner || !staticPredicates.get(
-                reference
-              ).contains(predicate)
-            then
-              fail("NODAL-AREA-058-INDEX", "ordering predicate has a foreign owner")
-            if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
-              val operands =
-                predicate.operands.map(value => analysis(value.asInstanceOf[Dimension]))
-              StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
-            else
-              StructuralPredicateOrdering.Logic(
-                predicate.operation,
-                predicate.operands.map(_.asInstanceOf[StaticPredicate])
-              )
+            def prove(left: StructuralBound, right: StructuralBound, inclusive: Boolean): Boolean =
+              if proof.less(left, right, inclusive) then true
+              else
+                var current = scope
+                val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
+                var proved = false
+                while current.nonEmpty && !proved do
+                  val region = current.get
+                  if visited.size >= 128 || !visited.add(region) then
+                    fail("NODAL-AREA-058-INDEX", "ordering lexical ancestry is cyclic or excessive")
+                  region.structuralArm.foreach: arm =>
+                    val conditional = structuralIfs(arm.conditional)
+                    proved =
+                      proof.under(conditional.predicate, !arm.whenTrue, left, right, inclusive)
+                  current = region.parent
+                proved
+            prove(zero, index, true) && prove(coordinate, upper, false)
           ,
-          _.bounds,
-          (left, right) => left.identity == right.identity
+          _ => true
         )
-        def prove(left: StructuralBound, right: StructuralBound, inclusive: Boolean): Boolean =
-          if proof.less(left, right, inclusive) then true
-          else
-            var current = scope
-            val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
-            var proved = false
-            while current.nonEmpty && !proved do
-              val region = current.get
-              if visited.size >= 128 || !visited.add(region) then
-                fail("NODAL-AREA-058-INDEX", "ordering lexical ancestry is cyclic or excessive")
-              region.structuralArm.foreach: arm =>
-                val conditional = structuralIfs(arm.conditional)
-                proved = proof.under(conditional.predicate, !arm.whenTrue, left, right, inclusive)
-              current = region.parent
-            proved
-        prove(zero, index, true) && prove(coordinate, upper, false)
-      ,
-      _ => true
-    )
-    bounds.parameters.foreach(markStructuralParameter)
-    valid
+      bounds.parameters.foreach(markStructuralParameter)
+      valid
+
+    val validPrefix = prefix.forall: selection =>
+      val valid = check(selection.family, selection.ordinal)
+      if valid then analysis.selectGeneratedInduction(selection.family, analysis(selection.ordinal))
+      valid
+    validPrefix && check(record, ordinal)
 
   private def validateGeneratedOrdinal(
       record: GeneratedRegionRecord,
-      ordinal: Int | Expr[Integer]
+      ordinal: Int | Expr[Integer],
+      prefix: Vector[GeneratedFamilySelectionRecord]
   ): Unit =
-    if !generatedOrdinalValid(record, ordinal, activeValueRegion) then
+    if !generatedOrdinalValid(record, ordinal, activeValueRegion, prefix) then
       fail(
         "NODAL-AREA-058-INDEX",
         "generated ordinal existence is not proved in its actual lexical scope"
@@ -5089,13 +5123,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def generatedAreaReference[A <: Area](family: GeneratedAreas[A], ordinal: Int | Expr[Integer])
       : GeneratedAreaRef[A] =
     val record = requireGeneratedFamily(family)
-    validateGeneratedOrdinal(record, ordinal)
+    validateGeneratedOrdinal(record, ordinal, family.selectionPrefix)
     new GeneratedAreaRef[A](family, ordinal, Vector.empty)
 
   private def generatedSelectedArea(value: GeneratedAreaRef[?])
       : (GeneratedRegionRecord, AreaRecord) =
     val family = requireGeneratedFamily(value.family)
-    validateGeneratedOrdinal(family, value.ordinal)
+    validateGeneratedOrdinal(family, value.ordinal, value.family.selectionPrefix)
     family -> generatedAreaPath(family, value.members)
 
   private def generatedAreaPath(
@@ -8419,14 +8453,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     private val active = mutable.HashSet.empty[ExpressionRef]
     private val identityIds = mutable.HashMap.empty[(Int, String, Vector[Int]), Int]
     private val identityKeys = mutable.ArrayBuffer.empty[(Int, String, Vector[Int])]
+    // Selected-use facts are private to this query, never a template-domain mutation.
+    private val selectedInductions = mutable.HashMap.empty[ExpressionRef, StructuralBound]
+    private var work = 0
 
-    private def intern(key: (Int, String, Vector[Int])): Int = identityIds.getOrElseUpdate(
-      key, {
-        val id = identityKeys.size
-        identityKeys += key
-        id
-      }
-    )
+    private def intern(key: (Int, String, Vector[Int])): Int =
+      work += 1
+      if work > 65536 then invalid("structural Integer query exceeds its finite work budget")
+      identityIds.getOrElseUpdate(
+        key, {
+          val id = identityKeys.size
+          identityKeys += key
+          id
+        }
+      )
 
     private def parameterFact(
         parameter: Param[?],
@@ -8451,6 +8491,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         expression: KernelExpr[?],
         generated: GeneratedRegionRecord
     ): Option[StructuralBound] =
+      selectedInductions.get(generated.induction) match
+        case Some(selected) => return Some(selected)
+        case None => ()
       if !generationStack.contains(generated) then
         invalid("Generate induction escaped its actual active lexical scope")
       val domain =
@@ -8652,6 +8695,40 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         operands.flatMap(_.parameters).distinct,
         Some(intern(key))
       )
+
+    def selectedGeneratedDomain(record: GeneratedRegionRecord): IterationDomain.Structural =
+      if record.owner != owner || !records(owner).generatedRegions.exists(_ eq record) then
+        invalid("selected domain requires its actual original Generate")
+      val inputs = Vector(record.lower, record.upperExclusive, record.step)
+        .map(value => apply(value.asInstanceOf[Dimension]))
+      val limits = inputs.map(_.bounds)
+      val domain = IterationDomain.structural(
+        limits(0),
+        limits(1),
+        limits(2),
+        record.maximum,
+        identicalBounds = inputs(0).identity == inputs(1).identity ||
+          (limits(0).lower == limits(0).upper && limits(1).lower == limits(1).upper &&
+            limits(0).lower >= limits(1).upper)
+      )
+        .fold(problem => invalid(problem.message), identity)
+      if domain.maximumTripCount > record.maximumTripCount then
+        invalid("selected domain exceeds its original template cardinality")
+      domain
+
+    def selectGeneratedInduction(record: GeneratedRegionRecord, ordinal: StructuralBound): Unit =
+      if record.owner != owner || !records(owner).generatedRegions.exists(_ eq record) ||
+        selectedInductions.size >= 128 || selectedInductions.contains(record.induction) ||
+        cache.contains(record.induction) || predicateCache.contains(record.induction) ||
+        generationStack.contains(record) || !record.digitalRegion.exists(region =>
+          region.loop.exists(_.generated.contains(record)) &&
+            region.arguments.headOption.exists(value =>
+              value._2 == "induction" && Option(expressionIds.get(value._1))
+                .flatMap(collectionArguments.get).contains(region -> 0)
+            )
+        )
+      then invalid("selected induction requires a fresh exact prior family proof")
+      selectedInductions.update(record.induction, generatedCoordinate(record, ordinal))
 
     def generatedCoordinate(
         record: GeneratedRegionRecord,

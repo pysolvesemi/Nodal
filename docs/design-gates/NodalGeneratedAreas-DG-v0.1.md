@@ -335,3 +335,54 @@ capture through isolated structural arms; family-local and exported typed Interf
 views; exported Instance views and ordered selection prefixes; shaped lane-indexed
 clock/reset sources; selection-qualified resolved/CDC proof; and actual target
 instance generation. Existing conservative/analog boundaries are not widened.
+
+## Foundation 58 selected dependent-family domains — 2026-10-20
+
+The approved continuation specializes only a selected use, never its original
+family template. Each ordered prefix proves its exact actual family/export and
+ordinal before replacing that family's original induction identity with the
+canonical `lower + ordinal * step` expression. Subsequent bounds use the same
+bounded Integer DAG algebra and complete parameter ranges. Source
+`StructuralBoundAnalysis`, bridge `StructuralParameterBinding.Query`, and the
+native Shape/GeneratedDomain query remain their respective trust-boundary
+owners. The bridge imports the original verified header DAG into one actual-use
+query, memoizing exact identities within its existing work/depth budget. No
+serialized coordinate, independent lane evaluator, copied occurrence registry,
+first-lane default, or generic induction-as-type binding is introduced.
+
+The actual lexical guard and captured argument chain remain proof obligations.
+An unselected enclosing induction is resolved through its exact registered
+Generate context; the final expression is still checked at its real consumer
+scope. Missing, duplicated, swapped, foreign and out-of-range prefix frames,
+raw ancestor escapes, and same-envelope but different actual families reject.
+Direct and saved family views agree, while original template cardinalities remain
+unchanged. External selected writes and generated symbol capabilities are not
+admitted by this read-projection checkpoint.
+
+A real registered structural Generate header now uses the existing structural
+iteration-domain contract, including bounded positive symbolic steps. Its owner,
+body, original operands, maximum and recomputed domain must agree exactly.
+Ordinary procedural loops still require a fixed parameter-independent step;
+this is not callback-effect widening or a descending-step promise. The same
+structural owner serves Area families and existing legacy structural-if bodies.
+
+The maintained `Increment58SelectedDependentAreaTests` has eight focused groups,
+and `Increment58SelectedDependentAreaReplay` emits ten actual source profiles.
+They include nonzero/nonunit dependent selection, symbolic ordinal/lower/step,
+a residual active induction, guarded existence, and dynamic per-lane register
+fixtures. In the nonunit fixture, collection ordinal `(1,4)` observes actual
+coordinate `(4,4)`, distinct from ordinal `(0,0)` at coordinate `(2,0)`.
+Strict private compilation, the eight maintained groups, 83 directly affected
+predecessor groups, and all ten maintained-name default-native gates pass.
+The native gates used compiler SHA-256
+`660d55cb9c348ad1cbf7dac04f27be63710791f5bc0e30b67dcffed8dd60024d`.
+Matched shared-source execution and maintained target behavioral acceptance
+remain separate checks; private source/native success does not establish them.
+Receipts are under `.work/f58-generated-areas/target-bounds/selected-prefix/`.
+
+The affected legacy DigitalLoop assertion no longer hard-codes a historical
+compiler-generated hash suffix. It verifies the authored binder stem, exact
+captured path/category/provenance/source, required eight-hex suffix and state
+identity, retaining repeat-snapshot and loop-scope checks. Its old mismatch was
+first reproduced against unmodified shared classes; no behavior check was
+removed or converted into an expected failure.

@@ -1378,3 +1378,21 @@ prevent unsigned budget exhaustion wrap while preserving depth 128 and work
 65536. Broader source/selected Interface, physical targets and pending lifecycle
 continuations remain open. No new consumer execution or whole F58 acceptance
 is claimed by this native checkpoint.
+
+## Checkpoint 37 — selected dependent-family source domains
+
+Eight source paths reproduce all 398 hashes in
+`.work/f58-selected-source-shared/source-before.json` (`69402774`), with matching
+after inventory. The filter excludes nine frontend fixtures already preserved
+by checkpoint 35; none are deleted. Retained shared checks cover 91 groups in
+11 suites and ten actual native replays on `660d55cb`, matching checkpoint 36
+prerequisites. The selected-domain contract section is recovered from a retained
+later baseline and appended as scoped documentation; its private-stage counts
+remain historical and are not substituted for this shared receipt.
+
+Canonical structural Parameter binding and selected ancestry provide exact
+dependent-family domains without per-value cloning. Digital-loop predecessor
+checks retain provenance/category, eight-hex generated suffix and repeatability
+invariants rather than a stale hardcoded suffix. Guarded/selected child
+Interface and physical target continuations remain separate; this checkpoint
+does not complete generated hierarchy execution or Foundation 58.

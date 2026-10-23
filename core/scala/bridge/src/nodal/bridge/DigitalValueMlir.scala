@@ -1062,7 +1062,28 @@ private[nodal] object DigitalValueMlir:
         "generated family projection chain exceeds depth",
         expression.path
       )
-      def ordinalValid(selectedFamily: KernelGeneratedRegionSnapshot, ordinal: String): Unit =
+      val query = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+      var selected = Map.empty[String, Int]
+      var remaining = 65536
+      def imported(source: StructuralParameterBinding.Query, tokens: Vector[String]): Vector[Int] =
+        val values = tokens.map(source.resolve(expression.owner, _))
+        if (source eq query) && selected.isEmpty then values
+        else
+          query.importGeneratedValues(
+            expression.owner,
+            source,
+            values,
+            selected,
+            () => {
+              remaining -= 1
+              requireValid(
+                remaining >= 0,
+                "selected family Integer proof exceeds work budget",
+                expression.path
+              )
+            }
+          )
+      def ordinalValid(selectedFamily: KernelGeneratedRegionSnapshot, ordinal: String): Int =
         ordinal.toLongOption match
           case Some(value) => requireValid(
               ordinal == value.toString,
@@ -1075,39 +1096,37 @@ private[nodal] object DigitalValueMlir:
         try
           val headerQuery =
             selectedFamily.lexicalParent.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
-          val query = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
-          val originalHeader =
+          val header = imported(
+            headerQuery,
             Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
-              .map(headerQuery.resolve(selectedFamily.owner, _))
-          val bounds = originalHeader.map(headerQuery.bounds)
+          )
+          val bounds = header.map(query.bounds)
           val index = query.resolve(expression.owner, ordinal)
           val domain = IterationDomain.structural(
             bounds(0),
             bounds(1),
             bounds(2),
             selectedFamily.maximum,
-            identicalBounds = originalHeader(0) == originalHeader(1)
+            identicalBounds = header(0) == header(1)
           )
             .fold(problem => fail(problem.message, expression.path), identity)
+          requireValid(
+            domain.maximumTripCount <= selectedFamily.maximumTripCount,
+            "selected domain exceeds original template cardinality",
+            expression.path
+          )
+          val coordinate = query.compose(
+            "analog_add",
+            Vector(header(0), query.compose("analog_mul", Vector(index, header(2))))
+          )
           IterationDomain.verifyOrdinal(domain, query.bounds(index)).left.foreach: problem =>
-            def imported(source: StructuralParameterBinding.Query, token: String): Int =
-              val original = source.resolve(expression.owner, token)
-              if source eq query then original
-              else query.importValue(expression.owner, source.exportValues(Vector(original)))
-            val header =
-              Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
-                .map(imported(headerQuery, _))
-            val coordinate = query.compose(
-              "analog_add",
-              Vector(header(0), query.compose("analog_mul", Vector(index, header(2))))
-            )
             val proof = new StructuralPredicateOrdering.Query[String, Int](
               path =>
                 val predicate =
                   predicates.getOrElse(path, fail("ordering predicate is absent", expression.path))
                 val source = predicate.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
                 if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
-                  val operands = predicate.operands.map(imported(source, _))
+                  val operands = imported(source, predicate.operands)
                   StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
                 else StructuralPredicateOrdering.Logic(predicate.operation, predicate.operands)
               ,
@@ -1143,6 +1162,7 @@ private[nodal] object DigitalValueMlir:
                 proved
             if !prove(query.literal(0L), index, true) || !prove(coordinate, header(1), false) then
               fail(problem.message, expression.path)
+          coordinate
         catch
           case error: IllegalArgumentException => fail(error.getMessage, expression.path)
 
@@ -1196,7 +1216,8 @@ private[nodal] object DigitalValueMlir:
           "selected family must follow an exact directly nested family export",
           expression.path
         )
-        ordinalValid(parent, selection.ordinal)
+        val coordinate = ordinalValid(parent, selection.ordinal)
+        selected = selected.updated(parent.induction, coordinate)
         expected = next.target
       requireValid(
         expected == family.path && exported.kind == "storage" &&
@@ -1210,7 +1231,7 @@ private[nodal] object DigitalValueMlir:
         expression.path
       )
       val _ = generatedAccess(exported, member.access)
-      ordinalValid(family, member.ordinal)
+      val _ = ordinalValid(family, member.ordinal)
       family -> exported
 
     private def assignmentRoot(

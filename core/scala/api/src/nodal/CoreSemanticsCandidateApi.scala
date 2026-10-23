@@ -301,7 +301,10 @@ final class FsmBuilder[S] private[nodal] (
     )
   def boundedCallStack(depth: Int): Unit =
     val _ = depth
-    FlatFsmRuntime.unsupported()
+    FlatFsmRuntime.fail(
+      "live boundedCallStack omits typed policies and procedure graph; use FsmDef.withCallStack, FsmState.call and returnOn",
+      "NODAL-FSM-058-DYNAMIC"
+    )
   def currentState: DecodedEnum[Expr[EnumValue[S]]] =
     ConstructionKernel.flatFsmStateView(this, next = false)
   def nextState: DecodedEnum[Expr[EnumValue[S]]] =

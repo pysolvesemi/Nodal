@@ -74,6 +74,14 @@ final class FsmState[S] private[nodal] (
   def on(guard: FsmGuard[S], mode: TransitionMode = TransitionMode.Exclusive)(to: S): FsmState[S] =
     FsmDefinitionRuntime.edge(this, guard, mode, to, None)
 
+  def call(guard: FsmGuard[S], mode: TransitionMode = TransitionMode.Exclusive)(
+      entry: S,
+      resume: S
+  ): FsmState[S] = FsmStackRuntime.call(this, guard, mode, entry, resume)
+
+  def returnOn(guard: FsmGuard[S], mode: TransitionMode = TransitionMode.Exclusive): FsmState[S] =
+    FsmStackRuntime.returnOn(this, guard, mode)
+
   def onWithAction(
       guard: FsmGuard[S],
       action: FsmAction[S],
@@ -187,7 +195,8 @@ final class FsmDef[S] private[nodal] (
     private[nodal] val children: Vector[FsmChild[S, ?]],
     private[nodal] val compositionCost: FsmCompositionCost,
     private[nodal] val semanticHash: String,
-    val transferSlots: Vector[FsmTransfer[S]]
+    val transferSlots: Vector[FsmTransfer[S]],
+    private[nodal] val stack: Option[FsmStackConfig[S]]
 ):
   /** Direct immutable slots in authored first-use order. Transfer guards stay carrier-typed. */
   val guardSlots: Vector[FsmGuard[S]] =
@@ -261,6 +270,24 @@ final class FsmDef[S] private[nodal] (
     )
 
 object FsmDef:
+  def withCallStack[S](
+      owner: FsmDefinition[S],
+      initial: S,
+      capacity: Int,
+      overflow: FsmStackPolicy[S],
+      underflow: FsmStackPolicy[S],
+      invalidFrame: FsmStackPolicy[S]
+  )(
+      fragments: FsmFragment[S]*
+  )(using evidence: HwEnum[S]): FsmDef[S] =
+    FsmDefinitionRuntime.definition(
+      owner,
+      initial,
+      fragments,
+      evidence,
+      Some(FsmStackRuntime.configuration(capacity, overflow, underflow, invalidFrame))
+    )
+
   def apply[S](definition: FsmDefinition[S], initial: S)(fragments: FsmFragment[S]*)(using
       evidence: HwEnum[S]
   ): FsmDef[S] =

@@ -1083,3 +1083,45 @@ with grouped source checks in `.work/f58-guarded-source-shared` and
 `.work/f58-guarded-artifact`. Guarded-family target execution, module-defined family
 selection under a later guard, induction-dependent bounds and generated symbol
 views remain required work, not implied by this source/native acceptance.
+
+## Checkpoint 24 — explicit bounded runtime call stacks
+
+`FsmDef.withCallStack` atomically validates a same-enum closed fragment graph,
+capacity 1–128 and independent overflow, underflow and invalid-frame policies.
+Typed calls retain exact entry and resume states; returns have no invented fixed
+destination. The existing graph/composition owners charge a bounded matching-return
+summary before expansion. The native v5 layout retains ordinary/call/return edge
+kinds, canonical private-storage roles and explicit policy records, not a second
+runtime or an all-states return approximation.
+
+The existing executor owns a minimal-width depth pointer and capacity times local
+state-width frames, balanced reads and exactly one selected frame write. Frames
+are not initialized; pointer reset, restart, cancellation, recovery and terminal
+lifecycle make stale frames unreachable. AssertHold suppresses the faulting edge
+and its entry/exit effects while retaining ordinary active-state behavior. Trap
+performs real state entry and clears stale stack/completion state. Existing domain,
+sampling, timer, composition and physical reset proofs remain authoritative.
+
+Matched shared Scala checks pass **43/43 groups** (stack 9, unroll 4, reusable 11,
+timed 9, composed 10). The integrated frontend harness passes **17 checks**, with
+**8 actual source replay profiles**. Native checks pass **164/164 cases** (137
+flat FSM and 27 composition), including 43 new stack and seven composition cases.
+The native full production/test manifests match. The frozen compiler is
+`5ec53036d0ccc2c9f14898e5d6e21c76693651b0dab564a75e0b19236d99375b`.
+
+Three unchanged public-source to gate to CIRCT to SystemVerilog to Icarus profiles
+pass: nested continuation/fault/action/lifecycle behavior; one definition in
+independent reset-bearing and resetless clock occurrences; and composed child
+registered completion/cancellation. AssertHold source gates, lowers and exports
+with its sampled assertion intact. Pinned Icarus cannot parse that assertion;
+no assertion is removed or disabled, and no AssertHold Icarus pass is claimed.
+Its fault/action/lifecycle semantics are covered by the focused native cases.
+
+Receipts are under `.work/f58-statecharts/stack/shared-accept`, native checks under
+its `native` directory, and shared source counts/manifests under
+`.work/f58-stack-shared`. The maintained demonstration is
+`tests/scala/reusable-fsm/run_stack_target.py`; the contract is
+[NodalSequentialState DG v0.10](../design-gates/NodalSequentialState-DG-v0.10.md).
+Register-backed frames make no RAM or minimum-area claim. Stack Gray encoding
+remains explicitly unsupported. Other required F58 hierarchy/interface work and
+all parent acceptance boxes remain open.

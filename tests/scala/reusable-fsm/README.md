@@ -144,3 +144,50 @@ existing foreign guard/action/child rejection; the rejection remains tested.
 Receipts are under `.work/f58-statecharts/unroll/promotion/` and
 `.work/f58-unroll-shared/`. This is focused prototype evidence, not exhaustive
 qualification. Runtime bounded call stacks remain a separate required F58 slice.
+
+## Bounded same-enum runtime procedure stacks
+
+`FsmDef.withCallStack(owner, initial, capacity, overflow, underflow, invalidFrame)`
+admits capacity 1..128 and explicit `FsmStackPolicy.AssertHold` or typed `Trap`
+policies. `FsmState.call(guard)(entry, resume)` and `returnOn(guard)` share normal
+priority/exclusivity, timing, action and lifecycle owners. Return targets are
+selected dynamically from private continuation frames, never fake graph edges.
+Compact, one-hot and custom local encodings are supported; dynamic Gray returns
+are explicitly unsupported. Frames are uninitialized and only the private depth
+pointer has reset/conditional-reset initialization.
+
+`Increment58StackFsmTests` provides nine focused source/bridge groups.
+`Increment58StackFsmReplay <output-directory-under-.work>` exports trap, hold,
+resetless, one, maximum, one-hot, required and composed actual source profiles.
+For actual target replay, run:
+
+```sh
+python tests/scala/reusable-fsm/run_stack_target.py \
+  --profile trap --input .work/stack-source/trap.mlir \
+  --snapshot .work/stack-source/trap.construction.json \
+  --out .work/stack-target/trap --nodalc "$NODAL_NODALC" \
+  --firtool .work/circt-toolchain/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog \
+  --vvp .work/tools/iverilog/bin/vvp
+```
+
+Use `required` or `composed` with matching source/snapshot files for the other
+profiles. The Trap bench checks nested exact continuations, priority, overflow,
+underflow, invalid pointer/frame, terminal and nonterminal traps, active/entry/exit
+ordering, pause, cancel/restart, recovery, and pointer reset without frame reset.
+The other benches check independent clocks/mixed reset and the registered child
+completion join. Only the benches are handwritten; DUT source and output are real.
+
+Native acceptance is 137 FlatFSM plus 27 composition groups. All three actual
+waveform profiles pass on compiler
+`5ec53036d0ccc2c9f14898e5d6e21c76693651b0dab564a75e0b19236d99375b`.
+The AssertHold profile gates/lowers/exports its unchanged sampled assertion, which
+pinned Icarus cannot compile. Its failed-operation hold, active actions, events
+and lifecycle semantics are tested by the native executor, not claimed as an
+Icarus pass. No DUT assertion is disabled. See
+`docs/design-gates/NodalSequentialState-DG-v0.10.md`. Shared production Scala
+integration passed 43 groups (stack 9 plus 34 directly affected predecessors),
+then the integrated artifacts passed 17 frontend checks, eight source profiles
+and all three target waveforms again. Receipts are under
+`.work/f58-stack-shared/` and `.work/f58-statecharts/stack/shared-accept/`.
+These results accept this runtime-stack slice, not the entire F58 parent.

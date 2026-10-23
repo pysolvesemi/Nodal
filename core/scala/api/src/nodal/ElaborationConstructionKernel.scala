@@ -418,6 +418,18 @@ private[nodal] object ConstructionKernel:
   def fsmTransfer[A <: Data](carrier: Stream[A]): Expr[Bool] =
     flatFsmSession.fsmTransfer(carrier)
 
+  def flatFsmStack[S](builder: FsmBuilder[S], config: FsmStackConfig[S]): Unit =
+    flatFsmSession.captureFlatFsmStack(builder, config)
+
+  def flatFsmProcedure[S](
+      builder: StateBuilder[S],
+      guard: Expr[Bool],
+      mode: TransitionMode,
+      entry: Option[S],
+      resume: Option[S]
+  ): Unit =
+    flatFsmSession.captureFlatFsmProcedure(builder, guard, mode, entry, resume)
+
   def flatFsmTimer[S](builder: StateBuilder[S], cycles: Int, mode: TransitionMode, to: S): Unit =
     flatFsmSession.captureFlatFsmTimer(builder, cycles, mode, to)
 

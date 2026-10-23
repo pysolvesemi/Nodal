@@ -271,13 +271,16 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       "nodal.FsmFragment",
       "nodal.FsmDef",
       "nodal.FsmChild",
-      "nodal.FsmTransfer"
+      "nodal.FsmTransfer",
+      "nodal.FsmStackPolicy.Trap"
     ).foreach: name =>
       pureMethods ++= moduleMethods(name, "apply")
     pureMethods ++= methods(
       requiredClass("nodal.FsmState"),
       "on",
       "onWithAction",
+      "call",
+      "returnOn",
       "after",
       "awaitTransfer",
       "entry",
@@ -358,6 +361,9 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     ).foreach: name =>
       immutableFsmMethods ++= immutableModule(name, "apply")
     immutableFsmModules += requiredModule("nodal.TransitionMode")
+    immutableFsmModules += requiredModule("nodal.FsmStackPolicy")
+    immutableFsmModules += requiredModule("nodal.FsmStackPolicy.AssertHold")
+    immutableFsmMethods ++= methods(requiredModule("nodal.FsmDef"), "withCallStack")
     immutableFsmMethods ++= methods(
       requiredClass("nodal.FsmState"),
       "on",

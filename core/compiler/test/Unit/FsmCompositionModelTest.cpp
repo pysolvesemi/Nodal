@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/FlatFSMModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/SequentialModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
@@ -101,6 +102,50 @@ std::string nonterminatingSecond(std::string source) {
   second = replace(second, bits(1) + ") -> (", bits(1) + ", " + bits(1) + ") -> (");
   return source.substr(0, at) + second;
 }
+std::string stackedSecond(std::string source, StringRef mode = "returning", unsigned capacity = 2) {
+  auto original = machine("second"), child = original;
+  unsigned pointerWidth = llvm::APInt(64, capacity).getActiveBits();
+  std::string storagePrefix =
+      "%secondDepth = \"nodal.digital_storage\"() <{name = \"secondDepth\", kind = \"register\", "
+      "domain = @core, metadata = {}}> : () -> !nodal.uint<" +
+      std::to_string(pointerWidth) + ">\n";
+  std::string operands = "%enableChild, %secondDepth",
+              types = "!nodal.uint<" + std::to_string(pointerWidth) + ">";
+  for (unsigned i = 0; i < capacity; ++i) {
+    auto name = "secondFrame" + std::to_string(i);
+    storagePrefix += storage(name);
+    operands += ", %" + name;
+    types += ", " + bits(2);
+  }
+  child = replace(child, "flat-fsm-v3", "flat-fsm-v5");
+  child = replace(
+      child, "machine_id =",
+      "lifecycle_mode = \"composed\", timer_edges = [], transfer_edges = [], stack = {capacity = " +
+          std::to_string(capacity) + " : i64, pointer_width = " + std::to_string(pointerWidth) +
+          " : i64, overflow = {kind = \"trap\", target_case = \"example.Mode." +
+          (mode == "overflow_completes" ? "Stop" : "Idle") +
+          "\"}, underflow = {kind = \"assert_hold\"}, invalid_frame = {kind = \"trap\", "
+          "target_case = \"example.Mode.Stop\"}}, machine_id =");
+  child = replace(child, "%enableChild, %go", operands + ", %go");
+  auto prefix =
+      " : (" + bits(2) + ", " + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ", ";
+  child = replace(child, prefix, prefix + types + ", ");
+  child =
+      replace(child, "source_case = \"example.Mode.Idle\", destination_case = \"example.Mode.Run\"",
+              "kind = \"call\", source_case = \"example.Mode.Idle\", destination_case = "
+              "\"example.Mode.Run\", resume_case = \"example.Mode.Stop\"");
+  std::string secondEdge =
+      mode == "returning" ? "kind = \"return\", source_case = \"example.Mode.Run\""
+      : mode == "callee_completes"
+          ? "kind = \"ordinary\", source_case = \"example.Mode.Run\", destination_case = "
+            "\"example.Mode.Stop\""
+          : "kind = \"call\", source_case = \"example.Mode.Run\", destination_case = "
+            "\"example.Mode.Run\", resume_case = \"example.Mode.Stop\"";
+  child =
+      replace(child, "source_case = \"example.Mode.Run\", destination_case = \"example.Mode.Stop\"",
+              secondEdge);
+  return replace(source, original, storagePrefix + child);
+}
 FailureOr<uint64_t> evaluate(Value value, const llvm::DenseMap<Value, uint64_t> &inputs,
                              unsigned depth = 0) {
   if (depth > 128)
@@ -114,6 +159,11 @@ FailureOr<uint64_t> evaluate(Value value, const llvm::DenseMap<Value, uint64_t> 
   if (auto literal = op->getAttrOfType<IntegerAttr>("value"))
     return literal.getValue().getZExtValue();
   auto name = op->getAttrOfType<StringAttr>("operator_name");
+  if (llvm::isa<nodal::SequentialSelectOp>(op) || (name && name.getValue() == "digital_select")) {
+    auto condition = evaluate(op->getOperand(0), inputs, depth + 1);
+    return failed(condition) ? FailureOr<uint64_t>(failure())
+                             : evaluate(op->getOperand(*condition ? 1 : 2), inputs, depth + 1);
+  }
   if (!name || op->getNumOperands() < 1)
     return failure();
   auto a = evaluate(op->getOperand(0), inputs, depth + 1);
@@ -121,6 +171,15 @@ FailureOr<uint64_t> evaluate(Value value, const llvm::DenseMap<Value, uint64_t> 
     return failure();
   if (name.getValue() == "bool_not")
     return uint64_t(!*a);
+  if (name.getValue() == "digital_extend")
+    return *a;
+  if (name.getValue() == "digital_truncate") {
+    auto type = value.getType();
+    unsigned width = llvm::isa<nodal::UIntType>(type)
+                         ? llvm::cast<nodal::UIntType>(type).getWidth()
+                         : llvm::cast<nodal::BitsType>(type).getWidth();
+    return *a & ((uint64_t(1) << width) - 1);
+  }
   if (op->getNumOperands() != 2)
     return failure();
   auto b = evaluate(op->getOperand(1), inputs, depth + 1);
@@ -132,6 +191,10 @@ FailureOr<uint64_t> evaluate(Value value, const llvm::DenseMap<Value, uint64_t> 
     return uint64_t(*a || *b);
   if (name.getValue() == "digital_eq")
     return uint64_t(*a == *b);
+  if (name.getValue() == "digital_le")
+    return uint64_t(*a <= *b);
+  if (name.getValue() == "digital_add")
+    return *a + *b;
   return failure();
 }
 } // namespace
@@ -330,6 +393,89 @@ int main() {
     unsigned generated = 0;
     return failed(nodal::expandFsmCompositionModel(module, generated, 1)) && generated == 0;
   });
+  check("stacked-child-matching-return-completes-all", stackedSecond(fixture()), true,
+        [](nodal::ModuleOp module) {
+          for (auto op : module.getOps<nodal::FlatFSMOp>()) {
+            auto summary = nodal::inspectFlatFSMGraphSummary(op);
+            if (failed(summary) || !summary->completionPossible)
+              return false;
+            if (summary->header.stacked && summary->structuralWork == 0)
+              return false;
+          }
+          return true;
+        });
+  check("stacked-child-terminal-callee-completes-all", stackedSecond(fixture(), "callee_completes"),
+        true);
+  check("stacked-child-overflow-trap-completes-all", stackedSecond(fixture(), "overflow_completes"),
+        true);
+  check("stacked-child-invalid-trap-coverage-is-not-completion",
+        stackedSecond(fixture(), "no_return"), false);
+  check("stacked-child-any-permits-noncompleting-sibling",
+        stackedSecond(fixture("any"), "no_return"), true, [](nodal::ModuleOp module) {
+          for (auto op : module.getOps<nodal::FlatFSMOp>()) {
+            auto summary = nodal::inspectFlatFSMGraphSummary(op);
+            if (failed(summary) || (summary->header.stacked && summary->completionPossible))
+              return false;
+          }
+          return true;
+        });
+  check("stacked-child-summary-charged-to-composition-budget",
+        stackedSecond(fixture(), "returning", 128), true, [](nodal::ModuleOp module) {
+          unsigned proofWork = 0;
+          for (auto op : module.getOps<nodal::FlatFSMOp>()) {
+            auto summary = nodal::inspectFlatFSMGraphSummary(op);
+            if (failed(summary))
+              return false;
+            proofWork += summary->structuralWork;
+          }
+          return proofWork > 1000 &&
+                 failed(nodal::verifyFsmCompositionModel(module, proofWork - 1));
+        });
+  check("stacked-child-normalized-completion-and-parent-cancellation", stackedSecond(fixture()),
+        true, [](nodal::ModuleOp module) {
+          // Normalization commits a detached replacement, so collect inputs from
+          // the resulting IR rather than retaining stale source SSA values.
+          if (failed(nodal::normalizeSequentialModel(module)))
+            return false;
+          llvm::DenseMap<Value, uint64_t> inputs;
+          Value cancel;
+          module.walk([&](nodal::PortValueOp op) {
+            auto port = op->getAttrOfType<FlatSymbolRefAttr>("port").getValue();
+            inputs[op->getResult(0)] = port == "enable" || port == "go";
+            if (port == "cancel")
+              cancel = op->getResult(0);
+          });
+          module.walk([&](nodal::DigitalStorageOp op) {
+            auto name = op->getAttrOfType<StringAttr>("name").getValue();
+            inputs[op->getResult(0)] =
+                name.starts_with("first") || name.starts_with("secondFrame") ? 2 : 1;
+          });
+          if (!cancel)
+            return false;
+          bool good = true;
+          for (unsigned cancelling : {0u, 1u}) {
+            inputs[cancel] = cancelling;
+            unsigned observations = 0;
+            module.walk([&](nodal::SequentialUpdateOp op) {
+              auto name =
+                  op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+              if (name != "secondDepth" && name != "secondStatus")
+                return;
+              ++observations;
+              auto result = evaluate(op->getOperand(1), inputs);
+              unsigned expected = name == "secondDepth" ? 0 : cancelling ? 3 : 2;
+              if (failed(result) || *result != expected)
+                llvm::errs() << "stack child cancel=" << cancelling << " " << name << ": "
+                             << (failed(result) ? -1 : int64_t(*result)) << " != " << expected
+                             << '\n';
+              good &= succeeded(result) && *result == expected;
+            });
+            if (observations != 2)
+              llvm::errs() << "stack child observations=" << observations << '\n';
+            good &= observations == 2;
+          }
+          return good;
+        });
   llvm::outs() << total << " FSM composition cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

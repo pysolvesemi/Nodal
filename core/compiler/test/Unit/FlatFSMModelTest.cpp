@@ -19,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 using namespace mlir;
 namespace {
@@ -264,6 +265,88 @@ std::string requiredFixture(bool controlled = true, bool conditional = true, boo
          "\"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" +
          child + "}) : () -> ()\n}";
 }
+std::string stackPolicy(StringRef target = {}) {
+  return target.empty() ? "{kind = \"assert_hold\"}"
+                        : "{kind = \"trap\", target_case = \"example.Mode." + target.str() + "\"}";
+}
+unsigned pointerWidth(unsigned capacity) { return llvm::APInt(64, capacity).getActiveBits(); }
+std::string stackSetup(bool reset = true, unsigned capacity = 2, unsigned width = 2,
+                       unsigned initial = 0) {
+  auto source = controlledSetup(reset);
+  source = replace(source, literal("initial", 0, 2), literal("initial", initial, width));
+  source = replace(source, state("state", bits(2), reset ? "initial" : ""),
+                   state("state", bits(width), reset ? "initial" : ""));
+  auto type = "!nodal.uint<" + std::to_string(pointerWidth(capacity)) + ">";
+  source +=
+      replace(literal("depthZero", 0, pointerWidth(capacity)), bits(pointerWidth(capacity)), type) +
+      state("depth", type, reset ? "depthZero" : "");
+  for (unsigned i = 0; i < capacity; ++i)
+    source += state("frame" + std::to_string(i), bits(width));
+  return source;
+}
+std::string stackMachine(bool actions = true, unsigned capacity = 2,
+                         std::string overflow = stackPolicy(),
+                         std::string underflow = stackPolicy(), std::string invalid = stackPolicy(),
+                         unsigned width = 2, std::string encoding = "compact",
+                         std::string codes = "0 : ui2, 1 : ui2, 2 : ui2") {
+  auto source = controlledMachine(actions);
+  source = replace(source, "flat-fsm-v2", "flat-fsm-v5");
+  source = replace(source, "machine_id =",
+                   "lifecycle_mode = \"controlled\", timer_edges = [], "
+                   "transfer_edges = [], stack = {capacity = " +
+                       std::to_string(capacity) +
+                       " : i64, pointer_width = " + std::to_string(pointerWidth(capacity)) +
+                       " : i64, overflow = " + overflow + ", underflow = " + underflow +
+                       ", invalid_frame = " + invalid + "}, machine_id =");
+  source = replace(source, "requested_encoding = \"compact\"",
+                   "requested_encoding = \"" + encoding + "\"");
+  source = replace(source, "resolved_encoding = \"compact\"",
+                   "resolved_encoding = \"" + encoding + "\"");
+  source =
+      replace(source, "local_width = 2 : i64", "local_width = " + std::to_string(width) + " : i64");
+  source =
+      replace(source, "local_codes = [0 : ui2, 1 : ui2, 2 : ui2]", "local_codes = [" + codes + "]");
+  source =
+      replace(source, " : (" + bits(2) + ", " + bits(2), " : (" + bits(width) + ", " + bits(2));
+  source = replace(source, ") -> (" + bits(2), ") -> (" + bits(width));
+  std::string operands = "%enable, %depth",
+              types = "!nodal.uint<" + std::to_string(pointerWidth(capacity)) + ">";
+  for (unsigned i = 0; i < capacity; ++i) {
+    operands += ", %frame" + std::to_string(i);
+    types += ", " + bits(width);
+  }
+  source = replace(source, "%enable, %go", operands + ", %go");
+  std::string prefix = " : (" + bits(width) + ", " + bits(2) + ", " + bits(1) + ", " + bits(1) +
+                       ", " + bits(1) + ", ";
+  source = replace(source, prefix, prefix + types + ", ");
+  source = replace(source,
+                   "source_case = \"example.Mode.Idle\", destination_case = \"example.Mode.Run\"",
+                   "kind = \"call\", source_case = \"example.Mode.Idle\", destination_case = "
+                   "\"example.Mode.Run\", resume_case = \"example.Mode.Stop\"");
+  source =
+      replace(source, "source_case = \"example.Mode.Run\", destination_case = \"example.Mode.Run\"",
+              "kind = \"call\", source_case = \"example.Mode.Run\", destination_case = "
+              "\"example.Mode.Run\", resume_case = \"example.Mode.Run\"");
+  source = replace(source,
+                   "source_case = \"example.Mode.Run\", destination_case = \"example.Mode.Stop\"",
+                   "kind = \"return\", source_case = \"example.Mode.Run\"");
+  if (actions)
+    source = replace(source, "phase = \"entry\", owner_case = \"example.Mode.Idle\"",
+                     "phase = \"entry\", owner_case = \"example.Mode.Run\"");
+  for (std::string event : {"next", "taken"}) {
+    auto type = event == "next" ? bits(width) : bits(1);
+    source +=
+        "%stack_observed_" + event + " = \"nodal.digital_expr\"(%false, %" + event + ", %" + event +
+        ") <{operator_name = \"digital_select\", metadata = {semantic_path = \"Fixture.observed_" +
+        event + "\"}}> : (" + bits(1) + ", " + type + ", " + type + ") -> " + type + "\n";
+  }
+  return source;
+}
+std::map<std::string, int> stackInputs() {
+  return {{"state", 1},   {"status", 1}, {"depth", 0},  {"frame0", 3}, {"frame1", 3},
+          {"restart", 0}, {"cancel", 0}, {"enable", 1}, {"go", 0},     {"again", 0},
+          {"done", 0},    {"reset", 0},  {"count", 99}, {"clock", 0}};
+}
 std::string print(Operation *op) {
   std::string s;
   llvm::raw_string_ostream out(s);
@@ -302,10 +385,17 @@ int evaluate(Value value, const std::map<std::string, int> &inputs) {
     return at(0) == at(1);
   if (code == "digital_ge")
     return at(0) >= at(1);
+  if (code == "digital_le")
+    return at(0) <= at(1);
   if (code == "digital_add")
     return at(0) + at(1);
-  if (code == "digital_truncate")
-    return at(0) & 0x7fffffff;
+  if (code == "digital_truncate") {
+    Type type = value.getType();
+    unsigned width = llvm::isa<nodal::UIntType>(type)
+                         ? llvm::cast<nodal::UIntType>(type).getWidth()
+                         : llvm::cast<nodal::BitsType>(type).getWidth();
+    return at(0) & int((uint64_t(1) << width) - 1);
+  }
   if (code == "digital_select")
     return at(0) ? at(1) : at(2);
   if (code == "enum_is_valid")
@@ -320,6 +410,52 @@ int evaluate(Value value, const std::map<std::string, int> &inputs) {
     return 0;
   }
   return -999;
+}
+bool stackStep(nodal::ModuleOp module, StringRef label, std::map<std::string, int> inputs,
+               std::map<std::string, int> changes, int assertion = 1) {
+  auto expected = inputs;
+  expected["next"] = inputs.at("state");
+  expected["taken"] = expected["entered"] = expected["exited"] = 0;
+  for (const auto &[name, value] : changes)
+    expected[name] = value;
+  if (changes.count("state") && !changes.count("next"))
+    expected["next"] = changes.at("state");
+  unsigned updates = 0, events = 0, assertions = 0;
+  bool good = true;
+  auto equal = [&](StringRef name, int actual, int wanted) {
+    if (actual != wanted) {
+      llvm::errs() << "stack step " << label << " " << name << ": " << actual << " != " << wanted
+                   << '\n';
+      good = false;
+    }
+  };
+  module.walk([&](nodal::SequentialUpdateOp op) {
+    ++updates;
+    auto name = op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+    int actual = inputs.at("reset") && op->getNumOperands() == 5
+                     ? evaluate(op->getOperand(4), inputs)
+                     : evaluate(op->getOperand(1), inputs);
+    equal(name, actual, expected.at(name.str()));
+    if (name.starts_with("frame"))
+      good &= op->getNumOperands() == 3;
+  });
+  module.walk([&](nodal::SequentialAssertOp op) {
+    ++assertions;
+    equal("assertion", evaluate(op->getOperand(0), inputs), assertion);
+  });
+  module.walk([&](nodal::DigitalExprOp op) {
+    auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
+    auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+    if (!path)
+      return;
+    for (std::string event : {"next", "taken", "entered", "exited"})
+      if (path.getValue() ==
+          (event == "next" || event == "taken" ? "Fixture.observed_" : "Fixture.") + event) {
+        ++events;
+        equal(event, evaluate(op->getResult(0), inputs), expected.at(event));
+      }
+  });
+  return good && updates == (inputs.count("elapsed") ? 7 : 6) && events == 4 && assertions == 1;
 }
 std::string enumSwitch() {
   std::string s = port("selector", "!nodal.enum<\"Mode\", 3>");
@@ -1387,6 +1523,446 @@ int main(int argc, char **argv) {
         return failed(nodal::normalizeSequentialModel(module, limits)) && print(module) == before;
       },
       false);
+  // Real v5 graphs exercise the normalized register network, not a parallel stack interpreter.
+  auto stack = wrap(stackSetup() + stackMachine());
+  check("stack-nested-call-return-exact-frame-writes", stack, true, [](nodal::ModuleOp module) {
+    auto values = stackInputs();
+    values["state"] = 0;
+    values["go"] = 1;
+    bool good = stackStep(module, "first call", values,
+                          {{"state", 1},
+                           {"depth", 1},
+                           {"frame0", 2},
+                           {"count", 4},
+                           {"taken", 1},
+                           {"entered", 1},
+                           {"exited", 1}});
+    values["state"] = 1;
+    values["depth"] = 1;
+    values["frame0"] = 2;
+    values["again"] = 1;
+    // Both guards true proves stack operations use the ordinary authored priority owner.
+    values["done"] = 1;
+    good &= stackStep(
+        module, "nested call at last slot", values,
+        {{"depth", 2}, {"frame1", 1}, {"count", 4}, {"taken", 1}, {"entered", 1}, {"exited", 1}});
+    values["depth"] = 2;
+    values["frame1"] = 1;
+    values["again"] = 0;
+    good &= stackStep(module, "nested return", values,
+                      {{"depth", 1}, {"count", 4}, {"taken", 1}, {"entered", 1}, {"exited", 1}});
+    values["depth"] = 1;
+    good &= stackStep(module, "outer terminal return", values,
+                      {{"state", 2},
+                       {"status", 2},
+                       {"depth", 0},
+                       {"count", 5},
+                       {"taken", 1},
+                       {"entered", 1},
+                       {"exited", 1}});
+    return good;
+  });
+  check("stack-assert-hold-faults-preserve-active-only", stack, true, [](nodal::ModuleOp module) {
+    bool good = true;
+    for (auto [depth, call, returning, frame] :
+         {std::tuple{2, 1, 1, 2}, std::tuple{0, 0, 1, 3}, std::tuple{3, 1, 1, 2},
+          std::tuple{1, 0, 1, 3}, std::tuple{3, 0, 0, 2}}) {
+      auto values = stackInputs();
+      values["depth"] = depth;
+      values["again"] = call;
+      values["done"] = returning;
+      values["frame0"] = values["frame1"] = frame;
+      good &= stackStep(module, "hold fault", values, {{"count", 1}}, 0);
+    }
+    auto values = stackInputs();
+    good &= stackStep(module, "uninitialized frames at zero are ignored", values, {{"count", 1}});
+    for (int status : {0, 2, 3}) {
+      values["status"] = status;
+      values["state"] = status == 2 ? 2 : 1;
+      values["depth"] = 3;
+      good &= stackStep(module, "fault operational gating", values, {}, status == 2 ? 0 : 1);
+    }
+    values["status"] = 1;
+    values["state"] = 1;
+    values["enable"] = 0;
+    good &= stackStep(module, "disabled fault", values, {});
+    return good;
+  });
+  check("stack-assert-hold-preserves-running-terminal-status", stack, true,
+        [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["state"] = 2;
+          values["depth"] = 3;
+          return stackStep(module, "terminal corrupt depth hold", values, {}, 0);
+        });
+  check("stack-invalid-pointer-policy-precedes-overflow",
+        wrap(stackSetup() +
+             stackMachine(true, 2, stackPolicy("Stop"), stackPolicy("Stop"), stackPolicy("Run"))),
+        true, [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["depth"] = 3;
+          values["again"] = values["done"] = 1;
+          return stackStep(
+              module, "invalid beats capacity policy", values,
+              {{"depth", 0}, {"count", 4}, {"taken", 1}, {"entered", 1}, {"exited", 1}});
+        });
+  check("stack-reset-restart-recovery-cancel-terminal-clear", stack, true,
+        [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["depth"] = 2;
+          values["reset"] = 1;
+          values["again"] = 1;
+          bool good =
+              stackStep(module, "reset", values, {{"state", 0}, {"status", 0}, {"depth", 0}});
+          values["reset"] = 0;
+          values["restart"] = 1;
+          good &=
+              stackStep(module, "restart", values, {{"state", 0}, {"depth", 0}, {"entered", 1}});
+          values["cancel"] = 1;
+          good &= stackStep(module, "cancel wins restart", values,
+                            {{"status", 3}, {"depth", 0}, {"count", 2}, {"exited", 1}});
+          values["cancel"] = values["restart"] = 0;
+          values["state"] = 3;
+          good &= stackStep(module, "local recovery", values, {{"state", 0}, {"depth", 0}});
+          values["state"] = 1;
+          values["again"] = 0;
+          values["status"] = 2;
+          good &= stackStep(module, "stale completion recovery", values,
+                            {{"state", 0}, {"status", 1}, {"depth", 0}});
+          values["state"] = 2;
+          good &= stackStep(module, "terminal continuation clear", values, {{"depth", 0}});
+          return good;
+        });
+  for (StringRef target : {StringRef("Run"), StringRef("Stop")}) {
+    auto policy = stackPolicy(target);
+    check("stack-trap-real-entry-" + target.str(),
+          wrap(stackSetup() + stackMachine(true, 2, policy, policy, policy)), true,
+          [target](nodal::ModuleOp module) {
+            bool good = true;
+            for (auto [depth, call, returning, frame, current, status] :
+                 {std::tuple{2, 1, 0, 2, 1, 1}, std::tuple{0, 0, 1, 3, 1, 1},
+                  std::tuple{1, 0, 1, 3, 1, 1}, std::tuple{3, 0, 0, 3, 1, 1},
+                  std::tuple{3, 0, 0, 3, 2, 2}}) {
+              auto values = stackInputs();
+              values["state"] = current;
+              values["status"] = status;
+              values["depth"] = depth;
+              values["again"] = call;
+              values["done"] = returning;
+              values["frame0"] = values["frame1"] = frame;
+              bool terminal = target == "Stop";
+              good &= stackStep(module, "trap", values,
+                                {{"state", terminal ? 2 : 1},
+                                 {"status", terminal ? 2 : 1},
+                                 {"depth", 0},
+                                 {"count", terminal ? 5 : 4},
+                                 {"taken", 1},
+                                 {"entered", 1},
+                                 {"exited", 1}});
+            }
+            return good;
+          });
+  }
+  auto ordinaryStack = stackMachine();
+  ordinaryStack = replace(ordinaryStack,
+                          "kind = \"call\", source_case = \"example.Mode.Idle\", destination_case "
+                          "= \"example.Mode.Run\", resume_case = \"example.Mode.Stop\"",
+                          "kind = \"ordinary\", source_case = \"example.Mode.Idle\", "
+                          "destination_case = \"example.Mode.Run\"");
+  ordinaryStack = replace(ordinaryStack, "resume_case = \"example.Mode.Run\"",
+                          "resume_case = \"example.Mode.Stop\"");
+  check("stack-invalid-pointer-blocks-ordinary-edge", wrap(stackSetup() + ordinaryStack), true,
+        [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["state"] = 0;
+          values["depth"] = 3;
+          values["go"] = 1;
+          return stackStep(module, "ordinary invalid pointer", values, {}, 0);
+        });
+  check("stack-resetless-restart-establishes-pointer-only",
+        wrap(stackSetup(false) + stackMachine()), true, [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["state"] = values["depth"] = 3;
+          values["restart"] = 1;
+          bool good = stackStep(module, "resetless restart", values,
+                                {{"state", 0}, {"depth", 0}, {"entered", 1}});
+          module.walk([&](nodal::DigitalStorageOp op) { good &= op->getNumOperands() == 0; });
+          return good;
+        });
+  check(
+      "stack-role-aware-header-and-bounded-summary", stack, true,
+      [](nodal::ModuleOp module) {
+        auto machine = *module.getOps<nodal::FlatFSMOp>().begin();
+        auto summary = nodal::inspectFlatFSMGraphSummary(machine);
+        if (failed(summary))
+          return false;
+        auto roles = summary->header.privateStateRoles();
+        return summary->header.stacked && summary->header.guardOffset == 8 &&
+               summary->header.stackCapacity == 2 && roles.size() == 5 &&
+               roles[0].role == nodal::FlatFSMPrivateRole::Local &&
+               roles[1].role == nodal::FlatFSMPrivateRole::Lifecycle &&
+               roles[2].role == nodal::FlatFSMPrivateRole::StackPointer &&
+               roles[3].role == nodal::FlatFSMPrivateRole::StackFrame &&
+               roles[4].role == nodal::FlatFSMPrivateRole::StackFrame &&
+               summary->completionPossible && summary->structuralWork == 82;
+      },
+      false);
+  auto noReturn =
+      replace(stackMachine(false), "kind = \"return\", source_case = \"example.Mode.Run\"",
+              "kind = \"ordinary\", source_case = \"example.Mode.Run\", destination_case = "
+              "\"example.Mode.Run\"");
+  check("stack-summary-resume-needs-matching-return", wrap(stackSetup() + noReturn), false);
+  noReturn = replace(noReturn, "invalid_frame = " + stackPolicy(),
+                     "invalid_frame = " + stackPolicy("Stop"));
+  noReturn = replace(noReturn, "overflow = " + stackPolicy(), "overflow = " + stackPolicy("Idle"));
+  check(
+      "stack-summary-trap-clears-continuation-not-return", wrap(stackSetup() + noReturn), true,
+      [](nodal::ModuleOp module) {
+        auto summary =
+            nodal::inspectFlatFSMGraphSummary(*module.getOps<nodal::FlatFSMOp>().begin());
+        return succeeded(summary) && !summary->completionPossible && summary->structuralWork > 0;
+      },
+      false);
+  auto completeInside =
+      replace(noReturn,
+              "kind = \"ordinary\", source_case = \"example.Mode.Run\", destination_case = "
+              "\"example.Mode.Run\", mode = \"priority\", ordinal = 2",
+              "kind = \"ordinary\", source_case = \"example.Mode.Run\", destination_case = "
+              "\"example.Mode.Stop\", mode = \"priority\", ordinal = 2");
+  check(
+      "stack-summary-callee-may-complete-without-return", wrap(stackSetup() + completeInside), true,
+      [](nodal::ModuleOp module) {
+        auto summary =
+            nodal::inspectFlatFSMGraphSummary(*module.getOps<nodal::FlatFSMOp>().begin());
+        return succeeded(summary) && summary->completionPossible;
+      },
+      false);
+  for (unsigned capacity : {1u, 128u})
+    check("stack-capacity-boundary-" + std::to_string(capacity),
+          wrap(stackSetup(true, capacity) + stackMachine(false, capacity)), true, {}, false);
+  for (unsigned capacity : {0u, 129u})
+    check("stack-invalid-capacity-" + std::to_string(capacity),
+          replace(stack, "capacity = 2 : i64", "capacity = " + std::to_string(capacity) + " : i64"),
+          false);
+  check("stack-pointer-width-forgery",
+        replace(stack, "pointer_width = 2 : i64", "pointer_width = 3 : i64"), false);
+  check("stack-return-cannot-forge-destination",
+        replace(stack, "kind = \"return\"",
+                "kind = \"return\", destination_case = \"example.Mode.Stop\""),
+        false);
+  check("stack-call-needs-resume", replace(stack, ", resume_case = \"example.Mode.Stop\"", ""),
+        false);
+  check("stack-unknown-policy-field",
+        replace(stack, "overflow = {kind = \"assert_hold\"}",
+                "overflow = {kind = \"assert_hold\", target_case = \"example.Mode.Stop\"}"),
+        false);
+  check("stack-foreign-trap-target",
+        replace(stack, "overflow = " + stackPolicy(),
+                "overflow = {kind = \"trap\", target_case = \"foreign.Mode.Stop\"}"),
+        false);
+  check("stack-unknown-transition-kind", replace(stack, "kind = \"call\"", "kind = \"tail_call\""),
+        false);
+  check("stack-private-pointer-cannot-alias-local",
+        replace(stack, "%enable, %depth", "%enable, %state"), false);
+  check("stack-private-frames-must-be-distinct",
+        replace(stack, "%depth, %frame0, %frame1", "%depth, %frame0, %frame0"), false);
+  check("stack-frame-initializer-forgery",
+        replace(stack, state("frame0", bits(2)), state("frame0", bits(2), "initial")), false);
+  check(
+      "stack-pointer-wrong-initializer",
+      replace(
+          stack,
+          "value = 0 : ui2, spelling = \"0\", metadata = {semantic_path = \"Fixture.depthZero\"}",
+          "value = 1 : ui2, spelling = \"1\", metadata = {semantic_path = \"Fixture.depthZero\"}"),
+      false);
+  check("stack-external-frame-writer",
+        wrap(stackSetup() + stackMachine() + assignment("frame0", "initial", bits(2))), false);
+  check("stack-external-pointer-writer",
+        wrap(stackSetup() + stackMachine() + assignment("depth", "depthZero", "!nodal.uint<2>")),
+        false);
+  check("stack-frame-conditional-initializer-forgery",
+        replace(stack, "name = \"frame0\", kind = \"register\"",
+                "name = \"frame0\", kind = \"register\", initializer_policy = \"if_reset\""),
+        false);
+  check("stack-gray-explicitly-unsupported",
+        wrap(stackSetup() + stackMachine(false, 2, stackPolicy(), stackPolicy(), stackPolicy(), 2,
+                                         "gray", "0 : ui2, 1 : ui2, 3 : ui2")),
+        false);
+  check("stack-one-hot-local-codes",
+        wrap(stackSetup(true, 2, 3, 1) + stackMachine(false, 2, stackPolicy(), stackPolicy(),
+                                                      stackPolicy(), 3, "one_hot",
+                                                      "1 : ui3, 2 : ui3, 4 : ui3")),
+        true);
+  check("stack-custom-local-codes",
+        wrap(stackSetup() + stackMachine(false, 2, stackPolicy(), stackPolicy(), stackPolicy(), 2,
+                                         "custom", "0 : ui2, 2 : ui2, 3 : ui2")),
+        true);
+  check(
+      "stack-normalization-limit-is-atomic", stack, true,
+      [](nodal::ModuleOp module) {
+        auto before = print(module);
+        nodal::SequentialModelLimits limits;
+        limits.maximumNormalizedOperations = 32;
+        return failed(nodal::normalizeSequentialModel(module, limits)) && before == print(module);
+      },
+      false);
+  for (unsigned width : {511u, 512u}) {
+    std::string codes = "0 : ui" + std::to_string(width) + ", 1 : ui" + std::to_string(width) +
+                        ", 2 : ui" + std::to_string(width);
+    check(
+        "stack-actual-storage-bits-" + std::to_string(width),
+        wrap(stackSetup(true, 128, width) + stackMachine(false, 128, stackPolicy(), stackPolicy(),
+                                                         stackPolicy(), width, "custom", codes)),
+        true,
+        [width](nodal::ModuleOp module) {
+          auto before = print(module);
+          unsigned generated = 0;
+          auto result = nodal::expandFlatFSMModel(module, generated, 65536);
+          return width == 511 ? succeeded(result) && generated > 0
+                              : failed(result) && generated == 0 && before == print(module);
+        },
+        false);
+  }
+  auto contextualStack = requiredFixture();
+  auto stackStorage = stackSetup().substr(controlledSetup().size());
+  stackStorage =
+      replace(stackStorage, "name = \"depth\", kind = \"register\"",
+              "name = \"depth\", kind = \"register\", initializer_policy = \"if_reset\"");
+  contextualStack = replace(contextualStack, controlledMachine(), stackStorage + stackMachine());
+  check("stack-contextual-mixed-reset-role-policy", contextualStack, true,
+        [](nodal::ModuleOp module) {
+          unsigned conditional = 0, frames = 0;
+          bool good = true;
+          module.walk([&](nodal::SequentialUpdateOp op) {
+            auto name =
+                op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+            conditional += op->hasAttr("initializer_policy");
+            if (name.starts_with("frame")) {
+              ++frames;
+              good &= !op->hasAttr("initializer_policy") && op->getNumOperands() == 3;
+            }
+          });
+          return good && conditional == 3 && frames == 2;
+        });
+  check("stack-contextual-pointer-needs-conditional-policy",
+        replace(contextualStack,
+                "name = \"depth\", kind = \"register\", initializer_policy = \"if_reset\"",
+                "name = \"depth\", kind = \"register\""),
+        false);
+  auto timedStack = stackMachine();
+  timedStack = replace(timedStack, "timer_edges = []",
+                       "timer_edges = [{ordinal = 2 : i64, cycles = 3 : i64}]");
+  timedStack = replace(timedStack, "%enable, %depth", "%enable, %elapsed, %depth");
+  timedStack = replace(timedStack, "!nodal.uint<2>, !nodal.bits<2>, !nodal.bits<2>",
+                       "!nodal.uint<31>, !nodal.uint<2>, !nodal.bits<2>, !nodal.bits<2>");
+  timedStack = replace(timedStack, "%go, %again, %done", "%go, %again, %expired");
+  auto elapsedQuery = timedMachine().substr(0, timedMachine().find("%next"));
+  check("stack-timer-return-entry-restarts-elapsed",
+        wrap(timedSetup() + stackSetup().substr(controlledSetup().size()) + elapsedQuery +
+             timedStack),
+        true, [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["elapsed"] = 2;
+          values["depth"] = 1;
+          values["frame0"] = 1;
+          bool good = stackStep(module, "timed self return", values,
+                                {{"depth", 0},
+                                 {"elapsed", 0},
+                                 {"count", 4},
+                                 {"taken", 1},
+                                 {"entered", 1},
+                                 {"exited", 1}});
+          values["elapsed"] = values["depth"] = 0;
+          good &= stackStep(module, "first resumed cycle", values, {{"elapsed", 1}, {"count", 1}});
+          return good;
+        });
+  auto trapExit = stackMachine(true, 2, stackPolicy("Run"), stackPolicy("Run"), stackPolicy("Run"));
+  trapExit = replace(trapExit, assignment("target3", "value3"), "");
+  check("stack-trap-exit-without-failed-transition-action", wrap(stackSetup() + trapExit), true,
+        [](nodal::ModuleOp module) {
+          auto values = stackInputs();
+          values["depth"] = 2;
+          values["again"] = 1;
+          return stackStep(
+              module, "trap exit action", values,
+              {{"depth", 0}, {"count", 2}, {"taken", 1}, {"entered", 1}, {"exited", 1}});
+        });
+  auto proofLimit = stackMachine(false, 128);
+  std::string extraOperands, extraTypes, extraEdges;
+  for (unsigned i = 3; i < 67; ++i) {
+    extraOperands += ", %again";
+    extraTypes += ", " + bits(1);
+    extraEdges += ", {kind = \"call\", source_case = \"example.Mode.Run\", destination_case = "
+                  "\"example.Mode.Run\", resume_case = \"example.Mode.Run\", mode = \"priority\", "
+                  "ordinal = " +
+                  std::to_string(i) + " : i64}";
+  }
+  proofLimit =
+      replace(proofLimit, "%go, %again, %done)", "%go, %again, %done" + extraOperands + ")");
+  proofLimit = replace(proofLimit, "ordinal = 2 : i64}], actions",
+                       "ordinal = 2 : i64}" + extraEdges + "], actions");
+  proofLimit = replace(proofLimit, ") -> (" + bits(2), extraTypes + ") -> (" + bits(2));
+  check("stack-predicate-and-rule-work-preflight-limit", wrap(stackSetup(true, 128) + proofLimit),
+        false);
+  for (bool recovery : {true, false}) {
+    auto legacy =
+        stackMachine(false, 2, stackPolicy("Run"), stackPolicy("Run"), stackPolicy("Run"));
+    legacy = replace(legacy, "lifecycle_mode = \"controlled\"", "lifecycle_mode = \"legacy\"");
+    legacy = replace(legacy, "%next, %taken, %entered, %exited =", "%next, %taken =");
+    legacy = replace(legacy, "%state, %status, %restart, %cancel, %enable, ", "%state, ");
+    legacy = replace(legacy,
+                     " : (" + bits(2) + ", " + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " +
+                         bits(1) + ", ",
+                     " : (" + bits(2) + ", ");
+    legacy =
+        replace(legacy, ") -> (" + bits(2) + ", " + bits(1) + ", " + bits(1) + ", " + bits(1) + ")",
+                ") -> (" + bits(2) + ", " + bits(1) + ")");
+    auto begin = legacy.find("%observed_entered"), end = legacy.find("%stack_observed_next");
+    legacy.erase(begin, end - begin);
+    if (!recovery)
+      legacy =
+          replace(legacy, "illegal_policy = \"recover_to_initial\"", "illegal_policy = \"error\"");
+    // This legacy fixture has only local, pointer and frame registers. Unused
+    // controlled fixtures would also acquire unrelated canonical hold updates.
+    auto legacySetup = replace(stackSetup(), state("status", bits(2), "dormant"), "");
+    legacySetup = replace(legacySetup, state("count", bits(8)), "");
+    check(recovery ? "stack-legacy-invalid-local-recovery-is-not-trap"
+                   : "stack-legacy-invalid-local-error-is-not-trap",
+          wrap(legacySetup + legacy), true, [recovery](nodal::ModuleOp module) {
+            auto values = stackInputs();
+            values["state"] = values["depth"] = 3;
+            values["go"] = values["again"] = values["done"] = 1;
+            bool good = true;
+            unsigned updates = 0, events = 0;
+            module.walk([&](nodal::SequentialUpdateOp op) {
+              ++updates;
+              auto name =
+                  op->getOperand(0).getDefiningOp()->getAttrOfType<StringAttr>("name").getValue();
+              int expected =
+                  (name == "state" || name == "depth") && recovery ? 0 : values.at(name.str());
+              int actual = evaluate(op->getOperand(1), values);
+              if (actual != expected)
+                llvm::errs() << "legacy " << recovery << " " << name << ": " << actual
+                             << " != " << expected << '\n';
+              good &= actual == expected;
+            });
+            module.walk([&](nodal::DigitalExprOp op) {
+              auto metadata = op->getAttrOfType<DictionaryAttr>("metadata");
+              auto path = metadata ? metadata.getAs<StringAttr>("semantic_path") : StringAttr();
+              if (path && path.getValue() == "Fixture.observed_taken") {
+                ++events;
+                int actual = evaluate(op->getResult(0), values);
+                if (actual != 0)
+                  llvm::errs() << "legacy " << recovery << " taken: " << actual << " != 0\n";
+                good &= actual == 0;
+              }
+            });
+            if (updates != 4 || events != 1)
+              llvm::errs() << "legacy " << recovery << " updates=" << updates
+                           << " events=" << events << '\n';
+            return good && updates == 4 && events == 1;
+          });
+  }
   llvm::outs() << total << " flat FSM cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

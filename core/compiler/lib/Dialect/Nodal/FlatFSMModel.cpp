@@ -16,6 +16,7 @@
 #include "llvm/ADT/StringSet.h"
 
 #include <functional>
+#include <optional>
 using namespace mlir;
 namespace nodal {
 namespace {
@@ -43,9 +44,16 @@ int64_t ordinal(DictionaryAttr a) {
   auto n = a ? a.getAs<IntegerAttr>("ordinal") : IntegerAttr();
   return n && n.getType().isSignlessInteger(64) ? n.getInt() : -1;
 }
+enum class EdgeKind { Ordinary, Call, Return };
 struct Transition {
-  unsigned source, destination;
+  unsigned source;
+  std::optional<unsigned> destination, resume;
   int64_t ordinal;
+  EdgeKind kind = EdgeKind::Ordinary;
+};
+struct StackPolicy {
+  bool trap = false;
+  unsigned target = 0;
 };
 struct Graph {
   CanonicalEnumDefinition enumeration;
@@ -53,7 +61,9 @@ struct Graph {
   SmallVector<Transition, 8> transitions;
   SmallVector<SmallVector<unsigned, 4>, 4> outgoing, incoming;
   SmallVector<bool, 4> terminal;
-  unsigned initial = 0, width = 0;
+  unsigned initial = 0, width = 0, structuralWork = 0;
+  bool completionPossible = false;
+  StackPolicy overflow, underflow, invalidFrame;
 };
 FailureOr<Graph> graph(const FlatFSMHeader &h) {
   Operation *op = h.operation;
@@ -97,7 +107,8 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     return failure();
   g.initial = initial->second;
   StringRef requested = text(op, "requested_encoding"), resolved = text(op, "resolved_encoding");
-  if ((requested == "auto" ? resolved != "auto-compact-v1" : requested != resolved) ||
+  if ((h.stacked && requested == "gray") ||
+      (requested == "auto" ? resolved != "auto-compact-v1" : requested != resolved) ||
       (requested != "compact" && requested != "one_hot" && requested != "gray" &&
        requested != "auto" && requested != "custom"))
     return failure();
@@ -126,6 +137,24 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     previous = ordinal(state);
     g.terminal[found->second] = end.getValue();
   }
+  if (h.stacked) {
+    auto stack = op->getAttrOfType<DictionaryAttr>("stack");
+    auto policy = [&](StringRef name, StackPolicy &out) {
+      auto value = stack.getAs<DictionaryAttr>(name);
+      StringRef kind = field(value, "kind");
+      if (kind == "assert_hold")
+        return closed(value, {"kind"}) && value.size() == 1;
+      auto target = index.find(field(value, "target_case"));
+      if (kind != "trap" || !closed(value, {"kind", "target_case"}) || value.size() != 2 ||
+          target == index.end())
+        return false;
+      out = {true, target->second};
+      return true;
+    };
+    if (!policy("overflow", g.overflow) || !policy("underflow", g.underflow) ||
+        !policy("invalid_frame", g.invalidFrame))
+      return failure();
+  }
   g.outgoing.resize(ids.size());
   g.incoming.resize(ids.size());
   llvm::StringMap<StringRef> modes;
@@ -136,9 +165,18 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
     auto transition = llvm::dyn_cast<DictionaryAttr>(transitions[i]);
     auto from = index.find(field(transition, "source_case")),
          to = index.find(field(transition, "destination_case"));
-    StringRef mode = field(transition, "mode");
-    if (!closed(transition, {"source_case", "destination_case", "mode", "ordinal"}) ||
-        from == index.end() || to == index.end() || ordinal(transition) <= previous ||
+    StringRef mode = field(transition, "mode"), kind = field(transition, "kind");
+    auto resume = index.find(field(transition, "resume_case"));
+    bool returning = h.stacked && kind == "return", calling = h.stacked && kind == "call";
+    if (!closed(transition,
+                h.stacked
+                    ? ArrayRef<StringRef>{"source_case", "destination_case", "mode", "ordinal",
+                                          "kind", "resume_case"}
+                    : ArrayRef<StringRef>{"source_case", "destination_case", "mode", "ordinal"}) ||
+        (h.stacked && kind != "ordinary" && !returning && !calling) ||
+        (returning ? transition.get("destination_case") != nullptr : to == index.end()) ||
+        (calling ? resume == index.end() : transition.get("resume_case") != nullptr) ||
+        from == index.end() || ordinal(transition) <= previous ||
         (mode != "exclusive" && mode != "priority"))
       return failure();
     previous = ordinal(transition);
@@ -166,26 +204,144 @@ FailureOr<Graph> graph(const FlatFSMHeader &h) {
           return failure();
         }
       }
-    g.transitions.push_back({from->second, to->second, previous});
+    g.transitions.push_back(
+        {from->second, returning ? std::nullopt : std::optional<unsigned>(to->second),
+         calling ? std::optional<unsigned>(resume->second) : std::nullopt, previous,
+         returning ? EdgeKind::Return
+         : calling ? EdgeKind::Call
+                   : EdgeKind::Ordinary});
     g.outgoing[from->second].push_back(i);
-    g.incoming[to->second].push_back(i);
+    if (!returning)
+      g.incoming[to->second].push_back(i);
   }
   for (unsigned i = 0; i < ids.size(); ++i)
     if (!g.terminal[i] && g.outgoing[i].empty())
       return failure();
-  SmallVector<bool, 4> reached(ids.size(), false);
-  SmallVector<unsigned, 8> pending{g.initial};
-  reached[g.initial] = true;
-  for (unsigned i = 0; i < pending.size(); ++i)
-    for (unsigned edge : g.outgoing[pending[i]]) {
-      unsigned destination = g.transitions[edge].destination;
-      if (!reached[destination]) {
-        reached[destination] = true;
-        pending.push_back(destination);
+  if (!h.stacked) {
+    SmallVector<bool, 4> reached(ids.size(), false);
+    SmallVector<unsigned, 8> pending{g.initial};
+    reached[g.initial] = true;
+    for (unsigned i = 0; i < pending.size(); ++i)
+      for (unsigned edge : g.outgoing[pending[i]]) {
+        unsigned destination = *g.transitions[edge].destination;
+        if (!reached[destination]) {
+          reached[destination] = true;
+          pending.push_back(destination);
+        }
+      }
+    if (pending.size() != ids.size())
+      return failure();
+    g.completionPossible = llvm::is_contained(g.terminal, true);
+  } else {
+    const unsigned count = ids.size(), levels = h.stackCapacity + 1;
+    uint64_t work = 3 * uint64_t(count) * levels + 2 * uint64_t(g.transitions.size()) * levels;
+    for (bool terminal : g.terminal)
+      if (terminal)
+        work += levels;
+    // Charge every represented predicate, reachability node, edge, rule and
+    // reverse dependency before allocating any worklist or summary arrays.
+    for (unsigned depth = 0; depth < levels; ++depth)
+      for (const auto &edge : g.transitions)
+        work += edge.kind == EdgeKind::Ordinary ? 4
+                : edge.kind == EdgeKind::Call   ? (depth < h.stackCapacity ? 8
+                                                   : g.overflow.trap       ? 2
+                                                                           : 0)
+                : depth                         ? 1
+                : g.underflow.trap              ? 2
+                                                : 0;
+    if (work > 65536)
+      return failure();
+    g.structuralWork = work;
+    auto node = [&](unsigned state, unsigned depth) { return depth * count + state; };
+    auto returning = [&](unsigned state, unsigned depth) { return 2 * node(state, depth); };
+    auto completing = [&](unsigned state, unsigned depth) { return returning(state, depth) + 1; };
+    struct Rule {
+      unsigned target, remaining;
+    };
+    SmallVector<Rule> rules;
+    SmallVector<SmallVector<unsigned, 2>> dependents(2 * count * levels);
+    SmallVector<bool> proved(2 * count * levels, false);
+    SmallVector<unsigned> ready;
+    auto establish = [&](unsigned predicate) {
+      if (!proved[predicate]) {
+        proved[predicate] = true;
+        ready.push_back(predicate);
+      }
+    };
+    auto rule = [&](unsigned target, ArrayRef<unsigned> dependencies) {
+      if (dependencies.empty()) {
+        establish(target);
+        return;
+      }
+      unsigned id = rules.size();
+      rules.push_back({target, unsigned(dependencies.size())});
+      for (unsigned dependency : dependencies)
+        dependents[dependency].push_back(id);
+    };
+    for (unsigned depth = 0; depth < levels; ++depth) {
+      for (unsigned state = 0; state < count; ++state)
+        if (g.terminal[state])
+          rule(completing(state, depth), {});
+      for (const auto &edge : g.transitions) {
+        unsigned r = returning(edge.source, depth), c = completing(edge.source, depth);
+        if (edge.kind == EdgeKind::Ordinary) {
+          rule(r, {returning(*edge.destination, depth)});
+          rule(c, {completing(*edge.destination, depth)});
+        } else if (edge.kind == EdgeKind::Call && depth < h.stackCapacity) {
+          unsigned callee = returning(*edge.destination, depth + 1);
+          rule(r, {callee, returning(*edge.resume, depth)});
+          rule(c, {completing(*edge.destination, depth + 1)});
+          rule(c, {callee, completing(*edge.resume, depth)});
+        } else if (edge.kind == EdgeKind::Call) {
+          if (g.overflow.trap)
+            rule(c, {completing(g.overflow.target, 0)});
+        } else if (depth)
+          rule(r, {});
+        else if (g.underflow.trap)
+          rule(c, {completing(g.underflow.target, 0)});
       }
     }
-  if (pending.size() != ids.size())
-    return failure();
+    for (unsigned i = 0; i < ready.size(); ++i)
+      for (unsigned id : dependents[ready[i]])
+        if (!--rules[id].remaining)
+          establish(rules[id].target);
+    SmallVector<bool> reached(count * levels, false);
+    SmallVector<std::pair<unsigned, unsigned>> pending;
+    auto visit = [&](unsigned state, unsigned depth) {
+      if (!reached[node(state, depth)]) {
+        reached[node(state, depth)] = true;
+        pending.push_back({state, depth});
+      }
+    };
+    visit(g.initial, 0);
+    if (g.invalidFrame.trap)
+      visit(g.invalidFrame.target, 0);
+    for (unsigned i = 0; i < pending.size(); ++i) {
+      auto [state, depth] = pending[i];
+      for (unsigned id : g.outgoing[state]) {
+        const auto &edge = g.transitions[id];
+        if (edge.kind == EdgeKind::Ordinary)
+          visit(*edge.destination, depth);
+        else if (edge.kind == EdgeKind::Call && depth < h.stackCapacity) {
+          visit(*edge.destination, depth + 1);
+          if (proved[returning(*edge.destination, depth + 1)])
+            visit(*edge.resume, depth);
+        } else if (edge.kind == EdgeKind::Call) {
+          if (g.overflow.trap)
+            visit(g.overflow.target, 0);
+        } else if (!depth && g.underflow.trap)
+          visit(g.underflow.target, 0);
+      }
+    }
+    for (unsigned state = 0; state < count; ++state) {
+      bool reachable = false;
+      for (unsigned depth = 0; depth < levels; ++depth)
+        reachable |= reached[node(state, depth)];
+      if (!reachable)
+        return failure();
+    }
+    g.completionPossible = proved[completing(g.initial, 0)];
+  }
   previous = -1;
   for (Attribute a : actions) {
     auto action = llvm::dyn_cast<DictionaryAttr>(a);
@@ -234,21 +390,38 @@ SmallVector<ActionControl, 4> actionControls(Operation *op, const Graph &g) {
 static FailureOr<FlatFSMHeader> inspectFlatFSMHeaderImpl(Operation *op, bool actionHeaders) {
   if (!llvm::isa_and_nonnull<FlatFSMOp>(op))
     return failure();
-  bool extended = text(op, "contract_version") == "flat-fsm-v4";
+  bool stacked = text(op, "contract_version") == "flat-fsm-v5";
+  bool extended = stacked || text(op, "contract_version") == "flat-fsm-v4";
   StringRef mode = text(op, "lifecycle_mode");
   bool composed = text(op, "contract_version") == "flat-fsm-v3" || (extended && mode == "composed");
   bool controlled = composed || text(op, "contract_version") == "flat-fsm-v2" ||
                     (extended && mode == "controlled");
   auto timers = op->getAttrOfType<ArrayAttr>("timer_edges"),
        transfers = op->getAttrOfType<ArrayAttr>("transfer_edges");
-  if (extended ? (!timers || !transfers || (timers.empty() && transfers.empty()) ||
+  if (extended ? (!timers || !transfers || (!stacked && timers.empty() && transfers.empty()) ||
                   timers.size() + transfers.size() > 65536 ||
                   (mode != "legacy" && mode != "controlled" && mode != "composed"))
                : (op->hasAttr("lifecycle_mode") || op->hasAttr("timer_edges") ||
                   op->hasAttr("transfer_edges")))
     return failure();
   bool timed = extended && !timers.empty();
-  unsigned privateOffset = controlled ? 5 : 1, guardOffset = privateOffset + unsigned(timed);
+  unsigned capacity = 0, pointerWidth = 0;
+  auto stack = op->getAttrOfType<DictionaryAttr>("stack");
+  if (stacked) {
+    auto c = stack ? stack.getAs<IntegerAttr>("capacity") : IntegerAttr();
+    auto w = stack ? stack.getAs<IntegerAttr>("pointer_width") : IntegerAttr();
+    if (!closed(stack, {"capacity", "pointer_width", "overflow", "underflow", "invalid_frame"}) ||
+        stack.size() != 5 || !c || !w || !c.getType().isSignlessInteger(64) ||
+        !w.getType().isSignlessInteger(64) || c.getInt() < 1 || c.getInt() > 128 ||
+        w.getInt() != llvm::APInt(64, c.getInt()).getActiveBits())
+      return failure();
+    capacity = c.getInt();
+    pointerWidth = w.getInt();
+  } else if (op->hasAttr("stack"))
+    return failure();
+  unsigned privateOffset = controlled ? 5 : 1;
+  unsigned stackOffset = privateOffset + unsigned(timed);
+  unsigned guardOffset = stackOffset + (stacked ? 1 + capacity : 0);
   if (!llvm::isa<ModuleOp>(op->getParentOp()) || op->getNumOperands() < guardOffset ||
       op->getNumResults() != (composed     ? 5
                               : controlled ? 4
@@ -256,11 +429,26 @@ static FailureOr<FlatFSMHeader> inspectFlatFSMHeaderImpl(Operation *op, bool act
       op->getNumSuccessors() ||
       (!controlled && !extended && text(op, "contract_version") != "flat-fsm-v1") ||
       !canonical(text(op, "machine_id")) || path(op) != text(op, "machine_id") ||
-      !closed(op->getAttrDictionary(),
-              {"contract_version", "machine_id", "enum_ref", "domain", "initial_case",
-               "requested_encoding", "resolved_encoding", "local_width", "case_ids", "local_codes",
-               "illegal_policy", "states", "transitions", "actions", "action_capture_counts",
-               "metadata", "lifecycle_mode", "timer_edges", "transfer_edges"}))
+      !closed(op->getAttrDictionary(), {"contract_version",
+                                        "machine_id",
+                                        "enum_ref",
+                                        "domain",
+                                        "initial_case",
+                                        "requested_encoding",
+                                        "resolved_encoding",
+                                        "local_width",
+                                        "case_ids",
+                                        "local_codes",
+                                        "illegal_policy",
+                                        "states",
+                                        "transitions",
+                                        "actions",
+                                        "action_capture_counts",
+                                        "metadata",
+                                        "lifecycle_mode",
+                                        "timer_edges",
+                                        "transfer_edges",
+                                        "stack"}))
     return failure();
   auto transitions = op->getAttrOfType<ArrayAttr>("transitions"),
        actions = op->getAttrOfType<ArrayAttr>("actions");
@@ -283,10 +471,22 @@ static FailureOr<FlatFSMHeader> inspectFlatFSMHeaderImpl(Operation *op, bool act
       return failure();
   if (timed && op->getOperand(privateOffset).getType() != UIntType::get(op->getContext(), 31))
     return failure();
-  if (actionHeaders)
-    for (unsigned i = controlled ? 2 : 1; i < guardOffset + transitions.size(); ++i)
-      if ((!timed || i != privateOffset) && op->getOperand(i).getType() != boolean)
+  if (stacked) {
+    if (op->getOperand(stackOffset).getType() != UIntType::get(op->getContext(), pointerWidth))
+      return failure();
+    for (unsigned i = 0; i < capacity; ++i)
+      if (op->getOperand(stackOffset + 1 + i).getType() != bits)
         return failure();
+  }
+  if (actionHeaders) {
+    if (controlled)
+      for (unsigned i = 2; i < 5; ++i)
+        if (op->getOperand(i).getType() != boolean)
+          return failure();
+    for (unsigned i = guardOffset; i < guardOffset + transitions.size(); ++i)
+      if (op->getOperand(i).getType() != boolean)
+        return failure();
+  }
   Operation *module = op->getParentOp();
   StringRef prefix = path(module).empty() ? text(module, "sym_name") : path(module);
   if (!text(op, "machine_id").starts_with((prefix + ".").str()))
@@ -300,6 +500,9 @@ static FailureOr<FlatFSMHeader> inspectFlatFSMHeaderImpl(Operation *op, bool act
   h.composed = composed;
   h.extended = extended;
   h.timed = timed;
+  h.stacked = stacked;
+  h.stackCapacity = capacity;
+  h.stackPointerWidth = pointerWidth;
   if (!actionHeaders)
     return h;
   unsigned offset = h.guardOffset + h.guards, captures = 0;
@@ -342,12 +545,31 @@ Value FlatFSMHeader::enable() const { return controlled ? operation->getOperand(
 Value FlatFSMHeader::elapsed() const {
   return timed ? operation->getOperand(controlled ? 5 : 1) : Value();
 }
-SmallVector<Value> FlatFSMHeader::privateStateOperands() const {
-  SmallVector<Value> result{currentLocal()};
+Value FlatFSMHeader::stackPointer() const {
+  return stacked ? operation->getOperand((controlled ? 5 : 1) + unsigned(timed)) : Value();
+}
+Value FlatFSMHeader::stackFrame(unsigned index) const {
+  return stacked && index < stackCapacity
+             ? operation->getOperand((controlled ? 5 : 1) + unsigned(timed) + 1 + index)
+             : Value();
+}
+SmallVector<FlatFSMPrivateState> FlatFSMHeader::privateStateRoles() const {
+  SmallVector<FlatFSMPrivateState> result{{currentLocal(), FlatFSMPrivateRole::Local}};
   if (controlled)
-    result.push_back(currentStatus());
+    result.push_back({currentStatus(), FlatFSMPrivateRole::Lifecycle});
   if (timed)
-    result.push_back(elapsed());
+    result.push_back({elapsed(), FlatFSMPrivateRole::Elapsed});
+  if (stacked) {
+    result.push_back({stackPointer(), FlatFSMPrivateRole::StackPointer});
+    for (unsigned i = 0; i < stackCapacity; ++i)
+      result.push_back({stackFrame(i), FlatFSMPrivateRole::StackFrame});
+  }
+  return result;
+}
+SmallVector<Value> FlatFSMHeader::privateStateOperands() const {
+  SmallVector<Value> result;
+  for (auto state : privateStateRoles())
+    result.push_back(state.value);
   return result;
 }
 SmallVector<Value> FlatFSMHeader::sampledInputs() const {
@@ -418,9 +640,19 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
       return reject(op, "FSM action dependency roots exceed finite sampling budget");
     return success();
   };
+  SmallVector<unsigned> dynamicReturns, overflowCalls;
+  if (h->stacked)
+    for (unsigned edge = 0; edge < g->transitions.size(); ++edge) {
+      if (failed(charge()))
+        return failure();
+      if (g->transitions[edge].kind == EdgeKind::Return)
+        dynamicReturns.push_back(edge);
+      else if (g->transitions[edge].kind == EdgeKind::Call && g->overflow.trap)
+        overflowCalls.push_back(edge);
+    }
   // A selected edge depends on its source's priority prefix. For entry actions,
   // coalesce the latest selected edge per source before expanding each prefix.
-  // This avoids quadratic prefix unions for high-fan-in actions.
+  // Index dynamic candidates once, avoiding an uncharged full-edge scan per action.
   for (auto control : actionControls(op, *g)) {
     SmallVector<Value, 4> roots;
     if (failed(charge()))
@@ -454,6 +686,21 @@ LogicalResult flatFSMActionControlDependencies(Operation *op,
         if (failed(charge()))
           return failure();
         selected(edge);
+      }
+      if (h->stacked && control.phase == "entry") {
+        // Return destination is a private frame, not a fabricated incoming edge.
+        // Invalid pointers can enter their trap without any selected guard.
+        for (unsigned edge : dynamicReturns) {
+          if (failed(charge()))
+            return failure();
+          selected(edge);
+        }
+        if (g->overflow.trap && g->overflow.target == control.owner)
+          for (unsigned edge : overflowCalls) {
+            if (failed(charge()))
+              return failure();
+            selected(edge);
+          }
       }
     }
     for (auto [source, last] : lastBySource)
@@ -638,29 +885,35 @@ static LogicalResult verifyFlatFSMWithGraph(const FlatFSMHeader &header, const G
   if (failed(controls))
     return reject(op, "flat FSM requires an exact local binding or unresolved requirement");
   llvm::DenseSet<Value> privateValues;
-  for (Value storage : h->privateStateOperands()) {
+  for (auto privateState : h->privateStateRoles()) {
+    Value storage = privateState.value;
     Operation *state = storage.getDefiningOp();
     if (!llvm::isa_and_nonnull<DigitalStorageOp>(state) || text(state, "kind") != "register" ||
         state->getParentOp() != h->module || state->getAttr("domain") != op->getAttr("domain") ||
         failed(verifyDigitalStorageOperation(state)) || !privateValues.insert(storage).second)
       return reject(op, "flat FSM requires distinct actual private registers in its exact domain");
-    bool initialized = controls->resetAvailability != SequentialResetAvailability::Absent;
+    bool frame = privateState.role == FlatFSMPrivateRole::StackFrame;
+    bool initialized = !frame && controls->resetAvailability != SequentialResetAvailability::Absent;
     if (initialized != (state->getNumOperands() == 1) ||
-        (controls->contextual() ? text(state, "initializer_policy") != "if_reset"
-                                : state->hasAttr("initializer_policy")))
+        (controls->contextual() && !frame ? text(state, "initializer_policy") != "if_reset"
+                                          : state->hasAttr("initializer_policy")))
       return reject(op,
                     "FSM storage requires exact physical or conditional contextual initialization");
     if (state->getNumOperands()) {
       Operation *initial = state->getOperand(0).getDefiningOp();
       auto code = initial ? initial->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
       bool local = storage == h->currentLocal();
-      unsigned width = local ? g->width : storage == h->elapsed() ? 31 : 2;
+      unsigned width = local                          ? g->width
+                       : storage == h->elapsed()      ? 31
+                       : storage == h->stackPointer() ? h->stackPointerWidth
+                                                      : 2;
       llvm::APInt expected = local ? g->codes[g->initial] : llvm::APInt(width, 0);
       if (!llvm::isa_and_nonnull<ConstLiteralOp, ConstantOp>(initial) || !code ||
           failed(verifyDigitalLiteralOperation(initial)) || code.getValue().getBitWidth() > 4096 ||
           code.getValue().zextOrTrunc(width) != expected)
-        return reject(op, local ? "FSM initializer must be the actual exact local initial code"
-                                : "FSM lifecycle/timer initializer must be exact zero");
+        return reject(op, local
+                              ? "FSM initializer must be the actual exact local initial code"
+                              : "FSM lifecycle/timer/stack pointer initializer must be exact zero");
     }
   }
   if (failed(timingTables(header)))
@@ -701,6 +954,8 @@ FailureOr<FlatFSMGraphSummary> inspectFlatFSMGraphSummary(Operation *op) {
   summary.terminal.append(g->terminal.begin(), g->terminal.end());
   summary.initial = g->initial;
   summary.width = g->width;
+  summary.structuralWork = g->structuralWork;
+  summary.completionPossible = g->completionPossible;
   return summary;
 }
 LogicalResult verifyFlatFSMOperation(Operation *op) {
@@ -767,16 +1022,21 @@ public:
                       "FSM timing expansion exceeds its conservative structural preflight budget");
       cost += extra;
     }
+    if (h.stacked) {
+      uint64_t extra = 256 + 16 * uint64_t(h.stackCapacity) + 12 * uint64_t(g.transitions.size()) +
+                       4 * uint64_t(g.codes.size()) + 4 * uint64_t(actionRecords.size());
+      if (cost > maximum || extra > uint64_t(maximum) - cost)
+        return reject(op,
+                      "FSM stack expansion exceeds its conservative structural preflight budget");
+      cost += extra;
+    }
     llvm::SetVector<Value> externalCaptures;
-    externalCaptures.insert(op->getOperand(0));
-    if (h.controlled)
-      externalCaptures.insert(op->getOperand(1));
-    if (h.timed)
-      externalCaptures.insert(h.elapsed());
+    for (Value storage : h.privateStateOperands())
+      externalCaptures.insert(storage);
     for (Value value : op->getOperands().drop_front(h.guardOffset + h.guards))
       externalCaptures.insert(value);
     if (externalCaptures.size() + (h.controlled ? 4 : 3) + unsigned(h.timed) +
-                actionRecords.size() >
+                (h.stacked ? 2 + h.stackCapacity : 0) + actionRecords.size() >
             8192 ||
         cost > maximum - std::min(maximum, generated))
       return reject(op, "FSM expansion exceeds the exact operation/capture preflight budget");
@@ -874,6 +1134,97 @@ public:
     }
     if (broken)
       return failure();
+    Value popped, stackTrap = zero, stackTrapTarget = current, stackAssertion = zero;
+    Value successfulCall = zero, successfulReturn = zero, resumeValue = current;
+    SmallVector<Value> frameIndices;
+    if (h.stacked) {
+      Type pointerType = h.stackPointer().getType();
+      Value limit = literal(llvm::APInt(h.stackPointerWidth, h.stackCapacity), pointerType);
+      Value pointerValid = expression("digital_le", {h.stackPointer(), limit}, zero.getType());
+      Value empty = eq(h.stackPointer(), literal(llvm::APInt(h.stackPointerWidth, 0), pointerType));
+      Value full = eq(h.stackPointer(), limit);
+      struct FrameChoice {
+        Value condition, value;
+      };
+      std::function<FrameChoice(unsigned, unsigned)> read = [&](unsigned first,
+                                                                unsigned last) -> FrameChoice {
+        if (last - first == 1) {
+          Value index = literal(llvm::APInt(h.stackPointerWidth, first + 1), pointerType);
+          return {eq(h.stackPointer(), index), h.stackFrame(first)};
+        }
+        unsigned middle = first + (last - first) / 2;
+        auto left = read(first, middle), right = read(middle, last);
+        return {either(left.condition, right.condition),
+                selectValue(left.condition, left.value, right.value)};
+      };
+      auto frame = read(0, h.stackCapacity);
+      // No frame is exposed as valid at empty or invalid depth.
+      popped = selectValue(frame.condition, frame.value, constants[g.initial]);
+      SmallVector<Value> validCodes;
+      for (Value code : constants)
+        validCodes.push_back(eq(popped, code));
+      Value frameValid = any(validCodes);
+      SmallVector<Value> calls, returns;
+      for (unsigned i = 0; i < g.transitions.size(); ++i) {
+        if (g.transitions[i].kind == EdgeKind::Call)
+          calls.push_back(selected[i]);
+        else if (g.transitions[i].kind == EdgeKind::Return)
+          returns.push_back(selected[i]);
+      }
+      Value call = any(calls), returning = any(returns);
+      Value invalidPointer = negate(pointerValid);
+      Value overflow = both(pointerValid, both(call, full));
+      Value underflow = both(pointerValid, both(returning, empty));
+      Value invalidFrame =
+          both(pointerValid, both(returning, both(negate(empty), negate(frameValid))));
+      auto applyPolicy = [&](Value fault, const StackPolicy &policy) {
+        if (policy.trap) {
+          stackTrap = either(stackTrap, fault);
+          stackTrapTarget = selectValue(fault, constants[policy.target], stackTrapTarget);
+        } else
+          stackAssertion = either(stackAssertion, fault);
+      };
+      applyPolicy(overflow, g.overflow);
+      applyPolicy(underflow, g.underflow);
+      applyPolicy(either(invalidPointer, invalidFrame), g.invalidFrame);
+      for (unsigned i = 0; i < g.transitions.size(); ++i) {
+        const auto &edge = g.transitions[i];
+        Value allowed = pointerValid;
+        if (edge.kind == EdgeKind::Call)
+          allowed = both(allowed, negate(full));
+        else if (edge.kind == EdgeKind::Return)
+          allowed = both(allowed, both(negate(empty), frameValid));
+        selected[i] = both(selected[i], allowed);
+      }
+      calls.clear();
+      returns.clear();
+      // A balanced selection of the authored resume constants shares the one
+      // ordinary edge priority decision with the frame write enables.
+      std::function<FrameChoice(unsigned, unsigned)> resume = [&](unsigned first,
+                                                                  unsigned last) -> FrameChoice {
+        if (first == last)
+          return {zero, current};
+        if (last - first == 1) {
+          const auto &edge = g.transitions[first];
+          return edge.kind == EdgeKind::Call ? FrameChoice{selected[first], constants[*edge.resume]}
+                                             : FrameChoice{zero, current};
+        }
+        unsigned middle = first + (last - first) / 2;
+        auto left = resume(first, middle), right = resume(middle, last);
+        return {either(left.condition, right.condition),
+                selectValue(left.condition, left.value, right.value)};
+      };
+      auto resumes = resume(0, g.transitions.size());
+      successfulCall = resumes.condition;
+      resumeValue = resumes.value;
+      for (unsigned i = 0; i < g.transitions.size(); ++i)
+        if (g.transitions[i].kind == EdgeKind::Return)
+          returns.push_back(selected[i]);
+      successfulReturn = any(returns);
+      for (unsigned i = 0; i < h.stackCapacity; ++i)
+        frameIndices.push_back(
+            eq(h.stackPointer(), literal(llvm::APInt(h.stackPointerWidth, i), pointerType)));
+    }
     struct Choice {
       Value condition, value;
     };
@@ -882,19 +1233,26 @@ public:
       if (first == last)
         return {zero, current};
       if (last - first == 1)
-        return {selected[first], constants[g.transitions[first].destination]};
+        return {selected[first], g.transitions[first].kind == EdgeKind::Return
+                                     ? popped
+                                     : constants[*g.transitions[first].destination]};
       unsigned middle = first + (last - first) / 2;
       auto a = select(first, middle), b = select(middle, last);
       return {expression("bool_or", {a.condition, b.condition}, zero.getType()),
               expression("digital_select", {a.condition, a.value, b.value}, current.getType())};
     };
     auto choice = select(0, g.transitions.size());
+    if (h.stacked) {
+      choice.value = selectValue(stackTrap, stackTrapTarget, choice.value);
+      choice.condition = either(both(valid, stackTrap), choice.condition);
+    }
     Value next =
         expression("digital_select", {choice.condition, choice.value, current}, current.getType());
     if (text(op, "illegal_policy") == "recover_to_initial")
       next = expression("digital_select", {valid, next, constants[g.initial]}, current.getType());
     Value actionGate = notReset, restarting = zero, cancelling = zero, recovering = zero;
     Value lifecycle, lifecycleNext, illegalProperty = valid;
+    Value stackOperationalGate = h.stacked ? both(notReset, valid) : zero;
     if (h.controlled) {
       lifecycle = op->getOperand(1);
       Value runningCode = literal(llvm::APInt(2, unsigned(FlatFSMLifecycle::Running))),
@@ -916,17 +1274,30 @@ public:
           both(both(negate(cancelSelected), negate(op->getOperand(2))), op->getOperand(4));
       Value advance = both(ordinary, running);
       actionGate = both(notReset, both(advance, valid));
+      if (h.stacked)
+        stackOperationalGate = both(notReset, both(ordinary, both(operational, valid)));
       Value initialStatus = g.terminal[g.initial] ? completedCode : runningCode;
       SmallVector<Value, 4> nextTerminals;
       for (unsigned i = 0; i < g.terminal.size(); ++i)
         if (g.terminal[i])
           nextTerminals.push_back(eq(next, constants[i]));
       Value advancedStatus = selectValue(any(nextTerminals), completedCode, runningCode);
-      lifecycleNext = selectValue(advance, advancedStatus, lifecycle);
+      Value lifecycleAdvance = h.stacked ? both(advance, negate(stackAssertion)) : advance;
+      lifecycleNext = selectValue(lifecycleAdvance, advancedStatus, lifecycle);
       next = selectValue(advance, next, current);
+      if (h.stacked) {
+        Value trapped = both(ordinary, both(operational, both(valid, stackTrap)));
+        next = selectValue(trapped, stackTrapTarget, next);
+        SmallVector<Value> trapTerminals;
+        for (unsigned i = 0; i < g.terminal.size(); ++i)
+          if (g.terminal[i])
+            trapTerminals.push_back(eq(stackTrapTarget, constants[i]));
+        lifecycleNext = selectValue(
+            trapped, selectValue(any(trapTerminals), completedCode, runningCode), lifecycleNext);
+      }
       if (text(op, "illegal_policy") == "recover_to_initial") {
         Value recover = both(ordinary, both(operational, negate(legal)));
-        if (h.composed || h.timed)
+        if (h.composed || h.timed || h.stacked)
           recovering = both(notReset, recover);
         next = selectValue(recover, constants[g.initial], next);
         lifecycleNext = selectValue(recover, initialStatus, lifecycleNext);
@@ -937,16 +1308,52 @@ public:
       illegalProperty =
           either(either(restartSelected, cancelSelected), either(negate(operational), legal));
     }
-    if (h.timed && !h.controlled && text(op, "illegal_policy") == "recover_to_initial")
+    if ((h.timed || h.stacked) && !h.controlled &&
+        text(op, "illegal_policy") == "recover_to_initial")
       recovering = both(notReset, negate(valid));
     Value effective = expression("digital_select", {reset, constants[g.initial], next},
                                  current.getType(), ".next");
-    Value taken = expression("bool_and", {actionGate, choice.condition}, zero.getType(), ".taken");
+    Value taken = expression("bool_and", {actionGate, choice.condition}, zero.getType(),
+                             h.stacked ? StringRef() : StringRef(".taken"));
+    Value stackTrapEvent = h.stacked ? both(stackOperationalGate, stackTrap) : zero;
+    if (h.stacked)
+      taken = expression("bool_or", {taken, stackTrapEvent}, zero.getType(), ".taken");
     Value entered = h.controlled ? either(taken, restarting) : taken;
     Value exited = h.controlled ? either(taken, cancelling) : taken;
     Value establishment = h.composed ? expression("bool_or", {restarting, recovering},
                                                   zero.getType(), ".establishment")
                                      : Value();
+    Value pointerNext;
+    SmallVector<Value> frameWrites;
+    if (h.stacked) {
+      Type pointerType = h.stackPointer().getType();
+      Type wide = UIntType::get(builder.getContext(), h.stackPointerWidth + 1);
+      Value unit = literal(llvm::APInt(h.stackPointerWidth, 1), pointerType);
+      Value minusOne = literal(llvm::APInt::getAllOnes(h.stackPointerWidth), pointerType);
+      Value increment =
+          expression("digital_truncate",
+                     {expression("digital_add", {h.stackPointer(), unit}, wide)}, pointerType);
+      Value decrement =
+          expression("digital_truncate",
+                     {expression("digital_add", {h.stackPointer(), minusOne}, wide)}, pointerType);
+      Value call = both(actionGate, successfulCall), returning = both(actionGate, successfulReturn);
+      pointerNext =
+          selectValue(call, increment, selectValue(returning, decrement, h.stackPointer()));
+      SmallVector<Value> nextTerminals;
+      for (unsigned i = 0; i < g.terminal.size(); ++i)
+        if (g.terminal[i])
+          nextTerminals.push_back(eq(next, constants[i]));
+      Value terminalClear =
+          both(stackOperationalGate, both(negate(stackAssertion), any(nextTerminals)));
+      Value clear = either(
+          reset,
+          either(restarting,
+                 either(cancelling, either(recovering, either(stackTrapEvent, terminalClear)))));
+      pointerNext = selectValue(clear, literal(llvm::APInt(h.stackPointerWidth, 0), pointerType),
+                                pointerNext);
+      for (Value index : frameIndices)
+        frameWrites.push_back(both(call, index));
+    }
     Value elapsedNext;
     if (h.timed) {
       llvm::DenseSet<int64_t> timedEdges;
@@ -992,6 +1399,23 @@ public:
       if (!create(assertion))
         return failure();
     }
+    if (h.stacked) {
+      Value property = negate(both(stackOperationalGate, stackAssertion));
+      if (!domainControls->clock && !charge())
+        return failure();
+      auto clock = getOrCreateSequentialDomainClock(op, builder, metadata(".clock"));
+      if (failed(clock))
+        return failure();
+      OperationState assertion(op->getLoc(), "nodal.sequential_assert");
+      assertion.addOperands({property, *clock});
+      assertion.addAttribute("domain", op->getAttr("domain"));
+      if (!domainControls->contextual())
+        assertion.addAttribute("edge", domainControls->declaration->getAttr("edge"));
+      assertion.addAttribute("root_id", builder.getStringAttr(text(op, "machine_id")));
+      assertion.addAttribute("metadata", metadata(".stack_fault"));
+      if (!create(assertion))
+        return failure();
+    }
     auto actions = op->getAttrOfType<ArrayAttr>("actions");
     auto controls = actionControls(op, g);
     SmallVector<Value, 8> conditions;
@@ -1010,7 +1434,12 @@ public:
               ? decoded[control.owner]
               : groupAny(control.phase == "exit" ? ArrayRef<unsigned>(g.outgoing[control.owner])
                                                  : ArrayRef<unsigned>(g.incoming[control.owner]));
-      condition = both(actionGate, condition);
+      if (h.stacked && control.phase == "entry")
+        condition = both(taken, eq(next, constants[control.owner]));
+      else if (h.stacked && control.phase == "exit")
+        condition = both(taken, decoded[control.owner]);
+      else
+        condition = both(actionGate, condition);
       if (h.controlled && control.phase == "entry" && control.owner == g.initial)
         condition = either(condition, restarting);
       if (h.controlled && control.phase == "exit")
@@ -1033,6 +1462,15 @@ public:
     if (h.timed) {
       values.insert(h.elapsed());
       values.insert(elapsedNext);
+    }
+    if (h.stacked) {
+      values.insert(h.stackPointer());
+      values.insert(pointerNext);
+      values.insert(resumeValue);
+      for (unsigned i = 0; i < h.stackCapacity; ++i) {
+        values.insert(h.stackFrame(i));
+        values.insert(frameWrites[i]);
+      }
     }
     for (Value v : conditions)
       values.insert(v);
@@ -1070,6 +1508,32 @@ public:
       timerAssignment.addAttribute("metadata", metadata(".elapsed_next"));
       if (!create(timerAssignment))
         return failure();
+    }
+    if (h.stacked) {
+      OperationState pointerAssignment(op->getLoc(), "nodal.digital_assign");
+      pointerAssignment.addOperands(
+          {mapping.lookup(h.stackPointer()), mapping.lookup(pointerNext)});
+      pointerAssignment.addAttribute("kind", builder.getStringAttr("register_next"));
+      pointerAssignment.addAttribute("metadata", metadata(".stack_pointer_next"));
+      if (!create(pointerAssignment))
+        return failure();
+      for (unsigned i = 0; i < h.stackCapacity; ++i) {
+        SmallVector<Value> inputs{mapping.lookup(h.stackFrame(i)), mapping.lookup(resumeValue)};
+        Operation *write =
+            branch(mapping.lookup(frameWrites[i]), inputs,
+                   (text(op, "machine_id") + ".stack_write" + std::to_string(i)).str());
+        if (!write)
+          return failure();
+        Block *writeBody = &write->getRegion(0).front();
+        builder.setInsertionPointToEnd(writeBody);
+        OperationState assignment(op->getLoc(), "nodal.digital_assign");
+        assignment.addOperands({writeBody->getArgument(0), writeBody->getArgument(1)});
+        assignment.addAttribute("kind", builder.getStringAttr("register_next"));
+        assignment.addAttribute("metadata", metadata(".stack_frame_next" + std::to_string(i)));
+        if (!create(assignment))
+          return failure();
+        builder.setInsertionPointToEnd(body);
+      }
     }
     for (unsigned i : order) {
       SmallVector<Value, 8> inputs{mapping.lookup(current), mapping.lookup(effective),
@@ -1205,11 +1669,17 @@ LogicalResult expandFlatFSMModel(Operation *module, unsigned &generated, unsigne
   for (Operation &op : module->getRegion(0).front())
     if (llvm::isa<FlatFSMOp>(op))
       machines.push_back(&op);
-  uint64_t timerBits = 0;
+  uint64_t auxiliaryBits = 0;
   for (Operation *op : machines) {
     auto h = inspectFlatFSMHeader(op);
-    if (failed(h) || (timerBits += h->timed ? 31 : 0) > 65536)
-      return reject(op, "actual private timer state exceeds its finite bit budget");
+    if (failed(h))
+      return failure();
+    uint64_t bits = h->timed ? 31 : 0;
+    if (h->stacked)
+      bits += h->stackPointerWidth +
+              uint64_t(h->stackCapacity) * op->getAttrOfType<IntegerAttr>("local_width").getInt();
+    if ((auxiliaryBits += bits) > 65536)
+      return reject(op, "actual private timer/stack state exceeds its finite bit budget");
   }
   for (Operation *op : machines) {
     auto h = inspectFlatFSMHeader(op);

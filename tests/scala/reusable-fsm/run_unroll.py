@@ -83,6 +83,12 @@ def main() -> None:
     _, text = compile_source("missing-plugin", "Positive", checked=False, expected=1)
     if "NODAL-FSM-058-UNROLL-MISSING" not in text:
         raise RuntimeError("unchecked finite-unroll source was not rejected")
+    stack, _ = compile_source("stack-positive", "StackPositive")
+    execute("stack-positive-run", stack, "stackunrollprobe.StackPositive")
+    for name in ("StackCallForeign", "StackTrapForeign"):
+        _, text = compile_source(name, name, expected=1)
+        if "Type Mismatch Error" not in text:
+            raise RuntimeError(f"foreign enum did not fail at the typed boundary: {name}\n{text}")
     (out / "manifest.json").write_text(json.dumps(
         {"status": "passed", "checks": results}, indent=2) + "\n")
     print(f"FINITE_UNROLL_FRONTEND_PASS {len(results)} checks: {out}")

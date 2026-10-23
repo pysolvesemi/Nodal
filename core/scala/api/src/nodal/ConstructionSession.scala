@@ -1182,7 +1182,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private val openFsms = mutable.ArrayBuffer.empty[FlatFsmRecord[?]]
   private var compositionObservationRoot: Option[ExpressionRef] = None
   private val privateFsmStorage = mutable.HashSet.empty[DeclarationRef]
-  private var timerStateBits = 0
+  private var auxiliaryFsmStateBits = 0
   private def contextualFsmInitializer(declaration: DeclarationRecord): Boolean =
     privateFsmStorage(declaration.reference) &&
       declaration.attributes.contains("initializer_policy" -> "if_reset") &&
@@ -1487,7 +1487,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         definition.semanticHash,
         fragments,
         definition.compositionCost,
-        definition.fragments.exists(_.states.exists(_.isTerminal))
+        definition.compositionCost.completionPossible
       ))
     plan.foreach(attach)
     def capture[T](occurrence: FsmOccurrence[T]): Unit =
@@ -1501,6 +1501,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       captureAllocatedFlatFsm(
         builder,
         machine =>
+          spec.definition.stack.foreach(captureFlatFsmStack(machine, _))
           spec.definition.fragments.foreach: fragment =>
             fragment.states.foreach: state =>
               captureFlatFsmState(
@@ -1515,6 +1516,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         edge.mode,
                         edge.destination,
                         edge.action.map(actions)
+                      )
+                    case call: FsmDefinitionCall[T] =>
+                      captureFlatFsmProcedure(
+                        stateBuilder,
+                        guards(call.guard),
+                        call.mode,
+                        Some(call.entry),
+                        Some(call.resume)
+                      )
+                    case returning: FsmDefinitionReturn[T] =>
+                      captureFlatFsmProcedure(
+                        stateBuilder,
+                        guards(returning.guard),
+                        returning.mode,
+                        None,
+                        None
                       )
                     case timer: FsmDefinitionTimer[T] =>
                       captureFlatFsmTimer(stateBuilder, timer.cycles, timer.mode, timer.destination)
@@ -1712,7 +1729,82 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       body: Option[() => Unit]
   ): Unit = fsmTransaction:
     val record = requireFsmState(builder)
-    if Option(mode).isEmpty || CandidateRuntime.expressionDataType(
+    val bound = captureFsmGuard(record, condition, mode)
+    val destination = DigitalEnumContract.selectedCase(to, record.evidence, record.canonical)
+    val transition =
+      FlatFsmTransitionRecord(
+        builder.record.caseId,
+        Some(destination),
+        mode,
+        bound,
+        record.nextOrdinal()
+      )
+    record.transitions += transition
+    body.foreach(callback =>
+      captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
+    )
+
+  def captureFlatFsmStack[S](builder: FsmBuilder[S], config: FsmStackConfig[S]): Unit =
+    fsmTransaction:
+      val record = requireFsm(builder)
+      if record.stack.nonEmpty || record.states.nonEmpty || record.transitions.nonEmpty then
+        FlatFsmRuntime.fail("stack must be configured once before machine states")
+      if record.encoding == FsmEncoding.Gray then
+        FlatFsmRuntime.fail("bounded dynamic return does not support Gray local encoding")
+      val contract = FsmStackRuntime.contract(
+        config,
+        value =>
+          DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+      )
+      val width = FsmStackRuntime.pointerWidth(contract.capacity)
+      val bits = width.toLong + contract.capacity.toLong * record.local.width
+      if auxiliaryFsmStateBits + bits > FsmTimingRuntime.MaximumStateBits then
+        FlatFsmRuntime.fail("FSM timer and stack private storage exceed 65536 actual bits")
+      val pointer = if record.domain.resetPolicy.contains(ResetPolicy.None) then
+        Reg.uninitialized(UInt(width))
+      else Reg(0.U(width))
+      val domain = domainRef(record.domain)
+      val module = currentModule
+      if module.domains(domain.index).kind == KernelDomainKind.Required then
+        val reference = declarationIds.get(pointer)
+        val declaration = module.declarations(reference.index)
+        module.declarations(reference.index) = declaration.copy(
+          attributes = declaration.attributes :+ ("initializer_policy" -> "if_reset")
+        )
+      val frames = Vector.fill(contract.capacity)(Reg.uninitialized(Bits(record.local.width)))
+      record.stack = Some(FlatFsmStackRecord(contract, pointer, frames, width))
+      (Vector(pointer) ++ frames).foreach(value => privateFsmStorage += declarationIds.get(value))
+      auxiliaryFsmStateBits += bits.toInt
+
+  def captureFlatFsmProcedure[S](
+      builder: StateBuilder[S],
+      condition: Expr[Bool],
+      mode: TransitionMode,
+      entry: Option[S],
+      resume: Option[S]
+  ): Unit = fsmTransaction:
+    val record = requireFsmState(builder)
+    if record.stack.isEmpty || entry.nonEmpty != resume.nonEmpty then
+      FlatFsmRuntime.fail("call/return requires one admitted stack and exact entry/resume shape")
+    val bound = captureFsmGuard(record, condition, mode)
+    def caseId(value: S): String =
+      DigitalEnumContract.selectedCase(value, record.evidence, record.canonical)
+    record.transitions += FlatFsmTransitionRecord(
+      builder.record.caseId,
+      entry.map(caseId),
+      mode,
+      bound,
+      record.nextOrdinal(),
+      if entry.nonEmpty then "call" else "return",
+      resume.map(caseId)
+    )
+
+  private def captureFsmGuard[S](
+      record: FlatFsmRecord[S],
+      condition: Expr[Bool],
+      mode: TransitionMode
+  ): Expr[Bool] =
+    if mode == null || CandidateRuntime.expressionDataType(
         condition
       ).map(CandidateRuntime.typeDescriptor) !=
         Some(KernelTypeDescriptor("Bool"))
@@ -1722,14 +1814,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       FlatFsmRuntime.fail("next-state/event feedback into transition selection is cyclic")
     if record.actions.size.toLong + record.transitions.size >= FlatFsmRuntime.MaximumRecords then
       FlatFsmRuntime.fail("machine transitions/actions exceed 65536 records")
-    val bound = bindCollectionValue(condition, None, currentModule.handle).asInstanceOf[Expr[Bool]]
-    val destination = DigitalEnumContract.selectedCase(to, record.evidence, record.canonical)
-    val transition =
-      FlatFsmTransitionRecord(builder.record.caseId, destination, mode, bound, record.nextOrdinal())
-    record.transitions += transition
-    body.foreach(callback =>
-      captureFsmAction(record, "transition", None, Some(transition.ordinal), callback)
-    )
+    bindCollectionValue(condition, None, currentModule.handle).asInstanceOf[Expr[Bool]]
 
   def captureFlatFsmTimer[S](
       builder: StateBuilder[S],
@@ -1740,7 +1825,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     FsmTimingRuntime.cycles(cycles)
     val record = requireFsmState(builder)
     val storage = record.timer.getOrElse {
-      if timerStateBits.toLong + FsmTimingRuntime.Width > FsmTimingRuntime.MaximumStateBits then
+      if auxiliaryFsmStateBits.toLong + FsmTimingRuntime.Width > FsmTimingRuntime.MaximumStateBits
+      then
         FsmDefinitionRuntime.fail("FSM timer state exceeds 65536 actual bits")
       val value = if record.domain.resetPolicy.contains(ResetPolicy.None) then
         Reg.uninitialized(UInt(FsmTimingRuntime.Width))
@@ -1757,7 +1843,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           declaration.attributes :+ ("initializer_policy" -> "if_reset")
         )
       record.timer = Some(value)
-      timerStateBits += FsmTimingRuntime.Width
+      auxiliaryFsmStateBits += FsmTimingRuntime.Width
       privateFsmStorage += reference
       value
     }
@@ -1976,7 +2062,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             value.destinationCase,
             if value.mode == TransitionMode.Exclusive then "exclusive" else "priority",
             pathOf(value.guard).get,
-            value.ordinal
+            value.ordinal,
+            value.kind,
+            value.resumeCase
           )
         ),
         record.actions.toVector.map: region =>
@@ -2050,6 +2138,17 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             pathOf(value.payload).get,
             pathOf(value.valid).get,
             pathOf(value.ready).get
+          )
+        ),
+        record.stack.map(value =>
+          KernelFsmStack(
+            value.contract.capacity,
+            value.pointerWidth,
+            pathOf(value.pointer).get,
+            value.frames.map(frame => pathOf(frame).get),
+            value.contract.overflow,
+            value.contract.underflow,
+            value.contract.invalidFrame
           )
         )
       )

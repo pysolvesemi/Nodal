@@ -189,12 +189,15 @@ private[nodal] object DigitalValueMlir:
       Vector(value.trueArm, value.falseArm).map(arm => arm.path -> (value, arm))
     ).toMap
     private val machines = snapshot.flatFsms.map(value => value.path -> value).toMap
-    private val composition = new FsmCompositionMlir.Plan(snapshot, fail)
+    private val stacks = new FsmStackMlir.Plan(snapshot, fail)
+    private val composition = new FsmCompositionMlir.Plan(snapshot, fail, stacks.summaries)
     private val timing = new FsmTimingMlir.Plan(snapshot, fail)
     private def machineInputs(value: KernelFlatFsmSnapshot): Vector[String] =
       Vector(value.storage) ++ value.control.toVector.flatMap(control =>
         Vector(control.storage, control.restart, control.cancel, control.enable)
-      ) ++ value.timerStorage ++ value.transitions.map(_.guard)
+      ) ++ value.timerStorage ++ value.stack.toVector.flatMap(stack =>
+        Vector(stack.pointerStorage) ++ stack.frameStorage
+      ) ++ value.transitions.map(_.guard)
     private def machineProjections(value: KernelFlatFsmSnapshot): Vector[(String, String, String)] =
       Vector(
         (value.nextLocal, "flat_fsm_next", s"Bits(${value.localWidth})"),
@@ -208,7 +211,8 @@ private[nodal] object DigitalValueMlir:
         (composition.establishment, FlatFsmRuntime.EstablishmentOperation, "Bool")
       )
     private val privateMachineStorage = snapshot.flatFsms.flatMap(value =>
-      Vector(value.storage) ++ value.control.map(_.storage) ++ value.timerStorage
+      Vector(value.storage) ++ value.control.map(_.storage) ++ value.timerStorage ++
+        value.stack.toVector.flatMap(stack => Vector(stack.pointerStorage) ++ stack.frameStorage)
     ).toSet
     private val enumDefinitions =
       snapshot.enumDefinitions.map(value => value.identity -> value).toMap
@@ -1140,7 +1144,9 @@ private[nodal] object DigitalValueMlir:
           2 + 2 * value.control.size + value.composition.size
         ).sum &&
         privateMachineStorage.size == snapshot.flatFsms.map(value =>
-          1 + value.control.size + value.timerStorage.size
+          1 + value.control.size + value.timerStorage.size + value.stack.map(s =>
+            1 + s.capacity
+          ).getOrElse(0)
         ).sum &&
         snapshot.flatFsms.map(_.storage).distinct.size == machines.size &&
         actions.size == snapshot.flatFsms.map(_.actions.size).sum &&
@@ -1279,6 +1285,43 @@ private[nodal] object DigitalValueMlir:
           "FSM timer resets to exact zero or stays deliberately uninitialized",
           path
         )
+      machine.stack.foreach: stack =>
+        (Vector(stack.pointerStorage -> s"UInt(${stack.pointerWidth})") ++
+          stack.frameStorage.map(_ -> s"Bits(${machine.localWidth})")).foreach:
+          (storage, expected) =>
+            requireVisible(storage, machine.owner, None, path)
+            requireValid(
+              declarations.get(storage).exists((owner, value) =>
+                owner == machine.owner && value.kind == "register" && value.generatedScope.isEmpty &&
+                  value.dataType.contains(expected) && (value.domain.contains(machine.domain) ||
+                    value.attributes.contains("declared_domain" -> machine.domain))
+              ),
+              "FSM stack storage must be distinct whole private registers in its exact domain",
+              path
+            )
+            val declaration = declarations(storage)._2
+            val initial = DigitalStorageMlir.initializer(declaration)
+            if storage == stack.pointerStorage then
+              validateInitializerPolicy(storage)
+              requireValid(
+                if domain.get.resetPolicy.contains("none") then initial.isEmpty
+                else
+                  initial.flatMap(expressions.get).exists(value =>
+                    value.owner == machine.owner && value.region.isEmpty && value.dataType == expected &&
+                      value.operation == "integer" && value.operands.isEmpty && value.literal.contains(
+                        "0"
+                      )
+                  )
+                ,
+                "FSM stack pointer requires exact zero or deliberate resetless initialization",
+                path
+              )
+            else
+              requireValid(
+                initial.isEmpty && !declaration.attributes.exists(_._1 == "initializer_policy"),
+                "FSM stack frames must stay deliberately uninitialized even in contextual domains",
+                path
+              )
       machineProjections(machine).foreach: (result, operation, dataType) =>
         requireValid(
           expressions.get(result).exists(value =>
@@ -1375,27 +1418,19 @@ private[nodal] object DigitalValueMlir:
       machine.transitions.foreach: edge =>
         requireVisible(edge.guard, machine.owner, None, path)
         requireValid(
-          caseSet(edge.sourceCase) && caseSet(edge.destinationCase) &&
+          caseSet(edge.sourceCase) && edge.destinationCase.forall(caseSet) &&
             Set("exclusive", "priority")(edge.mode) && expressionType(edge.guard) == "Bool",
           "flat FSM transition requires exact states and an actual Bool guard",
           path
         )
-        if machine.requestedEncoding == "gray" && edge.sourceCase != edge.destinationCase then
+        if machine.requestedEncoding == "gray" && edge.sourceCase != edge.destinationCase.get then
           requireValid(
-            (codeByCase(edge.sourceCase) ^ codeByCase(edge.destinationCase)).bitCount == 1,
+            (codeByCase(edge.sourceCase) ^ codeByCase(edge.destinationCase.get)).bitCount == 1,
             "flat FSM Gray transition must change exactly one local bit",
             path
           )
-      val reached = mutable.HashSet(machine.initialCase)
-      val pending = mutable.ArrayDeque(machine.initialCase)
-      while pending.nonEmpty do
-        outgoing.getOrElse(pending.removeHead(), Vector.empty).foreach: edge =>
-          if reached.add(edge.destinationCase) then pending.append(edge.destinationCase)
-      requireValid(
-        reached.toSet == cases.toSet,
-        "flat FSM contains structurally unreachable states",
-        path
-      )
+      if machine.stack.isEmpty then
+        val _ = FsmStackMlir.structure(machine, fail)
       machine.actions.foreach: action =>
         val statePhase = Set("active", "entry", "exit")(action.phase)
         requireValid(
@@ -2893,12 +2928,13 @@ private[nodal] object DigitalValueMlir:
             ))
           )
           val transitions = machine.transitions.map(edge =>
-            dictionary(Vector(
-              "source_case" -> quoted(edge.sourceCase),
-              "destination_case" -> quoted(edge.destinationCase),
-              "mode" -> quoted(edge.mode),
-              "ordinal" -> s"${edge.sourceOrdinal} : i64"
-            ))
+            dictionary(Vector("source_case" -> quoted(edge.sourceCase)) ++
+              edge.destinationCase.map(value => "destination_case" -> quoted(value)) ++ Vector(
+                "mode" -> quoted(edge.mode),
+                "ordinal" -> s"${edge.sourceOrdinal} : i64"
+              ) ++
+              Option.when(machine.stack.nonEmpty)("kind" -> quoted(edge.kind)) ++
+              edge.resumeCase.map(value => "resume_case" -> quoted(value)))
           )
           val actions = machine.actions.map(action =>
             dictionary(Vector(
@@ -2913,7 +2949,9 @@ private[nodal] object DigitalValueMlir:
           else s"array<i32: ${machine.actions.map(_.captures.size).mkString(", ")}>"
           val attributes = dictionary(Vector(
             "contract_version" -> quoted(
-              if machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty then "flat-fsm-v4"
+              if machine.stack.nonEmpty then "flat-fsm-v5"
+              else if machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty then
+                "flat-fsm-v4"
               else if machine.composition.nonEmpty then "flat-fsm-v3"
               else if machine.control.nonEmpty then "flat-fsm-v2" else "flat-fsm-v1"
             ),
@@ -2938,7 +2976,21 @@ private[nodal] object DigitalValueMlir:
             "actions" -> actions.mkString("[", ", ", "]"),
             "action_capture_counts" -> counts,
             "metadata" -> effectMetadata(machine.path, machine.sourceOrdinal)
-          ) ++ Option.when(machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty)(Vector(
+          ) ++ machine.stack.map(stack =>
+            def policy(target: Option[String]): String = dictionary(Vector("kind" -> quoted(
+              if target.nonEmpty then "trap" else "assert_hold"
+            )) ++
+              target.map(value => "target_case" -> quoted(value)))
+            "stack" -> dictionary(Vector(
+              "capacity" -> s"${stack.capacity} : i64",
+              "pointer_width" -> s"${stack.pointerWidth} : i64",
+              "overflow" -> policy(stack.overflow),
+              "underflow" -> policy(stack.underflow),
+              "invalid_frame" -> policy(stack.invalidFrame)
+            ))
+          ) ++ Option.when(
+            machine.stack.nonEmpty || machine.timerEdges.nonEmpty || machine.transferEdges.nonEmpty
+          )(Vector(
             "lifecycle_mode" -> quoted(if machine.composition.nonEmpty then "composed"
             else if machine.control.nonEmpty then "controlled" else "legacy"),
             "timer_edges" -> machine.timerEdges.map(edge =>

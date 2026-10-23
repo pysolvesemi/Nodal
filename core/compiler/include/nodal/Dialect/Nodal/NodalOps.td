@@ -2090,7 +2090,7 @@ def Nodal_FlatFSMOp : Nodal_Op<"flat_fsm", [HasParent<"ModuleOp">,
     StrAttr:$illegal_policy, ArrayAttr:$states, ArrayAttr:$transitions,
     ArrayAttr:$actions, DenseI32ArrayAttr:$action_capture_counts, DictionaryAttr:$metadata,
     OptionalAttr<StrAttr>:$lifecycle_mode, OptionalAttr<ArrayAttr>:$timer_edges,
-    OptionalAttr<ArrayAttr>:$transfer_edges);
+    OptionalAttr<ArrayAttr>:$transfer_edges, OptionalAttr<DictionaryAttr>:$stack);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<AnyRegion>:$action_bodies);
   let hasVerifier = 1;

@@ -8,7 +8,13 @@ private[nodal] object FsmCompositionMlir:
   final case class Join(parent: KernelFlatFsmSnapshot, value: KernelFsmJoinSnapshot)
   final case class Activation(parent: KernelFlatFsmSnapshot, value: KernelFsmChildGroup)
 
-  final class Plan(snapshot: ConstructionSnapshot, fail: (String, String) => Nothing):
+  final class Plan(
+      snapshot: ConstructionSnapshot,
+      fail: (String, String) => Nothing,
+      stackSummaries: Map[String, FlatFsmGraphContract.Structure] = Map.empty
+  ):
+    private def canComplete(value: KernelFlatFsmSnapshot): Boolean =
+      stackSummaries.get(value.path).fold(value.states.exists(_.terminal))(_.completionPossible)
     // Bound every nested inventory before producing maps or copied edge lists.
     if snapshot.flatFsms.size > 4096 then
       fail("composition exceeds bounded machine inventory", snapshot.root)
@@ -211,18 +217,19 @@ private[nodal] object FsmCompositionMlir:
         val children = facts.groups.flatMap(_.children)
         val occurrences = 1 + children.map(costs(_)._1).sum
         val records = value.states.size + value.transitions.size + value.actions.size +
-          children.size + facts.joins.map(_.children.size).sum + children.map(costs(_)._2).sum
+          children.size + facts.joins.map(_.children.size).sum + children.map(costs(_)._2).sum +
+          stackSummaries.get(value.path).map(_.work).getOrElse(0)
         val depth = 1 + children.map(costs(_)._3).maxOption.getOrElse(0)
         check(
           occurrences <= 4096 && records <= 65536 && depth <= 128 &&
             facts.occurrences == occurrences && facts.records == records && facts.depth == depth &&
-            facts.completionPossible == value.states.exists(_.terminal),
+            facts.completionPossible == canComplete(value),
           "composition report facts must match actual separate state and bounded subtree",
           path
         )
         costs.update(path, (occurrences, records, depth))
         facts.joins.foreach: join =>
-          val possibilities = join.children.map(child => machine(child).states.exists(_.terminal))
+          val possibilities = join.children.map(child => canComplete(machine(child)))
           check(
             if join.policy == "all" then possibilities.forall(identity)
             else possibilities.exists(identity),

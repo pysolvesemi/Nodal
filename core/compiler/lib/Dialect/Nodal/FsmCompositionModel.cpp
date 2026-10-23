@@ -72,13 +72,14 @@ public:
       auto graph = inspectFlatFSMGraphSummary(&op);
       if (failed(graph))
         return failure();
-      if (!charge(graph->caseIds.size() + graph->header.guards))
+      if (!charge(graph->caseIds.size() + graph->header.guards + graph->structuralWork))
         return failure();
       unsigned index = owners.size();
-      if (!roots.try_emplace(header->currentLocal(), index).second ||
-          !privateRoots.insert(header->currentLocal()).second ||
-          !privateRoots.insert(header->currentStatus()).second)
+      if (!roots.try_emplace(header->currentLocal(), index).second)
         return reject(&op, "composition occurrences require distinct actual private storage");
+      for (Value storage : header->privateStateOperands())
+        if (!privateRoots.insert(storage).second)
+          return reject(&op, "composition occurrences require distinct actual private storage");
       owners.push_back({std::move(*graph), {}, {}, {}, {}, false});
     }
     for (Operation *op : composition)
@@ -117,9 +118,9 @@ public:
         if (!possible)
           return reject(op, "join has no structural completion possibility");
       }
-      // Existing graph admission proves every declared local state reachable.
-      // This fact is usable only after all child join prerequisites above pass.
-      owners[owner].canComplete = llvm::is_contained(owners[owner].graph.terminal, true);
+      // Consume the canonical initial-state completion summary. A corruption
+      // trap may provide coverage without a possible ordinary completion path.
+      owners[owner].canComplete = owners[owner].graph.completionPossible;
     }
     return success();
   }

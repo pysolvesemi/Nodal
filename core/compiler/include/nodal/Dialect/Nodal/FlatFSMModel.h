@@ -4,16 +4,25 @@
 
 #include "llvm/ADT/SmallVector.h"
 namespace nodal {
+enum class FlatFSMPrivateRole { Local, Lifecycle, Elapsed, StackPointer, StackFrame };
+struct FlatFSMPrivateState {
+  mlir::Value value;
+  FlatFSMPrivateRole role;
+};
 struct FlatFSMHeader {
   mlir::Operation *operation = nullptr, *module = nullptr;
   unsigned guards = 0, guardOffset = 1;
-  bool controlled = false, composed = false, extended = false, timed = false;
+  bool controlled = false, composed = false, extended = false, timed = false, stacked = false;
+  unsigned stackCapacity = 0, stackPointerWidth = 0;
   mlir::Value currentLocal() const;
   mlir::Value currentStatus() const;
   mlir::Value restart() const;
   mlir::Value cancel() const;
   mlir::Value enable() const;
   mlir::Value elapsed() const;
+  mlir::Value stackPointer() const;
+  mlir::Value stackFrame(unsigned index) const;
+  llvm::SmallVector<FlatFSMPrivateState> privateStateRoles() const;
   llvm::SmallVector<mlir::Value> privateStateOperands() const;
   llvm::SmallVector<mlir::Value> sampledInputs() const;
   mlir::Value next() const;
@@ -21,7 +30,9 @@ struct FlatFSMHeader {
   mlir::Value entered() const;
   mlir::Value exited() const;
   mlir::Value establishment() const;
-  unsigned privateStateCount() const { return 1 + unsigned(controlled) + unsigned(timed); }
+  unsigned privateStateCount() const {
+    return 1 + unsigned(controlled) + unsigned(timed) + (stacked ? 1 + stackCapacity : 0);
+  }
   llvm::SmallVector<mlir::Block *, 4> bodies;
   llvm::SmallVector<unsigned, 4> captureOffsets, captureCounts;
 };
@@ -32,7 +43,8 @@ struct FlatFSMGraphSummary {
   llvm::SmallVector<mlir::StringAttr> caseIds;
   llvm::SmallVector<llvm::APInt> localCodes;
   llvm::SmallVector<bool> terminal;
-  unsigned initial = 0, width = 0;
+  unsigned initial = 0, width = 0, structuralWork = 0;
+  bool completionPossible = false;
 };
 mlir::FailureOr<FlatFSMGraphSummary> inspectFlatFSMGraphSummary(mlir::Operation *operation);
 mlir::FailureOr<FlatFSMHeader> inspectFlatFSMHeader(mlir::Operation *operation);
@@ -40,7 +52,7 @@ mlir::LogicalResult verifyFlatFSMOperation(mlir::Operation *operation);
 mlir::LogicalResult verifyFsmTimingOperation(mlir::Operation *operation);
 mlir::LogicalResult fsmTimingDependencies(mlir::Value result,
                                           llvm::SmallVectorImpl<mlir::Value> &dependencies);
-/// Canonical distinct result roles of an independently admitted v1/v2/v3/v4 header.
+/// Canonical distinct result roles of an independently admitted v1/v2/v3/v4/v5 header.
 llvm::StringRef flatFSMResultRole(mlir::Value result);
 mlir::FailureOr<mlir::Value> flatFSMCaptureSource(mlir::BlockArgument argument);
 mlir::LogicalResult flatFSMArgumentDependencies(mlir::BlockArgument argument,

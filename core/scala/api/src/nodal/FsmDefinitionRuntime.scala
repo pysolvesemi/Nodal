@@ -30,6 +30,17 @@ private[nodal] final case class FsmDefinitionTransfer[S](
     destination: S
 ) extends FsmDefinitionCommand[S]
 
+private[nodal] final case class FsmDefinitionCall[S](
+    guard: FsmGuard[S],
+    mode: TransitionMode,
+    entry: S,
+    resume: S
+) extends FsmDefinitionCommand[S]
+private[nodal] final case class FsmDefinitionReturn[S](
+    guard: FsmGuard[S],
+    mode: TransitionMode
+) extends FsmDefinitionCommand[S]
+
 /** Immutable graph admission and explicit binding adapter. FlatFsm owns all executable semantics.
   */
 private[nodal] object FsmDefinitionRuntime:
@@ -134,7 +145,8 @@ private[nodal] object FsmDefinitionRuntime:
       owner: FsmDefinition[S],
       initial: S,
       fragments: Seq[FsmFragment[S]],
-      evidence: HwEnum[S]
+      evidence: HwEnum[S],
+      stack: Option[FsmStackConfig[S]] = None
   ): FsmDef[S] =
     val frozen = bounded(fragments, 4096, "definition fragments")
     if owner == null || frozen.isEmpty || frozen.contains(null) then
@@ -156,7 +168,7 @@ private[nodal] object FsmDefinitionRuntime:
         FlatFsmRuntime.MaximumRecords
     then
       fail("definition transitions/actions exceed 65536 records")
-    val edges = Vector.newBuilder[(String, String, TransitionMode)]
+    val edges = Vector.newBuilder[FlatFsmGraphContract.Edge]
     var records = 0L
     states.foreach: state =>
       val source = caseId(state.value)
@@ -167,18 +179,33 @@ private[nodal] object FsmDefinitionRuntime:
             fail("definition transitions/actions exceed 65536 records")
           guards += edge.guard
           edge.action.foreach(actions += _)
-          edges += ((source, caseId(edge.destination), edge.mode))
+          edges += FlatFsmGraphContract.Edge(source, Some(caseId(edge.destination)), edge.mode)
         case timer: FsmDefinitionTimer[S] =>
           records += 1
-          edges += ((source, caseId(timer.destination), timer.mode))
+          edges += FlatFsmGraphContract.Edge(source, Some(caseId(timer.destination)), timer.mode)
         case transfer: FsmDefinitionTransfer[S] =>
           records += 1
           guards += transfer.slot.guard
           transfers += transfer.slot
-          edges += ((source, caseId(transfer.destination), transfer.mode))
+          edges +=
+            FlatFsmGraphContract.Edge(source, Some(caseId(transfer.destination)), transfer.mode)
         case join: FsmDefinitionJoin[S] =>
           records += 1
-          edges += ((source, caseId(join.destination), join.mode))
+          edges += FlatFsmGraphContract.Edge(source, Some(caseId(join.destination)), join.mode)
+        case call: FsmDefinitionCall[S] =>
+          records += 1
+          guards += call.guard
+          edges += FlatFsmGraphContract.Edge(
+            source,
+            Some(caseId(call.entry)),
+            call.mode,
+            "call",
+            Some(caseId(call.resume))
+          )
+        case returning: FsmDefinitionReturn[S] =>
+          records += 1
+          guards += returning.guard
+          edges += FlatFsmGraphContract.Edge(source, None, returning.mode, "return")
         case action: FsmDefinitionAction[S] =>
           records += 1
           if records > FlatFsmRuntime.MaximumRecords then
@@ -187,7 +214,16 @@ private[nodal] object FsmDefinitionRuntime:
     if records > FlatFsmRuntime.MaximumRecords then
       fail("definition transitions/actions exceed 65536 records")
     val children = states.flatMap(_.childSlots)
-    val cost = FsmCompositionRuntime.cost(states, records.toInt, children)
+    val structure = FlatFsmGraphContract.validateControlStructure(
+      canonical.caseIds,
+      initialId,
+      states.map(state => caseId(state.value) -> state.isTerminal),
+      edges.result(),
+      stack.map(FsmStackRuntime.contract(_, caseId)),
+      fail
+    )
+    val cost = FsmCompositionRuntime.cost(states, records.toInt + structure.work, children)
+      .copy(completionPossible = structure.completionPossible)
     FsmCompositionRuntime.admitStates(owner, states, children)
     val named = guards.toVector.map(value => (value.name, value.owner)) ++
       actions.toVector.map(value => (value.name, value.owner)) ++
@@ -196,13 +232,6 @@ private[nodal] object FsmDefinitionRuntime:
       fail("definition references a foreign guard, action or child slot")
     if named.map(_._1).distinct.size != named.size then
       fail("distinct slots must have distinct names within one definition")
-    FlatFsmGraphContract.validateStructure(
-      canonical.caseIds,
-      initialId,
-      states.map(state => caseId(state.value) -> state.isTerminal),
-      edges.result(),
-      fail
-    )
     new FsmDef(
       owner,
       initial,
@@ -212,8 +241,9 @@ private[nodal] object FsmDefinitionRuntime:
       evidence,
       children,
       cost,
-      FsmCompositionRuntime.definitionHash(owner, initialId, frozen, evidence),
-      transfers.toVector
+      FsmCompositionRuntime.definitionHash(owner, initialId, frozen, evidence, stack),
+      transfers.toVector,
+      stack
     )
 
   def control(restart: Expr[Bool], cancel: Expr[Bool], enable: Expr[Bool]): FsmControl =
@@ -299,6 +329,7 @@ private[nodal] object FsmDefinitionRuntime:
       custom,
       illegalState,
       machine => {
+        definition.stack.foreach(ConstructionKernel.flatFsmStack(machine, _))
         definition.fragments.foreach: fragment =>
           fragment.states.foreach: state =>
             ConstructionKernel.flatFsmState(
@@ -313,6 +344,22 @@ private[nodal] object FsmDefinitionRuntime:
                       edge.mode,
                       edge.destination,
                       edge.action.map(actions)
+                    )
+                  case call: FsmDefinitionCall[S] =>
+                    ConstructionKernel.flatFsmProcedure(
+                      builder,
+                      guards(call.guard),
+                      call.mode,
+                      Some(call.entry),
+                      Some(call.resume)
+                    )
+                  case returning: FsmDefinitionReturn[S] =>
+                    ConstructionKernel.flatFsmProcedure(
+                      builder,
+                      guards(returning.guard),
+                      returning.mode,
+                      None,
+                      None
                     )
                   case timer: FsmDefinitionTimer[S] =>
                     ConstructionKernel.flatFsmTimer(

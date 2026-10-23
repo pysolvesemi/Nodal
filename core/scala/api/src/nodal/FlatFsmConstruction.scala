@@ -9,10 +9,12 @@ private[nodal] final class FlatFsmStateRecord(val caseId: String, val ordinal: I
 
 private[nodal] final case class FlatFsmTransitionRecord(
     sourceCase: String,
-    destinationCase: String,
+    destinationCase: Option[String],
     mode: TransitionMode,
     guard: Expr[Bool],
-    ordinal: Int
+    ordinal: Int,
+    kind: String = "ordinary",
+    resumeCase: Option[String] = None
 )
 
 private[nodal] final case class FlatFsmActionHeader(
@@ -43,6 +45,7 @@ private[nodal] final class FlatFsmRecord[S](
   var open = true
   var composition: Option[FlatFsmCompositionRecord] = None
   var timer: Option[Register[UInt]] = None
+  var stack: Option[FlatFsmStackRecord] = None
   val timerEdges = mutable.ArrayBuffer.empty[FlatFsmTimerEdge]
   val transferEdges = mutable.ArrayBuffer.empty[FlatFsmTransferEdge]
   var captureCount = 0
@@ -62,13 +65,19 @@ private[nodal] final class FlatFsmRecord[S](
   private lazy val samplingOutgoing = transitions.toVector.groupBy(_.sourceCase)
   private lazy val samplingIndices = samplingOutgoing.valuesIterator.flatMap(_.zipWithIndex)
     .map((edge, index) => edge.ordinal -> (edge.sourceCase, index)).toMap
-  private lazy val samplingIncoming = transitions.toVector.groupBy(_.destinationCase)
+  private lazy val samplingIncoming = transitions.toVector.filter(_.destinationCase.nonEmpty)
+    .groupBy(_.destinationCase.get)
+  private def dynamicIncoming(owner: String): Vector[FlatFsmTransitionRecord] =
+    transitions.toVector.filter(edge =>
+      edge.kind == "return" ||
+        (edge.kind == "call" && stack.exists(_.contract.overflow.contains(owner)))
+    )
 
   def controlInputs: Vector[Expr[Bool]] = lifecycle.toVector.flatMap(value =>
     Vector(value.control.restart, value.control.cancel, value.control.enable)
   )
   def privateStorage: Vector[Register[? <: Data]] = Vector(storage) ++ lifecycle.map(_.storage) ++
-    timer
+    timer ++ stack.toVector.flatMap(value => Vector(value.pointer) ++ value.frames)
   private def stateAndControls: Vector[Any] = privateStorage ++ controlInputs
   lazy val futureSampleDependencies: Vector[Any] = stateAndControls ++ transitions.map(_.guard)
 
@@ -83,7 +92,8 @@ private[nodal] final class FlatFsmRecord[S](
         samplingOutgoing.getOrElse(header.ownerCase.get, Vector.empty).lastOption.toVector
           .map(edge => samplingIndices(edge.ordinal))
       case "entry" =>
-        samplingIncoming.getOrElse(header.ownerCase.get, Vector.empty)
+        (samplingIncoming.getOrElse(header.ownerCase.get, Vector.empty) ++
+          dynamicIncoming(header.ownerCase.get))
           .map(edge => samplingIndices(edge.ordinal))
       case "active" => Vector.empty
       case _ => FlatFsmRuntime.fail("action has no known sampling phase")
@@ -153,4 +163,11 @@ private[nodal] final case class FlatFsmTransferEdge(
     payload: Expr[?],
     valid: Expr[Bool],
     ready: Expr[Bool]
+)
+
+private[nodal] final case class FlatFsmStackRecord(
+    contract: FlatFsmGraphContract.Stack,
+    pointer: Register[UInt],
+    frames: Vector[Register[Bits]],
+    pointerWidth: Int
 )

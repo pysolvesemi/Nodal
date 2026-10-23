@@ -149,7 +149,8 @@ private[nodal] object FsmCompositionRuntime:
       owner: FsmDefinition[S],
       initial: String,
       fragments: Vector[FsmFragment[S]],
-      evidence: HwEnum[S]
+      evidence: HwEnum[S],
+      stack: Option[FsmStackConfig[S]] = None
   ): String =
     val digest = java.security.MessageDigest.getInstance("SHA-256")
     def atom(value: String): Unit =
@@ -162,6 +163,11 @@ private[nodal] object FsmCompositionRuntime:
     atom(owner.name)
     atom(canonical.hash)
     atom(initial)
+    stack.foreach: config =>
+      val value = FsmStackRuntime.contract(config, caseId)
+      atom("bounded-stack"); atom(value.capacity.toString)
+      Vector(value.overflow, value.underflow, value.invalidFrame).foreach: policy =>
+        atom(if policy.isEmpty then "assert_hold" else "trap"); atom(policy.getOrElse(""))
     fragments.foreach: fragment =>
       atom("fragment"); atom(fragment.name)
       fragment.states.foreach: state =>
@@ -173,6 +179,11 @@ private[nodal] object FsmCompositionRuntime:
             atom("edge"); atom(edge.guard.name); atom(edge.mode.toString);
             atom(caseId(edge.destination))
             atom(edge.action.map(_.name).getOrElse(""))
+          case call: FsmDefinitionCall[S] =>
+            atom("call"); atom(call.guard.name); atom(call.mode.toString)
+            atom(caseId(call.entry)); atom(caseId(call.resume))
+          case returning: FsmDefinitionReturn[S] =>
+            atom("return"); atom(returning.guard.name); atom(returning.mode.toString)
           case action: FsmDefinitionAction[S] =>
             atom("action"); atom(action.phase); atom(action.slot.name)
           case timer: FsmDefinitionTimer[S] =>

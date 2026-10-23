@@ -353,10 +353,12 @@ private[nodal] final case class KernelFlatFsmState(
 )
 private[nodal] final case class KernelFlatFsmTransition(
     sourceCase: String,
-    destinationCase: String,
+    destinationCase: Option[String],
     mode: String,
     guard: String,
-    sourceOrdinal: Int
+    sourceOrdinal: Int,
+    kind: String = "ordinary",
+    resumeCase: Option[String] = None
 )
 private[nodal] final case class KernelFlatFsmAction(
     path: String,
@@ -398,7 +400,8 @@ private[nodal] final case class KernelFlatFsmSnapshot(
     composition: Option[KernelFsmCompositionSnapshot] = None,
     timerStorage: Option[String] = None,
     timerEdges: Vector[KernelFsmTimerEdge] = Vector.empty,
-    transferEdges: Vector[KernelFsmTransferEdge] = Vector.empty
+    transferEdges: Vector[KernelFsmTransferEdge] = Vector.empty,
+    stack: Option[KernelFsmStack] = None
 )
 private[nodal] final case class KernelFsmTimerEdge(ordinal: Int, cycles: Int, guard: String)
 private[nodal] final case class KernelFsmTransferEdge(
@@ -955,4 +958,14 @@ private final case class DigitalLoopHeader(
     domain: IterationDomain.Structural,
     sourceOrdinal: Int,
     generated: Option[GeneratedRegionRecord] = None
+)
+
+private[nodal] final case class KernelFsmStack(
+    capacity: Int,
+    pointerWidth: Int,
+    pointerStorage: String,
+    frameStorage: Vector[String],
+    overflow: Option[String],
+    underflow: Option[String],
+    invalidFrame: Option[String]
 )

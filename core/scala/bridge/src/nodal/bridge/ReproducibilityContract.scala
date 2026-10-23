@@ -569,13 +569,16 @@ private[nodal] object ReproducibilityContract:
           )
         )),
         "transitions" -> array(value.transitions.map(edge =>
-          obj(
+          obj((Vector(
             "source_case" -> string(edge.sourceCase),
-            "destination_case" -> string(edge.destinationCase),
+            "destination_case" -> optionalString(edge.destinationCase),
             "mode" -> string(edge.mode),
             "guard" -> string(edge.guard),
             "source_ordinal" -> number(edge.sourceOrdinal)
-          )
+          ) ++ Option.when(value.stack.nonEmpty)(Vector(
+            "kind" -> string(edge.kind),
+            "resume_case" -> optionalString(edge.resumeCase)
+          )).toVector.flatten)*)
         )),
         "actions" -> array(value.actions.map(action =>
           obj(
@@ -591,6 +594,22 @@ private[nodal] object ReproducibilityContract:
             "source_ordinal" -> number(action.sourceOrdinal)
           )
         ))
+      ) ++ value.stack.map(stack =>
+        "stack" -> obj(
+          "contract" -> string("flat-fsm-v5"),
+          "capacity" -> number(stack.capacity),
+          "pointer_width" -> number(stack.pointerWidth),
+          "pointer_storage" -> string(stack.pointerStorage),
+          "frame_storage" -> array(stack.frameStorage.map(string)),
+          "actual_stack_bits" -> number(stack.pointerWidth + stack.capacity * value.localWidth),
+          "overflow_trap" -> optionalString(stack.overflow),
+          "underflow_trap" -> optionalString(stack.underflow),
+          "invalid_frame_trap" -> optionalString(stack.invalidFrame),
+          "assert_hold" -> string(
+            "failed operation holds transitions and stack; active actions continue"
+          ),
+          "frame_initialization" -> string("uninitialized; pointer reset independently")
+        )
       ) ++ value.control.map(control =>
         "control" -> obj(
           "storage" -> string(control.storage),

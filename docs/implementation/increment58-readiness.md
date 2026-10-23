@@ -1476,3 +1476,19 @@ bitwise/alias/Bool select with uninitialized resetless storage, not general
 arithmetic/resize/reset literals. Generated child Instance/Interface, descending
 domains, resolved/analog routes and four-state startup remain separate scope.
 These are retained matched results, not new consumer execution or F58 closure.
+
+## Checkpoint 42 — managed optional CIRCT capability profile
+
+The ten exact files in `.work/f58-circt-overlay/shared-validation` manifest
+`31b4498b` preserve the optional parameterized-inout repair profile, explicit
+source/patch identity and managed install/verify/CMake checks. They precede the
+bounded symbolic resolved consumer. Historical shared acceptance passed 36
+Python checks, baseline and repaired-profile CMake checks, tampered identity
+refusal and managed verification. The baseline profile and native target source
+were unchanged. Four retained lock/bootstrap support paths match their inputs.
+No installation, download or target execution is performed by this snapshot
+commit; later dirty managed-profile changes remain separate.
+
+The exact upstream unified patch has two required blank context markers at
+lines 61 and 69. Those single-space lines are retained to preserve patch
+semantics and its verified hash; all other staged whitespace checks pass.

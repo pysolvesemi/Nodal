@@ -1098,6 +1098,8 @@ private[nodal] object ReproducibilityContract:
                   "interface_boundary" -> interfaceBoundary(boundary)
                 ) ++ declaration.resolvedBoundary.toVector.map(boundary =>
                   "resolved_boundary" -> interfaceBoundary(boundary)
+                ) ++ declaration.resolvedMember.toVector.map(member =>
+                  "resolved_member" -> resolvedMember(member)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
                 ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
@@ -1131,10 +1133,12 @@ private[nodal] object ReproducibilityContract:
             "path" -> string(net.path),
             "data_type" -> string(net.dataType),
             "mode" -> string(net.mode),
-            "placement" -> string(net.placement),
-            "profile" -> string(net.profile),
             "operations" -> array(net.operations.sorted.map(string))
-          ) ++ net.boundary.toVector.map(boundary => "boundary" -> interfaceBoundary(boundary)))*)
+          ) ++ (if net.member.nonEmpty then Vector.empty else Vector(
+            "placement" -> string(net.placement),
+            "profile" -> string(net.profile)
+          )) ++ net.boundary.toVector.map(boundary => "boundary" -> interfaceBoundary(boundary)) ++
+            net.member.toVector.map(member => "member" -> resolvedMember(member)))*)
       ),
       "topology" -> array(
         snapshot.topology.sortBy(edge => (edge.kind, edge.left, edge.right)).map: edge =>
@@ -1298,6 +1302,10 @@ private[nodal] object ReproducibilityContract:
 
   private def interfaceBoundary(value: KernelInterfaceBoundarySnapshot): JsonValue =
     obj("instance" -> string(value.instance), "endpoint" -> string(value.endpoint))
+
+  private def resolvedMember(value: KernelResolvedMemberSnapshot): JsonValue =
+    obj("endpoint" -> string(value.endpoint), "member" -> string(value.member),
+      "role" -> string(value.role))
 
   private def interfaceRoles(values: Vector[(String, String)]): JsonValue =
     array(values.map((path, role) => obj("path" -> string(path), "role" -> string(role))))

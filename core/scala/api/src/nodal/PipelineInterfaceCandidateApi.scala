@@ -46,14 +46,14 @@ object InterfaceMember:
   def stream[A <: Data](name: String, payloadType: DataType[A]): InterfaceMember =
     StreamChannel(name, payloadType)
 
-  def nested[I <: Interface](name: String, definition: InterfaceType[I]): InterfaceMember =
+  def nested[I <: Interface](name: String, definition: InterfaceType[I]): Nested[I] =
     Nested(name, definition)
 
   def digitalInout[A <: Bits, M <: DriveMode](
       name: String,
       dataType: DataType[A],
       mode: DriveMode.Value[M]
-  ): InterfaceMember = DigitalResolved(name, dataType, mode)
+  ): DigitalResolved[A, M] = DigitalResolved(name, dataType, mode)
 
   def terminal[D <: Discipline](name: String, discipline: D): InterfaceMember =
     Conservative(name, discipline)
@@ -298,6 +298,13 @@ def interfaceArray[I <: Interface, R <: RoleKind](
 ): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, domain)
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
+  /** Select an actual declared resolved member through its ordered declared nested fields. */
+  def resolved[A <: Bits, M <: DriveMode](
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: InterfaceMember.Nested[?]*
+  ): ResolvedDigital[A, M] =
+    ConstructionKernel.interfaceResolvedMember(endpoint, field, through.toVector)
+
   def inverted(using inverse: RoleInverse[R]): InterfacePort[I, inverse.Out] =
     DigitalInterfaceContract.requireInvertible(endpoint)
     val invertedRole = new Role[inverse.Out](
@@ -401,6 +408,22 @@ enum ResolutionProfile:
   case FullResolvedSimulation
   case TechnologyMapped
 
+/** A resolved capability. Physical placement belongs only to an actual standalone declaration. */
+sealed trait ResolvedDigital[A <: Bits, M <: DriveMode]:
+  val dataType: DataType[A]
+  val mode: DriveMode.Value[M]
+  final def read: Expr[A] =
+    DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
+
+private[nodal] final class InterfaceResolvedView[A <: Bits, M <: DriveMode](
+    val dataType: DataType[A],
+    val mode: DriveMode.Value[M],
+    val endpoint: InterfacePort[?, ?],
+    val declaration: InterfaceMember.DigitalResolved[A, M],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String
+) extends ResolvedDigital[A, M]
+
 final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val dataType: DataType[A],
     val mode: DriveMode.Value[M],
@@ -408,7 +431,7 @@ final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
     val profile: ResolutionProfile,
     val name: String,
     private[nodal] val boundary: Boolean = false
-):
+) extends ResolvedDigital[A, M]:
   if !boundary then
     CandidateRuntime.declare(
       this,
@@ -421,8 +444,6 @@ final class DigitalInout[A <: Bits, M <: DriveMode] private[nodal] (
         "profile" -> profile
       )
     )
-
-  def read: Expr[A] = DigitalInterfaceContract.netExpression("digital_net_read", this, dataType)
 
 trait ArbitraryDrive[M <: DriveMode]
 
@@ -458,7 +479,7 @@ def digitalInout[A <: Bits, M <: DriveMode](
     name: String
 ): DigitalInout[A, M] = new DigitalInout(dataType, mode, placement, profile, name)
 
-extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
+extension [A <: Bits, M <: DriveMode](endpoint: ResolvedDigital[A, M])
   def drive(value: Expr[A], enable: Expr[Bool])(using ArbitraryDrive[M]): Unit =
     ConstructionKernel.operation("inout-drive", endpoint, value, enable)
 
@@ -473,17 +494,17 @@ extension [A <: Bits, M <: DriveMode](endpoint: DigitalInout[A, M])
       endpoint.mode
     )
 
-extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenDrain])
+extension [A <: Bits](endpoint: ResolvedDigital[A, DriveMode.OpenDrain])
   def driveLow(enable: Expr[Bool]): Unit =
     ConstructionKernel.operation("inout-drive-low", endpoint, enable)
 
-extension [A <: Bits](endpoint: DigitalInout[A, DriveMode.OpenSource])
+extension [A <: Bits](endpoint: ResolvedDigital[A, DriveMode.OpenSource])
   def driveHigh(enable: Expr[Bool]): Unit =
     ConstructionKernel.operation("inout-drive-high", endpoint, enable)
 
 def passThrough[A <: Bits, M <: DriveMode](
-    outer: DigitalInout[A, M],
-    inner: DigitalInout[A, M]
+    outer: ResolvedDigital[A, M],
+    inner: ResolvedDigital[A, M]
 ): Unit = ConstructionKernel.operation("inout-pass-through", outer, inner)
 
 def padAdapter[A <: Bits, M <: DriveMode](

@@ -91,7 +91,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     resolvedDomain: Option[String] = None,
     instancePort: Option[KernelInstancePortSnapshot] = None,
     interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
-    resolvedBoundary: Option[KernelInterfaceBoundarySnapshot] = None
+    resolvedBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    resolvedMember: Option[KernelResolvedMemberSnapshot] = None
 )
 
 private[nodal] final case class KernelInstancePortSnapshot(
@@ -514,6 +515,12 @@ private[nodal] final case class KernelModuleSnapshot(
     instances: Vector[KernelInstanceSnapshot]
 )
 
+private[nodal] final case class KernelResolvedMemberSnapshot(
+    endpoint: String,
+    member: String,
+    role: String
+)
+
 private[nodal] final case class KernelResolvedNetSnapshot(
     path: String,
     dataType: String,
@@ -521,7 +528,8 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     placement: String,
     profile: String,
     operations: Vector[String],
-    boundary: Option[KernelInterfaceBoundarySnapshot] = None
+    boundary: Option[KernelInterfaceBoundarySnapshot] = None,
+    member: Option[KernelResolvedMemberSnapshot] = None
 )
 
 private[nodal] final case class KernelTopologyEdge(

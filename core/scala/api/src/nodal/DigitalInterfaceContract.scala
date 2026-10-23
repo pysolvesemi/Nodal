@@ -107,7 +107,8 @@ private[nodal] object DigitalInterfaceContract:
       abi: Vector[InterfaceAbiEntry],
       dataTypes: Vector[DataType[?]],
       valueRoots: Vector[Expr[?]],
-      observationGroups: Vector[ObservationGroup]
+      observationGroups: Vector[ObservationGroup],
+      resolvedAliases: Vector[(String, String)] = Vector.empty
   )
 
   def fail(number: Int, message: String): Nothing =
@@ -117,7 +118,7 @@ private[nodal] object DigitalInterfaceContract:
 
   def netExpression[A <: Data](
       operation: String,
-      endpoint: DigitalInout[?, ?],
+      endpoint: ResolvedDigital[?, ?],
       resultType: DataType[A]
   ): Expr[A] =
     ConstructionKernel.requireNoGeneratedEffect("resolved-net expression")
@@ -132,6 +133,10 @@ private[nodal] object DigitalInterfaceContract:
     )
     ConstructionKernel.expression(expression)
     expression
+
+  private def resolutionProfile(endpoint: ResolvedDigital[?, ?]): ResolutionProfile = endpoint match
+    case net: DigitalInout[?, ?] => net.profile
+    case _: InterfaceResolvedView[?, ?] => ResolutionProfile.PortableBoundaryOnly
 
   def requireInvertible(endpoint: InterfacePort[?, ?]): Unit =
     endpoint.role.access.foreach:
@@ -167,26 +172,55 @@ private[nodal] object DigitalInterfaceContract:
         parents.update(current, result)
         current = next
       result
-    captured.connectivity.filter(_.kind == "inout-pass-through").foreach: connection =>
-      val left = representative(connection.target)
-      val right =
-        representative(connection.source.getOrElse(fail(11, "pass-through lost its source")))
+    def alias(a: String, b: String): Unit =
+      val left = representative(a)
+      val right = representative(b)
       if left != right then parents.update(right, left)
+    val resolvedMembers =
+      captured.interfaces.flatMap(_.members.filter(_.mode.nonEmpty)).map(_.path).toSet
+    captured.resolvedAliases.foreach((left, right) => alias(left, right))
+    captured.connectivity.filter(connection =>
+      connection.kind == "inout-pass-through" ||
+        connection.kind == "interface-connect" && resolvedMembers(connection.target)
+    ).foreach: connection =>
+      alias(
+        connection.target,
+        connection.source.getOrElse(fail(11, "pass-through lost its source"))
+      )
     // Retain strict local driver counting; a joined component needs the still-open
     // closed-root data/enable transport, never a guessed imported driver.
-    val joined = resolvedBoundaries.flatMap((parent, child) =>
+    val interfaceBoundaries = captured.interfaces.flatMap(endpoint =>
+      endpoint.boundary.toVector.flatMap(boundary =>
+        endpoint.members.filter(_.mode.nonEmpty).map(member =>
+          member.path -> s"${boundary.endpoint}.${member.name}"
+        )
+      )
+    )
+    val joined = (resolvedBoundaries ++ interfaceBoundaries).flatMap((parent, child) =>
       Vector(representative(parent), representative(child))
     ).toSet
     val drivers = captured.connectivity.filter(value =>
-      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(value.kind)
+      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(value.kind) ||
+        value.kind == "interface-drive" && resolvedMembers(value.target)
     ).groupBy(value => representative(value.target))
     expressions.foreach: (expression, owner) =>
       expression.operation.filter(ValueOperations.contains).foreach: operation =>
         val endpoint = expression.operands match
-          case Vector(value: DigitalInout[?, ?]) => value
+          case Vector(value: ResolvedDigital[?, ?]) => value
           case _ => fail(11, "resolved-net expression requires exactly one typed endpoint")
         if !ownerOf(endpoint).contains(owner) then
           fail(7, "resolved-net expression belongs to another module or transaction")
+        endpoint match
+          case view: InterfaceResolvedView[?, ?] =>
+            val selected =
+              ConstructionInterfaceLayout.leaves(view.endpoint.definition, view.endpoint.role)
+                .find(_.name == view.member).getOrElse(fail(
+                  3,
+                  "resolved read lost its selected member"
+                ))
+            if selected.access == "drive" then
+              fail(3, "drive-only resolved member cannot be read or split")
+          case _ => ()
         val path =
           pathOf(endpoint).getOrElse(fail(7, "resolved-net expression has no endpoint identity"))
         val expected = if operation == "digital_net_enable_view" then KernelTypeDescriptor("Bool")
@@ -225,7 +259,8 @@ private[nodal] object DigitalInterfaceContract:
       captured.flatMap(_.abi),
       captured.flatMap(_.dataTypes),
       captured.flatMap(_.valueRoots),
-      captured.flatMap(_.observationGroups)
+      captured.flatMap(_.observationGroups),
+      captured.flatMap(_.resolvedAliases)
     )
 
   private def captureOwner(
@@ -273,6 +308,9 @@ private[nodal] object DigitalInterfaceContract:
         case array: InterfaceArray[?, ?] =>
           register(array.definition, array.role)
           pending.append((array.definition, 0))
+        case view: InterfaceResolvedView[?, ?] =>
+          register(view.endpoint.definition, view.endpoint.role)
+          pending.append((view.endpoint.definition, 0))
         case _ => ()
     operations.foreach: operation =>
       operation.values.foreach:
@@ -452,7 +490,7 @@ private[nodal] object DigitalInterfaceContract:
           val _ = declaration(view, context.owner)
           val _ = endpointLeaves(view)
         case _ => fail(11, "inverted view lost its captured typed endpoints")
-    def net(value: DigitalInout[?, ?], owner: String): Declaration =
+    def net(value: ResolvedDigital[?, ?], owner: String): Declaration =
       val result = declaration(value, owner)
       val descriptor = CandidateRuntime.typeDescriptor(value.dataType)
       if !Set(
@@ -466,13 +504,39 @@ private[nodal] object DigitalInterfaceContract:
         fail(9, "resolved digital endpoint has an unknown drive mode")
       if !Set("Bits", "UInt", "SInt").contains(descriptor.kind) then
         fail(8, "resolved digital endpoints require a finite bit-vector type")
-      if value.profile == ResolutionProfile.PortableBoundaryOnly &&
-        value.placement == InoutPlacement.InternalResolvedNet
-      then fail(9, "portable boundary resolution does not support an internal resolved net")
+      value match
+        case net: DigitalInout[?, ?] =>
+          if net.profile == ResolutionProfile.PortableBoundaryOnly &&
+            net.placement == InoutPlacement.InternalResolvedNet
+          then fail(9, "portable boundary resolution does not support an internal resolved net")
+        case view: InterfaceResolvedView[?, ?] =>
+          val context = declaration(view.endpoint, owner)
+          val selected = ConstructionInterfaceLayout.resolvedMemberPath(
+            view.endpoint.definition,
+            view.declaration,
+            view.through
+          )
+          val leaf = endpointLeaves(view.endpoint).find(_.name == selected).getOrElse(
+            fail(3, "resolved view lost its selected declared member")
+          )
+          if selected != view.member || leaf.protocol != "resolved" ||
+            !leaf.mode.contains(value.mode.name) ||
+            !context.samePayloadTypes(
+              value.dataType,
+              context.actualMemberType(view.declaration.dataType)
+            )
+          then fail(8, "resolved view changed its exact member, mode or contextual type")
       result
+    def requireNetAccess(value: ResolvedDigital[?, ?], access: String): Unit = value match
+      case view: InterfaceResolvedView[?, ?] =>
+        val selected = endpointLeaves(view.endpoint).find(_.name == view.member).getOrElse(
+          fail(3, "resolved view has no selected role member")
+        )
+        if selected.access != access then fail(3, s"resolved member role does not permit $access")
+      case _ => ()
     declarations.foreach: candidate =>
       candidate.value match
-        case endpoint: DigitalInout[?, ?] =>
+        case endpoint: ResolvedDigital[?, ?] =>
           val _ = net(endpoint, candidate.owner)
           declarationTypes += endpoint.dataType
         case _ => ()
@@ -630,9 +694,10 @@ private[nodal] object DigitalInterfaceContract:
                 nestedRoles = leaf.nestedRoles,
                 endpointRole = Some(endpoint.role.name)
               )
-          case Vector(endpoint: DigitalInout[?, ?], value: Expr[?], enable: Expr[?])
+          case Vector(endpoint: ResolvedDigital[?, ?], value: Expr[?], enable: Expr[?])
               if operation.kind == "inout-drive" =>
             val context = net(endpoint, operation.owner)
+            requireNetAccess(endpoint, "drive")
             if !Set("push-pull", "open-source").contains(endpoint.mode.name) then
               fail(9, "drive mode forbids an arbitrary value driver")
             val expected = context.renderType(endpoint.dataType)
@@ -643,9 +708,10 @@ private[nodal] object DigitalInterfaceContract:
               enable = Some(exact(enable, "Bool", context)),
               dataType = Some(expected)
             ))
-          case Vector(endpoint: DigitalInout[?, ?], enable: Expr[?])
+          case Vector(endpoint: ResolvedDigital[?, ?], enable: Expr[?])
               if Set("inout-drive-low", "inout-drive-high").contains(operation.kind) =>
             val context = net(endpoint, operation.owner)
+            requireNetAccess(endpoint, "drive")
             val required =
               if operation.kind == "inout-drive-low" then "open-drain" else "open-source"
             if endpoint.mode.name != required then
@@ -656,8 +722,9 @@ private[nodal] object DigitalInterfaceContract:
               enable = Some(exact(enable, "Bool", context)),
               dataType = Some(context.renderType(endpoint.dataType))
             ))
-          case Vector(endpoint: DigitalInout[?, ?]) if operation.kind == "inout-high-z" =>
+          case Vector(endpoint: ResolvedDigital[?, ?]) if operation.kind == "inout-high-z" =>
             val context = net(endpoint, operation.owner)
+            requireNetAccess(endpoint, "drive")
             if endpoint.mode.name == "read-only" then
               fail(9, "read-only endpoint cannot create a high-impedance driver")
             Vector(effect(
@@ -665,13 +732,16 @@ private[nodal] object DigitalInterfaceContract:
               context.path,
               dataType = Some(context.renderType(endpoint.dataType))
             ))
-          case Vector(left: DigitalInout[?, ?], right: DigitalInout[?, ?])
+          case Vector(left: ResolvedDigital[?, ?], right: ResolvedDigital[?, ?])
               if operation.kind == "inout-pass-through" =>
             val a = net(left, operation.owner)
             val b = net(right, operation.owner)
+            requireNetAccess(left, "connect")
+            requireNetAccess(right, "connect")
             val expected = a.renderType(left.dataType)
             if a.path == b.path || expected != b.renderType(right.dataType) ||
-              left.mode.name != right.mode.name || left.profile != right.profile
+              left.mode.name != right.mode.name ||
+              resolutionProfile(left) != resolutionProfile(right)
             then
               fail(
                 8,
@@ -701,13 +771,19 @@ private[nodal] object DigitalInterfaceContract:
       )
     val valueRoots = operations.filter(value => EffectOperations.contains(value.kind))
       .flatMap(_.values.collect { case expression: Expr[?] => expression })
+    val resolvedAliases = declarations.flatMap: context =>
+      context.value match
+        case view: InterfaceResolvedView[?, ?] =>
+          Some(context.path -> s"${declaration(view.endpoint, context.owner).path}.${view.member}")
+        case _ => None
     Capture(
       interfaces.sortBy(_.path),
       connectivity,
       abi.sortBy(_.logicalPath),
       declarationTypes.toVector,
       valueRoots,
-      observations(declarations, interfaces, connectivity, valueRoots, pathOf)
+      observations(declarations, interfaces, connectivity, valueRoots, pathOf, resolvedAliases),
+      resolvedAliases
     )
 
   /** Resolve digital connectivity once in its existing typed owner. Ordinary connections are
@@ -719,12 +795,13 @@ private[nodal] object DigitalInterfaceContract:
       interfaces: Vector[KernelInterfaceSnapshot],
       connectivity: Vector[KernelDigitalConnectivitySnapshot],
       valueRoots: Vector[Expr[?]],
-      pathOf: Any => Option[String]
+      pathOf: Any => Option[String],
+      resolvedAliases: Vector[(String, String)]
   ): Vector[ObservationGroup] =
     val members = interfaces.flatMap(_.members).filter(member =>
       Set("plain", "valid", "stream", "resolved").contains(member.protocol)
     )
-    val nets = declarations.filter(_.value.isInstanceOf[DigitalInout[?, ?]])
+    val nets = declarations.filter(_.value.isInstanceOf[ResolvedDigital[?, ?]])
     val paths = (members.map(_.path) ++ nets.map(_.path)).distinct.sorted
     if paths.size > 65536 || connectivity.size > 262144 then
       fail(1, "digital observation graph exceeds its bounded node or edge budget")
@@ -751,12 +828,21 @@ private[nodal] object DigitalInterfaceContract:
         parents(child) = root
         sizes(root) += sizes(child)
         names(root) = math.min(names(root), names(child))
+    resolvedAliases.foreach((left, right) => alias(left, right))
     val resolved = members.filter(_.protocol == "resolved").map(_.path).toSet ++ nets.map(_.path)
     connectivity.foreach: edge =>
       if edge.kind == "inout-pass-through" ||
         edge.kind == "interface-connect" && resolved.contains(edge.target)
       then alias(edge.target, edge.source.get)
     def canonical(path: String): String = paths(names(representative(indices(path))))
+    val componentDomains = mutable.HashMap.empty[String, String]
+    interfaces.foreach: endpoint =>
+      endpoint.members.filter(_.protocol == "resolved").foreach: member =>
+        val key = canonical(member.path)
+        componentDomains.get(key).foreach: previous =>
+          if previous != endpoint.domain then
+            fail(6, "resolved pass-through component crosses exact Interface domain ownership")
+        componentDomains.update(key, endpoint.domain)
     val expressions = valueRoots.map(value =>
       pathOf(value).getOrElse(fail(7, "digital driver has no actual captured identity")) -> value
     ).toMap

@@ -4932,10 +4932,41 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   ): Unit =
     val analysis = new StructuralBoundAnalysis(record.owner, "NODAL-AREA-058-INDEX", "Area ordinal")
     val bounds = analysis(ordinal)
-    IterationDomain.verifyOrdinal(record.domain, bounds.bounds).fold(
-      problem => fail("NODAL-AREA-058-INDEX", problem.message),
-      identity
-    )
+    IterationDomain.verifyOrdinal(record.domain, bounds.bounds).left.foreach: problem =>
+      val index = analysis(ordinal)
+      val zero = analysis(0)
+      val coordinate = analysis.generatedCoordinate(record, index)
+      val upper = analysis(record.upperExclusive.asInstanceOf[Dimension])
+      val proof = new StructuralPredicateOrdering.Query[StaticPredicate, StructuralBound](
+        predicate =>
+          val reference = Option(expressionIds.get(predicate)).getOrElse(
+            fail("NODAL-AREA-058-INDEX", "ordering predicate has no actual owner"))
+          if reference.module != record.owner || !staticPredicates.get(reference).contains(predicate) then
+            fail("NODAL-AREA-058-INDEX", "ordering predicate has a foreign owner")
+          if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
+            val operands = predicate.operands.map(value => analysis(value.asInstanceOf[Dimension]))
+            StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
+          else StructuralPredicateOrdering.Logic(predicate.operation,
+            predicate.operands.map(_.asInstanceOf[StaticPredicate])),
+        _.bounds,
+        (left, right) => left.identity == right.identity)
+      def prove(left: StructuralBound, right: StructuralBound, inclusive: Boolean): Boolean =
+        if proof.less(left, right, inclusive) then true
+        else
+          var current = record.digitalRegion.flatMap(_.parent)
+          val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
+          var proved = false
+          while current.nonEmpty && !proved do
+            val region = current.get
+            if visited.size >= 128 || !visited.add(region) then
+              fail("NODAL-AREA-058-INDEX", "ordering lexical ancestry is cyclic or excessive")
+            region.structuralArm.foreach: arm =>
+              val conditional = structuralIfs(arm.conditional)
+              proved = proof.under(conditional.predicate, !arm.whenTrue, left, right, inclusive)
+            current = region.parent
+          proved
+      if !prove(zero, index, true) || !prove(coordinate, upper, false) then
+        fail("NODAL-AREA-058-INDEX", problem.message)
     bounds.parameters.foreach(markStructuralParameter)
 
   def generatedAreaReference[A <: Area](family: GeneratedAreas[A], ordinal: Int | Expr[Integer])
@@ -5181,7 +5212,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         16
       )
     )
-    record.parent.map(areaComponents).getOrElse(Vector.empty) :+ local
+    val parent = record.parent.map(areaComponents).getOrElse(Vector.empty)
+    val family = record.generatedScope.filterNot(value =>
+      record.parent.flatMap(_.generatedScope).contains(value))
+    parent ++ family.toVector.map(value => s"generate_${value.ordinal}") :+ local
 
   private def prepareAreaNames(): Unit =
     val paths = mutable.HashSet.empty[(Long, Vector[String])]
@@ -5421,11 +5455,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       Set(KernelSignalKind.Wire, KernelSignalKind.Register, KernelSignalKind.Memory).contains(kind)
     val deferredInstanceType = resolvedType.exists:
       case deferred: KernelInstanceDataType[?] =>
-        !deferred.finalized && instanceSelectionStack.nonEmpty &&
-        (Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) ||
+        !deferred.finalized && (
+          instanceSelectionStack.nonEmpty &&
+            (Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) ||
+              (kind == KernelSignalKind.DigitalInout && (value match
+                case endpoint: DigitalInout[?, ?] => endpoint.boundary
+                case _ => false))) ||
           (kind == KernelSignalKind.DigitalInout && (value match
-            case endpoint: DigitalInout[?, ?] => endpoint.boundary
-            case _ => false)))
+            case view: InterfaceResolvedView[?, ?] =>
+              val root = DigitalInterfaceContract.root(view.endpoint)
+              Option(declarationIds.get(root)).exists(reference =>
+                reference.module == module.handle && instanceInterfacePorts.contains(reference))
+            case _ => false))
+        )
       case _ => false
     resolvedType.filterNot(_ => deferredInstanceType).foreach(validateShapeType(
       _,
@@ -5581,6 +5623,73 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     mutable.LinkedHashMap.empty[DeclarationRef, Vector[Dimension]]
   private val instanceInterfaceTypes =
     mutable.LinkedHashMap.empty[DeclarationRef, Map[KernelTypeDescriptor, DataType[?]]]
+
+  // One exact source-view registry. It records no physical net or independent role map.
+  private val resolvedInterfaceViews = new IdentityHashMap[
+    InterfacePort[?, ?], mutable.LinkedHashMap[String, ResolvedDigital[?, ?]]
+  ]()
+
+  private def resolvedMemberSnapshot(declaration: DeclarationRecord)
+      : Option[KernelResolvedMemberSnapshot] = declaration.value match
+    case view: InterfaceResolvedView[?, ?] =>
+      val root = DigitalInterfaceContract.root(view.endpoint)
+      Some(KernelResolvedMemberSnapshot(
+        declarationPath(declarationIds.get(root)), view.member, view.endpoint.role.name
+      ))
+    case _ => None
+
+  def interfaceResolvedMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigital[A, M] =
+    requireNoGeneratedEffect("resolved Interface member selection")
+    val root = DigitalInterfaceContract.root(endpoint)
+    val reference = Option(declarationIds.get(root)).getOrElse(
+      fail("NODAL-INTERFACE-054-007", "resolved member requires an actual owned Interface endpoint")
+    )
+    if reference.module != currentModule.handle || activeValueRegion.nonEmpty ||
+      (root.boundary && endpoint.origin.nonEmpty)
+    then fail("NODAL-INTERFACE-054-007", "resolved member endpoint belongs to another module or role view")
+    val member = ConstructionInterfaceLayout.resolvedMemberPath(endpoint.definition, field, through)
+    val leaf = ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role)
+      .find(_.name == member).getOrElse(
+        fail("NODAL-INTERFACE-054-003", "resolved member is absent from its selected role")
+      )
+    if leaf.protocol != "resolved" || !leaf.mode.contains(field.mode.name) then
+      fail("NODAL-INTERFACE-054-003", "resolved member requires its actual resolved declaration")
+    val known = Option(resolvedInterfaceViews.get(endpoint)).getOrElse:
+      val created = mutable.LinkedHashMap.empty[String, ResolvedDigital[?, ?]]
+      resolvedInterfaceViews.put(endpoint, created)
+      created
+    known.getOrElseUpdate(member, {
+      val dataType: DataType[A] = if root.boundary then
+        new KernelInstanceDataType[A](CandidateRuntime.typeDescriptor(field.dataType))
+      else field.dataType
+      val view = new InterfaceResolvedView(dataType, field.mode, endpoint, field, through, member)
+      val name = s"resolved_member_${currentModule.declarations.size}"
+      registerDeclaration(view, KernelSignalKind.DigitalInout, Some(dataType), Some(name), None,
+        Vector("mode" -> field.mode.name))
+      view
+    }).asInstanceOf[ResolvedDigital[A, M]]
+
+  private def materializeResolvedInterfaceViews(): Unit =
+    // Shape validation can refine existing declaration records. Retain only the
+    // authored member-view inventory before invoking that shared mutation owner.
+    val views = records.valuesIterator.flatMap(module =>
+      module.declarations.iterator.flatMap(declaration => declaration.value match
+        case view: InterfaceResolvedView[?, ?] => Some(module.handle -> view)
+        case _ => None)
+    ).toVector
+    views.foreach: (owner, view) =>
+      view.dataType match
+        case deferred: KernelInstanceDataType[?] =>
+          val endpoint = declarationIds.get(DigitalInterfaceContract.root(view.endpoint))
+          deferred.seal(CandidateRuntime.typeDescriptor(
+            interfaceActualType(endpoint, view.declaration.dataType)
+          ))
+          validateShapeType(deferred, owner, cardinality = false)
+        case _ => ()
 
   private def interfaceActualType(reference: DeclarationRef, formal: DataType[?]): DataType[?] =
     instanceInterfaceTypes.get(reference).map(_.getOrElse(
@@ -8209,6 +8318,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         Some(intern(key))
       )
 
+    def generatedCoordinate(record: GeneratedRegionRecord, ordinal: StructuralBound): StructuralBound =
+      compose("analog_add", Vector(apply(record.lower.asInstanceOf[Dimension]),
+        compose("analog_mul", Vector(ordinal, apply(record.step.asInstanceOf[Dimension])), ordinal.value)),
+        ordinal.value)
+
     def shiftedBounds(base: IterationDomain.Bounds, offsets: Vector[(String, Dimension)])
         : IterationDomain.Bounds =
       offsets.foldLeft(base): (current, offset) =>
@@ -9920,14 +10034,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         declarationPath(declaration.reference),
         declaration.dataType.map(renderType(_, module.handle)).getOrElse("Bits"),
         attribute(declaration, "mode", module.handle, "unknown"),
-        attribute(declaration, "placement", module.handle, "unknown"),
-        attribute(declaration, "profile", module.handle, "unknown"),
+        attribute(declaration, "placement", module.handle, ""),
+        attribute(declaration, "profile", module.handle, ""),
         related.get(declaration.value).toVector,
         instanceDigitalInouts.get(declaration.reference).map: (instance, port) =>
           KernelInterfaceBoundarySnapshot(
             instancePath(module.handle, instance.ordinal),
             declarationPath(port)
-          )
+          ),
+        resolvedMemberSnapshot(declaration)
       )
     .sortBy(_.path)
 
@@ -10356,6 +10471,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 instanceDigitalPorts.get(declaration.reference)
                   .orElse(
                     instanceDigitalInouts.get(declaration.reference)
+                  ).orElse(declaration.value match
+                    case view: InterfaceResolvedView[?, ?] =>
+                      instanceInterfacePorts.get(declarationIds.get(DigitalInterfaceContract.root(view.endpoint)))
+                    case _ => None
                   ).map(_._2.module).getOrElse(
                     fail(
                       "NODAL-HIERARCHY-057-001",
@@ -10414,7 +10533,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             KernelInterfaceBoundarySnapshot(
               instancePath(module.handle, instance.ordinal),
               declarationPath(port)
-            )
+            ),
+          resolvedMemberSnapshot(declaration)
         )
       val instances = module.instances.toVector.map: instance =>
         val child = records(instance.child)
@@ -11473,6 +11593,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       materializeInstanceDigitalTypes(boundaryQueries)
       materializeInstanceDigitalInouts(boundaryQueries)
       materializeInstanceInterfaceDimensions(boundaryQueries)
+    materializeResolvedInterfaceViews()
     materializeDeferredResultTypes()
     val semantic = semanticOrigin.resolve()
     semanticResult = Some(semantic)

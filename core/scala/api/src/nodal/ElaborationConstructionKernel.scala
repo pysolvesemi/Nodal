@@ -636,6 +636,15 @@ private[nodal] object ConstructionKernel:
       throw new IllegalStateException("instance selection requires active construction")
     ).instanceDigitalInout(value)
 
+  def interfaceResolvedMember[A <: Bits, M <: DriveMode](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.DigitalResolved[A, M],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): ResolvedDigital[A, M] =
+    active.getOrElse(
+      throw new IllegalStateException("resolved member selection requires active construction")
+    ).interfaceResolvedMember(endpoint, field, through)
+
   def withInstanceSelection[A](instance: Instance[?])(body: => A): A =
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")

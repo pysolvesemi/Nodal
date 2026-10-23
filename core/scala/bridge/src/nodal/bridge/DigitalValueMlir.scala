@@ -977,37 +977,60 @@ private[nodal] object DigitalValueMlir:
       )
       def ordinalValid(selectedFamily: KernelGeneratedRegionSnapshot, ordinal: String): Unit =
         ordinal.toLongOption match
-          case Some(value) => requireValid(
-              ordinal == value.toString,
-              "generated ordinal literal must be canonical signed i64",
-              expression.path
-            )
+          case Some(value) => requireValid(ordinal == value.toString,
+            "generated ordinal literal must be canonical signed i64", expression.path)
           case None =>
             requireVisible(ordinal, expression.owner, expression.region, expression.path)
             requireStaticPredicateInput(ordinal, expression.owner, topology = true)
-        val (header, bounds, selected) = try
+        try
           val headerQuery = selectedFamily.lexicalParent.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
-          val ordinalQuery = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
-          val header =
-            Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
-              .map(headerQuery.resolve(selectedFamily.owner, _))
-          (
-            header,
-            header.map(headerQuery.bounds),
-            ordinalQuery.bounds(ordinalQuery.resolve(expression.owner, ordinal))
-          )
+          val query = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+          val originalHeader = Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
+            .map(headerQuery.resolve(selectedFamily.owner, _))
+          val bounds = originalHeader.map(headerQuery.bounds)
+          val index = query.resolve(expression.owner, ordinal)
+          val domain = IterationDomain.structural(bounds(0), bounds(1), bounds(2), selectedFamily.maximum,
+            identicalBounds = originalHeader(0) == originalHeader(1))
+            .fold(problem => fail(problem.message, expression.path), identity)
+          IterationDomain.verifyOrdinal(domain, query.bounds(index)).left.foreach: problem =>
+            def imported(source: StructuralParameterBinding.Query, token: String): Int =
+              val original = source.resolve(expression.owner, token)
+              if source eq query then original
+              else query.importValue(expression.owner, source.exportValues(Vector(original)))
+            val header = Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
+              .map(imported(headerQuery, _))
+            val coordinate = query.compose("analog_add", Vector(header(0), query.compose("analog_mul", Vector(index, header(2)))))
+            val proof = new StructuralPredicateOrdering.Query[String, Int](
+              path =>
+                val predicate = predicates.getOrElse(path, fail("ordering predicate is absent", expression.path))
+                val source = predicate.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+                if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
+                  val operands = predicate.operands.map(imported(source, _))
+                  StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
+                else StructuralPredicateOrdering.Logic(predicate.operation, predicate.operands),
+              query.bounds,
+              _ == _)
+            def prove(left: Int, right: Int, inclusive: Boolean): Boolean =
+              if proof.less(left, right, inclusive) then true
+              else
+                var current = expression.region
+                val visited = mutable.HashSet.empty[String]
+                var proved = false
+                while current.nonEmpty && !proved do
+                  val path = current.get
+                  requireValid(visited.size < 128 && visited.add(path),
+                    "ordering lexical ancestry is cyclic or excessive", expression.path)
+                  arms.get(path).foreach: (conditional, arm) =>
+                    if conditional.behavioralRoot.isEmpty then
+                      proved = proof.under(conditional.predicate, arm.path == conditional.falseArm.path,
+                        left, right, inclusive)
+                  current = regions.getOrElse(path, fail("ordering lexical region is absent", expression.path)).parentRegion
+                proved
+            if !prove(query.literal(0L), index, true) || !prove(coordinate, header(1), false) then
+              fail(problem.message, expression.path)
         catch
           case error: IllegalArgumentException => fail(error.getMessage, expression.path)
-        val domain = IterationDomain.structural(
-          bounds(0),
-          bounds(1),
-          bounds(2),
-          selectedFamily.maximum,
-          identicalBounds = header(0) == header(1)
-        )
-          .fold(problem => fail(problem.message, expression.path), identity)
-        IterationDomain.verifyOrdinal(domain, selected)
-          .fold(problem => fail(problem.message, expression.path), identity)
+
       var expected = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
       val root =
         generated.getOrElse(expected, fail("selected family root is absent", expression.path))

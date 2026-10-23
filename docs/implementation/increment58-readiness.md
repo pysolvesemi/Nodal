@@ -1125,3 +1125,29 @@ its `native` directory, and shared source counts/manifests under
 Register-backed frames make no RAM or minimum-area claim. Stack Gray encoding
 remains explicitly unsupported. Other required F58 hierarchy/interface work and
 all parent acceptance boxes remain open.
+
+## Checkpoint 25 — typed resolved views and source finalization
+
+The exact prospective source tree matches all 370 Scala files from the retained
+139-group integrated acceptance snapshot. Its 23 changed source paths add typed
+resolved Interface views, guarded generated-family existence/naming and deferred
+arithmetic finalization. Four reproducibility groups were additionally repeated
+with the actual translator enabled and are not double-counted. The matching
+source manifests and individual counts are retained in
+`.work/f58-integrated-source`. This snapshot includes the previously accepted
+bounded-stack source; it does not replace that implementation with an older one.
+
+Resolved views preserve the original complete member witness, actual placement,
+mode and domain authority through the existing capability and component owners.
+Guarded existence uses actual structural predicates and capture identity without
+changing global parameter bounds; generated Area names use actual family identity.
+Deferred arithmetic reuses the canonical result-type intent and operation
+inference, retaining width, divisor, assignment and forged-result negatives.
+Seven resolved native profiles include six positives and the causal child-feedback
+negative; five guarded-family exporters supply 24 default-gate inputs.
+
+The corresponding concrete arithmetic target behavior is accepted separately,
+not attributed to this source-only checkpoint. General symbolic arithmetic,
+region-owned inference, generated Instance/Interface routing and remaining
+physical boundary profiles are still required continuations. No F58 parent
+checkbox is closed by this checkpoint.

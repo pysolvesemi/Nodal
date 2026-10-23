@@ -26,7 +26,8 @@ final class Increment58DeferredHierarchySource(mode: String = "copy", late: Bool
   val otherWidth = param(4.integer, range = 2 to 8)
   val inputData = in(UInt(actualWidth))
   val otherData = in(UInt(otherWidth))
-  val outputData = out(UInt(actualWidth))
+  val outputData =
+    out(if mode == "arithmetic" then UInt(actualWidth + 1.integer) else UInt(actualWidth))
   val condition = in(Bool)
   val payload = Struct("DeferredPayload", StructField("data", UInt(actualWidth)))
   val aggregateInput = in(payload)

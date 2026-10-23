@@ -12,7 +12,7 @@ private[nodal] object DeferredResultType:
   def pending(value: Any): Boolean = value match
     case expression: KernelExpr[?] => !expression.typeFinalized
     case signal: Signal[?] => pendingType(signal.dataType)
-    case endpoint: DigitalInout[?, ?] => pendingType(endpoint.dataType)
+    case endpoint: ResolvedDigital[?, ?] => pendingType(endpoint.dataType)
     case _ => false
 
   private def pendingType(value: DataType[?]): Boolean = value match

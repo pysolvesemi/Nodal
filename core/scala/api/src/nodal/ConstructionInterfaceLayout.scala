@@ -19,6 +19,27 @@ private[nodal] object ConstructionInterfaceLayout:
         DigitalInterfaceContract.fail(1, "interface leaf has no exact type")
       )
 
+  /** Resolve only exact declaration witnesses; names and caller-supplied types confer no authority.
+    */
+  def resolvedMemberPath(
+      definition: InterfaceType[?],
+      field: InterfaceMember.DigitalResolved[?, ?],
+      through: Vector[InterfaceMember.Nested[?]]
+  ): String =
+    if through.size > 128 then
+      DigitalInterfaceContract.fail(1, "resolved member nesting exceeds 128")
+    var current = definition
+    through.foreach: nested =>
+      if !current.members.exists(_ eq nested) then
+        DigitalInterfaceContract.fail(
+          3,
+          "resolved member requires its exact ordered nested declarations"
+        )
+      current = nested.definition
+    if !current.members.exists(_ eq field) then
+      DigitalInterfaceContract.fail(3, "resolved member requires its exact declared field witness")
+    (through.map(_.name) :+ field.name).mkString(".")
+
   /** True selects the left sink. Declared roles never change across a boundary. */
   def connectionSink(left: String, leftBoundary: Boolean, right: String, rightBoundary: Boolean)
       : Option[Boolean] =

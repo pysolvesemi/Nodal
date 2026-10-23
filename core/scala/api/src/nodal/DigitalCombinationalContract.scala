@@ -105,46 +105,72 @@ private[nodal] object DigitalCombinationalContract:
       fail(1, "numeric operands require the same UInt or SInt kind; use explicit conversion")
     (a, b)
 
+  /** Preserve only an internal provisional kind until exact boundary dependencies seal. The
+    * existing operation inference runs once in the owning finalization context.
+    */
+  private def emitInferred[A <: Data](
+      operation: String,
+      operands: Vector[Expr[?]],
+      provisional: => KernelTypeDescriptor
+  )(result: => KernelTypeDescriptor): Expr[A] =
+    if !operands.exists(DeferredResultType.pending) then
+      emit(operation, result, operands*)
+    else
+      val expression = new KernelExpr[A](
+        operands,
+        resultType = Some(provisional),
+        operation = Some(operation),
+        typeIntent = DeferredResultType.intent(operands)(result)
+      )
+      ConstructionKernel.expression(expression)
+      expression
+
   def arithmetic[A <: Data](operation: String, left: Expr[?], right: Expr[?]): Expr[A] =
-    DeferredResultType.requireFinal(Vector(left, right), "shape-changing digital arithmetic")
-    val (a, b) = numericPair(left, right)
-    val resultWidth = operation match
-      case "digital_add" | "digital_sub" =>
-        addWidths(StaticIntegerExpression.maximum(width(a), width(b)), 1)
-      case "digital_mul" => addWidths(width(a), width(b))
-      case "digital_div" | "digital_rem" =>
-        if !DigitalScalarContract.knownValue(right).exists(_ != 0) then
-          fail(5, "division and remainder require a bounded exact nonzero divisor proof")
-        if operation == "digital_div" && a.kind == "SInt" then addWidths(width(a), 1)
-        else width(a)
-      case "digital_min" | "digital_max" =>
-        StaticIntegerExpression.maximum(width(a), width(b))
-      case _ => fail(1, "unsupported digital arithmetic operation")
-    val kind = if operation == "digital_sub" then "SInt" else a.kind
-    emit(operation, KernelTypeDescriptor(kind, Vector(resultWidth)), left, right)
+    def result: KernelTypeDescriptor =
+      val (a, b) = numericPair(left, right)
+      val resultWidth = operation match
+        case "digital_add" | "digital_sub" =>
+          addWidths(StaticIntegerExpression.maximum(width(a), width(b)), 1)
+        case "digital_mul" => addWidths(width(a), width(b))
+        case "digital_div" | "digital_rem" =>
+          if !DigitalScalarContract.knownValue(right).exists(_ != 0) then
+            fail(5, "division and remainder require a bounded exact nonzero divisor proof")
+          if operation == "digital_div" && a.kind == "SInt" then addWidths(width(a), 1)
+          else width(a)
+        case "digital_min" | "digital_max" =>
+          StaticIntegerExpression.maximum(width(a), width(b))
+        case _ => fail(1, "unsupported digital arithmetic operation")
+      val kind = if operation == "digital_sub" then "SInt" else a.kind
+      KernelTypeDescriptor(kind, Vector(resultWidth))
+    emitInferred(
+      operation,
+      Vector(left, right),
+      scalar(left).copy(kind = if operation == "digital_sub" then "SInt" else scalar(left).kind)
+    )(result)
 
   def negate(value: Expr[?]): Expr[SInt] =
-    DeferredResultType.requireFinal(Vector(value), "shape-changing digital negation")
-    val source = scalar(value)
-    if !Set("UInt", "SInt").contains(source.kind) then
-      fail(1, "numeric negation requires UInt or SInt")
-    emit("digital_neg", KernelTypeDescriptor("SInt", Vector(addWidths(width(source), 1))), value)
+    def result: KernelTypeDescriptor =
+      val source = scalar(value)
+      if !Set("UInt", "SInt").contains(source.kind) then
+        fail(1, "numeric negation requires UInt or SInt")
+      KernelTypeDescriptor("SInt", Vector(addWidths(width(source), 1)))
+    emitInferred("digital_neg", Vector(value), scalar(value).copy(kind = "SInt"))(result)
 
   def compare(operation: String, left: Expr[?], right: Expr[?]): Expr[Bool] =
-    DeferredResultType.requireFinal(Vector(left, right), "digital comparison")
-    val a = scalar(left)
-    val b = scalar(right)
-    if !Set("digital_eq", "digital_ne", "digital_lt", "digital_le", "digital_gt", "digital_ge")
-        .contains(operation)
-    then fail(1, "unsupported digital comparison")
-    if a.kind == "Bits" then
-      if !Set("digital_eq", "digital_ne").contains(operation) ||
-        !DigitalEnumContract.sameType(a, b)
-      then
-        fail(1, "Bits equality requires identical exact bit-vector types")
-    else if a.kind != b.kind then
-      fail(1, "numeric comparison requires the same UInt or SInt kind")
-    emit(operation, KernelTypeDescriptor("Bool"), left, right)
+    def result: KernelTypeDescriptor =
+      val a = scalar(left)
+      val b = scalar(right)
+      if !Set("digital_eq", "digital_ne", "digital_lt", "digital_le", "digital_gt", "digital_ge")
+          .contains(operation)
+      then fail(1, "unsupported digital comparison")
+      if a.kind == "Bits" then
+        if !Set("digital_eq", "digital_ne").contains(operation) ||
+          !DigitalEnumContract.sameType(a, b)
+        then fail(1, "Bits equality requires identical exact bit-vector types")
+      else if a.kind != b.kind then
+        fail(1, "numeric comparison requires the same UInt or SInt kind")
+      KernelTypeDescriptor("Bool")
+    emitInferred(operation, Vector(left, right), KernelTypeDescriptor("Bool"))(result)
 
   def bitwise[A <: Data](operation: String, left: Expr[A], right: Expr[A]): Expr[A] =
     def result: KernelTypeDescriptor =
@@ -163,47 +189,34 @@ private[nodal] object DigitalCombinationalContract:
     emitDeferred("digital_not", Vector(value))(scalar(value))
 
   def concatenate(left: Expr[?], right: Expr[?]): Expr[Bits] =
-    DeferredResultType.requireFinal(Vector(left, right), "shape-changing concatenation")
-    val a = scalar(left)
-    val b = scalar(right)
-    emit(
-      "digital_concat",
-      KernelTypeDescriptor("Bits", Vector(addWidths(width(a), width(b)))),
-      left,
-      right
-    )
+    def result: KernelTypeDescriptor =
+      val a = scalar(left)
+      val b = scalar(right)
+      KernelTypeDescriptor("Bits", Vector(addWidths(width(a), width(b))))
+    emitInferred("digital_concat", Vector(left, right), scalar(left).copy(kind = "Bits"))(result)
 
   private def staticOperand(value: Int): Expr[UInt] =
     CandidateRuntime.literalUInt(value, math.max(1, BigInt(value).bitLength))
 
   def extract(value: Expr[?], lower: Int, upperExclusive: Int): Expr[Bits] =
-    DeferredResultType.requireFinal(Vector(value), "width-bounded extraction")
-    val source = scalar(value)
-    if lower < 0 || upperExclusive <= lower ||
-      upperExclusive.toLong > DigitalScalarContract.widthBounds(source)._1
-    then
+    if lower < 0 || upperExclusive <= lower then
       fail(4, "extraction requires a nonempty half-open range within every legal source width")
-    emit(
-      "digital_extract",
-      KernelTypeDescriptor("Bits", Vector(upperExclusive - lower)),
-      value,
-      staticOperand(lower),
-      staticOperand(upperExclusive)
-    )
+    val resultType = KernelTypeDescriptor("Bits", Vector(upperExclusive - lower))
+    val operands = Vector(value, staticOperand(lower), staticOperand(upperExclusive))
+    emitInferred("digital_extract", operands, resultType):
+      val source = scalar(value)
+      if upperExclusive.toLong > DigitalScalarContract.widthBounds(source)._1 then
+        fail(4, "extraction requires a nonempty half-open range within every legal source width")
+      resultType
 
   def shift[A <: Data](operation: String, value: Expr[A], amount: Int): Expr[A] =
     if amount < 0 then fail(4, "digital shift amount must be nonnegative")
     if !Set("digital_shl", "digital_shr", "digital_logical_shr").contains(operation) then
       fail(1, "unsupported digital shift operation")
     if operation == "digital_shl" && amount != 0 then
-      DeferredResultType.requireFinal(Vector(value), "shape-changing left shift")
-      val source = scalar(value)
-      emit(
-        operation,
-        source.copy(arguments = Vector(addWidths(width(source), amount))),
-        value,
-        staticOperand(amount)
-      )
+      emitInferred(operation, Vector(value, staticOperand(amount)), scalar(value)):
+        val source = scalar(value)
+        source.copy(arguments = Vector(addWidths(width(source), amount)))
     else emitDeferred(operation, Vector(value, staticOperand(amount)))(scalar(value))
 
   /** Shared root capability profile for computed combinational values. Aggregate storage validation

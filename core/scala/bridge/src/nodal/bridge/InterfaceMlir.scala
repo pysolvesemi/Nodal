@@ -398,10 +398,16 @@ private[nodal] object InterfaceMlir:
       val fields = declaration.attributes.toMap
       requireValid(
         declaration.kind == "digital-inout" && declaration.generatedScope.isEmpty &&
-          declaration.resolvedBoundary == net.boundary && declaration.interfaceBoundary.isEmpty &&
-          declaration.dataType.contains(net.dataType) && fields.get("mode").contains(net.mode) &&
-          fields.get("placement").contains(net.placement) &&
-          fields.get("profile").contains(net.profile),
+          declaration.resolvedBoundary == net.boundary &&
+          declaration.resolvedMember == net.member &&
+          declaration.interfaceBoundary.isEmpty && declaration.dataType.contains(net.dataType) &&
+          fields.get("mode").contains(net.mode) &&
+          (if net.member.nonEmpty then
+             net.boundary.isEmpty && net.placement.isEmpty && net.profile.isEmpty &&
+             !fields.contains("placement") && !fields.contains("profile")
+           else
+             fields.get("placement").contains(net.placement) &&
+             fields.get("profile").contains(net.profile)),
         "resolved-net declaration and typed contract disagree",
         net.path
       )
@@ -416,6 +422,7 @@ private[nodal] object InterfaceMlir:
         val (childModule, childDeclaration) = declarations(child.path)
         requireValid(
           childModule.path == instance.childModule && child.boundary.isEmpty &&
+            child.member.isEmpty &&
             childDeclaration.kind == "digital-inout" && childDeclaration.generatedScope.isEmpty &&
             instance.generatedScope.isEmpty && declaration.domain.isEmpty &&
             net.mode == child.mode && net.placement == child.placement &&
@@ -425,13 +432,27 @@ private[nodal] object InterfaceMlir:
           net.path
         )
       val _ = mode(net.mode, net.path)
-      val selectedPlacement = placement(net.placement, net.path)
-      val selectedProfile = profile(net.profile, net.path)
-      requireValid(
-        selectedPlacement != "internal_resolved_net" || selectedProfile != "portable_boundary_only",
-        "internal net exceeds portable-boundary capabilities",
-        net.path
-      )
+      net.member match
+        case Some(origin) =>
+          val (endpoint, member) =
+            selectedMember(s"${origin.endpoint}.${origin.member}", module.path, Some(origin.role))
+          requireValid(
+            endpoint.path == origin.endpoint && endpoint.dimensions.isEmpty &&
+              member.name == origin.member && member.protocol == "resolved" &&
+              member.mode.contains(net.mode) &&
+              sameType(net.dataType, actualType(endpoint, member), net.path),
+            "resolved member view changes its exact endpoint, selected role, path, mode or contextual type",
+            net.path
+          )
+        case None =>
+          val selectedPlacement = placement(net.placement, net.path)
+          val selectedProfile = profile(net.profile, net.path)
+          requireValid(
+            selectedPlacement != "internal_resolved_net" ||
+              selectedProfile != "portable_boundary_only",
+            "internal net exceeds portable-boundary capabilities",
+            net.path
+          )
 
     private val projectedNets = snapshot.resolvedNets.flatMap(net =>
       net.boundary.map(boundary => (boundary.instance, boundary.endpoint))
@@ -551,6 +572,26 @@ private[nodal] object InterfaceMlir:
       )
       value
 
+    private def netPermission(value: KernelResolvedNetSnapshot): Option[String] = value.member.map:
+      origin =>
+        selectedMember(
+          s"${origin.endpoint}.${origin.member}",
+          declarations(value.path)._1.path,
+          Some(origin.role)
+        )._2.access
+    private def requireNetAccess(
+        value: KernelResolvedNetSnapshot,
+        access: String,
+        path: String
+    ): Unit =
+      requireValid(
+        netPermission(value).forall(_ == access),
+        "resolved member role does not permit " + access,
+        path
+      )
+    private def netProfile(value: KernelResolvedNetSnapshot): String =
+      if value.member.nonEmpty then "PortableBoundaryOnly" else value.profile
+
     snapshot.digitalConnectivity.foreach: effect =>
       requireValid(
         modules.contains(effect.owner) && effect.path.startsWith(effect.owner + ".") &&
@@ -633,13 +674,16 @@ private[nodal] object InterfaceMlir:
           effect.path
         )
         effect.kind match
-          case "inout-drive" => requireValid(
+          case "inout-drive" =>
+            requireNetAccess(target, "drive", effect.path)
+            requireValid(
               Set("push-pull", "open-source").contains(target.mode) && effect.value.nonEmpty &&
                 effect.enable.nonEmpty && effect.source.isEmpty,
               "conditional drive violates exact mode/operands",
               effect.path
             )
           case "inout-drive-low" | "inout-drive-high" =>
+            requireNetAccess(target, "drive", effect.path)
             val expected = if effect.kind == "inout-drive-low" then "open-drain" else "open-source"
             requireValid(
               target.mode == expected && effect.value.isEmpty && effect.enable.nonEmpty &&
@@ -647,7 +691,9 @@ private[nodal] object InterfaceMlir:
               "active-level drive violates exact mode/operands",
               effect.path
             )
-          case "inout-high-z" => requireValid(
+          case "inout-high-z" =>
+            requireNetAccess(target, "drive", effect.path)
+            requireValid(
               target.mode != "read-only" && effect.value.isEmpty && effect.enable.isEmpty &&
                 effect.source.isEmpty,
               "release violates exact mode/operands",
@@ -658,9 +704,11 @@ private[nodal] object InterfaceMlir:
               effect.source.getOrElse(fail("pass-through lost its source", effect.path)),
               effect.owner
             )
+            requireNetAccess(target, "connect", effect.path)
+            requireNetAccess(source, "connect", effect.path)
             requireValid(
               source.path != target.path && source.dataType == target.dataType &&
-                source.mode == target.mode && source.profile == target.profile &&
+                source.mode == target.mode && netProfile(source) == netProfile(target) &&
                 effect.value.isEmpty && effect.enable.isEmpty,
               "pass-through changes resolved-net contract",
               effect.path
@@ -669,31 +717,65 @@ private[nodal] object InterfaceMlir:
 
     // This finite equivalence relation models authored net connections only. It is not a
     // second expression traversal or a simulation of resolved values.
-    private val netComponents = mutable.HashMap.from(nets.keys.map(path => path -> path))
+    private val resolvedMemberPaths = members.iterator.collect:
+      case (path, (_, member)) if member.protocol == "resolved" => path
+    .toSet
+    private val netComponents =
+      mutable.HashMap.from((nets.keySet ++ resolvedMemberPaths).map(path => path -> path))
     private def component(path: String): String =
       var current = path
       var steps = 0
       while netComponents(current) != current do
         current = netComponents(current)
         steps += 1
-        requireValid(steps <= nets.size, "resolved-net equivalence cycle", path)
+        requireValid(steps <= netComponents.size, "resolved-net equivalence cycle", path)
       current
     requireValid(
       nets.size <= 65536 && snapshot.digitalConnectivity.size <= 262144,
       "digital connectivity exceeds the finite structural budget",
       snapshot.root
     )
-    snapshot.digitalConnectivity.filter(_.kind == "inout-pass-through").foreach: effect =>
-      val left = component(effect.target)
-      val right = component(effect.source.get)
+    private def aliasNet(a: String, b: String): Unit =
+      val left = component(a)
+      val right = component(b)
       if left != right then netComponents.update(left, right)
-    private val boundaryNetComponents = snapshot.resolvedNets.flatMap(net =>
-      net.boundary.toVector.flatMap(boundary =>
-        Vector(component(net.path), component(boundary.endpoint))
+    snapshot.resolvedNets.foreach(net =>
+      net.member.foreach(origin =>
+        aliasNet(net.path, s"${origin.endpoint}.${origin.member}")
       )
-    ).toSet
+    )
+    snapshot.digitalConnectivity.filter(effect =>
+      effect.kind == "inout-pass-through" ||
+        effect.kind == "interface-connect" && resolvedMemberPaths(effect.target)
+    ).foreach: effect =>
+      aliasNet(effect.target, effect.source.get)
+    private val componentDomains = mutable.HashMap.empty[String, String]
+    snapshot.interfaceContracts.foreach: endpoint =>
+      endpoint.members.filter(_.protocol == "resolved").foreach: member =>
+        val key = component(member.path)
+        componentDomains.get(key).foreach(previous =>
+          requireValid(
+            previous == endpoint.domain,
+            "resolved pass-through component crosses exact Interface domain ownership",
+            member.path
+          )
+        )
+        componentDomains.update(key, endpoint.domain)
+    private val boundaryNetComponents =
+      (snapshot.resolvedNets.flatMap(net =>
+        net.boundary.toVector.flatMap(boundary =>
+          Vector(component(net.path), component(boundary.endpoint))
+        )
+      ) ++ snapshot.interfaceContracts.flatMap(endpoint =>
+        endpoint.boundary.toVector.flatMap(boundary =>
+          endpoint.members.filter(_.mode.nonEmpty).flatMap(member =>
+            Vector(component(member.path), component(s"${boundary.endpoint}.${member.name}"))
+          )
+        )
+      )).toSet
     private val drivers = snapshot.digitalConnectivity.filter(effect =>
-      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(effect.kind)
+      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(effect.kind) ||
+        effect.kind == "interface-drive" && resolvedMemberPaths(effect.target)
     ).groupBy(effect => component(effect.target))
     snapshot.digitalConnectivity.flatMap: effect =>
       effect.kind match
@@ -761,6 +843,18 @@ private[nodal] object InterfaceMlir:
         declaration.path,
         fail("net declaration lost its typed contract", declaration.path)
       )
+      if selected.member.nonEmpty then
+        val origin = selected.member.get
+        return Vector(operation(
+          "nodal.member_access",
+          Vector(result -> resultType),
+          Vector.empty,
+          sourceLocation,
+          "instance" ->
+            ("@" + quoted(symbol("interface_instance", declarations(origin.endpoint)._2.name))),
+          "path" -> quoted(origin.member),
+          "metadata" -> metadata(sourceMetadata, "role" -> quoted(origin.role))
+        ))
       val identity = selected.boundary match
         case Some(boundary) => Vector(
             "instance" -> ("@" + quoted(symbol("instance", boundary.instance.split('.').last))),
@@ -797,6 +891,11 @@ private[nodal] object InterfaceMlir:
         expression.path
       )
       val endpoint = net(expression.operands.head, expression.owner)
+      requireValid(
+        netPermission(endpoint).forall(_ != "drive"),
+        "drive-only resolved member cannot be read or split",
+        expression.path
+      )
       requireValid(
         expression.dataType ==
           (if expression.operation == "digital_net_enable_view" then "Bool" else endpoint.dataType),

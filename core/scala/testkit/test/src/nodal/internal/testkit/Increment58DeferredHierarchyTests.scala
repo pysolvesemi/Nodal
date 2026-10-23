@@ -43,11 +43,10 @@ object Increment58DeferredHierarchyTests extends TestSuite:
       ).get
       assert(field.dataType == "UInt(actualWidth)")
       val _ = ScalaToMlirBridge.fromSnapshot(snapshot)
-    test("pending shape-changing inference rejects instead of freezing a formal descriptor"):
-      val failure = scala.util.Try(capture("arithmetic")).failed.get
-      assert(failure.isInstanceOf[ConstructionException])
-      assert(failure.asInstanceOf[ConstructionException].diagnostic.code ==
-        "NODAL-HIERARCHY-058-TYPE")
+    test("shape-changing inference seals only after actual parameter binding"):
+      val early = ScalaToMlirBridge.fromSnapshot(capture("arithmetic", false))
+      val late = ScalaToMlirBridge.fromSnapshot(capture("arithmetic", true))
+      assert(early.text == late.text, late.text.contains("operator_name = \"digital_add\""))
     test("bridge independently rejects a stale formal result after final capture"):
       val snapshot = capture("copy")
       val value = snapshot.digitalExpressions.find(item =>
@@ -64,7 +63,7 @@ object Increment58DeferredHierarchyTests extends TestSuite:
 object Increment58DeferredHierarchyNativeTests extends TestSuite:
   val tests = Tests:
     test("finalized actual hierarchy values pass the native default semantic gate"):
-      Vector("copy", "bitwise", "select", "field").foreach: mode =>
+      Vector("copy", "bitwise", "select", "field", "arithmetic").foreach: mode =>
         val document = ScalaToMlirBridge.fromSnapshot(
           ConstructionKernel.inspect(new Increment58DeferredHierarchySource(mode))
         )

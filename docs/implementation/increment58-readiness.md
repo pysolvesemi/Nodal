@@ -1245,3 +1245,23 @@ owners. Separate maintained target behavior is not inferred from these checks.
 Target runners and TARGET.md are not changed by this checkpoint; a mismatched
 historical target-document receipt is excluded rather than labeled exact.
 Broader generated routing, analog and pending lifecycle work remains open.
+
+## Checkpoint 30 — fixed named-field CDC payload adapters
+
+The matched snapshot in `.work/f58-fixed-struct-cdc/final-candidate` retains
+227 focused native checks (SequentialTarget 157, HierarchyTarget 39,
+SymbolicTarget 31) on `93a1af6b`, with all 233 native source hashes matched.
+Its 418-file source inventory adds the two exact named-CDC fixture/test files;
+three source groups and three actual native gate inputs pass. The same inputs
+produce retained Gray, handshake and FIFO four-state waveform passes, with
+illegal-Gray and illegal-FIFO-stall monitor negatives. The exact runner and
+contract are included; README adds only the accepted CDC section as fresh scoped
+documentation, excluding unrelated arithmetic instructions. Historical failed runs
+remain preserved. These results are retained acceptance, not new execution.
+
+Canonical packed-to-named-field adapters preserve logical row-major layout and
+reuse existing CDC state and monitors. The admitted profile is fixed payloads
+up to 4096 bits, explicit named fields and actual fixed contiguous ShapeIndex.
+Symbolic CDC, dynamic and noncontiguous selection remain unsupported. Existing
+source and generated-header provenance limits remain explicit; this partial
+checkpoint neither completes Foundation 58 nor resumes held consumer repairs.

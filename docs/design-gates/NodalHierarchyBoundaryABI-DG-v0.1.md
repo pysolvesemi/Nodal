@@ -334,3 +334,97 @@ still reject transactionally. The fixed-Struct CDC adapter gap under explicit
 `boundary-abi=named-fields` remains unchanged. Generated helpers must consume this
 same port plan rather than introduce a parallel boundary engine; generated loops
 and their pinned-consumer limitations remain in the generated Area gate.
+
+## Late-bound arithmetic inference continuation
+
+The existing bounded result-type finalizer also admits direct-module arithmetic
+whose operand type depends on a later child parameter binding. The arithmetic
+owner retains exact operand dependencies and only an internal provisional kind;
+it runs the same width, divisor, comparison and extraction checks once after the
+canonical boundary substitution. Derived widths are ordinary parent-owned static
+Integer DAG nodes, not evaluated defaults, duplicated type engines or a guessed
+formal-to-actual envelope equivalence. Chained results finalize in dependency order.
+
+This profile covers numeric arithmetic, negation, comparison, concatenation,
+constant half-open extraction and expanding constant left shift. Bitwise/select
+retain exact whole-type equality. An out-of-envelope extraction, absent exact
+nonzero divisor proof or stale bridge result still rejects at its canonical owner.
+Conversions, aggregate construction and lexical-region result materialization
+remain separate required continuations until their same-owner checks are accepted.
+
+Source/native support does not imply every target operation is implemented.
+Computed symbolic arithmetic remains outside the current symbolic boundary target
+profile. Fixed-width derived arithmetic must use the already-proved target width
+and signedness rather than treating a parameter-expression descriptor as zero
+bits. The concrete demonstration covers addition, multiplication, chained results,
+negation, concatenation, extraction and comparison through unchanged generated
+SystemVerilog; division and left-shift are not claimed by that demonstration.
+
+### Scalar conversion and Struct continuation
+
+The same finalizer now also delegates deferred scalar conversion to the existing
+`DigitalScalarContract` policy and deferred Struct construction to the existing
+`DigitalAggregateContract` schema/field checks. Only exact operand dependencies
+are retained; no source body is replayed. Conversion width direction, representable
+value, signedness and finite-Real restrictions still apply to the sealed actual
+type. Struct member identity, nominal name, field order and complete field types
+remain independently checked; equal parameter envelopes do not establish identity.
+Early/late actual binding is equivalent for both symbolic and concrete profiles.
+
+This remains direct-module result inference. Lexical-region finalization and
+inferred-storage lifecycles are not widened by this change. The all-conversion
+Struct witness passes native gates, but default packed aggregate projection and
+named-field saturation target limits still reject explicitly. Native semantic
+acceptance therefore does not claim that entire witness executes as emitted HDL.
+
+## Fixed named-field CDC inverse adaptation
+
+The earlier fixed-Struct CDC gap is now implemented for exact fixed payloads
+under explicit `boundary-abi=named-fields`. The target derives one immutable
+per-type permutation from the existing boundary leaf inventory and canonical
+fixed type/shape queries. It checks nominal field paths, independent dimension
+groups, actual target leaf widths and complete bit coverage before emission;
+serialized adapter metadata is an output record, never type or layout authority.
+The logical order remains recursive row-major with authored Struct fields least
+significant first. Concatenating physical leaf vectors in field order is not an
+acceptable substitute for the inverse when a Vec contains Structs.
+
+The adapter packs each actual crossing input into the existing packed CDC
+executor and unpacks its payload result. Gray, handshake and asynchronous FIFO
+state, latency, reset behavior and runtime monitors are unchanged; Boolean control
+results are not adapted. The same permutation supports direct, fixed contiguous
+`ShapeIndex` observations using the canonical proved selection interval. Dynamic,
+symbolic and noncontiguous indexing remain outside this target slice. Truly
+symbolic CDC payload layouts still reject transactionally.
+
+Architecture review: this is a target-only physical adapter, not a second shape,
+type, driver or hierarchy model. Plans are cached by exact original type within
+the existing module lowering. Fixed scalar segments are bounded by the existing
+4096-bit payload limit; extracts, binary concatenations and leaf construction
+are charged to the existing target operation budget before mutation. It adds no
+module specialization or register. Emission independently checks the actual
+value widths against the plan. No general symbolic-layout CDC or performance
+improvement is claimed.
+
+Focused acceptance comprises 157 sequential target cases (all 149 predecessors
+plus eight causal layout/index cases), 39 hierarchy target cases and 31 symbolic
+target cases. Native checks pin independent logical offsets for a 19-bit payload:
+cell zero occupies bits 0–8, cell one bits 9–17, marker bit 18; each cell places
+flag at 0, two UInt3 samples at 1–6 and SInt2 at 7–8. Distinct input packing and
+independent output-state decoding prevent a symmetric wrong inverse from passing.
+The maintained actual Scala source `Increment58NamedCdcSource.scala` passes all
+three full gate→CIRCT→unchanged SystemVerilog→four-state Icarus profiles, including
+independent typed field observations. Illegal Gray changes and FIFO stalled
+payload changes separately trigger their retained monitors; they are expected
+negative checks, not legal transport passes.
+
+The maintained `tests/scala/domain-hierarchy/run_named_cdc_target.py` records the
+explicit ABI, tool/input/output hashes and consumer configuration. Pinned
+firtool 1.154.0 uses its official
+`disallowPackedStructAssignments,disallowLocalVariables` lowering options for
+Icarus compatibility. Initial Icarus failures on packed-struct assignment patterns
+and automatic local variables are retained as historical failed attempts; no
+emitted DUT or assertion is edited to obtain the passing runs. Commands and the
+small actual-output demonstration are documented beside the runner. Electrical
+CDC timing/skew obligations and all broader unresolved boundary profiles remain
+unchanged.

@@ -92,3 +92,63 @@ check the boundary-facing direction rather than accepting symmetric output
 pass-through alone. Only the testbench is handwritten. These witnesses do not
 claim resolved/inout, analog/control Interface, generated-loop or fixed-Struct CDC
 support under the named-field profile.
+
+## Fixed Struct/Vec CDC with named-field pins
+
+`Increment58NamedCdcReplay` exports `gray`, `handshake` and `fifo` from the actual
+public source `nodal_external/Increment58NamedCdcSource.scala`. Use the replay
+command above with this class and `.work/f58-named-cdc-source`, then run:
+
+```sh
+python3 tests/scala/domain-hierarchy/run_named_cdc_target.py \
+  --input .work/f58-named-cdc-source --out .work/f58-named-cdc-target \
+  --nodalc .work/native-build/bin/nodalc \
+  --firtool .work/circt-toolchain/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog \
+  --vvp .work/tools/iverilog/bin/vvp
+```
+
+Use `--profile gray`, `handshake` or `fifo` for a narrower run. The runner requests
+`boundary-abi=named-fields` explicitly. Its 19-bit payload contains two cells,
+each with Bool, two UInt3 samples and SInt2, followed by a Bool marker. Whole
+payload outputs and separate typed observations check every logical field using
+asymmetric patterns, independently of the physical leaf-vector pin layout.
+Startup remains unspecified. Gray single-bit transitions, handshake snapshots,
+FIFO capacity/stall/order/wrap/reset and independent source/destination clocks
+exercise the existing packed CDC executor, not a replacement implementation.
+
+For example, the maintained Scala includes:
+
+```scala
+case "gray" => Cdc.gray(Gray(sampled.get), destination, 2)
+case "handshake" => Cdc.handshake(sampled.get, destination)
+```
+
+The actual generated Gray SystemVerilog contains this inverse mapping (location
+comments omitted from the excerpt only):
+
+```systemverilog
+wire [1:0] _GEN_1 = {__nodal_gray_0_stage_1[9], __nodal_gray_0_stage_1[0]};
+wire [11:0] _GEN_2 = {__nodal_gray_0_stage_1[15:10], __nodal_gray_0_stage_1[6:1]};
+wire [3:0] _GEN_3 = {__nodal_gray_0_stage_1[17:16], __nodal_gray_0_stage_1[8:7]};
+```
+
+This comes from the emitted `gray.sv`, not a handwritten DUT. Logical cells remain
+row-major even though each physical output groups the same named leaf across
+cells. Native target tests also pin the exact logical offsets, so a consistently
+wrong packing/unpacking pair cannot be hidden by whole-value round-trip tests.
+
+The runner retains generated SystemVerilog byte-for-byte and keeps assertions.
+For the pinned firtool 1.154.0/Icarus consumer pair it uses the official
+`--lowering-options=disallowPackedStructAssignments,disallowLocalVariables` export
+configuration, recorded with the exact tool version and hashes. Earlier attempts
+without these options exposed Icarus syntax/lifetime limitations, not a passing
+simulation. Illegal two-bit Gray transitions and a FIFO stalled-payload mutation
+must fail with the actual retained monitor; their receipts are explicitly marked
+`expected-monitor-failure`, separate from three legal transport passes.
+
+This is fixed-width named-field adaptation and fixed contiguous field/index
+observation only. Symbolic CDC payloads, dynamic/noncontiguous selection and
+physical timing/electrical certification are not claimed. The output directory
+contains actual gated input, CIRCT, unmodified SV, handwritten testbenches, exact
+commands and hashes. No generated artifacts are committed.

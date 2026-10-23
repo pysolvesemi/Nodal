@@ -338,7 +338,8 @@ public:
 
   LogicalResult preflight() {
     if (failed(domains.verifyRelationships()) || failed(planControlProjections()) ||
-        failed(planParameters()) || failed(planInterfaces()) || failed(planGeneratedFamilies()))
+        failed(planFixedShapeSelections()) || failed(planParameters()) ||
+        failed(planInterfaces()) || failed(planGeneratedFamilies()))
       return failure();
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (Operation &op : source.getBody().front()) {
@@ -348,7 +349,7 @@ public:
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
       bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op) ||
-                        generatedMembers.count(&op);
+                        generatedMembers.count(&op) || fixedShapeSelections.count(&op);
       if (!structural) {
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
@@ -386,7 +387,14 @@ public:
             return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
                 targetValueType(type));
           });
-      if (symbolic &&
+      bool fixedNamedCrossing = false;
+      if (namedBoundaryABI && isa<CrossingOp, AsyncFifoOp>(op) &&
+          isa_and_nonnull<circt::hw::StructType>(targetValueType(op.getOperand(0).getType()))) {
+        if (failed(planFixedBoundaryAdapter(op.getOperand(0).getType(), &op)))
+          return failure();
+        fixedNamedCrossing = true;
+      }
+      if (symbolic && !structural && !fixedNamedCrossing &&
           !isa<PortValueOp, InstancePortOp, MemberAccessOp, InterfaceDriveOp, InterfaceConnectOp,
                InterfaceObserveOp, DigitalAssignOp>(op) &&
           !(isa<DigitalStorageOp>(op) && text(&op, "kind") == "wire") &&
@@ -399,7 +407,7 @@ public:
       uint64_t expansion = 1;
       if (structural) {
         // Shape/index expressions are compile-time proof, not hardware values.
-        expansion = controlProjections.contains(&op) ? 2 : 0;
+        expansion = controlProjections.contains(&op) ? 2 : fixedShapeSelections.count(&op) ? 1 : 0;
       } else if (isa<PortOp>(op)) {
         auto type = op.getAttrOfType<TypeAttr>("type");
         Type lowered = type ? targetValueType(type.getValue()) : Type();
@@ -514,6 +522,12 @@ public:
                     : crossing->kind == CrossingKind::Pulse     ? 64
                     : crossing->kind == CrossingKind::Gray      ? 2 * crossing->stages + 32
                                                                 : 3 * crossing->stages + 8;
+        if (fixedNamedCrossing) {
+          const auto &adapter = fixedBoundaryAdapters.find(op.getOperand(0).getType())->second;
+          // Pack/unpack scalar extracts, binary concatenations, struct leaves
+          // and correlated identity, charged per actual crossing consumer.
+          expansion += 4 * adapter.segments.size() + 2 * adapter.leafBits.size() + 2;
+        }
       } else if (isa<WaiverOp>(op)) {
         if (failed(inspectExecutableWaiver(&op, domains)))
           return failure();
@@ -1189,7 +1203,12 @@ public:
       values[reg->getResult(0)] = state;
       stateEdges.emplace_back(update, edge);
     }
-    SmallVector<std::pair<Value, circt::Backedge>> crossingEdges;
+    struct CrossingEdge {
+      Value original;
+      circt::Backedge edge;
+      Operation *consumer;
+    };
+    SmallVector<CrossingEdge> crossingEdges;
     for (const auto &crossing : crossings) {
       Operation *op = crossing.operation;
       auto destination = crossingControls(op, op->getAttr("destination_domain"),
@@ -1198,16 +1217,25 @@ public:
         backedges.abandon();
         return reject(op, "crossing destination physical clock/reset did not map");
       }
-      auto input = backedges.get(targetValueType(op->getOperand(0).getType()), op->getLoc());
-      crossingEdges.emplace_back(op->getOperand(0), input);
+      Type inputType = targetValueType(op->getOperand(0).getType());
+      auto adapter = fixedBoundaryAdapters.find(op->getOperand(0).getType());
+      if (adapter != fixedBoundaryAdapters.end())
+        inputType = builder.getIntegerType(adapter->second.bits);
+      auto input = backedges.get(inputType, op->getLoc());
+      crossingEdges.push_back({op->getOperand(0), input, op});
       Value previous = input;
       if (crossing.kind == CrossingKind::Level || crossing.kind == CrossingKind::Gray) {
         for (unsigned stage = 0; stage < crossing.stages; ++stage)
           previous = crossingState(crossing, stage, previous, *destination, "forward",
                                    crossing.kind != CrossingKind::Gray);
         values[op->getResult(0)] = previous;
-        if (crossing.kind == CrossingKind::Level)
+        if (crossing.kind == CrossingKind::Level) {
+          if (failed(finishCrossingPayload(crossing))) {
+            backedges.abandon();
+            return failure();
+          }
           continue;
+        }
       }
       auto sourceControl = crossingControls(op, op->getAttr("source_domain"));
       if (failed(sourceControl)) {
@@ -1217,8 +1245,8 @@ public:
       if (crossing.kind == CrossingKind::Fifo) {
         auto sourceValid = backedges.get(builder.getI1Type(), op->getLoc());
         auto destinationReady = backedges.get(builder.getI1Type(), op->getLoc());
-        crossingEdges.emplace_back(op->getOperand(1), sourceValid);
-        crossingEdges.emplace_back(op->getOperand(2), destinationReady);
+        crossingEdges.push_back({op->getOperand(1), sourceValid, op});
+        crossingEdges.push_back({op->getOperand(2), destinationReady, op});
         lowerFifo(crossing, input, sourceValid, destinationReady, *sourceControl, *destination,
                   backedges);
       } else if (crossing.kind == CrossingKind::Gray) {
@@ -1326,6 +1354,10 @@ public:
                         "restart. Delivery is not promised before the common reset epoch or "
                         "after a spacing/width violation.");
       }
+      if (failed(finishCrossingPayload(crossing))) {
+        backedges.abandon();
+        return failure();
+      }
     }
     for (Operation *op : clocks) {
       Value result = lowerClock(op, backedges);
@@ -1378,6 +1410,15 @@ public:
               RequirementClockOp, RequirementResetOp, CrossingOp, AsyncFifoOp, ResetBoundaryOp,
               ResetSyncOp, ResetCombineOp>(op))
         continue;
+      if (fixedShapeSelections.count(&op)) {
+        Value result = lowerFixedShapeSelection(&op);
+        if (!result) {
+          backedges.abandon();
+          return reject(&op, "fixed named shape selection did not match its actual value layout");
+        }
+        values[op.getResult(0)] = result;
+        continue;
+      }
       SmallVector<Value> inputs;
       for (Value old : op.getOperands()) {
         Value mapped = values.lookup(old);
@@ -1444,11 +1485,16 @@ public:
         pending.pop_back();
       }
     }
-    for (auto &[original, edge] : crossingEdges) {
+    for (auto &[original, edge, consumer] : crossingEdges) {
       Value input = values.lookup(original);
       if (!input) {
         backedges.abandon();
         return reject(original.getDefiningOp(), "crossing actual sampled input did not lower");
+      }
+      input = packFixedBoundary(consumer, original.getType(), input);
+      if (!input || input.getType() != Value(edge).getType()) {
+        backedges.abandon();
+        return reject(consumer, "crossing named input disagrees with its exact packed layout");
       }
       edge.setValue(input);
     }
@@ -2610,8 +2656,8 @@ private:
       for (Value result : op->getResults())
         for (Operation *user : result.getUsers())
           if (!staticOperations.contains(user) && !controlSelectors.contains(user) &&
-              !controlProjections.contains(user) && !isa<GenerateOp, GeneratedMemberOp>(user) &&
-              !user->getParentOfType<GenerateOp>())
+              !fixedShapeSelections.count(user) && !controlProjections.contains(user) &&
+              !isa<GenerateOp, GeneratedMemberOp>(user) && !user->getParentOfType<GenerateOp>())
             return reject(user, "static Integer target parameters cannot become runtime values");
     SmallVector<Attribute> declarations;
     for (Operation &op : source.getBody().front()) {
@@ -2845,6 +2891,294 @@ private:
     auto result = builder.getDictionaryAttr(layout);
     packedLayouts.try_emplace(type, result);
     return result;
+  }
+  // This is one immutable physical permutation, not another type/shape owner.
+  // Each segment maps one canonical scalar's logical packed offset to its
+  // named leaf vector's offset. Both inventories are independently checked.
+  struct FixedBoundarySegment {
+    unsigned leaf, leafOffset, logicalOffset, bits;
+  };
+  struct FixedBoundaryAdapter {
+    unsigned bits = 0;
+    Type targetType;
+    SmallVector<unsigned> leafBits;
+    SmallVector<FixedBoundarySegment> segments;
+    DictionaryAttr layout;
+  };
+  LogicalResult planFixedBoundaryAdapter(Type type, Operation *at) {
+    if (fixedBoundaryAdapters.count(type))
+      return success();
+    auto target = dyn_cast_or_null<circt::hw::StructType>(targetValueType(type));
+    auto view = boundaryViews.find(type);
+    auto bits = inferDigitalBitPatternFixedBits(type, source);
+    if (!target || view == boundaryViews.end() || failed(bits) || !*bits || *bits > maximumWidth ||
+        target.getElements().size() != view->second.leaves.size())
+      return reject(at, "named-field CDC requires an exact fixed logical packed layout");
+    FixedBoundaryAdapter plan;
+    plan.bits = *bits;
+    plan.targetType = target;
+    llvm::StringMap<unsigned> leafIndices;
+    for (auto [index, leaf] : llvm::enumerate(view->second.leaves)) {
+      auto physical = dyn_cast<IntegerType>(target.getElements()[index].type);
+      if (!physical || !physical.getWidth() ||
+          !leafIndices.try_emplace(leafName(leaf), index).second)
+        return reject(at, "named-field CDC leaf vectors require unique fixed widths");
+      plan.leafBits.push_back(physical.getWidth());
+    }
+    SmallVector<unsigned> leafOffsets(plan.leafBits.size(), 0);
+    HierarchyBoundaryLeaf path;
+    unsigned logicalOffset = 0;
+    llvm::DenseMap<Type, unsigned> fixedWidths;
+    std::function<LogicalResult(Type, unsigned)> visit = [&](Type current,
+                                                             unsigned depth) -> LogicalResult {
+      if (depth > 128 || cost >= maximumGeneratedOperations)
+        return failure();
+      ++cost;
+      if (auto shape = dyn_cast<nodal::ShapedType>(current)) {
+        SmallVector<StringRef> dimensions;
+        shape.getDimensions().split(dimensions, ',');
+        unsigned count = 1;
+        for (StringRef token : dimensions) {
+          auto extent = resolveStaticShapeDimension(source, token);
+          if (failed(extent) || extent->bounds.lower != extent->bounds.upper ||
+              extent->bounds.lower <= 0 || extent->bounds.lower > maximumWidth / count)
+            return failure();
+          count *= extent->bounds.lower;
+        }
+        for (unsigned index = 0; index != count; ++index)
+          if (failed(visit(shape.getElementType(), depth + 1)))
+            return failure();
+        return success();
+      }
+      if (auto structure = dyn_cast<StructType>(current)) {
+        for (Attribute attribute : structure.getFields()) {
+          auto field = cast<DictionaryAttr>(attribute);
+          path.path.push_back(
+              {builder.getStringAttr(structure.getName()), field.getAs<StringAttr>("name")});
+          auto result = visit(field.getAs<TypeAttr>("type").getValue(), depth + 1);
+          path.path.pop_back();
+          if (failed(result))
+            return failure();
+        }
+        return success();
+      }
+      auto found = leafIndices.find(leafName(path));
+      if (found == leafIndices.end())
+        return failure();
+      unsigned index = found->second;
+      const auto &leaf = view->second.leaves[index];
+      if (leaf.type != current || leaf.path.size() != path.path.size())
+        return failure();
+      for (auto [actual, expected] : llvm::zip(path.path, leaf.path))
+        if (actual.structure != expected.structure || actual.name != expected.name)
+          return failure();
+      auto [width, inserted] = fixedWidths.try_emplace(current, 0);
+      if (inserted) {
+        auto proof = inferDigitalBitPatternFixedBits(current, source);
+        if (failed(proof) || !*proof || *proof > maximumWidth)
+          return failure();
+        width->second = *proof;
+      }
+      unsigned count = width->second;
+      if (count > plan.bits - logicalOffset || count > plan.leafBits[index] - leafOffsets[index])
+        return failure();
+      plan.segments.push_back({index, leafOffsets[index], logicalOffset, count});
+      leafOffsets[index] += count;
+      logicalOffset += count;
+      return success();
+    };
+    if (failed(visit(type, 0)) || logicalOffset != plan.bits || leafOffsets != plan.leafBits)
+      return reject(at,
+                    "named-field CDC logical/physical layout must be an exact bounded bijection");
+    SmallVector<Attribute> segments;
+    for (const auto &segment : plan.segments)
+      segments.push_back(builder.getDictionaryAttr(
+          {builder.getNamedAttr("leaf", builder.getI32IntegerAttr(segment.leaf)),
+           builder.getNamedAttr("leaf_offset", builder.getI32IntegerAttr(segment.leafOffset)),
+           builder.getNamedAttr("logical_offset", builder.getI32IntegerAttr(segment.logicalOffset)),
+           builder.getNamedAttr("width", builder.getI32IntegerAttr(segment.bits))}));
+    plan.layout = builder.getDictionaryAttr(
+        {builder.getNamedAttr("kind", builder.getStringAttr("fixed-named-cdc")),
+         builder.getNamedAttr("width", builder.getI64IntegerAttr(plan.bits)),
+         builder.getNamedAttr("order",
+                              builder.getStringAttr("recursive-row-major-fields-lsb-first")),
+         builder.getNamedAttr("boundary", packedLayout(type)),
+         builder.getNamedAttr("segments", builder.getArrayAttr(segments))});
+    fixedBoundaryAdapters.try_emplace(type, std::move(plan));
+    return success();
+  }
+  // Low-order segments first, with binary balanced concatenation. Keeping this
+  // bounded also avoids depending on attributed variadic backend reductions.
+  Value concatenateBoundary(Operation *at, SmallVector<Value> parts) {
+    if (parts.empty())
+      return {};
+    while (parts.size() > 1) {
+      SmallVector<Value> next;
+      for (unsigned i = 0; i < parts.size(); i += 2) {
+        if (i + 1 == parts.size()) {
+          next.push_back(parts[i]);
+          continue;
+        }
+        auto low = cast<IntegerType>(parts[i].getType()).getWidth();
+        auto high = cast<IntegerType>(parts[i + 1].getType()).getWidth();
+        next.push_back(
+            make(at, "comb.concat", builder.getIntegerType(low + high), {parts[i + 1], parts[i]}));
+      }
+      parts = std::move(next);
+    }
+    return parts.front();
+  }
+  Value boundarySegment(Operation *at, Value value, unsigned offset, unsigned bits) {
+    auto type = dyn_cast<IntegerType>(value.getType());
+    if (!type || offset > type.getWidth() || bits > type.getWidth() - offset)
+      return {};
+    return !offset && bits == type.getWidth()
+               ? value
+               : make(at, "comb.extract", builder.getIntegerType(bits), {value},
+                      {builder.getNamedAttr("lowBit", builder.getI32IntegerAttr(offset))});
+  }
+  Value packFixedBoundary(Operation *at, Type original, Value value) {
+    auto found = fixedBoundaryAdapters.find(original);
+    if (found == fixedBoundaryAdapters.end())
+      return value;
+    const auto &plan = found->second;
+    if (value.getType() != plan.targetType)
+      return {};
+    auto leaves = splitBoundary(at, value);
+    if (leaves.size() != plan.leafBits.size())
+      return {};
+    SmallVector<Value> segments;
+    for (const auto &segment : plan.segments) {
+      Value part = boundarySegment(at, leaves[segment.leaf], segment.leafOffset, segment.bits);
+      if (!part)
+        return {};
+      segments.push_back(part);
+    }
+    Value result = concatenateBoundary(at, std::move(segments));
+    if (!result || !result.getType().isInteger(plan.bits))
+      return {};
+    // A correlated wire keeps the inverse record off a shared input value.
+    auto wire = circt::hw::WireOp::create(builder, at->getLoc(), result);
+    correlate(wire, at);
+    wire->setAttr("nodal.boundary_pack", plan.layout);
+    return wire.getResult();
+  }
+  Value unpackFixedBoundary(Operation *at, Type original, Value value) {
+    auto found = fixedBoundaryAdapters.find(original);
+    if (found == fixedBoundaryAdapters.end())
+      return value;
+    const auto &plan = found->second;
+    if (!value.getType().isInteger(plan.bits))
+      return {};
+    SmallVector<SmallVector<Value>> segments(plan.leafBits.size());
+    for (const auto &segment : plan.segments) {
+      Value part = boundarySegment(at, value, segment.logicalOffset, segment.bits);
+      if (!part)
+        return {};
+      segments[segment.leaf].push_back(part);
+    }
+    SmallVector<Value> leaves;
+    for (auto [index, parts] : llvm::enumerate(segments)) {
+      Value leaf = concatenateBoundary(at, std::move(parts));
+      if (!leaf || !leaf.getType().isInteger(plan.leafBits[index]))
+        return {};
+      leaves.push_back(leaf);
+    }
+    Value result = joinBoundary(at, plan.targetType, leaves);
+    result.getDefiningOp()->setAttr("nodal.boundary_unpack", plan.layout);
+    return result;
+  }
+  LogicalResult finishCrossingPayload(const ExecutableCrossing &crossing) {
+    Operation *op = crossing.operation;
+    Value value =
+        unpackFixedBoundary(op, op->getResult(0).getType(), values.lookup(op->getResult(0)));
+    if (!value)
+      return reject(op, "crossing packed result disagrees with its exact named boundary layout");
+    values[op->getResult(0)] = value;
+    return success();
+  }
+  struct FixedShapeSelection {
+    Value root;
+    unsigned offset, bits;
+  };
+  LogicalResult planFixedShapeSelections() {
+    if (!namedBoundaryABI || source.getBody().front().empty())
+      return success();
+    Operation *use = &source.getBody().front().back();
+    SmallVector<Value> selectors;
+    for (Operation &op : source.getBody().front()) {
+      if (!isa<ShapeIndexOp>(op) ||
+          !getDigitalControlBoundaryKind(op.getResult(0).getType()).empty())
+        continue;
+      auto projection = resolveStaticShapeProjection(op.getResult(0), use);
+      if (failed(projection) || !projection->contiguousLiteralRegion ||
+          !projection->literalFirstOffset || !projection->literalLastOffset ||
+          !projection->exactFixedCardinality ||
+          llvm::any_of(projection->projections,
+                       [](Operation *part) { return !isa<ShapeIndexOp>(part); }))
+        return reject(&op,
+                      "named-field shape selection requires an exact fixed contiguous index image");
+      Type rootType = projection->root.getType();
+      Type element = rootType;
+      while (auto shape = dyn_cast<nodal::ShapedType>(element))
+        element = shape.getElementType();
+      auto elementBits = inferDigitalBitPatternFixedBits(element, source);
+      auto rootBits = inferDigitalBitPatternFixedBits(rootType, source);
+      auto resultBits = inferDigitalBitPatternFixedBits(op.getResult(0).getType(), source);
+      int64_t first = *projection->literalFirstOffset;
+      int64_t count = *projection->literalLastOffset - first + 1;
+      if (failed(elementBits) || failed(rootBits) || failed(resultBits) || !*elementBits ||
+          !*resultBits || *rootBits > maximumWidth || first < 0 || count <= 0 ||
+          *projection->exactFixedCardinality != *rootBits / *elementBits ||
+          first > *rootBits / *elementBits ||
+          count > (*rootBits - first * *elementBits) / *elementBits ||
+          count * *elementBits != *resultBits)
+        return reject(&op, "named-field shape selection requires exact fixed logical bit offsets");
+      for (Type type : {rootType, op.getResult(0).getType()}) {
+        Type mapped = targetValueType(type);
+        if (!mapped || (!isa<IntegerType>(mapped) && !isa<circt::hw::StructType>(mapped)))
+          return reject(&op, "named-field shape selection requires fixed data types");
+        if (isa<circt::hw::StructType>(mapped) && failed(planFixedBoundaryAdapter(type, &op)))
+          return failure();
+      }
+      llvm::append_range(selectors, op.getOperands().drop_front());
+      fixedShapeSelections.try_emplace(&op, FixedShapeSelection{projection->root,
+                                                                unsigned(first * *elementBits),
+                                                                unsigned(*resultBits)});
+      for (Type type : {rootType, op.getResult(0).getType()}) {
+        auto plan = fixedBoundaryAdapters.find(type);
+        if (plan == fixedBoundaryAdapters.end())
+          continue;
+        uint64_t expansion = 2 * plan->second.segments.size() + plan->second.leafBits.size() + 2;
+        if (expansion > maximumGeneratedOperations - cost)
+          return reject(&op, "fixed shape adapter exceeds target operation budget");
+        cost += expansion;
+      }
+    }
+    while (!selectors.empty()) {
+      Value selector = selectors.pop_back_val();
+      Operation *op = selector.getDefiningOp();
+      if (!op || !isa<ConstantOp, ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(op) ||
+          (!selector.getType().isIndex() && !selector.getType().isInteger(64)))
+        return reject(source, "fixed shape selectors require proved compile-time expressions");
+      if (!staticOperations.insert(op).second)
+        continue;
+      llvm::append_range(selectors, op->getOperands());
+    }
+    return success();
+  }
+  Value lowerFixedShapeSelection(Operation *op) {
+    const auto &selection = fixedShapeSelections.find(op)->second;
+    Value root = values.lookup(selection.root);
+    if (!root)
+      return {};
+    Value packed = packFixedBoundary(op, selection.root.getType(), root);
+    if (!packed)
+      return {};
+    Value selected = boundarySegment(op, packed, selection.offset, selection.bits);
+    if (!selected)
+      return {};
+    return unpackFixedBoundary(op, op->getResult(0).getType(), selected);
   }
   void correlateClock(Operation *target, Operation *op, StringRef role) {
     correlate(target, op);
@@ -3147,8 +3481,12 @@ private:
     state->setAttr("nodal.crossing_role", builder.getStringAttr(role));
     if (Attribute obligations = op->getAttr("obligations"))
       state->setAttr("nodal.crossing_obligations", obligations);
-    if (aggregatePayload(op->getOperand(0).getType()))
-      state->setAttr("nodal.packed_abi", packedLayout(op->getOperand(0).getType()));
+    if (aggregatePayload(op->getOperand(0).getType())) {
+      auto adapter = fixedBoundaryAdapters.find(op->getOperand(0).getType());
+      state->setAttr("nodal.packed_abi", adapter == fixedBoundaryAdapters.end()
+                                             ? packedLayout(op->getOperand(0).getType())
+                                             : adapter->second.layout);
+    }
     return state->getResult(0);
   }
   void lowerFifo(const ExecutableCrossing &crossing, Value payload, Value sourceValid,
@@ -3670,6 +4008,8 @@ private:
   llvm::DenseMap<Operation *, Type> portTypes;
   llvm::DenseMap<Type, Type> packedTypes;
   llvm::DenseMap<Type, HierarchyBoundaryType> boundaryViews;
+  llvm::DenseMap<Type, FixedBoundaryAdapter> fixedBoundaryAdapters;
+  llvm::DenseMap<Operation *, FixedShapeSelection> fixedShapeSelections;
   llvm::DenseMap<Type, llvm::StringMap<unsigned>> targetFieldIndices;
   llvm::DenseMap<Type, DictionaryAttr> packedLayouts;
   llvm::DenseSet<Operation *> controlProjections, controlSelectors;

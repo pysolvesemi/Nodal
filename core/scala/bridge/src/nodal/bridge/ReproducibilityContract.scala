@@ -408,6 +408,8 @@ private[nodal] object ReproducibilityContract:
           "ordinal" -> string(member.ordinal),
           "member" -> string(member.member),
           "access" -> string(member.access)
+        ) ++ member.familyInput.toVector.map(input =>
+          "family_input" -> string(input)
         ) ++ Option.when(member.selectionPrefix.nonEmpty)(
           "selection_prefix" -> array(member.selectionPrefix.map(frame =>
             obj(
@@ -1134,10 +1136,14 @@ private[nodal] object ReproducibilityContract:
             "data_type" -> string(net.dataType),
             "mode" -> string(net.mode),
             "operations" -> array(net.operations.sorted.map(string))
-          ) ++ (if net.member.nonEmpty then Vector.empty else Vector(
-            "placement" -> string(net.placement),
-            "profile" -> string(net.profile)
-          )) ++ net.boundary.toVector.map(boundary => "boundary" -> interfaceBoundary(boundary)) ++
+          ) ++ (if net.member.nonEmpty then Vector.empty
+                else
+                  Vector(
+                    "placement" -> string(net.placement),
+                    "profile" -> string(net.profile)
+                  )) ++ net.boundary.toVector.map(boundary =>
+            "boundary" -> interfaceBoundary(boundary)
+          ) ++
             net.member.toVector.map(member => "member" -> resolvedMember(member)))*)
       ),
       "topology" -> array(
@@ -1304,8 +1310,11 @@ private[nodal] object ReproducibilityContract:
     obj("instance" -> string(value.instance), "endpoint" -> string(value.endpoint))
 
   private def resolvedMember(value: KernelResolvedMemberSnapshot): JsonValue =
-    obj("endpoint" -> string(value.endpoint), "member" -> string(value.member),
-      "role" -> string(value.role))
+    obj(
+      "endpoint" -> string(value.endpoint),
+      "member" -> string(value.member),
+      "role" -> string(value.role)
+    )
 
   private def interfaceRoles(values: Vector[(String, String)]): JsonValue =
     array(values.map((path, role) => obj("path" -> string(path), "role" -> string(role))))

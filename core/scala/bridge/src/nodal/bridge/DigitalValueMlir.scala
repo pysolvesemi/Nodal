@@ -334,6 +334,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(declarations.get(path).map(_._1))
         .orElse(arguments.get(path).map(_._1.owner))
         .orElse(hierarchy.projections.get(path).map(_.owner))
+        .orElse(generated.get(path).filter(_.yieldedArea.nonEmpty).map(_.owner))
 
     def valueRegion(path: String): Option[String] =
       expressions.get(path).flatMap(_.region).orElse(predicates.get(path).flatMap(_.region))
@@ -341,6 +342,35 @@ private[nodal] object DigitalValueMlir:
         .orElse(iterationIndices.get(path).map(_.region))
         .orElse(arguments.get(path).map(_._1.path))
         .orElse(declarations.get(path).flatMap(_._2.generatedScope.map(_.owner)))
+        .orElse(generated.get(path).filter(_.yieldedArea.nonEmpty).flatMap(_.lexicalParent))
+
+    private def requireStructuralFamilyScope(scope: Option[String], consumer: String): Unit =
+      var current = scope
+      val visited = mutable.HashSet.empty[String]
+      while current.nonEmpty do
+        val path = current.get
+        requireValid(visited.add(path) && visited.size <= 128 &&
+          (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
+          "family capability requires actual structural-only lexical ancestry", consumer)
+        current = regions.getOrElse(path, fail("family scope is absent", consumer)).parentRegion
+
+    private def structuralFamilySource(path: String, owner: String, scope: Option[String], consumer: String,
+        depth: Int = 0): String =
+      requireValid(depth < 128, "family capture chain exceeds depth", consumer)
+      requireVisible(path, owner, scope, consumer)
+      requireStructuralFamilyScope(scope, consumer)
+      generated.get(path) match
+        case Some(family) =>
+          requireValid(family.yieldedArea.nonEmpty, "family capture requires actual family result", consumer)
+          family.path
+        case None =>
+          val (region, argument) = arguments.getOrElse(path, fail("family capture has no exact argument", consumer))
+          requireValid(arms.get(region.path).exists(_._1.behavioralRoot.isEmpty) &&
+            argument.dataType == "GeneratedFamily" && argument.role == "family_capture",
+            "family capture requires exact non-Data structural arm argument", consumer)
+          val index = region.arguments.indexWhere(_.path == path)
+          val source = region.captures.lift(index).getOrElse(fail("family argument has no capture edge", consumer))
+          structuralFamilySource(source, owner, region.parentRegion, consumer, depth + 1)
 
     def requireVisible(
         path: String,
@@ -712,10 +742,12 @@ private[nodal] object DigitalValueMlir:
             val expected = expressionType(arm.captures(index))
             requireValid(
               argument.path == s"${arm.path}.arg$index" &&
-                argument.role == (if expected != "Integer" then "capture"
+                argument.role == (if expected == "GeneratedFamily" then "family_capture"
+                                  else if expected != "Integer" then "capture"
                                   else if isIterationIndex(arm.captures(index)) then "index_capture"
                                   else "static_capture") &&
-                (expected == "Integer" || finiteType(expected)) &&
+                (expected == "GeneratedFamily" && argument.dataType == expected ||
+                  expected == "Integer" || finiteType(expected)) &&
                 !expressions.contains(argument.path) && !staticExpressions.contains(
                   argument.path
                 ) &&
@@ -723,6 +755,8 @@ private[nodal] object DigitalValueMlir:
               "structural arm argument requires its exact capture role and canonical identity",
               argument.path
             )
+            if expected == "GeneratedFamily" then
+              val _ = structuralFamilySource(argument.path, conditional.owner, Some(arm.path), argument.path)
           arm.yieldValue.foreach(requireVisible(
             _,
             conditional.owner,
@@ -1034,11 +1068,14 @@ private[nodal] object DigitalValueMlir:
       var expected = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
       val root =
         generated.getOrElse(expected, fail("selected family root is absent", expression.path))
-      requireValid(
-        root.lexicalParent == expression.region,
-        "selected family root escaped handle-definition scope",
-        expression.path
-      )
+      member.familyInput.foreach(path => requireValid(arguments.get(path).exists(value =>
+        value._2.role == "family_capture" && value._2.dataType == "GeneratedFamily"),
+        "family input must name its actual non-Data structural capture argument", expression.path))
+      if member.familyInput.isEmpty then requireValid(root.lexicalParent == expression.region,
+        "selected family root escaped handle-definition scope", expression.path)
+      val input = member.familyInput.getOrElse(root.path)
+      requireValid(structuralFamilySource(input, expression.owner, expression.region, expression.path) == root.path,
+        "selected family capture must retain its exact root producer", expression.path)
       member.selectionPrefix.foreach: selection =>
         requireValid(
           selection.family == expected,
@@ -2225,6 +2262,7 @@ private[nodal] object DigitalValueMlir:
         .orElse(arguments.get(path).map(_._2.dataType))
         .orElse(iterationIndices.get(path).map(_ => "Integer"))
         .orElse(hierarchy.projections.get(path).map(_.kind))
+        .orElse(generated.get(path).filter(_.yieldedArea.nonEmpty).map(_ => "GeneratedFamily"))
         .getOrElse(fail("digital operand requires an exact type", path))
 
     private def scalarLiteral(
@@ -3164,16 +3202,14 @@ private[nodal] object DigitalValueMlir:
                   clearRegion(arm.path)
                   blockArguments = arm.arguments.zipWithIndex.map: (argument, index) =>
                     requireValid(
-                      regionalTypeMatches(
-                        argument.dataType,
-                        expressionType(arm.captures(index)),
-                        argument.path
-                      ),
+                      (argument.dataType == "GeneratedFamily" && expressionType(arm.captures(index)) == "GeneratedFamily") ||
+                        regionalTypeMatches(argument.dataType, expressionType(arm.captures(index)), argument.path),
                       "structural arm capture must preserve its exact complete type",
                       argument.path
                     )
                     val name = s"%structural_arm_${ordinal}_arg$index"
-                    val dataType = computedType(argument.dataType, argument.path)
+                    val dataType = if argument.dataType == "GeneratedFamily" then "!nodal.generated_family"
+                      else computedType(argument.dataType, argument.path)
                     values.update(argument.path, name -> dataType)
                     heights.update(argument.path, heights(arm.captures(index)) + 1)
                     proofs.update(argument.path, proofs(arm.captures(index)))
@@ -3623,7 +3659,7 @@ private[nodal] object DigitalValueMlir:
                     val root =
                       member.selectionPrefix.headOption.map(_.family).getOrElse(family.path)
                     var handle = values.getOrElse(
-                      root,
+                      member.familyInput.getOrElse(root),
                       fail("generated member must follow its actual family producer", path)
                     )
                     val familyOperations = member.selectionPrefix.zipWithIndex.map:

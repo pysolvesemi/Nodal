@@ -46,7 +46,8 @@ private[nodal] final case class KernelGeneratedMemberSnapshot(
     ordinal: String,
     member: String,
     access: String,
-    selectionPrefix: Vector[KernelGeneratedFamilySelection] = Vector.empty
+    selectionPrefix: Vector[KernelGeneratedFamilySelection] = Vector.empty,
+    familyInput: Option[String] = None
 )
 
 private[nodal] final case class GeneratedAreaMemberRecord(

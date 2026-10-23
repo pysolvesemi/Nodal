@@ -2461,7 +2461,14 @@ ${indent(body, 2)}
           case (token, index) if token.toLongOption.nonEmpty =>
             (region -> token) -> s"$path.bound$index"
         }
-      val literalBoundIdentities = boundIdentities.groupMap(_._1)(_._2).view.mapValues(_.head).toMap
+      val memberIdentities = snapshot.digitalExpressions.filter(_.owner == module.path)
+        .sortBy(_.path).flatMap: expression =>
+          expression.generatedMember.toVector.flatMap: member =>
+            (member.selectionPrefix.map(_.ordinal) :+ member.ordinal).zipWithIndex.collect:
+              case (token, index) if token.toLongOption.nonEmpty =>
+                (expression.region -> token) -> s"${expression.path}.ordinal$index"
+      val literalBoundIdentities = (boundIdentities ++ memberIdentities).groupMap(_._1)(_._2)
+        .view.mapValues(_.head).toMap
       def renderDigitalStatic(
           path: String,
           region: Option[String],

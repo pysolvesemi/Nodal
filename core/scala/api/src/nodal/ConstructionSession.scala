@@ -2458,6 +2458,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     module.scaffoldExpressionCount += 1
     reference
 
+  private def dataArgument(value: DigitalRegionArgument): KernelExpr[?] = value match
+    case expression: KernelExpr[?] => expression
+    case _ => collectionFailure("non-Data family argument cannot enter a Data-only consumer")
+
+  private def dataCapture(value: DigitalCaptureValue): Expr[?] = value match
+    case expression: Expr[?] => expression
+    case _ => collectionFailure("non-Data family capture cannot enter a Data-only consumer")
+
   private def newCollectionArgument(
       region: DigitalValueRegionRecord,
       dataType: DataType[?],
@@ -2487,6 +2495,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       captureExpression(argument, retained = Some(reference), scopeOverride = Some(Some(region)))
     argument
 
+  /** Non-Data family capability capture uses the same ordered lexical owner as Data. */
+  private def bindGeneratedFamily(
+      family: GeneratedRegionRecord,
+      destination: Option[DigitalValueRegionRecord],
+      create: Boolean = true
+  ): GeneratedRegionRecord | GeneratedFamilyArgument =
+    val source = family.digitalRegion.getOrElse(
+      collectionFailure("family capture has no actual generated body")).parent
+    if source == destination then family
+    else destination match
+      case Some(region) if region.structuralArm.nonEmpty =>
+        val parent = bindGeneratedFamily(family, region.parent, create)
+        region.captures.get(parent) match
+          case Some((_, argument: GeneratedFamilyArgument)) if argument.family eq family => argument
+          case Some(_) => collectionFailure("family capture cannot change its actual capability")
+          case None if create =>
+            if region.arguments.size >= DigitalReductionContract.MaximumArguments then
+              collectionFailure("family capture exceeds the argument budget")
+            val argument = new GeneratedFamilyArgument(region, region.arguments.size, family)
+            region.arguments += argument -> "family_capture"
+            region.captures.update(parent, parent -> argument)
+            argument
+          case None => collectionFailure("family capture edge was not captured during construction")
+      case _ => collectionFailure("family capability escaped its exact structural lexical scope")
+
   /** Resolve each free edge through every intervening region. This retains actual parent values as
     * capture operands and introduces a genuine typed block argument at each isolation boundary.
     */
@@ -2513,7 +2546,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val sourceRegion = valueRegion(reference)
     val generatedInduction = destination.filter(_.isLoop).flatMap(_.loop.get.generated)
       .exists(region => reference == region.induction)
-    if generatedInduction then destination.get.arguments.head._1
+    if generatedInduction then dataArgument(destination.get.arguments.head._1)
     else if sourceRegion == destination then value
     else
       destination match
@@ -2523,7 +2556,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           val parentValue = bindCollectionValue(value, region.parent, owner, create, predicateUse)
           val parentReference = valueReference(parentValue)
           region.captures.get(parentReference) match
-            case Some((_, argument)) => argument
+            case Some((_: Expr[?], argument: KernelExpr[?])) => argument
+            case Some(_) => collectionFailure("ordinary capture cannot acquire a family capability")
             case None if create =>
               val dataType = CandidateRuntime.expressionDataType(parentValue).getOrElse(
                 collectionFailure("collection capture requires an exact type")
@@ -2764,7 +2798,22 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val positions = dependencies.map(ancestry.indexOf)
     if positions.exists(_ < 0) then
       collectionFailure("generated member handle or ordinal escaped its lexical scope")
-    ancestry(positions.min)
+    val candidates = ancestry.take(positions.min + 1).reverse
+    val selections = member.selectionPrefix.map(value => value.family -> value.ordinal) :+
+      (member.family -> member.ordinal)
+    def capturable(scope: Option[DigitalValueRegionRecord]): Boolean =
+      var current = scope
+      var valid = true
+      while current != familyBody.parent && valid do
+        current match
+          case Some(region) if region.structuralArm.nonEmpty => current = region.parent
+          case _ => valid = false
+      valid
+    val destination = candidates.find(scope => capturable(scope) && selections.forall:
+      (family, ordinal) => generatedOrdinalValid(family, ordinal, scope))
+      .getOrElse(collectionFailure("generated member has no dominating structural existence scope"))
+    val _ = bindGeneratedFamily(firstFamily, destination)
+    destination
 
   private def collectionExpressionScope(
       expression: KernelExpr[?],
@@ -2977,7 +3026,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           KernelDigitalRegionArgument(
             pathOf(argument).get,
             renderCollectionType(
-              CandidateRuntime.expressionDataType(argument).get,
+              CandidateRuntime.expressionDataType(dataArgument(argument)).get,
               region.reference.module,
               Some(region)
             ),
@@ -3023,11 +3072,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     region.arguments.toVector.map: (argument, role) =>
       KernelDigitalRegionArgument(
         pathOf(argument).get,
-        renderCollectionType(
-          CandidateRuntime.expressionDataType(argument).get,
-          region.reference.module,
-          Some(region)
-        ),
+        argument match
+          case _: GeneratedFamilyArgument => "GeneratedFamily"
+          case value: KernelExpr[?] => renderCollectionType(
+            CandidateRuntime.expressionDataType(value).get,
+            region.reference.module,
+            Some(region)),
         role
       )
 
@@ -4652,7 +4702,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       if !nested.arguments.take(expected.size).zip(expected).forall:
           case ((argument, _), (dataType, _)) =>
             DigitalEnumContract.sameType(
-              argument.resultDescriptor.get,
+              dataArgument(argument).resultDescriptor.get,
               CandidateRuntime.typeDescriptor(dataType)
             )
       then
@@ -4695,7 +4745,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           KernelDigitalRegionArgument(
             pathOf(argument).get,
             renderCollectionType(
-              CandidateRuntime.expressionDataType(argument).get,
+              CandidateRuntime.expressionDataType(dataArgument(argument)).get,
               owner,
               Some(region)
             ),
@@ -4926,13 +4976,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if value.selectionPrefix.isEmpty then
       bindArea(name, priority, record.yieldedArea.get.value.get)
 
-  private def validateGeneratedOrdinal(
+  private def generatedOrdinalValid(
       record: GeneratedRegionRecord,
-      ordinal: Int | Expr[Integer]
-  ): Unit =
+      ordinal: Int | Expr[Integer],
+      scope: Option[DigitalValueRegionRecord]
+  ): Boolean =
     val analysis = new StructuralBoundAnalysis(record.owner, "NODAL-AREA-058-INDEX", "Area ordinal")
     val bounds = analysis(ordinal)
-    IterationDomain.verifyOrdinal(record.domain, bounds.bounds).left.foreach: problem =>
+    val valid = IterationDomain.verifyOrdinal(record.domain, bounds.bounds).fold(_ =>
       val index = analysis(ordinal)
       val zero = analysis(0)
       val coordinate = analysis.generatedCoordinate(record, index)
@@ -4953,7 +5004,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       def prove(left: StructuralBound, right: StructuralBound, inclusive: Boolean): Boolean =
         if proof.less(left, right, inclusive) then true
         else
-          var current = record.digitalRegion.flatMap(_.parent)
+          var current = scope
           val visited = mutable.HashSet.empty[DigitalValueRegionRecord]
           var proved = false
           while current.nonEmpty && !proved do
@@ -4965,9 +5016,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               proved = proof.under(conditional.predicate, !arm.whenTrue, left, right, inclusive)
             current = region.parent
           proved
-      if !prove(zero, index, true) || !prove(coordinate, upper, false) then
-        fail("NODAL-AREA-058-INDEX", problem.message)
+      prove(zero, index, true) && prove(coordinate, upper, false), _ => true)
     bounds.parameters.foreach(markStructuralParameter)
+    valid
+
+  private def validateGeneratedOrdinal(record: GeneratedRegionRecord, ordinal: Int | Expr[Integer]): Unit =
+    if !generatedOrdinalValid(record, ordinal, activeValueRegion) then
+      fail("NODAL-AREA-058-INDEX", "generated ordinal existence is not proved in its actual lexical scope")
 
   def generatedAreaReference[A <: Area](family: GeneratedAreas[A], ordinal: Int | Expr[Integer])
       : GeneratedAreaRef[A] =
@@ -5184,25 +5239,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         val ordinal = input match
           case value: Int => value
           case value: Expr[Integer] =>
-            bindCollectionValue(
-              value,
-              expressionRegions.get(reference),
-              record.family.owner,
-              create = false
-            ).asInstanceOf[Expr[Integer]]
+            bindCollectionValue(value, expressionRegions.get(reference), record.family.owner,
+              create = false).asInstanceOf[Expr[Integer]]
         generatedBound(ordinal)
+      val root = record.selectionPrefix.headOption.map(_.family).getOrElse(record.family)
+      val familyInput = bindGeneratedFamily(root, expressionRegions.get(reference), create = false) match
+        case _: GeneratedRegionRecord => None
+        case argument: GeneratedFamilyArgument => pathOf(argument)
       KernelGeneratedMemberSnapshot(
         generatedRegionPath(record.family),
         bound(record.ordinal),
         record.members.mkString("."),
         record.access,
-        record.selectionPrefix.map(value =>
-          KernelGeneratedFamilySelection(
-            generatedRegionPath(value.family),
-            bound(value.ordinal),
-            value.members.mkString(".")
-          )
-        )
+        record.selectionPrefix.map(value => KernelGeneratedFamilySelection(
+          generatedRegionPath(value.family), bound(value.ordinal), value.members.mkString("."))),
+        familyInput
       )
 
   private def areaComponents(record: AreaRecord): Vector[String] =
@@ -9666,6 +9717,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       .getOrElse(s"${modulePath(parent)}.instance_$ordinal")
 
   def pathOf(value: Any): Option[String] = value match
+    case family: GeneratedRegionRecord => Some(generatedRegionPath(family))
+    case argument: GeneratedFamilyArgument => Some(s"${expressionPath(argument.region.reference)}.arg${argument.position}")
     case node: Node[?] if node.endpointReference.nonEmpty =>
       Option(expressionIds.get(node)).orElse(node.endpointReference).flatMap(
         shapeIndices.get
@@ -11134,7 +11187,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         (region, _) =>
           region.captures.valuesIterator.find(value =>
             Option(expressionIds.get(value._2)).contains(reference)
-          ).map(value => valueReference(value._1))
+          ).map(value => valueReference(dataCapture(value._1)))
       val input = capture.orElse(index.map(_.input)).orElse(view.map(_.input)).getOrElse(
         fail(
           "NODAL-DIGITAL-054-010",
@@ -11430,7 +11483,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     }.toVector
     val loopStaticRoots = (loopRegions.valuesIterator.filter(retainedLoops).flatMap(region =>
       Iterator(region.loop.get.lower, region.loop.get.upperExclusive, region.loop.get.step) ++
-        region.captures.valuesIterator.map(_._1).filter(value =>
+        region.captures.valuesIterator.map(value => dataCapture(value._1)).filter(value =>
           CandidateRuntime.expressionDataType(value).exists(dataType =>
             CandidateRuntime.typeDescriptor(dataType) == KernelTypeDescriptor("Integer")
           )

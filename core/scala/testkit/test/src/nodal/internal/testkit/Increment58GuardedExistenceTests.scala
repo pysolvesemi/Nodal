@@ -52,7 +52,12 @@ object Increment58GuardedExistenceTests extends TestSuite:
       do
         rejected(make)
     test("module family requiring later guard cannot hoist projection out of proof scope"):
-      rejected(() => new Increment58GuardedExistenceOuterHandle)
+      val snapshot = ConstructionKernel.inspect(new Increment58GuardedExistenceOuterHandle)
+      val projection = snapshot.digitalExpressions.find(_.generatedMember.nonEmpty).get
+      assert(projection.region.nonEmpty)
+      assert(projection.generatedMember.get.familyInput.nonEmpty)
+      assert(snapshot.generatedRegions.head.lexicalParent.isEmpty)
+      assert(ScalaToMlirBridge.fromSnapshot(snapshot).text.contains("!nodal.generated_family"))
     test("forged comparison cannot inherit authored presence authority"):
       for make <- Vector[() => Module](
           () => new Increment58GuardedExistenceSource,

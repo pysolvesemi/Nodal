@@ -228,3 +228,35 @@ object Increment58BoundaryArtifactTests extends TestSuite:
           )
         )
         assert(!canonical(historical).contains("\"body_parent_region\""))
+
+    test("captured generated family artifact retains the exact non-Data structural argument"):
+      val snapshot = ConstructionKernel.inspect(new nodal_external.Increment58FamilyCaptureSource)
+      val expression = snapshot.digitalExpressions.find(_.generatedMember.exists(
+        _.familyInput.nonEmpty
+      )).get
+      val member = expression.generatedMember.get
+      val input = member.familyInput.get
+      val argument = snapshot.structuralIfs.flatMap(value => Vector(value.trueArm, value.falseArm))
+        .flatMap(_.arguments).find(_.path == input).get
+      assert(argument.dataType == "GeneratedFamily", argument.role == "family_capture")
+      val artifact = canonical(snapshot)
+      val compact = artifact.replaceAll("\\s", "")
+      assert(compact.contains(s"\"family_input\":\"$input\""))
+      assert(compact.sliding("\"family_input\"".length).count(_ == "\"family_input\"") ==
+        snapshot.digitalExpressions.count(_.generatedMember.exists(_.familyInput.nonEmpty)))
+      val forged = snapshot.copy(digitalExpressions =
+        snapshot.digitalExpressions.map(value =>
+          if value.path == expression.path then
+            value.copy(generatedMember = Some(member.copy(familyInput = Some(input + "_other"))))
+          else value
+        )
+      )
+      assert(canonical(forged) != artifact)
+      val missing = snapshot.copy(digitalExpressions =
+        snapshot.digitalExpressions.map(value =>
+          value.copy(generatedMember = value.generatedMember.map(_.copy(familyInput = None)))
+        )
+      )
+      assert(!canonical(missing).contains("\"family_input\""))
+      assert(!canonical(ConstructionKernel.inspect(new Increment58GeneratedAreaScaleSource))
+        .contains("\"family_input\""))

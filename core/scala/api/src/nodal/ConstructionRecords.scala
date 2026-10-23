@@ -898,6 +898,17 @@ private final class BehavioralIfRecord(
 
 private final class BehavioralChainCursor(val root: ExpressionRef, var tail: BehavioralIfRecord)
 
+/** Non-Data argument in the same ordered lexical capture owner as ordinary values. */
+private[nodal] final class GeneratedFamilyArgument(
+    val region: DigitalValueRegionRecord,
+    val position: Int,
+    val family: GeneratedRegionRecord
+)
+
+private[nodal] type DigitalCaptureValue = Expr[?] | GeneratedRegionRecord | GeneratedFamilyArgument
+private[nodal] type DigitalCaptureKey = DeclarationRef | ExpressionRef | GeneratedRegionRecord | GeneratedFamilyArgument
+private[nodal] type DigitalRegionArgument = KernelExpr[?] | GeneratedFamilyArgument
+
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
 private final class DigitalValueRegionRecord(
     val reference: ExpressionRef,
@@ -926,8 +937,8 @@ private final class DigitalValueRegionRecord(
     case DigitalRegionKind.BoundedLoop | DigitalRegionKind.Generate | DigitalRegionKind.StructuralArm | DigitalRegionKind.BehavioralArm | DigitalRegionKind.FsmAction | DigitalRegionKind.SwitchArm =>
       true
     case DigitalRegionKind.Collection => false
-  val arguments: mutable.ArrayBuffer[(KernelExpr[?], String)] = mutable.ArrayBuffer.empty
-  val captures: mutable.LinkedHashMap[DeclarationRef | ExpressionRef, (Expr[?], KernelExpr[?])] =
+  val arguments: mutable.ArrayBuffer[(DigitalRegionArgument, String)] = mutable.ArrayBuffer.empty
+  val captures: mutable.LinkedHashMap[DigitalCaptureKey, (DigitalCaptureValue, DigitalRegionArgument)] =
     mutable.LinkedHashMap.empty
   var expressionCount: Int = 0
   var assignmentCount: Int = 0

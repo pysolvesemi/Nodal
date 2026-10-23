@@ -135,8 +135,11 @@ object Increment58GeneratedAreaTests extends TestSuite:
       assert(snapshot.structuralIfs.head.trueArm.captures.contains(members.head.path))
       assert(snapshot.structuralIfs.head.falseArm.captures.contains(members.last.path))
       val _ = ScalaToMlirBridge.fromSnapshot(snapshot)
-      // Guard-dependent existence is a separate required profile, never a default-based proof.
-      rejected("NODAL-AREA-058-INDEX")(new Increment58GeneratedGuardOnlyExistence)
+      val guarded = ConstructionKernel.inspect(new Increment58GeneratedGuardOnlyExistence)
+      val selected = guarded.digitalExpressions.find(_.generatedMember.nonEmpty).get
+      assert(selected.region.nonEmpty && selected.generatedMember.get.familyInput.nonEmpty)
+      assert(guarded.generatedRegions.head.lexicalParent.isEmpty)
+      val _ = ScalaToMlirBridge.fromSnapshot(guarded)
     test("bridge rejects forged exports capabilities type ordinal and raw storage escape"):
       val snapshot = ConstructionKernel.inspect(new Increment58GeneratedAreaSource)
       val family = snapshot.generatedRegions.head

@@ -1187,3 +1187,21 @@ prefix-map assertions and three additional negatives are not part of this exact
 snapshot. Nested lane-distinct target behavior and broader pending profiles
 remain open. No security-held consumer execution is resumed by preserving this
 previously accepted source checkpoint.
+
+## Checkpoint 27 — generated-family capture through structural choices
+
+The exact 375-file Scala source inventory matches the retained 73-group shared
+acceptance, with twelve changed source paths beyond the preceding scalar/Struct
+slice. Counts include eight family-capture groups, seven artifact groups and
+58 affected Area/Generate/structural predecessors. Six actual shared-compiled
+family-capture replays pass the frozen native compiler's default gate. Exact
+source manifests and counts are in `.work/f58-family-capture-shared`; replay
+receipts are in `.work/f58-generated-areas/n2c/shared-promoted`.
+
+The canonical ordered capture owner transports a closed non-Data family argument.
+Original family identity and actual capture edge remain separate; artifact
+`family_input` appears only when present, preserving earlier bytes otherwise.
+The source checkpoint depends on the independently checked native family transport
+implementation and does not itself establish generated-symbol or target support.
+No represented lane expansion, alternate hierarchy graph or parent closure is
+introduced. Later nested assignment and physical target results remain separate.

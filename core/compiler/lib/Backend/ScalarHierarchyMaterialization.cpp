@@ -232,6 +232,8 @@ private:
           if (!text(&operation, key).empty())
             names.insert(text(&operation, key));
       for (auto &endpoint : logical) {
+        if (endpoint.selection || !llvm::isa<ModuleOp>(endpoint.operation->getParentOp()))
+          return invalid(endpoint.operation, "generated conservative Interface requires selected occurrence routing");
         if (!endpoint.dimensions.empty())
           return invalid(endpoint.operation, "conservative Interface emission requires scalar endpoints");
         Endpoint entry{endpoint, {}};

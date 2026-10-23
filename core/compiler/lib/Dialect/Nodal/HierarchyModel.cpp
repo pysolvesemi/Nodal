@@ -117,17 +117,21 @@ LogicalResult verifyHierarchyInstanceOperation(Operation *instance) {
   Operation *module = instance->getParentOfType<ModuleOp>();
   auto dictionary = instance->getAttrOfType<DictionaryAttr>("domain_bindings");
   if (!definition || !dictionary)
-    return reject(instance, "hierarchy instance requires a resolved direct definition and domain dictionary");
+    return reject(instance,
+                  "hierarchy instance requires a resolved direct definition and domain dictionary");
   for (NamedAttribute binding : dictionary) {
     auto requirement = FlatSymbolRefAttr::get(instance->getContext(), binding.getName().getValue());
     if (!isa_and_nonnull<DomainRequirementOp>(local(definition, requirement)) ||
         !isa_and_nonnull<DomainOp, DomainRequirementOp>(local(module, binding.getValue())))
-      return reject(instance, "instance domain dictionary must name exact child requirements and parent actuals");
+      return reject(
+          instance,
+          "instance domain dictionary must name exact child requirements and parent actuals");
   }
   return success();
 }
 FailureOr<HierarchyInstance> resolveHierarchyInstance(Operation *use, Attribute reference) {
-  auto *instance = resolveStructuralInstance(use, dyn_cast_if_present<FlatSymbolRefAttr>(reference));
+  auto *instance =
+      resolveStructuralInstance(use, dyn_cast_if_present<FlatSymbolRefAttr>(reference));
   if (!instance || failed(verifyHierarchyInstanceOperation(instance)))
     return failure();
   return HierarchyInstance{instance, resolveInstanceModuleDefinition(instance)};
@@ -176,9 +180,8 @@ LogicalResult verifyInstanceDomainBinding(Operation *op) {
     if (failed(binding) || !sameClock(op->getOperand(0), op, (*binding)->getOperand(0), *binding))
       return reject(op, "actual instance Clock operand disagrees with its concrete domain binding");
     if (op->getNumOperands() != (*binding)->getNumOperands() ||
-        (op->getNumOperands() == 2 &&
-         capturedControlIdentity(op->getOperand(1)) !=
-             capturedControlIdentity((*binding)->getOperand(1))))
+        (op->getNumOperands() == 2 && capturedControlIdentity(op->getOperand(1)) !=
+                                          capturedControlIdentity((*binding)->getOperand(1))))
       return reject(
           op, "actual instance Reset operand disagrees with its exact bound reset capability");
   }
@@ -194,11 +197,31 @@ FailureOr<InstancePort> inspectInstancePort(Operation *op) {
     (void)reject(op, reason);
     return failure();
   };
-  if (!isa_and_nonnull<InstancePortOp>(op) || op->getNumOperands() || op->getNumResults() != 1 ||
+  if (!isa_and_nonnull<InstancePortOp>(op) ||
+      (op->getNumOperands() != 0 && op->getNumOperands() != 2) || op->getNumResults() != 1 ||
       op->getNumRegions() || op->getNumSuccessors() ||
-      !closed(op, {"instance", "port", "direction", "metadata"}))
+      !closed(op, {"instance", "port", "direction", "metadata", "member"}))
     return fail("instance port requires its exact parent-owned typed reference");
-  auto boundary = child(op);
+  FailureOr<InstancePort> boundary = failure();
+  if (op->getNumOperands()) {
+    auto member = op->getAttrOfType<StringAttr>("member");
+    auto proof = member ? inspectGeneratedSelection(op->getOperand(0), op->getOperand(1),
+                                                    member.getValue(), op)
+                        : FailureOr<GeneratedSelectionProof>(failure());
+    auto target = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
+                                   : FailureOr<Operation *>(failure());
+    auto reference = op->getAttrOfType<FlatSymbolRefAttr>("instance");
+    if (failed(target) || !isa<InstanceOp>(*target) || !reference ||
+        (*target)->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()) !=
+            reference.getAttr() ||
+        failed(verifyHierarchyInstanceOperation(*target)))
+      return fail("selected instance port requires its exact exported instance target");
+    boundary = InstancePort{*target, resolveInstanceModuleDefinition(*target), nullptr, op};
+  } else {
+    if (op->hasAttr("member") || !isa<ModuleOp, GenerateOp>(op->getParentOp()))
+      return fail("direct instance port forbids selection keys or non-direct ownership");
+    boundary = child(op);
+  }
   if (failed(boundary))
     return fail("instance port must name an exact lexical immediate-child instance");
   auto name = text(op, "port");
@@ -207,8 +230,14 @@ FailureOr<InstancePort> inspectInstancePort(Operation *op) {
                        : local(boundary->module, FlatSymbolRefAttr::get(op->getContext(), name));
   auto type = boundary->port ? boundary->port->getAttrOfType<TypeAttr>("type") : TypeAttr();
   if (!isa_and_nonnull<PortOp>(boundary->port) || !type ||
-      !equivalentInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
-                                             op->getResult(0).getType()) ||
+      !(boundary->selection
+            ? equivalentSelectedDigitalStorageTypes(op, boundary->instance, type.getValue(),
+                                                    op->getResult(0).getType())
+        : isa<GenerateOp>(op->getParentOp())
+            ? equivalentGeneratedInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
+                                                             op->getResult(0).getType(), op)
+            : equivalentInstanceDigitalStorageTypes(boundary->instance, type.getValue(),
+                                                    op->getResult(0).getType())) ||
       !llvm::is_contained(ArrayRef<StringRef>{"input", "output"}, text(op, "direction")) ||
       text(op, "direction") != text(boundary->port, "direction") ||
       isDigitalControlBoundaryType(type.getValue()) ||
@@ -305,7 +334,8 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
       Operation *target = ref ? definitions.lookup(ref.getValue()) : nullptr;
       if (!target || ++definitionEdges > limits.maximumEdges ||
           failed(verifyHierarchyInstanceOperation(op))) {
-        (void)reject(op, "hierarchy instance requires a resolved direct definition within the edge budget");
+        (void)reject(
+            op, "hierarchy instance requires a resolved direct definition within the edge budget");
         return WalkResult::interrupt();
       }
       children[&definition].push_back(target);
@@ -340,8 +370,9 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
       auto boundary = resolveHierarchyInstance(op, op->getAttr("instance"));
       if (failed(boundary))
         return WalkResult::interrupt();
-      if (!data->bindings.try_emplace(
-              std::make_pair(boundary->instance, op->getAttr("requirement")), op).second) {
+      if (!data->bindings
+               .try_emplace(std::make_pair(boundary->instance, op->getAttr("requirement")), op)
+               .second) {
         (void)reject(op, "one authoritative binding is required per instance and requirement");
         return WalkResult::interrupt();
       }
@@ -356,7 +387,8 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
     // Copy only this bounded context header: vector growth must not invalidate it.
     auto occurrence = data->occurrences[cursor];
     SmallVector<Operation *, 4> instanceOperations;
-    occurrence.module->walk([&](InstanceOp op) { instanceOperations.push_back(op.getOperation()); });
+    occurrence.module->walk(
+        [&](InstanceOp op) { instanceOperations.push_back(op.getOperation()); });
     for (Operation *op : instanceOperations) {
       auto ref = op->getAttrOfType<FlatSymbolRefAttr>("module");
       Operation *target = ref ? definitions.lookup(ref.getValue()) : nullptr;
@@ -392,7 +424,8 @@ FailureOr<std::shared_ptr<HierarchyModel>> HierarchyModel::create(Operation *out
       if (path.size() > 4096)
         return fail(op, "concrete occurrence path exceeds finite identity budget");
       data->children.try_emplace(std::make_pair(cursor, op), data->occurrences.size());
-      data->occurrences.push_back({target, op, cursor, std::move(path), std::move(generatedScopes)});
+      data->occurrences.push_back(
+          {target, op, cursor, std::move(path), std::move(generatedScopes)});
     }
   }
   return std::shared_ptr<HierarchyModel>(new HierarchyModel(std::move(data)));
@@ -540,7 +573,9 @@ LogicalResult HierarchyModel::verifyBindings() const {
         }
         if (!context.generatedScopes.empty() &&
             ((isa<CrossingOp, AsyncFifoOp>(op) && op.hasAttr("contract")) || isa<WaiverOp>(op)))
-          return reject(&op, "generated occurrence crossing/waiver requires selection-qualified lane provenance");
+          return reject(
+              &op,
+              "generated occurrence crossing/waiver requires selection-qualified lane provenance");
         if (isa<ResetBoundaryOp, ResetSyncOp, ResetCombineOp>(op)) {
           if (failed(inspectReset({index, op.getResult(0), &op}, *this)))
             return failure();

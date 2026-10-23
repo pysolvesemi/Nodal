@@ -244,6 +244,30 @@ InstantiatedIntegerExpression makeOpaqueIntegerExpression(mlir::Value identity,
 mlir::FailureOr<InstantiatedIntegerExpression>
 composeIntegerExpression(llvm::StringRef opcode,
                          llvm::ArrayRef<InstantiatedIntegerExpression> operands);
+/// Query-only substitution of already checked exact opaque identities. Replacements
+/// must narrow the original atom envelope; this grants no lexical/type capability.
+mlir::FailureOr<InstantiatedIntegerExpression> substituteIntegerExpression(
+    const InstantiatedIntegerExpression &expression,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> substitutions);
+/// Original generated occurrence query: proves every actual lane against the
+/// exact child formal contract without admitting induction as a generic type binding.
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedInstanceIntegerParameter(mlir::Operation *instance, mlir::Operation *parameter,
+                                         ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+/// Original child expression under the same all-lane generated contract.
+mlir::FailureOr<InstantiatedIntegerExpression> resolveGeneratedInstanceIntegerExpression(
+    mlir::Operation *instance, mlir::Value expression,
+    ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+/// Selected structural consumer only. Caller independently verifies the exact
+/// instance/export selection and passes its checked induction-coordinate prefix.
+mlir::FailureOr<InstantiatedIntegerExpression> resolveSelectedInstanceIntegerParameter(
+    mlir::Operation *instance, mlir::Operation *parameter,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> substitutions,
+    ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+mlir::FailureOr<InstantiatedIntegerExpression> resolveSelectedInstanceIntegerExpression(
+    mlir::Operation *instance, mlir::Value expression,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> substitutions,
+    ParameterIntegerMode mode = ParameterIntegerMode::Storage);
 /// Conservative all-legal ordering, using exact identity and checked bounds.
 bool proveIntegerExpressionLess(const InstantiatedIntegerExpression &left,
                                 const InstantiatedIntegerExpression &right, bool inclusive = false);
@@ -256,8 +280,42 @@ bool equivalentInstantiatedIntegerExpressions(const InstantiatedIntegerExpressio
 struct StructuralIntegerFacts {
   std::optional<InstantiatedIntegerExpression> expression;
 };
+/// Generated declaration consumers may retain checked empty attainment. Numeric
+/// and selected-use APIs above never synthesize an expression for absence.
+mlir::FailureOr<StructuralIntegerFacts> resolveGeneratedInstanceIntegerParameterFacts(
+    mlir::Operation *instance, mlir::Operation *parameter,
+    ParameterIntegerMode mode = ParameterIntegerMode::Storage);
+mlir::FailureOr<StructuralIntegerFacts> resolveGeneratedInstanceIntegerExpressionFacts(
+    mlir::Operation *instance, mlir::Value expression,
+    ParameterIntegerMode mode = ParameterIntegerMode::Storage);
 mlir::FailureOr<StructuralIntegerFacts> resolveStructuralIntegerExpression(mlir::Value value,
                                                                            mlir::Operation *use);
+/// Explicit arithmetic policy only; it does not grant additional lexical rights.
+mlir::FailureOr<StructuralIntegerFacts>
+resolveStructuralIntegerExpression(mlir::Value value, mlir::Operation *use,
+                                   ParameterIntegerMode mode);
+/// Borrowed query-local view of one original actual hierarchy edge. The
+/// coordinate storage must outlive the query; no environment survives it.
+struct SelectedIntegerInstanceStep {
+  mlir::Operation *instance = nullptr;
+  llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> coordinates;
+};
+/// Resolve an exact structural use through the full original selected-root path.
+/// Checks original per-edge contracts before actual contextual substitution.
+mlir::FailureOr<StructuralIntegerFacts> resolveSelectedInstancePathStructuralIntegerExpression(
+    mlir::Operation *rootModule, llvm::ArrayRef<SelectedIntegerInstanceStep> path,
+    mlir::Value value, mlir::Operation *use, unsigned &remainingWork,
+    ParameterIntegerMode mode = ParameterIntegerMode::MathematicalSigned64);
+/// Exact structural use in the selected generated instance's child definition.
+/// Follows the existing structural capture/local DAG interpreter, substituting
+/// only canonical instance/formal leaves through the independently checked
+/// parent-coordinate prefix. Original all-lane validity precedes specialization;
+/// absent child attainment remains absent. No new lexical or selection access.
+mlir::FailureOr<StructuralIntegerFacts> resolveSelectedInstanceStructuralIntegerExpression(
+    mlir::Operation *instance, mlir::Value value, mlir::Operation *use,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> parentCoordinates,
+    unsigned &remainingWork,
+    ParameterIntegerMode mode = ParameterIntegerMode::MathematicalSigned64);
 mlir::FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(mlir::Value value,
                                                                            mlir::Operation *use);
 /// Non-diagnostic type-binding capture classification. A runtime Integer or
@@ -267,6 +325,13 @@ mlir::FailureOr<StructuralIntegerFacts> resolveBehavioralIntegerExpression(mlir:
 mlir::FailureOr<StructuralIntegerFacts> probeBehavioralIntegerCapture(mlir::Value value,
                                                                       mlir::Operation *use);
 mlir::LogicalResult verifyStructuralIntegerOperation(mlir::Operation *operation);
+/// Producer-only admission for finite ordinary Integer constructor actuals.
+/// Every actual arithmetic/capture use must end in a checked ordinary generated
+/// child override. This does not confer structural effects or runtime eligibility.
+mlir::LogicalResult verifyConstructorBindingIntegerOperation(mlir::Operation *operation);
+/// Same original producer/use inventory through an exact actual capture. Success
+/// grants capture admission only, never a type-environment binding.
+mlir::LogicalResult verifyConstructorBindingIntegerCapture(mlir::Value value, mlir::Operation *use);
 
 /// Resolve only a direct instance in the use's immediate Module/Generate scope.
 /// Module definitions and parameter declarations have separate owner namespaces.

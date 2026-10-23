@@ -2,20 +2,25 @@
 
 #include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/AnalogNumeric.h"
+#include "nodal/Dialect/Nodal/DigitalRegionModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/StructuralIfModel.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -88,6 +93,121 @@ LogicalResult arity(Operation *operation, unsigned operands, unsigned results,
     return reject(operation, "malformed typed connectivity operand/result/region arity");
   return success();
 }
+// Symbol capabilities are lexical. In particular a structural arm cannot use a
+// module/ancestor endpoint by name instead of retaining its actual family capture.
+Operation *localInterfaceSymbol(Operation *use, FlatSymbolRefAttr reference) {
+  if (!use || !reference || !use->getBlock())
+    return nullptr;
+  Operation *found = nullptr;
+  for (Operation &candidate : *use->getBlock()) {
+    if (symbol(&candidate) != reference.getValue())
+      continue;
+    if (found)
+      return nullptr;
+    found = &candidate;
+  }
+  return found;
+}
+Operation *interfaceModule(Operation *operation) {
+  return operation ? operation->getParentOfType<nodal::ModuleOp>() : nullptr;
+}
+bool lexicalInterfaceOperation(Operation *operation) {
+  if (!operation)
+    return false;
+  Operation *owner = operation->getParentOp();
+  if (llvm::isa_and_nonnull<nodal::ModuleOp>(owner))
+    return true;
+  bool definition = llvm::isa<InterfaceOp>(operation);
+  bool declaration = llvm::isa<InterfaceInstanceOp, InterfaceAbiOp>(operation);
+  bool projection = llvm::isa<InterfaceBoundaryOp, MemberAccessOp>(operation);
+  bool effect = named(operation, "nodal.interface_connect") ||
+                named(operation, "nodal.interface_drive") ||
+                named(operation, "nodal.interface_observe");
+  if ((!definition && !declaration && !projection && !effect) ||
+      (declaration && !llvm::isa_and_nonnull<GenerateOp>(owner)))
+    return false;
+  unsigned depth = 0;
+  for (Operation *scope = owner; scope; scope = scope->getParentOp()) {
+    if (llvm::isa<nodal::ModuleOp>(scope))
+      return true;
+    if (++depth > digitalTypeMaximumDepth)
+      return false;
+    if (llvm::isa<GenerateOp>(scope)) {
+      if (failed(resolveGeneratedDomain(scope)))
+        return false;
+    } else if (llvm::isa<StructuralIfOp>(scope)) {
+      if (failed(inspectStructuralIfHeader(scope)))
+        return false;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+// Query-local indexes are derived from unchanged authored blocks. They avoid
+// rescanning a Module for every member/endpoint while charging every operation
+// and ancestry step to the existing finite model budget. They own no semantics.
+struct DefinitionScopeIndex {
+  llvm::StringMap<Operation *> symbols, semantics;
+};
+using DefinitionLookupCache = std::map<Block *, DefinitionScopeIndex>;
+FailureOr<DefinitionScopeIndex *> definitionScopeIndex(Block *block, unsigned &work,
+                                                       DefinitionLookupCache &cache) {
+  auto known = cache.find(block);
+  if (known != cache.end())
+    return &known->second;
+  DefinitionScopeIndex index;
+  auto insert = [](llvm::StringMap<Operation *> &entries, StringRef key, Operation *op) {
+    if (key.empty())
+      return;
+    auto [entry, inserted] = entries.try_emplace(key, op);
+    if (!inserted)
+      entry->second = nullptr; // A duplicate is an error, never an outer fallback.
+  };
+  for (Operation &candidate : *block) {
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    insert(index.symbols, symbol(&candidate), &candidate);
+    if (llvm::isa<InterfaceOp>(candidate))
+      insert(index.semantics, text(metadata(&candidate), "semantic_identity"), &candidate);
+  }
+  return &cache.emplace(block, std::move(index)).first->second;
+}
+// One lexical definition resolver serves the canonical inventory and shallow
+// leaf consumers. Module declarations retain order-independent lookup; regional
+// declarations must precede the exact actual ancestor anchor.
+Operation *lexicalInterfaceDefinition(Operation *use, StringRef name, bool semantic, unsigned &work,
+                                      DefinitionLookupCache *shared = nullptr) {
+  if (!use || !identity(name))
+    return nullptr;
+  DefinitionLookupCache local;
+  auto &cache = shared ? *shared : local;
+  Operation *anchor = use;
+  for (unsigned depth = 0; anchor && depth < digitalTypeMaximumDepth; ++depth) {
+    if (++work > digitalTypeMaximumNodes)
+      return nullptr;
+    Block *block = anchor->getBlock();
+    Operation *scope = block ? block->getParentOp() : nullptr;
+    if (!block || !llvm::isa_and_nonnull<nodal::ModuleOp, GenerateOp, StructuralIfOp>(scope))
+      return nullptr;
+    auto index = definitionScopeIndex(block, work, cache);
+    if (failed(index))
+      return nullptr;
+    auto &entries = semantic ? (*index)->semantics : (*index)->symbols;
+    if (auto entry = entries.find(name); entry != entries.end()) {
+      Operation *found = entry->second;
+      if (!llvm::isa_and_nonnull<InterfaceOp>(found) || !lexicalInterfaceOperation(found) ||
+          (!llvm::isa<nodal::ModuleOp>(scope) && !found->isBeforeInBlock(anchor)))
+        return nullptr;
+      return found;
+    }
+    if (llvm::isa<nodal::ModuleOp>(scope))
+      return nullptr;
+    anchor = scope;
+  }
+  return nullptr;
+}
+
 struct Member {
   Operation *operation = nullptr;
   Type type;
@@ -119,6 +239,7 @@ struct Instance {
   Operation *childInstance = nullptr;
   Operation *childEndpoint = nullptr;
   llvm::StringMap<Type> actualTypes;
+  Operation *selection = nullptr;
 };
 struct Access {
   Instance *instance = nullptr;
@@ -134,7 +255,10 @@ struct Net {
 
 class Model {
 public:
-  explicit Model(Operation *module) : module(module) {}
+  explicit Model(Operation *module, unsigned initialWork = 0) : module(module), work(initialWork) {}
+  unsigned consumedWork() const { return work; }
+  FailureOr<SmallVector<DigitalInterfaceTemplateDriver, 4>>
+  templateDrivers(ArrayRef<std::pair<Value, Operation *>> seeds);
   LogicalResult verify();
   LogicalResult endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result);
   LogicalResult memberAccesses(SmallVectorImpl<DigitalInterfaceAccess> &result);
@@ -163,21 +287,35 @@ private:
   unsigned representative(unsigned index);
   void unite(unsigned a, unsigned b);
   llvm::DenseMap<unsigned, Value> resolvedComponentValues();
-  LogicalResult addOrdinaryDriver(const Access &access, Operation *operation);
+  using PhysicalMember = std::tuple<Operation *, Operation *, std::string>;
+  struct OrdinaryDriver {
+    Value target, source;
+    Operation *operation = nullptr;
+    Operation *projection = nullptr;
+  };
+  PhysicalMember physicalMember(const Access &access) const;
+  LogicalResult addOrdinaryDriver(const Access &access, Value target, Value source,
+                                  Operation *operation);
   bool equivalentBoundaryTypes(Type left, Operation *leftInstance, Type right,
-                               Operation *rightInstance);
+                               Operation *rightInstance, Operation *leftSelection = nullptr,
+                               Operation *rightSelection = nullptr);
 
   Operation *module;
+  SmallVector<Operation *> lexicalOperations;
   unsigned work = 0;
+  DefinitionLookupCache definitionLookup;
   std::map<Operation *, std::unique_ptr<Definition>> definitions;
-  llvm::StringMap<Definition *> semanticDefinitions;
-  llvm::StringMap<Operation *> semanticDefinitionInstances;
-  llvm::StringMap<llvm::StringMap<const Role *>> semanticRoles;
+  using SemanticKey = std::pair<Block *, std::string>;
+  std::map<SemanticKey, Definition *> semanticDefinitions;
+  std::map<SemanticKey, Operation *> semanticDefinitionInstances, semanticDefinitionSelections;
+  std::map<SemanticKey, llvm::StringMap<const Role *>> semanticRoles;
   std::map<Operation *, Instance> instances;
   std::map<Operation *, std::unique_ptr<Model>> childDefinitions;
   std::set<std::pair<Operation *, Operation *>> boundaryIdentities;
+  std::map<std::tuple<Operation *, Operation *, Block *>, SmallVector<GeneratedSelectionProof, 2>>
+      selectedBoundaryIdentities;
   std::set<std::pair<Operation *, Operation *>> comparedDefinitions;
-  using ContextualType = std::pair<Type, Operation *>;
+  using ContextualType = std::pair<Type, std::pair<Operation *, Operation *>>;
   llvm::DenseMap<std::pair<ContextualType, ContextualType>, bool> boundaryTypeEqualities;
   llvm::DenseMap<Value, Access> accesses;
   llvm::DenseMap<Value, unsigned> netIndices;
@@ -190,7 +328,7 @@ private:
   llvm::StringMap<Operation *> driverIdentities;
   llvm::DenseSet<Value> usedDrivers;
   llvm::DenseSet<Operation *> seenAbi;
-  std::map<std::pair<Operation *, std::string>, Operation *> ordinaryDrivers;
+  std::map<PhysicalMember, SmallVector<OrdinaryDriver, 2>> ordinaryDrivers;
   SmallVector<std::pair<unsigned, Operation *>> conditionalDrivers;
   SmallVector<std::pair<unsigned, Operation *>> splits;
 };
@@ -200,38 +338,52 @@ LogicalResult Model::ownership(Operation *operation) {
     return failure();
   if (++work > digitalTypeMaximumNodes)
     return reject(operation, "typed connectivity exceeds its finite represented-node limit");
-  if (operation->getParentOp() != module)
-    return reject(operation, "typed connectivity requires direct ownership by one module");
+  if (interfaceModule(operation) != module || !lexicalInterfaceOperation(operation))
+    return reject(operation,
+                  "typed connectivity requires exact Module/Generate structural ownership");
   return success();
 }
 LogicalResult Model::localValue(Value value, Operation *use) {
-  Operation *producer = value.getDefiningOp();
-  if (!producer || producer->getParentOp() != module || producer == use)
-    return reject(use, "connectivity operands must be actual SSA values owned by the same module");
+  if (!value || interfaceModule(use) != module || failed(verifyDigitalValueScope(value, use)))
+    return reject(use, "connectivity operands must retain exact owned SSA/capture provenance");
   return success();
 }
 bool Model::equivalentBoundaryTypes(Type left, Operation *leftInstance, Type right,
-                                    Operation *rightInstance) {
+                                    Operation *rightInstance, Operation *leftSelection,
+                                    Operation *rightSelection) {
   // This immutable-model query owns one parent context. Both exact occurrence
   // contexts remain part of the key even when the raw types are identical.
   // Callers charge every represented member to the existing structural budget,
   // so the memo cannot grow beyond that bounded traversal.
-  auto leftResolved = llvm::dyn_cast<ResolvedType>(left);
-  auto rightResolved = llvm::dyn_cast<ResolvedType>(right);
-  if (leftResolved || rightResolved) {
-    if (!leftResolved || !rightResolved ||
-        leftResolved.getDriveMode() != rightResolved.getDriveMode())
-      return false;
-    left = leftResolved.getElementType();
-    right = rightResolved.getElementType();
-  }
-  const auto key =
-      std::make_pair(ContextualType{left, leftInstance}, ContextualType{right, rightInstance});
+  // Outer Interface axes qualify a family of resolved components. Compare
+  // their digital payload shapes without treating the capability itself as
+  // storage, while retaining the exact mode and every ordered outer axis.
+  auto payload = [](Type type) -> std::pair<Type, StringRef> {
+    if (auto resolved = llvm::dyn_cast<ResolvedType>(type))
+      return {resolved.getElementType(), resolved.getDriveMode()};
+    if (auto shaped = llvm::dyn_cast<nodal::ShapedType>(type))
+      if (auto resolved = llvm::dyn_cast<ResolvedType>(shaped.getElementType()))
+        return {nodal::ShapedType::get(type.getContext(), shaped.getDimensions(),
+                                       resolved.getElementType()),
+                resolved.getDriveMode()};
+    return {type, {}};
+  };
+  auto [leftPayload, leftMode] = payload(left);
+  auto [rightPayload, rightMode] = payload(right);
+  if (leftMode != rightMode)
+    return false;
+  left = leftPayload;
+  right = rightPayload;
+  const auto key = std::make_pair(ContextualType{left, {leftInstance, leftSelection}},
+                                  ContextualType{right, {rightInstance, rightSelection}});
   auto found = boundaryTypeEqualities.find(key);
   if (found != boundaryTypeEqualities.end())
     return found->second;
-  bool equal = equivalentDigitalStorageTypesAcrossInstances(module, left, leftInstance, right,
-                                                            rightInstance);
+  bool equal = leftSelection || rightSelection
+                   ? equivalentSelectedDigitalStorageTypesAcross(
+                         leftSelection, leftInstance, left, rightSelection, rightInstance, right)
+                   : equivalentDigitalStorageTypesAcrossInstances(module, left, leftInstance, right,
+                                                                  rightInstance);
   boundaryTypeEqualities.try_emplace(key, equal);
   return equal;
 }
@@ -318,6 +470,9 @@ LogicalResult Model::definition(Operation *operation) {
   if (!region.hasOneBlock() || region.front().getNumArguments() || !identity(symbol(operation)))
     return reject(operation,
                   "typed Interface requires one argument-free definition block and identity");
+  auto index = definitionScopeIndex(operation->getBlock(), work, definitionLookup);
+  if (failed(index) || (*index)->symbols.lookup(symbol(operation)) != operation)
+    return reject(operation, "Interface declaration requires a unique lexical symbol");
   auto result = std::make_unique<Definition>();
   result->operation = operation;
   result->semanticIdentity = text(metadata(operation), "semantic_identity");
@@ -347,7 +502,7 @@ LogicalResult Model::definition(Operation *operation) {
         auto resolved = llvm::dyn_cast<ResolvedType>(value);
         if (!resolved || !driveMode(resolved.getDriveMode()) ||
             !bitVector(resolved.getElementType()) ||
-            failed(inferDigitalStorageMaximumBits(resolved.getElementType(), module)))
+            failed(inferDigitalStorageMaximumBits(resolved.getElementType(), operation)))
           return reject(&child, "resolved Interface leaf requires a finite digital bit-vector net");
       } else if (kind == "conservative") {
         auto terminal = llvm::dyn_cast<TerminalType>(value);
@@ -388,7 +543,7 @@ LogicalResult Model::definition(Operation *operation) {
           return reject(&child,
                         "Clock/Reset capability requires an exact finite plain boundary member");
       } else if (!analogMetadata.empty() || !analogReferences.empty() ||
-                 failed(inferDigitalStorageMaximumBits(value, module))) {
+                 failed(inferDigitalStorageMaximumBits(value, operation))) {
         return reject(&child, "digital Interface leaf requires an owned finite exact storage type");
       }
       if (!result->members
@@ -455,9 +610,10 @@ LogicalResult Model::definition(Operation *operation) {
         return reject(role.second.operation, "nested leaf role must match the final resolved role");
     }
   }
-  if (!semanticDefinitions.try_emplace(result->semanticIdentity, result.get()).second)
-    return reject(operation, "one module cannot redeclare an Interface semantic identity");
-  auto &canonicalRoles = semanticRoles[result->semanticIdentity];
+  SemanticKey key{operation->getBlock(), result->semanticIdentity.str()};
+  if (!semanticDefinitions.try_emplace(key, result.get()).second)
+    return reject(operation, "one lexical scope cannot redeclare an Interface semantic identity");
+  auto &canonicalRoles = semanticRoles[key];
   for (const auto &role : result->roles)
     canonicalRoles.try_emplace(role.getKey(), &role.second);
   definitions.emplace(operation, std::move(result));
@@ -467,7 +623,7 @@ LogicalResult Model::definition(Operation *operation) {
 LogicalResult Model::nestedDefinitions(Definition &definition) {
   for (auto &roleItem : definition.roles) {
     Role &role = roleItem.second;
-    llvm::StringMap<unsigned> prefixCounts;
+    llvm::StringMap<unsigned> prefixCounts, prefixSizes;
     llvm::StringMap<std::pair<StringRef, StringRef>> prefixBindings;
     for (auto &item : role.entries) {
       Entry &entry = item.second;
@@ -482,10 +638,13 @@ LogicalResult Model::nestedDefinitions(Definition &definition) {
         if (!inserted && binding->second != std::make_pair(name, roleName))
           return reject(role.operation,
                         "one nested member prefix must select one actual Interface and role");
-        auto known = semanticDefinitions.find(name);
-        if (known == semanticDefinitions.end())
+        Operation *nested =
+            lexicalInterfaceDefinition(definition.operation, name, true, work, &definitionLookup);
+        auto known = definitions.find(nested);
+        if (known == definitions.end())
           return reject(role.operation, "nested Interface identity has no actual owned definition");
         Definition &child = *known->second;
+        prefixSizes.try_emplace(prefix, child.members.size());
         auto childRole = child.roles.find(roleName);
         StringRef suffix = item.getKey().drop_front(prefix.size() + 1);
         auto member = child.members.find(suffix);
@@ -494,8 +653,14 @@ LogicalResult Model::nestedDefinitions(Definition &definition) {
                         "nested role/member does not resolve in its actual Interface");
         Entry &childEntry = childRole->second.entries.find(suffix)->second;
         Member &parentMember = definition.members.find(item.getKey())->second;
-        if (member->second.type != parentMember.type ||
-            member->second.protocol != parentMember.protocol ||
+        bool sameType = member->second.type == parentMember.type;
+        if (!analog(parentMember.protocol) && parentMember.protocol != "resolved" &&
+            !isDigitalControlBoundaryType(parentMember.type) &&
+            (isDigitalRegionOwner(child.operation->getParentOp()) ||
+             isDigitalRegionOwner(definition.operation->getParentOp())))
+          sameType = equivalentDigitalStorageTypesAt(member->second.type, child.operation,
+                                                     parentMember.type, definition.operation);
+        if (!sameType || member->second.protocol != parentMember.protocol ||
             member->second.analogMetadata != parentMember.analogMetadata ||
             member->second.analogReferences != parentMember.analogReferences ||
             childEntry.access != entry.access || childEntry.leafRole != entry.leafRole ||
@@ -523,9 +688,7 @@ LogicalResult Model::nestedDefinitions(Definition &definition) {
       for (Attribute attribute : item.second.nestedInterfaces) {
         auto reference = llvm::cast<DictionaryAttr>(attribute);
         StringRef prefix = text(reference, "path");
-        if (checked.insert(prefix).second &&
-            prefixCounts[prefix] !=
-                semanticDefinitions.find(text(reference, "definition"))->second->members.size())
+        if (checked.insert(prefix).second && prefixCounts[prefix] != prefixSizes.lookup(prefix))
           return reject(role.operation,
                         "nested Interface projection omits or repeats child leaves");
       }
@@ -537,7 +700,9 @@ LogicalResult Model::instance(Operation *operation) {
   if (failed(ownership(operation)) || failed(arity(operation, 0, 0)))
     return failure();
   auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("definition");
-  Operation *target = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+  Operation *target = reference ? lexicalInterfaceDefinition(operation, reference.getValue(), false,
+                                                             work, &definitionLookup)
+                                : nullptr;
   auto found = definitions.find(target);
   if (!identity(symbol(operation)) || found == definitions.end())
     return reject(operation,
@@ -566,7 +731,9 @@ LogicalResult Model::instance(Operation *operation) {
     shape += value.getValue().str();
   }
   if (!shape.empty()) {
-    auto cardinality = inferStaticShapeMaximumCardinality(module, shape);
+    auto cardinality = inferDigitalStorageMaximumBits(
+        nodal::ShapedType::get(module->getContext(), shape, BitsType::get(module->getContext(), 1)),
+        operation);
     if (failed(cardinality))
       return reject(operation, "Interface array dimensions require owned finite structural proofs");
     // Checked logical footprint, not lane expansion. Analog leaf storage remains
@@ -579,93 +746,144 @@ LogicalResult Model::instance(Operation *operation) {
         type = resolved.getElementType();
       auto bits = isDigitalControlBoundaryType(type)
                       ? inferDigitalControlMaximumElements(type, module)
-                      : inferDigitalStorageMaximumBits(type, module);
+                      : inferDigitalStorageMaximumBits(type, definition.operation);
       if (failed(bits) || *bits > std::numeric_limits<int64_t>::max() / *cardinality)
         return reject(operation,
                       "Interface array leaf footprint exceeds finite metadata arithmetic");
     }
   }
+  if (operation->getParentOp() != module)
+    for (const auto &member : definition.members)
+      if (analog(member.second.protocol) || member.second.protocol == "resolved" ||
+          isDigitalControlBoundaryType(member.second.type))
+        return reject(
+            operation,
+            "generated Interface requires separately admitted analog/resolved/control ownership");
   instances.emplace(operation, Instance{operation, &definition, &role->second, domain, shape});
   return success();
 }
 
 LogicalResult Model::boundary(Operation *operation) {
-  if (failed(ownership(operation)) || failed(arity(operation, 0, 0)))
+  if (failed(ownership(operation)))
     return failure();
   auto boundary = inspectDigitalInterfaceBoundary(operation);
   if (failed(boundary))
     return failure();
-  if (!boundaryIdentities.emplace(boundary->instance, boundary->endpoint).second)
+  if (boundary->selection) {
+    auto selection = inspectGeneratedSelection(operation->getOperand(0), operation->getOperand(1),
+                                               text(operation, "member"), operation);
+    if (failed(selection))
+      return failure();
+    // A symbol view is local to its exact lexical block. Separate structural
+    // arms may need distinct read aliases; they retain the same declaration and
+    // checked selection rather than creating additional physical endpoints.
+    auto &known =
+        selectedBoundaryIdentities[{boundary->instance, boundary->endpoint, operation->getBlock()}];
+    for (const auto &previous : known) {
+      if (previous.selections.size() != selection->selections.size())
+        continue;
+      bool same = true;
+      for (auto [left, right] : llvm::zip(previous.selections, selection->selections)) {
+        if (++work > digitalTypeMaximumNodes)
+          return reject(operation, "selected Interface identity comparison exceeds finite budget");
+        same &= left.family == right.family &&
+                equivalentInstantiatedIntegerExpressions(left.coordinate, right.coordinate);
+      }
+      if (same)
+        return reject(operation, "duplicate selected Interface must reuse its physical identity");
+    }
+    known.push_back(*selection);
+  } else if (!boundaryIdentities.emplace(boundary->instance, boundary->endpoint).second) {
     return reject(operation,
                   "duplicate child Interface projection must reuse its physical identity");
-  auto &child = childDefinitions[boundary->module];
-  if (!child) {
-    child = std::make_unique<Model>(boundary->module);
-    // Import only canonical declarations. Never recurse through child projections
-    // or duplicate its driver graph; the hierarchy occurrence graph owns edges.
-    for (Operation &op : boundary->module->getRegion(0).front())
-      if (llvm::isa<InterfaceOp>(op) && marked(&op) && failed(child->definition(&op)))
-        return failure();
-    for (auto &[unused, definition] : child->definitions)
-      if (failed(child->nestedDefinitions(*definition)))
-        return failure();
   }
-  if (!child->instances.count(boundary->endpoint) && failed(child->instance(boundary->endpoint)))
-    return failure();
-  const Instance &original = child->instances.find(boundary->endpoint)->second;
-  // A semantic label is not an ABI proof. Compare each imported definition once
-  // against the local canonical definition, including unaccessed members and
-  // any identically named role maps; disjoint selected roles remain additive.
-  for (const auto &[unused, imported] : child->definitions) {
-    if (!comparedDefinitions.emplace(imported->operation, boundary->instance).second)
-      continue;
-    auto found = semanticDefinitions.find(imported->semanticIdentity);
-    if (found == semanticDefinitions.end()) {
-      semanticDefinitions.try_emplace(imported->semanticIdentity, imported.get());
-      semanticDefinitionInstances.try_emplace(imported->semanticIdentity, boundary->instance);
-    } else {
-      const Definition &local = *found->second;
-      if (local.members.size() != imported->members.size())
-        return reject(operation,
-                      "child Interface semantic identity changes its complete member set");
-      for (const auto &member : imported->members) {
-        if (++work > digitalTypeMaximumNodes)
-          return reject(operation, "Interface boundary comparison exceeds its structural budget");
-        auto known = local.members.find(member.getKey());
-        if (known == local.members.end() ||
-            ((analog(member.second.protocol) || isDigitalControlBoundaryType(member.second.type))
-                 ? known->second.type != member.second.type
-                 : !equivalentBoundaryTypes(
-                       known->second.type,
-                       semanticDefinitionInstances.lookup(imported->semanticIdentity),
-                       member.second.type, boundary->instance)) ||
-            known->second.protocol != member.second.protocol ||
-            known->second.analogMetadata != member.second.analogMetadata ||
-            known->second.analogReferences != member.second.analogReferences)
-          return reject(operation,
-                        "child Interface semantic identity changes its complete member ABI");
-      }
+  const Instance *imported = nullptr;
+  if (!boundary->instance) {
+    auto local = instances.find(boundary->endpoint);
+    if (local == instances.end())
+      return reject(operation, "selected Interface must retain its actual inventoried declaration");
+    imported = &local->second;
+  } else {
+    auto &child = childDefinitions[boundary->module];
+    if (!child) {
+      child = std::make_unique<Model>(boundary->module);
+      // Import only canonical declarations. Never recurse through child projections
+      // or duplicate its driver graph; the hierarchy occurrence graph owns edges.
+      for (Operation &op : boundary->module->getRegion(0).front())
+        if (llvm::isa<InterfaceOp>(op) && marked(&op) && failed(child->definition(&op)))
+          return failure();
+      for (auto &[unused, definition] : child->definitions)
+        if (failed(child->nestedDefinitions(*definition)))
+          return failure();
     }
-    // This validation cache accumulates disjoint imported roles without granting
-    // those roles to any endpoint definition. Later siblings must agree even if
-    // the first local/imported definition did not declare their shared role.
-    auto &canonicalRoles = semanticRoles[imported->semanticIdentity];
-    for (const auto &role : imported->roles) {
-      if (++work > digitalTypeMaximumNodes)
-        return reject(operation, "Interface boundary roles exceed their structural budget");
-      auto [known, inserted] = canonicalRoles.try_emplace(role.getKey(), &role.second);
-      if (inserted)
+    if (!child->instances.count(boundary->endpoint) && failed(child->instance(boundary->endpoint)))
+      return failure();
+    imported = &child->instances.find(boundary->endpoint)->second;
+    // A semantic label is not an ABI proof. Compare each imported definition once
+    // against the local canonical definition, including unaccessed members and
+    // any identically named role maps; disjoint selected roles remain additive.
+    for (const auto &[unused, imported] : child->definitions) {
+      if (!comparedDefinitions
+               .emplace(imported->operation,
+                        boundary->selection ? boundary->selection : boundary->instance)
+               .second)
         continue;
-      if (known->second->entries.size() != role.second.entries.size())
-        return reject(operation, "child Interface changes an identically named complete role");
-      for (const auto &entry : role.second.entries) {
-        auto selected = known->second->entries.find(entry.getKey());
-        if (++work > digitalTypeMaximumNodes || selected == known->second->entries.end() ||
-            selected->second.dictionary != entry.second.dictionary)
-          return reject(operation, "child Interface changes an identically named role map");
+      SemanticKey semanticKey{&module->getRegion(0).front(), imported->semanticIdentity.str()};
+      auto found = semanticDefinitions.find(semanticKey);
+      if (found == semanticDefinitions.end()) {
+        semanticDefinitions.try_emplace(semanticKey, imported.get());
+        semanticDefinitionInstances.try_emplace(semanticKey, boundary->instance);
+        semanticDefinitionSelections.try_emplace(semanticKey, boundary->selection);
+      } else {
+        const Definition &local = *found->second;
+        if (local.members.size() != imported->members.size())
+          return reject(operation,
+                        "child Interface semantic identity changes its complete member set");
+        // One authored definition has one invariant declaration contract. Its
+        // distinct selected occurrences may specialize that same formal type
+        // differently; every boundary below still checks its own complete
+        // actual inventory against its independently inspected exact prefix.
+        for (const auto &member : imported->members) {
+          if (++work > digitalTypeMaximumNodes)
+            return reject(operation, "Interface boundary comparison exceeds its structural budget");
+          auto known = local.members.find(member.getKey());
+          if (known == local.members.end() ||
+              ((local.operation == imported->operation || analog(member.second.protocol) ||
+                isDigitalControlBoundaryType(member.second.type))
+                   ? known->second.type != member.second.type
+                   : !equivalentBoundaryTypes(
+                         known->second.type, semanticDefinitionInstances[semanticKey],
+                         member.second.type, boundary->instance,
+                         semanticDefinitionSelections[semanticKey], boundary->selection)) ||
+              known->second.protocol != member.second.protocol ||
+              known->second.analogMetadata != member.second.analogMetadata ||
+              known->second.analogReferences != member.second.analogReferences)
+            return reject(operation,
+                          "child Interface semantic identity changes its complete member ABI");
+        }
+      }
+      // This validation cache accumulates disjoint imported roles without granting
+      // those roles to any endpoint definition. Later siblings must agree even if
+      // the first local/imported definition did not declare their shared role.
+      auto &canonicalRoles = semanticRoles[semanticKey];
+      for (const auto &role : imported->roles) {
+        if (++work > digitalTypeMaximumNodes)
+          return reject(operation, "Interface boundary roles exceed their structural budget");
+        auto [known, inserted] = canonicalRoles.try_emplace(role.getKey(), &role.second);
+        if (inserted)
+          continue;
+        if (known->second->entries.size() != role.second.entries.size())
+          return reject(operation, "child Interface changes an identically named complete role");
+        for (const auto &entry : role.second.entries) {
+          auto selected = known->second->entries.find(entry.getKey());
+          if (++work > digitalTypeMaximumNodes || selected == known->second->entries.end() ||
+              selected->second.dictionary != entry.second.dictionary)
+            return reject(operation, "child Interface changes an identically named role map");
+        }
       }
     }
   }
+  const Instance &original = *imported;
   auto actualDimensions = metadata(operation).getAs<ArrayAttr>("dimensions");
   auto formalDimensions = metadata(boundary->endpoint).getAs<ArrayAttr>("dimensions");
   if ((metadata(operation).get("dimensions") && !actualDimensions) ||
@@ -681,17 +899,34 @@ LogicalResult Model::boundary(Operation *operation) {
       auto actual = llvm::dyn_cast<StringAttr>(actualAttribute);
       if (!formal || !actual || actual.getValue().contains(',') || !identity(actual.getValue()))
         return reject(operation, "Interface boundary dimensions require canonical shape tokens");
-      auto childExtent = resolveStaticShapeDimension(boundary->module, formal.getValue());
-      auto parentExtent = resolveStaticShapeDimension(module, actual.getValue());
-      if (failed(childExtent) || failed(parentExtent) ||
-          failed(verifyInstanceShapeDimension(boundary->instance, *childExtent, *parentExtent)))
+      bool equal = false;
+      if (boundary->selection) {
+        Type unit = BitsType::get(module->getContext(), 1);
+        Type formalShape = nodal::ShapedType::get(module->getContext(), formal.getValue(), unit);
+        Type actualShape = nodal::ShapedType::get(module->getContext(), actual.getValue(), unit);
+        equal = boundary->instance
+                    ? equivalentSelectedDigitalStorageTypes(operation, boundary->instance,
+                                                            formalShape, actualShape)
+                    : equivalentSelectedDigitalStorageTypesAt(operation, boundary->endpoint,
+                                                              formalShape, actualShape);
+      } else {
+        auto childExtent = resolveStaticShapeDimension(boundary->module, formal.getValue());
+        auto parentExtent = resolveStaticShapeDimension(module, actual.getValue());
+        equal = succeeded(childExtent) && succeeded(parentExtent) &&
+                succeeded(
+                    verifyInstanceShapeDimension(boundary->instance, *childExtent, *parentExtent));
+      }
+      if (!equal)
         return reject(operation,
-                      "Interface boundary shape differs from exact finalized child binding");
+                      "Interface boundary shape differs from exact finalized selection binding");
       if (!shape.empty())
         shape += ',';
       shape += actual.getValue().str();
     }
-    if (!shape.empty() && failed(inferStaticShapeMaximumCardinality(module, shape)))
+    if (!shape.empty() && failed(inferDigitalStorageMaximumBits(
+                              nodal::ShapedType::get(module->getContext(), shape,
+                                                     BitsType::get(module->getContext(), 1)),
+                              operation)))
       return reject(operation, "Interface boundary shape requires finite structural cardinality");
   }
   auto actualInventory = metadata(operation).getAs<ArrayAttr>("actual_types");
@@ -711,14 +946,15 @@ LogicalResult Model::boundary(Operation *operation) {
     auto resolved = llvm::dyn_cast<ResolvedType>(member.type);
     Type payload = resolved ? resolved.getElementType() : member.type;
     const bool conservative = member.protocol == "conservative";
-    if ((conservative && !shape.empty()) || member.protocol == "signal_flow" ||
+    if ((boundary->selection &&
+         (analog(member.protocol) || resolved || isDigitalControlBoundaryType(member.type))) ||
+        (conservative && !shape.empty()) || member.protocol == "signal_flow" ||
         isDigitalControlBoundaryType(member.type) ||
-        (!conservative && failed(inferDigitalBitPatternMaximumBits(payload, boundary->module))))
+        (!conservative &&
+         failed(inferDigitalBitPatternMaximumBits(payload, original.definition->operation))))
       return reject(
           operation,
           "child Interface projection requires digital data or scalar conservative leaves");
-    if (resolved && !shape.empty())
-      return reject(operation, "resolved Interface boundary requires a scalar component");
     Type actual = member.type;
     if (actualInventory) {
       auto item = llvm::dyn_cast<DictionaryAttr>(actualInventory[memberIndex]);
@@ -727,12 +963,18 @@ LogicalResult Model::boundary(Operation *operation) {
         return reject(operation, "Interface boundary actual types change ordered member identity");
       actual = type.getValue();
     } else if (!conservative &&
-               failed(inferDigitalBitPatternFixedBits(payload, boundary->module))) {
+               failed(inferDigitalBitPatternFixedBits(payload, original.definition->operation))) {
       return reject(operation, "symbolic Interface boundary requires explicit actual member types");
     }
     ++memberIndex;
     if (conservative ? actual != member.type
-                     : !equivalentBoundaryTypes(member.type, boundary->instance, actual, nullptr))
+        : boundary->selection
+            ? !(boundary->instance
+                    ? equivalentSelectedDigitalStorageTypes(operation, boundary->instance,
+                                                            member.type, actual)
+                    : equivalentSelectedDigitalStorageTypesAt(
+                          operation, original.definition->operation, member.type, actual))
+            : !equivalentBoundaryTypes(member.type, boundary->instance, actual, nullptr))
       return reject(operation,
                     "Interface actual member type differs from exact finalized child binding");
     auto actualResolved = llvm::dyn_cast<ResolvedType>(actual);
@@ -740,13 +982,14 @@ LogicalResult Model::boundary(Operation *operation) {
     Type shaped = shape.empty()
                       ? actualPayload
                       : nodal::ShapedType::get(module->getContext(), shape, actualPayload);
-    if (!conservative && failed(inferDigitalBitPatternMaximumBits(shaped, module)))
+    if (!conservative && failed(inferDigitalBitPatternMaximumBits(shaped, operation)))
       return reject(operation, "Interface actual payload requires finite owned bit-pattern shape");
     actualTypes.try_emplace(path, actual);
   }
   instances.emplace(operation,
                     Instance{operation, original.definition, original.role, boundary->domain, shape,
-                             boundary->instance, boundary->endpoint, std::move(actualTypes)});
+                             boundary->instance, boundary->endpoint, std::move(actualTypes),
+                             boundary->selection});
   return success();
 }
 
@@ -754,7 +997,7 @@ LogicalResult Model::access(Operation *operation) {
   if (failed(ownership(operation)) || failed(arity(operation, 0, 1)))
     return failure();
   auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
-  Operation *target = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+  Operation *target = localInterfaceSymbol(operation, reference);
   auto found = instances.find(target);
   if (found == instances.end())
     return reject(operation,
@@ -768,7 +1011,7 @@ LogicalResult Model::access(Operation *operation) {
   auto member = instance.definition->members.find(path);
   if (role == instance.definition->roles.end() || member == instance.definition->members.end())
     return reject(operation, "member access must resolve its exact path and actual selected role");
-  if (instance.childInstance && &role->second != instance.role)
+  if (instance.childEndpoint && &role->second != instance.role)
     return reject(operation,
                   "child Interface projection cannot elevate or invert its declared role");
   if (&role->second != instance.role && selected != "monitor") {
@@ -781,17 +1024,44 @@ LogicalResult Model::access(Operation *operation) {
                       "non-monitor Interface views require fully complementary digital leaves");
     }
   }
-  Type expected = instance.childInstance ? instance.actualTypes.lookup(path) : member->second.type;
+  Type expected = instance.childEndpoint ? instance.actualTypes.lookup(path) : member->second.type;
   if (!instance.dimensions.empty())
     expected = nodal::ShapedType::get(module->getContext(), instance.dimensions, expected);
-  if (operation->getResult(0).getType() != expected)
+  Type actual = operation->getResult(0).getType();
+  bool equal = actual == expected;
+  Operation *payloadAnchor =
+      instance.childEndpoint ? instance.operation : instance.definition->operation;
+  if (!analog(member->second.protocol) && member->second.protocol != "resolved" &&
+      !isDigitalControlBoundaryType(member->second.type) &&
+      (isDigitalRegionOwner(operation->getParentOp()) ||
+       isDigitalRegionOwner(payloadAnchor->getParentOp()))) {
+    Type payload = actual;
+    equal = true;
+    if (!instance.dimensions.empty()) {
+      auto shaped = llvm::dyn_cast<nodal::ShapedType>(actual);
+      Type unit = BitsType::get(module->getContext(), 1);
+      equal =
+          shaped && equivalentDigitalStorageTypesAt(
+                        nodal::ShapedType::get(module->getContext(), instance.dimensions, unit),
+                        instance.operation,
+                        nodal::ShapedType::get(module->getContext(), shaped.getDimensions(), unit),
+                        operation);
+      if (shaped)
+        payload = shaped.getElementType();
+    }
+    Type declared =
+        instance.childEndpoint ? instance.actualTypes.lookup(path) : member->second.type;
+    equal &= equivalentDigitalStorageTypesAt(declared, payloadAnchor, payload, operation);
+  }
+  if (!equal)
     return reject(operation,
                   "member SSA result must retain the exact declared type and ordered dimensions");
   accesses.try_emplace(
       operation->getResult(0),
       Access{&instance, &member->second, &role->second.entries.find(path)->second, path});
-  if (member->second.protocol == "resolved" && instance.dimensions.empty()) {
-    auto type = llvm::cast<ResolvedType>(expected);
+  if (member->second.protocol == "resolved") {
+    auto type = llvm::cast<ResolvedType>(instance.childEndpoint ? instance.actualTypes.lookup(path)
+                                                                : member->second.type);
     unsigned index = nets.size();
     netIndices.try_emplace(operation->getResult(0), index);
     nets.push_back(Net{operation->getResult(0), "portable_boundary_only", type.getDriveMode()});
@@ -805,7 +1075,7 @@ LogicalResult Model::abi(Operation *operation) {
   if (failed(ownership(operation)) || failed(arity(operation, 0, 0)))
     return failure();
   auto reference = metadata(operation).getAs<FlatSymbolRefAttr>("instance");
-  Operation *target = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+  Operation *target = localInterfaceSymbol(operation, reference);
   auto found = instances.find(target);
   if (found == instances.end() || !seenAbi.insert(target).second)
     return reject(operation, "typed ABI must identify one actual local instance exactly once");
@@ -952,11 +1222,33 @@ void Model::unite(unsigned a, unsigned b) {
   if (ranks[a] == ranks[b])
     ++ranks[a];
 }
-LogicalResult Model::addOrdinaryDriver(const Access &access, Operation *operation) {
-  if (!ordinaryDrivers
-           .emplace(std::make_pair(access.instance->operation, access.path.str()), operation)
-           .second)
-    return reject(operation, "ordinary Interface member has multiple authored drivers");
+Model::PhysicalMember Model::physicalMember(const Access &access) const {
+  const Instance &instance = *access.instance;
+  return {instance.childEndpoint ? instance.childEndpoint : instance.operation,
+          instance.childInstance, access.path.str()};
+}
+LogicalResult Model::addOrdinaryDriver(const Access &access, Value target, Value source,
+                                       Operation *operation) {
+  auto &drivers = ordinaryDrivers[physicalMember(access)];
+  for (const OrdinaryDriver &previous : drivers) {
+    if (++work > digitalTypeMaximumNodes)
+      return reject(operation,
+                    "ordinary Interface driver proof exceeds its finite relation budget");
+    // Preserve the established same-projection rule without asking Shape to grant
+    // control or protocol rights. Distinct selected aliases need physical proof.
+    if (previous.projection == access.instance->operation)
+      return reject(operation, "ordinary Interface member has multiple authored drivers");
+    auto left = resolveStaticShapeProjection(previous.target, previous.operation);
+    auto right = resolveStaticShapeProjection(target, operation);
+    if (failed(left) || failed(right))
+      return reject(operation, "ordinary Interface writers require exact physical shape proof");
+    auto overlap = compareStaticShapeProjections(*left, *right, operation);
+    if (overlap.status != ShapeRegionProofStatus::Proved ||
+        overlap.overlap != ShapeRegionOverlap::Disjoint)
+      return reject(operation,
+                    "ordinary Interface member has overlapping or unproved selected drivers");
+  }
+  drivers.push_back({target, source, operation, access.instance->operation});
   return success();
 }
 
@@ -992,8 +1284,8 @@ LogicalResult Model::effect(Operation *operation) {
     }
     if (!(isDigitalControlBoundaryType(expected)
               ? operation->getOperand(1).getType() == expected
-              : equivalentDigitalStorageTypes(operation->getOperand(1).getType(), expected,
-                                              module)) ||
+              : equivalentDigitalStorageTypesAt(operation->getOperand(1).getType(), operation,
+                                                expected, operation)) ||
         failed(localValue(operation->getOperand(1), operation)))
       return reject(operation, "Interface drive value must have the exact owned member type");
     if (isDigitalControlBoundaryType(expected)) {
@@ -1033,7 +1325,7 @@ LogicalResult Model::effect(Operation *operation) {
           operation,
           "Interface member drive source must be readable digital access in the same domain");
     if (!resolved)
-      return addOrdinaryDriver(left, operation);
+      return addOrdinaryDriver(left, operation->getOperand(0), operation->getOperand(1), operation);
     auto index = netIndex(operation->getOperand(0), operation);
     if (failed(index))
       return failure();
@@ -1054,14 +1346,23 @@ LogicalResult Model::effect(Operation *operation) {
   if (failed(localValue(operation->getOperand(1), operation)))
     return failure();
   if (left.instance == right.instance ||
-      left.instance->definition->semanticIdentity != right.instance->definition->semanticIdentity ||
+      (left.instance->definition != right.instance->definition &&
+       (left.instance->definition->operation->getParentOp() !=
+            interfaceModule(left.instance->definition->operation) ||
+        right.instance->definition->operation->getParentOp() !=
+            interfaceModule(right.instance->definition->operation) ||
+        left.instance->definition->semanticIdentity !=
+            right.instance->definition->semanticIdentity)) ||
       left.member->protocol != right.member->protocol ||
       left.entry->nestedInterfaces != right.entry->nestedInterfaces || left.path != right.path ||
       left.instance->domain != right.instance->domain ||
       (isDigitalControlBoundaryType(operation->getOperand(0).getType())
            ? operation->getOperand(0).getType() != operation->getOperand(1).getType()
-           : !equivalentBoundaryTypes(operation->getOperand(0).getType(), nullptr,
-                                      operation->getOperand(1).getType(), nullptr)))
+       : resolved
+           ? !equivalentBoundaryTypes(operation->getOperand(0).getType(), nullptr,
+                                      operation->getOperand(1).getType(), nullptr)
+           : !equivalentDigitalStorageTypesAt(operation->getOperand(0).getType(), operation,
+                                              operation->getOperand(1).getType(), operation)))
     return reject(
         operation,
         "Interface connection requires distinct exact members, dimensions and domain identity");
@@ -1085,7 +1386,8 @@ LogicalResult Model::effect(Operation *operation) {
     return reject(operation, "Interface connection requires exact boundary-facing directions");
   bool leftSink =
       forwarding ? (leftBoundary ? permission == "in" : permission == "out") : permission == "in";
-  return addOrdinaryDriver(leftSink ? left : right, operation);
+  return addOrdinaryDriver(leftSink ? left : right, operation->getOperand(leftSink ? 0 : 1),
+                           operation->getOperand(leftSink ? 1 : 0), operation);
 }
 
 LogicalResult Model::resolvedEffect(Operation *operation) {
@@ -1110,16 +1412,36 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
   if (failed(index))
     return failure();
   Net &net = nets[*index];
-  auto type = llvm::dyn_cast<ResolvedType>(net.value.getType());
-  if (!type)
-    return reject(operation, "resolved operation requires the scalar resolved-net carrier");
+  Type carrier = net.value.getType();
+  auto shape = llvm::dyn_cast<nodal::ShapedType>(carrier);
+  auto type = llvm::dyn_cast<ResolvedType>(shape ? shape.getElementType() : carrier);
   auto member = accesses.find(net.value);
+  if (!type || !bitVector(type.getElementType()) ||
+      (shape && (member == accesses.end() || member->second.instance->dimensions.empty() ||
+                 member->second.instance->selection ||
+                 member->second.instance->operation->getParentOp() != module)))
+    return reject(operation,
+                  "resolved family requires one actual module-owned Interface member shape");
+  // The admitted member access owns the ordered outer axes. Replacing only its
+  // scalar capability leaf preserves the exact pointwise coordinate tuple.
+  auto pointwise = [&](Type element) -> Type {
+    return shape ? nodal::ShapedType::get(module->getContext(), shape.getDimensions(), element)
+                 : element;
+  };
+  Type valueType = pointwise(type.getElementType());
+  Type enableType = pointwise(BitsType::get(module->getContext(), 1));
+  Type driverType = pointwise(DriverType::get(module->getContext(), type.getElementType()));
+  auto exactData = [&](Type actual, Type expected) {
+    return equivalentDigitalStorageTypesAt(actual, operation, expected, operation);
+  };
   StringRef permission = member == accesses.end() ? StringRef() : member->second.entry->access;
   if (read || split) {
     if (permission == "drive")
       return reject(operation, "drive-only Interface capability cannot be read or split");
-    if (operation->getResult(0).getType() != type.getElementType() ||
-        (split && !boolean(operation->getResult(1).getType())))
+    if ((shape ? !exactData(operation->getResult(0).getType(), valueType)
+               : operation->getResult(0).getType() != type.getElementType()) ||
+        (split && (shape ? !exactData(operation->getResult(1).getType(), enableType)
+                         : !boolean(operation->getResult(1).getType()))))
       return reject(operation,
                     "net read/split must retain exact value and canonical Bool result types");
     if (split) {
@@ -1152,9 +1474,8 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
       (!permission.empty() && permission != "drive" && permission != "connect"))
     return reject(operation, "resolved endpoint does not permit creating or using a driver");
   if (driver) {
-    auto driverType = llvm::dyn_cast<DriverType>(operation->getResult(0).getType());
     StringRef id = text(operation, "driver_id");
-    if (!driverType || driverType.getElementType() != type.getElementType() || !identity(id) ||
+    if (operation->getResult(0).getType() != driverType || !identity(id) ||
         !driverIdentities.try_emplace(id, operation).second)
       return reject(operation,
                     "driver requires exact element type and unique owned authored identity");
@@ -1162,25 +1483,22 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
   }
   Value driverValue = operation->getOperand(1);
   Operation *declaration = driverValue.getDefiningOp();
-  auto driverType = llvm::dyn_cast<DriverType>(driverValue.getType());
   if (!llvm::isa_and_nonnull<NetDriverOp>(declaration) || !marked(declaration) ||
       declaration->getParentOp() != module || declaration->getNumOperands() != 1 ||
       declaration->getNumResults() != 1 || declaration->getOperand(0) != net.value ||
-      declaration->getResult(0) != driverValue || !driverType ||
-      driverType.getElementType() != type.getElementType() ||
+      declaration->getResult(0) != driverValue || driverValue.getType() != driverType ||
       !usedDrivers.insert(driverValue).second)
     return reject(operation,
                   "drive/release must use one actual unique driver of this exact owned net");
   if (release)
     return success();
   Value enable = operation->getOperand(conditional ? 3 : 2);
-  if (!boolean(enable.getType()) || failed(localValue(enable, operation)))
+  if (!exactData(enable.getType(), enableType) || failed(localValue(enable, operation)))
     return reject(operation, "conditional driver enable requires an actual owned canonical Bool");
   if (conditional) {
     if ((net.mode != "push_pull" && net.mode != "open_source") ||
         text(operation, "mode") != net.mode ||
-        !equivalentDigitalStorageTypes(operation->getOperand(2).getType(), type.getElementType(),
-                                       module) ||
+        !exactData(operation->getOperand(2).getType(), valueType) ||
         failed(localValue(operation->getOperand(2), operation)))
       return reject(operation,
                     "conditional value drive requires permitted mode and exact owned value type");
@@ -1201,7 +1519,6 @@ LogicalResult Model::verify() {
   if (!llvm::isa_and_nonnull<nodal::ModuleOp>(module) || module->getNumRegions() != 1 ||
       !module->getRegion(0).hasOneBlock())
     return reject(module, "typed connectivity requires one owning module block");
-  auto &operations = module->getRegion(0).front();
   // Reject typed fragments in arbitrary nested executable regions. Definitions
   // have their own strict child schema; independent modules are checked there.
   WalkResult ownershipResult = module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
@@ -1213,19 +1530,17 @@ LogicalResult Model::verify() {
         hasDigitalInterfaceContract(operation) &&
         failed(verifyDigitalInterfaceOperation(operation)))
       return WalkResult::interrupt();
-    if ((marked(operation) || newOperation(operation)) &&
-        (oldOperation(operation) || newOperation(operation)) &&
-        operation->getParentOp() != module &&
-        !llvm::isa<InterfaceRoleOp, InterfaceMemberOp>(operation)) {
-      (void)reject(operation,
-                   "typed connectivity declaration/access cannot escape direct module ownership");
+    if (++work > digitalTypeMaximumNodes) {
+      (void)reject(operation, "typed connectivity lexical inventory exceeds finite work budget");
       return WalkResult::interrupt();
     }
+    if (!llvm::isa<InterfaceRoleOp, InterfaceMemberOp>(operation))
+      lexicalOperations.push_back(operation);
     return WalkResult::advance();
   });
   if (ownershipResult.wasInterrupted())
     return failure();
-  for (Operation &operation : operations)
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
     if (llvm::isa<InterfaceOp>(operation)) {
       if (marked(&operation)) {
         if (failed(definition(&operation)))
@@ -1242,14 +1557,14 @@ LogicalResult Model::verify() {
   for (auto &[unused, value] : definitions)
     if (failed(nestedDefinitions(*value)))
       return failure();
-  for (Operation &operation : operations)
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
     if (llvm::isa<InterfaceInstanceOp>(operation) && marked(&operation))
       if (failed(instance(&operation)))
         return failure();
-  for (Operation &operation : operations)
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
     if (llvm::isa<InterfaceBoundaryOp>(operation) && failed(boundary(&operation)))
       return failure();
-  for (Operation &operation : operations) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     if (llvm::isa<MemberAccessOp>(operation) && marked(&operation)) {
       if (failed(access(&operation)))
         return failure();
@@ -1272,7 +1587,7 @@ LogicalResult Model::verify() {
     if (!inserted)
       unite(known->second, index->second);
   }
-  for (Operation &operation : operations) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     if (!marked(&operation) && !newOperation(&operation)) {
       // No marker omission can bridge a legacy declaration/use into a typed
       // identity. Legacy standalone shells retain their predecessor contract.
@@ -1281,7 +1596,12 @@ LogicalResult Model::verify() {
                                                                 : "";
       if (!key.empty()) {
         auto reference = operation.getAttrOfType<FlatSymbolRefAttr>(key);
-        Operation *target = reference ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+        Operation *target =
+            key == "definition"
+                ? (reference ? lexicalInterfaceDefinition(&operation, reference.getValue(), false,
+                                                          work, &definitionLookup)
+                             : nullptr)
+                : localInterfaceSymbol(&operation, reference);
         if (target && marked(target))
           return reject(&operation,
                         "legacy Interface use cannot consume a fully typed declaration");
@@ -1311,7 +1631,7 @@ LogicalResult Model::verify() {
     }
   }
   for (auto &[operation, instance] : instances)
-    if (!instance.childInstance && !seenAbi.contains(operation))
+    if (!instance.childEndpoint && !seenAbi.contains(operation))
       return reject(operation,
                     "fully typed Interface instance requires its exact structural ABI projection");
   for (auto &item : driverIdentities) {
@@ -1399,7 +1719,7 @@ llvm::DenseMap<unsigned, Value> Model::resolvedComponentValues() {
   llvm::DenseMap<unsigned, Value> components;
   // Both logical endpoint and dependency consumers use the same authored-order
   // representative, independent of union-find rank or pointer/hash order.
-  for (Operation &operation : module->getRegion(0).front())
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
     for (Value value : operation.getResults()) {
       auto net = netIndices.find(value);
       if (net != netIndices.end())
@@ -1418,7 +1738,7 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
           components.lookup(representative(net->second)));
   }
   SmallVector<DigitalInterfaceEndpoint> collected;
-  for (Operation &operation : module->getRegion(0).front()) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     auto found = instances.find(&operation);
     if (found == instances.end())
       continue;
@@ -1429,7 +1749,7 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
     DigitalInterfaceEndpoint endpoint;
     endpoint.operation = &operation;
     endpoint.declaration = declaration;
-    endpoint.declarationOwner = declaration->getParentOp();
+    endpoint.declarationOwner = interfaceModule(declaration);
     endpoint.domainOwner = module;
     endpoint.instance = instance.childInstance;
     endpoint.definition = instance.definition->operation;
@@ -1438,6 +1758,7 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
         metadata(endpoint.definition).getAs<StringAttr>("semantic_identity");
     endpoint.domain = instance.domain;
     endpoint.dimensions = metadata(declaration).getAs<ArrayAttr>("dimensions");
+    endpoint.selection = instance.selection;
     for (Operation &memberOperation : endpoint.definition->getRegion(0).front()) {
       if (!llvm::isa<InterfaceMemberOp>(memberOperation))
         continue;
@@ -1467,11 +1788,92 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
                 std::make_move_iterator(collected.end()));
   return success();
 }
+FailureOr<SmallVector<DigitalInterfaceTemplateDriver, 4>>
+Model::templateDrivers(ArrayRef<std::pair<Value, Operation *>> seeds) {
+  if (!isa_and_nonnull<nodal::ModuleOp>(module) || seeds.size() > digitalTypeMaximumNodes ||
+      failed(verify()))
+    return failure();
+  SmallVector<DigitalInterfaceTemplateDriver, 4> result;
+  DenseMap<std::pair<Value, Operation *>, unsigned> memo;
+  DenseSet<Operation *> checkedFamilies;
+  auto charge = [&]() { return ++work <= digitalTypeMaximumNodes; };
+  auto ancestry = [&](Operation *op) -> FailureOr<SmallVector<Region *, 4>> {
+    SmallVector<Region *, 4> arms;
+    unsigned depth = 0;
+    for (; op && op != module; op = op->getParentOp()) {
+      if (!charge() || ++depth > digitalTypeMaximumDepth)
+        return failure();
+      if (isa_and_nonnull<StructuralIfOp>(op->getParentOp()))
+        arms.push_back(op->getParentRegion());
+    }
+    return op == module ? FailureOr<SmallVector<Region *, 4>>(std::move(arms))
+                        : FailureOr<SmallVector<Region *, 4>>(failure());
+  };
+  for (auto seed : seeds) {
+    Value value = seed.first;
+    Operation *use = seed.second;
+    if (!charge() || !value || !use)
+      return failure();
+    if (auto known = memo.find(seed); known != memo.end()) {
+      result.push_back(result[known->second]);
+      continue;
+    }
+    auto refuse =
+        [&](StringRef reason) -> FailureOr<SmallVector<DigitalInterfaceTemplateDriver, 4>> {
+      (void)reject(use, reason);
+      return failure();
+    };
+    auto found = accesses.find(value);
+    Operation *root = value.getDefiningOp();
+    Operation *family = root ? root->getParentOp() : nullptr;
+    if (found == accesses.end() || !isa_and_nonnull<GenerateOp>(family) ||
+        use->getParentOp() != family || family->getNumRegions() != 1 ||
+        !family->getRegion(0).hasOneBlock() || family->getRegion(0).front().empty() ||
+        use != &family->getRegion(0).front().back())
+      return refuse(
+          "authored Interface driver requires its original whole root and final body use");
+    const Access &access = found->second;
+    if (access.instance->selection || access.instance->childInstance ||
+        access.instance->childEndpoint || access.instance->operation->getParentOp() != family ||
+        access.entry->access != "out" || !isDigitalStorageType(access.member->type))
+      return refuse("authored Interface driver requires an original ordinary local output");
+    if (checkedFamilies.insert(family).second) {
+      auto inventory = family->walk(
+          [&](Operation *) { return charge() ? WalkResult::advance() : WalkResult::interrupt(); });
+      if (inventory.wasInterrupted() || failed(verifyDigitalGenerateBody(family)))
+        return refuse("authored Interface driver requires a valid complete generated body");
+    }
+    auto read = resolveStaticShapeProjection(value, use);
+    if (failed(read) || read->root != value || !read->projections.empty())
+      return refuse("authored Interface driver cannot transport a partial projection");
+    auto bucket = ordinaryDrivers.find(physicalMember(access));
+    if (bucket == ordinaryDrivers.end() || bucket->second.size() != 1)
+      return refuse("authored Interface driver requires exactly one original whole writer");
+    const OrdinaryDriver &driver = bucket->second.front();
+    auto writer = accesses.find(driver.target);
+    if (!charge() || writer == accesses.end() || writer->second.instance->selection ||
+        writer->second.instance->childEndpoint || driver.operation->getParentOp() != family ||
+        driver.target.getDefiningOp()->getParentOp() != family)
+      return refuse("authored Interface driver cannot transport a selected or foreign writer");
+    auto written = resolveStaticShapeProjection(driver.target, driver.operation);
+    if (failed(written) || !written->projections.empty() ||
+        proveStaticShapeProjectionIdentity(*read, *written, use) != ShapeRegionProofStatus::Proved)
+      return refuse("authored Interface driver requires exact whole physical identity");
+    auto useArms = ancestry(use), rootArms = ancestry(root), writeArms = ancestry(driver.operation);
+    if (failed(useArms) || failed(rootArms) || failed(writeArms) || *useArms != *rootArms ||
+        *useArms != *writeArms)
+      return refuse(
+          "authored Interface driver requires the exact original structural arm ancestry");
+    memo.try_emplace(seed, result.size());
+    result.push_back({value, driver.source, driver.operation, family});
+  }
+  return result;
+}
 LogicalResult Model::memberAccesses(SmallVectorImpl<DigitalInterfaceAccess> &result) {
   SmallVector<DigitalInterfaceAccess> collected;
   auto components = resolvedComponentValues();
   std::map<std::pair<Operation *, std::string>, Value> canonical;
-  for (Operation &operation : module->getRegion(0).front()) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     if (!llvm::isa<MemberAccessOp>(operation) || operation.getNumResults() != 1)
       continue;
     auto found = accesses.find(operation.getResult(0));
@@ -1488,10 +1890,12 @@ LogicalResult Model::memberAccesses(SmallVectorImpl<DigitalInterfaceAccess> &res
     value.value = operation.getResult(0);
     value.canonicalValue = first->second;
     value.projection = instance.operation;
-    value.identity =
-        DigitalInterfaceMember{declaration, instance.childInstance, declaration->getParentOp(),
-                               operation.getAttrOfType<StringAttr>("path"),
-                               access.entry->dictionary.getAs<StringAttr>("access")};
+    value.identity = DigitalInterfaceMember{declaration,
+                                            instance.childInstance,
+                                            interfaceModule(declaration),
+                                            operation.getAttrOfType<StringAttr>("path"),
+                                            access.entry->dictionary.getAs<StringAttr>("access"),
+                                            instance.selection};
     value.leaf.declaration = access.member->operation;
     value.leaf.path = value.identity.path;
     value.leaf.type = access.member->type;
@@ -1513,9 +1917,51 @@ LogicalResult Model::memberAccesses(SmallVectorImpl<DigitalInterfaceAccess> &res
 }
 LogicalResult Model::topology(DigitalResolvedTopology &result) {
   DigitalResolvedTopology collected;
+  // Query-local geometry is proved once per original endpoint, independently of
+  // how many members/role aliases use it. Payload is never part of these axes.
+  llvm::DenseMap<Operation *, DigitalResolvedShape> shapes;
+  auto shape = [&](Operation *owner) -> FailureOr<const DigitalResolvedShape *> {
+    auto found = shapes.find(owner);
+    if (found != shapes.end())
+      return &found->second;
+    if (!owner || owner->getParentOp() != module ||
+        !llvm::isa<InterfaceInstanceOp, InterfaceBoundaryOp, ResolvedNetOp, ResolvedBoundaryOp>(
+            owner)) {
+      (void)reject(owner ? owner : module,
+                   "resolved family geometry requires its actual local endpoint owner");
+      return failure();
+    }
+    auto dimensions = metadata(owner).getAs<ArrayAttr>("dimensions");
+    if (!dimensions)
+      dimensions = ArrayAttr::get(module->getContext(), {});
+    if (dimensions.size() > digitalTypeMaximumDepth ||
+        (llvm::isa<ResolvedNetOp, ResolvedBoundaryOp>(owner) && !dimensions.empty())) {
+      (void)reject(owner, "resolved family geometry requires bounded original outer axes");
+      return failure();
+    }
+    DigitalResolvedShape result{owner, dimensions, {}};
+    for (Attribute attribute : dimensions) {
+      if (++work > digitalTypeMaximumNodes) {
+        (void)reject(owner, "resolved family geometry exceeds its structural budget");
+        return failure();
+      }
+      auto token = llvm::dyn_cast<StringAttr>(attribute);
+      if (!token || token.getValue().contains(',')) {
+        (void)reject(owner, "resolved family geometry requires canonical ordered axis identities");
+        return failure();
+      }
+      auto axis = resolveStaticShapeDimension(module, token.getValue());
+      if (failed(axis)) {
+        (void)reject(owner, "resolved family axis lost its exact owned Shape proof");
+        return failure();
+      }
+      result.axes.push_back(*axis);
+    }
+    return &shapes.try_emplace(owner, std::move(result)).first->second;
+  };
   auto components = resolvedComponentValues();
   llvm::DenseMap<unsigned, unsigned> positions;
-  for (Operation &operation : module->getRegion(0).front())
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
     for (Value value : operation.getResults()) {
       auto net = netIndices.find(value);
       if (net == netIndices.end())
@@ -1524,10 +1970,16 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
       if (components.lookup(root) != value)
         continue;
       positions.try_emplace(root, collected.components.size());
-      collected.components.push_back({value, componentDomains.lookup(root), {}, {}, {}, {}});
+      auto access = accesses.find(value);
+      Operation *owner = access == accesses.end() ? &operation : access->second.instance->operation;
+      auto geometry = shape(owner);
+      if (failed(geometry))
+        return failure();
+      collected.components.push_back(
+          {value, componentDomains.lookup(root), {}, {}, {}, {}, **geometry});
     }
   if (module->hasAttr("external_name"))
-    for (Operation &operation : module->getRegion(0).front())
+    for (Operation &operation : llvm::make_pointee_range(lexicalOperations))
       if (llvm::isa<ResolvedNetOp>(operation)) {
         auto index = netIndices.find(operation.getResult(0));
         if (index != netIndices.end())
@@ -1539,7 +1991,7 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
   for (auto [index, operation] : splits)
     collected.components[positions.lookup(representative(index))].splits.push_back(operation);
   std::map<std::pair<Operation *, std::string>, Value> resolvedMembers;
-  for (Operation &operation : module->getRegion(0).front()) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     for (Value value : operation.getResults()) {
       auto net = netIndices.find(value);
       if (net == netIndices.end())
@@ -1563,6 +2015,9 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
       auto index = netIndices.find(operation.getResult(0));
       if (index == netIndices.end())
         return reject(&operation, "resolved endpoint has no existing component identity");
+      auto geometry = shape(&operation);
+      if (failed(geometry))
+        return failure();
       collected.endpoints.push_back(
           {&operation,
            boundary == netBoundaries.end() ? nullptr : boundary->second.first,
@@ -1575,10 +2030,11 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
                module->getContext(),
                llvm::cast<ResolvedType>(operation.getResult(0).getType()).getDriveMode()),
            metadata(&operation).getAs<StringAttr>("profile"),
-           metadata(&operation).getAs<StringAttr>("placement")});
+           metadata(&operation).getAs<StringAttr>("placement"),
+           **geometry});
     }
     auto found = instances.find(&operation);
-    if (found == instances.end() || !found->second.dimensions.empty())
+    if (found == instances.end())
       continue;
     const Instance &instance = found->second;
     for (Operation &memberOperation : instance.definition->operation->getRegion(0).front()) {
@@ -1587,6 +2043,9 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
         continue;
       if (++work > digitalTypeMaximumNodes)
         return reject(&operation, "resolved endpoint slots exceed their structural budget");
+      auto geometry = shape(&operation);
+      if (failed(geometry))
+        return failure();
       StringAttr path = memberOperation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
       auto represented = resolvedMembers.find({&operation, path.getValue().str()});
       // Member accesses may be authored after their declaration. Populate the
@@ -1605,7 +2064,8 @@ LogicalResult Model::topology(DigitalResolvedTopology &result) {
                llvm::cast<ResolvedType>(memberOperation.getAttrOfType<TypeAttr>("type").getValue())
                    .getDriveMode()),
            StringAttr::get(module->getContext(), "portable_boundary_only"),
-           {}});
+           {},
+           **geometry});
     }
   }
   for (auto &endpoint : collected.endpoints) {
@@ -1633,7 +2093,7 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
   // Choose representatives in authored source order, never hash iteration order.
   // Aliases point one way to their canonical value; pass-through alone is not a
   // combinational feedback edge and must not manufacture a two-node cycle.
-  for (Operation &operation : module->getRegion(0).front()) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     for (Value value : operation.getResults()) {
       auto net = netIndices.find(value);
       if (net != netIndices.end()) {
@@ -1657,17 +2117,57 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
         entry.sources.emplace_back(known->second, &operation);
     }
   }
-  for (const auto &[key, operation] : ordinaryDrivers) {
-    auto known = members.find(key);
-    if (known == members.end())
-      return reject(operation, "ordinary dependency has no canonical actual member");
-    Value source = operation->getOperand(1);
-    if (named(operation, "nodal.interface_connect")) {
-      const Access &left = accesses.find(operation->getOperand(0))->second;
-      source = operation->getOperand(
-          key == std::make_pair(left.instance->operation, left.path.str()) ? 1 : 0);
+  // Keep the existing lexical aliases one-way. Physical writer buckets use the
+  // original declaration, while selected reads retain their own actual SSA root
+  // so Assignment can carry its checked context into template-local RHS edges.
+  for (const auto &[unused, value] : members) {
+    const Access &access = accesses.find(value)->second;
+    auto found = ordinaryDrivers.find(physicalMember(access));
+    if (found == ordinaryDrivers.end())
+      continue;
+    SmallVector<const OrdinaryDriver *, 2> matches;
+    SmallVector<StaticShapeProjection, 2> writes;
+    std::optional<StaticShapeProjection> read;
+    bool sameProjection = false;
+    for (const OrdinaryDriver &driver : found->second) {
+      if (++work > digitalTypeMaximumNodes)
+        return reject(value.getDefiningOp(),
+                      "ordinary Interface dependency proof exceeds its finite relation budget");
+      if (driver.projection == access.instance->operation) {
+        matches.push_back(&driver);
+        sameProjection = true;
+        continue;
+      }
+      if (!read) {
+        auto projection = resolveStaticShapeProjection(value, value.getDefiningOp());
+        if (failed(projection))
+          return reject(value.getDefiningOp(),
+                        "selected Interface read requires an exact physical shape");
+        read = *projection;
+      }
+      auto write = resolveStaticShapeProjection(driver.target, driver.operation);
+      if (failed(write))
+        return reject(driver.operation,
+                      "selected Interface writer requires an exact physical shape");
+      auto overlap = compareStaticShapeProjections(*read, *write, value.getDefiningOp());
+      if (overlap.status != ShapeRegionProofStatus::Proved ||
+          overlap.overlap == ShapeRegionOverlap::Unknown)
+        return reject(value.getDefiningOp(), "selected Interface dependency overlap is unproved");
+      if (overlap.overlap == ShapeRegionOverlap::Disjoint)
+        continue;
+      matches.push_back(&driver);
+      writes.push_back(*write);
     }
-    add(known->second).sources.emplace_back(source, operation);
+    // An existing physical writer bucket establishes local drive ownership.
+    // A different disjoint lane is not an external/domain-only source for this
+    // read. Genuine external input roles have no local writer bucket.
+    if (!sameProjection && (matches.empty() || verifyStaticShapeProjectionCoverage(
+                                                   *read, writes, value.getDefiningOp()) !=
+                                                   ShapeRegionProofStatus::Proved))
+      return reject(value.getDefiningOp(),
+                    "selected Interface drivers do not prove complete read coverage");
+    for (const OrdinaryDriver *driver : matches)
+      add(value).sources.emplace_back(driver->source, driver->operation);
   }
   for (auto [index, operation] : conditionalDrivers) {
     auto &entry = add(components.find(representative(index))->second);
@@ -1680,7 +2180,7 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
                                  operation);
     }
   }
-  for (Operation &operation : module->getRegion(0).front()) {
+  for (Operation &operation : llvm::make_pointee_range(lexicalOperations)) {
     if (!marked(&operation))
       continue;
     if (llvm::isa<NetReadOp>(operation)) {
@@ -1764,36 +2264,88 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
 } // namespace
 
 FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *operation) {
+  const unsigned operands = operation ? operation->getNumOperands() : 0;
   if (!llvm::isa_and_nonnull<InterfaceBoundaryOp>(operation) || failed(version(operation)) ||
-      failed(arity(operation, 0, 0)) || !identity(symbol(operation)) ||
-      !identity(text(metadata(operation), "semantic_path"))) {
-    (void)reject(operation, "Interface boundary requires a typed parent-owned semantic identity");
+      (operands != 0 && operands != 2) || failed(arity(operation, operands, 0)) ||
+      !lexicalInterfaceOperation(operation) || !identity(symbol(operation)) ||
+      !identity(text(metadata(operation), "semantic_path")) ||
+      (operands == 0 && operation->hasAttr("member"))) {
+    (void)reject(operation, "Interface boundary requires an exact typed lexical identity");
     return failure();
   }
-  auto child = resolveHierarchyInstance(operation, operation->getAttr("instance"));
-  if (failed(child))
+  // A boundary is a lexical projection, not a SymbolTable declaration: guarded
+  // arms have no SymbolTable trait. Preserve exact same-block name uniqueness
+  // independently, including unaccessed projections of distinct physical lanes.
+  auto self = FlatSymbolRefAttr::get(operation->getContext(), symbol(operation));
+  if (localInterfaceSymbol(operation, self) != operation) {
+    (void)reject(operation, "Interface boundary requires one unique exact lexical name");
     return failure();
+  }
+  Operation *selected = nullptr, *instance = nullptr, *childModule = nullptr;
   StringRef name = text(operation, "endpoint");
-  Operation *endpoint = identity(name) ? SymbolTable::lookupSymbolIn(child->module, name) : nullptr;
+  if (operands == 2) {
+    auto proof = inspectGeneratedSelection(operation->getOperand(0), operation->getOperand(1),
+                                           text(operation, "member"), operation);
+    if (failed(proof))
+      return failure();
+    auto target = inspectGeneratedExportSymbol(proof->exportOperation);
+    if (failed(target))
+      return failure();
+    if (text(proof->exportOperation, "kind") == "interface") {
+      Operation *endpoint = *target;
+      Operation *owner = interfaceModule(endpoint);
+      auto domain = metadata(endpoint).getAs<FlatSymbolRefAttr>("domain");
+      Operation *declaration = domain ? SymbolTable::lookupSymbolIn(owner, domain) : nullptr;
+      if (operation->hasAttr("instance") || name != symbol(endpoint) || !marked(endpoint) ||
+          !llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) ||
+          !llvm::isa_and_nonnull<DomainOp, DomainRequirementOp>(declaration) ||
+          declaration->getParentOp() != owner ||
+          failed(verifyDigitalInterfaceOperation(endpoint))) {
+        (void)reject(operation,
+                     "selected Interface requires its exact exported endpoint and domain");
+        return failure();
+      }
+      return DigitalInterfaceBoundary{nullptr, owner, endpoint, domain, operation};
+    }
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
+    if (text(proof->exportOperation, "kind") != "instance" ||
+        !llvm::isa_and_nonnull<InstanceOp>(*target) || !reference ||
+        reference.getValue() != symbol(*target) ||
+        failed(verifyHierarchyInstanceOperation(*target))) {
+      (void)reject(operation, "selected child Interface requires its exact exported instance");
+      return failure();
+    }
+    instance = *target;
+    childModule = resolveInstanceModuleDefinition(instance);
+    selected = operation;
+  } else {
+    auto child = resolveHierarchyInstance(operation, operation->getAttr("instance"));
+    if (failed(child))
+      return failure();
+    instance = child->instance;
+    childModule = child->module;
+  }
+  Operation *endpoint =
+      identity(name) && childModule ? SymbolTable::lookupSymbolIn(childModule, name) : nullptr;
   if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) || !marked(endpoint) ||
-      endpoint->getParentOp() != child->module) {
+      endpoint->getParentOp() != childModule) {
     (void)reject(operation,
                  "Interface boundary requires its exact immediate child's direct endpoint");
     return failure();
   }
   auto requirement = metadata(endpoint).getAs<FlatSymbolRefAttr>("domain");
   Operation *required =
-      requirement ? SymbolTable::lookupSymbolIn(child->module, requirement) : nullptr;
+      requirement ? SymbolTable::lookupSymbolIn(childModule, requirement) : nullptr;
   if (!llvm::isa_and_nonnull<DomainRequirementOp>(required)) {
     (void)reject(operation,
                  "child Interface domain requires an actual instance requirement binding");
     return failure();
   }
   Operation *binding = nullptr;
-  for (Operation &candidate : operation->getParentOp()->getRegion(0).front()) {
-    if (!llvm::isa<InstanceDomainBindingOp>(candidate) ||
-        candidate.getAttr("instance") != operation->getAttr("instance") ||
-        candidate.getAttr("requirement") != requirement)
+  for (Operation &candidate : *instance->getBlock()) {
+    auto reference = candidate.getAttrOfType<FlatSymbolRefAttr>("instance");
+    if (!llvm::isa<InstanceDomainBindingOp>(candidate) || !reference ||
+        reference.getValue() != symbol(instance) || candidate.getAttr("requirement") != requirement)
       continue;
     if (binding || failed(verifyInstanceDomainBinding(&candidate))) {
       (void)reject(operation, "child Interface domain requires one exact executable binding");
@@ -1805,17 +2357,30 @@ FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *o
     (void)reject(operation, "child Interface domain has no executable actual binding");
     return failure();
   }
-  return DigitalInterfaceBoundary{child->instance, child->module, endpoint,
-                                  binding->getAttrOfType<FlatSymbolRefAttr>("actual")};
+  return DigitalInterfaceBoundary{instance, childModule, endpoint,
+                                  binding->getAttrOfType<FlatSymbolRefAttr>("actual"), selected};
+}
+
+FailureOr<Operation *> resolveDigitalInterfaceDefinition(Operation *endpoint) {
+  if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) || !marked(endpoint) ||
+      failed(verifyDigitalInterfaceOperation(endpoint)))
+    return failure();
+  auto reference = endpoint->getAttrOfType<FlatSymbolRefAttr>("definition");
+  unsigned work = 0;
+  Operation *definition =
+      reference ? lexicalInterfaceDefinition(endpoint, reference.getValue(), false, work) : nullptr;
+  return definition && marked(definition) ? FailureOr<Operation *>(definition)
+                                          : FailureOr<Operation *>(failure());
 }
 
 FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(Operation *operation) {
   if (!llvm::isa_and_nonnull<MemberAccessOp>(operation) || !marked(operation))
     return failure();
   auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
-  Operation *endpoint =
-      reference ? SymbolTable::lookupSymbolIn(operation->getParentOp(), reference) : nullptr;
-  Operation *instance = nullptr, *owner = operation->getParentOp();
+  if (failed(verifyDigitalInterfaceOperation(operation)))
+    return failure();
+  Operation *endpoint = localInterfaceSymbol(operation, reference);
+  Operation *instance = nullptr, *owner = interfaceModule(operation), *selection = nullptr;
   if (llvm::isa_and_nonnull<InterfaceBoundaryOp>(endpoint)) {
     auto boundary = inspectDigitalInterfaceBoundary(endpoint);
     if (failed(boundary))
@@ -1823,12 +2388,12 @@ FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(Operation *opera
     endpoint = boundary->endpoint;
     instance = boundary->instance;
     owner = boundary->module;
+    selection = boundary->selection;
   }
   if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(endpoint) || !marked(endpoint))
     return failure();
-  auto definitionRef = endpoint->getAttrOfType<FlatSymbolRefAttr>("definition");
-  Operation *definition =
-      definitionRef ? SymbolTable::lookupSymbolIn(owner, definitionRef) : nullptr;
+  auto resolvedDefinition = resolveDigitalInterfaceDefinition(endpoint);
+  Operation *definition = succeeded(resolvedDefinition) ? *resolvedDefinition : nullptr;
   // Occurrence substitution follows the actual endpoint, including monitor aliases.
   StringRef selected = text(endpoint, "role");
   auto path = operation->getAttrOfType<StringAttr>("path");
@@ -1841,8 +2406,8 @@ FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(Operation *opera
   for (Attribute entry : entries) {
     auto value = llvm::dyn_cast<DictionaryAttr>(entry);
     if (text(value, "path") == path.getValue())
-      return DigitalInterfaceMember{endpoint, instance, owner, path,
-                                    value.getAs<StringAttr>("access")};
+      return DigitalInterfaceMember{
+          endpoint, instance, owner, path, value.getAs<StringAttr>("access"), selection};
   }
   return failure();
 }
@@ -1860,12 +2425,20 @@ LogicalResult verifyDigitalInterfaceOperation(Operation *operation) {
   if (llvm::isa<InterfaceRoleOp, InterfaceMemberOp>(operation)) {
     if (!llvm::isa_and_nonnull<InterfaceOp>(owner) || !marked(owner))
       return reject(operation, "fully typed role/member requires its fully typed Interface owner");
-    owner = owner->getParentOp();
   }
-  if (!llvm::isa_and_nonnull<nodal::ModuleOp>(owner))
+  if (llvm::isa<InterfaceRoleOp, InterfaceMemberOp>(operation)) {
+    if (!lexicalInterfaceOperation(owner))
+      return reject(operation, "typed Interface member requires its exact lexical definition");
+  } else if (!lexicalInterfaceOperation(operation)) {
     return reject(operation,
-                  "fully typed Interface and resolved operations require local module ownership");
+                  "fully typed Interface operation requires exact lexical structural ownership");
+  }
   return success();
+}
+FailureOr<SmallVector<DigitalInterfaceTemplateDriver, 4>>
+inspectGeneratedInterfaceTemplateDrivers(Operation *module,
+                                         ArrayRef<std::pair<Value, Operation *>> seeds) {
+  return Model(module).templateDrivers(seeds);
 }
 LogicalResult verifyDigitalInterfaceModel(Operation *module) { return Model(module).verify(); }
 LogicalResult
@@ -1876,12 +2449,22 @@ collectDigitalInterfaceEndpoints(Operation *module,
 LogicalResult collectDigitalInterfaceEndpoints(Operation *module,
                                                SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints,
                                                SmallVectorImpl<DigitalInterfaceAccess> *accesses) {
-  Model model(module);
+  unsigned work = 0;
+  return collectDigitalInterfaceEndpoints(module, endpoints, accesses, work);
+}
+LogicalResult collectDigitalInterfaceEndpoints(Operation *module,
+                                               SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints,
+                                               SmallVectorImpl<DigitalInterfaceAccess> *accesses,
+                                               unsigned &work) {
+  if (work > digitalTypeMaximumNodes)
+    return failure();
+  Model model(module, work);
   SmallVector<DigitalInterfaceEndpoint> collectedEndpoints;
   SmallVector<DigitalInterfaceAccess> collectedAccesses;
   if (failed(model.verify()) || failed(model.endpoints(collectedEndpoints)) ||
       (accesses && failed(model.memberAccesses(collectedAccesses))))
     return failure();
+  work = model.consumedWork();
   endpoints.append(std::make_move_iterator(collectedEndpoints.begin()),
                    std::make_move_iterator(collectedEndpoints.end()));
   if (accesses)
@@ -1893,7 +2476,7 @@ FailureOr<DigitalInterfaceAccess> resolveDigitalInterfaceAccess(Value value) {
   Operation *operation = value ? value.getDefiningOp() : nullptr;
   if (!llvm::isa_and_nonnull<MemberAccessOp>(operation))
     return failure();
-  Model model(operation->getParentOp());
+  Model model(interfaceModule(operation));
   SmallVector<DigitalInterfaceAccess> accesses;
   if (failed(model.verify()) || failed(model.memberAccesses(accesses)))
     return failure();

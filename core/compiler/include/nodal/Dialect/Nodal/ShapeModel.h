@@ -4,6 +4,7 @@
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
@@ -40,10 +41,37 @@ resolveStaticShapeDimension(mlir::Operation *module, llvm::StringRef dimension,
                             llvm::StringRef requiredEffect = "shape",
                             const ParameterIntegerEnvironment *environment = nullptr);
 
+/// Explicit generated template type-use proof. Retains the original induction
+/// DAG and checks actual lexical/capture ancestry, effects and all-lane bounds.
+/// It never binds an induction into the ordinary parameter environment.
+/// A successful missing expression proves checked empty attainment, not width zero.
+/// Every dependency still passes lexical, effect and independent arithmetic checks.
+mlir::FailureOr<StructuralIntegerFacts>
+resolveGeneratedTypeDimensionFacts(mlir::Operation *use, llvm::StringRef dimension,
+                                   llvm::StringRef requiredEffect = "shape");
+mlir::FailureOr<StaticShapeDimension>
+resolveGeneratedTypeDimension(mlir::Operation *use, llvm::StringRef dimension,
+                              llvm::StringRef requiredEffect = "shape");
+mlir::FailureOr<InstantiatedIntegerExpression>
+resolveGeneratedTypeDimensionExpression(mlir::Operation *use, llvm::StringRef dimension,
+                                        llvm::StringRef requiredEffect = "shape");
+
 /// Prove a nonempty shape's worst-case cardinality fits positive signed i64.
 mlir::FailureOr<int64_t>
 inferStaticShapeMaximumCardinality(mlir::Operation *module, llvm::StringRef dimensions,
                                    const ParameterIntegerEnvironment *environment = nullptr);
+
+/// Same checked cardinality product with caller-owned query-local dimension memo.
+mlir::FailureOr<int64_t> inferStaticShapeMaximumCardinality(
+    llvm::StringRef dimensions,
+    llvm::function_ref<mlir::FailureOr<ParameterIntegerBounds>(llvm::StringRef)> resolveDimension);
+
+/// Same finite product validation, retaining checked absence of attained dimensions.
+/// Concrete dimensions are independently checked even beside an unattained one.
+mlir::FailureOr<std::optional<int64_t>> inferStaticShapeMaximumCardinalityFacts(
+    llvm::StringRef dimensions,
+    llvm::function_ref<mlir::FailureOr<std::optional<ParameterIntegerBounds>>(llvm::StringRef)>
+        resolveDimension);
 
 /// Prove an owned static index using the existing literal/i64 carriers, with
 /// explicit admitted collection context when the value is collection-local.
@@ -219,6 +247,21 @@ StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &le
                                                  const StaticShapeProjection &right,
                                                  mlir::Operation *use,
                                                  ShapeRegionProofLimits limits = {});
+
+/// Refine the same original physical region with an immutable, independently
+/// inspected query context. Contexts come from the generated selector/graph owner,
+/// never serialized coordinates; no template shape or cache is rewritten.
+StaticShapeOverlap compareStaticShapeContextualProjections(
+    const StaticShapeProjection &left, llvm::ArrayRef<GeneratedSelection> leftContext,
+    const StaticShapeProjection &right, llvm::ArrayRef<GeneratedSelection> rightContext,
+    mlir::Operation *use, ShapeRegionProofLimits limits = {});
+
+/// Prove the same exact occurrence-qualified physical image, not merely overlap.
+/// A template-wide family and one selected lane never become alias representatives.
+ShapeRegionProofStatus proveStaticShapeProjectionIdentity(const StaticShapeProjection &left,
+                                                          const StaticShapeProjection &right,
+                                                          mlir::Operation *use,
+                                                          ShapeRegionProofLimits limits = {});
 
 /// Prove every physical point of a read is covered exactly once by the supplied
 /// disjoint writes. Uses the same canonical cut/partition engine, with bounded

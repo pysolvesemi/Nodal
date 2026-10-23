@@ -205,9 +205,31 @@ FailureOr<int64_t> staticShapeLiteral(Value value) {
 bool hasStaticShapeIndexDependencies(
     Value value, Operation *module, llvm::SmallPtrSetImpl<Operation *> &active, unsigned depth = 0,
     bool directModule = false, llvm::StringRef requiredEffect = "shape",
-    const nodal::ParameterIntegerEnvironment *environment = nullptr, unsigned *work = nullptr) {
+    const nodal::ParameterIntegerEnvironment *environment = nullptr, unsigned *work = nullptr,
+    Operation *generatedUse = nullptr) {
   if (!value || depth >= 512 || (work && ++*work > nodal::digitalTypeMaximumNodes))
     return false;
+  if (generatedUse) {
+    if (failed(nodal::verifyDigitalValueScope(value, generatedUse)))
+      return false;
+    if (auto argument = llvm::dyn_cast<BlockArgument>(value)) {
+      auto header = nodal::inspectDigitalRegion(argument.getOwner());
+      if (failed(header))
+        return false;
+      if (header->kind == nodal::DigitalRegionKind::Generate)
+        return true; // Exact domain/arithmetic proof belongs to ParameterModel below.
+      if (header->kind != nodal::DigitalRegionKind::StructuralArm)
+        return false;
+      auto capture = nodal::digitalRegionCaptureSource(argument);
+      return succeeded(capture) && *capture &&
+             hasStaticShapeIndexDependencies(*capture, module, active, depth + 1, false,
+                                             requiredEffect, nullptr, work, header->operation);
+    }
+    if (value.getDefiningOp() && value.getDefiningOp()->getParentOp() == module) {
+      generatedUse = nullptr;
+      directModule = true;
+    }
+  }
   if (environment && value.getDefiningOp() && value.getDefiningOp()->getParentOp() == module)
     environment = nullptr; // Module static dependencies retain their ordinary effect policy.
   if (environment) {
@@ -250,6 +272,9 @@ bool hasStaticShapeIndexDependencies(
   if (!llvm::isa<nodal::ConstExprOp>(operation))
     return false;
   return llvm::all_of(operation->getOperands(), [&](Value operand) {
+    if (generatedUse)
+      return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, false,
+                                             requiredEffect, nullptr, work, operation);
     if (!environment)
       return hasStaticShapeIndexDependencies(operand, module, active, depth + 1, directModule,
                                              requiredEffect, nullptr, work);
@@ -1918,28 +1943,164 @@ nodal::resolveStaticShapeDimension(Operation *module, llvm::StringRef dimension,
   return result;
 }
 
+namespace {
+FailureOr<std::optional<nodal::StaticShapeDimension>>
+inspectGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef effect) {
+  using namespace nodal;
+  if (!isGeneratedTypeUse(use) || (effect != "shape" && effect != "width") || dimension.empty() ||
+      dimension != dimension.trim())
+    return failure();
+  Operation *module = use->getParentOfType<nodal::ModuleOp>();
+  int64_t literal = 0;
+  if (!dimension.getAsInteger(10, literal)) {
+    auto proof = resolveStaticShapeDimension(module, dimension, effect);
+    return succeeded(proof) ? FailureOr<std::optional<StaticShapeDimension>>(*proof)
+                            : FailureOr<std::optional<StaticShapeDimension>>(failure());
+  }
+  if (!isCanonicalDigitalWidthToken(dimension))
+    return failure();
+  Value value;
+  unsigned work = 0;
+  Operation *visible = use;
+  for (unsigned depth = 0; visible && depth < 128; ++depth) {
+    if (++work > digitalTypeMaximumNodes)
+      return failure();
+    auto found = lookupDigitalRegionToken(visible->getBlock(), dimension, &work);
+    if (failed(found))
+      return failure();
+    if (*found) {
+      value = *found;
+      break;
+    }
+    if (visible->getParentOp() == module)
+      break;
+    auto header = inspectDigitalRegion(visible->getBlock());
+    if (failed(header))
+      return failure();
+    if (header->isolated)
+      break; // No ancestor token can substitute for an actual capture.
+    visible = header->operation;
+  }
+  if (!value) {
+    // A Module parameter name is an existing implicit structural identity, not
+    // an ancestor SSA read. Keep its ordinary effect/range contract unchanged.
+    auto ordinary = resolveStaticShapeDimension(module, dimension, effect);
+    return succeeded(ordinary) && ordinary->parameter
+               ? FailureOr<std::optional<StaticShapeDimension>>(*ordinary)
+               : FailureOr<std::optional<StaticShapeDimension>>(failure());
+  }
+  llvm::SmallPtrSet<Operation *, 16> active;
+  if (!value.getType().isSignlessInteger(64) ||
+      !hasStaticShapeIndexDependencies(value, module, active, 0, false, effect, nullptr, &work,
+                                       use))
+    return failure();
+  auto facts = resolveStructuralIntegerExpression(value, use,
+                                                  effect == "width"
+                                                      ? ParameterIntegerMode::MathematicalSigned64
+                                                      : ParameterIntegerMode::Storage);
+  if (failed(facts))
+    return failure();
+  if (!facts->expression)
+    return std::optional<StaticShapeDimension>();
+  if (facts->expression->bounds.lower <= 0 ||
+      facts->expression->bounds.upper < facts->expression->bounds.lower)
+    return failure();
+  return std::optional<StaticShapeDimension>(
+      StaticShapeDimension{facts->expression->bounds, nullptr, value, 0});
+}
+} // namespace
+FailureOr<nodal::StaticShapeDimension>
+nodal::resolveGeneratedTypeDimension(Operation *use, StringRef dimension, StringRef effect) {
+  auto proof = inspectGeneratedTypeDimension(use, dimension, effect);
+  return succeeded(proof) && *proof ? FailureOr<StaticShapeDimension>(**proof)
+                                    : FailureOr<StaticShapeDimension>(failure());
+}
+FailureOr<nodal::StructuralIntegerFacts>
+nodal::resolveGeneratedTypeDimensionFacts(Operation *use, StringRef dimension, StringRef effect) {
+  auto proof = inspectGeneratedTypeDimension(use, dimension, effect);
+  if (failed(proof))
+    return failure();
+  if (!*proof)
+    return StructuralIntegerFacts{};
+  const auto &attained = **proof;
+  auto mode = effect == "width" ? ParameterIntegerMode::MathematicalSigned64
+                                : ParameterIntegerMode::Storage;
+  if (attained.expression)
+    return resolveStructuralIntegerExpression(attained.expression, use, mode);
+  auto expression = attained.parameter
+                        ? resolveOwnedIntegerParameter(use->getParentOfType<nodal::ModuleOp>(),
+                                                       attained.parameter, mode)
+                        : FailureOr<InstantiatedIntegerExpression>(
+                              makeLiteralIntegerExpression(attained.literal));
+  return succeeded(expression)
+             ? FailureOr<StructuralIntegerFacts>(StructuralIntegerFacts{*expression})
+             : FailureOr<StructuralIntegerFacts>(failure());
+}
+FailureOr<nodal::InstantiatedIntegerExpression>
+nodal::resolveGeneratedTypeDimensionExpression(Operation *use, StringRef dimension,
+                                               StringRef effect) {
+  auto proof = resolveGeneratedTypeDimensionFacts(use, dimension, effect);
+  return succeeded(proof) && proof->expression
+             ? FailureOr<InstantiatedIntegerExpression>(*proof->expression)
+             : FailureOr<InstantiatedIntegerExpression>(failure());
+}
+
 FailureOr<int64_t>
 nodal::inferStaticShapeMaximumCardinality(Operation *module, llvm::StringRef dimensions,
                                           const ParameterIntegerEnvironment *environment) {
-  llvm::SmallVector<llvm::StringRef> tokens;
+  return inferStaticShapeMaximumCardinality(
+      dimensions, [&](StringRef token) -> FailureOr<ParameterIntegerBounds> {
+        auto dimension = environment && isGeneratedTypeUse(environment->use())
+                             ? resolveGeneratedTypeDimension(environment->use(), token, "shape")
+                             : resolveStaticShapeDimension(module, token, "shape", environment);
+        return succeeded(dimension) ? FailureOr<ParameterIntegerBounds>(dimension->bounds)
+                                    : FailureOr<ParameterIntegerBounds>(failure());
+      });
+}
+FailureOr<int64_t> nodal::inferStaticShapeMaximumCardinality(
+    StringRef dimensions,
+    llvm::function_ref<FailureOr<ParameterIntegerBounds>(StringRef)> resolveDimension) {
+  auto result = inferStaticShapeMaximumCardinalityFacts(
+      dimensions, [&](StringRef token) -> FailureOr<std::optional<ParameterIntegerBounds>> {
+        auto value = resolveDimension(token);
+        return succeeded(value) ? FailureOr<std::optional<ParameterIntegerBounds>>(*value)
+                                : FailureOr<std::optional<ParameterIntegerBounds>>(failure());
+      });
+  return succeeded(result) && *result ? FailureOr<int64_t>(**result)
+                                      : FailureOr<int64_t>(failure());
+}
+FailureOr<std::optional<int64_t>> nodal::inferStaticShapeMaximumCardinalityFacts(
+    StringRef dimensions,
+    llvm::function_ref<FailureOr<std::optional<ParameterIntegerBounds>>(StringRef)>
+        resolveDimension) {
+  llvm::SmallVector<StringRef> tokens;
   dimensions.split(tokens, ',', -1, true);
-  llvm::StringMap<ParameterIntegerBounds> proven;
+  if (tokens.size() > digitalTypeMaximumNodes)
+    return failure();
+  llvm::StringMap<std::optional<ParameterIntegerBounds>> proven;
+  bool unattained = false;
   uint64_t maximum = 1;
-  for (llvm::StringRef token : tokens) {
+  for (StringRef token : tokens) {
     auto found = proven.find(token);
     if (found == proven.end()) {
-      auto dimension = resolveStaticShapeDimension(module, token, "shape", environment);
-      if (failed(dimension))
+      auto bounds = resolveDimension(token);
+      if (failed(bounds) ||
+          (*bounds && ((**bounds).lower <= 0 || (**bounds).upper < (**bounds).lower)))
         return failure();
-      found = proven.try_emplace(token, dimension->bounds).first;
+      found = proven.try_emplace(token, *bounds).first;
     }
-    const int64_t extent = found->second.upper;
-    if (extent <= 0 || maximum > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) /
-                                     static_cast<uint64_t>(extent))
+    if (!found->second) {
+      unattained = true;
+      continue;
+    }
+    const int64_t extent = found->second->upper;
+    if (maximum >
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / static_cast<uint64_t>(extent))
       return failure();
     maximum *= static_cast<uint64_t>(extent);
   }
-  return static_cast<int64_t>(maximum);
+  return unattained ? std::optional<int64_t>()
+                    : std::optional<int64_t>(static_cast<int64_t>(maximum));
 }
 
 FailureOr<nodal::ParameterIntegerBounds>
@@ -2358,8 +2519,16 @@ LogicalResult nodal::ConnectArrayOp::verify() {
 }
 
 LogicalResult nodal::InterfaceOp::verify() {
+  // Keep the predecessor name/visibility contract without imposing a parent
+  // SymbolTable on typed structural arms. The Interface still owns its own
+  // member/role SymbolTable.
+  if (failed(mlir::detail::verifySymbol(getOperation())))
+    return failure();
   if (hasDigitalInterfaceContract(getOperation()))
     return verifyDigitalInterfaceOperation(getOperation());
+  Operation *parent = getOperation()->getParentOp();
+  if (parent && parent->isRegistered() && !parent->hasTrait<OpTrait::SymbolTable>())
+    return emitOpError("legacy Interface parent requires its original SymbolTable ownership");
   if (failed(
           requireText(getOperation(), mlir::SymbolTable::getSymbolAttrName(), "interface symbol")))
     return failure();
@@ -3241,7 +3410,9 @@ LogicalResult nodal::ResolvedBoundaryOp::verify() {
 LogicalResult nodal::NetReadOp::verify() {
   if (hasDigitalInterfaceContract(getOperation()))
     return verifyDigitalInterfaceOperation(getOperation());
-  auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
+  auto net = llvm::dyn_cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
+  if (!net)
+    return emitOpError("resolved families require the typed Interface contract");
   if (getOperation()->getResult(0).getType() != net.getElementType())
     return emitOpError("result must match resolved-net element type");
   return success();
@@ -3250,8 +3421,10 @@ LogicalResult nodal::NetReadOp::verify() {
 LogicalResult nodal::NetDriverOp::verify() {
   if (hasDigitalInterfaceContract(getOperation()))
     return verifyDigitalInterfaceOperation(getOperation());
-  auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
-  auto driver = llvm::cast<nodal::DriverType>(getOperation()->getResult(0).getType());
+  auto net = llvm::dyn_cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
+  auto driver = llvm::dyn_cast<nodal::DriverType>(getOperation()->getResult(0).getType());
+  if (!net || !driver)
+    return emitOpError("resolved families require the typed Interface contract");
   if (driver.getElementType() != net.getElementType())
     return emitOpError("driver must match resolved-net element type");
   return requireText(getOperation(), "driver_id", "driver identity");
@@ -3262,8 +3435,10 @@ LogicalResult nodal::NetDriveOp::verify() {
     return verifyDigitalInterfaceOperation(getOperation());
   if (!getOperation()->getOperand(3).getType().isSignlessInteger(1))
     return emitOpError("legacy net drive enable must be i1");
-  auto net = llvm::cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
-  auto driver = llvm::cast<nodal::DriverType>(getOperation()->getOperand(1).getType());
+  auto net = llvm::dyn_cast<nodal::ResolvedType>(getOperation()->getOperand(0).getType());
+  auto driver = llvm::dyn_cast<nodal::DriverType>(getOperation()->getOperand(1).getType());
+  if (!net || !driver)
+    return emitOpError("resolved families require the typed Interface contract");
   if (driver.getElementType() != net.getElementType() ||
       getOperation()->getOperand(2).getType() != net.getElementType())
     return emitOpError("driver and value types must match the resolved net");

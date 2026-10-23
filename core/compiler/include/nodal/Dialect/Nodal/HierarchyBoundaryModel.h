@@ -30,16 +30,32 @@ struct HierarchyBoundaryLeaf {
 struct HierarchyBoundaryType {
   mlir::Type type;
   mlir::Operation *declarationOwner = nullptr;
-  /// Optional exact direct child instance. Expressions then retain finalized
-  /// parent actual substitution, while type/path identity stays child-owned.
+  /// Optional exact lexical child instance. Expressions retain finalized parent
+  /// actual substitution, including original all-lane induction atoms for a
+  /// generated template; type/path identity stays child-owned.
   mlir::Operation *instance = nullptr;
   llvm::SmallVector<HierarchyBoundaryLeaf, 4> leaves;
 };
 /// Derive complete bit-pattern leaves from the existing type/shape/parameter
 /// owners without expanding lanes or bits. The IR must stay alive and unchanged.
-/// Generated lexical instances require the subsequent admitted family view.
+/// A generated lexical instance retains its original all-lane formal contract
+/// and actual induction DAG, never a selected lane or a sampled/default width.
 mlir::FailureOr<HierarchyBoundaryType>
 inspectHierarchyBoundaryType(mlir::Type type, mlir::Operation *declarationOwner,
                              mlir::Operation *instance = nullptr);
+/// Original direct endpoint geometry. Payload dimensions retain their authored
+/// definition anchor; outer InterfaceArray axes retain the endpoint anchor.
+/// All expressions are numeric all-lane facts, never selected specialization.
+struct DigitalInterfaceBoundaryType {
+  mlir::Operation *endpoint = nullptr, *definition = nullptr, *member = nullptr;
+  HierarchyBoundaryType payload;
+  llvm::SmallVector<InstantiatedIntegerExpression, 2> outerDimensions;
+};
+/// Independently verifies the complete original Interface inventory once, then
+/// returns exact endpoint/member seeds in order. Partial results are not exposed.
+/// No child-instance substitution is inferred from a declaration alone.
+mlir::FailureOr<llvm::SmallVector<DigitalInterfaceBoundaryType, 4>>
+inspectDigitalInterfaceBoundaryTypes(
+    mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Operation *, mlir::Operation *>> seeds);
 } // namespace nodal
 #endif

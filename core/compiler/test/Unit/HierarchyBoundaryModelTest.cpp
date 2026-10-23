@@ -8,6 +8,7 @@
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -207,6 +208,128 @@ int main() {
          failed(nodal::inspectHierarchyBoundaryType(type("!nodal.capability<\"clock\">"), parent)));
   report("non-bit-pattern-not-a-payload-leaf",
          failed(nodal::inspectHierarchyBoundaryType(type("f64"), parent)));
+  auto replace = [](std::string text, StringRef from, StringRef to) {
+    size_t at = text.find(from.str());
+    if (at != std::string::npos)
+      text.replace(at, from.size(), to.str());
+    return text;
+  };
+  auto generated = [&](int64_t lower, int64_t upper, int64_t step = 1) {
+    auto integer = [](StringRef name, int64_t value) {
+      return "%" + name.str() + " = \"nodal.const_literal\"() <{kind = \"integer\", spelling = \"" +
+             std::to_string(value) + "\", value = " + std::to_string(value) +
+             " : i64, metadata = {}}> : () -> i64\n";
+    };
+    auto child = replace(instance("u"), "metadata = {}",
+                         "generated_owner = \"Parent.family\", generated_induction = "
+                         "\"Parent.family.i\", metadata = {}");
+    auto binding = [&](StringRef name) {
+      return replace(override(name, "iv"), "metadata = {}",
+                     "generated_owner = \"Parent.family\", generated_induction = "
+                     "\"Parent.family.i\", metadata = {}");
+    };
+    return integer("lo", lower) + integer("hi", upper) + integer("step", step) +
+           "%family = \"nodal.generate\"(%lo, %hi, %step) <{induction = \"i\", region_id = "
+           "\"Parent.family\", "
+           "induction_path = \"Parent.family.i\", metadata = {maximum_trip_count = " +
+           std::to_string(upper <= lower ? 0 : (upper - lower + step - 1) / step) +
+           " : i64}}> ({^bb0(%iv: i64):\n" + child + binding("N") + binding("W") +
+           "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  auto generatedQuery = [&](StringRef name, StringRef body, StringRef formal, bool expected,
+                            auto inspect, StringRef childSource = "") {
+    auto fixture = parseSourceString<mlir::ModuleOp>(
+        "module {" + module("Child", childSource.empty() ? childBody : childSource.str()) +
+            module("Parent", body.str()) + "}",
+        ParserConfig(&context, false));
+    bool good = false;
+    if (fixture) {
+      auto unchanged = print(fixture->getOperation());
+      Operation *owner = SymbolTable::lookupSymbolIn(*fixture, "Child");
+      Operation *occurrence = nullptr;
+      fixture->walk([&](nodal::InstanceOp candidate) { occurrence = candidate; });
+      auto view = nodal::inspectHierarchyBoundaryType(type(formal), owner, occurrence);
+      good = succeeded(view) == expected && unchanged == print(fixture->getOperation());
+      if (succeeded(view))
+        good &= view->instance == occurrence && view->declarationOwner == owner &&
+                inspect(*view, occurrence->getParentOp());
+    }
+    report(name, good);
+  };
+  auto accept = [](const auto &, Operation *) { return true; };
+  generatedQuery("generated-original-induction-width-is-not-lane-or-default", generated(1, 4),
+                 digital("W"), true, [&](const auto &view, Operation *family) {
+                   auto domain = nodal::resolveGeneratedDomain(family);
+                   return succeeded(domain) && view.leaves.size() == 1 &&
+                          view.leaves[0].width.root->kind ==
+                              nodal::InstantiatedIntegerNode::Kind::OpaqueValue &&
+                          view.leaves[0].width.root->identity == domain->induction &&
+                          view.leaves[0].width.bounds.lower == 1 &&
+                          view.leaves[0].width.bounds.upper == 3;
+                 });
+  generatedQuery("generated-nonzero-nonunit-original-coordinate", generated(2, 9, 3), digital("W"),
+                 true, [&](const auto &view, Operation *family) {
+                   auto domain = nodal::resolveGeneratedDomain(family);
+                   return succeeded(domain) && view.leaves.size() == 1 &&
+                          view.leaves[0].width.root->identity == domain->induction &&
+                          view.leaves[0].width.bounds.lower == 2 &&
+                          view.leaves[0].width.bounds.upper == 8;
+                 });
+  generatedQuery(
+      "generated-expression-width-and-extent-retain-one-original-DAG", generated(1, 4),
+      shape("Child.twice", digital("Child.twice")), true, [&](const auto &view, Operation *family) {
+        auto domain = nodal::resolveGeneratedDomain(family);
+        if (failed(domain) || !domain->attainedInductionBounds || view.leaves.size() != 1)
+          return false;
+        auto atom =
+            nodal::makeOpaqueIntegerExpression(domain->induction, *domain->attainedInductionBounds);
+        auto twice = nodal::composeIntegerExpression("add", {atom, atom});
+        return succeeded(twice) && view.leaves[0].dimensions.size() == 1 &&
+               nodal::equivalentInstantiatedIntegerExpressions(view.leaves[0].width, *twice) &&
+               nodal::equivalentInstantiatedIntegerExpressions(
+                   view.leaves[0].dimensions[0].extents[0], *twice);
+      });
+  generatedQuery("generated-complete-nominal-fields-and-dimension-groups", generated(1, 4), nested,
+                 true, [&](const auto &view, Operation *) {
+                   return view.leaves.size() == 2 && view.leaves[0].path.size() == 1 &&
+                          view.leaves[0].path[0].structure.getValue() == "Frame" &&
+                          view.leaves[0].path[0].name.getValue() == "payload" &&
+                          view.leaves[0].dimensions.size() == 2 &&
+                          view.leaves[0].dimensions[0].fieldDepth == 0 &&
+                          view.leaves[0].dimensions[1].fieldDepth == 1 &&
+                          view.leaves[0].dimensions[1].extents.size() == 2 &&
+                          view.leaves[1].dimensions.size() == 1;
+                 });
+  generatedQuery("generated-original-all-lane-formal-range-is-required", generated(1, 35),
+                 digital("W"), false, accept);
+  generatedQuery("generated-original-extent-also-checks-all-lane-formal-range", generated(1, 35),
+                 shape("N", "!nodal.bits<1>"), false, accept);
+  generatedQuery("generated-forged-instance-owner-rejected",
+                 replace(generated(1, 4), "generated_owner = \"Parent.family\"",
+                         "generated_owner = \"Parent.forged\""),
+                 digital("W"), false, accept);
+  generatedQuery("generated-forged-instance-induction-rejected",
+                 replace(generated(1, 4), "generated_induction = \"Parent.family.i\"",
+                         "generated_induction = \"Parent.family.j\""),
+                 digital("W"), false, accept);
+  generatedQuery("generated-forged-override-owner-rejected",
+                 replace(generated(1, 4), "parameter = @W, generated_owner = \"Parent.family\"",
+                         "parameter = @W, generated_owner = \"Parent.forged\""),
+                 digital("W"), false, accept);
+  generatedQuery(
+      "generated-wrong-template-trip-count-rejected",
+      replace(generated(1, 4), "maximum_trip_count = 3 : i64", "maximum_trip_count = 4 : i64"),
+      digital("W"), false, accept);
+  std::string largeChild = childBody;
+  while (largeChild.find("spelling = \"32\", value = 32 : i64") != std::string::npos)
+    largeChild = replace(largeChild, "spelling = \"32\", value = 32 : i64",
+                         "spelling = \"1000000\", value = 1000000 : i64");
+  generatedQuery(
+      "million-generated-lanes-remain-one-symbolic-leaf", generated(1, 1000001), digital("W"), true,
+      [](const auto &view, Operation *) {
+        return view.leaves.size() == 1 && view.leaves[0].width.bounds.upper == 1000000;
+      },
+      largeChild);
   report("all-queries-read-only", before == print(parsed->getOperation()));
   llvm::outs() << "HIERARCHY_BOUNDARY_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;

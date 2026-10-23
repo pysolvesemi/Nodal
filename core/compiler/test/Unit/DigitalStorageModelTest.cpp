@@ -1230,6 +1230,81 @@ int main() {
         generatedDomain +
             replace(nestedCapture, "(%innerCapture, %ordinal)", "(%familyCapture, %ordinal)"),
         false);
+
+  const std::string emptyWidth = "!nodal.digital<\"uint\", \"Fixture.empty.width\">";
+  auto dependentWireFamily = [&](StringRef type, StringRef upper = "0",
+                                 StringRef increment = "family_step") {
+    auto body = family("0", upper, "1", "wire");
+    body = replace(body, storage(sint, "stored", "register", "", "", "clock"),
+                   "%width = \"nodal.const_expr\"(%i, %" + increment.str() +
+                       ") <{operator_name = \"add\", metadata = {semantic_path = "
+                       "\"Fixture.empty.width\"}}> : (i64, i64) -> i64\n" +
+                       storage(type, "stored"));
+    body = replace(body, ": (" + sint + ") -> ()", ": (" + type.str() + ") -> ()");
+    return body;
+  };
+  auto checkedStorageFacts = [&](StringRef name, const std::string &body, bool valid,
+                                 std::optional<int64_t> footprint) {
+    auto parsed = parseSourceString<mlir::ModuleOp>(model(body), ParserConfig(&context, false));
+    Operation *declaration = nullptr;
+    if (parsed)
+      parsed->walk([&](nodal::DigitalStorageOp op) {
+        if (op->getAttrOfType<StringAttr>("name").getValue() == "stored")
+          declaration = op;
+      });
+    auto before = parsed ? print(parsed->getOperation()) : "";
+    auto proof = declaration ? nodal::inspectDigitalStorageType(declaration->getResult(0).getType(),
+                                                                declaration)
+                             : FailureOr<nodal::DigitalStorageTypeFacts>(failure());
+    bool good = parsed && declaration && succeeded(proof) == valid;
+    if (good && valid) {
+      good = proof->maximumBits == footprint &&
+             succeeded(nodal::verifyDigitalStorageOperation(declaration));
+      auto numeric =
+          nodal::inferDigitalStorageMaximumBits(declaration->getResult(0).getType(), declaration);
+      good &= footprint ? succeeded(numeric) && *numeric == *footprint : failed(numeric);
+    }
+    report(name, good && before == print(parsed->getOperation()));
+  };
+  const auto emptyWire = dependentWireFamily(emptyWidth);
+  checkedStorageFacts("empty-dependent-wire-keeps-checked-absent-footprint", emptyWire, true,
+                      std::nullopt);
+  check("empty-dependent-wire-full-declaration-verifier", emptyWire, true);
+  const auto emptyShape =
+      dependentWireFamily("!nodal.shaped<\"Fixture.empty.width\", !nodal.uint<2>>");
+  checkedStorageFacts("empty-dependent-wire-extent-keeps-absent-footprint", emptyShape, true,
+                      std::nullopt);
+  check("empty-dependent-wire-extent-full-verifier", emptyShape, true);
+  checkedStorageFacts("attained-dependent-wire-still-has-positive-maximum",
+                      dependentWireFamily(emptyWidth, "3"), true, 3);
+  check("empty-dependent-wire-cannot-supply-selected-zero",
+        emptyWire + selected("0", "read", "stored", "!nodal.uint<1>"), false);
+  check("empty-dependent-token-cannot-escape-to-module-storage",
+        emptyWire + storage(emptyWidth, "escaped"), false);
+  auto zeroParameter = parameter();
+  zeroParameter = replace(zeroParameter, "default_value = 2", "default_value = 0");
+  zeroParameter =
+      replace(zeroParameter, "spelling = \"1\", value = 1", "spelling = \"0\", value = 0");
+  zeroParameter =
+      replace(zeroParameter, "spelling = \"4\", value = 4", "spelling = \"0\", value = 0");
+  checkedStorageFacts(
+      "empty-wire-cannot-hide-independent-zero-dimension",
+      zeroParameter +
+          dependentWireFamily("!nodal.shaped<\"Fixture.empty.width,N\", !nodal.uint<2>>"),
+      false, std::nullopt);
+  auto maybeParameter =
+      replace(parameter(), "spelling = \"1\", value = 1", "spelling = \"0\", value = 0");
+  auto maybeFamily =
+      replace(dependentWireFamily(emptyWidth, "4", "family_lo"),
+              "%family_lo, %family_hi, %family_step", "%family_lo, %N, %family_step");
+  checkedStorageFacts("maybe-empty-wire-still-proves-all-attained-widths",
+                      maybeParameter + maybeFamily, false, std::nullopt);
+  checkedStorageFacts("empty-wire-domain-contract-is-not-assumed",
+                      replace(emptyWire, "maximum_trip_count = 0", "maximum_trip_count = 1"), false,
+                      std::nullopt);
+  check("empty-family-cannot-make-module-memory-type-valid",
+        generatedDomain + emptyWire + memory(emptyWidth), false);
+
   llvm::outs() << "DIGITAL_STORAGE_MODEL_RESULT " << cases - failures << '/' << cases << '\n';
   return failures ? 1 : 0;
 }

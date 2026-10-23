@@ -24,6 +24,13 @@ struct DigitalRegionHeader {
 };
 mlir::FailureOr<DigitalRegionHeader> inspectDigitalRegion(mlir::Block *body);
 bool isDigitalRegionOwner(mlir::Operation *operation);
+/// Raw unique token lookup in one actual block. Empty Value means absent;
+/// failure means malformed/ambiguous. Scope and arithmetic remain caller proofs.
+mlir::FailureOr<mlir::Value> lookupDigitalRegionToken(mlir::Block *body, llvm::StringRef token,
+                                                      unsigned *work = nullptr);
+/// Exact structural-only ancestry containing a real Generate. This is not a
+/// generic Integer environment binding and grants no capture bypass.
+bool isGeneratedTypeUse(mlir::Operation *use);
 mlir::LogicalResult
 verifyDigitalValueScope(mlir::Value value, mlir::Operation *use,
                         const ParameterIntegerEnvironment *environment = nullptr);

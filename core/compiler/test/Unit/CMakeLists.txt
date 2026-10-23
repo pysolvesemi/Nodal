@@ -813,3 +813,35 @@ target_link_libraries(nodal-fsm-composition-model-unit-tests PRIVATE
   NodalDialect MLIRIR MLIRParser MLIRSupport LLVMSupport)
 add_test(NAME nodal.native.fsm-composition-model-unit COMMAND nodal-fsm-composition-model-unit-tests)
 set_tests_properties(nodal.native.fsm-composition-model-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-occurrence-circt-unit-tests GeneratedOccurrenceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-occurrence-circt-unit-tests)
+target_link_libraries(nodal-generated-occurrence-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-occurrence-circt-unit COMMAND nodal-generated-occurrence-circt-unit-tests)
+set_tests_properties(nodal.native.generated-occurrence-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-interface-circt-unit-tests GeneratedInterfaceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-interface-circt-unit-tests)
+target_link_libraries(nodal-generated-interface-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-interface-circt-unit COMMAND nodal-generated-interface-circt-unit-tests)
+set_tests_properties(nodal.native.generated-interface-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-generated-direct-interface-circt-unit-tests GeneratedDirectInterfaceCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-generated-direct-interface-circt-unit-tests)
+target_link_libraries(nodal-generated-direct-interface-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.generated-direct-interface-circt-unit COMMAND nodal-generated-direct-interface-circt-unit-tests)
+set_tests_properties(nodal.native.generated-direct-interface-circt-unit PROPERTIES TIMEOUT 60)
+
+add_executable(nodal-typed-fill-circt-unit-tests TypedFillCIRCTTest.cpp)
+llvm_update_compile_flags(nodal-typed-fill-circt-unit-tests)
+target_link_libraries(nodal-typed-fill-circt-unit-tests PRIVATE
+  NodalTransforms NodalDialect CIRCTHW CIRCTComb CIRCTSeq CIRCTSV CIRCTVerif CIRCTSupport
+  MLIRIR MLIRParser MLIRPass MLIRSupport LLVMSupport)
+add_test(NAME nodal.native.typed-fill-circt-unit COMMAND nodal-typed-fill-circt-unit-tests)
+set_tests_properties(nodal.native.typed-fill-circt-unit PROPERTIES TIMEOUT 60)

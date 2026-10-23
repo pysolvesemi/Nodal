@@ -2,14 +2,15 @@
 
 #include "mlir/IR/Verifier.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
+#include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/EnumValueModel.h"
-#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/HierarchyModel.h"
+#include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/SequentialModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
@@ -181,6 +182,10 @@ public:
       // induction ancestry at each read; predicates never use this admission.
       if (succeeded(resolveDigitalIterationIndex(source, h.operation)))
         continue;
+      // Finite ordinary constructor data can cross this exact capture, but
+      // induction-derived data never becomes a structural/type binding.
+      if (succeeded(verifyConstructorBindingIntegerCapture(source, h.operation)))
+        continue;
       auto expression =
           outer ? resolveOwnedIntegerExpression(h.module, source, *outer,
                                                 ParameterIntegerMode::MathematicalSigned64)
@@ -279,6 +284,23 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     return verifyGenerateBody(op, budget, depth + 1);
   if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<GeneratedMemberOp>(op))
     return success(succeeded(inspectGeneratedMember(op)));
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() && llvm::isa<InstancePortOp>(op) &&
+      op->getNumOperands() == 2)
+    // Only an actual selected carrier may cross this lexical seam. The shared
+    // inspector retains the exact family/ordinal capture chain and child owner.
+    return success(succeeded(inspectInstancePort(op)));
+  if (!pure && !op->getParentOfType<HardwareLoopOp>() &&
+      llvm::isa<InterfaceOp, InterfaceInstanceOp, InterfaceAbiOp, InterfaceBoundaryOp,
+                MemberAccessOp, InterfaceConnectOp, InterfaceDriveOp, InterfaceObserveOp>(op)) {
+    // Structural admission never supplies role, type, domain or driver authority.
+    // The canonical Interface model independently checks the complete owning
+    // module; this path only admits its exact lexical declaration/use carrier.
+    if (failed(verifyDigitalInterfaceOperation(op)))
+      return failure();
+    return llvm::isa<InterfaceBoundaryOp>(op)
+               ? success(succeeded(inspectDigitalInterfaceBoundary(op)))
+               : success();
+  }
   if (!pure && generatedStorage && op->getParentOp() == family) {
     if (llvm::isa<InstanceOp>(op))
       return verifyHierarchyInstanceOperation(op);
@@ -288,22 +310,24 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
       Operation *parameter = nullptr;
       if (succeeded(boundary) && reference)
         for (Operation &candidate : boundary->module->getRegion(0).front())
-          if (llvm::isa<ParameterOp>(candidate) && text(&candidate, "sym_name") == reference.getValue())
+          if (llvm::isa<ParameterOp>(candidate) &&
+              text(&candidate, "sym_name") == reference.getValue())
             parameter = &candidate;
       auto declared = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
       for (NamedAttribute attribute : op->getAttrs())
         if (!llvm::is_contained(ArrayRef<StringRef>{"instance", "parameter", "generated_owner",
-                                                   "generated_induction", "metadata"},
+                                                    "generated_induction", "metadata"},
                                 attribute.getName().getValue()))
           return reject(op, "generated parameter override carries an unsupported field");
       if (failed(boundary) || boundary->instance->getParentOp() != family || !parameter ||
           !declared || !declared.getValue().isSignlessInteger(64) || op->getNumOperands() != 1 ||
-          op->getOperand(0).getType() != declared.getValue() ||
-          !op->getOperand(0).getDefiningOp() ||
-          op->getOperand(0).getDefiningOp()->getParentOp() != at->module() ||
-          failed(mlir::verify(op, false)) ||
-          failed(resolveInstanceIntegerParameter(boundary->instance, parameter)))
-        return reject(op, "generated child parameter override requires exact invariant Integer formal/actual proof");
+          op->getOperand(0).getType() != declared.getValue() || failed(mlir::verify(op, false)) ||
+          failed(resolveGeneratedInstanceIntegerParameterFacts(
+              boundary->instance, parameter,
+              isStructuralParameter(parameter) ? ParameterIntegerMode::Storage
+                                               : ParameterIntegerMode::MathematicalSigned64)))
+        return reject(op, "generated child parameter override requires exact all-lane Integer "
+                          "formal/actual proof");
       return success();
     }
     if (llvm::isa<InstanceDomainBindingOp>(op))
@@ -349,7 +373,8 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
     return verifyShapeViewMapping(op, &*at);
   if (llvm::isa<ConstantOp, ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(op)) {
     Type type = op->getResult(0).getType();
-    if (isDigitalCombinationalValueType(type, environment.module(), &*at)) {
+    if ((isDigitalScalarType(type) && succeeded(inspectDigitalStorageType(type, op, &*at))) ||
+        isDigitalCombinationalValueType(type, environment.module(), &*at)) {
       if (llvm::isa<ConstExprOp, ConstParameterRefOp>(op))
         return reject(op, "runtime values require closed digital producers");
       if (llvm::isa<EnumType>(type))
@@ -357,8 +382,16 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                                                                : failure();
       return verifyDigitalLiteralOperation(op, &*at);
     }
+    // Shape selectors retain the existing closed index-literal carrier. This
+    // does not grant index arithmetic or runtime Integer producers static proof.
+    if (llvm::isa<ConstantOp>(op) && type.isIndex())
+      return mlir::verify(op, false);
     if (!type.isSignlessInteger(64))
       return reject(op, "static producers require dimensionless i64");
+    // Ordinary constructor data is static but not structurally eligible. The
+    // Parameter owner checks every actual use/sink before this narrow admission.
+    if (succeeded(verifyConstructorBindingIntegerOperation(op)))
+      return mlir::verify(op, false);
     Operation *next = op->getNextNode();
     if (!next)
       return succeeded(verifyStructuralIntegerOperation(op))

@@ -234,26 +234,6 @@ FailureOr<Signature> inspect(Operation *operation) {
   return h;
 }
 
-FailureOr<Value> localToken(Block *body, StringRef token) {
-  Value result;
-  unsigned work = 0;
-  for (BlockArgument arg : body->getArguments())
-    if (digitalValueSemanticPath(arg) == token) {
-      if (result)
-        return failure();
-      result = arg;
-    }
-  for (Operation &op : *body) {
-    if (++work > maximumRegionNodes)
-      return failure();
-    if (path(&op) == token) {
-      if (result || op.getNumResults() != 1)
-        return failure();
-      result = op.getResult(0);
-    }
-  }
-  return result ? FailureOr<Value>(result) : FailureOr<Value>(failure());
-}
 FailureOr<Expr> tokenExpression(Operation *module, StringRef token, StringRef effect,
                                 const ParameterIntegerEnvironment *env) {
   if (env)
@@ -418,8 +398,10 @@ public:
       p.coefficient = *width;
       return p;
     }
-    auto raw = localToken(h.body, symbolic.getWidth());
-    if (failed(raw)) {
+    auto raw = lookupDigitalRegionToken(h.body, symbolic.getWidth());
+    if (failed(raw))
+      return failure();
+    if (!*raw) {
       auto width = tokenExpression(h.module, symbolic.getWidth(), "width", &environment);
       if (failed(width))
         return failure();
@@ -1320,18 +1302,13 @@ resolveCollectionIntegerTokenValue(Operation *module, StringRef token, StringRef
   auto header = inspectDigitalRegion(environment.scope());
   if (failed(header) || header->module != module)
     return failure();
-  auto value = localToken(environment.scope(), token);
-  if (failed(value)) {
-    Value result;
-    for (Operation &op : module->getRegion(0).front())
-      if (path(&op) == token) {
-        if (result || op.getNumResults() != 1)
-          return failure();
-        result = op.getResult(0);
-      }
-    if (!result)
+  auto value = lookupDigitalRegionToken(environment.scope(), token);
+  if (failed(value))
+    return failure();
+  if (!*value) {
+    value = lookupDigitalRegionToken(&module->getRegion(0).front(), token);
+    if (failed(value) || !*value)
       return failure();
-    value = result;
   }
   if (!(*value).getType().isSignlessInteger(64) ||
       !hasStaticIntegerEffect(*value, module, effect, &environment))

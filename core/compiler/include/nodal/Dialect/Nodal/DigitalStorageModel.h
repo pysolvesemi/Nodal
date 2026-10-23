@@ -20,6 +20,18 @@ struct GeneratedSelection {
   mlir::Value ordinal;
   InstantiatedIntegerExpression coordinate;
 };
+/// Shared structural selection proof. Consumers retain their own capability/type checks.
+struct GeneratedSelectionProof {
+  mlir::Operation *family = nullptr;
+  mlir::Operation *exportOperation = nullptr;
+  llvm::SmallVector<GeneratedSelection, 2> selections;
+};
+mlir::FailureOr<GeneratedSelectionProof> inspectGeneratedSelection(mlir::Value familyHandle,
+                                                                   mlir::Value ordinal,
+                                                                   llvm::StringRef member,
+                                                                   mlir::Operation *use);
+/// Exact preceding direct symbol only; does not recursively verify the instance graph.
+mlir::FailureOr<mlir::Operation *> inspectGeneratedExportSymbol(mlir::Operation *exportOperation);
 struct GeneratedMember {
   mlir::Operation *family = nullptr;
   mlir::Operation *exportOperation = nullptr;
@@ -93,6 +105,9 @@ struct DigitalDependencyNode {
   /// Opaque external contribution remains a real unannotated source while the
   /// same component also retains every explicit authored driver dependency.
   bool externalContribution = false;
+  /// Query-owned immutable actual generated coordinates. Zero is the ordinary
+  /// authored template context, never a synthesized physical lane identifier.
+  unsigned selectedContext = 0;
 };
 struct DigitalCrossingSample {
   unsigned root;
@@ -124,6 +139,14 @@ struct DigitalObservationGroup {
   mlir::Operation *use = nullptr;
   llvm::SmallVector<unsigned, 2> roots;
 };
+struct DigitalDependencySelection {
+  /// Existing hierarchy occurrence containing this original Generate declaration.
+  unsigned occurrence = 0;
+  GeneratedSelection selection;
+};
+struct DigitalDependencySelectionContext {
+  llvm::SmallVector<DigitalDependencySelection, 2> selections;
+};
 struct DigitalDependencyGraph {
   llvm::SmallVector<DigitalDependencyNode> nodes;
   llvm::SmallVector<unsigned> roots;
@@ -135,10 +158,30 @@ struct DigitalDependencyGraph {
   std::shared_ptr<const HierarchyModel> hierarchy;
   /// Canonical local Interface facts consumed by the existing occurrence graph.
   DigitalResolvedTopology resolved;
+  /// Interned from independently checked authored selections, never lane expansion.
+  llvm::SmallVector<DigitalDependencySelectionContext, 1> selectionContexts;
 };
 mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(
     mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
     DigitalAssignmentProofLimits limits = {});
+
+/// Non-executable transport of one original whole template assignment. These
+/// facts do not establish an attained lane, a selected occurrence or a live edge.
+struct DigitalTemplateAssignment {
+  mlir::Value root;
+  mlir::Value source;
+  mlir::Operation *assignment = nullptr;
+  mlir::Operation *family = nullptr;
+};
+/// One bounded canonical Assignment inventory for an ordered Module-local batch.
+/// Each seed is a direct Generate-local wire or child-input whole root and that
+/// original body's final operation. Requires one whole writer in the exact same
+/// family/structural arm ancestry, including empty templates. Partial, selected,
+/// ambiguous and guard-bypassing forms refuse; original native gating is unchanged.
+mlir::FailureOr<llvm::SmallVector<DigitalTemplateAssignment, 4>>
+inspectGeneratedTemplateAssignments(mlir::Operation *module,
+                                    llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
+                                    DigitalAssignmentProofLimits limits = {});
 
 /// Immutable successful split facts from the existing occurrence/component proof.
 /// Values stay in their original definition and occurrence; they are not parent SSA.
@@ -165,6 +208,9 @@ struct DigitalResolvedHierarchyComponent {
   mlir::Value representative;
   llvm::SmallVector<DigitalResolvedOccurrenceEndpoint, 0> endpoints;
   llvm::SmallVector<DigitalResolvedOccurrenceOperation, 2> drivers, externalContributions;
+  /// Geometry is local to the existing representative occurrence, or the first
+  /// exact endpoint when no SSA representative exists. It never enumerates lanes.
+  DigitalResolvedShape shape;
 };
 mlir::LogicalResult verifyHierarchyDependencies(
     std::shared_ptr<const HierarchyModel> hierarchy, DigitalAssignmentProofLimits limits = {},

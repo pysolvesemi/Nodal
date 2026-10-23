@@ -220,6 +220,48 @@ std::string digitalValueSemanticPath(Value value) {
   }
   return {};
 }
+FailureOr<Value> lookupDigitalRegionToken(Block *body, StringRef token, unsigned *work) {
+  if (!body || token.empty())
+    return failure();
+  Value result;
+  unsigned localWork = 0;
+  if (!work)
+    work = &localWork;
+  for (BlockArgument arg : body->getArguments()) {
+    if (++*work > 65536)
+      return failure();
+    if (digitalValueSemanticPath(arg) == token) {
+      if (result)
+        return failure();
+      result = arg;
+    }
+  }
+  for (Operation &op : *body) {
+    if (++*work > 65536)
+      return failure();
+    if (path(&op) == token) {
+      if (result || op.getNumResults() != 1)
+        return failure();
+      result = op.getResult(0);
+    }
+  }
+  return result;
+}
+bool isGeneratedTypeUse(Operation *use) {
+  bool generated = false;
+  unsigned depth = 0;
+  while (use && !isa_and_nonnull<ModuleOp>(use->getParentOp())) {
+    if (++depth > 128)
+      return false;
+    auto header = inspectDigitalRegion(use->getBlock());
+    if (failed(header) || (header->kind != DigitalRegionKind::Generate &&
+                           header->kind != DigitalRegionKind::StructuralArm))
+      return false;
+    generated |= header->kind == DigitalRegionKind::Generate;
+    use = header->operation;
+  }
+  return use && generated;
+}
 namespace detail {
 class DigitalGenerateIntegerEnvironmentAdmission {
 public:

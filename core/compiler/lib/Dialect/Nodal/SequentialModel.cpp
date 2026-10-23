@@ -561,7 +561,7 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
     // An intersection of attributed input cones is a causal reconvergence, not
     // a coincidence of constants or equal clock frequencies. Store one owner
     // per actual leaf; never copy transitive provenance sets into value nodes.
-    llvm::DenseMap<std::pair<unsigned, Operation *>, unsigned> owners;
+    llvm::DenseMap<std::pair<std::pair<unsigned, unsigned>, Operation *>, unsigned> owners;
     for (unsigned index : boundaries) {
       visited.clear();
       for (const auto &sample : graph.crossings[index].samples)
@@ -575,8 +575,10 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
         const auto &node = graph.nodes[id];
         auto source = sampleSource(module, node);
         if (source.boundary && source.domain && source.identity) {
-          auto inserted =
-              owners.try_emplace(std::make_pair(node.occurrence, source.identity), index);
+          auto inserted = owners.try_emplace(
+              std::make_pair(std::make_pair(node.occurrence, node.selectedContext),
+                             source.identity),
+              index);
           if (!inserted.second && inserted.first->second != index)
             return group.use->emitOpError(
                 "NODAL-CDC-057-002: independent synchronizers of a shared actual source "

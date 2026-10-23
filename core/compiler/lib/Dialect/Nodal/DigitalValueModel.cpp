@@ -145,7 +145,8 @@ unsigned expressionArity(StringRef opcode) {
       .Default(0);
 }
 
-LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment);
+LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment,
+                           bool allowUnattained = false);
 
 /// A static index is an actual, owned UInt literal SSA value. An invariant
 /// hardware expression or a parameter's default is not a static literal.
@@ -161,7 +162,8 @@ std::optional<int64_t> staticIndex(Value value, const ParameterIntegerEnvironmen
   return exact->getZExtValue();
 }
 
-LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment) {
+LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironment *environment,
+                           bool allowUnattained) {
   std::optional<ParameterIntegerEnvironment> context;
   if (environment) {
     auto scoped = environment->atUse(operation);
@@ -176,10 +178,23 @@ LogicalResult checkLiteral(Operation *operation, const ParameterIntegerEnvironme
     return failure();
   Type type = operation->getResult(0).getType();
   auto value = operation->getAttrOfType<IntegerAttr>("value");
-  if (operation->hasAttr("unit") ||
-      !digitalIntegerAttributeFits(value, type, owner(operation), environment))
+  auto carrier = value ? llvm::dyn_cast<IntegerType>(value.getType()) : IntegerType();
+  if (operation->hasAttr("unit") || !carrier || scalarKind(type).empty())
     return failure();
-  auto carrier = llvm::cast<IntegerType>(value.getType());
+  bool unattained = false;
+  if (allowUnattained) {
+    auto facts = inspectDigitalStorageType(type, operation, environment);
+    if (failed(facts))
+      return failure();
+    unattained = !facts->maximumBits;
+  }
+  if (unattained) {
+    if (scalarKind(type) != "sint" && !carrier.isUnsigned() && !llvm::isa<BoolAttr>(value) &&
+        value.getValue().isNegative())
+      return failure();
+  } else if (!digitalIntegerAttributeFits(value, type, owner(operation), environment)) {
+    return failure();
+  }
   const llvm::APInt &bits = value.getValue();
   const bool unsignedValue = carrier.isUnsigned() || llvm::isa<BoolAttr>(value);
   const StringRef name = operation->getName().getStringRef();
@@ -904,7 +919,7 @@ LogicalResult verifyDigitalLiteralOperation(Operation *operation,
         return failure();
     return success();
   }
-  if (failed(checkLiteral(operation, environment)))
+  if (failed(checkLiteral(operation, environment, true)))
     return reject(operation, "digital literal requires an exact fitting integer and canonical "
                              "spelling over every legal owned width");
   return success();

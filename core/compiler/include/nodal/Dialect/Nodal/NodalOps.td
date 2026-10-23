@@ -211,10 +211,10 @@ def Nodal_InstanceOp : Nodal_Op<"instance",
 }
 
 // F57: actual immediate-child data boundaries, distinct from conservative terminals.
-def Nodal_InstancePortOp : Nodal_Op<"instance_port", [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
+def Nodal_InstancePortOp : Nodal_Op<"instance_port", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Parent-owned exact immediate-child digital port reference";
-  let arguments = (ins FlatSymbolRefAttr:$instance, StrAttr:$port,
-    StrAttr:$direction, DictionaryAttr:$metadata);
+  let arguments = (ins Variadic<AnyType>:$selection, FlatSymbolRefAttr:$instance, StrAttr:$port,
+    StrAttr:$direction, DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$member);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
@@ -267,7 +267,7 @@ def Nodal_InstanceTerminalArrayOp : Nodal_Op<"instance_terminal_array",
 //===----------------------------------------------------------------------===//
 
 def Nodal_InterfaceOp : Nodal_Op<"interface",
-    [IsolatedFromAbove, Symbol, SymbolTable, NoTerminator]> {
+    [IsolatedFromAbove, SymbolTable, NoTerminator]> {
   let summary = "Logical non-storable Interface definition";
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$metadata);
   let regions = (region SizedRegion<1>:$body);
@@ -299,7 +299,7 @@ def Nodal_InterfaceMemberOp : Nodal_Op<"interface_member",
 }
 
 def Nodal_InterfaceInstanceOp : Nodal_Op<"interface_instance",
-    [HasParent<"ModuleOp">, Symbol]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>, Symbol]> {
   let summary = "Physical instance of one logical Interface definition";
   let arguments = (ins
     SymbolNameAttr:$sym_name,
@@ -312,10 +312,11 @@ def Nodal_InterfaceInstanceOp : Nodal_Op<"interface_instance",
 
 // F58: a projection of an actual immediate-child endpoint, not another Interface instance.
 def Nodal_InterfaceBoundaryOp : Nodal_Op<"interface_boundary",
-    [HasParent<"ModuleOp">, Symbol]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Parent-owned projection of one exact child Interface endpoint";
-  let arguments = (ins SymbolNameAttr:$sym_name, FlatSymbolRefAttr:$instance,
-    StrAttr:$endpoint, DictionaryAttr:$metadata);
+  let arguments = (ins Variadic<AnyType>:$selection, SymbolNameAttr:$sym_name,
+    OptionalAttr<FlatSymbolRefAttr>:$instance, StrAttr:$endpoint, DictionaryAttr:$metadata,
+    OptionalAttr<StrAttr>:$member);
   let hasVerifier = 1;
 }
 
@@ -331,7 +332,7 @@ def Nodal_MemberAccessOp : Nodal_Op<"member_access"> {
 }
 
 def Nodal_InterfaceAbiOp : Nodal_Op<"interface_abi",
-    [HasParent<"ModuleOp">]> {
+    [ParentOneOf<["ModuleOp", "GenerateOp"]>]> {
   let summary = "Target-neutral logical Interface ABI metadata";
   let arguments = (ins
     StrAttr:$logical_path,
@@ -343,17 +344,17 @@ def Nodal_InterfaceAbiOp : Nodal_Op<"interface_abi",
 }
 
 // Fully typed connectivity uses existing Interface/Role/Member identities.
-def Nodal_InterfaceConnectOp : Nodal_Op<"interface_connect", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceConnectOp : Nodal_Op<"interface_connect", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Connect two exact role-qualified Interface leaves";
   let arguments = (ins AnyType:$left, AnyType:$right, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
-def Nodal_InterfaceDriveOp : Nodal_Op<"interface_drive", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceDriveOp : Nodal_Op<"interface_drive", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Drive an explicitly writable Interface leaf";
   let arguments = (ins AnyType:$member, AnyType:$value, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
-def Nodal_InterfaceObserveOp : Nodal_Op<"interface_observe", [HasParent<"ModuleOp">]> {
+def Nodal_InterfaceObserveOp : Nodal_Op<"interface_observe", [ParentOneOf<["ModuleOp", "GenerateOp", "StructuralIfOp"]>]> {
   let summary = "Observe a role-qualified digital Interface leaf";
   let arguments = (ins AnyType:$member, DictionaryAttr:$metadata);
   let hasVerifier = 1;
@@ -656,8 +657,9 @@ def Nodal_GenerateOp : Nodal_Op<"generate", [SymbolTable, NoTerminator]> {
 
 def Nodal_GeneratedExportOp : Nodal_Op<"generated_export", [HasParent<"GenerateOp">]> {
   let summary = "Exact existing storage export from one generated family template";
-  let arguments = (ins AnyType:$value, StrAttr:$member, StrAttr:$access,
-    DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$kind);
+  let arguments = (ins Optional<AnyType>:$value, StrAttr:$member, StrAttr:$access,
+    DictionaryAttr:$metadata, OptionalAttr<StrAttr>:$kind,
+    OptionalAttr<FlatSymbolRefAttr>:$target);
   let hasVerifier = 1;
 }
 
@@ -725,26 +727,41 @@ def Nodal_ResolvedBoundaryOp : Nodal_Op<"net_boundary",
   let hasVerifier = 1;
 }
 
+// Whole Interface families keep one ordered shape around the scalar capability.
+// Nested wrappers and arbitrary payloads are not capability carriers.
+def Nodal_ResolvedCarrier : Type<CPred<
+  "::llvm::isa<::nodal::ResolvedType>($_self) || "
+  "(::llvm::isa<::nodal::ShapedType>($_self) && "
+  "::llvm::isa<::nodal::ResolvedType>("
+  "::llvm::cast<::nodal::ShapedType>($_self).getElementType()))">,
+  "scalar resolved capability or one shaped resolved family">;
+def Nodal_DriverCarrier : Type<CPred<
+  "::llvm::isa<::nodal::DriverType>($_self) || "
+  "(::llvm::isa<::nodal::ShapedType>($_self) && "
+  "::llvm::isa<::nodal::DriverType>("
+  "::llvm::cast<::nodal::ShapedType>($_self).getElementType()))">,
+  "scalar driver capability or one shaped driver family">;
+
 def Nodal_NetReadOp : Nodal_Op<"net_read"> {
   let summary = "Read the resolved value of a digital net";
-  let arguments = (ins Nodal_ResolvedType:$net, DictionaryAttr:$metadata);
+  let arguments = (ins Nodal_ResolvedCarrier:$net, DictionaryAttr:$metadata);
   let results = (outs AnyType:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_NetDriverOp : Nodal_Op<"net_driver"> {
   let summary = "Create one stable typed driver identity";
-  let arguments = (ins Nodal_ResolvedType:$net, StrAttr:$driver_id,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, StrAttr:$driver_id,
                        DictionaryAttr:$metadata);
-  let results = (outs Nodal_DriverType:$result);
+  let results = (outs Nodal_DriverCarrier:$result);
   let hasVerifier = 1;
 }
 
 def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
   let summary = "Drive a resolved net through one explicit driver";
   let arguments = (ins
-    Nodal_ResolvedType:$net,
-    Nodal_DriverType:$driver,
+    Nodal_ResolvedCarrier:$net,
+    Nodal_DriverCarrier:$driver,
     AnyType:$value,
     AnyType:$enable,
     StrAttr:$mode,
@@ -756,25 +773,25 @@ def Nodal_NetDriveOp : Nodal_Op<"net_drive"> {
 
 def Nodal_NetReleaseOp : Nodal_Op<"net_release", [HasParent<"ModuleOp">]> {
   let summary = "Explicit inactive high-impedance driver";
-  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, Nodal_DriverCarrier:$driver,
                        DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetDriveLevelOp : Nodal_Op<"net_drive_level", [HasParent<"ModuleOp">]> {
   let summary = "Conditional low or high drive with no fabricated bit-vector constant";
-  let arguments = (ins Nodal_ResolvedType:$net, Nodal_DriverType:$driver,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, Nodal_DriverCarrier:$driver,
                        AnyType:$enable, StrAttr:$level, DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetPassThroughOp : Nodal_Op<"net_pass_through", [HasParent<"ModuleOp">]> {
   let summary = "Exact resolved-net identity connection";
-  let arguments = (ins Nodal_ResolvedType:$left, Nodal_ResolvedType:$right,
+  let arguments = (ins Nodal_ResolvedCarrier:$left, Nodal_ResolvedCarrier:$right,
                        DictionaryAttr:$metadata);
   let hasVerifier = 1;
 }
 def Nodal_NetSplitOp : Nodal_Op<"net_split", [HasParent<"ModuleOp">]> {
   let summary = "Typed write and enable views of one unique authored conditional driver";
-  let arguments = (ins Nodal_ResolvedType:$net, OptionalAttr<UnitAttr>:$hierarchy_driver,
+  let arguments = (ins Nodal_ResolvedCarrier:$net, OptionalAttr<UnitAttr>:$hierarchy_driver,
                        DictionaryAttr:$metadata);
   let results = (outs AnyType:$value, AnyType:$enable);
   let hasVerifier = 1;

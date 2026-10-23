@@ -21,6 +21,7 @@
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
+#include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/DomainModel.h"
 #include "nodal/Dialect/Nodal/EventModel.h"
 #include "nodal/Dialect/Nodal/HierarchyBoundaryModel.h"
@@ -90,6 +91,58 @@ bool resolvedScalar(Type type) {
   auto parametric = dyn_cast<ParametricIntegerType>(type);
   return parametric &&
          llvm::is_contained(ArrayRef<StringRef>{"bits", "uint", "sint"}, parametric.getKind());
+}
+// One physical carrier is a vector of independent electrical lanes. Geometry
+// never replaces endpoint/component/occurrence identity. Re-prove exact local
+// axis provenance before mapping its complete data and enable value types.
+struct ResolvedPhysicalGeometry {
+  Type carrier, payload, data, enable;
+};
+Type resolvedPointwiseType(Type carrier, Type element) {
+  if (auto shape = dyn_cast<nodal::ShapedType>(carrier))
+    return nodal::ShapedType::get(carrier.getContext(), shape.getDimensions(), element);
+  return element;
+}
+ResolvedType resolvedCarrierLeaf(Type type) {
+  if (auto shape = dyn_cast<nodal::ShapedType>(type))
+    type = shape.getElementType();
+  return dyn_cast<ResolvedType>(type);
+}
+FailureOr<ResolvedPhysicalGeometry>
+inspectResolvedPhysicalGeometry(const DigitalResolvedEndpoint &endpoint, Operation *module) {
+  const auto &shape = endpoint.shape;
+  auto resolved = dyn_cast_or_null<ResolvedType>(endpoint.type);
+  if (!resolved || !shape.owner || shape.owner != endpoint.operation ||
+      shape.owner->getParentOp() != module || !shape.dimensions ||
+      shape.axes.size() != shape.dimensions.size() || shape.axes.size() > digitalTypeMaximumDepth ||
+      !isa<InterfaceInstanceOp, InterfaceBoundaryOp, ResolvedNetOp, ResolvedBoundaryOp>(
+          shape.owner) ||
+      (!shape.axes.empty() && (!isa<InterfaceInstanceOp, InterfaceBoundaryOp>(shape.owner) ||
+                               module->hasAttr("external_name"))))
+    return failure();
+  auto metadata = shape.owner->getAttrOfType<DictionaryAttr>("metadata");
+  auto original = metadata ? metadata.getAs<ArrayAttr>("dimensions") : ArrayAttr();
+  if ((original && original != shape.dimensions) || (!original && !shape.axes.empty()))
+    return failure();
+  std::string dimensions;
+  for (auto [index, axis] : llvm::enumerate(shape.axes)) {
+    auto token = dyn_cast<StringAttr>(shape.dimensions[index]);
+    auto checked = token ? resolveStaticShapeDimension(module, token.getValue())
+                         : FailureOr<StaticShapeDimension>(failure());
+    if (failed(checked) || checked->parameter != axis.parameter ||
+        checked->expression != axis.expression || checked->literal != axis.literal ||
+        checked->bounds.lower != axis.bounds.lower || checked->bounds.upper != axis.bounds.upper)
+      return failure();
+    if (!dimensions.empty())
+      dimensions += ',';
+    dimensions += token.getValue();
+  }
+  Type carrier = resolved;
+  if (!dimensions.empty())
+    carrier = nodal::ShapedType::get(module->getContext(), dimensions, resolved);
+  return ResolvedPhysicalGeometry{
+      carrier, resolved.getElementType(), resolvedPointwiseType(carrier, resolved.getElementType()),
+      resolvedPointwiseType(carrier, BitsType::get(module->getContext(), 1))};
 }
 Type targetType(Type type) {
   if (auto capability = dyn_cast<ControlCapabilityType>(type)) {
@@ -162,6 +215,7 @@ struct LogicalPortPlan {
   bool inout = false;
   DictionaryAttr interfaceContract;
   DictionaryAttr resolvedContract;
+  DictionaryAttr generatedLayout;
   std::optional<unsigned> splitRoute;
   bool splitEnable = false;
   SmallVector<Value> references;
@@ -186,6 +240,14 @@ struct ModuleVariantPlan {
   SmallVector<LogicalPortSignature, 0> ports;
   Operation *target = nullptr;
 };
+struct InterfaceTargetFacts {
+  SmallVector<DigitalInterfaceEndpoint> endpoints;
+  SmallVector<DigitalInterfaceAccess> accesses;
+  // Original-template query facts are independent of physical domain variants.
+  bool generatedTemplatesReady = false;
+  SmallVector<DigitalInterfaceBoundaryType, 4> generatedTypes;
+  SmallVector<DigitalInterfaceTemplateDriver, 4> generatedDrivers;
+};
 struct HierarchyTargetPlan {
   std::shared_ptr<HierarchyModel> proof;
   SmallVector<ModuleVariantPlan> variants;
@@ -195,14 +257,14 @@ struct HierarchyTargetPlan {
   SmallVector<SmallVector<const DigitalResolvedEndpoint *, 0>> resolvedEndpoints;
   // Borrowed endpoint facts are collected once per original definition, even
   // when material clock/reset variants emit separate physical module bodies.
-  llvm::DenseMap<Operation *, std::unique_ptr<SmallVector<DigitalInterfaceEndpoint>>> interfaces;
+  llvm::DenseMap<Operation *, std::unique_ptr<InterfaceTargetFacts>> interfaces;
 
   // Derived physical routes only. The successful semantic query owns unique
   // driver/component/domain proof, and the existing occurrence tree owns paths.
   struct SplitRoute {
     const DigitalResolvedSplitBinding *binding = nullptr;
     unsigned bits = 0, canonical = 0;
-    Type originalType;
+    Type originalType, enableType;
     bool incoming = false, outgoing = false;
     Operation *sourceChild = nullptr;
     unsigned sourceChildOccurrence = 0, sourceChildRoute = 0;
@@ -256,7 +318,11 @@ struct HierarchyTargetPlan {
         if (++work > maximumGeneratedOperations || !resolved ||
             endpoint.occurrence >= occurrences.size() || !resolvedScalar(resolved.getElementType()))
           return reject(input, "split component requires an exact local scalar payload");
-        Type type = resolved.getElementType();
+        auto geometry = inspectResolvedPhysicalGeometry(endpoint.endpoint,
+                                                        occurrences[endpoint.occurrence].module);
+        if (failed(geometry))
+          return reject(endpoint.endpoint.operation, "split family lost exact local geometry");
+        Type type = geometry->data;
         auto [found, inserted] =
             componentTypes.try_emplace(std::make_pair(&component, endpoint.occurrence), type);
         if (!inserted && !equivalentDigitalStorageTypes(found->second, type,
@@ -287,6 +353,7 @@ struct HierarchyTargetPlan {
         node.binding = &binding;
         node.bits = bits;
         node.originalType = localType;
+        node.enableType = resolvedPointwiseType(localType, BitsType::get(input.getContext(), 1));
         plan.routes.push_back(std::move(node));
       } else if (plan.routes[index].bits != bits)
         return failure();
@@ -298,11 +365,15 @@ struct HierarchyTargetPlan {
           binding.driver->getParentOp() != occurrences[binding.driverOccurrence].module ||
           binding.split->getParentOp() != occurrences[binding.splitOccurrence].module)
         return reject(input, "split physical route requires exact direct owned operations");
-      Type original = binding.split->getResult(0).getType();
-      auto driverNet = dyn_cast<ResolvedType>(binding.driver->getOperand(0).getType());
-      if (!resolvedScalar(original) || !driverNet || !resolvedScalar(driverNet.getElementType()) ||
-          (binding.data && binding.data.getType() != driverNet.getElementType()) ||
-          !binding.enable || width(binding.enable.getType()) != 1 ||
+      Type driverCarrier = binding.driver->getOperand(0).getType();
+      auto driverNet = resolvedCarrierLeaf(driverCarrier);
+      Type driverData =
+          driverNet ? resolvedPointwiseType(driverCarrier, driverNet.getElementType()) : Type();
+      Type driverEnable =
+          resolvedPointwiseType(driverCarrier, BitsType::get(input.getContext(), 1));
+      if (!driverNet || !resolvedScalar(driverNet.getElementType()) ||
+          (binding.data && binding.data.getType() != driverData) || !binding.enable ||
+          binding.enable.getType() != driverEnable ||
           (!binding.data &&
            (!binding.level ||
             !llvm::is_contained(ArrayRef<StringRef>{"low", "high"}, binding.level.getValue()))))
@@ -387,7 +458,7 @@ struct HierarchyTargetPlan {
           return left < right;
         });
         llvm::raw_string_ostream out(node.signature);
-        out << node.originalType << ':';
+        out << node.originalType << ':' << node.enableType << ':';
         if (node.incoming)
           out << 'I';
         else if (node.sourceChild)
@@ -462,8 +533,38 @@ struct HierarchyTargetPlan {
     occurrenceVariants.resize(occurrences.size());
     llvm::DenseMap<Operation *, llvm::StringMap<unsigned>> variantLookup;
     llvm::DenseMap<Operation *, SmallVector<unsigned>> variantsBySource;
-    // Children precede parents. This inventories represented occurrences only;
-    // generated families remain a later explicitly rejected profile.
+    // Index the existing occurrence inventory once. Generated entries name the
+    // original authored template, never an enumerated lane or cloned definition.
+    SmallVector<SmallVector<unsigned>> children(occurrences.size());
+    for (unsigned child = 1; child < occurrences.size(); ++child)
+      children[occurrences[child].parent].push_back(child);
+    using ActualBindings = llvm::DenseMap<std::pair<Operation *, Attribute>, Operation *>;
+    llvm::DenseMap<Operation *, ActualBindings> definitionBindings;
+    uint64_t bindingWork = 0;
+    for (const auto &context : occurrences) {
+      auto entry = definitionBindings.try_emplace(context.module);
+      if (!entry.second)
+        continue;
+      auto inventory = context.module->walk<WalkOrder::PreOrder>([&](Operation *operation) {
+        if (operation != context.module && isa<nodal::ModuleOp>(operation))
+          return WalkResult::skip();
+        if (++bindingWork > maximumGeneratedOperations) {
+          (void)reject(operation, "child binding inventory exceeds finite target budget");
+          return WalkResult::interrupt();
+        }
+        if (isa<InstanceDomainBindingOp>(operation)) {
+          auto instance = resolveHierarchyInstance(operation, operation->getAttr("instance"));
+          if (failed(instance))
+            return WalkResult::interrupt();
+          entry.first->second.try_emplace(
+              std::make_pair(instance->instance, operation->getAttr("requirement")), operation);
+        }
+        return WalkResult::advance();
+      });
+      if (inventory.wasInterrupted())
+        return failure();
+    }
+    // Children precede parents, including Generate-owned original instances.
     for (unsigned cursor = occurrences.size(); cursor; --cursor) {
       unsigned index = cursor - 1;
       const auto &context = occurrences[index];
@@ -472,11 +573,7 @@ struct HierarchyTargetPlan {
       candidate.occurrence = index;
       DomainModel local(context.module);
       llvm::DenseMap<Attribute, std::pair<bool, bool>> demands;
-      llvm::DenseMap<std::pair<Attribute, Attribute>, Operation *> actualBindings;
-      for (Operation &op : context.module->getRegion(0).front())
-        if (isa<InstanceDomainBindingOp>(op))
-          actualBindings.try_emplace(
-              std::make_pair(op.getAttr("instance"), op.getAttr("requirement")), &op);
+      const auto &actualBindings = definitionBindings.find(context.module)->second;
       auto demand = [&](Attribute domain, bool clock, bool reset) {
         if (!local.unresolvedRequirement(domain))
           return;
@@ -505,20 +602,17 @@ struct HierarchyTargetPlan {
           if (crossing->kind != CrossingKind::Level)
             demand(op.getAttr("source_domain"), true, true);
           demand(op.getAttr("destination_domain"), true, crossing->kind != CrossingKind::Gray);
-        } else if (isa<InstanceOp>(op)) {
-          auto child = proof->childOccurrence(index, &op);
-          if (failed(child))
-            return reject(&op, "target instance lacks a verified occurrence");
-          unsigned variant = occurrenceVariants[*child];
-          candidate.children.try_emplace(&op, variant);
-          for (const auto &port : variants[variant].domains) {
-            Operation *binding = actualBindings.lookup(
-                {FlatSymbolRefAttr::get(input.getContext(), text(&op, "sym_name")),
-                 port.requirement});
-            if (!binding)
-              return reject(&op, "inferred child domain port lacks its exact actual binding");
-            demand(binding->getAttr("actual"), port.clock, port.reset);
-          }
+        }
+      }
+      for (unsigned child : children[index]) {
+        Operation *instance = occurrences[child].instance;
+        unsigned childVariant = occurrenceVariants[child];
+        candidate.children.try_emplace(instance, childVariant);
+        for (const auto &port : variants[childVariant].domains) {
+          Operation *binding = actualBindings.lookup({instance, port.requirement});
+          if (!binding)
+            return reject(instance, "inferred child domain port lacks its exact actual binding");
+          demand(binding->getAttr("actual"), port.clock, port.reset);
         }
       }
       for (Operation &op : context.module->getRegion(0).front()) {
@@ -638,8 +732,8 @@ public:
       if (op.getNumRegions() || op.getNumSuccessors())
         return reject(&op, "target profile requires flat normalized scalar operations");
       bool structural = controlProjections.contains(&op) || controlSelectors.contains(&op) ||
-                        generatedMembers.count(&op) || fixedShapeSelections.count(&op) ||
-                        resolvedOperations.contains(&op);
+                        generatedMembers.count(&op) || selectedInstanceReads.count(&op) ||
+                        fixedShapeSelections.count(&op) || resolvedOperations.contains(&op);
       if (!structural) {
         bool aggregate = llvm::any_of(op.getOperandTypes(), aggregatePayload) ||
                          llvm::any_of(op.getResultTypes(), aggregatePayload);
@@ -668,15 +762,16 @@ public:
                 &op, "result requires fixed scalar/packed width 1..4096 or a fixed control input");
       }
       bool symbolic =
-          llvm::any_of(op.getOperandTypes(),
-                       [&](Type type) {
-                         return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
-                             targetValueType(type));
-                       }) ||
-          llvm::any_of(op.getResultTypes(), [&](Type type) {
-            return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
-                targetValueType(type));
-          });
+          !resolvedOperations.contains(&op) &&
+          (llvm::any_of(op.getOperandTypes(),
+                        [&](Type type) {
+                          return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
+                              targetValueType(type));
+                        }) ||
+           llvm::any_of(op.getResultTypes(), [&](Type type) {
+             return isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(
+                 targetValueType(type));
+           }));
       bool fixedNamedCrossing = false;
       if (namedBoundaryABI && isa<CrossingOp, AsyncFifoOp>(op) &&
           isa_and_nonnull<circt::hw::StructType>(targetValueType(op.getOperand(0).getType()))) {
@@ -740,6 +835,11 @@ public:
         auto boundary = inspectInstancePort(&op);
         if (!hierarchy || failed(boundary))
           return reject(&op, "digital instance boundary requires its checked hierarchy plan");
+        if (boundary->selection) {
+          if (!selectedInstanceReads.count(&op))
+            return reject(&op, "selected generated instance port lacks its exact carrier plan");
+          continue; // A structural read, not another physical child port.
+        }
         instancePortValues[{boundary->instance, {boundary->port, Attribute()}}].push_back(
             op.getResult(0));
         if (auto type = dyn_cast<circt::hw::StructType>(targetValueType(op.getResult(0).getType())))
@@ -747,6 +847,8 @@ public:
         if (text(&op, "direction") == "input")
           seeds.emplace_back(op.getResult(0), &op);
       } else if (isa<MemberAccessOp>(op)) {
+        if (selectedInstanceReads.count(&op))
+          continue; // A selected child member is a structural read, never a new physical pin.
         auto reference = op.getAttrOfType<FlatSymbolRefAttr>("instance");
         Operation *endpoint = reference ? SymbolTable::lookupSymbolIn(source, reference) : nullptr;
         auto found = interfaceEndpoints.find(endpoint);
@@ -1083,7 +1185,10 @@ public:
         variant->ports.push_back(
             {port.key, port.input, unsigned(port.pins.size()), port.inout,
              port.inout ? cast<circt::hw::InOutType>(port.targetType).getElementType() : Type(),
-             port.inout ? cast<ResolvedType>(port.originalType).getElementType() : Type(),
+             port.inout
+                 ? resolvedPointwiseType(port.originalType,
+                                         resolvedCarrierLeaf(port.originalType).getElementType())
+                 : Type(),
              port.splitRoute ? std::optional<unsigned>(hierarchy->splitPlans[variant->occurrence]
                                                            .routes[*port.splitRoute]
                                                            .canonical)
@@ -1313,7 +1418,7 @@ public:
                                                      : port.input ? "input"
                                                                   : "output"));
         entry.set("physical_pins", builder.getArrayAttr(pins));
-        if (aggregatePayload(port.originalType))
+        if (!port.inout && aggregatePayload(port.originalType))
           entry.set("layout", packedLayout(port.originalType));
         if (port.interfaceContract)
           entry.set("interface", port.interfaceContract);
@@ -1327,7 +1432,7 @@ public:
     Block *body = target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
     for (const auto &port : logicalPorts) {
-      if (!aggregatePayload(port.originalType))
+      if (port.inout || !aggregatePayload(port.originalType))
         continue;
       std::string contract;
       llvm::raw_string_ostream stream(contract);
@@ -1348,7 +1453,7 @@ public:
         if (route.incoming)
           continue;
         auto data = backedges.get(splitTypes[index], source.getLoc());
-        auto enable = backedges.get(builder.getI1Type(), source.getLoc());
+        auto enable = backedges.get(splitEnableTypes[index], source.getLoc());
         splitValues[index] = {data, enable};
         splitEdges.push_back({unsigned(index), {data, enable}});
       }
@@ -1453,73 +1558,9 @@ public:
       backedges.abandon();
       return failure();
     }
-    for (Operation *instance : instances) {
-      const auto &child = hierarchy->variants[variant->children.lookup(instance)];
-      if (!child.target)
-        return reject(instance, "target child definition was not materialized before its parent");
-      SmallVector<Value> inputs;
-      for (const auto &port : child.ports)
-        if (port.input) {
-          if (port.splitRoute) {
-            auto found = splitChildInputs.find({instance, *port.splitRoute});
-            if (found == splitChildInputs.end())
-              return reject(instance, "split child input lost its exact parent route");
-            const auto &pair = splitValues[found->second];
-            inputs.push_back(port.splitEnable ? pair.second : pair.first);
-            continue;
-          }
-          if (port.inout) {
-            auto found = resolvedChildCarriers.find({instance, port.key});
-            if (found == resolvedChildCarriers.end())
-              return reject(instance, "resolved instance port lacks its exact physical carrier");
-            inputs.push_back(found->second);
-            continue;
-          }
-          auto &references = instancePortValues.find({instance, port.key})->second;
-          auto leaves = splitBoundary(instance, values.lookup(references.front()));
-          llvm::append_range(inputs, leaves);
-        }
-      for (const auto &port : child.domains) {
-        Operation *binding = instanceBindings.lookup({instance, port.requirement});
-        if (port.clock)
-          inputs.push_back(values.lookup(binding->getOperand(0)));
-        if (port.reset)
-          inputs.push_back(values.lookup(binding->getOperand(1)));
-      }
-      if (llvm::any_of(inputs, [](Value value) { return !value; }))
-        return reject(instance, "target instance actual input did not map");
-      auto targetInstance = circt::hw::InstanceOp::create(
-          builder, instance->getLoc(), child.target,
-          instance->getAttrOfType<StringAttr>("sym_name"), ArrayRef<Value>(inputs),
-          targetInstanceParameters.lookup(instance),
-          circt::hw::InnerSymAttr::get(instance->getAttrOfType<StringAttr>("sym_name")));
-      correlate(targetInstance, instance);
-      targetInstance->setAttr("nodal.domain_bindings", instance->getAttr("domain_bindings"));
-      unsigned result = 0;
-      for (const auto &port : child.ports)
-        if (!port.input) {
-          if (port.splitRoute) {
-            auto found = splitChildOutputs.find({instance, *port.splitRoute});
-            if (found == splitChildOutputs.end())
-              return reject(instance, "split child output lost its exact parent route");
-            auto &pair = splitValues[found->second];
-            (port.splitEnable ? pair.second : pair.first) = targetInstance.getResult(result++);
-            continue;
-          }
-          auto references = instancePortValues.find({instance, port.key});
-          if (references == instancePortValues.end()) {
-            result += port.pins;
-            continue; // A real complete output may intentionally be unobserved.
-          }
-          Type actualType = targetValueType(references->second.front().getType());
-          SmallVector<Value> leaves;
-          for (unsigned index = 0; index < port.pins; ++index)
-            leaves.push_back(targetInstance.getResult(result++));
-          Value joined = joinBoundary(instance, actualType, leaves);
-          for (Value reference : references->second)
-            values[reference] = joined;
-        }
-    }
+    for (Operation *instance : instances)
+      if (failed(lowerInstance(instance)))
+        return failure();
     SmallVector<std::pair<Value, circt::Backedge>> eventEdges;
     for (const auto &event : events) {
       Operation *op = event.operation;
@@ -1950,13 +1991,13 @@ public:
       if (!route.sourceChild) {
         const auto &binding = *route.binding;
         actual.first = binding.data ? values.lookup(binding.data)
-                                    : resolvedFill(binding.driver, splitTypes[index],
-                                                   binding.level.getValue() == "high" ? '1' : '0');
+                                    : typedFill(binding.driver, splitTypes[index],
+                                                binding.level.getValue() == "high" ? '1' : '0');
         actual.second = values.lookup(binding.enable);
       }
       if (!actual.first || !actual.second || actual.first == Value(edges.first) ||
           actual.second == Value(edges.second) || actual.first.getType() != splitTypes[index] ||
-          !actual.second.getType().isInteger(1)) {
+          actual.second.getType() != splitEnableTypes[index]) {
         backedges.abandon();
         return reject(source, "split route did not resolve exact driver data/enable");
       }
@@ -2033,6 +2074,80 @@ public:
   }
 
 private:
+  LogicalResult lowerInstance(Operation *instance) {
+    const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+    if (!child.target)
+      return reject(instance, "target child definition was not materialized before its parent");
+    SmallVector<Value> inputs;
+    for (const auto &port : child.ports)
+      if (port.input) {
+        if (port.splitRoute) {
+          auto found = splitChildInputs.find({instance, *port.splitRoute});
+          if (found == splitChildInputs.end())
+            return reject(instance, "split child input lost its exact parent route");
+          const auto &pair = splitValues[found->second];
+          inputs.push_back(port.splitEnable ? pair.second : pair.first);
+          continue;
+        }
+        if (port.inout) {
+          auto found = resolvedChildCarriers.find({instance, port.key});
+          if (found == resolvedChildCarriers.end())
+            return reject(instance, "resolved instance port lacks its exact physical carrier");
+          inputs.push_back(found->second);
+          continue;
+        }
+        auto &references = instancePortValues.find({instance, port.key})->second;
+        auto leaves = splitBoundary(instance, values.lookup(references.front()));
+        llvm::append_range(inputs, leaves);
+      }
+    for (const auto &port : child.domains) {
+      Operation *binding = instanceBindings.lookup({instance, port.requirement});
+      if (port.clock)
+        inputs.push_back(values.lookup(binding->getOperand(0)));
+      if (port.reset)
+        inputs.push_back(values.lookup(binding->getOperand(1)));
+    }
+    if (llvm::any_of(inputs, [](Value value) { return !value; }))
+      return reject(instance, "target instance actual input did not map");
+    auto targetInstance = circt::hw::InstanceOp::create(
+        builder, instance->getLoc(), child.target, instance->getAttrOfType<StringAttr>("sym_name"),
+        ArrayRef<Value>(inputs), targetInstanceParameters.lookup(instance),
+        circt::hw::InnerSymAttr::get(instance->getAttrOfType<StringAttr>("sym_name")));
+    correlate(targetInstance, instance);
+    targetInstance->setAttr("nodal.domain_bindings", instance->getAttr("domain_bindings"));
+    unsigned result = 0;
+    for (const auto &port : child.ports)
+      if (!port.input) {
+        if (port.splitRoute) {
+          auto found = splitChildOutputs.find({instance, *port.splitRoute});
+          if (found == splitChildOutputs.end())
+            return reject(instance, "split child output lost its exact parent route");
+          auto &pair = splitValues[found->second];
+          (port.splitEnable ? pair.second : pair.first) = targetInstance.getResult(result++);
+          continue;
+        }
+        InstanceLogicalPortKey key{instance, port.key};
+        auto references = instancePortValues.find(key);
+        auto demanded = generatedInstanceOutputs.find(key);
+        if (references == instancePortValues.end() && demanded == generatedInstanceOutputs.end()) {
+          result += port.pins;
+          continue; // Every unobserved authored output retains its physical slot.
+        }
+        Type actualType = demanded != generatedInstanceOutputs.end()
+                              ? demanded->second.type
+                              : targetValueType(references->second.front().getType());
+        SmallVector<Value> leaves;
+        for (unsigned index = 0; index < port.pins; ++index)
+          leaves.push_back(targetInstance.getResult(result++));
+        Value joined = joinBoundary(instance, actualType, leaves);
+        if (demanded != generatedInstanceOutputs.end())
+          generatedInstanceValues[key] = joined;
+        if (references != instancePortValues.end())
+          for (Value reference : references->second)
+            values[reference] = joined;
+      }
+    return success();
+  }
   struct GeneratedFamilyPlan;
   struct GeneratedOutput {
     Value value;
@@ -2041,7 +2156,29 @@ private:
     uint64_t maximumLaneBits;
     GeneratedFamilyPlan *child = nullptr;
     unsigned childOutput = 0;
+    SmallVector<Operation *, 1> writes;
+    InstanceLogicalPortKey instancePort = {};
   };
+  struct GeneratedInstanceOutput {
+    HierarchyBoundaryType boundary;
+    Type type;
+    uint64_t maximumBits;
+    DictionaryAttr layout;
+  };
+  struct SelectedInstanceRead {
+    InstanceLogicalPortKey key;
+    GeneratedSelectionProof proof;
+  };
+  // Original Instance + logical declaration, or a direct original endpoint with
+  // no Instance. A selected SSA view is never logical output identity.
+  llvm::DenseMap<LogicalPortKey, DigitalInterfaceBoundaryType> generatedInterfaceTypes;
+  llvm::DenseMap<Value, DigitalInterfaceTemplateDriver> generatedInterfaceDrivers;
+  llvm::DenseMap<LogicalPortKey, Value> generatedInterfaceRoots;
+  llvm::DenseSet<Operation *> generatedInterfaceEffects;
+  llvm::MapVector<InstanceLogicalPortKey, GeneratedInstanceOutput> generatedInstanceOutputs;
+  llvm::DenseMap<Operation *, SmallVector<InstanceLogicalPortKey>> generatedInstanceDemandKeys;
+  llvm::MapVector<Operation *, SelectedInstanceRead> selectedInstanceReads;
+  llvm::DenseMap<InstanceLogicalPortKey, Value> generatedInstanceValues;
   struct GeneratedFamilyPlan {
     Operation *operation;
     GeneratedFamilyPlan *parent = nullptr;
@@ -2054,7 +2191,16 @@ private:
     SmallVector<LogicalPortPlan> ports;
     SmallVector<Value> captures;
     SmallVector<GeneratedOutput> outputs;
-    SmallVector<Operation *> operations, registers;
+    SmallVector<Operation *> operations, registers, instances;
+    SmallVector<std::pair<Value, Operation *>> connectionSeeds;
+    llvm::DenseMap<Value, Value> aliases;
+    // One exact flattened row-major read route per authored projection. These
+    // are physical adapters over checked ShapeIndex operations, not selections.
+    struct Slice {
+      Value root;
+      SmallVector<TypedAttr> offsets;
+    };
+    llvm::DenseMap<Operation *, Slice> slices;
     llvm::DenseMap<Value, SmallVector<Operation *, 2>> updates;
     llvm::DenseSet<Operation *> sinks;
     circt::hw::HWModuleOp target;
@@ -2101,6 +2247,33 @@ private:
     }
     return {};
   }
+  // Proof cache only: the literal owner independently checks original spelling,
+  // signedness, actual-use provenance and every legal width before fill emission.
+  llvm::DenseMap<Operation *, char> literalFills;
+  char symbolicLiteralFill(Operation *op) {
+    auto found = literalFills.find(op);
+    if (found != literalFills.end())
+      return found->second;
+    if (!isa<ConstantOp, ConstLiteralOp>(op) || op->getNumResults() != 1 ||
+        !isDigitalScalarType(op->getResult(0).getType()))
+      return 0;
+    auto value = op->getAttrOfType<IntegerAttr>("value");
+    if (!value)
+      return 0;
+    Type type = op->getResult(0).getType();
+    auto parametric = dyn_cast<ParametricIntegerType>(type);
+    bool sign = isa<SIntType>(type) || (parametric && parametric.getKind() == "sint");
+    char fill =
+        value.getValue().isZero() ? '0'
+        : sign && !cast<IntegerType>(value.getType()).isUnsigned() && value.getValue().isAllOnes()
+            ? '1'
+            : 0;
+    if (!fill || cost >= maximumGeneratedOperations || failed(verifyDigitalLiteralOperation(op)))
+      return 0;
+    ++cost;
+    literalFills.try_emplace(op, fill);
+    return fill;
+  }
   bool generatedSymbolicValue(Operation *op) {
     if (op->getNumResults() != 1)
       return false;
@@ -2108,6 +2281,8 @@ private:
     Type result = targetValueType(original);
     if (!isa_and_nonnull<circt::hw::IntType>(result))
       return false;
+    if (symbolicLiteralFill(op))
+      return true;
     StringRef code = text(op, "operator_name");
     if (isa<SequentialSelectOp>(op) || code == "digital_select")
       return op->getNumOperands() == 3 &&
@@ -2132,14 +2307,17 @@ private:
                : TypedAttr();
   }
   void appendGeneratedPort(SmallVectorImpl<LogicalPortPlan> &ports, Value value, bool input,
-                           unsigned index, Type type) {
+                           unsigned index, Type type, Operation *anchor = nullptr,
+                           Type originalType = {}, DictionaryAttr layout = {}) {
     LogicalPortPlan pin;
-    pin.key = {value.getDefiningOp(), Attribute()};
-    pin.originalType = value.getType();
+    pin.key = {value ? value.getDefiningOp() : anchor, Attribute()};
+    pin.originalType = value ? value.getType() : originalType;
+    pin.generatedLayout = layout;
     pin.targetType = type;
     pin.name = builder.getStringAttr((input ? "capture_" : "result_") + std::to_string(index));
     pin.input = input;
-    pin.references.push_back(value);
+    if (value)
+      pin.references.push_back(value);
     if (auto structure = dyn_cast<circt::hw::StructType>(type))
       for (const auto &field : structure.getElements())
         pin.pins.push_back(
@@ -2148,6 +2326,169 @@ private:
       pin.pins.push_back(pin.name);
     ports.push_back(std::move(pin));
   }
+  void appendGeneratedOutputPort(SmallVectorImpl<LogicalPortPlan> &ports,
+                                 const GeneratedOutput &output, bool input, unsigned index,
+                                 Type type) {
+    if (!output.instancePort.second.first)
+      return appendGeneratedPort(ports, output.value, input, index, type);
+    const auto &logical = generatedInstanceOutputs.find(output.instancePort)->second;
+    appendGeneratedPort(ports, {}, input, index, type,
+                        output.instancePort.first ? output.instancePort.first
+                                                  : output.instancePort.second.first,
+                        logical.boundary.type, logical.layout);
+  }
+  Value generatedOutputValue(const GeneratedOutput &output) {
+    if (output.instancePort.second.first) {
+      if (Value value = generatedInstanceValues.lookup(output.instancePort))
+        return value;
+      if (!output.instancePort.first)
+        return values.lookup(generatedInterfaceRoots.lookup(output.instancePort.second));
+      return {};
+    }
+    return values.lookup(capturedValue(output.value));
+  }
+  LogicalResult planSelectedInstanceOutput(Operation *op, InstanceLogicalPortKey key,
+                                           Type originalType, Operation *declarationOwner,
+                                           const GeneratedSelectionProof &proof,
+                                           const HierarchyBoundaryType *originalView = nullptr) {
+    if (!generatedInstanceOutputs.count(key)) {
+      auto view = originalView
+                      ? FailureOr<HierarchyBoundaryType>(*originalView)
+                      : inspectHierarchyBoundaryType(originalType, declarationOwner, key.first);
+      if (failed(view))
+        return failure();
+      uint64_t maximumBits = 0;
+      SmallVector<circt::hw::StructType::FieldInfo> fields;
+      for (const auto &leaf : view->leaves) {
+        Type type = leafVectorType(leaf); // No scope: induction atoms cannot become slot widths.
+        uint64_t bits = leaf.width.bounds.upper;
+        if (!type || leaf.width.bounds.lower <= 0 || bits > maximumWidth) {
+          (void)reject(op, "selected instance carrier requires invariant all-lane payload widths");
+          return failure();
+        }
+        for (const auto &group : leaf.dimensions)
+          for (const auto &extent : group.extents) {
+            if (extent.bounds.lower <= 0 || extent.bounds.upper > maximumWidth / bits) {
+              (void)reject(op, "selected instance carrier exceeds bounded all-lane shape");
+              return failure();
+            }
+            bits *= extent.bounds.upper;
+          }
+        if (bits > maximumWidth - maximumBits || cost >= maximumGeneratedOperations) {
+          (void)reject(op, "selected instance logical output exceeds target budget");
+          return failure();
+        }
+        ++cost;
+        maximumBits += bits;
+        fields.push_back({builder.getStringAttr(leafName(leaf)), type});
+      }
+      if (fields.empty() ||
+          (!namedBoundaryABI && (fields.size() != 1 || !view->leaves.front().path.empty()))) {
+        (void)reject(op, "selected aggregate output requires exact named leaf transport");
+        return failure();
+      }
+      Type type = fields.size() == 1 && view->leaves.front().path.empty()
+                      ? fields.front().type
+                      : Type(circt::hw::StructType::get(builder.getContext(), fields));
+      DictionaryAttr layout;
+      if (fields.size() == 1 && view->leaves.front().path.empty() &&
+          !view->leaves.front().dimensions.empty()) {
+        const auto &leaf = view->leaves.front();
+        SmallVector<Attribute> groups;
+        for (const auto &group : leaf.dimensions) {
+          SmallVector<Attribute> extents;
+          for (const auto &extent : group.extents)
+            extents.push_back(parameterExpression(extent));
+          groups.push_back(builder.getArrayAttr(extents));
+        }
+        layout = builder.getDictionaryAttr(
+            {builder.getNamedAttr("kind", builder.getStringAttr("scalar-element-vec")),
+             builder.getNamedAttr("order",
+                                  builder.getStringAttr("recursive-row-major-fields-lsb-first")),
+             builder.getNamedAttr("element_width", parameterExpression(leaf.width)),
+             builder.getNamedAttr("dimension_groups", builder.getArrayAttr(groups))});
+      }
+      generatedInstanceOutputs.try_emplace(
+          key, GeneratedInstanceOutput{*view, type, maximumBits, layout});
+      generatedInstanceDemandKeys[key.first ? key.first : key.second.first].push_back(key);
+    }
+    if (generatedInstanceOutputs.find(key)->second.type !=
+        targetValueType(op->getResult(0).getType())) {
+      (void)reject(op, "selected view must exactly match the invariant original logical payload");
+      return failure();
+    }
+    if (cost + proof.selections.size() + 1 > maximumGeneratedOperations) {
+      (void)reject(op, "selected instance prefix storage exceeds target budget");
+      return failure();
+    }
+    cost += proof.selections.size() + 1;
+    selectedInstanceReads.try_emplace(op, SelectedInstanceRead{key, proof});
+    return success();
+  }
+  LogicalResult planSelectedInstanceOutputs() {
+    unsigned visited = 0;
+    auto walked = source->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      if (op != source.getOperation() && isa<ModuleOp>(op))
+        return WalkResult::skip();
+      if (++visited > maximumAuthoredOperations) {
+        (void)reject(op, "selected output demand inventory exceeds authored-work budget");
+        return WalkResult::interrupt();
+      }
+      if (!isa<InstancePortOp>(op) || op->getNumOperands() == 0)
+        return WalkResult::advance();
+      auto boundary = inspectInstancePort(op);
+      if (failed(boundary) || !boundary->selection || text(op, "direction") != "output" ||
+          !isa<GenerateOp>(boundary->instance->getParentOp())) {
+        (void)reject(op,
+                     "selected instance target currently admits original generated outputs only");
+        return WalkResult::interrupt();
+      }
+      auto proof =
+          inspectGeneratedSelection(op->getOperand(0), op->getOperand(1), text(op, "member"), op);
+      if (failed(proof) || proof->selections.empty())
+        return WalkResult::interrupt();
+      InstanceLogicalPortKey key{boundary->instance, {boundary->port, Attribute()}};
+      if (failed(planSelectedInstanceOutput(
+              op, key, boundary->port->getAttrOfType<TypeAttr>("type").getValue(), boundary->module,
+              *proof)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    if (walked.wasInterrupted())
+      return failure();
+    for (const auto &access : interfaceAccesses) {
+      if (cost >= maximumGeneratedOperations)
+        return reject(access.value.getDefiningOp(),
+                      "Interface access inventory exceeds target budget");
+      ++cost;
+      if (!access.identity.selection)
+        continue;
+      Operation *op = access.value.getDefiningOp();
+      auto endpointIndex = interfaceEndpoints.find(access.projection);
+      if (endpointIndex == interfaceEndpoints.end())
+        return reject(op, "selected Interface member lost its complete original endpoint");
+      const auto &endpoint = endpoints[endpointIndex->second];
+      if (access.identity.access.getValue() != "out")
+        return reject(op, "selected Interface target requires an original ordinary output");
+      Operation *selection = access.identity.selection;
+      auto proof = inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
+                                             text(selection, "member"), selection);
+      if (failed(proof) || proof->selections.empty())
+        return failure();
+      InstanceLogicalPortKey key{endpoint.instance, {endpoint.declaration, access.identity.path}};
+      const HierarchyBoundaryType *originalView = nullptr;
+      if (!endpoint.instance) {
+        auto found = generatedInterfaceTypes.find(key.second);
+        if (found == generatedInterfaceTypes.end() || !generatedInterfaceRoots.count(key.second))
+          return reject(op, "selected direct Interface lost its original authored payload driver");
+        originalView = &found->second.payload;
+      }
+      if (failed(planSelectedInstanceOutput(op, key, access.leaf.type, endpoint.declarationOwner,
+                                            *proof, originalView)))
+        return failure();
+    }
+    return success();
+  }
   bool generatedScopeContains(Block *scope, Block *block) {
     for (; block; block = block->getParentOp() ? block->getParentOp()->getBlock() : nullptr)
       if (scope == block)
@@ -2155,6 +2496,8 @@ private:
     return false;
   }
   LogicalResult planGeneratedFamilies() {
+    if (failed(planSelectedInstanceOutputs()))
+      return failure();
     llvm::StringSet<> names;
     for (Operation &op : *source->getParentOfType<mlir::ModuleOp>().getBody())
       if (auto name = op.getAttrOfType<StringAttr>("sym_name"))
@@ -2279,35 +2622,45 @@ private:
           family.captures.push_back(value);
         return success();
       };
-      auto output = [&](Value value, GeneratedFamilyPlan *child = nullptr,
-                        unsigned childOutput = 0) -> FailureOr<unsigned> {
+      auto output = [&](Value value, GeneratedFamilyPlan *child = nullptr, unsigned childOutput = 0,
+                        InstanceLogicalPortKey key = {}) -> FailureOr<unsigned> {
         if (domain->maximumTripCount == 0)
           return failure(); // No physical slot, not even a zero-width placeholder.
-        value = capturedValue(value);
-        Type type = child ? child->outputs[childOutput].busType
-                          : (value ? targetValueType(value.getType()) : Type());
-        uint64_t maximumBits = 0;
+        if (value)
+          value = capturedValue(value);
+        if (child)
+          key = child->outputs[childOutput].instancePort;
+        auto logical = generatedInstanceOutputs.find(key);
+        Type type = child              ? child->outputs[childOutput].busType
+                    : key.second.first ? logical->second.type
+                                       : (value ? targetValueType(value.getType()) : Type());
+        uint64_t maximumBits = key.second.first ? logical->second.maximumBits : 0;
         if (child) {
           const auto &leaf = child->outputs[childOutput];
           maximumBits = leaf.maximumLaneBits * child->domain.maximumTripCount;
+        } else if (key.second.first) {
+          // The original all-lane boundary query already established this capacity.
         } else if (auto scalar = dyn_cast_if_present<IntegerType>(type))
           maximumBits = scalar.getWidth();
-        else if (isa_and_nonnull<circt::hw::IntType>(type)) {
+        else if (isa_and_nonnull<circt::hw::IntType, circt::hw::StructType>(type)) {
           auto maximum = inferDigitalBitPatternMaximumBits(value.getType(), source);
           if (succeeded(maximum) && *maximum > 0)
             maximumBits = *maximum;
         }
         if (!maximumBits || maximumBits > maximumWidth / domain->maximumTripCount)
           return failure();
-        for (auto [index, prior] : llvm::enumerate(family.outputs))
-          if (prior.value == value && prior.child == child && prior.childOutput == childOutput)
+        for (auto [index, prior] : llvm::enumerate(family.outputs)) {
+          if (cost >= maximumGeneratedOperations)
+            return failure();
+          ++cost; // Repeated exports cannot create uncharged quadratic dedup work.
+          if (prior.value == value && prior.instancePort == key && prior.child == child &&
+              prior.childOutput == childOutput)
             return index;
-        TypedAttr bits = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, family.capacity,
-                                                       generatedWidth(type));
-        Type bus = isa<IntegerAttr>(bits)
-                       ? Type(builder.getIntegerType(cast<IntegerAttr>(bits).getInt()))
-                       : Type(circt::hw::IntType::get(bits));
-        family.outputs.push_back({value, {}, type, bus, maximumBits, child, childOutput});
+        }
+        Type bus = generatedBusType(type, family.capacity);
+        if (!bus)
+          return failure();
+        family.outputs.push_back({value, {}, type, bus, maximumBits, child, childOutput, {}, key});
         return family.outputs.size() - 1;
       };
       auto walk = op.walk<WalkOrder::PreOrder>([&](Operation *child) {
@@ -2329,7 +2682,9 @@ private:
           for (auto [i, leaf] : llvm::enumerate(nested->outputs))
             for (Value destination : leaf.destinations) {
               auto row = destination.getDefiningOp<ShapeIndexOp>();
-              if (!row || row->getParentOp() != &op || row->getNumOperands() != 2 ||
+              if (!row ||
+                  (row->getParentOp() != &op && !nested->operation->isProperAncestor(row)) ||
+                  row->getNumOperands() != 2 ||
                   capturedValue(row->getOperand(1)) != family.domain.induction ||
                   targetValueType(destination.getType()) != leaf.busType) {
                 (void)reject(child, "nested generated output lost its exact parent row");
@@ -2343,6 +2698,7 @@ private:
               auto &out = family.outputs[*index];
               if (!llvm::is_contained(out.destinations, row->getOperand(0)))
                 out.destinations.push_back(row->getOperand(0));
+              llvm::append_range(out.writes, leaf.writes);
               family.sinks.insert(row);
             }
           for (Value value : nested->captures)
@@ -2359,6 +2715,45 @@ private:
           staticOperations.insert(child);
           return WalkResult::advance();
         }
+        if (isa<InterfaceOp>(child)) {
+          staticOperations.insert(child);
+          return WalkResult::skip(); // Definition payload was checked at its original anchor.
+        }
+        if (isa<InterfaceInstanceOp, InterfaceAbiOp>(child)) {
+          if (child->getParentOp() != &op ||
+              (isa<InterfaceInstanceOp>(child) && !interfaceEndpoints.count(child))) {
+            (void)reject(child, "generated Interface declaration lost its direct checked family");
+            return WalkResult::interrupt();
+          }
+          staticOperations.insert(child);
+          return WalkResult::advance();
+        }
+        if (isa<MemberAccessOp>(child)) {
+          if (selectedInstanceReads.count(child))
+            return WalkResult::advance();
+          auto found = generatedInterfaceDrivers.find(child->getResult(0));
+          if (found == generatedInterfaceDrivers.end() || found->second.family != &op ||
+              child->getParentOp() != &op || !targetValueType(child->getResult(0).getType()) ||
+              failed(capture(found->second.source))) {
+            (void)reject(child, "generated Interface member requires its original whole driver");
+            return WalkResult::interrupt();
+          }
+          family.aliases.try_emplace(found->second.root, capturedValue(found->second.source));
+          family.operations.push_back(child);
+          return WalkResult::advance();
+        }
+        if (generatedInterfaceEffects.contains(child))
+          return WalkResult::advance(); // Exact original effect owned by the authored batch.
+        if (isa<InterfaceObserveOp>(child)) {
+          if (!llvm::all_of(child->getOperands(), [&](Value value) {
+                return generatedInterfaceDrivers.count(value) ||
+                       selectedInstanceReads.count(value.getDefiningOp());
+              })) {
+            (void)reject(child, "generated Interface observation lacks its exact ordinary route");
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        }
         if (isa<GeneratedMemberOp>(child)) {
           auto member = inspectGeneratedMember(child);
           if (failed(member) || child->getParentOp() != &op) {
@@ -2367,6 +2762,59 @@ private:
             return WalkResult::interrupt();
           }
           generatedMembers.try_emplace(child, *member);
+          return WalkResult::advance();
+        }
+        if (isa<InstanceOp>(child)) {
+          if (child->getParentOp() != &op || !variant || !variant->children.count(child)) {
+            (void)reject(child, "generated child requires its exact checked occurrence template");
+            return WalkResult::interrupt();
+          }
+          auto actuals = instanceParameters(child, &family);
+          if (failed(actuals)) {
+            (void)reject(child, "generated child parameter lacks its exact bounded actual DAG");
+            return WalkResult::interrupt();
+          }
+          targetInstanceParameters.try_emplace(child, *actuals);
+          family.instances.push_back(child);
+          return WalkResult::advance();
+        }
+        if (isa<ParameterOverrideOp>(child)) {
+          staticOperations.insert(child);
+          return WalkResult::advance();
+        }
+        if (isa<InstanceDomainBindingOp>(child)) {
+          auto target = resolveHierarchyInstance(child, child->getAttr("instance"));
+          if (failed(target) || target->instance->getParentOp() != &op) {
+            (void)reject(child, "generated binding requires its exact family-owned child");
+            return WalkResult::interrupt();
+          }
+          instanceBindings.try_emplace(
+              std::make_pair(target->instance, child->getAttr("requirement")), child);
+          for (Value operand : child->getOperands())
+            if (failed(capture(operand)))
+              return WalkResult::interrupt();
+          return WalkResult::advance();
+        }
+        if (isa<InstancePortOp>(child)) {
+          if (selectedInstanceReads.count(child)) {
+            if (child->getParentOp() != &op) {
+              (void)reject(child,
+                           "selected instance view requires its exact admitted lexical scope");
+              return WalkResult::interrupt();
+            }
+            return WalkResult::advance();
+          }
+          auto boundary = inspectInstancePort(child);
+          if (failed(boundary) || boundary->selection || boundary->instance->getParentOp() != &op ||
+              child->getParentOp() != &op || !targetValueType(child->getResult(0).getType())) {
+            (void)reject(child, "generated port requires its exact body-local ordinary child");
+            return WalkResult::interrupt();
+          }
+          Value value = child->getResult(0);
+          instancePortValues[{boundary->instance, {boundary->port, Attribute()}}].push_back(value);
+          if (text(child, "direction") == "input")
+            family.connectionSeeds.emplace_back(value, &op.getRegion(0).front().back());
+          family.operations.push_back(child);
           return WalkResult::advance();
         }
         if (isa<StructuralIfOp>(child)) {
@@ -2396,6 +2844,25 @@ private:
         if (isa<StructuralYieldOp>(child))
           return WalkResult::advance();
         if (isa<GeneratedExportOp>(child)) {
+          if (text(child, "kind") == "instance" || text(child, "kind") == "interface") {
+            auto symbol = inspectGeneratedExportSymbol(child);
+            if (failed(symbol))
+              return WalkResult::interrupt();
+            for (const auto &key : generatedInstanceDemandKeys.lookup(*symbol))
+              if (failed(output({}, nullptr, 0, key))) {
+                (void)reject(child,
+                             "selected original instance output exceeds family carrier budget");
+                return WalkResult::interrupt();
+              }
+            return WalkResult::advance();
+          }
+          if (child->getNumOperands() != 1 ||
+              (text(child, "kind") != "" && text(child, "kind") != "family")) {
+            (void)reject(
+                child,
+                "generated structural symbol exports require occurrence-aware target routing");
+            return WalkResult::interrupt();
+          }
           // An empty template has no attained slot and must not manufacture an
           // i0 bus or a driver. Its authored helper and zero-trip loop remain.
           if (domain->maximumTripCount == 0)
@@ -2430,6 +2897,15 @@ private:
           if (text(child, "kind") != "continuous") {
             (void)reject(child, "generated target requires canonical normalized updates");
             return WalkResult::interrupt();
+          }
+          Value assigned = capturedValue(child->getOperand(0));
+          Operation *producer = assigned ? assigned.getDefiningOp() : nullptr;
+          if (producer && producer->getParentOp() == &op &&
+              (isa<InstancePortOp>(producer) ||
+               (isa<DigitalStorageOp>(producer) && text(producer, "kind") == "wire"))) {
+            if (failed(capture(child->getOperand(1))))
+              return WalkResult::interrupt();
+            return WalkResult::advance(); // The canonical authored-template query owns this alias.
           }
           auto projection = resolveStaticShapeProjection(child->getOperand(0), child);
           StaticShapeRegion image;
@@ -2472,14 +2948,23 @@ private:
             }
           }
           auto index = output(child->getOperand(1));
-          Value destination = slice->getOperand(0);
+          Value destination = capturedValue(slice->getOperand(0));
           if (failed(index) ||
               targetValueType(destination.getType()) != family.outputs[*index].busType) {
             (void)reject(child, "generated output requires exact parent-row lane layout");
             return WalkResult::interrupt();
           }
           family.outputs[*index].destinations.push_back(destination);
-          family.sinks.insert(slice);
+          family.outputs[*index].writes.push_back(child);
+          // Source may spell outer row selections inside the innermost body.
+          // Keep every proven output projection as a sink-only logical route.
+          for (Value target = child->getOperand(0); target;) {
+            auto projection = target.getDefiningOp<ShapeIndexOp>();
+            if (!projection || !op.isProperAncestor(projection))
+              break;
+            family.sinks.insert(projection);
+            target = projection->getOperand(0);
+          }
           return WalkResult::advance();
         }
         if (isa<SequentialUpdateOp>(child)) {
@@ -2495,6 +2980,12 @@ private:
           family.updates[state].push_back(child);
         } else if (isa<DigitalStorageOp>(child)) {
           Type stateType = targetValueType(child->getResult(0).getType());
+          if (child->getParentOp() == &op && text(child, "kind") == "wire" && stateType) {
+            family.connectionSeeds.emplace_back(child->getResult(0),
+                                                &op.getRegion(0).front().back());
+            family.operations.push_back(child);
+            return WalkResult::advance();
+          }
           if (child->getParentOp() != &op || text(child, "kind") != "register" ||
               !isa_and_nonnull<IntegerType, circt::hw::IntType>(stateType) ||
               (isa<circt::hw::IntType>(stateType) && child->getNumOperands())) {
@@ -2512,13 +3003,62 @@ private:
         if (isa<ShapeIndexOp>(child)) {
           auto shape = dyn_cast<nodal::ShapedType>(child->getOperand(0).getType());
           auto index = resolveStaticShapeIterationIndex(child->getOperand(1), child);
+          bool exactAxis = false;
+          if (succeeded(index))
+            for (auto *ancestor = &family; ancestor; ancestor = ancestor->parent)
+              exactAxis |= index->loop == ancestor->operation &&
+                           capturedValue(child->getOperand(1)) == ancestor->domain.induction;
           if (child->getNumOperands() != 2 || !shape ||
-              !generatedWidth(targetValueType(child->getResult(0).getType())) || failed(index) ||
-              index->loop != &op || capturedValue(child->getOperand(1)) != domain->induction) {
+              !generatedBusType(targetValueType(child->getResult(0).getType()),
+                                builder.getI32IntegerAttr(1)) ||
+              failed(index) || !exactAxis) {
             (void)reject(child,
                          "generated scalar slice requires the exact direct family induction");
             return WalkResult::interrupt();
           }
+        }
+        if (isa<ShapeIndexOp>(child)) {
+          auto resultStructure =
+              dyn_cast<circt::hw::StructType>(targetValueType(child->getResult(0).getType()));
+          unsigned leafCount = resultStructure ? resultStructure.getElements().size() : 1;
+          GeneratedFamilyPlan::Slice route;
+          for (unsigned leaf = 0; leaf != leafCount; ++leaf) {
+            Value root = child->getResult(0);
+            TypedAttr offset = builder.getI32IntegerAttr(0);
+            while (auto projection = root.getDefiningOp<ShapeIndexOp>()) {
+              if (projection->getParentOp() != &op)
+                break;
+              if (cost >= maximumGeneratedOperations) {
+                (void)reject(child, "generated row-major read exceeds finite target budget");
+                return WalkResult::interrupt();
+              }
+              ++cost;
+              TypedAttr index = familyInteger(family, projection->getOperand(1), projection);
+              Type type = targetValueType(root.getType());
+              if (resultStructure) {
+                auto structure = dyn_cast<circt::hw::StructType>(type);
+                if (!structure || leaf >= structure.getElements().size() ||
+                    structure.getElements()[leaf].name !=
+                        resultStructure.getElements()[leaf].name) {
+                  (void)reject(child, "generated row-major read lost its exact logical field");
+                  return WalkResult::interrupt();
+                }
+                type = structure.getElements()[leaf].type;
+              }
+              TypedAttr stride = generatedWidth(type);
+              if (!index || !stride) {
+                (void)reject(child, "generated row-major read lost its exact axis proof");
+                return WalkResult::interrupt();
+              }
+              offset = circt::hw::ParamExprAttr::get(
+                  circt::hw::PEO::Add, offset,
+                  circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, index, stride));
+              root = capturedValue(projection->getOperand(0));
+            }
+            route.root = root;
+            route.offsets.push_back(offset);
+          }
+          family.slices.try_emplace(child, std::move(route));
         }
         if (child->getNumResults() == 1 &&
             isa_and_nonnull<circt::hw::IntType>(targetValueType(child->getResult(0).getType())) &&
@@ -2571,16 +3111,29 @@ private:
           Operation *port = SymbolTable::lookupSymbolIn(
               source, portValue->getAttrOfType<FlatSymbolRefAttr>("port"));
           if (parent || !port || text(port, "direction") != "output" ||
-              targetValueType(destination.getType()) != out.busType ||
-              !generatedOutputPorts.try_emplace(port, std::make_pair(&family, i)).second)
+              targetValueType(destination.getType()) != out.busType)
             return reject(&op,
                           "generated output requires one ordinary output pin with exact layout");
+          if (isa<StructuralIfOp>(op.getParentOp())) {
+            if (out.writes.empty())
+              return reject(&op, "guarded generated output lost its canonical authored writes");
+            llvm::append_range(generatedGuardOutputs[port], out.writes);
+          } else if (!generatedOutputPorts.try_emplace(port, std::make_pair(&family, i)).second)
+            return reject(&op, "generated output requires one exact family driver");
         }
       // A driven output bus is a sink, not a helper input. Reject any separate
       // read of that bus rather than invent an internally driven input pin.
       llvm::DenseSet<Value> outputRoots;
       for (const auto &out : family.outputs)
-        outputRoots.insert(out.destinations.begin(), out.destinations.end());
+        for (Value destination : out.destinations) {
+          outputRoots.insert(destination);
+          while (auto projection = destination.getDefiningOp<ShapeIndexOp>()) {
+            if (!family.sinks.contains(projection))
+              break;
+            destination = projection->getOperand(0);
+            outputRoots.insert(destination);
+          }
+        }
       for (Operation *child : family.operations)
         if (!family.sinks.contains(child))
           for (Value operand : child->getOperands())
@@ -2590,10 +3143,13 @@ private:
       for (auto [index, value] : llvm::enumerate(family.captures))
         appendGeneratedPort(family.ports, value, true, index, targetValueType(value.getType()));
       for (auto [index, out] : llvm::enumerate(family.outputs))
-        appendGeneratedPort(family.ports, out.value, false, index, out.laneType);
-      if (cost + 8 * family.ports.size() + targetParameters.size() > maximumGeneratedOperations)
+        appendGeneratedOutputPort(family.ports, out, false, index, out.laneType);
+      uint64_t physicalPins = 0;
+      for (const auto &port : family.ports)
+        physicalPins += port.pins.size();
+      if (cost + 8 * physicalPins + targetParameters.size() > maximumGeneratedOperations)
         return reject(&op, "generated logical adapters exceed target budget");
-      cost += 8 * family.ports.size() + targetParameters.size();
+      cost += 8 * physicalPins + targetParameters.size();
       if (cost + 12 * targetParameters.size() > maximumGeneratedOperations)
         return reject(&op, "generated parameter guards exceed target budget");
       cost += 12 * targetParameters.size();
@@ -2677,6 +3233,8 @@ private:
           for (Region &region : op.getRegions())
             if (failed(planScope(region.front(), depth + 1)))
               return failure();
+        } else if (selectedInstanceReads.count(&op)) {
+          // The demanded original output and actual prefix were checked before family planning.
         } else if (isa<GeneratedMemberOp>(op)) {
           auto member = inspectGeneratedMember(&op);
           if (failed(member))
@@ -2731,6 +3289,55 @@ private:
     };
     if (failed(planScope(source.getBody().front(), 0)))
       return failure();
+    // Inventory all authored families before asking the canonical assignment
+    // owner once for original-template routing. Each root retains its actual lexical use, so
+    // sibling and nested families are not merged semantically. There is no per-port or per-family
+    // whole-module writer scan in this target adapter.
+    SmallVector<std::pair<Value, Operation *>> connectionSeeds;
+    SmallVector<GeneratedFamilyPlan *> connectionOwners;
+    for (const auto &family : generatedFamilies) {
+      if (family->connectionSeeds.size() > (maximumGeneratedOperations - cost) / 2)
+        return reject(family->operation, "generated alias roots exceed finite target budget");
+      cost += 2 * family->connectionSeeds.size();
+      llvm::append_range(connectionSeeds, family->connectionSeeds);
+      connectionOwners.append(family->connectionSeeds.size(), family.get());
+    }
+    if (!connectionSeeds.empty()) {
+      auto assignments = inspectGeneratedTemplateAssignments(source, connectionSeeds);
+      if (failed(assignments))
+        return failure();
+      for (auto [index, fact] : llvm::enumerate(*assignments)) {
+        // These are verified authored-template aliases, not executable edges.
+        // In particular an exact-empty family still has an authored helper
+        // body, but no attained slot, driver or selected value is invented.
+        auto *family = connectionOwners[index];
+        Value value = capturedValue(fact.source);
+        if (fact.root != connectionSeeds[index].first || fact.family != family->operation || !value)
+          return reject(connectionSeeds[index].second,
+                        "generated template alias lost its original root/family identity");
+        family->aliases.try_emplace(fact.root, value);
+      }
+    }
+    for (const auto &ownedFamily : generatedFamilies) {
+      const auto &family = *ownedFamily;
+      for (Operation *instance : family.instances) {
+        const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+        for (const auto &port : child.ports) {
+          if (port.inout || port.splitRoute)
+            return reject(instance,
+                          "generated resolved child requires exact physical lane routing");
+          if (port.input) {
+            auto references = instancePortValues.find({instance, port.key});
+            if (references == instancePortValues.end() ||
+                !family.aliases.count(references->second.front()))
+              return reject(instance, "generated child input requires its canonical actual driver");
+          }
+        }
+        for (const auto &port : child.domains)
+          if (!instanceBindings.count({instance, port.requirement}))
+            return reject(instance, "generated child control requires its exact actual binding");
+      }
+    }
     if (!generatedFamilies.empty())
       for (Operation &op : source.getBody().front())
         if (isa<ParameterConstraintOp>(op) && text(&op, "constraint_kind") == "exclude") {
@@ -2743,14 +3350,12 @@ private:
           generatedExclusions[op.getAttr("parameter")].push_back(actual);
           cost += 4;
         }
-    for (auto &[operation, member] : generatedMembers) {
-      if (member.familyView) {
-        staticOperations.insert(operation);
-        continue;
-      }
-      if (member.selections.empty() || !generatedExports.count(member.exportOperation))
+    auto planRead = [&](Operation *operation, ArrayRef<GeneratedSelection> selections,
+                        Value storage, InstanceLogicalPortKey key,
+                        Operation *exportOperation) -> LogicalResult {
+      if (selections.empty() || (!key.second.first && !generatedExports.count(exportOperation)))
         return reject(operation, "generated target selection requires an original scalar export");
-      auto *plan = generatedFamilyPlans.lookup(member.selections.front().family);
+      auto *plan = generatedFamilyPlans.lookup(selections.front().family);
       Operation *scope = plan && plan->parent ? plan->parent->operation : source.getOperation();
       Operation *owner = operation->getParentOp();
       while (isa<StructuralIfOp>(owner))
@@ -2760,16 +3365,18 @@ private:
       plan->selections.push_back(operation);
       unsigned outputIndex = 0;
       for (; outputIndex < plan->outputs.size(); ++outputIndex)
-        if (plan->outputs[outputIndex].value == member.storage)
+        if (plan->outputs[outputIndex].value == storage &&
+            plan->outputs[outputIndex].instancePort == key)
           break;
       auto root = std::make_pair(plan, outputIndex);
-      for (auto [i, selection] : llvm::enumerate(member.selections)) {
+      for (auto [i, selection] : llvm::enumerate(selections)) {
         if (plan->operation != selection.family || outputIndex >= plan->outputs.size() ||
             !parameterExpression(selection.coordinate))
           return reject(operation, "generated target selection must retain every exact prefix");
         const auto &out = plan->outputs[outputIndex];
-        if (i + 1 == member.selections.size()) {
-          if (out.child || out.value != member.storage)
+        if (i + 1 == selections.size()) {
+          if (out.child || out.value != storage || out.instancePort != key ||
+              out.laneType != targetValueType(operation->getResult(0).getType()))
             return reject(operation, "generated target selection did not reach original storage");
         } else {
           if (!out.child)
@@ -2779,10 +3386,27 @@ private:
         }
       }
       generatedSelectionRoots.try_emplace(operation, root);
-      cost += 8 * member.selections.size();
+      auto structure = dyn_cast_if_present<circt::hw::StructType>(
+          targetValueType(operation->getResult(0).getType()));
+      uint64_t fields = structure ? structure.getElements().size() : 1;
+      cost += 8 * fields * selections.size();
       if (cost > maximumGeneratedOperations)
         return reject(operation, "generated prefix adapters exceed finite target budget");
+      return success();
+    };
+    for (auto &[operation, member] : generatedMembers) {
+      if (member.familyView) {
+        staticOperations.insert(operation);
+        continue;
+      }
+      if (failed(
+              planRead(operation, member.selections, member.storage, {}, member.exportOperation)))
+        return failure();
     }
+    for (auto &[operation, port] : selectedInstanceReads)
+      if (failed(
+              planRead(operation, port.proof.selections, {}, port.key, port.proof.exportOperation)))
+        return failure();
     // Outline only authored arms that would otherwise require nested explicit
     // sv.generate wrappers. The pinned exporter cannot emit those legally.
     // Reverse preorder is postorder: every nested scope target exists first.
@@ -2816,10 +3440,17 @@ private:
               if (!generatedScopeContains(block, family->operation->getBlock()))
                 carriers.insert({family, index});
             }
-            if (isa<DigitalAssignOp>(use) && generatedGuardOperations.contains(use)) {
-              auto pin = capturedValue(use->getOperand(0)).getDefiningOp<PortValueOp>();
-              destinations.insert(SymbolTable::lookupSymbolIn(
-                  source, pin->getAttrOfType<FlatSymbolRefAttr>("port")));
+            if (isa<DigitalAssignOp>(use)) {
+              auto projection = resolveStaticShapeProjection(use->getOperand(0), use);
+              auto pin = succeeded(projection)
+                             ? capturedValue(projection->root).getDefiningOp<PortValueOp>()
+                             : PortValueOp();
+              Operation *port = pin ? SymbolTable::lookupSymbolIn(
+                                          source, pin->getAttrOfType<FlatSymbolRefAttr>("port"))
+                                    : nullptr;
+              auto writes = generatedGuardOutputs.find(port);
+              if (writes != generatedGuardOutputs.end() && llvm::is_contained(writes->second, use))
+                destinations.insert(port);
             }
             for (auto [index, operand] : llvm::enumerate(use->getOperands())) {
               if (isa<StructuralIfOp>(use))
@@ -2859,18 +3490,25 @@ private:
           busFamilies.insert(family);
         llvm::append_range(plan->busFamilies, busFamilies);
         for (Value value : captures) {
+          if (auto pin = value.getDefiningOp<PortValueOp>())
+            if (destinations.contains(SymbolTable::lookupSymbolIn(
+                    source, pin->getAttrOfType<FlatSymbolRefAttr>("port"))))
+              continue; // Exact destination buses are helper outputs, never captures.
           appendGeneratedPort(plan->ports, value, true, plan->ports.size(),
                               targetValueType(value.getType()));
           plan->carriers.emplace_back(nullptr, 0);
         }
         for (auto [family, index] : carriers) {
           const auto &out = family->outputs[index];
-          appendGeneratedPort(plan->ports, out.value, true, plan->ports.size(), out.busType);
+          appendGeneratedOutputPort(plan->ports, out, true, plan->ports.size(), out.busType);
           plan->carriers.emplace_back(family, index);
         }
         for (Operation *destination : destinations) {
-          Value reference =
-              capturedValue(generatedGuardOutputs[destination].front()->getOperand(0));
+          Operation *write = generatedGuardOutputs[destination].front();
+          auto projection = resolveStaticShapeProjection(write->getOperand(0), write);
+          if (failed(projection))
+            return reject(write, "generated guard output lost its exact logical root");
+          Value reference = capturedValue(projection->root);
           appendGeneratedPort(plan->ports, reference, false, plan->destinations.size(),
                               targetValueType(reference.getType()));
           plan->destinations.push_back(destination);
@@ -2932,8 +3570,43 @@ private:
       return symbolic.getWidth();
     return {};
   }
+  Type generatedBusType(Type lane, TypedAttr capacity) {
+    if (auto structure = dyn_cast_if_present<circt::hw::StructType>(lane)) {
+      SmallVector<circt::hw::StructType::FieldInfo> fields;
+      for (const auto &field : structure.getElements()) {
+        Type bus = generatedBusType(field.type, capacity);
+        if (!bus)
+          return {};
+        fields.push_back({field.name, bus});
+      }
+      return circt::hw::StructType::get(builder.getContext(), fields);
+    }
+    TypedAttr width = generatedWidth(lane);
+    if (!width)
+      return {};
+    TypedAttr bits = circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, capacity, width);
+    return isa<IntegerAttr>(bits) ? Type(builder.getIntegerType(cast<IntegerAttr>(bits).getInt()))
+                                  : Type(circt::hw::IntType::get(bits));
+  }
   Value generatedSlice(Operation *at, Value input, Value index, Type result, bool bitOffset = false,
                        TypedAttr lower = {}, TypedAttr step = {}) {
+    if (auto structure = dyn_cast<circt::hw::StructType>(result)) {
+      auto inputType = dyn_cast<circt::hw::StructType>(input.getType());
+      if (!inputType || inputType.getElements().size() != structure.getElements().size() ||
+          bitOffset)
+        return {}; // A selected nested route computes a separate exact offset per leaf.
+      auto leaves = splitBoundary(at, input);
+      SmallVector<Value> selected;
+      for (auto [i, field] : llvm::enumerate(structure.getElements())) {
+        if (inputType.getElements()[i].name != field.name)
+          return {};
+        Value value = generatedSlice(at, leaves[i], index, field.type, false, lower, step);
+        if (!value)
+          return {};
+        selected.push_back(value);
+      }
+      return joinBoundary(at, result, selected);
+    }
     Type element = result;
     if (auto inout = dyn_cast<circt::hw::InOutType>(element))
       element = inout.getElementType();
@@ -2982,8 +3655,13 @@ private:
   LogicalResult lowerGeneratedHelper(GeneratedFamilyPlan &family) {
     OpBuilder::InsertionGuard insertion(builder);
     auto parentValues = std::move(values);
+    auto parentInstanceValues = std::move(generatedInstanceValues);
     values.clear();
-    auto restoreValues = llvm::scope_exit([&] { values = std::move(parentValues); });
+    generatedInstanceValues.clear();
+    auto restoreValues = llvm::scope_exit([&] {
+      values = std::move(parentValues);
+      generatedInstanceValues = std::move(parentInstanceValues);
+    });
     SmallVector<circt::hw::PortInfo> ports;
     unsigned inputIndex = 0, outputIndex = 0;
     appendPhysicalPorts(family.ports, ports, inputIndex, outputIndex);
@@ -3010,9 +3688,10 @@ private:
           leaves.push_back(body->getArgument(inputIndex++));
         values[port.references.front()] = joinBoundary(port.key.first, port.targetType, leaves);
       }
-    values[family.domain.induction] = circt::hw::ParamValueOp::create(
-        builder, family.operation->getLoc(), builder.getI32Type(),
-        circt::hw::ParamDeclRefAttr::get(family.indexName, builder.getI32Type()));
+    for (auto *ancestor = &family; ancestor; ancestor = ancestor->parent)
+      values[ancestor->domain.induction] = circt::hw::ParamValueOp::create(
+          builder, family.operation->getLoc(), builder.getI32Type(),
+          circt::hw::ParamDeclRefAttr::get(ancestor->indexName, builder.getI32Type()));
     circt::BackedgeBuilder backedges(builder, family.operation->getLoc());
     SmallVector<std::pair<Value, circt::Backedge>> edges;
     for (Operation *op : family.operations) {
@@ -3046,20 +3725,44 @@ private:
       }
       values[reg->getResult(0)] = state;
     }
+    for (auto [original, alias] : family.aliases) {
+      Value actual = values.lookup(alias);
+      if (!actual) {
+        backedges.abandon();
+        return reject(original.getDefiningOp(), "generated canonical RHS did not map");
+      }
+      values[original] = actual;
+    }
+    for (Operation *instance : family.instances)
+      if (failed(lowerInstance(instance))) {
+        backedges.abandon();
+        return failure();
+      }
     if (failed(lowerGeneratedScope(&family))) {
       backedges.abandon();
       return failure();
     }
     for (Operation *op : family.operations) {
-      if (!op->getNumResults() || isa<DigitalStorageOp, StaticCompareOp>(op) ||
+      if (!op->getNumResults() ||
+          isa<DigitalStorageOp, StaticCompareOp, InstancePortOp, MemberAccessOp>(op) ||
           family.sinks.contains(op))
         continue;
       Value result;
-      if (isa<ShapeIndexOp>(op))
-        result =
-            generatedSlice(op, mapped(op->getOperand(0)), values.lookup(family.domain.induction),
-                           targetValueType(op->getResult(0).getType()));
-      else {
+      if (isa<ShapeIndexOp>(op)) {
+        const auto &route = family.slices.find(op)->second;
+        auto carriers = splitBoundary(op, mapped(route.root));
+        Type resultType = targetValueType(op->getResult(0).getType());
+        auto structure = dyn_cast<circt::hw::StructType>(resultType);
+        SmallVector<Value> leaves;
+        for (auto [leaf, carrier] : llvm::enumerate(carriers)) {
+          Type type = structure ? structure.getElements()[leaf].type : resultType;
+          Value offset =
+              circt::sv::LocalParamOp::create(builder, op->getLoc(), builder.getI32Type(),
+                                              route.offsets[leaf], builder.getStringAttr(""));
+          leaves.push_back(generatedSlice(op, carrier, offset, type, true));
+        }
+        result = joinBoundary(op, resultType, leaves);
+      } else {
         SmallVector<Value> inputs;
         for (Value operand : op->getOperands())
           inputs.push_back(mapped(operand));
@@ -3119,9 +3822,15 @@ private:
       builder.setInsertionPoint(body->getTerminator());
     }
     SmallVector<Value> outputs;
-    for (const auto &port : family.ports)
-      if (!port.input)
-        llvm::append_range(outputs, splitBoundary(port.key.first, mapped(port.references.front())));
+    for (const auto &out : family.outputs) {
+      Value value = generatedOutputValue(out);
+      if (!value || value.getType() != out.laneType) {
+        backedges.abandon();
+        return reject(family.operation,
+                      "generated logical output did not map its original payload");
+      }
+      llvm::append_range(outputs, splitBoundary(family.operation, value));
+    }
     body->getTerminator()->setOperands(outputs);
     for (auto &[original, edge] : edges) {
       Value result = values.lookup(original);
@@ -3179,8 +3888,7 @@ private:
       }
     SmallVector<Value> outputs;
     for (Operation *destination : scope.destinations) {
-      Type type =
-          targetValueType(generatedGuardOutputs[destination].front()->getOperand(0).getType());
+      Type type = targetValueType(destination->getAttrOfType<TypeAttr>("type").getValue());
       Value wire = make(destination, "sv.wire", circt::hw::InOutType::get(type), {},
                         {builder.getNamedAttr("name", builder.getStringAttr(""))});
       generatedGuardWires.try_emplace(destination, wire);
@@ -3255,7 +3963,7 @@ private:
         });
       }
     for (const auto &[port, writes] : generatedGuardOutputs) {
-      Type type = targetValueType(writes.front()->getOperand(0).getType());
+      Type type = targetValueType(port->getAttrOfType<TypeAttr>("type").getValue());
       Value wire = make(port, "sv.wire", circt::hw::InOutType::get(type), {},
                         {builder.getNamedAttr("name", builder.getStringAttr(""))});
       generatedGuardWires.try_emplace(port, wire);
@@ -3333,28 +4041,56 @@ private:
         parameters.push_back(circt::hw::ParamDeclAttr::get(
             family.indexName, circt::hw::ParamVerbatimAttr::get(
                                   builder.getContext(), family.genvarName, builder.getI32Type())));
+        // Materialize the actual lvalues before their producer instance. This
+        // preserves direct output-port connectivity even without optimization;
+        // no dependency, ordering token or extra instance is manufactured.
+        SmallVector<Value> outputDestinations;
+        for (auto [i, out] : llvm::enumerate(family.outputs)) {
+          SmallVector<std::pair<Value, Type>> destinations;
+          if (auto structure = dyn_cast<circt::hw::StructType>(out.laneType)) {
+            auto bus = cast<circt::hw::StructType>(out.busType);
+            for (auto [fieldIndex, field] : llvm::enumerate(structure.getElements())) {
+              Value wire = make(family.operation, "sv.struct_field_inout",
+                                circt::hw::InOutType::get(bus.getElements()[fieldIndex].type),
+                                {wires[i]}, {builder.getNamedAttr("field", field.name)});
+              destinations.emplace_back(wire, field.type);
+            }
+          } else
+            destinations.emplace_back(wires[i], out.laneType);
+          for (auto [wire, laneType] : destinations) {
+            Value destination =
+                generatedSlice(family.operation, wire, index, circt::hw::InOutType::get(laneType),
+                               false, family.ordinalTransport ? family.lower : TypedAttr(),
+                               family.ordinalTransport ? family.step : TypedAttr());
+            outputDestinations.push_back(destination);
+          }
+        }
         auto instance = circt::hw::InstanceOp::create(
             builder, family.operation->getLoc(), family.target, builder.getStringAttr("lane"),
             ArrayRef<Value>(inputs), builder.getArrayAttr(parameters));
         correlate(instance, family.operation);
-        for (auto [i, out] : llvm::enumerate(family.outputs)) {
-          Value destination = generatedSlice(family.operation, wires[i], index,
-                                             circt::hw::InOutType::get(out.laneType), false,
-                                             family.ordinalTransport ? family.lower : TypedAttr(),
-                                             family.ordinalTransport ? family.step : TypedAttr());
-          assignGenerated(family.operation, destination, instance.getResult(i));
-        }
+        if (outputDestinations.size() != instance.getNumResults())
+          return reject(family.operation, "generated helper lost its exact physical output count");
+        for (auto [result, destination] : llvm::enumerate(outputDestinations))
+          assignGenerated(family.operation, destination, instance.getResult(result));
       }
       for (auto [i, out] : llvm::enumerate(family.outputs)) {
-        if (parent)
-          values[out.value] = buses[i];
+        if (parent) {
+          if (out.instancePort.second.first)
+            generatedInstanceValues[out.instancePort] = buses[i];
+          else
+            values[out.value] = buses[i];
+        }
         for (Value destination : out.destinations) {
           auto pin = destination.getDefiningOp<PortValueOp>();
           if (pin) {
             Operation *port =
                 SymbolTable::lookupSymbolIn(source, pin->getAttrOfType<FlatSymbolRefAttr>("port"));
-            for (Value reference : portValues[port])
-              values[reference] = buses[i];
+            if (Value wire = generatedGuardWires.lookup(port))
+              assignGenerated(family.operation, wire, buses[i]);
+            else
+              for (Value reference : portValues[port])
+                values[reference] = buses[i];
           } else {
             values[destination] = buses[i];
           }
@@ -3364,9 +4100,13 @@ private:
     }
     for (Operation &selectedOperation : *scope) {
       auto found = generatedMembers.find(&selectedOperation);
-      if (found != generatedMembers.end() && !found->second.familyView) {
+      auto instance = selectedInstanceReads.find(&selectedOperation);
+      if ((found != generatedMembers.end() && !found->second.familyView) ||
+          instance != selectedInstanceReads.end()) {
         Operation *operation = &selectedOperation;
-        const auto &member = found->second;
+        ArrayRef<GeneratedSelection> selections = instance != selectedInstanceReads.end()
+                                                      ? ArrayRef(instance->second.proof.selections)
+                                                      : ArrayRef(found->second.selections);
         auto route = generatedSelectionRoots.find(operation);
         if (route == generatedSelectionRoots.end())
           return reject(operation, "generated selection lost its preflight carrier route");
@@ -3374,42 +4114,61 @@ private:
         if (selected >= plan->buses.size() || !plan->buses[selected])
           return reject(operation, "generated selection carrier did not map in its exact scope");
         Value bus = plan->buses[selected];
-        TypedAttr offset = builder.getI32IntegerAttr(0);
-        SmallVector<Attribute> prefixes;
-        Type selectedType;
-        for (const auto &selection : member.selections) {
-          const auto &out = plan->outputs[selected];
-          TypedAttr coordinate = parameterExpression(selection.coordinate);
-          auto ordinal = resolveStructuralIntegerExpression(selection.ordinal, operation);
-          TypedAttr position = coordinate;
-          if (plan->ordinalTransport) {
-            if (failed(ordinal) || !ordinal->expression)
+        auto rootStructure = dyn_cast<circt::hw::StructType>(bus.getType());
+        auto carriers = splitBoundary(operation, bus);
+        SmallVector<Value> leaves;
+        for (auto [fieldIndex, carrier] : llvm::enumerate(carriers)) {
+          auto *current = plan;
+          unsigned output = selected;
+          TypedAttr offset = builder.getI32IntegerAttr(0);
+          SmallVector<Attribute> prefixes;
+          Type selectedType;
+          for (const auto &selection : selections) {
+            const auto &out = current->outputs[output];
+            TypedAttr coordinate = parameterExpression(selection.coordinate);
+            auto ordinal = resolveStructuralIntegerExpression(selection.ordinal, operation);
+            TypedAttr position = coordinate;
+            if (current->ordinalTransport) {
+              if (failed(ordinal) || !ordinal->expression)
+                return reject(operation,
+                              "generated transport ordinal lost its exact Integer proof");
+              position = parameterExpression(*ordinal->expression);
+            }
+            if (!position)
               return reject(operation, "generated transport ordinal lost its exact Integer proof");
-            position = parameterExpression(*ordinal->expression);
+            selectedType = out.laneType;
+            if (rootStructure) {
+              auto structure = dyn_cast<circt::hw::StructType>(selectedType);
+              if (!structure || fieldIndex >= structure.getElements().size() ||
+                  structure.getElements()[fieldIndex].name !=
+                      rootStructure.getElements()[fieldIndex].name)
+                return reject(operation, "generated selection lost its exact logical field route");
+              selectedType = structure.getElements()[fieldIndex].type;
+            }
+            TypedAttr stride = generatedWidth(selectedType);
+            if (!stride)
+              return reject(operation, "generated selected leaf lacks its exact physical stride");
+            offset = circt::hw::ParamExprAttr::get(
+                circt::hw::PEO::Add, offset,
+                circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, position, stride));
+            prefixes.push_back(builder.getDictionaryAttr(
+                {builder.getNamedAttr("family", selection.family->getAttr("region_id")),
+                 builder.getNamedAttr("coordinate", coordinate),
+                 builder.getNamedAttr("ordinal", position),
+                 builder.getNamedAttr("stride_bits", stride)}));
+            current = out.child;
+            output = out.childOutput;
           }
-          if (!position)
-            return reject(operation, "generated transport ordinal lost its exact Integer proof");
-          TypedAttr stride = generatedWidth(out.laneType);
-          offset = circt::hw::ParamExprAttr::get(
-              circt::hw::PEO::Add, offset,
-              circt::hw::ParamExprAttr::get(circt::hw::PEO::Mul, position, stride));
-          prefixes.push_back(builder.getDictionaryAttr(
-              {builder.getNamedAttr("family", selection.family->getAttr("region_id")),
-               builder.getNamedAttr("coordinate", coordinate),
-               builder.getNamedAttr("ordinal", position),
-               builder.getNamedAttr("stride_bits", stride)}));
-          selectedType = out.laneType;
-          plan = out.child;
-          selected = out.childOutput;
+          Value index =
+              circt::sv::LocalParamOp::create(builder, operation->getLoc(), builder.getI32Type(),
+                                              offset, builder.getStringAttr(""));
+          Value value = generatedSlice(operation, carrier, index, selectedType, true);
+          value.getDefiningOp()->setAttr("nodal.generated_selection",
+                                         builder.getArrayAttr(prefixes));
+          leaves.push_back(value);
         }
-        // Compose every verified prefix stride, not just the final coordinate.
-        // A single range select avoids invalid SV select chaining even when
-        // downstream optimization removes intermediate adapter wires.
-        Value index = circt::sv::LocalParamOp::create(
-            builder, operation->getLoc(), builder.getI32Type(), offset, builder.getStringAttr(""));
-        Value value = generatedSlice(operation, bus, index, selectedType, true);
-        value.getDefiningOp()->setAttr("nodal.generated_selection", builder.getArrayAttr(prefixes));
-        values[operation->getResult(0)] = value;
+        values[operation->getResult(0)] =
+            joinBoundary(operation, targetValueType(operation->getResult(0).getType()), leaves);
       }
     }
     if (!parent)
@@ -3468,7 +4227,7 @@ private:
   }
 
   SmallVector<std::pair<Value, Value>> splitValues;
-  SmallVector<Type> splitTypes;
+  SmallVector<Type> splitTypes, splitEnableTypes;
   llvm::DenseMap<std::pair<Operation *, unsigned>, unsigned> splitChildInputs, splitChildOutputs;
   LogicalResult planSplitPorts() {
     if (!hierarchy || !variant)
@@ -3476,12 +4235,17 @@ private:
     const auto &plan = hierarchy->splitPlans[variant->occurrence];
     auto occurrences = hierarchy->proof->occurrences();
     splitTypes.resize(plan.routes.size());
+    splitEnableTypes.resize(plan.routes.size());
     for (unsigned raw : plan.ordered) {
       const auto &route = plan.routes[raw];
       Type mapped = targetValueType(route.originalType);
       if (!isa_and_nonnull<IntegerType, circt::hw::IntType>(mapped))
         return reject(source, "split route lost its exact local scalar type mapping");
+      Type enableType = targetValueType(route.enableType);
+      if (!isa_and_nonnull<IntegerType, circt::hw::IntType>(enableType))
+        return reject(source, "split route lost exact local pointwise enable mapping");
       splitTypes[raw] = mapped;
+      splitEnableTypes[raw] = enableType;
       if (8 > maximumGeneratedOperations - cost)
         return reject(source, "split route transport exceeds target operation budget");
       cost += 8;
@@ -3508,9 +4272,8 @@ private:
             "__nodal_split_" + std::to_string(route.canonical) + (enable ? "_enable" : "_data");
         port.key = {source.getOperation(), builder.getStringAttr(name)};
         port.name = builder.getStringAttr(name);
-        port.originalType =
-            enable ? route.binding->split->getResult(1).getType() : route.originalType;
-        port.targetType = enable ? builder.getI1Type() : mapped;
+        port.originalType = enable ? route.enableType : route.originalType;
+        port.targetType = enable ? enableType : mapped;
         port.input = route.incoming;
         port.splitRoute = raw;
         port.splitEnable = enable;
@@ -3525,12 +4288,19 @@ private:
     bool checkedParametricInOut = false;
     llvm::DenseMap<Value, unsigned> byRepresentative;
     for (const auto *endpoint : hierarchy->resolvedEndpoints[variant->occurrence]) {
+      auto geometry = inspectResolvedPhysicalGeometry(*endpoint, source);
+      if (failed(geometry))
+        return reject(endpoint->operation,
+                      "resolved physical target requires exact ordinary endpoint geometry");
       auto resolved = dyn_cast_or_null<ResolvedType>(endpoint->type);
-      Type type = resolved ? targetValueType(resolved.getElementType()) : Type();
-      auto maximum = resolved ? inferDigitalBitPatternMaximumBits(resolved.getElementType(), source)
-                              : FailureOr<int64_t>(failure());
+      Type type = targetValueType(geometry->data);
+      Type laneType = targetValueType(geometry->payload);
+      Type enableType = targetValueType(geometry->enable);
+      auto maximum = inferDigitalBitPatternMaximumBits(geometry->data, source);
       if (!resolved || !resolvedScalar(resolved.getElementType()) ||
-          !isa_and_nonnull<IntegerType, circt::hw::IntType>(type) || failed(maximum) ||
+          !isa_and_nonnull<IntegerType, circt::hw::IntType>(type) ||
+          !isa_and_nonnull<IntegerType, circt::hw::IntType>(laneType) ||
+          !isa_and_nonnull<IntegerType, circt::hw::IntType>(enableType) || failed(maximum) ||
           *maximum <= 0 || *maximum > maximumWidth || !endpoint->mode ||
           endpoint->mode.getValue() != resolved.getDriveMode() || !endpoint->profile ||
           endpoint->profile.getValue() != "portable_boundary_only" ||
@@ -3572,13 +4342,20 @@ private:
         ResolvedLocalComponent component;
         component.representative = endpoint->component;
         component.type = type;
+        component.laneType = laneType;
+        component.enableType = enableType;
+        component.geometry = endpoint;
+        component.originalData = geometry->data;
         component.mode = endpoint->mode;
         component.profile = endpoint->profile;
         resolvedLocalComponents.push_back(std::move(component));
       }
       auto &component = resolvedLocalComponents[index];
-      if (component.type != type || component.mode != endpoint->mode ||
-          component.profile != endpoint->profile ||
+      if (component.type != type || component.laneType != laneType ||
+          component.enableType != enableType ||
+          !equivalentDigitalStorageTypesAt(component.originalData, component.geometry->operation,
+                                           geometry->data, endpoint->operation) ||
+          component.mode != endpoint->mode || component.profile != endpoint->profile ||
           !resolvedEndpointComponents.try_emplace(key, index).second)
         return reject(endpoint->operation,
                       "resolved local endpoint identity or exact type disagrees");
@@ -3592,8 +4369,10 @@ private:
         component.childPins.push_back(child);
       } else
         component.localPins.push_back(declaration);
-      if (isa<ResolvedNetOp, ResolvedBoundaryOp>(endpoint->operation))
+      if (isa<ResolvedNetOp, ResolvedBoundaryOp>(endpoint->operation)) {
         component.values.push_back(endpoint->operation->getResult(0));
+        resolvedValueComponents.try_emplace(endpoint->operation->getResult(0), index);
+      }
       if (uint64_t(*maximum) + 5 > maximumGeneratedOperations - cost)
         return reject(endpoint->operation,
                       "resolved physical carrier exceeds target operation budget");
@@ -3601,8 +4380,8 @@ private:
     }
     for (Operation &op : source.getBody().front()) {
       bool resolved =
-          llvm::any_of(op.getOperandTypes(), [](Type t) { return isa<ResolvedType>(t); }) ||
-          llvm::any_of(op.getResultTypes(), [](Type t) { return isa<ResolvedType>(t); });
+          llvm::any_of(op.getOperandTypes(), [](Type t) { return bool(resolvedCarrierLeaf(t)); }) ||
+          llvm::any_of(op.getResultTypes(), [](Type t) { return bool(resolvedCarrierLeaf(t)); });
       if (!resolved)
         continue;
       if (!isa<ResolvedNetOp, ResolvedBoundaryOp, MemberAccessOp, NetDriverOp, NetReadOp,
@@ -3617,10 +4396,14 @@ private:
       auto path = op.getAttrOfType<StringAttr>("path");
       auto found = resolvedEndpointComponents.find({endpoint, path});
       auto facts = resolvedEndpointFacts.find({endpoint, path});
-      if (found == resolvedEndpointComponents.end() || facts == resolvedEndpointFacts.end() ||
-          op.getResult(0).getType() != facts->second->type)
+      auto geometry = facts == resolvedEndpointFacts.end()
+                          ? FailureOr<ResolvedPhysicalGeometry>(failure())
+                          : inspectResolvedPhysicalGeometry(*facts->second, source);
+      if (found == resolvedEndpointComponents.end() || failed(geometry) ||
+          op.getResult(0).getType() != geometry->carrier)
         return reject(&op, "resolved member view lost its exact checked endpoint type");
       resolvedLocalComponents[found->second].values.push_back(op.getResult(0));
+      resolvedValueComponents.try_emplace(op.getResult(0), found->second);
       LogicalPortKey key{facts->second->declaration, path};
       if (facts->second->instance)
         instancePortValues[{facts->second->instance, key}].push_back(op.getResult(0));
@@ -3640,6 +4423,10 @@ private:
     if (facts->domain)
       record.set("domain", facts->domain);
     record.set("width", generatedWidth(component.type));
+    record.set("outer_dimensions", facts->shape.dimensions);
+    record.set("lane_width", generatedWidth(component.laneType));
+    record.set("lane_count", generatedWidth(component.enableType));
+    record.set("layout", builder.getStringAttr("row-major-lanes-lsb-first"));
     record.set("member", facts->path);
     record.set("carrier", builder.getStringAttr("true-inout"));
     return builder.getDictionaryAttr(record);
@@ -3719,8 +4506,9 @@ private:
     }
     return success();
   }
-  Value resolvedFill(Operation *at, Type type, char fill) {
-    assert((fill == '0' || fill == '1' || fill == 'z') && "closed resolved fill token");
+  Value typedFill(Operation *at, Type type, char fill,
+                  StringRef correlation = "nodal.resolved_fill") {
+    assert((fill == '0' || fill == '1' || fill == 'z') && "closed typed fill token");
     if (auto integer = dyn_cast<IntegerType>(type)) {
       if (fill == 'z')
         return make(at, "sv.constantZ", type, {});
@@ -3734,7 +4522,7 @@ private:
     auto value = circt::sv::VerbatimExprOp::create(builder, at->getLoc(), type,
                                                    std::string("'") + fill, ValueRange{});
     correlate(value, at);
-    value->setAttr("nodal.resolved_fill", builder.getStringAttr(std::string(1, fill)));
+    value->setAttr(correlation, builder.getStringAttr(std::string(1, fill)));
     return value.getResult();
   }
   LogicalResult lowerResolvedEffects() {
@@ -3745,9 +4533,50 @@ private:
       if (!inout || !isa<IntegerType, circt::hw::IntType>(inout.getElementType()))
         return reject(op, "resolved driver lost its exact typed physical component");
       Type type = inout.getElementType();
+      auto componentIndex = resolvedValueComponents.find(op->getOperand(0));
+      if (componentIndex == resolvedValueComponents.end())
+        return reject(op, "resolved effect lost its exact planned component");
+      const auto &component = resolvedLocalComponents[componentIndex->second];
+      if (!component.geometry->shape.axes.empty() && !isa<NetReleaseOp>(op)) {
+        if (!isa<NetDriveOp, NetDriveLevelOp>(op))
+          return reject(op, "resolved family requires a checked pointwise conditional driver");
+        Value enable = values.lookup(op->getOperand(isa<NetDriveOp>(op) ? 3 : 2));
+        Value data = isa<NetDriveOp>(op) ? values.lookup(op->getOperand(2)) : Value();
+        if (!enable || enable.getType() != component.enableType ||
+            (isa<NetDriveOp>(op) && (!data || data.getType() != component.type)))
+          return reject(op, "resolved family data/enable lost exact whole pointwise mapping");
+        OpBuilder::InsertionGuard insertion(builder);
+        unsigned ordinal = resolvedDriverOrdinal++;
+        auto *wrapper = regionOperation(
+            op, "sv.generate", {builder.getNamedAttr("sym_name", builder.getStringAttr(""))});
+        builder.setInsertionPointToEnd(&wrapper->getRegion(0).front());
+        auto *loop = regionOperation(
+            op, "sv.generate.for",
+            {builder.getNamedAttr("lowerBound", builder.getI32IntegerAttr(0)),
+             builder.getNamedAttr("upperBound", generatedWidth(component.enableType)),
+             builder.getNamedAttr("step", builder.getI32IntegerAttr(1)),
+             builder.getNamedAttr("genBlockName", builder.getStringAttr("resolved_lanes_" +
+                                                                        std::to_string(ordinal))),
+             builder.getNamedAttr("inductionVarName", builder.getStringAttr("resolved_lane"))});
+        Block &body = loop->getRegion(0).front();
+        Value index = body.addArgument(builder.getI32Type(), op->getLoc());
+        builder.setInsertionPointToEnd(&body);
+        Value destination =
+            generatedSlice(op, carrier, index, circt::hw::InOutType::get(component.laneType));
+        Value laneEnable = generatedSlice(op, enable, index, builder.getI1Type());
+        Value laneData =
+            data ? generatedSlice(op, data, index, component.laneType)
+                 : typedFill(op, component.laneType, text(op, "level") == "high" ? '1' : '0');
+        Value released = typedFill(op, component.laneType, 'z');
+        if (!destination || !laneEnable || !laneData || !released)
+          return reject(op, "resolved family lane transport lost its checked slice");
+        Value drive = make(op, "comb.mux", component.laneType, {laneEnable, laneData, released});
+        assignGenerated(op, destination, drive);
+        continue;
+      }
       Value drive;
       if (isa<NetReleaseOp>(op))
-        drive = resolvedFill(op, type, 'z');
+        drive = typedFill(op, type, 'z');
       else if (isa<InterfaceDriveOp>(op))
         drive = values.lookup(op->getOperand(1));
       else {
@@ -3756,12 +4585,12 @@ private:
         if (isa<NetDriveOp>(op))
           data = values.lookup(op->getOperand(2));
         else {
-          data = resolvedFill(op, type, text(op, "level") == "high" ? '1' : '0');
+          data = typedFill(op, type, text(op, "level") == "high" ? '1' : '0');
         }
         if (!enable || !enable.getType().isInteger(1) || !data || data.getType() != type)
           return reject(op,
                         "resolved conditional driver values disagree with actual checked types");
-        Value released = resolvedFill(op, type, 'z');
+        Value released = typedFill(op, type, 'z');
         drive = make(op, "comb.mux", type, {enable, data, released});
       }
       if (!drive || drive.getType() != type)
@@ -3794,7 +4623,10 @@ private:
         NamedAttrList attributes;
         if (!sourcePath(port.key.first).empty())
           attributes.set("nodal.source_path", builder.getStringAttr(sourcePath(port.key.first)));
-        if (aggregatePayload(port.originalType) && !isa<circt::hw::StructType>(port.targetType))
+        if (port.generatedLayout)
+          attributes.set("nodal.packed_abi", port.generatedLayout);
+        else if (!port.inout && aggregatePayload(port.originalType) &&
+                 !isa<circt::hw::StructType>(port.targetType))
           attributes.set("nodal.packed_abi", packedLayout(port.originalType));
         if (port.resolvedContract)
           attributes.set("nodal.resolved", port.resolvedContract);
@@ -3821,34 +4653,87 @@ private:
 
   LogicalResult planInterfaces() {
     bool hasEndpoints = false;
-    for (Operation &op : source.getBody().front()) {
-      if (isa<InterfaceOp, InterfaceInstanceOp, InterfaceBoundaryOp, InterfaceAbiOp>(op))
-        staticOperations.insert(&op);
+    unsigned inventoryWork = 0;
+    auto inventory = source->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      if (op != source.getOperation() && isa<ModuleOp>(op))
+        return WalkResult::skip();
+      if (++inventoryWork > maximumAuthoredOperations) {
+        (void)reject(op, "Interface target inventory exceeds authored-work budget");
+        return WalkResult::interrupt();
+      }
+      if (isa<InterfaceOp, InterfaceInstanceOp, InterfaceBoundaryOp, InterfaceAbiOp>(op) &&
+          op->getParentOp() == source)
+        staticOperations.insert(op);
       if (isa<InterfaceInstanceOp, InterfaceBoundaryOp>(op)) {
-        if (!hasDigitalInterfaceContract(&op))
-          return reject(&op, "target requires fully typed Interface endpoint contracts");
+        if (!hasDigitalInterfaceContract(op)) {
+          (void)reject(op, "target requires fully typed Interface endpoint contracts");
+          return WalkResult::interrupt();
+        }
         hasEndpoints = true;
       }
-    }
+      return WalkResult::advance();
+    });
+    if (inventory.wasInterrupted())
+      return failure();
     if (!hasEndpoints)
       return success();
+    InterfaceTargetFacts localTemplateFacts;
+    InterfaceTargetFacts *templateFacts = &localTemplateFacts;
     if (hierarchy) {
       auto found = hierarchy->interfaces.find(source);
       if (found == hierarchy->interfaces.end()) {
-        auto collected = std::make_unique<SmallVector<DigitalInterfaceEndpoint>>();
-        if (failed(collectDigitalInterfaceEndpoints(source, *collected)))
+        auto collected = std::make_unique<InterfaceTargetFacts>();
+        if (failed(collectDigitalInterfaceEndpoints(source, collected->endpoints,
+                                                    &collected->accesses)))
           return failure();
         found = hierarchy->interfaces.try_emplace(source, std::move(collected)).first;
       }
-      endpoints = *found->second;
+      templateFacts = found->second.get();
+      endpoints = templateFacts->endpoints;
+      interfaceAccesses = templateFacts->accesses;
     } else {
-      if (failed(collectDigitalInterfaceEndpoints(source, localEndpoints)))
+      if (failed(collectDigitalInterfaceEndpoints(source, localEndpoints, &localInterfaceAccesses)))
         return failure();
       endpoints = localEndpoints;
+      interfaceAccesses = localInterfaceAccesses;
     }
+    SmallVector<std::pair<Operation *, Operation *>> typeSeeds;
+    SmallVector<LogicalPortKey> typeKeys;
+    llvm::DenseSet<LogicalPortKey> seenTypes;
     for (auto [index, endpoint] : llvm::enumerate(endpoints)) {
+      bool directGenerated =
+          !endpoint.instance && isa<GenerateOp>(endpoint.declaration->getParentOp());
+      bool selectedChild = endpoint.selection && endpoint.instance &&
+                           isa<GenerateOp>(endpoint.instance->getParentOp());
+      if ((!directGenerated && endpoint.selection && !selectedChild) ||
+          (!directGenerated && !isa<ModuleOp>(endpoint.operation->getParentOp())) ||
+          (directGenerated && !isa<ModuleOp, GenerateOp>(endpoint.operation->getParentOp())))
+        return reject(endpoint.operation,
+                      "generated Interface target requires selected occurrence routing");
+      if (selectedChild && (!isa<ModuleOp>(endpoint.declarationOwner) ||
+                            endpoint.definition->getParentOp() != endpoint.declarationOwner ||
+                            endpoint.declaration->getParentOp() != endpoint.declarationOwner ||
+                            !endpoint.dimensions.empty()))
+        return reject(
+            endpoint.operation,
+            "selected child Interface requires original module-owned payload and scalar endpoint");
       interfaceEndpoints.try_emplace(endpoint.operation, index);
       for (const auto &leaf : endpoint.leaves) {
+        if (directGenerated) {
+          if (leaf.access.getValue() != "out" || !endpoint.dimensions.empty())
+            return reject(
+                endpoint.operation,
+                "generated direct Interface requires ordinary outputs and scalar endpoint");
+          LogicalPortKey key{endpoint.declaration, leaf.path};
+          if (seenTypes.insert(key).second) {
+            typeSeeds.emplace_back(endpoint.declaration, leaf.declaration);
+            typeKeys.push_back(key);
+          }
+        }
+        if (selectedChild && failed(inspectHierarchyBoundaryType(
+                                 leaf.type, endpoint.declarationOwner, endpoint.instance)))
+          return reject(endpoint.operation,
+                        "selected child Interface leaf lacks original all-lane type proof");
         if (isa<ResolvedType>(leaf.type) &&
             resolvedEndpointComponents.count({endpoint.operation, leaf.path}))
           continue;
@@ -3866,6 +4751,68 @@ private:
         ++cost;
       }
     }
+    if (!typeSeeds.empty()) {
+      if (!templateFacts->generatedTemplatesReady) {
+        auto types = inspectDigitalInterfaceBoundaryTypes(source, typeSeeds);
+        if (failed(types))
+          return failure();
+        templateFacts->generatedTypes = std::move(*types);
+      }
+      if (templateFacts->generatedTypes.size() != typeKeys.size())
+        return reject(source, "cached Interface template inventory lost original authored order");
+      for (auto [index, type] : llvm::enumerate(templateFacts->generatedTypes)) {
+        if (type.endpoint != typeKeys[index].first || !type.outerDimensions.empty())
+          return reject(type.endpoint,
+                        "generated Interface lost its original scalar endpoint geometry");
+        // Full original payload validation includes unobserved logical leaves.
+        for (const auto &leaf : type.payload.leaves) {
+          uint64_t work = 1 + leaf.path.size();
+          for (const auto &group : leaf.dimensions)
+            work += 1 + group.extents.size();
+          if (work > maximumGeneratedOperations - cost || !leafVectorType(leaf))
+            return reject(type.endpoint,
+                          "generated Interface requires bounded invariant original payload layout");
+          cost += work;
+        }
+        generatedInterfaceTypes.try_emplace(typeKeys[index], std::move(type));
+      }
+    }
+    SmallVector<std::pair<Value, Operation *>> driverSeeds;
+    SmallVector<LogicalPortKey> driverKeys;
+    for (const auto &access : interfaceAccesses) {
+      if (access.identity.selection || access.identity.instance ||
+          !generatedInterfaceTypes.count({access.identity.endpoint, access.identity.path}))
+        continue;
+      Operation *root = access.value.getDefiningOp();
+      Operation *family = access.identity.endpoint->getParentOp();
+      if (root->getParentOp() != family || cost + 2 > maximumGeneratedOperations)
+        return reject(root,
+                      "generated Interface driver requires bounded direct original family use");
+      cost += 2;
+      driverSeeds.emplace_back(access.value, &family->getRegion(0).front().back());
+      driverKeys.emplace_back(access.identity.endpoint, access.identity.path);
+    }
+    if (!driverSeeds.empty()) {
+      if (!templateFacts->generatedTemplatesReady) {
+        auto drivers = inspectGeneratedInterfaceTemplateDrivers(source, driverSeeds);
+        if (failed(drivers))
+          return failure();
+        templateFacts->generatedDrivers = std::move(*drivers);
+      }
+      if (templateFacts->generatedDrivers.size() != driverSeeds.size())
+        return reject(source, "cached Interface driver inventory lost original authored order");
+      for (auto [index, driver] : llvm::enumerate(templateFacts->generatedDrivers)) {
+        if (driver.root != driverSeeds[index].first ||
+            driver.family != driverKeys[index].first->getParentOp() ||
+            driver.effect->getParentOp() != driver.family)
+          return reject(driver.effect,
+                        "generated Interface driver lost exact original family identity");
+        generatedInterfaceDrivers.try_emplace(driver.root, driver);
+        generatedInterfaceRoots.try_emplace(driverKeys[index], driver.root);
+        generatedInterfaceEffects.insert(driver.effect);
+      }
+    }
+    templateFacts->generatedTemplatesReady = true;
     for (Operation &op : source.getBody().front())
       if (isa<InterfaceInstanceOp, InterfaceBoundaryOp>(op) && !interfaceEndpoints.count(&op))
         return reject(&op,
@@ -4063,6 +5010,7 @@ private:
           if (!staticOperations.contains(user) && !controlSelectors.contains(user) &&
               !fixedShapeSelections.count(user) && !controlProjections.contains(user) &&
               !isa<GenerateOp, GeneratedMemberOp, StaticCompareOp, StructuralIfOp>(user) &&
+              !(isa<InstancePortOp, InterfaceBoundaryOp>(user) && user->getNumOperands() == 2) &&
               !user->getParentOfType<GenerateOp>())
             return reject(user, "static Integer target parameters cannot become runtime values");
     SmallVector<Attribute> declarations;
@@ -4098,7 +5046,8 @@ private:
     targetParameters = builder.getArrayAttr(declarations);
     return success();
   }
-  FailureOr<ArrayAttr> instanceParameters(Operation *instance) {
+  FailureOr<ArrayAttr> instanceParameters(Operation *instance,
+                                          GeneratedFamilyPlan *scope = nullptr) {
     Operation *child = resolveInstanceModuleDefinition(instance);
     if (!child)
       return failure();
@@ -4106,9 +5055,11 @@ private:
     for (Operation &op : child->getRegion(0).front()) {
       if (!isa<ParameterOp>(op) || text(&op, "variability") != "symbolic")
         continue;
-      auto proof = resolveInstanceIntegerParameter(instance, &op,
-                                                   ParameterIntegerMode::MathematicalSigned64);
-      TypedAttr value = succeeded(proof) ? parameterExpression(*proof) : TypedAttr();
+      auto proof = scope ? resolveGeneratedInstanceIntegerParameter(
+                               instance, &op, ParameterIntegerMode::MathematicalSigned64)
+                         : resolveInstanceIntegerParameter(
+                               instance, &op, ParameterIntegerMode::MathematicalSigned64);
+      TypedAttr value = succeeded(proof) ? parameterExpression(*proof, scope) : TypedAttr();
       if (!value || cost >= maximumGeneratedOperations)
         return failure();
       ++cost;
@@ -5283,6 +6234,8 @@ private:
         (void)reject(op, "symbolic scalar emitter requires exact-type bitwise/select transport");
         return {};
       }
+      if (char fill = symbolicLiteralFill(op))
+        return typedFill(op, resultType, fill, "nodal.literal_fill");
       if (isa<SequentialSelectOp>(op) || operationCode == "digital_select")
         return mux(op, inputs[0], inputs[1], inputs[2]);
       if (operationCode == "digital_alias")
@@ -5415,7 +6368,8 @@ private:
   llvm::DenseMap<InstanceLogicalPortKey, SmallVector<Value>> instancePortValues;
   struct ResolvedLocalComponent {
     Value representative;
-    Type type;
+    Type type, laneType, enableType, originalData;
+    const DigitalResolvedEndpoint *geometry = nullptr;
     StringAttr mode, profile, physicalName;
     SmallVector<StringAttr, 2> aliasNames;
     SmallVector<LogicalPortKey, 2> localPins;
@@ -5434,12 +6388,16 @@ private:
   llvm::DenseMap<LogicalPortKey, Value> resolvedPortCarriers;
   llvm::DenseMap<InstanceLogicalPortKey, Value> resolvedChildCarriers;
   llvm::DenseSet<InstanceLogicalPortKey> projectedResolvedPorts;
+  llvm::DenseMap<Value, unsigned> resolvedValueComponents;
   llvm::DenseSet<Operation *> resolvedOperations;
   SmallVector<Operation *> resolvedEffects;
+  unsigned resolvedDriverOrdinal = 0;
 
   SmallVector<LogicalPortPlan> logicalPorts;
   SmallVector<DigitalInterfaceEndpoint> localEndpoints;
+  SmallVector<DigitalInterfaceAccess> localInterfaceAccesses;
   ArrayRef<DigitalInterfaceEndpoint> endpoints;
+  ArrayRef<DigitalInterfaceAccess> interfaceAccesses;
   llvm::DenseMap<Operation *, unsigned> interfaceEndpoints;
   llvm::DenseMap<LogicalPortKey, SmallVector<Value>> interfacePortValues;
   llvm::DenseSet<Value> interfaceValues;

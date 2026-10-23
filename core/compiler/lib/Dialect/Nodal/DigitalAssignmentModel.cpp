@@ -22,6 +22,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <algorithm>
@@ -66,6 +67,10 @@ struct Node {
   FlatSymbolRefAttr contextualReset;
 };
 
+// Exact existing AssignmentQuery guard alternatives, exported only to this
+// translation unit's hierarchy composition. No public graph layout is changed.
+using DependencyGuard = SmallVector<std::pair<Operation *, unsigned>, 2>;
+
 /// One graph for actual SSA dependencies and implicit reads through ordinary
 /// storage. Value nodes are memoized without copying transitive leaf sets.
 /// Assignment nodes are physical writes; a projected read only links writers
@@ -76,7 +81,10 @@ public:
   AssignmentQuery(Operation *module, DigitalAssignmentProofLimits limits)
       : module(module), limits(limits) {}
   LogicalResult verify();
-  FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds) {
+  FailureOr<SmallVector<DigitalTemplateAssignment, 4>>
+  templateAssignments(ArrayRef<std::pair<Value, Operation *>> seeds);
+  FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds,
+                                          SmallVectorImpl<DependencyGuard> *guardOutput = nullptr) {
     DigitalDependencyGraph result;
     for (auto [value, use] : seeds) {
       Operation *localRoot = value ? value.getDefiningOp() : nullptr;
@@ -92,6 +100,16 @@ public:
     if (failed(verify()))
       return failure();
     for (Node &node : nodes) {
+      if (guardOutput) {
+        DependencyGuard actual;
+        if (node.guard != impossibleGuard)
+          for (auto [condition, arm] : guards[node.guard]) {
+            if (failed(guardWork(node.use)))
+              return failure();
+            actual.emplace_back(choices[condition].operation, arm);
+          }
+        guardOutput->push_back(std::move(actual));
+      }
       Operation *crossing = node.value ? node.value.getDefiningOp() : nullptr;
       if (!crossingIndexes.count(crossing))
         crossing = nullptr;
@@ -113,10 +131,10 @@ public:
         Operation *root = succeeded(access) ? access->root.getDefiningOp() : nullptr;
         boundary |= isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
         if (isa_and_nonnull<MemberAccessOp>(root) && hasDigitalInterfaceContract(root)) {
-          auto reference = root->getAttrOfType<FlatSymbolRefAttr>("instance");
-          Operation *endpoint =
-              reference ? SymbolTable::lookupSymbolIn(root->getParentOp(), reference) : nullptr;
-          boundary = isa_and_nonnull<InterfaceBoundaryOp>(endpoint);
+          auto member = inspectDigitalInterfaceMember(root);
+          if (failed(member))
+            return failure();
+          boundary = member->instance != nullptr;
         }
       }
       result.nodes.push_back({node.value, node.use, std::move(node.dependencies), endpoint.domain,
@@ -211,6 +229,8 @@ private:
   std::map<Guard, unsigned> guardIds = {{Guard{}, 0}};
   std::vector<Choice> choices;
   llvm::DenseMap<Operation *, unsigned> choiceIds, ancestryIds;
+  bool retainLexicalGuards = false;
+  llvm::DenseMap<Operation *, DependencyGuard> lexicalGuards;
   llvm::DenseMap<Operation *, GeneratedDomain> domains;
   llvm::DenseMap<std::pair<Operation *, unsigned>, unsigned> assignmentNodes;
   std::vector<Node> nodes;
@@ -316,6 +336,7 @@ FailureOr<unsigned> AssignmentQuery::ancestry(Operation *operation) {
   if (auto found = ancestryIds.find(operation); found != ancestryIds.end())
     return found->second;
   unsigned guard = 0, depth = 0;
+  DependencyGuard actual;
   for (Operation *at = operation; at && at->getParentOp() != module; at = at->getParentOp()) {
     if (++depth > limits.maximumGuardDepth) {
       (void)reject(operation, "structural assignment ancestry exceeds its finite depth budget");
@@ -327,12 +348,20 @@ FailureOr<unsigned> AssignmentQuery::ancestry(Operation *operation) {
     auto id = choice(parent);
     if (failed(id))
       return failure();
-    auto next = extend(guard, *id, at->getParentRegion()->getRegionNumber(), operation);
+    const unsigned arm = at->getParentRegion()->getRegionNumber();
+    if (retainLexicalGuards) {
+      if (failed(guardWork(operation)))
+        return failure();
+      actual.emplace_back(parent, arm);
+    }
+    auto next = extend(guard, *id, arm, operation);
     if (failed(next))
       return failure();
     guard = *next;
   }
   ancestryIds.try_emplace(operation, guard);
+  if (retainLexicalGuards)
+    lexicalGuards.try_emplace(operation, std::move(actual));
   return guard;
 }
 FailureOr<unsigned> AssignmentQuery::assignmentNode(Operation *operation, Operation *loop,
@@ -435,24 +464,21 @@ FailureOr<bool> AssignmentQuery::disjoint(const StaticShapeProjection &a,
     return failure();
   }
   ++relationCount;
-  // Same physical port with independently authored root aliases cannot use a
-  // different-root shape proof. Until canonical alias rebasing exists, retain
-  // the possible overlap. This is conservative, never independent fake storage.
-  bool independent = false;
-  if (a.root == b.root) {
-    Operation *root = a.root.getDefiningOp();
-    if (resolveGeneratedLocalRootFamily(root) && a.projections.empty() && b.projections.empty())
-      use = &root->getBlock()->back();
-    auto relation =
-        compareStaticShapeProjections(a, b, use, {limits.maximumShapeWork, limits.maximumNodes});
-    if (relation.status == ShapeRegionProofStatus::Invalid ||
-        relation.status == ShapeRegionProofStatus::ResourceLimit) {
-      (void)reject(use, "ordinary assignment physical projection proof is invalid or exhausted");
-      return failure();
-    }
-    independent = relation.status == ShapeRegionProofStatus::Proved &&
-                  relation.overlap == ShapeRegionOverlap::Disjoint;
+  // ShapeModel independently retains actual physical declaration and selected
+  // coordinates. Distinct aliases alone never establish independent storage.
+  Operation *root = a.root.getDefiningOp();
+  if (a.root == b.root && resolveGeneratedLocalRootFamily(root) && a.projections.empty() &&
+      b.projections.empty())
+    use = &root->getBlock()->back();
+  auto relation =
+      compareStaticShapeProjections(a, b, use, {limits.maximumShapeWork, limits.maximumNodes});
+  if (relation.status == ShapeRegionProofStatus::Invalid ||
+      relation.status == ShapeRegionProofStatus::ResourceLimit) {
+    (void)reject(use, "ordinary assignment physical projection proof is invalid or exhausted");
+    return failure();
   }
+  bool independent = relation.status == ShapeRegionProofStatus::Proved &&
+                     relation.overlap == ShapeRegionOverlap::Disjoint;
   relations.try_emplace(key, independent);
   relations.try_emplace(std::make_pair(second, first), independent);
   return independent;
@@ -636,8 +662,9 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
     auto separate = disjoint(access, write.target, physicalUse(write.operation, use));
     if (failed(separate))
       return failure();
-    if (*separate)
-      continue;
+    // Retain even disjoint payload writers for the shared full-root coverage
+    // partition. They never add causal edges, but their independently verified
+    // cells can establish a complete root that covers a sparse generated read.
     auto combined = merge(guard, write.guard, use);
     if (failed(combined))
       return failure();
@@ -659,10 +686,14 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
       }
     }
     driven |= !*separate;
-    const bool localFamilyRoot =
-        resolveGeneratedLocalRootFamily(*owner) == write.loop && write.loop &&
-        write.loop->isProperAncestor(use);
-    wholeWriter |= write.target.wholeRoot && (!write.loop || localFamilyRoot);
+    const bool localFamilyRoot = resolveGeneratedLocalRootFamily(*owner) == write.loop &&
+                                 write.loop && write.loop->isProperAncestor(use);
+    bool exactRoot = write.target.root == access.root;
+    if (!exactRoot && write.target.wholeRoot && access.wholeRoot)
+      exactRoot = proveStaticShapeProjectionIdentity(
+                      write.target, access, use, {limits.maximumShapeWork, limits.maximumNodes}) ==
+                  ShapeRegionProofStatus::Proved;
+    wholeWriter |= exactRoot && write.target.wholeRoot && (!write.loop || localFamilyRoot);
     bool attainedForEverySetting = true;
     if (write.loop) {
       auto domain = iterationDomain(write.loop);
@@ -676,7 +707,7 @@ LogicalResult AssignmentQuery::readAlternative(unsigned node, const StaticShapeP
       attainedForEverySetting |=
           succeeded(domain) && domain->lower.bounds.upper < domain->upperExclusive.bounds.lower;
     }
-    if (write.target.root == access.root && attainedForEverySetting)
+    if (attainedForEverySetting)
       coverage.push_back(write.target);
     if (coverageUse->getBlock() == writeAnchor->getBlock() &&
         coverageUse->isBeforeInBlock(writeAnchor))
@@ -806,7 +837,8 @@ LogicalResult AssignmentQuery::expand(unsigned node) {
     if (failed(fsmTimingDependencies(value, dependencies)))
       return reject(definition, "FSM timing predicate lacks its exact checked guard owner");
     for (Value input : dependencies)
-      if (failed(depend(node, input, definition))) return failure();
+      if (failed(depend(node, input, definition)))
+        return failure();
     return success();
   }
   if (llvm::isa<FsmJoinOp, FsmActivationOp>(definition)) {
@@ -1198,7 +1230,86 @@ LogicalResult AssignmentQuery::verify() {
     return reject(module, "digital dependency graph contains a combinational value cycle");
   return success();
 }
+FailureOr<SmallVector<DigitalTemplateAssignment, 4>>
+AssignmentQuery::templateAssignments(ArrayRef<std::pair<Value, Operation *>> seeds) {
+  retainLexicalGuards = true;
+  if (seeds.size() > limits.maximumNodes) {
+    (void)reject(module, "authored template batch exceeds its finite seed budget");
+    return failure();
+  }
+  if (failed(verify()))
+    return failure();
+  SmallVector<DigitalTemplateAssignment, 4> result;
+  DenseMap<std::pair<Value, Operation *>, unsigned> memo;
+  for (auto seed : seeds) {
+    Value value = seed.first;
+    Operation *use = seed.second;
+    if (!value || !use || failed(guardWork(use)))
+      return failure();
+    if (auto known = memo.find(seed); known != memo.end()) {
+      result.push_back(result[known->second]);
+      continue;
+    }
+    auto read = resolveStaticShapeProjection(value, use);
+    Operation *root = succeeded(read) ? read->root.getDefiningOp() : nullptr;
+    Operation *family = resolveGeneratedLocalRootFamily(root);
+    auto refuse = [&](StringRef reason) -> FailureOr<SmallVector<DigitalTemplateAssignment, 4>> {
+      (void)reject(use, reason);
+      return failure();
+    };
+    if (failed(read) || !family || family->getParentOfType<ModuleOp>() != module ||
+        !read->projections.empty() || value != read->root || use->getParentOp() != family ||
+        use != &family->getRegion(0).front().back())
+      return refuse(
+          "authored template assignment requires its direct whole root and exact final use");
+    bool ordinary = isa<DigitalStorageOp>(root) && text(root, "kind") == "wire";
+    if (isa<InstancePortOp>(root)) {
+      auto port = inspectInstancePort(root);
+      ordinary = succeeded(port) && !port->selection && text(root, "direction") == "input";
+    }
+    if (!ordinary)
+      return refuse("authored template assignment supports only an original wire or child input");
+    auto owner = storageOwner(*read, use);
+    if (failed(owner) || !*owner)
+      return failure();
+    auto found = writers.find(*owner);
+    if (found == writers.end() || found->second.size() != 1)
+      return refuse("authored template assignment requires exactly one original whole writer");
+    if (++relationCount > limits.maximumRelations)
+      return refuse("authored template assignments exceed finite relation budget");
+    const Write &write = writes[found->second.front()];
+    Operation *writeRoot = write.target.root.getDefiningOp();
+    if (write.loop != family || text(write.operation, "kind") != "continuous" ||
+        !write.target.projections.empty() || resolveGeneratedLocalRootFamily(writeRoot) != family)
+      return refuse(
+          "authored template assignment cannot transport partial or foreign-family writers");
+    if (isa<InstancePortOp>(writeRoot)) {
+      auto port = inspectInstancePort(writeRoot);
+      if (failed(port) || port->selection)
+        return refuse("authored template assignment cannot transport selected writers");
+    }
+    if (proveStaticShapeProjectionIdentity(*read, write.target, use,
+                                           {limits.maximumShapeWork, limits.maximumNodes}) !=
+        ShapeRegionProofStatus::Proved)
+      return refuse("authored template assignment requires exact whole physical identity");
+    if (failed(ancestry(use)) || failed(ancestry(write.operation)))
+      return failure();
+    if (lexicalGuards.find(use)->second != lexicalGuards.find(write.operation)->second)
+      return refuse(
+          "authored template assignment requires the exact original structural arm ancestry");
+    memo.try_emplace(seed, result.size());
+    result.push_back({read->root, write.operation->getOperand(1), write.operation, family});
+  }
+  return result;
+}
 } // namespace
+
+FailureOr<SmallVector<DigitalTemplateAssignment, 4>>
+inspectGeneratedTemplateAssignments(Operation *module,
+                                    ArrayRef<std::pair<Value, Operation *>> seeds,
+                                    DigitalAssignmentProofLimits limits) {
+  return AssignmentQuery(module, limits).templateAssignments(seeds);
+}
 
 FailureOr<DigitalDependencyGraph>
 analyzeDigitalAssignmentDependencies(Operation *module,
@@ -1223,12 +1334,14 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
                             SmallVectorImpl<DigitalResolvedHierarchyComponent> *components) {
   struct LocalGraph {
     DigitalDependencyGraph graph;
+    SmallVector<DependencyGuard> guards;
     SmallVector<SequentialSample, 8> samples;
     DenseMap<Value, unsigned> values;
     DenseMap<Operation *, unsigned> ports;
-    DenseMap<std::pair<Operation *, Operation *>, unsigned> instancePorts;
+    DenseMap<std::pair<Operation *, Operation *>, SmallVector<unsigned, 2>> instancePorts;
     std::map<std::pair<Operation *, std::string>, unsigned> interfaceMembers;
-    std::map<std::tuple<Operation *, Operation *, std::string>, unsigned> instanceInterfaces;
+    std::map<std::tuple<Operation *, Operation *, std::string>, SmallVector<unsigned, 2>>
+        instanceInterfaces;
     DenseMap<Operation *, DigitalInterfaceMember> interfaceFacts;
   };
   DenseMap<Operation *, unsigned> indexes;
@@ -1238,7 +1351,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   SmallVector<unsigned> offsets;
   SmallVector<SequentialSample, 8> samples;
   SmallVector<unsigned> sampleRoots;
-  unsigned edges = 0;
+  SmallVector<DependencyGuard> baseGuards;
+  unsigned edges = 0, guardCopies = 0;
   // Seed actual reset producers in their existing local graph. A formal query
   // can be the only consumer, so ordinary local SSA uses do not suffice. The
   // occurrence owner resolves forwarding; no foreign SSA enters a definition.
@@ -1292,10 +1406,10 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     auto resetRoots = resetSeeds.find(context.module);
     if (resetRoots != resetSeeds.end())
       seeds.append(resetRoots->second.begin(), resetRoots->second.end());
-    auto localGraph = analyzeDigitalAssignmentDependencies(context.module, seeds, limits);
+    LocalGraph local;
+    auto localGraph = AssignmentQuery(context.module, limits).graph(seeds, &local.guards);
     if (failed(localGraph))
       return failure();
-    LocalGraph local;
     local.graph = std::move(*localGraph);
     local.samples = std::move(*localSamples);
     for (unsigned i = 0; i < seeds.size(); ++i)
@@ -1312,7 +1426,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         auto boundary = inspectInstancePort(op);
         if (failed(boundary))
           return failure();
-        local.instancePorts.try_emplace(std::make_pair(boundary->instance, boundary->port), node);
+        local.instancePorts[std::make_pair(boundary->instance, boundary->port)].push_back(node);
       }
     }
     for (unsigned i = 0; i < local.graph.nodes.size(); ++i) {
@@ -1331,8 +1445,10 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       }
       const auto *member = &known->second;
       if (member->instance)
-        local.instanceInterfaces.try_emplace(
-            std::make_tuple(member->instance, member->endpoint, member->path.getValue().str()), i);
+        local
+            .instanceInterfaces[std::make_tuple(member->instance, member->endpoint,
+                                                member->path.getValue().str())]
+            .push_back(i);
       else
         local.interfaceMembers.try_emplace(
             std::make_pair(member->endpoint, member->path.getValue().str()), i);
@@ -1348,6 +1464,12 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
                     "concrete hierarchy dependency graph exceeds finite node budget");
     const unsigned offset = graph.nodes.size(), crossingOffset = graph.crossings.size();
     offsets.push_back(offset);
+    for (const auto &guard : local.guards) {
+      if (guard.size() > limits.maximumGuardWork - guardCopies)
+        return reject(context.module, "hierarchy guard inventory exceeds finite proof-work budget");
+      guardCopies += guard.size();
+      baseGuards.push_back(guard);
+    }
     for (auto node : local.graph.nodes) {
       node.occurrence = occurrence;
       for (unsigned &dependency : node.dependencies)
@@ -1393,11 +1515,303 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     }
     ++occurrence;
   }
+  // Retain one original graph and intern only contexts requested by actual
+  // authored selections. Work is bounded by graph/context budgets, not family
+  // cardinality. Every contextual node is still an original node plus proof.
+  const auto baseNodes = graph.nodes;
+  SmallVector<unsigned> baseIds;
+  for (unsigned i = 0; i != baseNodes.size(); ++i)
+    baseIds.push_back(i);
+  graph.selectionContexts.push_back({});
+  DenseMap<std::pair<unsigned, unsigned>, unsigned> contextualNodes;
+  uint64_t selectionWork = guardCopies;
+  auto spendSelection = [&](Operation *use, uint64_t work = 1) {
+    if (work > limits.maximumGuardWork - std::min<uint64_t>(selectionWork, limits.maximumGuardWork))
+      return reject(use, "selected dependency contexts exceed finite proof-work budget");
+    selectionWork += work;
+    return success();
+  };
+  auto internContext = [&](DigitalDependencySelectionContext candidate,
+                           Operation *use) -> FailureOr<unsigned> {
+    llvm::sort(candidate.selections, [](const auto &a, const auto &b) {
+      if (a.occurrence != b.occurrence)
+        return a.occurrence < b.occurrence;
+      return std::less<Operation *>()(a.selection.family, b.selection.family);
+    });
+    for (auto [index, known] : llvm::enumerate(graph.selectionContexts)) {
+      if (failed(spendSelection(use, 1 + candidate.selections.size())))
+        return failure();
+      if (candidate.selections.size() != known.selections.size())
+        continue;
+      bool equal = true;
+      for (auto [a, b] : llvm::zip(candidate.selections, known.selections))
+        equal &= a.occurrence == b.occurrence && a.selection.family == b.selection.family &&
+                 equivalentInstantiatedIntegerExpressions(a.selection.coordinate,
+                                                          b.selection.coordinate);
+      if (equal)
+        return unsigned(index);
+    }
+    if (graph.selectionContexts.size() >= limits.maximumNodes) {
+      (void)reject(use, "selected dependency contexts exceed finite represented-node budget");
+      return failure();
+    }
+    unsigned id = graph.selectionContexts.size();
+    graph.selectionContexts.push_back(std::move(candidate));
+    return id;
+  };
+  auto extendContext = [&](unsigned original, unsigned occurrence,
+                           ArrayRef<GeneratedSelection> selections,
+                           Operation *use) -> FailureOr<unsigned> {
+    DigitalDependencySelectionContext candidate = graph.selectionContexts[original];
+    for (auto selection : selections) {
+      if (failed(spendSelection(use, 1 + candidate.selections.size())) || !selection.family ||
+          selection.family->getNumRegions() != 1 || !selection.family->getRegion(0).hasOneBlock())
+        return failure();
+      SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 4> substitutions;
+      for (const auto &known : candidate.selections)
+        if (known.occurrence == occurrence)
+          substitutions.emplace_back(known.selection.family->getRegion(0).front().getArgument(0),
+                                     known.selection.coordinate);
+      auto coordinate = substituteIntegerExpression(selection.coordinate, substitutions);
+      if (failed(coordinate))
+        return failure();
+      selection.coordinate = *coordinate;
+      auto known = llvm::find_if(candidate.selections, [&](const auto &entry) {
+        return entry.occurrence == occurrence && entry.selection.family == selection.family;
+      });
+      if (known == candidate.selections.end())
+        candidate.selections.push_back({occurrence, std::move(selection)});
+      else
+        known->selection = std::move(selection);
+    }
+    return internContext(std::move(candidate), use);
+  };
+  auto selectedContext = [&](Operation *selection, unsigned original,
+                             unsigned occurrence) -> FailureOr<unsigned> {
+    if (!selection)
+      return original;
+    auto member = selection->getAttrOfType<StringAttr>("member");
+    auto proof = member && selection->getNumOperands() == 2
+                     ? inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
+                                                 member.getValue(), selection)
+                     : FailureOr<GeneratedSelectionProof>(failure());
+    return failed(proof) ? FailureOr<unsigned>(failure())
+                         : extendContext(original, occurrence, proof->selections, selection);
+  };
+  auto contextNode = [&](unsigned base, unsigned context, Operation *use) -> FailureOr<unsigned> {
+    if (!context)
+      return base;
+    const auto &original = baseNodes[base];
+    const auto &occurrence = hierarchy->occurrences()[original.occurrence];
+    Operation *owner = original.value ? original.value.getDefiningOp() : original.use;
+    if (!owner)
+      if (auto argument = dyn_cast<BlockArgument>(original.value))
+        owner = argument.getOwner()->getParentOp();
+    DigitalDependencySelectionContext relevant;
+    for (const auto &selection : graph.selectionContexts[context].selections) {
+      if (failed(spendSelection(use, 1 + occurrence.generatedScopes.size())))
+        return failure();
+      bool inherited = llvm::any_of(occurrence.generatedScopes, [&](const auto &scope) {
+        return scope.occurrence == selection.occurrence &&
+               scope.family == selection.selection.family;
+      });
+      bool lexical = original.occurrence == selection.occurrence && owner &&
+                     selection.selection.family->isProperAncestor(owner);
+      if (inherited || lexical)
+        relevant.selections.push_back(selection);
+    }
+    auto canonical = internContext(std::move(relevant), use);
+    if (failed(canonical))
+      return failure();
+    if (!*canonical)
+      return base;
+    if (original.crossing || original.waiver || original.eventProcess || original.eventTrigger ||
+        original.externalContribution ||
+        (original.value && isDigitalControlBoundaryType(original.value.getType()))) {
+      (void)reject(use,
+                   "selected generated control, event, crossing, waiver or resolved dependency "
+                   "requires its selection-qualified capability proof");
+      return failure();
+    }
+    auto key = std::make_pair(base, *canonical);
+    if (auto known = contextualNodes.find(key); known != contextualNodes.end())
+      return known->second;
+    if (graph.nodes.size() >= limits.maximumNodes) {
+      (void)reject(use, "selected dependency graph exceeds finite represented-node budget");
+      return failure();
+    }
+    unsigned id = graph.nodes.size();
+    auto node = original;
+    node.selectedContext = *canonical;
+    graph.nodes.push_back(std::move(node));
+    baseIds.push_back(base);
+    contextualNodes.try_emplace(key, id);
+    return id;
+  };
+  auto matchesContext = [&](Operation *selection, unsigned requested,
+                            unsigned occurrence) -> FailureOr<bool> {
+    if (!selection)
+      return true; // The original authored template is contextualized, never aliased to a lane.
+    auto context = selectedContext(selection, requested, occurrence);
+    if (failed(context))
+      return failure();
+    const auto &actual = graph.selectionContexts[*context].selections;
+    const auto &expected = graph.selectionContexts[requested].selections;
+    for (const auto &entry : actual) {
+      if (entry.occurrence != occurrence)
+        continue;
+      auto known = llvm::find_if(expected, [&](const auto &item) {
+        return item.occurrence == occurrence && item.selection.family == entry.selection.family;
+      });
+      if (known == expected.end() || !equivalentInstantiatedIntegerExpressions(
+                                         known->selection.coordinate, entry.selection.coordinate))
+        return false;
+    }
+    return true;
+  };
+  std::map<std::tuple<unsigned, Operation *, unsigned>, StaticPredicateActivity> selectedGuards;
+  auto guardActive = [&](unsigned base, unsigned context, Operation *use) -> FailureOr<bool> {
+    if (!context)
+      return true;
+    const unsigned occurrence = baseNodes[base].occurrence;
+    for (auto [condition, arm] : baseGuards[base]) {
+      if (failed(spendSelection(use)))
+        return failure();
+      auto key = std::make_tuple(occurrence, condition, context);
+      auto known = selectedGuards.find(key);
+      if (known == selectedGuards.end()) {
+        SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2> substitutions;
+        SmallVector<unsigned, 4> ancestors;
+        for (unsigned at = occurrence; at; at = hierarchy->occurrences()[at].parent) {
+          if (failed(spendSelection(use)) || ancestors.size() >= 128)
+            return failure();
+          ancestors.push_back(at);
+        }
+        std::reverse(ancestors.begin(), ancestors.end());
+        SmallVector<SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2>, 4>
+            coordinateStorage;
+        coordinateStorage.resize(ancestors.size());
+        for (const auto &selection : graph.selectionContexts[context].selections) {
+          if (failed(spendSelection(use)))
+            return failure();
+          if (selection.occurrence == occurrence &&
+              selection.selection.family->isProperAncestor(condition))
+            substitutions.emplace_back(
+                selection.selection.family->getRegion(0).front().getArgument(0),
+                selection.selection.coordinate);
+          for (unsigned index = 0; index < ancestors.size(); ++index) {
+            if (failed(spendSelection(use)))
+              return failure();
+            const auto &authored = hierarchy->occurrences()[ancestors[index]];
+            if (selection.occurrence == authored.parent &&
+                selection.selection.family->isProperAncestor(authored.instance))
+              coordinateStorage[index].emplace_back(
+                  selection.selection.family->getRegion(0).front().getArgument(0),
+                  selection.selection.coordinate);
+          }
+        }
+        SmallVector<SelectedIntegerInstanceStep, 4> path;
+        for (unsigned index = 0; index < ancestors.size(); ++index)
+          path.push_back(
+              {hierarchy->occurrences()[ancestors[index]].instance, coordinateStorage[index]});
+        unsigned remaining = limits.maximumGuardWork - selectionWork;
+        const unsigned before = remaining;
+        // The original occurrence path, not a child definition or a selected
+        // suffix, owns actual ancestor parameter bindings.
+        auto facts = path.empty() ? analyzeStaticPredicate(condition->getOperand(0), condition,
+                                                           substitutions, remaining)
+                                  : analyzeSelectedInstancePathStaticPredicate(
+                                        condition->getOperand(0), condition,
+                                        hierarchy->occurrences().front().module, path,
+                                        substitutions, remaining);
+        selectionWork += before - remaining;
+        if (failed(facts)) {
+          (void)reject(use, "selected guard requires an exact bounded original predicate proof");
+          return failure();
+        }
+        known = selectedGuards.emplace(key, facts->activity).first;
+      }
+      auto activity = known->second;
+      if (activity == StaticPredicateActivity::Unreachable ||
+          (activity == StaticPredicateActivity::AlwaysTrue && arm != 0) ||
+          (activity == StaticPredicateActivity::AlwaysFalse && arm != 1))
+        return false;
+    }
+    return true;
+  };
   // Wire only explicit immediate-child boundaries. Node identity is now the
   // occurrence plus original local graph node, so repeated definitions never
   // share state, synchronizers, physical inputs or cached dependency facts.
   for (unsigned id = 0; id < graph.nodes.size(); ++id) {
-    auto &node = graph.nodes[id];
+    auto node = graph.nodes[id];
+    auto save = llvm::scope_exit([&] { graph.nodes[id] = std::move(node); });
+    node.dependencies.clear();
+    unsigned dependencyContext = node.selectedContext;
+    if (node.value && isa_and_nonnull<GeneratedMemberOp>(node.value.getDefiningOp())) {
+      auto member = inspectGeneratedMember(node.value.getDefiningOp());
+      if (failed(member))
+        return failure();
+      if (!member->familyView) {
+        auto context =
+            extendContext(dependencyContext, node.occurrence, member->selections, node.use);
+        if (failed(context))
+          return failure();
+        dependencyContext = *context;
+      }
+    }
+    if (node.value) {
+      auto projection = resolveStaticShapeProjection(node.value, node.use);
+      Operation *root = succeeded(projection) ? projection->root.getDefiningOp() : nullptr;
+      Operation *selection = nullptr;
+      if (isa_and_nonnull<MemberAccessOp>(root) && hasDigitalInterfaceContract(root)) {
+        auto member = inspectDigitalInterfaceMember(root);
+        if (failed(member))
+          return failure();
+        selection = member->selection;
+      } else if (isa_and_nonnull<InstancePortOp>(root)) {
+        auto boundary = inspectInstancePort(root);
+        if (failed(boundary))
+          return failure();
+        selection = boundary->selection;
+      }
+      auto context = selectedContext(selection, dependencyContext, node.occurrence);
+      if (failed(context))
+        return failure();
+      dependencyContext = *context;
+    }
+    node.selectedContext = dependencyContext;
+    SmallVector<GeneratedSelection, 2> localSelection;
+    for (const auto &selection : graph.selectionContexts[dependencyContext].selections)
+      if (selection.occurrence == node.occurrence)
+        localSelection.push_back(selection.selection);
+    for (unsigned dependency : baseNodes[baseIds[id]].dependencies) {
+      auto active = guardActive(dependency, dependencyContext, node.use);
+      if (failed(active))
+        return failure();
+      if (!*active)
+        continue;
+      const auto &source = baseNodes[dependency];
+      if (!localSelection.empty() && node.value && !source.value &&
+          isa_and_nonnull<DigitalAssignOp>(source.use)) {
+        auto read = resolveStaticShapeProjection(node.value, node.use);
+        auto write = resolveStaticShapeProjection(source.use->getOperand(0), source.use);
+        if (succeeded(read) && succeeded(write)) {
+          auto relation = compareStaticShapeContextualProjections(
+              *read, localSelection, *write, localSelection, node.use,
+              {limits.maximumShapeWork, limits.maximumNodes});
+          if (relation.status != ShapeRegionProofStatus::Proved)
+            return reject(node.use, "selected dependency requires an exact bounded physical image");
+          if (relation.overlap == ShapeRegionOverlap::Disjoint)
+            continue;
+        }
+      }
+      auto target = contextNode(dependency, dependencyContext, node.use);
+      if (failed(target))
+        return failure();
+      if (id >= baseNodes.size() && ++edges > limits.maximumEdges)
+        return reject(node.use, "selected dependency graph exceeds finite edge budget");
+      node.dependencies.push_back(*target);
+    }
     if (node.contextualReset) {
       auto actual = hierarchy->resolveBinding(node.occurrence, node.contextualReset);
       if (failed(actual))
@@ -1413,7 +1827,11 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
           return reject(node.use, "contextual reset lost its exact physical dependency root");
         if (++edges > limits.maximumEdges)
           return reject(node.use, "contextual reset edges exceed finite hierarchy budget");
-        node.dependencies.push_back(offsets[reset->occurrence] + found->second);
+        auto target =
+            contextNode(offsets[reset->occurrence] + found->second, node.selectedContext, node.use);
+        if (failed(target))
+          return failure();
+        node.dependencies.push_back(*target);
       }
       // No edge is permitted only after the actual binding proves resetless.
     }
@@ -1440,16 +1858,44 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
             childGraph.graph.nodes[found->second].dependencies.empty())
           return reject(op,
                         "child Interface output must retain its actual driver, not a domain label");
-        target = offsets[*child] + found->second;
+        auto selection = selectedContext(member->selection, node.selectedContext, node.occurrence);
+        if (failed(selection))
+          return failure();
+        auto selected = contextNode(offsets[*child] + found->second, *selection, op);
+        if (failed(selected))
+          return failure();
+        target = *selected;
       } else if (!member->instance && context.instance && member->access.getValue() == "in") {
         const auto &parent = hierarchy->occurrences()[context.parent];
         const auto &parentGraph = definitions[indexes.lookup(parent.module)];
         auto found = parentGraph.instanceInterfaces.find(
             {context.instance, member->endpoint, member->path.getValue().str()});
-        if (found == parentGraph.instanceInterfaces.end() ||
-            parentGraph.graph.nodes[found->second].dependencies.empty())
+        if (found == parentGraph.instanceInterfaces.end())
           return reject(op, "used child Interface input needs an actual parent-owned connection");
-        target = offsets[context.parent] + found->second;
+        std::optional<unsigned> input;
+        for (unsigned candidate : found->second) {
+          const auto &value = parentGraph.graph.nodes[candidate];
+          if (value.dependencies.empty())
+            continue;
+          auto boundary = inspectDigitalInterfaceMember(value.value.getDefiningOp());
+          if (failed(boundary))
+            return failure();
+          auto matches = matchesContext(boundary->selection, node.selectedContext, context.parent);
+          if (failed(matches))
+            return failure();
+          if (*matches && (!input || boundary->selection)) {
+            input = candidate;
+            if (boundary->selection)
+              break;
+          }
+        }
+        if (!input)
+          return reject(op,
+                        "used child Interface input needs its exact selected parent connection");
+        auto selected = contextNode(offsets[context.parent] + *input, node.selectedContext, op);
+        if (failed(selected))
+          return failure();
+        target = *selected;
       }
       if (target) {
         if (++edges > limits.maximumEdges)
@@ -1474,7 +1920,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       auto found = childGraph.ports.find(boundary->port);
       if (found == childGraph.ports.end())
         return reject(op, "child output must retain its actual driver, not a domain annotation");
-      target = offsets[*child] + found->second;
+      auto selection = selectedContext(boundary->selection, node.selectedContext, node.occurrence);
+      if (failed(selection))
+        return failure();
+      auto selected = contextNode(offsets[*child] + found->second, *selection, op);
+      if (failed(selected))
+        return failure();
+      target = *selected;
     } else if (isa<PortValueOp>(op) && context.instance) {
       auto ref = op->getAttrOfType<FlatSymbolRefAttr>("port");
       Operation *port = ref ? SymbolTable::lookupSymbolIn(context.module, ref) : nullptr;
@@ -1485,7 +1937,27 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       auto found = parentGraph.instancePorts.find({context.instance, port});
       if (found == parentGraph.instancePorts.end())
         return reject(op, "used child input requires an actual parent-owned typed connection");
-      target = offsets[context.parent] + found->second;
+      std::optional<unsigned> input;
+      for (unsigned candidate : found->second) {
+        auto boundary =
+            inspectInstancePort(parentGraph.graph.nodes[candidate].value.getDefiningOp());
+        if (failed(boundary))
+          return failure();
+        auto matches = matchesContext(boundary->selection, node.selectedContext, context.parent);
+        if (failed(matches))
+          return failure();
+        if (*matches && (!input || boundary->selection)) {
+          input = candidate;
+          if (boundary->selection)
+            break;
+        }
+      }
+      if (!input)
+        return reject(op, "used child input requires its exact selected parent-owned connection");
+      auto selected = contextNode(offsets[context.parent] + *input, node.selectedContext, op);
+      if (failed(selected))
+        return failure();
+      target = *selected;
     }
     if (target) {
       if (++edges > limits.maximumEdges)
@@ -1502,6 +1974,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     unsigned parent, rank = 0;
     std::optional<ContextualDomain> domain;
     bool boundary = false, generated = false;
+    DigitalResolvedShape shape;
+    Type geometry;
   };
   struct ResolvedUse {
     unsigned slot, occurrence;
@@ -1525,7 +1999,51 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     }
     return root;
   };
-  auto newSlot = [&](unsigned occurrence, Attribute domain, Operation *use) -> FailureOr<unsigned> {
+  auto newSlot = [&](unsigned occurrence, Attribute domain, Operation *use,
+                     DigitalResolvedShape shape) -> FailureOr<unsigned> {
+    Operation *owner = shape.owner;
+    Operation *expectedModule = hierarchy->occurrences()[occurrence].module;
+    if (!owner || owner->getParentOp() != expectedModule || !shape.dimensions ||
+        shape.dimensions.size() > digitalTypeMaximumDepth ||
+        !isa<InterfaceInstanceOp, InterfaceBoundaryOp, ResolvedNetOp, ResolvedBoundaryOp>(owner)) {
+      (void)reject(use, "resolved family geometry lost its actual local endpoint owner");
+      return failure();
+    }
+    auto metadata = owner->getAttrOfType<DictionaryAttr>("metadata");
+    auto declared = metadata ? metadata.getAs<ArrayAttr>("dimensions") : ArrayAttr();
+    if ((isa<ResolvedNetOp, ResolvedBoundaryOp>(owner) && !shape.dimensions.empty()) ||
+        (declared ? declared != shape.dimensions : !shape.dimensions.empty())) {
+      (void)reject(use, "resolved family geometry differs from its exact original outer axes");
+      return failure();
+    }
+    if (shape.axes.size() != shape.dimensions.size()) {
+      (void)reject(use, "resolved family geometry requires one canonical Shape proof per axis");
+      return failure();
+    }
+    std::string dimensions;
+    for (auto [attribute, axis] : llvm::zip(shape.dimensions, shape.axes)) {
+      auto token = dyn_cast<StringAttr>(attribute);
+      if (!token || token.getValue().empty() || token.getValue().contains(',')) {
+        (void)reject(use, "resolved family geometry requires canonical ordered axis identities");
+        return failure();
+      }
+      auto original = resolveStaticShapeDimension(expectedModule, token.getValue());
+      if (failed(original) || original->parameter != axis.parameter ||
+          original->expression != axis.expression || original->literal != axis.literal ||
+          original->bounds.lower != axis.bounds.lower ||
+          original->bounds.upper != axis.bounds.upper) {
+        (void)reject(use, "resolved family geometry lost its exact original Shape identity");
+        return failure();
+      }
+      if (!dimensions.empty())
+        dimensions += ',';
+      dimensions += token.getValue().str();
+    }
+    Type geometry = BitsType::get(owner->getContext(), 1);
+    if (!dimensions.empty())
+      geometry = nodal::ShapedType::get(owner->getContext(), dimensions, geometry);
+    if (failed(inferDigitalStorageMaximumBits(geometry, owner)))
+      return failure();
     if (resolvedSlots.size() >= limits.maximumNodes) {
       (void)reject(use, "resolved hierarchy slots exceed their finite represented-node budget");
       return failure();
@@ -1538,12 +2056,24 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       actual = *resolved;
     }
     unsigned index = resolvedSlots.size();
-    resolvedSlots.push_back(
-        {index, 0, actual, false, !hierarchy->occurrences()[occurrence].generatedScopes.empty()});
+    resolvedSlots.push_back({index, 0, actual, false,
+                             !hierarchy->occurrences()[occurrence].generatedScopes.empty(), shape,
+                             geometry});
     return index;
   };
-  auto joinSlots = [&](unsigned left, unsigned right, bool boundary,
-                       Operation *use) -> LogicalResult {
+  auto joinSlots = [&](unsigned left, unsigned right, bool boundary, Operation *use,
+                       Operation *instance = nullptr) -> LogicalResult {
+    // Compare the two original local geometries before union-find changes their
+    // representatives. Whole-family links preserve every ordered coordinate;
+    // equal flattened cardinality never licenses a permutation or broadcast.
+    const auto &a = resolvedSlots[left];
+    const auto &b = resolvedSlots[right];
+    if (a.shape.dimensions.size() != b.shape.dimensions.size() ||
+        (instance ? !equivalentInstanceDigitalStorageTypes(instance, b.geometry, a.geometry)
+                  : a.shape.owner->getParentOp() != b.shape.owner->getParentOp() ||
+                        !equivalentDigitalStorageTypes(a.geometry, b.geometry,
+                                                       a.shape.owner->getParentOp())))
+      return reject(use, "resolved component families require exact pointwise ordered geometry");
     left = rootSlot(left);
     right = rootSlot(right);
     if (left == right) {
@@ -1572,7 +2102,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       auto found = local.values.find(component.value);
       if (found == local.values.end())
         return reject(context.module, "resolved component lost its actual local dependency root");
-      auto slot = newSlot(occurrence, component.domain, component.value.getDefiningOp());
+      auto slot =
+          newSlot(occurrence, component.domain, component.value.getDefiningOp(), component.shape);
       if (failed(slot))
         return failure();
       if (component.drivers.size() > limits.maximumNodes - resolvedDrivers.size() ||
@@ -1595,7 +2126,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       }
     }
     for (const auto &endpoint : local.graph.resolved.endpoints) {
-      auto slot = newSlot(occurrence, endpoint.domain, endpoint.operation);
+      auto slot = newSlot(occurrence, endpoint.domain, endpoint.operation, endpoint.shape);
       if (failed(slot))
         return failure();
       resolvedEndpoints.emplace(
@@ -1625,7 +2156,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
           resolvedEndpoints.find({*child, endpoint.declaration, endpoint.path.getValue().str()});
       if (parent == resolvedEndpoints.end() || target == resolvedEndpoints.end())
         return reject(endpoint.operation, "resolved boundary lost its exact complete child leaf");
-      if (failed(joinSlots(parent->second, target->second, true, endpoint.operation)))
+      if (failed(joinSlots(parent->second, target->second, true, endpoint.operation,
+                           endpoint.instance)))
         return failure();
     }
   }
@@ -1658,8 +2190,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   for (const auto &split : resolvedSplits) {
     unsigned slot = rootSlot(split.slot);
     if (resolvedSlots[slot].generated)
-      return reject(split.operation,
-                    "resolved split of generated occurrence families requires exact selection-qualified driver proof");
+      return reject(split.operation, "resolved split of generated occurrence families requires "
+                                     "exact selection-qualified driver proof");
     bool joined = resolvedSlots[slot].boundary;
     if (split.operation->hasAttr("hierarchy_driver") && !joined)
       return reject(split.operation,
@@ -1755,11 +2287,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         if (inserted) {
           DigitalResolvedHierarchyComponent result;
           result.occurrence = occurrence;
+          result.shape = endpoint.shape;
           auto values = resolvedGroups.find(root);
           if (values != resolvedGroups.end() && !values->second.empty()) {
             const auto &value = graph.nodes[values->second.front()];
             result.occurrence = value.occurrence;
             result.representative = value.value;
+            result.shape = resolvedSlots[resolvedNodes.lookup(values->second.front())].shape;
           }
           for (const auto &driver : componentDrivers.lookup(root))
             result.drivers.push_back({driver.occurrence, driver.operation});
@@ -1789,6 +2323,31 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   SequentialModelLimits sampleLimits;
   sampleLimits.maximumOperations = limits.maximumNodes;
   Operation *root = hierarchy->occurrences().front().module;
+  // Ordinary selected data retains original source/domain facts. Strict
+  // crossing and waiver sampling additionally needs selected coherent identities
+  // for its own capability contract, which this ordinary slice does not invent.
+  SmallVector<std::pair<unsigned, Operation *>, 8> strictSelections;
+  for (const auto &crossing : graph.crossings)
+    for (const auto &sample : crossing.samples)
+      strictSelections.emplace_back(sample.root, crossing.operation);
+  for (const auto &waiver : graph.waivers)
+    strictSelections.emplace_back(waiver.root, waiver.operation);
+  for (const auto &[root, use] : strictSelections) {
+    DenseSet<unsigned> visited;
+    SmallVector<unsigned, 8> pending{root};
+    while (!pending.empty()) {
+      unsigned id = pending.pop_back_val();
+      if (!visited.insert(id).second)
+        continue;
+      if (failed(spendSelection(use)))
+        return failure();
+      const auto &node = graph.nodes[id];
+      if (node.selectedContext)
+        return reject(use, "selected generated crossing or waiver sampling requires its "
+                           "selection-qualified coherent source proof");
+      pending.append(node.dependencies.begin(), node.dependencies.end());
+    }
+  }
   if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)) ||
       failed(verifyWaiverSourceDependencies(root, graph, sampleLimits)))
     return failure();

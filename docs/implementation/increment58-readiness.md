@@ -1551,3 +1551,34 @@ compile-command/recipe identity parity do not claim a new v1 native install:
 compilation was mocked for recipe comparison, and output comparisons used the
 previous installed binary. Actual new native build/live checks apply only to
 the successor. Required unified-patch blank context markers remain exact.
+
+## Checkpoint 46 — coherent native query and physical target composition
+
+This atomic native prerequisite uses all 341 authored compiler paths from
+`.work/f58-selected-dependencies/shared-native-composition-accepted` manifest
+`a5baeb47`, overlaid only with the explicitly accepted unified target
+`12a1d607` and six maintained Unit files (CMake, hierarchy and four new suites).
+Forty-one paths differ from the preceding commit; no prior compiler source is
+deleted. The six generated Ops evidence entries remain ignored, not source
+files; their exact bytes match the unified build. Supplemental Dialect/Types
+headers map to the recorded authored ODS inputs in generated-provenance.json.
+
+Query compiler `d59b274b` historically passed 16 focused native executables; its
+260 unique CLI runs/270 expectations are separate baseline evidence, not reruns
+on the later target. Unified compiler `fbe93efe` retains dialect `d2da1a96` and
+managed descriptor `ecca89d2`. Its seven direct C++ suites pass 318 cases:
+86 hierarchy, 157 sequential, 31 symbolic, 20 generated occurrence, seven
+selected-child Interface, ten direct Interface and seven typed-fill. These
+embed native IR and have no Scala runner dependency. The corrected hierarchy86
+receipt, not the stale 71-case earlier log, is authoritative.
+
+This commits a matched semantic/target composition, not the stale query target
+alone. Canonical occurrence and logical-port owners remain shared. Source
+fixtures, maintained runner and waveform closure are deliberately deferred to
+the next source checkpoint; no fresh source, target or consumer execution is
+claimed here. Dependent payload target admission and broader electrical
+profiles remain open. F58 is incomplete.
+
+The accepted occurrence test contains one two-space blank line inside its
+embedded raw MLIR fixture (line 68). It is preserved as exact tested input; all
+other staged whitespace checks pass. No semantic test assertion is relaxed.

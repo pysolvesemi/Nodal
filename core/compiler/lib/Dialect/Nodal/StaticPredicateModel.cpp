@@ -1,5 +1,6 @@
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
+#include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalValueModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -85,10 +86,79 @@ bool closed(Operation *op, ArrayRef<StringRef> keys) {
   return path && !path.getValue().empty() && path.getValue().size() <= 4096 &&
          path.getValue() == path.getValue().trim();
 }
+LogicalResult chargeIntegerGraph(const InstantiatedIntegerExpression &expression,
+                                 unsigned &budget) {
+  llvm::DenseSet<const InstantiatedIntegerNode *> visited;
+  SmallVector<std::pair<const InstantiatedIntegerNode *, unsigned>, 8> pending{
+      {expression.root.get(), 0}};
+  while (!pending.empty()) {
+    auto [node, depth] = pending.pop_back_val();
+    if (!consume(budget) || !node || depth >= maximumGuardDepth)
+      return failure();
+    if (!visited.insert(node).second)
+      continue;
+    for (const auto &operand : node->operands)
+      pending.emplace_back(operand.get(), depth + 1);
+  }
+  return success();
+}
+LogicalResult
+validateSelectedCoordinates(ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> substitutions,
+                            Operation *scope, unsigned &budget) {
+  if (!scope || substitutions.size() > maximumGuardDepth)
+    return failure();
+  llvm::DenseSet<Value> identities;
+  for (const auto &[identity, replacement] : substitutions) {
+    auto induction = llvm::dyn_cast<BlockArgument>(identity);
+    Operation *family = induction ? induction.getOwner()->getParentOp() : nullptr;
+    if (!consume(budget) || !induction || induction.getArgNumber() != 0 ||
+        !llvm::isa_and_nonnull<GenerateOp>(family) || !family->isProperAncestor(scope) ||
+        !identities.insert(identity).second || !replacement.root ||
+        replacement.bounds.lower != replacement.root->bounds.lower ||
+        replacement.bounds.upper != replacement.root->bounds.upper)
+      return failure();
+    auto domain = resolveGeneratedDomain(family);
+    if (failed(domain) || domain->induction != identity || !domain->attainedInductionBounds ||
+        replacement.bounds.lower < domain->attainedInductionBounds->lower ||
+        replacement.bounds.upper > domain->attainedInductionBounds->upper)
+      return failure();
+    // Charge each retained replacement node before canonical substitution.
+    if (failed(chargeIntegerGraph(replacement, budget)))
+      return failure();
+  }
+  return success();
+}
+
+// Work preflight only: the Parameter owner still interprets every binding and
+// validates exact declaration/provenance. Charge original parameter SSA inputs
+// before invoking its existing independently bounded selected-instance query.
+LogicalResult chargeInstanceInputs(Operation *instance, Operation *child, unsigned &budget) {
+  llvm::DenseSet<Value> visited;
+  for (Block *block : {instance->getBlock(), &child->getRegion(0).front()})
+    for (Operation &operation : *block) {
+      if (!consume(budget))
+        return failure();
+      StringRef name = operation.getName().getStringRef();
+      if (name != "nodal.parameter_override" && name != "nodal.parameter_value" &&
+          name != "nodal.parameter_constraint")
+        continue;
+      for (Value operand : operation.getOperands())
+        if (failed(chargeValueGraph(operand, budget, visited)))
+          return failure();
+    }
+  return success();
+}
+
 class Query {
 public:
-  explicit Query(bool behavioral = false, unsigned *remainingWork = nullptr)
-      : behavioral(behavioral), remainingWork(remainingWork) {}
+  explicit Query(bool behavioral = false, unsigned *remainingWork = nullptr,
+                 ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> substitutions = {},
+                 Operation *instance = nullptr,
+                 ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> childCoordinates = {},
+                 Operation *rootModule = nullptr, ArrayRef<SelectedIntegerInstanceStep> path = {})
+      : behavioral(behavioral), remainingWork(remainingWork), substitutions(substitutions),
+        instance(instance), childCoordinates(childCoordinates), rootModule(rootModule), path(path) {
+  }
   FailureOr<Activity> value(Value input, Operation *use, unsigned depth = 0) {
     if (!step() || depth >= 128 || !input || !llvm::isa<StaticPredicateType>(input.getType()) ||
         failed(verifyDigitalValueScope(input, use)))
@@ -137,8 +207,38 @@ public:
         return failure();
       if (!left->expression || !right->expression)
         return Activity::Unreachable;
-      auto &a = *left->expression;
-      auto &b = *right->expression;
+      auto a = *left->expression;
+      auto b = *right->expression;
+      if (instance || !path.empty()) {
+        if (!remainingWork)
+          return failure();
+        auto resolve = [&](Value input) {
+          return path.empty() ? resolveSelectedInstanceStructuralIntegerExpression(
+                                    instance, input, op, substitutions, *remainingWork)
+                              : resolveSelectedInstancePathStructuralIntegerExpression(
+                                    rootModule, path, input, op, *remainingWork);
+        };
+        auto selectedLeft = resolve(op->getOperand(0));
+        auto selectedRight = resolve(op->getOperand(1));
+        if (failed(selectedLeft) || failed(selectedRight))
+          return failure();
+        if (!selectedLeft->expression || !selectedRight->expression)
+          return Activity::Unreachable;
+        a = *selectedLeft->expression;
+        b = *selectedRight->expression;
+      }
+      auto localCoordinates = instance || !path.empty() ? childCoordinates : substitutions;
+      if (!localCoordinates.empty()) {
+        if (!remainingWork || failed(chargeIntegerGraph(a, *remainingWork)) ||
+            failed(chargeIntegerGraph(b, *remainingWork)))
+          return failure();
+        auto selectedLeft = substituteIntegerExpression(a, localCoordinates);
+        auto selectedRight = substituteIntegerExpression(b, localCoordinates);
+        if (failed(selectedLeft) || failed(selectedRight))
+          return failure();
+        a = *selectedLeft;
+        b = *selectedRight;
+      }
       if (remainingWork) {
         llvm::DenseSet<std::pair<const InstantiatedIntegerNode *, const InstantiatedIntegerNode *>>
             visited;
@@ -208,6 +308,11 @@ private:
   bool step() { return ++work <= maximumGuardWork && (!remainingWork || consume(*remainingWork)); }
   bool behavioral;
   unsigned *remainingWork;
+  ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> substitutions;
+  Operation *instance;
+  ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> childCoordinates;
+  Operation *rootModule;
+  ArrayRef<SelectedIntegerInstanceStep> path;
   unsigned work = 0;
   llvm::DenseMap<Value, Activity> memo;
   llvm::DenseSet<Value> active;
@@ -272,13 +377,63 @@ public:
         auto lr = equal(left, comparison->right), rl = equal(right, comparison->left);
         if (failed(ll) || failed(rr) || failed(lr) || failed(rl))
           return failure();
-        unsigned mask = outcomes(literal);
+        unsigned original = outcomes(literal);
+        unsigned mask = original;
         if (*lr && *rl)
           mask = ((mask & 1) << 2) | (mask & 2) | ((mask & 4) >> 2);
         else if (!(*ll && *rr))
-          continue;
-        if ((mask & ~wanted) == 0)
+          mask = 7;
+        if ((mask & ~wanted) == 0) {
           proved = true;
+          continue;
+        }
+        // Reuse checked identity and interval bounds around one authored comparison.
+        // L <= a, a < b, b <= R proves L < R without narrowing any domain.
+        auto boundedLess = [&](const InstantiatedIntegerExpression &a,
+                               const InstantiatedIntegerExpression &b,
+                               bool allowEqual) -> FailureOr<bool> {
+          auto same = equal(a, b);
+          if (failed(same))
+            return failure();
+          return *same ? allowEqual
+                       : (allowEqual ? a.bounds.upper <= b.bounds.lower
+                                     : a.bounds.upper < b.bounds.lower);
+        };
+        auto through = [&](const InstantiatedIntegerExpression &a,
+                           const InstantiatedIntegerExpression &b,
+                           unsigned relation) -> FailureOr<bool> {
+          auto same = equal(a, b);
+          if (failed(same))
+            return failure();
+          unsigned attainable =
+              *same
+                  ? 2
+                  : (a.bounds.lower < b.bounds.upper ? 1 : 0) |
+                        (a.bounds.lower <= b.bounds.upper && b.bounds.lower <= a.bounds.upper ? 2
+                                                                                              : 0) |
+                        (a.bounds.upper > b.bounds.lower ? 4 : 0);
+          unsigned possible = relation & attainable;
+          if (!possible || (possible & ~3))
+            return false;
+          auto before = boundedLess(left, a, true), after = boundedLess(b, right, true);
+          if (failed(before) || failed(after))
+            return failure();
+          if (!*before || !*after)
+            return false;
+          if (inclusive || (possible & ~1) == 0)
+            return true;
+          auto strictBefore = boundedLess(left, a, false),
+               strictAfter = boundedLess(b, right, false);
+          if (failed(strictBefore) || failed(strictAfter))
+            return failure();
+          return *strictBefore || *strictAfter;
+        };
+        auto forward = through(comparison->left, comparison->right, original);
+        auto backward = through(comparison->right, comparison->left,
+                                ((original & 1) << 2) | (original & 2) | ((original & 4) >> 2));
+        if (failed(forward) || failed(backward))
+          return failure();
+        proved |= *forward || *backward;
       }
       if (!proved)
         return false;
@@ -501,6 +656,109 @@ FailureOr<StaticPredicateFacts> analyzeStaticPredicate(Value predicate, Operatio
   auto result = Query().value(predicate, use);
   return failed(result) ? FailureOr<StaticPredicateFacts>(failure())
                         : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+}
+FailureOr<StaticPredicateFacts>
+analyzeStaticPredicate(Value predicate, Operation *use,
+                       ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> substitutions,
+                       unsigned &remainingWork) {
+  unsigned available = std::min(remainingWork, maximumGuardWork), budget = available;
+  auto finish = [&](FailureOr<Activity> result) -> FailureOr<StaticPredicateFacts> {
+    remainingWork -= available - budget;
+    return failed(result)
+               ? FailureOr<StaticPredicateFacts>(failure())
+               : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+  };
+  // Never use a narrowed coordinate to excuse an invalid original predicate.
+  auto original = Query(false, &budget).value(predicate, use);
+  if (failed(original) || !use || substitutions.size() > maximumGuardDepth)
+    return finish(failure());
+  if (failed(validateSelectedCoordinates(substitutions, use, budget)))
+    return finish(failure());
+  if (substitutions.empty())
+    return finish(original);
+  return finish(Query(false, &budget, substitutions).value(predicate, use));
+}
+FailureOr<StaticPredicateFacts> analyzeSelectedInstanceStaticPredicate(
+    Value predicate, Operation *use, Operation *instance,
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> coordinates,
+    unsigned &remainingWork) {
+  return analyzeSelectedInstanceStaticPredicate(predicate, use, instance, coordinates, {},
+                                                remainingWork);
+}
+FailureOr<StaticPredicateFacts> analyzeSelectedInstanceStaticPredicate(
+    Value predicate, Operation *use, Operation *instance,
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> coordinates,
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> childCoordinates,
+    unsigned &remainingWork) {
+  unsigned available = std::min(remainingWork, maximumGuardWork), budget = available;
+  auto finish = [&](FailureOr<Activity> result) -> FailureOr<StaticPredicateFacts> {
+    remainingWork -= available - budget;
+    return failed(result)
+               ? FailureOr<StaticPredicateFacts>(failure())
+               : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+  };
+  auto original = Query(false, &budget).value(predicate, use);
+  Operation *child = instance ? resolveInstanceModuleDefinition(instance) : nullptr;
+  if (failed(original) || !use || !child || !child->isProperAncestor(use) ||
+      !isa_and_nonnull<GenerateOp>(instance->getParentOp()) || coordinates.empty() ||
+      failed(validateSelectedCoordinates(coordinates, instance, budget)) ||
+      failed(validateSelectedCoordinates(childCoordinates, use, budget)) ||
+      failed(chargeInstanceInputs(instance, child, budget)))
+    return finish(failure());
+  return finish(
+      Query(false, &budget, coordinates, instance, childCoordinates).value(predicate, use));
+}
+FailureOr<StaticPredicateFacts> analyzeSelectedInstancePathStaticPredicate(
+    Value predicate, Operation *use, Operation *rootModule,
+    ArrayRef<SelectedIntegerInstanceStep> path,
+    ArrayRef<std::pair<Value, InstantiatedIntegerExpression>> childCoordinates,
+    unsigned &remainingWork) {
+  unsigned available = std::min(remainingWork, maximumGuardWork), budget = available;
+  auto finish = [&](FailureOr<Activity> result) -> FailureOr<StaticPredicateFacts> {
+    remainingWork -= available - budget;
+    return failed(result)
+               ? FailureOr<StaticPredicateFacts>(failure())
+               : FailureOr<StaticPredicateFacts>(StaticPredicateFacts{predicate, *result});
+  };
+  auto original = Query(false, &budget).value(predicate, use);
+  Operation *outer = rootModule ? rootModule->getParentOp() : nullptr;
+  auto selector =
+      outer ? outer->getAttrOfType<FlatSymbolRefAttr>("nodal.root.module") : FlatSymbolRefAttr();
+  if (failed(original) || !use || !isa_and_nonnull<ModuleOp>(rootModule) ||
+      !isa_and_nonnull<mlir::ModuleOp>(outer) || !selector ||
+      SymbolTable::lookupSymbolIn(outer, selector) != rootModule || path.empty() ||
+      path.size() > maximumGuardDepth ||
+      failed(validateSelectedCoordinates(childCoordinates, use, budget)))
+    return finish(failure());
+  Operation *expected = rootModule;
+  llvm::DenseSet<Operation *> modules{rootModule}, edges;
+  bool selected = !childCoordinates.empty();
+  for (const auto &step : path) {
+    Operation *instance = step.instance;
+    Operation *child = instance ? resolveInstanceModuleDefinition(instance) : nullptr;
+    if (!consume(budget) || !instance || !child ||
+        instance->getParentOfType<ModuleOp>() != expected || !edges.insert(instance).second ||
+        !modules.insert(child).second ||
+        failed(validateSelectedCoordinates(step.coordinates, instance, budget)) ||
+        failed(chargeInstanceInputs(instance, child, budget)))
+      return finish(failure());
+    if (failed(verifyGeneratedStructuralOwnership(instance)))
+      return finish(failure());
+    for (Operation *scope = instance->getParentOp(); scope && scope != expected;
+         scope = scope->getParentOp()) {
+      if (!consume(budget) || !isa<GenerateOp>(scope))
+        return finish(failure());
+      auto domain = resolveGeneratedDomain(scope);
+      if (failed(domain) || !domain->attainedInductionBounds)
+        return finish(failure());
+    }
+    selected |= !step.coordinates.empty();
+    expected = child;
+  }
+  if (!selected || use->getParentOfType<ModuleOp>() != expected)
+    return finish(failure());
+  return finish(
+      Query(false, &budget, {}, nullptr, childCoordinates, rootModule, path).value(predicate, use));
 }
 FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(Value predicate, Operation *use) {
   auto result = Query(true).value(predicate, use);

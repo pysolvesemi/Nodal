@@ -1,9 +1,11 @@
 #include "nodal/Dialect/Nodal/ShapeModel.h"
 
+#include "mlir/IR/SymbolTable.h"
 #include "nodal/Dialect/Nodal/DigitalCollectionModel.h"
 #include "nodal/Dialect/Nodal/DigitalLoopModel.h"
 #include "nodal/Dialect/Nodal/DigitalRegionModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
@@ -478,7 +480,7 @@ resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
   // chain. Substitute its exact induction identities in this query, never in the
   // declaration's retained domain or maximum trip count. A captured family view
   // need not expose its parent's ordinal as a fresh SSA use in the current arm.
-  llvm::DenseMap<Value, InstantiatedIntegerExpression> substitutions;
+  llvm::SmallVector<std::pair<Value, InstantiatedIntegerExpression>, 2> substitutions;
   Operation *previous = nullptr;
   for (const auto &selection : prefix) {
     Operation *ancestor = selection.family;
@@ -487,43 +489,13 @@ resolveGeneratedOrdinal(Operation *family, Value ordinal, Operation *use,
         !llvm::hasSingleElement(ancestor->getRegion(0)) ||
         ancestor->getRegion(0).front().getNumArguments() == 0 || !selection.coordinate.root)
       return failure();
-    substitutions.try_emplace(ancestor->getRegion(0).front().getArgument(0), selection.coordinate);
+    substitutions.emplace_back(ancestor->getRegion(0).front().getArgument(0), selection.coordinate);
     previous = ancestor;
   }
-  using Node = InstantiatedIntegerNode;
-  llvm::DenseMap<const Node *, InstantiatedIntegerExpression> memo;
-  unsigned remaining = 65536;
-  auto substitute = [&](auto &&self, const std::shared_ptr<const Node> &node,
-                        unsigned depth) -> FailureOr<InstantiatedIntegerExpression> {
-    if (!node || depth > 128 || !remaining)
-      return failure();
-    --remaining;
-    if (auto found = memo.find(node.get()); found != memo.end())
-      return found->second;
-    InstantiatedIntegerExpression result{node, node->bounds};
-    if (node->kind == Node::Kind::OpaqueValue) {
-      if (auto found = substitutions.find(node->identity); found != substitutions.end())
-        result = found->second;
-    } else if (node->kind == Node::Kind::Apply) {
-      llvm::SmallVector<InstantiatedIntegerExpression, 4> operands;
-      for (const auto &operand : node->operands) {
-        auto mapped = self(self, operand, depth + 1);
-        if (failed(mapped))
-          return failure();
-        operands.push_back(*mapped);
-      }
-      auto mapped = composeIntegerExpression(node->opcode, operands);
-      if (failed(mapped))
-        return failure();
-      result = *mapped;
-    }
-    memo.try_emplace(node.get(), result);
-    return result;
-  };
   if (!prefix.empty()) {
-    auto lower = substitute(substitute, domain->lower.root, 0);
-    auto upper = substitute(substitute, domain->upperExclusive.root, 0);
-    auto step = substitute(substitute, domain->step.root, 0);
+    auto lower = substituteIntegerExpression(domain->lower, substitutions);
+    auto upper = substituteIntegerExpression(domain->upperExclusive, substitutions);
+    auto step = substituteIntegerExpression(domain->step, substitutions);
     if (failed(lower) || failed(upper) || failed(step) || step->bounds.lower <= 0)
       return failure();
     domain->lower = *lower;
@@ -1020,6 +992,81 @@ private:
       equalities;
 };
 
+/// Physical declaration identity and an independently inspected selected prefix.
+/// The aliases remain original SSA values; no synthetic root or lane is allocated.
+struct PhysicalRoot {
+  Operation *owner = nullptr;
+  Operation *member = nullptr;
+  StringAttr path;
+  SmallVector<GeneratedSelection, 2> selections;
+};
+FailureOr<PhysicalRoot> physicalRoot(Value root, RegionQuery &query) {
+  Operation *operation = root ? root.getDefiningOp() : nullptr;
+  if (!operation || !query.spend())
+    return failure();
+  PhysicalRoot result{operation};
+  Operation *selection = nullptr;
+  if (isa<InstancePortOp>(operation)) {
+    auto boundary = inspectInstancePort(operation);
+    if (failed(boundary))
+      return failure();
+    result.owner = boundary->instance;
+    result.member = boundary->port;
+    selection = boundary->selection;
+  } else if (isa<MemberAccessOp>(operation) && hasDigitalInterfaceContract(operation)) {
+    auto member = inspectDigitalInterfaceMember(operation);
+    if (failed(member))
+      return failure();
+    result.owner = member->instance ? member->instance : member->endpoint;
+    result.member = member->endpoint;
+    result.path = member->path;
+    selection = member->selection;
+  } else if (isa<PortValueOp>(operation)) {
+    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("port");
+    auto module = operation->getParentOfType<nodal::ModuleOp>();
+    result.owner = reference && module ? SymbolTable::lookupSymbolIn(module, reference) : nullptr;
+    if (!isa_and_nonnull<PortOp>(result.owner))
+      return failure();
+  } else if (isa<GeneratedMemberOp>(operation)) {
+    auto member = inspectGeneratedMember(operation);
+    if (failed(member) || member->familyView)
+      return failure();
+    result.owner = member->storage.getDefiningOp();
+    result.selections = std::move(member->selections);
+  }
+  if (selection) {
+    auto key = selection->getAttrOfType<StringAttr>("member");
+    auto proof = key && selection->getNumOperands() == 2
+                     ? inspectGeneratedSelection(selection->getOperand(0), selection->getOperand(1),
+                                                 key.getValue(), selection)
+                     : FailureOr<GeneratedSelectionProof>(failure());
+    if (failed(proof))
+      return failure();
+    result.selections = std::move(proof->selections);
+  }
+  return result;
+}
+/// Missing selected coordinates denote the authored template's full family,
+/// not a distinct domainless root. Existence is already checked by the selector.
+std::optional<ShapeRegionOverlap>
+comparePhysicalRoots(const PhysicalRoot &left, const PhysicalRoot &right, RegionQuery &query) {
+  if (left.owner != right.owner || left.member != right.member || left.path != right.path)
+    return ShapeRegionOverlap::Disjoint;
+  if (left.selections.empty() || right.selections.empty())
+    return ShapeRegionOverlap::Overlapping;
+  if (left.selections.size() != right.selections.size())
+    return std::nullopt;
+  bool equal = true;
+  for (auto [a, b] : llvm::zip(left.selections, right.selections)) {
+    if (!query.spend() || a.family != b.family)
+      return std::nullopt;
+    if (query.less(a.coordinate, b.coordinate) || query.less(b.coordinate, a.coordinate))
+      return ShapeRegionOverlap::Disjoint;
+    equal &= query.equal(a.coordinate, b.coordinate);
+  }
+  return equal ? std::optional<ShapeRegionOverlap>(ShapeRegionOverlap::Overlapping) : std::nullopt;
+}
+
 RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &query,
                           StaticShapeRegion &result, bool physicalSelectors = false,
                           std::optional<IntegerExpression> logicalOrdinal = std::nullopt,
@@ -1041,6 +1088,15 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
         proofUse = last;
         break;
       }
+  }
+  // A relation may compare a read with a later writer or another lexical
+  // alias. Recheck each original SSA chain at its actual definition instead of
+  // granting visibility at the relation's diagnostic use. Access/capture rights
+  // remain the caller's independently checked operation contract.
+  if (iterationImages) {
+    Operation *definition = selected.getDefiningOp();
+    if (definition && !precedesLexically(definition, proofUse))
+      proofUse = definition;
   }
   auto verified = resolveStaticShapeProjection(selected, proofUse);
   if (failed(verified) || verified->root != projection.root ||
@@ -1873,13 +1929,102 @@ ShapeRegionProofStatus verifyStaticShapeIterationPredecessorSeed(const StaticSha
   return query.status;
 }
 
-StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &left,
-                                                 const StaticShapeProjection &right, Operation *use,
-                                                 ShapeRegionProofLimits limits) {
+namespace {
+RegionStatus specializeRegion(StaticShapeRegion &region, ArrayRef<GeneratedSelection> selections,
+                              RegionQuery &query) {
+  if (selections.empty())
+    return RegionStatus::Proved;
+  SmallVector<std::pair<Value, IntegerExpression>, 4> substitutions;
+  for (const auto &selection : selections) {
+    if (!query.spend() || !isa_and_nonnull<GenerateOp>(selection.family) ||
+        selection.family->getNumRegions() != 1 || !selection.family->getRegion(0).hasOneBlock() ||
+        !selection.coordinate.root)
+      return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
+    substitutions.emplace_back(selection.family->getRegion(0).front().getArgument(0),
+                               selection.coordinate);
+  }
+  auto substitute = [&](IntegerExpression &expression) {
+    if (!expression.root)
+      return true;
+    if (!query.spend())
+      return false;
+    auto result = substituteIntegerExpression(expression, substitutions);
+    if (failed(result))
+      return false;
+    expression = *result;
+    return true;
+  };
+  SmallVector<StaticShapeIterationImage, 2> retained;
+  bool selectedMap = false;
+  for (unsigned i = 0; i != region.iterationCount(); ++i) {
+    auto map = region.iterationAt(i);
+    auto selection =
+        llvm::find_if(selections, [&](const auto &entry) { return entry.family == map.loop; });
+    if (selection == selections.end()) {
+      retained.push_back(std::move(map));
+      continue;
+    }
+    RegionAxis *axis = map.varyingAxis ? &region.axes[*map.varyingAxis] : &region.interval;
+    auto displacement = query.apply("sub", selection->coordinate, map.domain.lower);
+    auto scaled =
+        displacement ? query.apply("mul", *displacement, map.occurrenceWidth) : std::nullopt;
+    auto lower = scaled ? query.apply("add", axis->lower, *scaled) : std::nullopt;
+    auto upper = lower ? query.apply("add", *lower, map.occurrenceWidth) : std::nullopt;
+    if (!lower || !upper)
+      return query.failedStatus();
+    *axis = {*lower, *upper};
+    selectedMap = true;
+  }
+  region.iteration.reset();
+  region.outerIterations.clear();
+  if (!retained.empty()) {
+    region.iteration = retained.pop_back_val();
+    region.outerIterations = std::move(retained);
+  }
+  for (auto &axis : region.axes)
+    if (!substitute(axis.lower) || !substitute(axis.upperExclusive))
+      return query.failedStatus();
+  if (!substitute(region.interval.lower) || !substitute(region.interval.upperExclusive))
+    return query.failedStatus();
+  if (selectedMap && region.kind == StaticShapeRegion::Kind::Whole)
+    region.kind = region.interval.lower.root ? StaticShapeRegion::Kind::Interval
+                                             : StaticShapeRegion::Kind::Box;
+  return query.status;
+}
+RegionStatus specializePhysicalRoot(PhysicalRoot &root, ArrayRef<GeneratedSelection> selections,
+                                    RegionQuery &query) {
+  for (const auto &selection : selections) {
+    if (!query.spend())
+      return query.status;
+    if (!selection.family || !root.owner || !selection.family->isProperAncestor(root.owner))
+      continue;
+    auto known = llvm::find_if(root.selections,
+                               [&](const auto &entry) { return entry.family == selection.family; });
+    if (known == root.selections.end())
+      root.selections.push_back(selection);
+    else
+      *known = selection;
+  }
+  // Inspector prefixes and query contexts both retain actual ancestry order.
+  llvm::sort(root.selections, [](const auto &a, const auto &b) {
+    return a.family != b.family && a.family->isProperAncestor(b.family);
+  });
+  return query.status;
+}
+} // namespace
+
+StaticShapeOverlap compareStaticShapeContextualProjections(
+    const StaticShapeProjection &left, ArrayRef<GeneratedSelection> leftContext,
+    const StaticShapeProjection &right, ArrayRef<GeneratedSelection> rightContext, Operation *use,
+    ShapeRegionProofLimits limits) {
   RegionQuery query(use, limits);
   auto unknown = [&](RegionStatus status) {
     return StaticShapeOverlap{status, ShapeRegionOverlap::Unknown};
   };
+  auto leftRoot = physicalRoot(left.root, query), rightRoot = physicalRoot(right.root, query);
+  if (failed(leftRoot) || failed(rightRoot))
+    return unknown(query.status == RegionStatus::ResourceLimit ? query.status
+                                                               : RegionStatus::Invalid);
   StaticShapeRegion a, b;
   auto status = deriveRegion(left, query, a, true, std::nullopt, true);
   if (status != RegionStatus::Proved)
@@ -1887,9 +2032,26 @@ StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &le
   status = deriveRegion(right, query, b, true, std::nullopt, true);
   if (status != RegionStatus::Proved)
     return unknown(status);
-  if (a.root != b.root || a.kind == StaticShapeRegion::Kind::Empty ||
-      b.kind == StaticShapeRegion::Kind::Empty)
+  if (a.kind == StaticShapeRegion::Kind::Empty || b.kind == StaticShapeRegion::Kind::Empty)
     return {RegionStatus::Proved, ShapeRegionOverlap::Disjoint};
+  status = specializeRegion(a, leftContext, query);
+  if (status != RegionStatus::Proved)
+    return unknown(status);
+  status = specializeRegion(b, rightContext, query);
+  if (status != RegionStatus::Proved)
+    return unknown(status);
+  if (specializePhysicalRoot(*leftRoot, leftContext, query) != RegionStatus::Proved ||
+      specializePhysicalRoot(*rightRoot, rightContext, query) != RegionStatus::Proved)
+    return unknown(query.failedStatus());
+  auto physical = comparePhysicalRoots(*leftRoot, *rightRoot, query);
+  if (physical == ShapeRegionOverlap::Disjoint)
+    return {query.status, *physical};
+  if (!physical)
+    return unknown(query.failedStatus());
+  if (a.kind == StaticShapeRegion::Kind::Whole && b.kind == StaticShapeRegion::Kind::Whole)
+    return {query.status, ShapeRegionOverlap::Overlapping};
+  if (a.root != b.root && a.root.getType() != b.root.getType())
+    return unknown(RegionStatus::Unsupported);
   if (auto strided = compareStridedImages(a, b, query))
     return {query.status != RegionStatus::Proved      ? query.status
             : *strided == ShapeRegionOverlap::Unknown ? RegionStatus::Unsupported
@@ -1953,6 +2115,58 @@ StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &le
       uncertain |= overlap == ShapeRegionOverlap::Unknown;
     }
   return result(uncertain ? ShapeRegionOverlap::Unknown : ShapeRegionOverlap::Disjoint);
+}
+
+StaticShapeOverlap compareStaticShapeProjections(const StaticShapeProjection &left,
+                                                 const StaticShapeProjection &right, Operation *use,
+                                                 ShapeRegionProofLimits limits) {
+  return compareStaticShapeContextualProjections(left, {}, right, {}, use, limits);
+}
+
+ShapeRegionProofStatus proveStaticShapeProjectionIdentity(const StaticShapeProjection &left,
+                                                          const StaticShapeProjection &right,
+                                                          Operation *use,
+                                                          ShapeRegionProofLimits limits) {
+  RegionQuery query(use, limits);
+  auto aRoot = physicalRoot(left.root, query), bRoot = physicalRoot(right.root, query);
+  if (failed(aRoot) || failed(bRoot))
+    return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
+  StaticShapeRegion a, b;
+  auto status = deriveRegion(left, query, a, true, std::nullopt, true);
+  if (status != RegionStatus::Proved)
+    return status;
+  status = deriveRegion(right, query, b, true, std::nullopt, true);
+  if (status != RegionStatus::Proved)
+    return status;
+  if (aRoot->owner != bRoot->owner || aRoot->member != bRoot->member ||
+      aRoot->path != bRoot->path || aRoot->selections.size() != bRoot->selections.size() ||
+      a.root.getType() != b.root.getType())
+    return RegionStatus::Unsupported;
+  for (auto [x, y] : llvm::zip(aRoot->selections, bRoot->selections))
+    if (x.family != y.family || !query.equal(x.coordinate, y.coordinate))
+      return query.failedStatus();
+  // Rebase only these query-local regions after proving exact physical identity.
+  // Their original SSA chains above remain the sole verification evidence.
+  b.root = a.root;
+  if (a.iteration || b.iteration)
+    return sameImage(a, b, query) ? query.status : query.failedStatus();
+  auto dimensions = query.dimensions(a.root.getType());
+  if (!dimensions)
+    return query.failedStatus();
+  auto first = regionBox(a, query, *dimensions), second = regionBox(b, query, *dimensions);
+  if (first && second) {
+    if (first->size() != second->size())
+      return RegionStatus::Unsupported;
+    for (auto [x, y] : llvm::zip(*first, *second))
+      if (!query.equal(x.lower, y.lower) || !query.equal(x.upperExclusive, y.upperExclusive))
+        return query.failedStatus();
+    return query.status;
+  }
+  auto x = regionInterval(a, query, *dimensions), y = regionInterval(b, query, *dimensions);
+  return x && y && query.equal(x->lower, y->lower) &&
+                 query.equal(x->upperExclusive, y->upperExclusive)
+             ? query.status
+             : query.failedStatus();
 }
 
 static ShapeRegionProofStatus verifyRegionCoverage(Value root,
@@ -2166,20 +2380,35 @@ verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
                                     llvm::ArrayRef<StaticShapeProjection> writes, Operation *use,
                                     ShapeRegionProofLimits limits) {
   RegionQuery query(use, limits);
-  SmallVector<StaticShapeRegion, 4> regions;
-  for (const auto &write : writes) {
-    if (write.root != read.root)
-      return RegionStatus::Invalid;
-    StaticShapeRegion region;
-    auto status = deriveRegion(write, query, region, true, std::nullopt, true);
-    if (status != RegionStatus::Proved)
-      return status;
-    regions.push_back(std::move(region));
-  }
+  auto readRoot = physicalRoot(read.root, query);
+  if (failed(readRoot))
+    return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
   StaticShapeRegion selected;
   auto status = deriveRegion(read, query, selected, true, std::nullopt, true);
   if (status != RegionStatus::Proved)
     return status;
+  SmallVector<StaticShapeRegion, 4> regions;
+  for (const auto &write : writes) {
+    auto writeRoot = physicalRoot(write.root, query);
+    if (failed(writeRoot))
+      return query.status == RegionStatus::ResourceLimit ? query.status : RegionStatus::Invalid;
+    StaticShapeRegion region;
+    status = deriveRegion(write, query, region, true, std::nullopt, true);
+    if (status != RegionStatus::Proved)
+      return status;
+    auto relation = comparePhysicalRoots(*readRoot, *writeRoot, query);
+    if (relation == ShapeRegionOverlap::Disjoint)
+      continue;
+    if (!relation || (readRoot->selections.empty() && !writeRoot->selections.empty()))
+      return query.failedStatus();
+    if (region.root.getType() != read.root.getType() &&
+        region.kind != StaticShapeRegion::Kind::Whole)
+      return RegionStatus::Unsupported;
+    // Exact equal selected contexts, or an authored whole family covering the
+    // checked selected occurrence. Never widen a selected writer to its template.
+    region.root = read.root;
+    regions.push_back(std::move(region));
+  }
   if (selected.kind == StaticShapeRegion::Kind::Empty)
     return RegionStatus::Proved;
   const bool stridedRead = stridedImage(selected);
@@ -2189,7 +2418,7 @@ verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
       if (!sameImage(selected, regions[i], query))
         continue;
       bool disjoint = true;
-      for (unsigned j = 0; j != writes.size(); ++j) {
+      for (unsigned j = 0; j != regions.size(); ++j) {
         if (i == j)
           continue;
         if (!query.spend())

@@ -10,6 +10,38 @@ struct StaticPredicateFacts {
 mlir::FailureOr<StaticPredicateFacts>
 analyzeStaticPredicate(mlir::Value predicate, mlir::Operation *use,
                        const ParameterIntegerEnvironment *environment = nullptr);
+/// Query-local specialization of independently checked generated coordinates.
+/// Validates the original lexical/all-lane predicate before narrowing exact
+/// ancestor induction identities. This grants no selection/existence capability.
+/// All visits consume the caller's shared work budget; Either stays conservative.
+mlir::FailureOr<StaticPredicateFacts> analyzeStaticPredicate(
+    mlir::Value predicate, mlir::Operation *use,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> substitutions,
+    unsigned &remainingWork);
+/// Specialize original child structural predicate Integer operands through
+/// the exact generated instance binding and independently checked parent prefix.
+/// This retains original all-lane validation and exact regional captures.
+/// Descendant binding chains remain separate.
+mlir::FailureOr<StaticPredicateFacts> analyzeSelectedInstanceStaticPredicate(
+    mlir::Value predicate, mlir::Operation *use, mlir::Operation *instance,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> coordinates,
+    unsigned &remainingWork);
+/// Compose independently checked child-local induction coordinates with the
+/// exact actual parent-instance bindings. Neither prefix grants existence or
+/// lexical access, and unresolved symbolic coordinates remain conservative.
+mlir::FailureOr<StaticPredicateFacts> analyzeSelectedInstanceStaticPredicate(
+    mlir::Value predicate, mlir::Operation *use, mlir::Operation *instance,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> parentCoordinates,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> childCoordinates,
+    unsigned &remainingWork);
+/// Selected predicate in an exact complete original root-to-leaf actual path.
+/// Every edge retains its own parent-coordinate prefix; the final local prefix
+/// is independently checked at use. No suffix may silently rebase its root.
+mlir::FailureOr<StaticPredicateFacts> analyzeSelectedInstancePathStaticPredicate(
+    mlir::Value predicate, mlir::Operation *use, mlir::Operation *rootModule,
+    llvm::ArrayRef<SelectedIntegerInstanceStep> path,
+    llvm::ArrayRef<std::pair<mlir::Value, InstantiatedIntegerExpression>> childCoordinates,
+    unsigned &remainingWork);
 mlir::FailureOr<StaticPredicateFacts> analyzeBehavioralStaticPredicate(mlir::Value predicate,
                                                                        mlir::Operation *use);
 /// Conservative exclusivity of actual owned Bits<1> guards. Supports Boolean

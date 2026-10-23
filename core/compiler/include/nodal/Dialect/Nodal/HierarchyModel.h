@@ -104,6 +104,8 @@ struct InstancePort {
   mlir::Operation *instance;
   mlir::Operation *module;
   mlir::Operation *port;
+  /// Actual selected boundary operation; no cloned occurrence or serialized prefix.
+  mlir::Operation *selection = nullptr;
 };
 mlir::FailureOr<InstancePort> inspectInstancePort(mlir::Operation *operation);
 mlir::LogicalResult verifyRequirementProjection(mlir::Operation *operation);

@@ -4,16 +4,23 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Support/LogicalResult.h"
+#include "nodal/Dialect/Nodal/ShapeModel.h"
 
 #include "llvm/ADT/SmallVector.h"
 
 namespace nodal {
+/// Resolve the original endpoint's actual lexical definition, preserving regional
+/// precedence and scope. This shallow query does not build a connectivity graph.
+mlir::FailureOr<mlir::Operation *> resolveDigitalInterfaceDefinition(mlir::Operation *endpoint);
+
 /// Original endpoint facts, never copied role/access claims from a projection.
 struct DigitalInterfaceBoundary {
   mlir::Operation *instance = nullptr;
   mlir::Operation *module = nullptr;
   mlir::Operation *endpoint = nullptr;
   mlir::FlatSymbolRefAttr domain;
+  /// Actual selected boundary operation; shared family inspector owns its prefix.
+  mlir::Operation *selection = nullptr;
 };
 mlir::FailureOr<DigitalInterfaceBoundary>
 inspectDigitalInterfaceBoundary(mlir::Operation *operation);
@@ -24,6 +31,8 @@ struct DigitalInterfaceMember {
   mlir::Operation *module = nullptr;
   mlir::StringAttr path;
   mlir::StringAttr access;
+  /// Null for an ordinary declaration, otherwise the original selected boundary.
+  mlir::Operation *selection = nullptr;
 };
 mlir::FailureOr<DigitalInterfaceMember> inspectDigitalInterfaceMember(mlir::Operation *operation);
 
@@ -82,6 +91,8 @@ struct DigitalInterfaceEndpoint {
   mlir::FlatSymbolRefAttr domain;
   mlir::ArrayAttr dimensions;
   llvm::SmallVector<DigitalInterfaceLeaf> leaves;
+  /// Retains selected occurrence provenance without copying a family/prefix registry.
+  mlir::Operation *selection = nullptr;
 };
 /// Validate once per owning module and transactionally append all endpoints and
 /// complete selected-role leaves in authored declaration order. These are
@@ -97,6 +108,26 @@ collectDigitalInterfaceEndpoints(mlir::Operation *module,
                                  llvm::SmallVectorImpl<DigitalInterfaceAccess> *accesses);
 /// Per-use independent ingress. Bulk consumers use the combined collector once.
 mlir::FailureOr<DigitalInterfaceAccess> resolveDigitalInterfaceAccess(mlir::Value value);
+
+/// Original whole authored driver, including unreachable generated templates.
+/// No live dependency, selected occurrence, layout or physical slot is implied.
+struct DigitalInterfaceTemplateDriver {
+  mlir::Value root, source;
+  mlir::Operation *effect = nullptr;
+  mlir::Operation *family = nullptr;
+};
+/// Ordered, transactional batch from one verified Interface model. Each seed is
+/// an original whole generated member and its actual final body operation.
+/// Duplicate seeds retain order and are charged, but share the checked proof.
+mlir::FailureOr<llvm::SmallVector<DigitalInterfaceTemplateDriver, 4>>
+inspectGeneratedInterfaceTemplateDrivers(
+    mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds);
+
+/// Shared query-local work accounting for complete boundary inventory plus its
+/// downstream logical leaf traversal. This does not accept cached proof facts.
+mlir::LogicalResult collectDigitalInterfaceEndpoints(
+    mlir::Operation *module, llvm::SmallVectorImpl<DigitalInterfaceEndpoint> &endpoints,
+    llvm::SmallVectorImpl<DigitalInterfaceAccess> *accesses, unsigned &work);
 
 /// Verified implicit read edges for actual typed member/net values. Canonical
 /// aliases and pass-through components share one physical identity; resolution
@@ -124,6 +155,18 @@ struct DigitalInterfaceObservationGroup {
   mlir::FlatSymbolRefAttr domain;
   llvm::SmallVector<mlir::Value, 2> values;
 };
+/// Checked geometry of one pointwise component family, not physical identity.
+/// The exact original local endpoint operation owns these canonical dimension
+/// tokens. Ordered outer Interface axes stay separate from the scalar payload.
+/// Empty dimensions denote the existing singleton component. Every current
+/// connection preserves the coordinate tuple; no broadcast/reshape is implied.
+struct DigitalResolvedShape {
+  mlir::Operation *owner = nullptr;
+  mlir::ArrayAttr dimensions;
+  /// Canonical ShapeModel proofs in the same axis order. Parameters and
+  /// expressions retain their actual declarations/SSA, never sampled defaults.
+  llvm::SmallVector<StaticShapeDimension, 2> axes;
+};
 /// Existing local resolution facts, not another net allocation or topology owner.
 struct DigitalResolvedComponent {
   mlir::Value value;
@@ -132,6 +175,7 @@ struct DigitalResolvedComponent {
   llvm::SmallVector<mlir::Value, 2> values;
   llvm::SmallVector<mlir::Operation *, 2> drivers, splits;
   llvm::SmallVector<mlir::Operation *, 2> externalContributions;
+  DigitalResolvedShape shape;
 };
 /// Logical slots include unaccessed Interface leaves and existing standalone nets.
 /// Standalone declarations/boundaries use an explicit empty member path. A null
@@ -146,6 +190,7 @@ struct DigitalResolvedEndpoint {
   /// Verified local type and policy. Placement is absent for Interface members.
   mlir::Type type;
   mlir::StringAttr mode, profile, placement;
+  DigitalResolvedShape shape;
 };
 struct DigitalResolvedTopology {
   llvm::SmallVector<DigitalResolvedComponent> components;

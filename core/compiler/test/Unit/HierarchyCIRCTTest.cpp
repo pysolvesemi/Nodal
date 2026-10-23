@@ -879,6 +879,124 @@ std::pair<unsigned, unsigned> run() {
            replace(externalFixture(true), read("observed", "pad"),
                    read("observed", "pad") + split("pad")),
            "opaque external contribution");
+  // One actual two-axis electrical family. Payload and enable lane shapes stay
+  // separate; all geometry is original authored identity, never a lane registry.
+  const std::string resolvedArray =
+      R"mlir(module attributes {nodal.root.module = @Fixture, nodal.root.parameter_bindings = {}} {
+"nodal.module"() <{sym_name = "Fixture", metadata = {}}> ({
+"nodal.domain"() <{sym_name = "clock", edge = "rising", reset_policy = "none", metadata = {}}> : () -> ()
+"nodal.port"() <{sym_name = "clockPin", type = !nodal.capability<"clock">, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%clockPin = "nodal.port_value"() <{port = @clockPin, metadata = {}}> : () -> !nodal.capability<"clock">
+"nodal.local_domain_binding"(%clockPin) <{domain = @clock, reset_polarity = "active_high", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+"nodal.interface"() <{sym_name = "Bus", metadata = {interface_abi_version = 1 : i64, semantic_identity = "pkg.Bus"}}> ({
+"nodal.interface_role"() <{sym_name = "connected", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "connect", leaf_role = "connected", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_role"() <{sym_name = "monitor", kind = "explicit", metadata = {interface_abi_version = 1 : i64, access = [{path = "data", access = "observe", leaf_role = "monitor", nested_roles = [], nested_interfaces = []}]}}> : () -> ()
+"nodal.interface_member"() <{sym_name = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, protocol = "resolved", roles = ["connected", "monitor"], metadata = {interface_abi_version = 1 : i64}}> : () -> ()
+}) : () -> ()
+"nodal.interface_instance"() <{sym_name = "left", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.left"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.left", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @left}}> : () -> ()
+%left = "nodal.member_access"() <{instance = @left, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_instance"() <{sym_name = "right", definition = @Bus, role = "connected", metadata = {interface_abi_version = 1 : i64, domain = @clock, dimensions = ["2", "3"], semantic_path = "Fixture.right"}}> : () -> ()
+"nodal.interface_abi"() <{logical_path = "Fixture.right", layout_policy = "structural", members = [{path = "data", type = !nodal.resolved<"push_pull", !nodal.bits<8>>, role = "connected", access = "connect", nested_roles = [], nested_interfaces = []}], metadata = {interface_abi_version = 1 : i64, instance = @right}}> : () -> ()
+%right = "nodal.member_access"() <{instance = @right, path = "data", metadata = {interface_abi_version = 1 : i64}}> : () -> !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>
+"nodal.interface_connect"(%left, %right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> ()
+"nodal.port"() <{sym_name = "data", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%data = "nodal.port_value"() <{port = @data, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.port"() <{sym_name = "enable", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "input", domain = @clock, metadata = {}}> : () -> ()
+%enable = "nodal.port_value"() <{port = @enable, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+%driver = "nodal.net_driver"(%left) <{driver_id = "writer", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>
+"nodal.net_drive"(%left, %driver, %data, %enable) <{mode = "push_pull", metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.driver<!nodal.bits<8>>>, !nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+%read = "nodal.net_read"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> !nodal.shaped<"2,3", !nodal.bits<8>>
+%write, %enabled = "nodal.net_split"(%right) <{metadata = {interface_abi_version = 1 : i64}}> : (!nodal.shaped<"2,3", !nodal.resolved<"push_pull", !nodal.bits<8>>>) -> (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<1>>)
+"nodal.port"() <{sym_name = "observed", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%observed = "nodal.port_value"() <{port = @observed, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%observed, %read) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.port"() <{sym_name = "written", type = !nodal.shaped<"2,3", !nodal.bits<8>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%written = "nodal.port_value"() <{port = @written, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<8>>
+"nodal.digital_assign"(%written, %write) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<8>>, !nodal.shaped<"2,3", !nodal.bits<8>>) -> ()
+"nodal.port"() <{sym_name = "active", type = !nodal.shaped<"2,3", !nodal.bits<1>>, direction = "output", domain = @clock, metadata = {}}> : () -> ()
+%active = "nodal.port_value"() <{port = @active, metadata = {}}> : () -> !nodal.shaped<"2,3", !nodal.bits<1>>
+"nodal.digital_assign"(%active, %enabled) <{kind = "continuous", metadata = {}}> : (!nodal.shaped<"2,3", !nodal.bits<1>>, !nodal.shaped<"2,3", !nodal.bits<1>>) -> ()
+}) : () -> ()
+}
+)mlir";
+  auto replaceArrayTokens = [](std::string input, StringRef from, StringRef to) {
+    size_t position = 0;
+    while ((position = input.find(from.str(), position)) != std::string::npos) {
+      input.replace(position, from.size(), to.str());
+      position += to.size();
+    }
+    return input;
+  };
+  auto symbolicArray = replaceArrayTokens(resolvedArray, "2,3", "N,3");
+  symbolicArray = replaceArrayTokens(symbolicArray, "[\"2\", \"3\"]", "[\"N\", \"3\"]");
+  symbolicArray = replace(
+      symbolicArray, "\"nodal.interface\"",
+      R"mlir("nodal.parameter"() <{sym_name = "N", type = i64, default_value = 2 : i64, parameter_kind = "integer", classification = "structural", variability = "symbolic", metadata = {}}> : () -> ()
+%lo = "nodal.const_literal"() <{kind = "integer", spelling = "1", value = 1 : i64, metadata = {}}> : () -> i64
+%hi = "nodal.const_literal"() <{kind = "integer", spelling = "4", value = 4 : i64, metadata = {}}> : () -> i64
+"nodal.parameter_constraint"(%lo, %hi) <{parameter = @N, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+"nodal.parameter_envelope"() <{parameter = @N, policy = "static_generate", effects = ["shape"], metadata = {}}> : () -> ()
+)mlir"
+      "\"nodal.interface\"");
+  auto variablePayloadArray =
+      replaceArrayTokens(symbolicArray, "!nodal.bits<8>", "!nodal.digital<\"bits\", \"W\">");
+  variablePayloadArray = replace(
+      variablePayloadArray, "\"nodal.interface\"",
+      R"mlir("nodal.parameter"() <{sym_name = "W", type = i64, default_value = 2 : i64, parameter_kind = "integer", classification = "structural", variability = "symbolic", metadata = {}}> : () -> ()
+%wlo = "nodal.const_literal"() <{kind = "integer", spelling = "1", value = 1 : i64, metadata = {}}> : () -> i64
+%whi = "nodal.const_literal"() <{kind = "integer", spelling = "8", value = 8 : i64, metadata = {}}> : () -> i64
+"nodal.parameter_constraint"(%wlo, %whi) <{parameter = @W, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+"nodal.parameter_envelope"() <{parameter = @W, policy = "static_generate", effects = ["width"], metadata = {}}> : () -> ()
+)mlir"
+      "\"nodal.interface\"");
+  auto oneArrayLoop = [](mlir::ModuleOp module) {
+    unsigned loops = 0;
+    module.walk([&](circt::sv::GenerateForOp) { ++loops; });
+    return loops == 1;
+  };
+  positive("resolved-array-unequal-axes-pointwise-physical-layout", resolvedArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"2\", \"3\"]") &&
+                    StringRef(ir).contains("lane_count = 6 : i32") &&
+                    StringRef(ir).contains("lane_width = 8 : i32") &&
+                    StringRef(ir).contains("!hw.inout<i48>") &&
+                    StringRef(ir).contains("bit_strides = [24, 8]");
+           });
+  positive("resolved-array-symbolic-outer-axis-not-default", symbolicArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"N\", \"3\"]") &&
+                    StringRef(ir).contains("!hw.inout<int<") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"N\"");
+           });
+  positive("resolved-array-independent-payload-width-axis", variablePayloadArray,
+           [&](mlir::ModuleOp module) {
+             std::string ir = print(module);
+             return oneArrayLoop(module) &&
+                    StringRef(ir).contains("outer_dimensions = [\"N\", \"3\"]") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"N\"") &&
+                    StringRef(ir).contains("#hw.param.decl.ref<\"W\"");
+           });
+  negative(
+      "resolved-array-scalar-enable-is-not-broadcast",
+      replaceArrayTokens(resolvedArray, "!nodal.shaped<\"2,3\", !nodal.bits<1>>", "!nodal.bits<1>"),
+      "conditional driver enable requires an actual owned canonical Bool");
+  negative("resolved-array-equal-cardinality-axis-permutation-is-not-identity",
+           replaceArrayTokens(resolvedArray, "!nodal.shaped<\"2,3\", !nodal.bits<1>>",
+                              "!nodal.shaped<\"3,2\", !nodal.bits<1>>"),
+           "conditional driver enable requires an actual owned canonical Bool");
+  negative("resolved-array-driver-retains-original-family-origin",
+           replace(resolvedArray, "\"nodal.net_drive\"(%left", "\"nodal.net_drive\"(%right"),
+           "drive/release must use one actual unique driver of this exact owned net");
+  negative("resolved-array-native-valid-footprint-refuses-transactionally",
+           replace(symbolicArray, "spelling = \"4\", value = 4 : i64",
+                   "spelling = \"513\", value = 513 : i64"),
+           "split physical routes exceed their checked bounded profile");
+
   llvm::outs() << count << " resolved target cases, " << failures << " failures\n";
   return {count, failures};
 }

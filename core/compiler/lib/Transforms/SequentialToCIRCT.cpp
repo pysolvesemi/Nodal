@@ -1,5 +1,6 @@
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/HW/HWAttributes.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/SV/SVDialect.h"
@@ -83,6 +84,13 @@ unsigned width(Type type) {
     return 1;
   return 0;
 }
+bool resolvedScalar(Type type) {
+  if (isa<BitsType, UIntType, SIntType>(type))
+    return true;
+  auto parametric = dyn_cast<ParametricIntegerType>(type);
+  return parametric &&
+         llvm::is_contained(ArrayRef<StringRef>{"bits", "uint", "sint"}, parametric.getKind());
+}
 Type targetType(Type type) {
   if (auto capability = dyn_cast<ControlCapabilityType>(type)) {
     if (capability.getKind() == "clock")
@@ -165,6 +173,7 @@ struct LogicalPortSignature {
   unsigned pins;
   bool inout = false;
   Type resolvedElement;
+  Type resolvedOriginal;
   std::optional<unsigned> splitRoute;
   bool splitEnable = false;
 };
@@ -193,6 +202,7 @@ struct HierarchyTargetPlan {
   struct SplitRoute {
     const DigitalResolvedSplitBinding *binding = nullptr;
     unsigned bits = 0, canonical = 0;
+    Type originalType;
     bool incoming = false, outgoing = false;
     Operation *sourceChild = nullptr;
     unsigned sourceChildOccurrence = 0, sourceChildRoute = 0;
@@ -227,11 +237,47 @@ struct HierarchyTargetPlan {
         ordinals.try_emplace(&op, index++);
       }
     }
-    auto route = [&](unsigned occurrence, const DigitalResolvedSplitBinding &binding,
-                     unsigned bits) -> FailureOr<unsigned> {
+    // Index only the successful semantic component inventory. Each route uses
+    // the payload declared in that exact local module, never a foreign token.
+    using DriverKey = std::pair<unsigned, Operation *>;
+    llvm::DenseMap<DriverKey, const DigitalResolvedHierarchyComponent *> driverComponents;
+    llvm::DenseMap<std::pair<const DigitalResolvedHierarchyComponent *, unsigned>, Type>
+        componentTypes;
+    for (const auto &component : resolvedComponents) {
+      for (const auto &driver : component.drivers) {
+        if (++work > maximumGeneratedOperations ||
+            !driverComponents
+                 .try_emplace(DriverKey{driver.occurrence, driver.operation}, &component)
+                 .second)
+          return reject(input, "split component inventory exceeds exact bounded driver identity");
+      }
+      for (const auto &endpoint : component.endpoints) {
+        auto resolved = dyn_cast<ResolvedType>(endpoint.endpoint.type);
+        if (++work > maximumGeneratedOperations || !resolved ||
+            endpoint.occurrence >= occurrences.size() || !resolvedScalar(resolved.getElementType()))
+          return reject(input, "split component requires an exact local scalar payload");
+        Type type = resolved.getElementType();
+        auto [found, inserted] =
+            componentTypes.try_emplace(std::make_pair(&component, endpoint.occurrence), type);
+        if (!inserted && !equivalentDigitalStorageTypes(found->second, type,
+                                                        occurrences[endpoint.occurrence].module))
+          return reject(endpoint.endpoint.operation,
+                        "split component local payload types disagree");
+      }
+    }
+    auto route = [&](unsigned occurrence,
+                     const DigitalResolvedSplitBinding &binding) -> FailureOr<unsigned> {
       if (occurrence >= occurrences.size() || !occurrences[occurrence].generatedScopes.empty() ||
           ++work > maximumGeneratedOperations)
         return failure();
+      auto component = driverComponents.lookup({binding.driverOccurrence, binding.driver});
+      Type localType = componentTypes.lookup({component, occurrence});
+      if (!localType)
+        return failure();
+      auto maximum = inferDigitalBitPatternMaximumBits(localType, occurrences[occurrence].module);
+      if (failed(maximum) || *maximum <= 0 || *maximum > maximumWidth)
+        return failure();
+      unsigned bits = *maximum;
       auto &plan = splitPlans[occurrence];
       auto found = plan.driverRoutes.try_emplace(
           std::make_pair(binding.driverOccurrence, binding.driver), plan.routes.size());
@@ -240,6 +286,7 @@ struct HierarchyTargetPlan {
         SplitRoute node;
         node.binding = &binding;
         node.bits = bits;
+        node.originalType = localType;
         plan.routes.push_back(std::move(node));
       } else if (plan.routes[index].bits != bits)
         return failure();
@@ -252,15 +299,15 @@ struct HierarchyTargetPlan {
           binding.split->getParentOp() != occurrences[binding.splitOccurrence].module)
         return reject(input, "split physical route requires exact direct owned operations");
       Type original = binding.split->getResult(0).getType();
-      auto mapped = dyn_cast_or_null<IntegerType>(targetType(original));
-      if (!mapped || !mapped.getWidth() || mapped.getWidth() > maximumWidth ||
-          (binding.data && binding.data.getType() != original) || !binding.enable ||
-          width(binding.enable.getType()) != 1 ||
+      auto driverNet = dyn_cast<ResolvedType>(binding.driver->getOperand(0).getType());
+      if (!resolvedScalar(original) || !driverNet || !resolvedScalar(driverNet.getElementType()) ||
+          (binding.data && binding.data.getType() != driverNet.getElementType()) ||
+          !binding.enable || width(binding.enable.getType()) != 1 ||
           (!binding.data &&
            (!binding.level ||
             !llvm::is_contained(ArrayRef<StringRef>{"low", "high"}, binding.level.getValue()))))
         return reject(binding.split,
-                      "split physical route requires exact fixed scalar data/enable");
+                      "split physical route requires exact scalar data/enable in its actual owner");
       SmallVector<unsigned> ancestors;
       for (unsigned at = binding.driverOccurrence;; at = occurrences[at].parent) {
         if (ancestors.size() >= 128)
@@ -277,13 +324,13 @@ struct HierarchyTargetPlan {
         descending.push_back(lca);
         lca = occurrences[lca].parent;
       }
-      auto current = route(binding.driverOccurrence, binding, mapped.getWidth());
+      auto current = route(binding.driverOccurrence, binding);
       if (failed(current))
         return reject(binding.split, "split physical routes exceed their checked bounded profile");
       unsigned at = binding.driverOccurrence;
       while (at != lca) {
         unsigned parent = occurrences[at].parent;
-        auto next = route(parent, binding, mapped.getWidth());
+        auto next = route(parent, binding);
         if (failed(next))
           return reject(binding.split,
                         "split physical routes exceed their checked bounded profile");
@@ -300,7 +347,7 @@ struct HierarchyTargetPlan {
         at = parent;
       }
       for (unsigned child : llvm::reverse(descending)) {
-        auto next = route(child, binding, mapped.getWidth());
+        auto next = route(child, binding);
         if (failed(next))
           return reject(binding.split,
                         "split physical routes exceed their checked bounded profile");
@@ -340,7 +387,7 @@ struct HierarchyTargetPlan {
           return left < right;
         });
         llvm::raw_string_ostream out(node.signature);
-        out << node.bits << ':';
+        out << node.originalType << ':';
         if (node.incoming)
           out << 'I';
         else if (node.sourceChild)
@@ -637,7 +684,7 @@ public:
           return failure();
         fixedNamedCrossing = true;
       }
-      if (symbolic && !structural && !fixedNamedCrossing &&
+      if (symbolic && !structural && !fixedNamedCrossing && !resolvedOperations.contains(&op) &&
           !isa<PortValueOp, InstancePortOp, MemberAccessOp, InterfaceDriveOp, InterfaceConnectOp,
                InterfaceObserveOp, DigitalAssignOp>(op) &&
           !(isa<DigitalStorageOp>(op) && text(&op, "kind") == "wire") &&
@@ -1036,6 +1083,7 @@ public:
         variant->ports.push_back(
             {port.key, port.input, unsigned(port.pins.size()), port.inout,
              port.inout ? cast<circt::hw::InOutType>(port.targetType).getElementType() : Type(),
+             port.inout ? cast<ResolvedType>(port.originalType).getElementType() : Type(),
              port.splitRoute ? std::optional<unsigned>(hierarchy->splitPlans[variant->occurrence]
                                                            .routes[*port.splitRoute]
                                                            .canonical)
@@ -1062,12 +1110,18 @@ public:
         InstanceLogicalPortKey key{instance, port.key};
         if (projectedResolvedPorts.contains(key))
           continue;
-        auto type = dyn_cast_or_null<IntegerType>(port.resolvedElement);
-        if (!type || !type.getWidth() || type.getWidth() > maximumWidth ||
-            type.getWidth() + 3 > maximumGeneratedOperations - cost)
+        auto view = inspectHierarchyBoundaryType(port.resolvedOriginal, child.source, instance);
+        if (failed(view) || view->leaves.size() != 1 || !view->leaves.front().path.empty() ||
+            !view->leaves.front().dimensions.empty() ||
+            view->leaves.front().width.bounds.lower <= 0 ||
+            view->leaves.front().width.bounds.upper > maximumWidth)
+          return reject(instance, "unconnected resolved child pin lost exact instance width proof");
+        auto &leaf = view->leaves.front();
+        Type type = leafVectorType(leaf);
+        if (!type || uint64_t(leaf.width.bounds.upper) + 3 > maximumGeneratedOperations - cost)
           return reject(instance,
                         "unconnected resolved child pin requires exact bounded scalar context");
-        cost += type.getWidth() + 3;
+        cost += leaf.width.bounds.upper + 3;
         auto name = reserveResolvedName("__nodal_unconnected_resolved_" +
                                         std::to_string(unconnectedResolvedPorts.size()));
         unconnectedResolvedPorts.push_back({key, type, name});
@@ -1293,7 +1347,7 @@ public:
       for (auto [index, route] : llvm::enumerate(plan.routes)) {
         if (route.incoming)
           continue;
-        auto data = backedges.get(builder.getIntegerType(route.bits), source.getLoc());
+        auto data = backedges.get(splitTypes[index], source.getLoc());
         auto enable = backedges.get(builder.getI1Type(), source.getLoc());
         splitValues[index] = {data, enable};
         splitEdges.push_back({unsigned(index), {data, enable}});
@@ -1896,14 +1950,12 @@ public:
       if (!route.sourceChild) {
         const auto &binding = *route.binding;
         actual.first = binding.data ? values.lookup(binding.data)
-                                    : constant(binding.driver, route.bits,
-                                               binding.level.getValue() == "high"
-                                                   ? APInt::getAllOnes(route.bits)
-                                                   : APInt(route.bits, 0));
+                                    : resolvedFill(binding.driver, splitTypes[index],
+                                                   binding.level.getValue() == "high" ? '1' : '0');
         actual.second = values.lookup(binding.enable);
       }
       if (!actual.first || !actual.second || actual.first == Value(edges.first) ||
-          actual.second == Value(edges.second) || !actual.first.getType().isInteger(route.bits) ||
+          actual.second == Value(edges.second) || actual.first.getType() != splitTypes[index] ||
           !actual.second.getType().isInteger(1)) {
         backedges.abandon();
         return reject(source, "split route did not resolve exact driver data/enable");
@@ -3416,14 +3468,20 @@ private:
   }
 
   SmallVector<std::pair<Value, Value>> splitValues;
+  SmallVector<Type> splitTypes;
   llvm::DenseMap<std::pair<Operation *, unsigned>, unsigned> splitChildInputs, splitChildOutputs;
   LogicalResult planSplitPorts() {
     if (!hierarchy || !variant)
       return success();
     const auto &plan = hierarchy->splitPlans[variant->occurrence];
     auto occurrences = hierarchy->proof->occurrences();
+    splitTypes.resize(plan.routes.size());
     for (unsigned raw : plan.ordered) {
       const auto &route = plan.routes[raw];
+      Type mapped = targetValueType(route.originalType);
+      if (!isa_and_nonnull<IntegerType, circt::hw::IntType>(mapped))
+        return reject(source, "split route lost its exact local scalar type mapping");
+      splitTypes[raw] = mapped;
       if (8 > maximumGeneratedOperations - cost)
         return reject(source, "split route transport exceeds target operation budget");
       cost += 8;
@@ -3450,8 +3508,9 @@ private:
             "__nodal_split_" + std::to_string(route.canonical) + (enable ? "_enable" : "_data");
         port.key = {source.getOperation(), builder.getStringAttr(name)};
         port.name = builder.getStringAttr(name);
-        port.originalType = route.binding->split->getResult(enable ? 1 : 0).getType();
-        port.targetType = builder.getIntegerType(enable ? 1 : route.bits);
+        port.originalType =
+            enable ? route.binding->split->getResult(1).getType() : route.originalType;
+        port.targetType = enable ? builder.getI1Type() : mapped;
         port.input = route.incoming;
         port.splitRoute = raw;
         port.splitEnable = enable;
@@ -3463,19 +3522,43 @@ private:
   LogicalResult planResolved() {
     if (!hierarchy || !variant)
       return success();
+    bool checkedParametricInOut = false;
     llvm::DenseMap<Value, unsigned> byRepresentative;
     for (const auto *endpoint : hierarchy->resolvedEndpoints[variant->occurrence]) {
       auto resolved = dyn_cast_or_null<ResolvedType>(endpoint->type);
       Type type = resolved ? targetValueType(resolved.getElementType()) : Type();
-      auto integer = dyn_cast_or_null<IntegerType>(type);
-      if (!resolved || !integer || !integer.getWidth() || integer.getWidth() > maximumWidth ||
-          !endpoint->mode || endpoint->mode.getValue() != resolved.getDriveMode() ||
-          !endpoint->profile || endpoint->profile.getValue() != "portable_boundary_only" ||
+      auto maximum = resolved ? inferDigitalBitPatternMaximumBits(resolved.getElementType(), source)
+                              : FailureOr<int64_t>(failure());
+      if (!resolved || !resolvedScalar(resolved.getElementType()) ||
+          !isa_and_nonnull<IntegerType, circt::hw::IntType>(type) || failed(maximum) ||
+          *maximum <= 0 || *maximum > maximumWidth || !endpoint->mode ||
+          endpoint->mode.getValue() != resolved.getDriveMode() || !endpoint->profile ||
+          endpoint->profile.getValue() != "portable_boundary_only" ||
           (endpoint->placement && endpoint->placement.getValue() != "top_level_pin" &&
            endpoint->placement.getValue() != "black_box_pin"))
         return reject(
             endpoint->operation,
-            "resolved physical target requires exact fixed scalar portable boundary pins");
+            "resolved physical target requires exact bounded scalar portable boundary pins");
+      if (isa<circt::hw::IntType>(type) && !checkedParametricInOut) {
+        // Probe the linked consumer, not a path or manifest. An overridden
+        // runtime library must not silently invalidate a managed build's ABI.
+        auto formal =
+            circt::hw::ParamDeclRefAttr::get(builder.getStringAttr("formal"), builder.getI32Type());
+        auto actual =
+            circt::hw::ParamDeclRefAttr::get(builder.getStringAttr("actual"), builder.getI32Type());
+        auto wrapper = circt::hw::InOutType::get(circt::hw::IntType::get(formal));
+        auto bindings = builder.getArrayAttr(
+            {circt::hw::ParamDeclAttr::get(builder.getStringAttr("formal"), actual)});
+        auto substituted = circt::hw::evaluateParametricType(endpoint->operation->getLoc(),
+                                                             bindings, wrapper, false);
+        if (!circt::hw::isParametricType(wrapper) || failed(substituted) ||
+            *substituted != circt::hw::InOutType::get(circt::hw::IntType::get(actual)))
+          return reject(endpoint->operation,
+                        "symbolic resolved transport requires recursive CIRCT InOut parameter "
+                        "substitution; bootstrap --overlay circt-inout-parameters-v1 and "
+                        "rebuild/select that managed toolchain prefix");
+        checkedParametricInOut = true;
+      }
       Attribute path = endpoint->path && !endpoint->path.getValue().empty()
                            ? Attribute(endpoint->path)
                            : Attribute();
@@ -3511,10 +3594,10 @@ private:
         component.localPins.push_back(declaration);
       if (isa<ResolvedNetOp, ResolvedBoundaryOp>(endpoint->operation))
         component.values.push_back(endpoint->operation->getResult(0));
-      if (integer.getWidth() + 5 > maximumGeneratedOperations - cost)
+      if (uint64_t(*maximum) + 5 > maximumGeneratedOperations - cost)
         return reject(endpoint->operation,
                       "resolved physical carrier exceeds target operation budget");
-      cost += integer.getWidth() + 5;
+      cost += *maximum + 5;
     }
     for (Operation &op : source.getBody().front()) {
       bool resolved =
@@ -3556,27 +3639,36 @@ private:
       record.set("placement", facts->placement);
     if (facts->domain)
       record.set("domain", facts->domain);
-    record.set("width", builder.getI32IntegerAttr(cast<IntegerType>(component.type).getWidth()));
+    record.set("width", generatedWidth(component.type));
     record.set("member", facts->path);
     record.set("carrier", builder.getStringAttr("true-inout"));
     return builder.getDictionaryAttr(record);
   }
   LogicalResult joinResolvedPins(Operation *sourceOp, Value left, Value right, StringAttr name) {
     auto type = dyn_cast<circt::hw::InOutType>(left.getType());
-    auto bits = type ? dyn_cast<IntegerType>(type.getElementType()) : IntegerType();
-    if (!bits || left.getType() != right.getType() || !bits.getWidth() ||
-        bits.getWidth() > maximumWidth)
+    Type element = type ? type.getElementType() : Type();
+    auto bits = dyn_cast_or_null<IntegerType>(element);
+    if (!isa_and_nonnull<IntegerType, circt::hw::IntType>(element) ||
+        left.getType() != right.getType() ||
+        (bits && (!bits.getWidth() || bits.getWidth() > maximumWidth)))
       return reject(sourceOp, "electrical alias requires two exact equal-width InOut operands");
     // sv.alias is the native semantic equivalent, but pinned Icarus cannot parse
     // that construct. Only this fixed standard primitive is rendered as text.
     // Both nets remain typed SSA operands; no authored name or text is interpolated.
     std::string primitive = "tran";
-    if (bits.getWidth() != 1)
+    SmallVector<Value, 3> operands{left, right};
+    if (!bits) {
+      TypedAttr last = circt::hw::ParamExprAttr::get(circt::hw::PEO::Add, generatedWidth(element),
+                                                     builder.getI32IntegerAttr(-1));
+      operands.push_back(circt::sv::LocalParamOp::create(
+          builder, sourceOp->getLoc(), builder.getI32Type(), last, builder.getStringAttr("")));
+      primitive += " " + name.getValue().str() + "[{{2}}:0]";
+    } else if (bits.getWidth() != 1)
       primitive += " " + name.getValue().str() + "[" + std::to_string(bits.getWidth() - 1) + ":0]";
     primitive += " ({{0}}, {{1}});";
     auto alias =
         circt::sv::VerbatimOp::create(builder, sourceOp->getLoc(), builder.getStringAttr(primitive),
-                                      ValueRange{left, right}, builder.getArrayAttr({}));
+                                      operands, builder.getArrayAttr({}));
     correlate(alias, sourceOp);
     alias->setAttr("nodal.resolved_alias", builder.getStringAttr("checked-local-component"));
     return success();
@@ -3627,17 +3719,35 @@ private:
     }
     return success();
   }
+  Value resolvedFill(Operation *at, Type type, char fill) {
+    assert((fill == '0' || fill == '1' || fill == 'z') && "closed resolved fill token");
+    if (auto integer = dyn_cast<IntegerType>(type)) {
+      if (fill == 'z')
+        return make(at, "sv.constantZ", type, {});
+      unsigned bits = integer.getWidth();
+      return constant(at, bits, fill == '1' ? APInt::getAllOnes(bits) : APInt(bits, 0));
+    }
+    if (!isa<circt::hw::IntType>(type))
+      return {};
+    // Pinned constantZ does not export HWInt and replicate uses a fixed-width
+    // accessor. Only these closed self-sized literal tokens are admitted here.
+    auto value = circt::sv::VerbatimExprOp::create(builder, at->getLoc(), type,
+                                                   std::string("'") + fill, ValueRange{});
+    correlate(value, at);
+    value->setAttr("nodal.resolved_fill", builder.getStringAttr(std::string(1, fill)));
+    return value.getResult();
+  }
   LogicalResult lowerResolvedEffects() {
     for (Operation *op : resolvedEffects) {
       Value carrier = values.lookup(op->getOperand(0));
       auto inout =
           carrier ? dyn_cast<circt::hw::InOutType>(carrier.getType()) : circt::hw::InOutType();
-      if (!inout || !isa<IntegerType>(inout.getElementType()))
+      if (!inout || !isa<IntegerType, circt::hw::IntType>(inout.getElementType()))
         return reject(op, "resolved driver lost its exact typed physical component");
       Type type = inout.getElementType();
       Value drive;
       if (isa<NetReleaseOp>(op))
-        drive = make(op, "sv.constantZ", type, {});
+        drive = resolvedFill(op, type, 'z');
       else if (isa<InterfaceDriveOp>(op))
         drive = values.lookup(op->getOperand(1));
       else {
@@ -3646,14 +3756,12 @@ private:
         if (isa<NetDriveOp>(op))
           data = values.lookup(op->getOperand(2));
         else {
-          unsigned bits = cast<IntegerType>(type).getWidth();
-          data = constant(op, bits,
-                          text(op, "level") == "high" ? APInt::getAllOnes(bits) : APInt(bits, 0));
+          data = resolvedFill(op, type, text(op, "level") == "high" ? '1' : '0');
         }
         if (!enable || !enable.getType().isInteger(1) || !data || data.getType() != type)
           return reject(op,
                         "resolved conditional driver values disagree with actual checked types");
-        Value released = make(op, "sv.constantZ", type, {});
+        Value released = resolvedFill(op, type, 'z');
         drive = make(op, "comb.mux", type, {enable, data, released});
       }
       if (!drive || drive.getType() != type)

@@ -269,3 +269,70 @@ registers or latency. Receipts record source/plugin/classpath, native compiler,
 exporter, simulator, commands, output hashes, exact relative module counts, and
 unchanged-SV checks. Symbolic/array payloads and generated selection-qualified
 physical split routes are separate required continuations.
+
+## Bounded symbolic resolved scalar transport
+
+The same `run_resolved_target.py` also accepts five explicit symbolic profiles;
+its default seven fixed profiles are unchanged. Use the original public
+`Increment58TypedResolvedMemberSource` read/drive replays and
+`Increment58ResolvedSplitSource` Interface/child-driver/parent-driver replays,
+without replacing their symbolic types by defaults or maximum widths. Place the
+exact replays at `symbolic-read.mlir`, `symbolic-drive.mlir`,
+`symbolic-split-interface.mlir`, `symbolic-split-child-driver.mlir` and
+`symbolic-split-parent-driver.mlir` in the input directory.
+
+The pinned base CIRCT omits recursive InOut parameter substitution. Install and
+select the checksum-owned
+[managed repair profile](../../../toolchains/patches/circt-inout-parameters-v1/README.md)
+for the Nodal build and its downstream firtool. An unrepaired linked consumer
+fails target preflight with the exact required profile name, even if a stale
+manifest claims otherwise. Existing fixed profiles still work with the base.
+
+```sh
+python3 tests/scala/domain-hierarchy/run_resolved_target.py \
+  --input .work/symbolic-resolved-replays --out .work/symbolic-resolved-target \
+  --nodalc .work/native-repaired/bin/nodalc \
+  --firtool /path/to/repaired-prefix/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog --vvp .work/tools/iverilog/bin/vvp \
+  --profiles symbolic-read symbolic-drive symbolic-split-interface \
+    symbolic-split-child-driver symbolic-split-parent-driver
+```
+
+Each profile runs widths 2, 7 and 8 against the same emitted parameterized body.
+The typed Interface profiles deliberately map child `width` to parent
+`actualWidth` and keep an independent sibling width. Their benches drive both
+physical aliases, check the nested `bus.pad` identity, and verify the independent
+pin is not shorted. The split profiles retain original data/enable during external
+Z/X interference rather than substituting the resolved read. All use independent
+four-state reference nets and the unchanged emitted DUT. The receipt includes
+input/output/tool hashes, consumer manifest identity, explicit runtime library
+selection when present, parameter settings and commands.
+
+The maintained `Increment58ResolvedSplitSource.scala` supplies the actual child
+storage type and conditional driver (excerpt from `Increment58ResolvedSplitLeaf`):
+
+```scala
+val width = param(4.integer, range = 2 to 8)
+val data = in(UInt(width))
+val enable = in(Bool)
+val pad = digitalInout(
+  UInt(width), DriveMode.pushPull,
+  InoutPlacement.TopLevelPin, ResolutionProfile.PortableBoundaryOnly, "pad"
+)
+if ownDriver then pad.drive(data, enable)
+```
+
+The parent binds `child.param(_.width, width)` and observes
+`selected.split.write` and `selected.split.enable`. For the child-driver profile,
+the actual SystemVerilog backend emits symbolic carriers and distinct sidebands:
+
+```systemverilog
+assign pad = enable ? data : 'z;
+assign __nodal_split_0_data = data;
+assign __nodal_split_0_enable = enable;
+```
+
+The initial symbolic continuation remains scalar Bits/UInt/SInt with canonical
+finite width proofs. Arrays, selection-qualified generated physical routes,
+internal/hierarchy-pass-through placements and broader electrical profiles are
+still required continuations, not implicit support from a symbolic width.

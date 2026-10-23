@@ -3,12 +3,14 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 
 PROFILES = ("read", "drive", "open-drain", "repeated", "independent", "local-alias", "interface-fixed")
+SYMBOLIC_PROFILES = ("symbolic-read", "symbolic-drive", "symbolic-split-interface", "symbolic-split-child-driver", "symbolic-split-parent-driver")
 
 
 def sha(path):
@@ -20,8 +22,92 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def symbolic_bench(profile, root):
+    """Independent electrical expectations at three exact parameter settings."""
+    mode = profile.removeprefix("symbolic-")
+    if mode in ("split-child-driver", "split-parent-driver"):
+        return "", f"""module one #(parameter W=2)(output reg done=0);
+  reg [W-1:0] data=0, externalData=0;reg enable=0,externalEnable=0;
+  wire [W-1:0] written;wire enabled;tri [W-1:0] expected;
+  {root} #(.width(W)) dut(.core_clock(1'b0),.data(data),.enable(enable),.written(written),.enabled(enabled));
+  assign dut.child_instance.pad=externalEnable?externalData:{{W{{1'bz}}}};
+  assign expected=enable?data:{{W{{1'bz}}}};
+  assign expected=externalEnable?externalData:{{W{{1'bz}}}};
+  task check;#1;
+    if($bits(dut.child_instance.pad)!=W || $bits(written)!=W) $fatal(1,"exact split width substitution");
+    if(written!==data || enabled!==enable) $fatal(1,"split sidebands changed with external contribution");
+    if(dut.child_instance.pad!==expected) $fatal(1,"resolved electrical identity");
+  endtask
+  initial begin
+    for(integer i=0;i<16;i=i+1) begin data=i;externalData=~i;
+      enable=0;externalEnable=0;check;externalEnable=1;check;
+      enable=1;check;externalEnable=0;check;
+    end
+    enable=0;externalEnable=1;externalData={{W{{1'bx}}}};check;
+    externalData={{W{{1'bz}}}};check;done=1;
+  end
+endmodule
+module tb;wire a,b,c;one #(2) narrow(a);one #(7) wide(b);one #(8) maximum(c);
+  initial begin wait(a&&b&&c);$display("SYMBOLIC_RESOLVED_PASS {profile}");$finish;end
+endmodule
+"""
+    expected_output = "data" if mode == "split-interface" else "expected"
+    driven = "assign expectedDriven=enable?data:{W{1'bz}};" if mode == "drive" else ""
+    return "", f"""module one #(parameter W=2,O=7)(output reg done=0);
+  reg [W-1:0] data=0,extA=0,extB=0,extC=0;
+  reg enable=0,ena=0,enb=0,enc=0;wire [W-1:0] observed;
+  tri [W-1:0] expected,expectedDriven;
+  {root} #(.actualWidth(W),.otherWidth(O)) dut(.core_clock(1'b0),.data(data),.other({{O{{1'b1}}}}),.enable(enable),.output_0(observed));
+  assign dut.child_instance.physical=ena?extA:{{W{{1'bz}}}};
+  assign dut.child_instance.connected__m_3_bus_3_pad=enb?extB:{{W{{1'bz}}}};
+  assign dut.child_instance.driven__m_3_bus_3_pad=enc?extC:{{W{{1'bz}}}};
+  assign expected=enable?data:{{W{{1'bz}}}};
+  assign expected=ena?extA:{{W{{1'bz}}}};
+  assign expected=enb?extB:{{W{{1'bz}}}};
+  assign expectedDriven=enc?extC:{{W{{1'bz}}}};
+  {driven}
+  task check;#1;
+    if($bits(dut.child_instance.physical)!=W || $bits(dut.child_instance.connected__m_3_bus_3_pad)!=W || $bits(dut.child_instance.driven__m_3_bus_3_pad)!=W || $bits(observed)!=W || $bits(dut.other)!=O)
+      $fatal(1,"exact owner substitution and sibling width");
+    if(dut.child_instance.physical!==expected || dut.child_instance.connected__m_3_bus_3_pad!==expected)
+      $fatal(1,"symbolic bidirectional alias identity");
+    if(dut.child_instance.driven__m_3_bus_3_pad!==expectedDriven) $fatal(1,"independent symbolic pin joined");
+    if(observed!=={expected_output}) $fatal(1,"original source observation changed");
+  endtask
+  initial begin
+    for(integer i=0;i<16;i=i+1) begin data=i;extA=~i;extB=i^7;extC=i^3;
+      for(integer mask=0;mask<16;mask=mask+1) begin
+        enable=mask[0];ena=mask[1];enb=mask[2];enc=mask[3];check;
+      end
+    end
+    enable=0;ena=1;enb=0;enc=1;extA={{W{{1'bx}}}};extC={{W{{1'bz}}}};check;
+    ena=0;enb=1;extB={{W{{1'bx}}}};extC={{W{{1'bx}}}};check;
+    extB={{W{{1'bz}}}};check;done=1;
+  end
+endmodule
+module tb;wire a,b,c;one #(2,7) narrow(a);one #(7,2) wide(b);one #(8,2) maximum(c);
+  initial begin wait(a&&b&&c);$display("SYMBOLIC_RESOLVED_PASS {profile}");$finish;end
+endmodule
+"""
+
+
+def inspect_symbolic(profile, root, ir, sv):
+    require(re.search(r"^module " + re.escape(root) + r"\s*#", sv, re.M), "root parameterization lost")
+    require('!hw.inout<int<' in ir, "symbolic physical carrier lost")
+    require('sv.alias' not in ir and 'sv.verbatim' in ir, "closed symbolic carrier emission lost")
+    if profile in ("symbolic-read", "symbolic-drive", "symbolic-split-interface"):
+        require('actualWidth' in sv and '.width(actualWidth)' in sv, "exact differing-owner substitution lost")
+        require('connected__m_3_bus_3_pad' in sv and 'member = "bus.pad"' in ir, "nested Interface member identity lost")
+        require('tran ' in sv and 'nodal.resolved_alias = "checked-local-component"' in ir, "actual typed alias lost")
+    else:
+        require('__nodal_split_0_data' in sv and '__nodal_split_0_enable' in sv, "cross-occurrence split sidebands lost")
+    return ""
+
+
 def bench(profile, root, external):
     """Authored environment only; never modify or recreate the generated DUT."""
+    if profile in SYMBOLIC_PROFILES:
+        return symbolic_bench(profile, root)
     model = ""
     if external:
         body = "reg enable=0; reg [3:0] value=0; assign pin=enable?value:4'bz;"
@@ -167,6 +253,8 @@ def bench(profile, root, external):
 
 
 def inspect(profile, root, ir, sv):
+    if profile in SYMBOLIC_PROFILES:
+        return inspect_symbolic(profile, root, ir, sv)
     require(len(re.findall(r"^module " + re.escape(root) + r"\(", sv, re.M)) == 1, "missing exact root")
     external_names = re.findall(r'verilogName = "([^"]+)"', ir)
     expected_externs = 0 if profile in ("local-alias", "interface-fixed") else 1
@@ -193,13 +281,17 @@ def main():
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--profiles", nargs="+", choices=PROFILES, default=list(PROFILES))
+    parser.add_argument("--profiles", nargs="+", choices=(*PROFILES, *SYMBOLIC_PROFILES), default=list(PROFILES))
     args = parser.parse_args()
     for name in ("input", "out", "nodalc", "firtool", "iverilog", "vvp"):
         setattr(args, name, getattr(args, name).resolve())
     args.out.mkdir(parents=True, exist_ok=True)
     receipt = {"simulation": "four-state", "dut_transformations": [], "profiles": {}, "tools": {}}
     receipt["runner_sha256"] = sha(Path(__file__))
+    receipt["environment"] = {"LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", "")}
+    manifest = args.firtool.parent.parent / ".nodal-toolchain.json"
+    if manifest.is_file():
+        receipt["toolchain"] = {"path": str(manifest), "sha256": sha(manifest), "identity": json.loads(manifest.read_text())}
     shutil.copyfile(__file__, args.out / "runner.py")
     if args.source:
         receipt["source"] = {"path": str(args.source.resolve()), "sha256": sha(args.source)}
@@ -232,7 +324,9 @@ def main():
             sv = (directory / "target.sv").read_text()
             root = re.search(r"nodal.root.module = @([A-Za-z_][A-Za-z_0-9]*)", ir).group(1)
             external = inspect(profile, root, ir, sv)
-            record["physical"] = {"root": root, "external": external, "abi": "legacy", "width": 4}
+            record["physical"] = {"root": root, "external": external, "abi": "legacy", "width": "symbolic" if profile in SYMBOLIC_PROFILES else 4}
+            if profile in SYMBOLIC_PROFILES:
+                record["physical"]["settings"] = [2, 7, 8]
             original = sha(directory / "target.sv")
             model, test = bench(profile, root, external)
             (directory / "external_model.sv").write_text(model)

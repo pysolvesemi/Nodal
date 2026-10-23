@@ -1492,3 +1492,21 @@ commit; later dirty managed-profile changes remain separate.
 The exact upstream unified patch has two required blank context markers at
 lines 61 and 69. Those single-space lines are retained to preserve patch
 semantics and its verified hash; all other staged whitespace checks pass.
+
+## Checkpoint 43 — bounded symbolic resolved physical transport
+
+The matched `.work/f58-symbolic-resolved-target/shared` manifest `60bc4bc4`
+pins 248 inputs. All 246 non-composed inputs match this index; two documents
+retain scoped sections only. Two native files and the standalone runner are
+exact historical accepted bytes. The managed compiler `cb7381a1` and library
+`12478d2a` passed 267 native cases (79 hierarchy, 157 sequential, 31 symbolic),
+seven fixed and five symbolic unchanged-DUT four-state profiles at widths
+2/7/8. Baseline capability refusal and a managed compiler with baseline-library
+override refusal are separately retained. These are historical matched results,
+not a new execution or full Scala run. Input hashes remain pinned by the
+maintained-input manifest: two typed-resolved and three split replays.
+
+True bidirectional scalar Bits/UInt/SInt transport reuses verified component
+proof and the optional managed profile. Resolved Interface arrays, generated or
+selected physical routes, and broader conservative/electrical profiles remain
+open. No replacement of electrical connectivity with paired assignments occurs.

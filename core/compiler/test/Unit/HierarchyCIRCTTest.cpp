@@ -1,3 +1,4 @@
+#include "circt/Dialect/HW/HWAttributes.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
@@ -603,6 +604,94 @@ std::pair<unsigned, unsigned> run() {
   auto contains = [](StringRef token) {
     return [=](mlir::ModuleOp op) { return StringRef(print(op)).contains(token); };
   };
+  auto symbolic = [&](std::string body) {
+    std::string payload = "!nodal.digital<\"uint\", \"W\">";
+    size_t at = 0;
+    while ((at = body.find(bits, at)) != std::string::npos) {
+      body.replace(at, bits.size(), payload);
+      at += payload.size();
+    }
+    return model(R"mlir(
+      "nodal.parameter"() <{sym_name = "W", type = i64, classification = "structural", variability = "symbolic", default_value = 4 : i64, metadata = {}}> : () -> ()
+      %minimum = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> i64
+      %maximum = "nodal.const_literal"() <{value = 8 : i64, spelling = "8", metadata = {}}> : () -> i64
+      "nodal.parameter_constraint"(%minimum, %maximum) <{parameter = @W, constraint_kind = "range", lower_inclusive = true, upper_inclusive = true, metadata = {}}> : (i64, i64) -> ()
+      "nodal.parameter_envelope"() <{parameter = @W, effects = ["width"], policy = "static_generate", metadata = {}}> : () -> ()
+    )mlir" + body);
+  };
+  auto closedFill = [](StringRef token) {
+    return [=](mlir::ModuleOp op) {
+      unsigned fills = 0;
+      bool valid = true;
+      op.walk([&](circt::sv::VerbatimExprOp expression) {
+        auto tag = expression->getAttrOfType<StringAttr>("nodal.resolved_fill");
+        if (!tag)
+          return;
+        ++fills;
+        valid &= expression.getNumOperands() == 0 &&
+                 isa<circt::hw::IntType>(expression.getResult().getType()) &&
+                 llvm::is_contained(ArrayRef<StringRef>{"0", "1", "z"}, tag.getValue()) &&
+                 expression.getFormatString() == "'" + tag.getValue().str();
+      });
+      return valid && fills && StringRef(print(op)).contains(token);
+    };
+  };
+  auto symbolicPositive = [&](StringRef name, const std::string &input,
+                              std::function<bool(mlir::ModuleOp)> check) {
+    context.getOrLoadDialect<circt::hw::HWDialect>();
+    auto reference = circt::hw::ParamDeclRefAttr::get(StringAttr::get(&context, "probe"),
+                                                      IntegerType::get(&context, 32));
+    if (circt::hw::isParametricType(circt::hw::InOutType::get(circt::hw::IntType::get(reference))))
+      positive(name, input, check);
+    else
+      negative(name, input, "bootstrap --overlay circt-inout-parameters-v1");
+  };
+  symbolicPositive("symbolic-resolved-driver-retains-closed-width-sized-Z",
+                   symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive()),
+                   closedFill("nodal.resolved_fill = \"z\""));
+  symbolicPositive("symbolic-resolved-release-retains-closed-width-sized-Z",
+                   symbolic(net() + driver("release") + release()),
+                   closedFill("nodal.resolved_fill = \"z\""));
+  symbolicPositive("symbolic-resolved-open-drain-uses-closed-zero-and-Z",
+                   symbolic(boundDomain() + net("net", "open_drain") + port("enable", boolean) +
+                            driver("driver", "net", "open_drain") + level()),
+                   closedFill("nodal.resolved_fill = \"0\""));
+  symbolicPositive("symbolic-resolved-open-source-uses-closed-one-and-Z",
+                   symbolic(boundDomain() + net("net", "open_source") + port("enable", boolean) +
+                            driver("driver", "net", "open_source") + level("high", "open_source")),
+                   closedFill("nodal.resolved_fill = \"1\""));
+  symbolicPositive("symbolic-resolved-alias-retains-typed-static-width-bound",
+                   symbolic(net() + net("other") + through()), [](mlir::ModuleOp op) {
+                     unsigned aliases = 0;
+                     bool valid = true;
+                     op.walk([&](circt::sv::VerbatimOp alias) {
+                       if (!alias->hasAttr("nodal.resolved_alias"))
+                         return;
+                       ++aliases;
+                       valid &= alias.getNumOperands() == 3 &&
+                                alias.getOperand(0).getType() == alias.getOperand(1).getType() &&
+                                isa<circt::hw::InOutType>(alias.getOperand(0).getType()) &&
+                                alias.getOperand(2).getDefiningOp<circt::sv::LocalParamOp>();
+                     });
+                     return valid && aliases == 1;
+                   });
+  negative("symbolic-resolved-forged-split-kind-is-not-width-only",
+           replace(symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive() + split()),
+                   ") -> (!nodal.digital<\"uint\", \"W\">, !nodal.bits<1>)",
+                   ") -> (!nodal.digital<\"sint\", \"W\">, !nodal.bits<1>)"),
+           "net read/split must retain exact value and canonical Bool result types");
+  negative("symbolic-resolved-width-envelope-over-target-budget",
+           replace(symbolic(net()), "value = 8 : i64, spelling = \"8\"",
+                   "value = 4097 : i64, spelling = \"4097\""),
+           "resolved physical target requires exact bounded scalar portable boundary pins");
+  negative("symbolic-resolved-split-default-width-is-not-a-proof",
+           replace(symbolic(boundDomain() + net() + port("value", bits) + port("enable", boolean) +
+                            driver() + netDrive() + split()),
+                   ") -> (!nodal.digital<\"uint\", \"W\">, !nodal.bits<1>)",
+                   ") -> (!nodal.uint<4>, !nodal.bits<1>)"),
+           "net read/split must retain exact value and canonical Bool result types");
   positive("declared-unaccessed-pin", model(net()), [](mlir::ModuleOp op) {
     auto modules = op.getOps<circt::hw::HWModuleOp>();
     if (modules.empty())
@@ -745,7 +834,7 @@ std::pair<unsigned, unsigned> run() {
            });
   negative("unsupported-internal-placement",
            model(net("net", "push_pull", "internal_resolved_net", "full_resolved_simulation")),
-           "resolved physical target requires exact fixed scalar portable boundary pins");
+           "resolved physical target requires exact bounded scalar portable boundary pins");
 
   std::string many;
   for (unsigned i = 0; i < 64; ++i) {

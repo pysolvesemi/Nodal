@@ -577,3 +577,42 @@ Symbolic/array resolved payloads, generated selection-qualified routes,
 internal/hierarchy-pass-through placements, and technology-specific electrical
 profiles remain open. The successful fixed subset does not close those broader
 requirements or claim physical timing/electrical certification.
+
+## Bounded symbolic resolved scalar continuation
+
+The scalar physical and successful split-route plans retain each occurrence's
+original local Bits/UInt/SInt payload type. The existing canonical parameter and
+hierarchy type owners determine the target HWInt and exact child-to-parent
+substitution. Maximum widths bound cost only; they never replace symbolic pin
+widths, and a child formal token is never interpreted in its parent's owner.
+The existing relative split ABI carries original data/enable with no new state
+or latency. Actual component and domain/uniqueness proofs remain unchanged.
+
+Symbolic carriers use the same true InOut/read/assign/instance transport as fixed
+carriers. The pinned consumer cannot export `sv.constantZ` on HWInt, and its
+fixed-width replicate accessor is unsuitable. Only the closed target-owned
+self-sized tokens `'0`, `'1` and `'z` may therefore use a typed zero-operand
+`sv.verbatim.expr`. The result type has already passed the canonical bounded-width
+proof. There is no interpolation, source text, symbolic arithmetic emitter or
+untyped value fallback; `'1` denotes all ones, not numeric one. Fixed carriers
+retain their native constants. A proven two-pin symbolic alias uses the same
+standard typed `tran` primitive and its canonical width-minus-one expression.
+
+The exact pinned CIRCT type utility must recurse through InOut for both
+classification and parameter substitution. The optional checksum-owned
+`circt-inout-parameters-v1` managed profile repairs that shared owner without
+changing the base lock, headers, public type ABI or original installation.
+Bootstrap/state/CMake own installation identity independently of Nodal semantics.
+Target preflight probes the actually linked utility with a bounded differing-name
+InOut substitution; a missing capability reports the required profile rather than
+trusting a private path, sampling a width, casting, or weakening verification.
+
+The maintained resolved runner's five explicit symbolic profiles use unchanged
+public source types, exact widths 2/7/8, differing child/parent parameter names,
+independent sibling widths, bidirectional Z/X tests, and original split sidebands
+under external interference. Native controls reject forged kind/default-width
+substitution and excessive canonical width envelopes. Existing fixed, generated
+storage, named-field and CDC target predecessors remain intact. This continuation
+does not admit Interface-array components, generated selection-qualified physical
+routes, analog/control carriers, broader placements or technology-specific
+profiles; those remain open under their existing owners.

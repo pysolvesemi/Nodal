@@ -521,7 +521,9 @@ LogicalResult verifyHierarchyModule(Operation *module) {
     instances |= isa<InstanceOp>(op);
     executable |= isa<LocalDomainBindingOp, SequentialUpdateOp, WaiverOp, EventProcessOp>(op) ||
                   (isa<CrossingOp, AsyncFifoOp>(op) && op->hasAttr("contract"));
-    hierarchy |= contextualSequentialOperation(op);
+    hierarchy |= contextualSequentialOperation(op) ||
+                 isa<InterfaceBoundaryOp, ResolvedBoundaryOp>(op) ||
+                 (isa<NetSplitOp>(op) && op->hasAttr("hierarchy_driver"));
     if (!hierarchyOperation(op))
       return WalkResult::advance();
     hierarchy = true;
@@ -542,6 +544,19 @@ LogicalResult verifyHierarchyModule(Operation *module) {
                   "executable hierarchy requires one exact outer nodal.root.module selector");
   auto hierarchyModel = HierarchyModel::create(outer);
   if (failed(hierarchyModel) || failed((*hierarchyModel)->verifyBindings()))
+    return failure();
+  // A context-dependent split cannot hide in an unused definition. Its empty
+  // local dependencies are obligations, not domainless constants.
+  DenseSet<Operation *> reached;
+  for (const auto &occurrence : (*hierarchyModel)->occurrences())
+    reached.insert(occurrence.module);
+  auto obligations = outer->walk([&](NetSplitOp split) {
+    if (!split->hasAttr("hierarchy_driver") || reached.contains(split->getParentOp()))
+      return WalkResult::advance();
+    (void)reject(split, "hierarchy-driver split belongs to an unreachable definition");
+    return WalkResult::interrupt();
+  });
+  if (obligations.wasInterrupted())
     return failure();
   return verifyHierarchyDependencies(*hierarchyModel);
 }

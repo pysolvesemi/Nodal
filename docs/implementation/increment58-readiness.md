@@ -1205,3 +1205,27 @@ The source checkpoint depends on the independently checked native family transpo
 implementation and does not itself establish generated-symbol or target support.
 No represented lane expansion, alternate hierarchy graph or parent closure is
 introduced. Later nested assignment and physical target results remain separate.
+
+## Checkpoint 28 — bounded nested assignment images
+
+The exact accepted native snapshot restores 12 paths and matches all 223
+repository source hashes in `.work/f58-nested-images/third/source-before.sha256`
+(`197e87fa`), unchanged after its focused run. Compiler `795f3ef4` passed
+ShapeIteration 173, ShapeRegion 55, AssignmentGuard 41, InterfaceModel 254,
+InterfaceObservation 25, HierarchyTarget 39, SequentialTarget 149 and
+SymbolicHierarchy 31 checks, 767 total. These are retained matched results, not
+a new run or a waveform claim.
+
+ShapeModel retains canonical ordered outer iteration images and exact authored
+projection types. Assignment coverage and guards check complete occurrence
+ancestry. Unit-stride Cartesian coverage uses the existing partition proof;
+nonunit images retain holes. Budgets depend on authored axes, expressions and
+cuts, not lane products. Correlated/triangular maps, nested residue completion,
+multi-axis flat re-radixing and mixed ordered-loop nesting remain unsupported.
+The combined snapshot includes resolved boundary and target static-bound fixes.
+
+Historical fixture failures and the interrupted second runner remain preserved;
+only the immutable third runner is accepted. ODS changes are included in the
+tracked source inventory; generated build-directory headers are not separately
+sealed, so fresh generated-header reproduction is not claimed. Broader source
+and target profiles remain separately required before Foundation 58 can close.

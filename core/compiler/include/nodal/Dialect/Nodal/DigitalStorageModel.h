@@ -134,8 +134,19 @@ mlir::FailureOr<DigitalDependencyGraph> analyzeDigitalAssignmentDependencies(
     mlir::Operation *module, llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
     DigitalAssignmentProofLimits limits = {});
 
-mlir::LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
-                                                DigitalAssignmentProofLimits limits = {});
+/// Immutable successful split facts from the existing occurrence/component proof.
+/// Values stay in their original definition and occurrence; they are not parent SSA.
+/// A null data value is permitted only with the verified low/high level attribute.
+struct DigitalResolvedSplitBinding {
+  unsigned splitOccurrence = 0, driverOccurrence = 0, componentOccurrence = 0;
+  mlir::Operation *split = nullptr;
+  mlir::Operation *driver = nullptr;
+  mlir::Value component, data, enable;
+  mlir::StringAttr level;
+};
+mlir::LogicalResult verifyHierarchyDependencies(
+    std::shared_ptr<const HierarchyModel> hierarchy, DigitalAssignmentProofLimits limits = {},
+    llvm::SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings = nullptr);
 
 /// Verify an owned structural wire/register declaration. The actual SSA result
 /// retains the recursive value type; register initialization and domain are

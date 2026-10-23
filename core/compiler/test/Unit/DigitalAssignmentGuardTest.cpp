@@ -178,6 +178,46 @@ std::string generated(bool constantTarget = false, bool missing = false, bool cr
          branch("lanes.choice", thenCaptures, left + yield(), elseCaptures, right + yield()) +
          "}) : (i64, i64, i64) -> ()\n";
 }
+std::string nestedGenerated(bool missingOuter = false, bool repeatedOuter = false,
+                            bool duplicate = false, bool missingArm = false, int64_t count = 4,
+                            int64_t stride = 1) {
+  const std::string rowType = shape(std::to_string(count));
+  const std::string matrixType = shape(std::to_string(count) + "," + std::to_string(count));
+  auto replaceAll = [](std::string text, const std::string &from, const std::string &to) {
+    size_t at = 0;
+    while ((at = text.find(from, at)) != std::string::npos) {
+      text.replace(at, from.size(), to);
+      at += to.size();
+    }
+    return text;
+  };
+  std::string inner = generated(false, missingArm, false, count);
+  inner = inner.substr(inner.find("\"nodal.generate\""));
+  inner = replaceAll(inner, "Fixture.lanes", "Fixture.outer.inner");
+  inner = replaceAll(inner, "%out,", "%outRow,");
+  inner = replaceAll(inner, "%input", "%inputRow");
+  inner = replaceAll(inner, "%lo, %hi, %step", "%lo, %hi, %innerStep");
+  inner = replaceAll(inner, "maximum_trip_count = " + std::to_string(count),
+                     "maximum_trip_count = " + std::to_string((count + stride - 1) / stride));
+  if (repeatedOuter)
+    inner = replaceAll(inner, "%outRow, %iv", "%outRow, %outerIndex");
+  std::string second;
+  if (duplicate)
+    second = replaceAll(inner, "Fixture.outer.inner", "Fixture.outer.duplicate");
+  auto row = [&](std::string name, std::string root) {
+    return "%" + name + " = \"nodal.shape_index\"(%" + root + ", %" +
+           std::string(missingOuter ? "lo" : "outerIndex") + ") <{metadata = {}}> : (" +
+           matrixType + ", i64) -> " + rowType + "\n";
+  };
+  return literal("lo", 0) + literal("hi", count) + literal("step", 1) +
+         literal("innerStep", stride) + port("input", matrixType) +
+         port("out", matrixType, "output") +
+         "\"nodal.generate\"(%lo, %hi, %step) <{induction = \"i\", region_id = \"Fixture.outer\", "
+         "induction_path = \"Fixture.outer.i\", metadata = {semantic_path = \"Fixture.outer\", "
+         "maximum_trip_count = " +
+         std::to_string(count) + " : i64}}> ({^bb0(%outerIndex: i64):\n" + row("outRow", "out") +
+         row("inputRow", "input") + inner + second + "}) : (i64, i64, i64) -> ()\n";
+}
 std::string generatedAffine(bool shifted = false) {
   std::string source = generated(), oldType = shape("4"), type = shape("5");
   size_t position = 0;
@@ -266,6 +306,15 @@ int main() {
   check("generated-constant-target-cross-lane-duplicate", generated(true), false);
   check("generated-missing-arm", generated(false, true), false);
   check("generated-guarded-cross-lane-read", generated(false, false, true), false);
+  check("nested-generated-complete-Cartesian-guarded-image", nestedGenerated(), true);
+  check("nested-generated-trillion-lanes-no-enumeration",
+        nestedGenerated(false, false, false, false, 1000000), true);
+  check("nested-generated-missing-outer-axis", nestedGenerated(true), false);
+  check("nested-generated-repeated-outer-axis", nestedGenerated(false, true), false);
+  check("nested-generated-distinct-writer-overlap", nestedGenerated(false, false, true), false);
+  check("nested-generated-missing-guard-arm", nestedGenerated(false, false, false, true), false);
+  check("nested-generated-stride-holes-not-full-coverage",
+        nestedGenerated(false, false, false, false, 4, 2), false);
   check("generated-affine-same-occurrence", generatedAffine(), true);
   check("generated-shifted-opposite-maps", generatedAffine(true), false);
   check("predecessor-loop-independent-family", independent(8), true);

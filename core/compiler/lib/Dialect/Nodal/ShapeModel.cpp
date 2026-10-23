@@ -7,6 +7,7 @@
 #include "nodal/Dialect/Nodal/StaticPredicateModel.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -746,6 +747,21 @@ public:
     auto result = composeIntegerExpression(opcode, {a, b});
     return succeeded(result) ? std::optional<IntegerExpression>(*result) : std::nullopt;
   }
+  bool invariant(const IntegerExpression &expression) {
+    SmallVector<std::shared_ptr<const InstantiatedIntegerNode>, 8> pending{expression.root};
+    llvm::SmallPtrSet<const InstantiatedIntegerNode *, 16> visited;
+    while (!pending.empty()) {
+      auto node = pending.pop_back_val();
+      if (!node || !spend())
+        return false;
+      if (!visited.insert(node.get()).second)
+        continue;
+      if (node->kind == InstantiatedIntegerNode::Kind::OpaqueValue)
+        return false;
+      pending.append(node->operands.begin(), node->operands.end());
+    }
+    return true;
+  }
   std::optional<llvm::SmallVector<IntegerExpression, 4>> dimensions(Type type) {
     auto found = dimensionCache.find(type);
     if (found != dimensionCache.end())
@@ -973,6 +989,40 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
   RegionBox currentBox = query.full(*selectedDimensions);
   std::optional<RegionAxis> currentInterval;
   std::optional<StaticShapeIterationImage> iteration;
+  SmallVector<StaticShapeIterationImage, 2> outerIterations;
+  auto addIteration = [&](StaticShapeIterationImage next) {
+    if (!query.spend(outerIterations.size() + 1))
+      return false;
+    if (!iteration) {
+      iteration = std::move(next);
+      return true;
+    }
+    if (outerIterations.size() + 2 > query.limits.maximumStates) {
+      query.status = RegionStatus::ResourceLimit;
+      return false;
+    }
+    // Only independent Generate coordinates compose into a Cartesian image.
+    // Ordered-loop predecessor semantics remain deliberately single-axis.
+    if (!isa<GenerateOp>(next.loop) || !isa<GenerateOp>(iteration->loop) || !next.varyingAxis ||
+        !iteration->varyingAxis || next.loop == iteration->loop)
+      return false;
+    for (const auto &outer : outerIterations)
+      if (outer.loop == next.loop ||
+          (!outer.loop->isProperAncestor(next.loop) && !next.loop->isProperAncestor(outer.loop)))
+        return false;
+    if (iteration->loop->isProperAncestor(next.loop)) {
+      outerIterations.push_back(*iteration);
+      iteration = std::move(next);
+    } else if (next.loop->isProperAncestor(iteration->loop)) {
+      auto at = llvm::find_if(outerIterations, [&](const auto &outer) {
+        return next.loop->isProperAncestor(outer.loop);
+      });
+      outerIterations.insert(at, std::move(next));
+    } else {
+      return false;
+    }
+    return true;
+  };
   if (logicalOrdinal) {
     auto cardinality = query.count(*selectedDimensions);
     auto end = query.apply("add", *logicalOrdinal, query.one);
@@ -996,6 +1046,10 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
         sameDimensions &= query.equal((*input)[axis], (*output)[axis]);
       if (sameDimensions)
         continue;
+      // Re-radixing more than one occurrence axis needs a separate exact
+      // mixed-radix proof; a bounding flat interval is not that proof.
+      if (!outerIterations.empty())
+        return query.failedStatus();
       if (!iteration && !currentInterval && query.whole(currentBox, *output)) {
         currentBox = query.full(*input);
         continue;
@@ -1032,6 +1086,14 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
     if (llvm::isa<ShapeIndexOp>(operation)) {
       RegionBox prefix;
       const bool iterationInOutput = iteration.has_value();
+      const unsigned prefixRank = operation->getNumOperands() - 1;
+      if (!query.spend(outerIterations.size() + 1))
+        return query.failedStatus();
+      if (iteration && iteration->varyingAxis)
+        *iteration->varyingAxis += prefixRank;
+      for (auto &outer : outerIterations)
+        *outer.varyingAxis += prefixRank;
+      bool addedIteration = false;
       IntegerExpression prefixOffset = query.zero;
       unsigned axis = 0;
       for (Value index : operation->getOperands().drop_front()) {
@@ -1040,8 +1102,6 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
                           ? resolveStaticShapeIterationIndex(index, operation)
                           : FailureOr<DigitalIterationIndex>(failure());
         if (succeeded(affine)) {
-          if (iteration)
-            return query.failedStatus(); // One independently varying axis only.
           auto step = RegionQuery::literal(affine->domain.step);
           if (!step || *step <= 0)
             return query.failedStatus();
@@ -1065,12 +1125,13 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
             return query.failedStatus();
           if (iterationStart)
             end = query.apply("add", *position, query.one);
-          else
-            iteration =
-                StaticShapeIterationImage{affine->loop,   affine->domain,
-                                          affine->offset, *count,
-                                          query.one,      axis,
-                                          *step,          !affine->domain.attainedInductionBounds};
+          else {
+            if (!addIteration(StaticShapeIterationImage{
+                    affine->loop, affine->domain, affine->offset, *count, query.one, axis, *step,
+                    !affine->domain.attainedInductionBounds}))
+              return query.failedStatus();
+            addedIteration = true;
+          }
         } else {
           position = query.selector(index, operation, true);
           end = position ? query.apply("add", *position, query.one) : std::nullopt;
@@ -1084,11 +1145,9 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
           return query.failedStatus();
         prefixOffset = *next;
       }
-      if (iterationInOutput && iteration->varyingAxis)
-        *iteration->varyingAxis += axis;
       if (currentInterval) {
         // Flat families can only be translated by loop-invariant prefixes.
-        if (iteration && !iterationInOutput)
+        if (addedIteration || (iteration && !iterationInOutput))
           return query.failedStatus();
         auto stride = query.count(llvm::ArrayRef<IntegerExpression>(*input).drop_front(axis));
         auto offset = stride ? query.apply("mul", prefixOffset, *stride) : std::nullopt;
@@ -1137,12 +1196,35 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
   auto rootDimensions = query.dimensions(projection.root.getType());
   if (!rootDimensions)
     return query.failedStatus();
+  if (!outerIterations.empty()) {
+    // Every independent coordinate and occurrence boundary must be invariant
+    // over the complete ancestry. Triangular domains, diagonal repetitions and
+    // opaque selector relationships are not rectangular Cartesian products.
+    if (currentInterval || !iteration || !iteration->varyingAxis)
+      return query.failedStatus();
+    llvm::SmallDenseSet<unsigned, 4> axes;
+    auto exact = [&](const StaticShapeIterationImage &map) {
+      return query.spend() && map.varyingAxis && axes.insert(*map.varyingAxis).second &&
+             query.invariant(map.domain.lower) && query.invariant(map.domain.upperExclusive) &&
+             query.invariant(map.offset);
+    };
+    if (!exact(*iteration))
+      return query.failedStatus();
+    for (const auto &outer : outerIterations)
+      if (!exact(outer))
+        return query.failedStatus();
+    for (const auto &axis : currentBox)
+      if (!query.invariant(axis.lower) || !query.invariant(axis.upperExclusive))
+        return query.failedStatus();
+  }
   StaticShapeRegion region;
   region.root = projection.root;
   if (iteration || (!physicalSelectors && !logicalOrdinal))
     region.projection = std::move(*verified);
   region.iteration = iteration;
-  if (iteration && iteration->empty) {
+  region.outerIterations = std::move(outerIterations);
+  if ((iteration && iteration->empty) ||
+      llvm::any_of(region.outerIterations, [](const auto &outer) { return outer.empty; })) {
     region.kind = StaticShapeRegion::Kind::Empty;
     region.axes = std::move(currentBox);
     if (currentInterval)
@@ -1161,10 +1243,14 @@ RegionStatus deriveRegion(const StaticShapeProjection &projection, RegionQuery &
   return RegionStatus::Proved;
 }
 
+bool stridedImage(const StaticShapeRegion &region) {
+  return (region.iteration && region.iteration->stride != 1) ||
+         llvm::any_of(region.outerIterations, [](const auto &outer) { return outer.stride != 1; });
+}
+
 std::optional<RegionBox> regionBox(const StaticShapeRegion &region, RegionQuery &query,
                                    llvm::ArrayRef<IntegerExpression> dimensions) {
-  if (region.kind == StaticShapeRegion::Kind::Empty ||
-      (region.iteration && region.iteration->stride != 1))
+  if (region.kind == StaticShapeRegion::Kind::Empty || stridedImage(region))
     return std::nullopt;
   if (region.kind == StaticShapeRegion::Kind::Whole)
     return query.full(dimensions);
@@ -1174,8 +1260,7 @@ std::optional<RegionBox> regionBox(const StaticShapeRegion &region, RegionQuery 
 }
 std::optional<RegionAxis> regionInterval(const StaticShapeRegion &region, RegionQuery &query,
                                          llvm::ArrayRef<IntegerExpression> dimensions) {
-  if (region.kind == StaticShapeRegion::Kind::Empty ||
-      (region.iteration && region.iteration->stride != 1))
+  if (region.kind == StaticShapeRegion::Kind::Empty || stridedImage(region))
     return std::nullopt;
   if (region.kind == StaticShapeRegion::Kind::Interval)
     return region.interval;
@@ -1282,8 +1367,8 @@ unsigned imageAxis(const StaticShapeRegion &region) {
   return region.iteration->varyingAxis.value_or(0);
 }
 bool sameInvariantAxes(const StaticShapeRegion &a, const StaticShapeRegion &b, RegionQuery &query) {
-  if (!a.iteration || !b.iteration || a.root != b.root ||
-      a.iteration->varyingAxis != b.iteration->varyingAxis ||
+  if (!a.outerIterations.empty() || !b.outerIterations.empty() || !a.iteration || !b.iteration ||
+      a.root != b.root || a.iteration->varyingAxis != b.iteration->varyingAxis ||
       !query.equal(a.iteration->occurrenceWidth, b.iteration->occurrenceWidth))
     return false;
   auto first = imageAxes(a, query), second = imageAxes(b, query);
@@ -1297,6 +1382,25 @@ bool sameInvariantAxes(const StaticShapeRegion &a, const StaticShapeRegion &b, R
   return true;
 }
 bool sameImage(const StaticShapeRegion &a, const StaticShapeRegion &b, RegionQuery &query) {
+  if (!a.outerIterations.empty() || !b.outerIterations.empty()) {
+    if (a.root != b.root || a.iterationCount() != b.iterationCount() ||
+        !query.spend(a.iterationCount()))
+      return false;
+    for (unsigned i = 0; i != a.iterationCount(); ++i) {
+      const auto &x = a.iterationAt(i), &y = b.iterationAt(i);
+      if (x.varyingAxis != y.varyingAxis || x.stride != y.stride ||
+          !query.equal(x.occurrenceWidth, y.occurrenceWidth) ||
+          !query.equal(x.tripCount, y.tripCount))
+        return false;
+    }
+    auto first = imageAxes(a, query), second = imageAxes(b, query);
+    if (!first || !second || first->size() != second->size())
+      return false;
+    for (auto [x, y] : llvm::zip(*first, *second))
+      if (!query.equal(x.lower, y.lower) || !query.equal(x.upperExclusive, y.upperExclusive))
+        return false;
+    return true;
+  }
   if (!sameInvariantAxes(a, b, query) || a.iteration->stride != b.iteration->stride ||
       !query.equal(a.iteration->tripCount, b.iteration->tripCount))
     return false;
@@ -1308,8 +1412,48 @@ bool sameImage(const StaticShapeRegion &a, const StaticShapeRegion &b, RegionQue
 // interval is a disjointness bound, never evidence that stride holes are filled.
 std::optional<ShapeRegionOverlap>
 compareStridedImages(const StaticShapeRegion &a, const StaticShapeRegion &b, RegionQuery &query) {
-  if ((!a.iteration || a.iteration->stride == 1) && (!b.iteration || b.iteration->stride == 1))
+  if (!stridedImage(a) && !stridedImage(b))
     return std::nullopt;
+  if (!a.outerIterations.empty() || !b.outerIterations.empty()) {
+    auto first = imageAxes(a, query), second = imageAxes(b, query);
+    if (!first || !second || first->size() != second->size())
+      return ShapeRegionOverlap::Unknown;
+    bool intersection = true;
+    auto coordinate = [&](const StaticShapeRegion &region, unsigned axis, RegionAxis bounds) {
+      StaticShapeRegion selected;
+      selected.root = region.root;
+      selected.kind = StaticShapeRegion::Kind::Box;
+      selected.axes = {bounds};
+      selected.interval = bounds;
+      for (unsigned i = 0; i != region.iterationCount(); ++i) {
+        const auto &map = region.iterationAt(i);
+        if (map.varyingAxis == axis) {
+          selected.iteration = map;
+          selected.iteration->varyingAxis.reset();
+          break;
+        }
+      }
+      return selected;
+    };
+    if (!query.spend(first->size() * (a.iterationCount() + b.iterationCount() + 1)))
+      return ShapeRegionOverlap::Unknown;
+    for (unsigned axis = 0; axis != first->size(); ++axis) {
+      const auto &x = (*first)[axis], &y = (*second)[axis];
+      if (query.less(x.upperExclusive, y.lower, true) ||
+          query.less(y.upperExclusive, x.lower, true))
+        return ShapeRegionOverlap::Disjoint;
+      auto left = coordinate(a, axis, x), right = coordinate(b, axis, y);
+      // Reuse the one-coordinate progression proof, retaining ordinary axes
+      // as ordinary intervals rather than inventing an induction or count.
+      auto relation = compareStridedImages(left, right, query);
+      if (relation && *relation == ShapeRegionOverlap::Disjoint)
+        return *relation;
+      intersection &=
+          relation ? *relation == ShapeRegionOverlap::Overlapping
+                   : query.less(x.lower, y.upperExclusive) && query.less(y.lower, x.upperExclusive);
+    }
+    return intersection ? ShapeRegionOverlap::Overlapping : ShapeRegionOverlap::Unknown;
+  }
   auto first = imageAxes(a, query), second = imageAxes(b, query);
   if (!first || !second || first->size() != second->size())
     return ShapeRegionOverlap::Unknown;
@@ -1369,10 +1513,14 @@ RegionStatus coalesceResidues(llvm::ArrayRef<StaticShapeRegion> input, RegionQue
     if (consumed[i] || input[i].kind == StaticShapeRegion::Kind::Empty)
       continue;
     const auto &first = input[i];
-    if (!first.iteration || first.iteration->stride == 1) {
+    if (!stridedImage(first)) {
       output.push_back(first);
       continue;
     }
+    // Nested residue completion is not yet admitted. Preserve holes rather
+    // than treating a per-coordinate hull as complete Cartesian coverage.
+    if (!first.outerIterations.empty())
+      return query.failedStatus();
     int64_t stride = first.iteration->stride;
     if (static_cast<uint64_t>(stride) > input.size())
       return query.failedStatus();
@@ -1385,8 +1533,8 @@ RegionStatus coalesceResidues(llvm::ArrayRef<StaticShapeRegion> input, RegionQue
       if (!query.spend())
         return query.failedStatus();
       const auto &next = input[j];
-      if (consumed[j] || !next.iteration || next.iteration->stride != stride ||
-          !sameInvariantAxes(first, next, query) ||
+      if (consumed[j] || !next.outerIterations.empty() || !next.iteration ||
+          next.iteration->stride != stride || !sameInvariantAxes(first, next, query) ||
           !query.equal(first.iteration->tripCount, next.iteration->tripCount))
         continue;
       auto nextAxes = imageAxes(next, query);
@@ -1541,6 +1689,26 @@ ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProject
     return status;
   if (!candidate.iteration)
     return RegionStatus::Unsupported;
+  // Injectivity is over every repeated occurrence between this actual use and
+  // the root's declaration, not merely each selector considered separately.
+  // A root declared in a family is already fresh in its enclosing occurrences.
+  Operation *rootScope = candidate.root.getDefiningOp()->getParentOp();
+  for (Operation *scope = use->getParentOp(); scope && scope != rootScope;
+       scope = scope->getParentOp()) {
+    if (!query.spend(candidate.iterationCount() + 1))
+      return query.failedStatus();
+    if (!isa<GenerateOp>(scope) && !isBoundedDigitalLoop(scope))
+      continue;
+    auto domain = isa<GenerateOp>(scope) ? resolveGeneratedDomain(scope)
+                                         : resolveBoundedIterationDomain(scope);
+    if (failed(domain))
+      return RegionStatus::Invalid;
+    bool represented = false;
+    for (unsigned i = 0; i != candidate.iterationCount(); ++i)
+      represented |= candidate.iterationAt(i).loop == scope;
+    if (domain->maximumTripCount > 1 && !represented)
+      return query.failedStatus();
+  }
   result = std::move(candidate);
   return RegionStatus::Proved;
 }
@@ -1568,9 +1736,12 @@ ShapeRegionProofStatus proveStaticShapeSameOccurrence(const StaticShapeProjectio
   auto second = deriveRegion(right, query, b, true, std::nullopt, true);
   if (second != RegionStatus::Proved)
     return second;
-  if (!a.iteration || !b.iteration || a.iteration->loop != b.iteration->loop ||
-      !sameImage(a, b, query) || !query.equal(a.iteration->offset, b.iteration->offset))
+  if (!a.iteration || !b.iteration || !sameImage(a, b, query) || !query.spend(a.iterationCount()))
     return query.failedStatus();
+  for (unsigned i = 0; i != a.iterationCount(); ++i)
+    if (a.iterationAt(i).loop != b.iterationAt(i).loop ||
+        !query.equal(a.iterationAt(i).offset, b.iterationAt(i).offset))
+      return query.failedStatus();
   return query.status;
 }
 
@@ -1951,7 +2122,7 @@ verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
     return status;
   if (selected.kind == StaticShapeRegion::Kind::Empty)
     return RegionStatus::Proved;
-  const bool stridedRead = selected.iteration && selected.iteration->stride != 1;
+  const bool stridedRead = stridedImage(selected);
   if (stridedRead) {
     // An exact mapped family read can be covered without filling its holes.
     for (unsigned i = 0; i != regions.size(); ++i) {
@@ -2046,7 +2217,7 @@ StaticShapeScalarLocation locate(const StaticShapeRegion &region, const StaticSh
     return {RegionStatus::Invalid, ShapeRegionMembership::Unknown, std::nullopt};
   if (region.root != point.root || region.kind == StaticShapeRegion::Kind::Empty)
     return reject(ShapeRegionMembership::Outside);
-  if (region.iteration && region.iteration->stride != 1)
+  if (stridedImage(region))
     return reject();
   auto dimensions = query.dimensions(region.root.getType());
   if (!dimensions)

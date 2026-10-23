@@ -99,11 +99,12 @@ public:
         waiver = nullptr;
       if (waiver)
         endpoint.domain = waiver->getAttrOfType<FlatSymbolRefAttr>("destination_domain");
-      bool boundary = false;
+      bool boundary = node.value && isa_and_nonnull<NetSplitOp>(node.value.getDefiningOp()) &&
+                      node.value.getDefiningOp()->hasAttr("hierarchy_driver");
       if (node.value) {
         auto access = resolveStaticShapeProjection(node.value, node.use);
         Operation *root = succeeded(access) ? access->root.getDefiningOp() : nullptr;
-        boundary = isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
+        boundary |= isa_and_nonnull<InstancePortOp>(root) && text(root, "direction") == "output";
         if (isa_and_nonnull<MemberAccessOp>(root) && hasDigitalInterfaceContract(root)) {
           auto reference = root->getAttrOfType<FlatSymbolRefAttr>("instance");
           Operation *endpoint =
@@ -523,8 +524,9 @@ LogicalResult AssignmentQuery::read(unsigned node, const StaticShapeProjection &
       // writer; that writer must not erase the requesting occurrence context.
       auto generatedChoice = [&](unsigned context) {
         return llvm::any_of(guards[context], [&](auto entry) {
-          return choices[entry.first].occurrence == write.loop &&
-                 llvm::isa_and_nonnull<GenerateOp>(write.loop);
+          Operation *occurrence = choices[entry.first].occurrence;
+          return llvm::isa_and_nonnull<GenerateOp>(occurrence) &&
+                 occurrence->isProperAncestor(write.operation);
         });
       };
       bool sameOccurrenceRequired = generatedChoice(nodes[node].guard) ||
@@ -901,26 +903,31 @@ LogicalResult AssignmentQuery::collect(Operation *operation, Operation *loop, un
     return reject(operation, "ordinary assignment target lacks its actual writable owner");
   bool active = *guard != impossibleGuard;
   if (loop) {
-    // The image owner admits one varying occurrence axis. A second enclosing
-    // iteration would repeat that family, even if the nearest loop is injective.
     bool localFamilyRoot = llvm::isa_and_nonnull<GenerateOp>(loop) &&
                            target->root.getDefiningOp()->getParentOp() == loop &&
                            llvm::isa<DigitalStorageOp>(target->root.getDefiningOp()) &&
                            loop->getNumResults() == 1;
-    if (iterationScope(loop) && !localFamilyRoot)
-      return reject(operation,
-                    "nested iteration assignment images are outside the bounded profile");
+    bool repeated = false;
+    Operation *rootScope = target->root.getDefiningOp()->getParentOp();
+    bool outsideRoot = false;
+    for (Operation *scope = loop; scope; scope = iterationScope(scope)) {
+      if (failed(guardWork(operation)))
+        return failure();
+      auto domain = iterationDomain(scope);
+      if (failed(domain))
+        return failure();
+      outsideRoot |= scope == rootScope;
+      repeated |= !outsideRoot && domain->maximumTripCount > 1;
+      active &= domain->maximumTripCount != 0;
+    }
     StaticShapeRegion image;
     auto status = resolveStaticShapeIterationImage(*target, operation, image,
                                                    {limits.maximumShapeWork, limits.maximumNodes});
-    auto domain = iterationDomain(loop);
-    // A declaration in this exact family is fresh storage in each occurrence,
-    // unlike a module root whose varying index must establish injectivity.
-    if (failed(domain) || (!localFamilyRoot && domain->maximumTripCount > 1 &&
-                           (status != ShapeRegionProofStatus::Proved || !image.iteration ||
-                            image.iteration->loop != loop)))
+    // ShapeModel proves the entire ordered occurrence ancestry and Cartesian
+    // footprint. Per-axis injectivity alone cannot discharge a missing outer
+    // coordinate. Fresh local declarations retain their original family rule.
+    if (!localFamilyRoot && repeated && status != ShapeRegionProofStatus::Proved)
       return reject(operation, "iteration target must prove an injective physical write family");
-    active &= domain->maximumTripCount != 0;
   }
   for (unsigned previous : writers[*owner]) {
     const Write &other = writes[previous];
@@ -1195,8 +1202,10 @@ LogicalResult verifyDigitalAssignmentModel(Operation *module, DigitalAssignmentP
   return succeeded(AssignmentQuery(module, limits).graph({})) ? success() : failure();
 }
 
-LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
-                                          DigitalAssignmentProofLimits limits) {
+LogicalResult
+verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
+                            DigitalAssignmentProofLimits limits,
+                            SmallVectorImpl<DigitalResolvedSplitBinding> *splitBindings) {
   struct LocalGraph {
     DigitalDependencyGraph graph;
     SmallVector<SequentialSample, 8> samples;
@@ -1467,9 +1476,14 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
   struct ResolvedSlot {
     unsigned parent, rank = 0;
     std::optional<ContextualDomain> domain;
-    Operation *split = nullptr;
     bool boundary = false;
   };
+  struct ResolvedUse {
+    unsigned slot, occurrence;
+    Operation *operation;
+  };
+  SmallVector<ResolvedUse> resolvedDrivers, resolvedSplits;
+  SmallVector<DigitalResolvedSplitBinding> collectedSplitBindings;
   SmallVector<ResolvedSlot> resolvedSlots;
   DenseMap<unsigned, unsigned> resolvedNodes;
   SmallVector<std::pair<unsigned, unsigned>> resolvedValues;
@@ -1499,7 +1513,7 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
       actual = *resolved;
     }
     unsigned index = resolvedSlots.size();
-    resolvedSlots.push_back({index, 0, actual, nullptr, false});
+    resolvedSlots.push_back({index, 0, actual, false});
     return index;
   };
   auto joinSlots = [&](unsigned left, unsigned right, bool boundary,
@@ -1522,8 +1536,6 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
       ++root.rank;
     if (!root.domain)
       root.domain = child.domain;
-    if (!root.split)
-      root.split = child.split;
     root.boundary |= child.boundary || boundary;
     return success();
   };
@@ -1536,8 +1548,13 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
       auto slot = newSlot(occurrence, component.domain, component.value.getDefiningOp());
       if (failed(slot))
         return failure();
-      if (!component.splits.empty())
-        resolvedSlots[*slot].split = component.splits.front();
+      if (component.drivers.size() > limits.maximumNodes - resolvedDrivers.size() ||
+          component.splits.size() > limits.maximumNodes - resolvedSplits.size())
+        return reject(context.module, "resolved hierarchy driver/split facts exceed finite budget");
+      for (Operation *driver : component.drivers)
+        resolvedDrivers.push_back({*slot, static_cast<unsigned>(occurrence), driver});
+      for (Operation *split : component.splits)
+        resolvedSplits.push_back({*slot, static_cast<unsigned>(occurrence), split});
       resolvedNodes.try_emplace(offsets[occurrence] + found->second, *slot);
       for (Value value : component.values) {
         auto alias = local.values.find(value);
@@ -1581,16 +1598,78 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
         return failure();
     }
   }
-  for (unsigned index = 0; index < resolvedSlots.size(); ++index)
-    if (rootSlot(index) == index && resolvedSlots[index].boundary && resolvedSlots[index].split)
-      return reject(resolvedSlots[index].split,
-                    "split on a child-boundary-joined component requires global driver transport");
-  for (auto [node, slot] : resolvedValues)
-    if (resolvedSlots[rootSlot(slot)].boundary)
-      graph.nodes[node].hierarchyBoundary = true;
   std::map<unsigned, SmallVector<unsigned, 2>> resolvedGroups;
   for (auto [node, slot] : resolvedNodes)
     resolvedGroups[rootSlot(slot)].push_back(node);
+  for (auto &[slot, nodes] : resolvedGroups)
+    llvm::sort(nodes);
+  // Group immutable authored facts only after all exact endpoint unions. Each
+  // driver remains qualified by occurrence; reusing a definition is not aliasing.
+  DenseMap<unsigned, SmallVector<ResolvedUse, 2>> componentDrivers;
+  DenseSet<std::pair<unsigned, Operation *>> driverIdentities;
+  for (const auto &driver : resolvedDrivers)
+    if (driverIdentities.insert({driver.occurrence, driver.operation}).second)
+      componentDrivers[rootSlot(driver.slot)].push_back(driver);
+  auto dependencyNode = [&](unsigned occurrence, Value value,
+                            Operation *use) -> FailureOr<unsigned> {
+    Operation *owner = hierarchy->occurrences()[occurrence].module;
+    const auto &local = definitions[indexes.lookup(owner)];
+    auto found = local.values.find(value);
+    if (found == local.values.end()) {
+      (void)reject(use, "resolved split lost its exact occurrence-qualified dependency root");
+      return failure();
+    }
+    return offsets[occurrence] + found->second;
+  };
+  for (const auto &split : resolvedSplits) {
+    unsigned slot = rootSlot(split.slot);
+    bool joined = resolvedSlots[slot].boundary;
+    if (split.operation->hasAttr("hierarchy_driver") && !joined)
+      return reject(split.operation,
+                    "hierarchy-driver split requires an actual closed-root boundary connection");
+    auto found = componentDrivers.find(slot);
+    if (found == componentDrivers.end() || found->second.size() != 1)
+      return reject(split.operation,
+                    "resolved hierarchy split requires exactly one actual conditional driver");
+    const auto &driver = found->second.front();
+    bool valueDriver = isa<NetDriveOp>(driver.operation);
+    if (!valueDriver && !isa<NetDriveLevelOp>(driver.operation))
+      return reject(split.operation,
+                    "resolved hierarchy split cannot invent an unconditional driver's enable");
+    Value data = valueDriver ? driver.operation->getOperand(2) : Value();
+    Value enable = driver.operation->getOperand(valueDriver ? 3 : 2);
+    if (joined) {
+      for (unsigned result = 0; result < 2; ++result) {
+        auto node =
+            dependencyNode(split.occurrence, split.operation->getResult(result), split.operation);
+        if (failed(node))
+          return failure();
+        auto &target = graph.nodes[*node];
+        edges -= target.dependencies.size();
+        target.dependencies.clear();
+        Value source = result ? enable : data;
+        if (source) {
+          auto origin = dependencyNode(driver.occurrence, source, driver.operation);
+          if (failed(origin))
+            return failure();
+          if (++edges > limits.maximumEdges)
+            return reject(split.operation, "resolved split edges exceed finite hierarchy budget");
+          target.dependencies.push_back(*origin);
+        }
+        target.hierarchyBoundary = true;
+      }
+    }
+    // The deterministic component representative is an original value qualified
+    // by its actual occurrence, not a new physical net or a split-specific alias.
+    const auto &component = graph.nodes[resolvedGroups.find(slot)->second.front()];
+    collectedSplitBindings.push_back(
+        {split.occurrence, driver.occurrence, component.occurrence, split.operation,
+         driver.operation, component.value, data, enable,
+         valueDriver ? StringAttr() : driver.operation->getAttrOfType<StringAttr>("level")});
+  }
+  for (auto [node, slot] : resolvedValues)
+    if (resolvedSlots[rootSlot(slot)].boundary)
+      graph.nodes[node].hierarchyBoundary = true;
   for (auto &[slot, nodes] : resolvedGroups) {
     if (!resolvedSlots[slot].boundary)
       continue;
@@ -1637,6 +1716,10 @@ LogicalResult verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> 
   if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)) ||
       failed(verifyWaiverSourceDependencies(root, graph, sampleLimits)))
     return failure();
-  return verifySequentialSampleDependencies(root, samples, graph, sampleRoots, sampleLimits);
+  if (failed(verifySequentialSampleDependencies(root, samples, graph, sampleRoots, sampleLimits)))
+    return failure();
+  if (splitBindings)
+    splitBindings->append(collectedSplitBindings.begin(), collectedSplitBindings.end());
+  return success();
 }
 } // namespace nodal

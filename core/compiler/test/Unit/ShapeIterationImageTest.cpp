@@ -76,6 +76,48 @@ std::string model(int64_t count, int64_t step, const std::string &dimension, boo
   return "module { \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({" + prefix +
          literal("marker", 99) + "}) : () -> () }";
 }
+std::string generatedMatrix(int64_t rows, int64_t columns, int64_t step = 1,
+                            bool nestedType = false, bool symbolic = false, bool repeated = false,
+                            bool missing = false, bool swapped = false) {
+  std::string r = symbolic ? "R" : std::to_string(rows);
+  std::string c = symbolic ? "C" : std::to_string(columns);
+  const std::string rowType = shaped(c);
+  const std::string rootType =
+      nestedType ? "!nodal.shaped<\"" + r + "\", " + rowType + ">" : shaped(r + "," + c);
+  std::string body = literal("zero", 0) + literal("one", 1) + literal("step", step);
+  if (symbolic) {
+    for (auto name : {"R", "C"}) {
+      std::string declaration = parameter(name);
+      auto at = declaration.find(literal(std::string(name) + "low", 0));
+      declaration.replace(at, literal(std::string(name) + "low", 0).size(),
+                          literal(std::string(name) + "low", 2));
+      body += declaration;
+    }
+  } else {
+    body += literal("R", rows) + literal("C", columns);
+  }
+  body += "%cells = \"nodal.digital_storage\"() <{name = \"cells\", kind = \"wire\", "
+          "metadata = {test_name = \"root\"}}> : () -> " +
+          rootType + "\n";
+  auto begin = [&](std::string name, std::string upper, std::string stepName) {
+    int64_t maximum = symbolic ? 1000000 : upper == "R" ? rows : columns;
+    int64_t stride = stepName == "step" ? step : 1;
+    maximum = (maximum + stride - 1) / stride;
+    return "\"nodal.generate\"(%zero, %" + upper + ", %" + stepName + ") <{induction = \"" + name +
+           "\", region_id = \"Fixture." + name + "\", induction_path = \"Fixture." + name +
+           ".index\", metadata = {maximum_trip_count = " + std::to_string(maximum) +
+           " : i64}}> ({^bb0(%" + name + ": i64):\n";
+  };
+  body += begin("i", swapped ? "C" : "R", "one");
+  body += "%row = \"nodal.shape_index\"(%cells, %" + std::string(missing ? "zero" : "i") +
+          ") <{metadata = {test_name = \"row\"}}> : (" + rootType + ", i64) -> " + rowType + "\n";
+  body += begin("j", swapped ? "R" : "C", "step");
+  body += index("leaf", "row", repeated ? "i" : "j", rowType);
+  body += index("leaf2", "row", repeated ? "i" : "j", rowType);
+  body += "}) : (i64, i64, i64) -> ()\n}) : (i64, i64, i64) -> ()\n";
+  return "module { \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({" + body +
+         literal("marker", 99) + "}) : () -> () }";
+}
 Value value(mlir::ModuleOp module, StringRef name) {
   Value found;
   module.walk([&](Operation *operation) {
@@ -349,6 +391,65 @@ int main() {
       check(failed(nodal::resolveStaticShapeProjection(value(*module, "root"),
                                                        value(*module, "marker").getDefiningOp())),
             "nested-total-cardinality-overflow-rejected");
+  }
+  for (auto [name, source] :
+       {std::make_pair("matrix", generatedMatrix(3, 4)),
+        std::make_pair("matrix-nested-Vec", generatedMatrix(3, 4, 1, true)),
+        std::make_pair("matrix-trillion-lanes", generatedMatrix(1000000, 1000000)),
+        std::make_pair("matrix-independent-parameters", generatedMatrix(2, 2, 1, false, true)),
+        std::make_pair("matrix-nonunit-stride", generatedMatrix(4, 4, 2))}) {
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    check(bool(module), std::string(name) + "-parse");
+    if (!module)
+      continue;
+    auto leaf = value(*module, "leaf"), leaf2 = value(*module, "leaf2");
+    auto use = leaf2.getDefiningOp();
+    auto selected = nodal::resolveStaticShapeProjection(leaf, use);
+    auto other = nodal::resolveStaticShapeProjection(leaf2, use);
+    auto root = nodal::resolveStaticShapeProjection(value(*module, "root"), use);
+    check(succeeded(selected) && succeeded(other) && succeeded(root),
+          std::string(name) + "-projection");
+    if (failed(selected) || failed(other) || failed(root))
+      continue;
+    nodal::StaticShapeRegion image;
+    check(nodal::resolveStaticShapeIterationImage(*selected, use, image) == Status::Proved &&
+              image.iterationCount() == 2 && image.iterationAt(0).varyingAxis == 0 &&
+              image.iterationAt(1).varyingAxis == 1 &&
+              image.iterationAt(0).loop->isProperAncestor(image.iterationAt(1).loop),
+          std::string(name) + "-ordered-Cartesian-image");
+    check(nodal::proveStaticShapeSameOccurrence(*selected, *other, use) == Status::Proved,
+          std::string(name) + "-exact-occurrence-vector");
+    const bool strided = std::string(name) == "matrix-nonunit-stride";
+    auto marker = value(*module, "marker").getDefiningOp();
+    check((nodal::verifyStaticShapeProjectionCoverage(*root, {*selected}, marker) ==
+           Status::Proved) == !strided,
+          std::string(name) + "-complete-or-strided-holes");
+    check(nodal::verifyStaticShapeProjectionCoverage(*selected, {*other}, marker) == Status::Proved,
+          std::string(name) + "-exact-family-read");
+    auto overlap = nodal::compareStaticShapeProjections(*selected, *other, marker);
+    check(overlap.status == Status::Proved &&
+              overlap.overlap == nodal::ShapeRegionOverlap::Overlapping,
+          std::string(name) + "-duplicate-writer-overlap");
+    check(nodal::resolveStaticShapeIterationImage(*selected, use, image, {200000, 1}) ==
+              Status::ResourceLimit,
+          std::string(name) + "-axis-state-budget");
+  }
+  for (auto [name, source] :
+       {std::make_pair("repeated-outer-axis", generatedMatrix(4, 4, 1, false, false, true)),
+        std::make_pair("missing-outer-axis", generatedMatrix(4, 4, 1, false, false, false, true)),
+        std::make_pair("swapped-same-envelope-parameters",
+                       generatedMatrix(2, 2, 1, false, true, false, false, true))}) {
+    ScopedDiagnosticHandler silence(&context, [](Diagnostic &) { return success(); });
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool rejected = false;
+    if (module) {
+      auto leaf = value(*module, "leaf");
+      auto selected = nodal::resolveStaticShapeProjection(leaf, leaf.getDefiningOp());
+      nodal::StaticShapeRegion image;
+      rejected = failed(selected) || nodal::resolveStaticShapeIterationImage(
+                                         *selected, leaf.getDefiningOp(), image) != Status::Proved;
+    }
+    check(bool(module) && rejected, std::string(name) + "-rejected");
   }
   llvm::outs() << "SHAPE_ITERATION_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures ? 1 : 0;

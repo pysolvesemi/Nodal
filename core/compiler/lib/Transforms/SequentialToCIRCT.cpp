@@ -1662,10 +1662,40 @@ private:
             return WalkResult::interrupt();
           }
           auto *nested = generatedFamilyPlans.lookup(child);
+          // A child iteration drives its exact parent row. Route that same
+          // canonical sink bottom-up, never a second driver or a lane clone.
+          for (auto [i, leaf] : llvm::enumerate(nested->outputs))
+            for (Value destination : leaf.destinations) {
+              auto row = destination.getDefiningOp<ShapeIndexOp>();
+              if (!row || row->getParentOp() != &op || row->getNumOperands() != 2 ||
+                  capturedValue(row->getOperand(1)) != family.domain.induction ||
+                  targetValueType(destination.getType()) != leaf.busType) {
+                (void)reject(child, "nested generated output lost its exact parent row");
+                return WalkResult::interrupt();
+              }
+              auto index = output(leaf.value, nested, i);
+              if (failed(index)) {
+                (void)reject(child, "nested generated output exceeds finite physical bit budget");
+                return WalkResult::interrupt();
+              }
+              auto &out = family.outputs[*index];
+              if (!llvm::is_contained(out.destinations, row->getOperand(0)))
+                out.destinations.push_back(row->getOperand(0));
+              family.sinks.insert(row);
+            }
           for (Value value : nested->captures)
             if (failed(capture(value)))
               return WalkResult::interrupt();
           return WalkResult::skip();
+        }
+        if (isa<ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(child) &&
+            child->getNumResults() == 1 && child->getResult(0).getType().isSignlessInteger(64)) {
+          if (failed(verifyStructuralIntegerOperation(child))) {
+            (void)reject(child, "generated static value lacks its canonical Integer proof");
+            return WalkResult::interrupt();
+          }
+          staticOperations.insert(child);
+          return WalkResult::advance();
         }
         if (isa<GeneratedMemberOp>(child)) {
           auto member = inspectGeneratedMember(child);
@@ -1746,21 +1776,44 @@ private:
             (void)reject(child, "generated output requires one exact complete iteration partition");
             return WalkResult::interrupt();
           }
-          auto portValue = projection->root.getDefiningOp<PortValueOp>();
-          Operation *port = portValue
-                                ? SymbolTable::lookupSymbolIn(
-                                      source, portValue->getAttrOfType<FlatSymbolRefAttr>("port"))
-                                : nullptr;
-          auto index = output(child->getOperand(1));
-          if (!port || text(port, "direction") != "output" || failed(index) ||
-              targetValueType(projection->root.getType()) != family.outputs[*index].busType ||
-              !generatedOutputPorts.try_emplace(port, std::make_pair(&family, *index)).second) {
-            (void)reject(
-                child, "generated output requires one ordinary output pin with exact lane layout");
+          auto slice = child->getOperand(0).getDefiningOp<ShapeIndexOp>();
+          if (!slice || slice->getNumOperands() != 2 || slice->getParentOp() != &op ||
+              capturedValue(slice->getOperand(1)) != family.domain.induction) {
+            (void)reject(child, "generated output requires its exact direct induction slice");
             return WalkResult::interrupt();
           }
-          family.outputs[*index].destinations.push_back(projection->root);
-          family.sinks.insert(child->getOperand(0).getDefiningOp());
+          // The shared image proves full root coverage. Physical composition
+          // peels only this actual family's axis, retaining every parent row.
+          SmallVector<GeneratedFamilyPlan *> ancestry;
+          for (auto *ancestor = &family; ancestor; ancestor = ancestor->parent)
+            ancestry.push_back(ancestor);
+          std::reverse(ancestry.begin(), ancestry.end());
+          if (image.iterationCount() != ancestry.size()) {
+            (void)reject(child, "generated output image must retain every exact family axis");
+            return WalkResult::interrupt();
+          }
+          if (ancestry.size() > maximumGeneratedOperations - cost) {
+            (void)reject(child, "generated output route exceeds finite target budget");
+            return WalkResult::interrupt();
+          }
+          cost += ancestry.size();
+          for (unsigned i = 0; i != ancestry.size(); ++i) {
+            const auto &axis = image.iterationAt(i);
+            if (axis.loop != ancestry[i]->operation || !axis.varyingAxis ||
+                *axis.varyingAxis != i || axis.stride != 1 || axis.empty) {
+              (void)reject(child, "generated output requires ordered complete direct family axes");
+              return WalkResult::interrupt();
+            }
+          }
+          auto index = output(child->getOperand(1));
+          Value destination = slice->getOperand(0);
+          if (failed(index) ||
+              targetValueType(destination.getType()) != family.outputs[*index].busType) {
+            (void)reject(child, "generated output requires exact parent-row lane layout");
+            return WalkResult::interrupt();
+          }
+          family.outputs[*index].destinations.push_back(destination);
+          family.sinks.insert(slice);
           return WalkResult::advance();
         }
         if (isa<SequentialUpdateOp>(child)) {
@@ -1828,6 +1881,22 @@ private:
                   "generated alternatives require identical actual controls and initializer");
         }
       }
+      for (auto [i, out] : llvm::enumerate(family.outputs))
+        for (Value destination : out.destinations) {
+          auto portValue = destination.getDefiningOp<PortValueOp>();
+          if (!portValue) {
+            if (!parent)
+              return reject(&op, "generated root output must reach its original module pin");
+            continue; // The exact enclosing family consumes this row route.
+          }
+          Operation *port = SymbolTable::lookupSymbolIn(
+              source, portValue->getAttrOfType<FlatSymbolRefAttr>("port"));
+          if (parent || !port || text(port, "direction") != "output" ||
+              targetValueType(destination.getType()) != out.busType ||
+              !generatedOutputPorts.try_emplace(port, std::make_pair(&family, i)).second)
+            return reject(&op,
+                          "generated output requires one ordinary output pin with exact layout");
+        }
       // A driven output bus is a sink, not a helper input. Reject any separate
       // read of that bus rather than invent an internally driven input pin.
       llvm::DenseSet<Value> outputRoots;
@@ -1987,9 +2056,23 @@ private:
       return {};
     // A parameter value may be outlined as a runtime wire. A localparam keeps
     // the slice width an elaboration constant through the actual SV consumer.
-    Value stride = make(at, "sv.localparam", builder.getI32Type(), {},
-                        {builder.getNamedAttr("value", width),
-                         builder.getNamedAttr("name", builder.getStringAttr(""))});
+    Value stride;
+    {
+      // These operand-free declarations refer only to this helper's admitted
+      // parameters. Place them before every use, including child loop captures:
+      // the exporter otherwise turns a forward localparam use into a wire,
+      // which is not a legal constant part-select width.
+      OpBuilder::InsertionGuard insertion(builder);
+      Operation *owner = builder.getInsertionBlock()->getParentOp();
+      auto module = dyn_cast<circt::hw::HWModuleOp>(owner);
+      if (!module)
+        module = owner->getParentOfType<circt::hw::HWModuleOp>();
+      assert(module && "generated slice requires an actual target module");
+      builder.setInsertionPointToStart(module.getBodyBlock());
+      stride = make(at, "sv.localparam", builder.getI32Type(), {},
+                    {builder.getNamedAttr("value", width),
+                     builder.getNamedAttr("name", builder.getStringAttr(""))});
+    }
     return make(
         at, "sv.verbatim.expr", result, {input, index, stride},
         {builder.getNamedAttr("format_string",
@@ -2246,10 +2329,14 @@ private:
           values[out.value] = buses[i];
         for (Value destination : out.destinations) {
           auto pin = destination.getDefiningOp<PortValueOp>();
-          Operation *port =
-              SymbolTable::lookupSymbolIn(source, pin->getAttrOfType<FlatSymbolRefAttr>("port"));
-          for (Value reference : portValues[port])
-            values[reference] = buses[i];
+          if (pin) {
+            Operation *port =
+                SymbolTable::lookupSymbolIn(source, pin->getAttrOfType<FlatSymbolRefAttr>("port"));
+            for (Value reference : portValues[port])
+              values[reference] = buses[i];
+          } else {
+            values[destination] = buses[i];
+          }
         }
       }
       for (Operation *operation : family.selections) {

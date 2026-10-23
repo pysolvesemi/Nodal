@@ -1115,8 +1115,12 @@ LogicalResult Model::resolvedEffect(Operation *operation) {
         (split && !boolean(operation->getResult(1).getType())))
       return reject(operation,
                     "net read/split must retain exact value and canonical Bool result types");
-    if (split)
+    if (split) {
+      if (operation->hasAttr("hierarchy_driver") &&
+          !operation->getAttrOfType<UnitAttr>("hierarchy_driver"))
+        return reject(operation, "split hierarchy-driver intent must be the closed unit property");
       splits.emplace_back(*index, operation);
+    }
     return success();
   }
   if (through) {
@@ -1326,6 +1330,13 @@ LogicalResult Model::verify() {
     possibleDrivers[representative(index)].push_back(operation);
   for (auto [index, operation] : splits) {
     auto found = possibleDrivers.find(representative(index));
+    if (operation->hasAttr("hierarchy_driver")) {
+      // This is an unresolved obligation, never an external driver. The mandatory
+      // closed-root proof must establish an actual joined boundary and driver.
+      if (found != possibleDrivers.end() && !found->second.empty())
+        return reject(operation, "hierarchy-driver split must have no local authored value driver");
+      continue;
+    }
     if (found == possibleDrivers.end() || found->second.size() != 1)
       return reject(
           operation,
@@ -1566,8 +1577,14 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
     componentDriver.try_emplace(representative(index), operation);
   for (auto [index, operation] : splits) {
     Operation *driver = componentDriver.lookup(representative(index));
-    // verify() proved exactly one conditional driver. A split exposes that
-    // driver's data/enable, not an independently invented resolved signal.
+    // A contextual split retains explicit empty obligations until the existing
+    // occurrence proof binds both results to one actual conditional driver.
+    if (!driver && operation->hasAttr("hierarchy_driver")) {
+      add(operation->getResult(0));
+      add(operation->getResult(1));
+      continue;
+    }
+    // verify() proved exactly one conditional local driver.
     if (!driver)
       return reject(operation, "split dependency has no verified conditional driver");
     auto &data = add(operation->getResult(0));

@@ -773,7 +773,8 @@ def Nodal_NetPassThroughOp : Nodal_Op<"net_pass_through", [HasParent<"ModuleOp">
 }
 def Nodal_NetSplitOp : Nodal_Op<"net_split", [HasParent<"ModuleOp">]> {
   let summary = "Typed write and enable views of one unique authored conditional driver";
-  let arguments = (ins Nodal_ResolvedType:$net, DictionaryAttr:$metadata);
+  let arguments = (ins Nodal_ResolvedType:$net, OptionalAttr<UnitAttr>:$hierarchy_driver,
+                       DictionaryAttr:$metadata);
   let results = (outs AnyType:$value, AnyType:$enable);
   let hasVerifier = 1;
 }

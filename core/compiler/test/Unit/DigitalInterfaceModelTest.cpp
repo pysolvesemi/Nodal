@@ -5,6 +5,8 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/HierarchyModel.h"
 #include "nodal/Dialect/Nodal/NodalDialect.h"
 #include "nodal/Dialect/Nodal/TargetCapabilities.h"
 
@@ -366,6 +368,26 @@ std::string asStandaloneBoundary(std::string source) {
 }
 std::string standaloneBoundaryFixture(StringRef parentEffects = "", StringRef childEffects = "") {
   return asStandaloneBoundary(hierarchyResolvedFixture(parentEffects, childEffects));
+}
+std::string contextualSplit(StringRef target = "net", StringRef mode = "push_pull") {
+  return replace(split(target, mode), "metadata =", "hierarchy_driver = unit, metadata =");
+}
+std::string bareModule(StringRef name, StringRef body) {
+  return "\"nodal.module\"() <{sym_name = \"" + name.str() + "\", metadata = {}}> ({\n" +
+         body.str() + "}) : () -> ()\n";
+}
+std::string bareInstance(StringRef name = "child", StringRef target = "Child") {
+  return "\"nodal.instance\"() <{sym_name = \"" + name.str() + "\", module = @" + target.str() +
+         ", parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()\n";
+}
+std::string bareSplitFixture(StringRef parentEffects = "", StringRef childEffects = "",
+                             bool sibling = false) {
+  std::string top = bareInstance() + standaloneBoundary();
+  if (sibling)
+    top += bareInstance("sibling") + standaloneBoundary("sibling_view", "sibling");
+  return "module attributes {nodal.root.module = @Top} {\n" +
+         bareModule("Top", top + parentEffects.str()) +
+         bareModule("Child", net("exported") + childEffects.str()) + "}\n";
 }
 std::string symbolicStandaloneBoundaryFixture(bool wrong = false) {
   std::string parentParameter = parameter();
@@ -1247,12 +1269,93 @@ int main() {
                             replace(standaloneBoundary(), resolved(), resolved("read_only"))),
                     net("exported"), net("exported", "read_only")),
             false, "does not permit creating or using a driver");
-  hierarchy("standalone-boundary-joined-split-explicitly-requires-global-transport",
-            standaloneBoundaryFixture("", childDriver + split("exported")), false,
-            "split on a child-boundary-joined component requires global driver transport");
+  hierarchy("standalone-boundary-local-split-retains-unique-global-driver",
+            standaloneBoundaryFixture("", childDriver + split("exported")), true);
   hierarchy("standalone-boundary-no-local-driver-split-remains-strict",
             standaloneBoundaryFixture("", split("exported")), false,
             "exactly one authored conditional driver");
+  hierarchy("contextual-split-parent-observes-child-driver-without-clock-trigger",
+            bareSplitFixture(contextualSplit("projected"), childDriver), true);
+  hierarchy("contextual-split-child-observes-parent-driver-without-clock-trigger",
+            bareSplitFixture(parentDriver, contextualSplit("exported")), true);
+  hierarchy("contextual-split-missing-root-is-not-an-empty-constant",
+            replace(bareSplitFixture(contextualSplit("projected"), childDriver),
+                    " attributes {nodal.root.module = @Top}", ""),
+            false, "requires one exact outer nodal.root.module selector");
+  hierarchy("contextual-split-driverless-joined-component-rejected",
+            bareSplitFixture(contextualSplit("projected")), false,
+            "resolved hierarchy split requires exactly one actual conditional driver");
+  hierarchy("contextual-split-local-driver-forged-intent-rejected",
+            bareSplitFixture(parentDriver + contextualSplit("projected")), false,
+            "hierarchy-driver split must have no local authored value driver");
+  hierarchy("contextual-split-unjoined-root-rejected",
+            "module attributes {nodal.root.module = @Top} {" +
+                bareModule("Top", net() + contextualSplit()) + "}",
+            false, "hierarchy-driver split requires an actual closed-root boundary connection");
+  const std::string unreachable = bareSplitFixture("", childDriver);
+  hierarchy("contextual-split-unused-definition-cannot-hide-obligation",
+            unreachable.substr(0, unreachable.rfind('}')) +
+                bareModule("Dead", net() + contextualSplit()) + "}",
+            false, "hierarchy-driver split belongs to an unreachable definition");
+  hierarchy("contextual-split-repeated-definition-keeps-independent-drivers",
+            bareSplitFixture(
+                contextualSplit("projected") +
+                    replace(replace(contextualSplit("sibling_view"), "%write", "%second_write"),
+                            "%enabled", "%second_enable"),
+                childDriver, true),
+            true);
+  hierarchy("contextual-split-sibling-join-counts-both-occurrence-drivers",
+            bareSplitFixture(through("projected", "sibling_view") + contextualSplit("projected"),
+                             childDriver, true),
+            false, "resolved hierarchy split requires exactly one actual conditional driver");
+  const std::string middle = net("exported") + bareInstance() +
+                             replace(standaloneBoundary(), "Top.projected", "Middle.projected") +
+                             through("exported", "projected");
+  hierarchy("contextual-split-two-boundaries-retain-one-actual-driver",
+            "module attributes {nodal.root.module = @Top} {" +
+                bareModule("Top", bareInstance("child", "Middle") + standaloneBoundary() +
+                                      contextualSplit("projected")) +
+                bareModule("Middle", middle) + bareModule("Child", net("exported") + childDriver) +
+                "}",
+            true);
+  const std::string splitFeedback =
+      "%child_in = \"nodal.instance_port\"() <{instance = @child, port = \"input\", "
+      "direction = \"input\", metadata = {}}> : () -> " +
+      bits + "\n" + contextualSplit("projected") +
+      "\"nodal.digital_assign\"(%child_in, %write) <{kind = \"continuous\", metadata = {}}> : (" +
+      bits + ", " + bits + ") -> ()\n";
+  hierarchy("contextual-split-data-feedback-retains-cross-occurrence-cycle",
+            bareSplitFixture(splitFeedback,
+                             port("input", bits, "input", "none") + driver("driver", "exported") +
+                                 literal("enable", boolean) +
+                                 replace(netDrive("driver", "exported"), "%value", "%input")),
+            false, "hierarchy connection contains a causal combinational dependency cycle");
+  auto bindingFacts = [&](StringRef name, const std::string &source, unsigned expected) {
+    ++cases;
+    diagnosticText.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool valid = parsed && succeeded(verify(parsed->getOperation()));
+    SmallVector<nodal::DigitalResolvedSplitBinding> facts;
+    std::string before = valid ? print(parsed->getOperation()) : "";
+    if (valid) {
+      auto model = nodal::HierarchyModel::create(parsed->getOperation());
+      valid = succeeded(model) && succeeded(nodal::verifyHierarchyDependencies(*model, {}, &facts));
+    }
+    bool passed = valid && facts.size() == expected && before == print(parsed->getOperation());
+    for (const auto &fact : facts)
+      passed &= fact.split && fact.driver && fact.component && fact.enable &&
+                bool(fact.data) != bool(fact.level) &&
+                fact.driverOccurrence != fact.splitOccurrence;
+    failures += !passed;
+    if (!passed)
+      llvm::errs() << diagnosticText;
+    (passed ? llvm::outs() : llvm::errs())
+        << "DIGITAL_INTERFACE_MODEL_" << (passed ? "PASS " : "FAIL ") << name << '\n';
+  };
+  bindingFacts("contextual-split-facts-retain-actual-child-driver",
+               bareSplitFixture(contextualSplit("projected"), childDriver), 1);
+  bindingFacts("contextual-split-facts-retain-actual-parent-driver",
+               bareSplitFixture(parentDriver, contextualSplit("exported")), 1);
   hierarchy("standalone-boundary-read-feedback-remains-a-real-cycle",
             standaloneBoundaryFixture(driver("driver", "projected") + literal("enable", boolean) +
                                       resolvedRead("projected", "value") +
@@ -1290,12 +1393,11 @@ int main() {
               driver("driver", "exported") + literal("enable", boolean) +
               netDrive("driver", "exported")),
       false, "causal combinational dependency cycle");
-  hierarchy("resolved-boundary-split-requires-global-driver-transport",
+  hierarchy("resolved-boundary-split-rechecks-all-actual-drivers",
             hierarchyResolvedFixture(parentDriver, childDriver + split("exported")), false,
-            "split on a child-boundary-joined component requires global driver transport");
-  hierarchy("resolved-boundary-unaccessed-parent-cannot-hide-child-split",
-            hierarchyResolvedFixture("", childDriver + split("exported"), "sink", false), false,
-            "split on a child-boundary-joined component requires global driver transport");
+            "resolved hierarchy split requires exactly one actual conditional driver");
+  hierarchy("resolved-boundary-unaccessed-parent-retains-unique-child-split",
+            hierarchyResolvedFixture("", childDriver + split("exported"), "sink", false), true);
   hierarchy("resolved-boundary-local-split-remains-strict",
             hierarchyResolvedFixture("", split("exported")), false);
   hierarchy("resolved-boundary-monitor-cannot-gain-drive",

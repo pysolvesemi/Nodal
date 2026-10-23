@@ -134,7 +134,16 @@ struct StaticShapeRegion {
   /// Retained actual map for scalar identity; coverage cuts alone do not
   /// identify independently authored compound selector atoms.
   std::optional<StaticShapeProjection> projection;
+  /// The innermost actual occurrence map. A single-axis image retains its
+  /// existing representation. Additional maps are ordered outermost first;
+  /// every map owns a distinct physical root coordinate, never a flattened
+  /// coordinate group. Together they describe one exact Cartesian image.
   std::optional<StaticShapeIterationImage> iteration;
+  llvm::SmallVector<StaticShapeIterationImage, 2> outerIterations;
+  unsigned iterationCount() const { return outerIterations.size() + bool(iteration); }
+  const StaticShapeIterationImage &iterationAt(unsigned index) const {
+    return index < outerIterations.size() ? outerIterations[index] : iteration.value();
+  }
 };
 enum class ShapeRegionProofStatus { Proved, Unsupported, Invalid, ResourceLimit };
 struct ShapeRegionProofLimits {
@@ -159,9 +168,9 @@ mlir::FailureOr<DigitalIterationIndex> resolveStaticShapeIterationIndex(mlir::Va
                                                                         mlir::Operation *use);
 
 /// Resolve the aggregate image of one actual iteration-selected projection. Success
-/// establishes per-iteration injectivity, including empty domains; ordinary or
-/// invariant projections return Unsupported. The returned iteration facts retain
-/// actual iteration/domain/offset identity. Ordering remains loop-only.
+/// establishes injectivity over all represented occurrence axes, including empty domains; ordinary
+/// or invariant projections return Unsupported. The returned iteration facts retain actual
+/// iteration/domain/offset identity. Ordering remains loop-only.
 ShapeRegionProofStatus resolveStaticShapeIterationImage(const StaticShapeProjection &projection,
                                                         mlir::Operation *use,
                                                         StaticShapeRegion &result,

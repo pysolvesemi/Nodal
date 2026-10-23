@@ -218,6 +218,33 @@ std::string nestedGeneratedFixture(unsigned depth = 2, bool symbolic = true) {
          body + selection + suffix;
 }
 
+std::string nestedMatrixFixture() {
+  const std::string matrix = "!nodal.shaped<\"2,N\", !nodal.bits<1>>";
+  const std::string row = "!nodal.shaped<\"N\", !nodal.bits<1>>";
+  auto slice = [&](StringRef name, StringRef input, StringRef index, const std::string &inputType,
+                   const std::string &resultType) {
+    return "%" + name.str() + " = \"nodal.shape_index\"(%" + input.str() + ", %" + index.str() +
+           ") <{metadata = {semantic_path = \"Top." + name.str() + "\"}}> : (" + inputType +
+           ", i64) -> " + resultType + "\n";
+  };
+  std::string input =
+      replace(nestedGeneratedFixture(), port("input", "input", "a"),
+              port("matrixIn", "input", "a", matrix) + port("matrixOut", "output", "a", matrix));
+  input = replace(input, "%family =",
+                  slice("rowIn", "matrixIn", "outer0", matrix, row) +
+                      slice("rowOut", "matrixOut", "outer0", matrix, row) + "%family =");
+  input = replace(input, "%zero =", slice("input", "rowIn", "i", row, bit) + "%zero =");
+  input = replace(input, "%family = \"nodal.generate\"(%lower, %upper, %step)",
+                  "%innerLower = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+                  "metadata = {}}> : () -> i64\n"
+                  "%innerStep = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", "
+                  "metadata = {}}> : () -> i64\n"
+                  "%family = \"nodal.generate\"(%innerLower, %upper, %innerStep)");
+  return replace(input, "\"nodal.generated_export\"(%state)",
+                 slice("laneOut", "rowOut", "i", row, bit) + assign("laneOut", "state") +
+                     "\"nodal.generated_export\"(%state)");
+}
+
 std::string derivedWidthFixture() {
   auto ty = [](unsigned bits) {
     return "!nodal.digital<\"sint\", \"Top.width" + std::to_string(bits) + "\">";
@@ -537,10 +564,31 @@ int main() {
     if (lowered) {
       unsigned modules = 0, instances = 0, loops = 0, registers = 0, leftovers = 0;
       bool extraction = extractOffset < 0;
+      unsigned prefixMaps = 0;
+      bool constantWidthsDominate = true;
       parsed->walk([&](Operation *op) {
         if (op->getName().getStringRef() == "comb.extract")
           if (auto low = op->getAttrOfType<IntegerAttr>("lowBit"))
             extraction |= low.getInt() == extractOffset;
+        if (op->getName().getStringRef() == "sv.localparam")
+          for (Operation *user : op->getUsers()) {
+            Operation *ancestor = user;
+            while (ancestor && ancestor->getBlock() != op->getBlock())
+              ancestor = ancestor->getParentOp();
+            constantWidthsDominate &= ancestor && op->isBeforeInBlock(ancestor);
+          }
+        if (auto prefixes = op->getAttrOfType<ArrayAttr>("nodal.generated_selection")) {
+          if (prefixes.size() == depth) {
+            bool exact = true;
+            for (auto [index, raw] : llvm::enumerate(prefixes)) {
+              auto frame = cast<DictionaryAttr>(raw);
+              auto coordinate = dyn_cast<IntegerAttr>(frame.get("coordinate"));
+              exact &= frame.getAs<StringAttr>("family") && frame.get("stride_bits") &&
+                       coordinate && coordinate.getInt() == (index + 1 == depth ? 0 : 1);
+            }
+            prefixMaps += exact;
+          }
+        }
         modules += isa<circt::hw::HWModuleOp>(op);
         instances += isa<circt::hw::InstanceOp>(op);
         registers += isa<circt::seq::CompRegOp>(op);
@@ -548,9 +596,11 @@ int main() {
         leftovers += op->getDialect()->getNamespace() == "nodal";
       });
       correct &= modules == depth + 1 && instances == depth && registers == 1 && loops == depth &&
-                 !leftovers && extraction && succeeded(verify(*parsed));
+                 !leftovers && extraction && prefixMaps == 1 && constantWidthsDominate &&
+                 succeeded(verify(*parsed));
       auto text = print(*parsed);
-      correct &= StringRef(text).contains("nodal.generated_template") &&
+      correct &= !StringRef(text).contains("i0") &&
+                 StringRef(text).contains("nodal.generated_template") &&
                  StringRef(text).contains("nodal.preserve_constant_loops");
       auto roundtrip = parseSourceString<mlir::ModuleOp>(text, &context);
       correct &= bool(roundtrip) && succeeded(verify(*roundtrip));
@@ -587,6 +637,8 @@ int main() {
       true, false, "zero-based unit-stride family");
   generatedTarget("nested-family-two-exact-prefixes-and-reusable-bodies", nestedGeneratedFixture(),
                   true, true, "", -1, 2);
+  generatedTarget("nested-matrix-routes-exact-parent-row-through-shared-helpers",
+                  nestedMatrixFixture(), true, true, "", -1, 2);
   generatedTarget("nested-family-three-prefixes-retain-inverse-dimensions",
                   nestedGeneratedFixture(3), true, true, "", -1, 3);
   generatedTarget("nested-concrete-preserves-each-actual-loop", nestedGeneratedFixture(2, false),
@@ -601,6 +653,21 @@ int main() {
                                   "value = 4096 : i64, spelling = \"4096\""),
                           "maximum_trip_count = 8", "maximum_trip_count = 4096"),
                   true, false, "nested generated export exceeds finite physical bit budget");
+  negative("nested-selection-outer-ordinal-proof-is-not-last-index-only",
+           replace(nestedGeneratedFixture(), "generated_member\"(%family0, %step)",
+                   "generated_member\"(%family0, %outerUpper)"),
+           "generated ordinal lacks an all-legal existence proof");
+  negative("nested-selection-inner-ordinal-proof-remains-independent",
+           replace(nestedGeneratedFixture(), "generated_member\"(%view0, %lower)",
+                   "generated_member\"(%view0, %upper)"),
+           "generated ordinal lacks an all-legal existence proof");
+  negative("nested-selection-member-must-belong-to-exact-export-inventory",
+           replace(nestedGeneratedFixture(),
+                   "member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> : "
+                   "(!nodal.generated_family, i64)",
+                   "member = \"foreign\", access = \"read\", kind = \"family\", metadata = {}}> : "
+                   "(!nodal.generated_family, i64)"),
+           "generated member key is absent");
   {
     diagnostics.clear();
     auto parsed =

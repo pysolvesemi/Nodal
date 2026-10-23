@@ -1609,3 +1609,13 @@ distinct recorded source stacks. Only matching resolved-array fixture bytes
 are asserted; no blanket source-to-target rerun is implied. Public array rank
 limits, broader selected/generated electrical admission and dependent payload
 target work remain open.
+
+## Checkpoint 48 — durable regression fixture sources
+
+Seven exact accepted scratch fixtures are now retained under the domain
+hierarchy fixture tree, with a bounded recipe explaining isolated replay cwd,
+the two separate ordering compilations and expected 19+7 historical outcomes.
+This is byte-preserving source retention with disclosed path relocation, not
+new maintained-harness acceptance or a rerun. A future harness must verify
+changed source-location/origin identities. No obsolete combined-ordering or
+positive-weak-Or assumptions are copied.

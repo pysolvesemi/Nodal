@@ -1740,3 +1740,50 @@ A/B prerequisites do not admit those callbacks. Broader selected conservative
 profiles, remaining generated/physical routing and held consumer work remain
 open; no CI, global suite or numerical/backend qualification is claimed.
 Foundation 58 remains incomplete.
+
+## Checkpoint 54: maintainable adapter regressions and fresh source compilation
+
+The conservative adapter selection is now represented by maintained source
+templates, assert-counted generators, an exact probe source, explicit expected
+results and a focused Python runner. The runner accepts a supplied probe and
+public-source output directory; it imports no historical receipts and searches
+for no predecessor binary. Generated data stays below ignored root `.work`,
+probe invocations have a 60-second timeout, and large adjacent-budget inputs
+are generated sequentially and removed. There is no new native build-target
+or fresh probe-compilation claim.
+
+Nine generation/expectation controls passed, including import isolation,
+mutation anchors, refusal/transaction checks, timeout cleanup and disk reserve.
+Fresh coherent-source replay passed the same 125 executions across 81 exact
+inputs with ten structural checks. This overlaps checkpoint 52, not another
+125 feature cases. The 111 predecessor checks and four duplicate/budget checks
+retain their exact expectations. Full public input/output hashes are pinned
+separately for default `coherent-source53` and explicit `historical` profiles;
+no comment or correspondence metadata is normalized away. The source assets
+total 1,038,579 bytes; logs, binaries and padded budget files are not committed.
+
+A separate fresh source53 check also closes its retained-test-JAR limitation.
+Four strict compilations and six runtime groups passed on the exact accepted
+API/bridge/plugin, with 135 pinned inputs unchanged and coherent source lookup:
+pending reduction 26 observations; conservative three maintained groups plus
+five public exports, eight causal and six bridge refusals; selected first
+positive plus 28 controls; and 11 no-plugin A/B lifecycle controls. The existing
+combined native probe verified/emitted all five fresh selected profiles.
+
+Relocated coherent source lookup changes MLIR provenance and Verilog-A comments
+(including authored induction identity instead of a fallback identity). Those
+outputs are deliberately not called byte-identical to historical results. All
+five Verilog-A non-comment line sequences are identical, while the maintained
+current profile additionally pins exact full output bytes. Old output evidence
+is preserved separately. No assertions were weakened or stale test JARs counted
+as fresh compilation.
+
+C1 epoch/closure work remains private and unaccepted; pending geometry and the
+remaining Foundation 58 feature/backend scope stay open. No CI, full suite,
+firtool or held consumer action was invoked.
+
+Whitespace check limitation: the exact hash-pinned historical MLIR templates
+retain 122 blank-line trailing-space findings and five terminal blank lines in
+42 files. The complete diff check reports these known fixture-byte exceptions;
+the non-template diff check passes. No whitespace checking configuration was
+disabled and no expected input hashes were silently regenerated.

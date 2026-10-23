@@ -41,3 +41,18 @@ original compilation API hashes were respectively `f202e796`, `c9b70954` and
 `9cf1d079`, with bridge `ca2a96fa`; reduction/conservative used plugin
 `0d8fdfdd`, and A/B used no plugin. This is not a fresh compilation of all
 maintained fixtures against the final stack or a global testkit pass.
+
+## Fresh coherent source53 follow-up
+
+After preservation, all five maintained sources and the small committed runner
+were freshly compiled against the final API/bridge/plugin with warnings as
+errors. Selected pairs and no-plugin A/B were also freshly compiled, in four
+isolated compilation groups total. All six runtime groups passed. The exact
+counts and native five-profile replay are recorded in checkpoint 54 readiness.
+Source lookup used a coherent root of exact compiled sources and fixtures, not
+mixed working-tree library text.
+
+Fresh relocated MLIR and Verilog-A provenance/comments differ from historical
+outputs. Do not feed these into the historical exact-hash profile or claim
+byte parity. The maintained conservative adapter runner defaults to the
+`coherent-source53` profile and keeps `historical` explicitly selectable.

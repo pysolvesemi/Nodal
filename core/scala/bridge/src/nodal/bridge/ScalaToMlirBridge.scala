@@ -1175,7 +1175,7 @@ ${indent(body, 2)}
             )
           )
           if !Set("analog-node", "analog-node-array", "variable").contains(declaration.kind) &&
-            !digitalValues.generatedStorage(path)
+            !digitalValues.generatedDeclaration(path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -1376,7 +1376,7 @@ ${indent(body, 2)}
       modules.foreach: module =>
         module.declarations.foreach: declaration =>
           if declaration.generatedScope.nonEmpty && declaration.kind != "analog-node-array" &&
-            !digitalValues.generatedStorage(declaration.path)
+            !digitalValues.generatedDeclaration(declaration.path)
           then
             fail(
               "NODAL-BRIDGE-043",
@@ -2810,6 +2810,27 @@ ${indent(body, 2)}
             stableLocalSymbol,
             bridgeMetadata(write.path, Vector("source_ordinal" -> integer(write.sourceOrdinal))),
             location(write.path)
+          ),
+        (region, generatedValues) =>
+          val instances = module.instances.filter(_.generatedScope.exists(_.owner == region.path))
+          instances.sortBy(_.path).flatMap(instance =>
+            renderInstance(
+              instance,
+              parameterSymbols,
+              declarationsByPath,
+              expressionsByPath,
+              shapeStaticValues,
+              () => allocateShapeStaticValue(),
+              staticBody = Some(body),
+              definitionComparison = definitionComparison
+            )
+          ) ++ hierarchy.renderBindings(
+            module,
+            generatedValues,
+            stableLocalSymbol,
+            path => bridgeMetadata(path, Vector.empty),
+            location,
+            Some(region.path)
           )
       )
       body ++= digital.lines
@@ -6200,6 +6221,19 @@ ${indent(body, 2)}
                   if ordinal < 0 || ordinal >= collection.captures.size then
                     invalid("static capture ordinal is outside the actual operand segment", token)
                   check(collection.captures(ordinal))
+              case None if generatedByInduction.contains(token) =>
+                val generated = generatedByInduction(token)
+                if generated.owner != module.path || !generated.digitalBody.exists(body =>
+                    body.arguments.headOption.exists(argument =>
+                      argument.path == token && argument.dataType == "Integer" && argument.role == "induction"
+                    )
+                  )
+                then invalid(s"$subject induction has no actual owned Generate body", token)
+                try
+                  val query = queryForPath(value)
+                  val _ = query.bounds(query.resolve(module.path, token))
+                catch
+                  case error: IllegalArgumentException => invalid(error.getMessage, diagnosticPath)
               case None =>
                 val expression = expressions.getOrElse(
                   token,

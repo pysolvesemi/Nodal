@@ -349,27 +349,46 @@ private[nodal] object DigitalValueMlir:
       val visited = mutable.HashSet.empty[String]
       while current.nonEmpty do
         val path = current.get
-        requireValid(visited.add(path) && visited.size <= 128 &&
-          (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
-          "family capability requires actual structural-only lexical ancestry", consumer)
+        requireValid(
+          visited.add(path) && visited.size <= 128 &&
+            (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
+          "family capability requires actual structural-only lexical ancestry",
+          consumer
+        )
         current = regions.getOrElse(path, fail("family scope is absent", consumer)).parentRegion
 
-    private def structuralFamilySource(path: String, owner: String, scope: Option[String], consumer: String,
-        depth: Int = 0): String =
+    private def structuralFamilySource(
+        path: String,
+        owner: String,
+        scope: Option[String],
+        consumer: String,
+        depth: Int = 0
+    ): String =
       requireValid(depth < 128, "family capture chain exceeds depth", consumer)
       requireVisible(path, owner, scope, consumer)
       requireStructuralFamilyScope(scope, consumer)
       generated.get(path) match
         case Some(family) =>
-          requireValid(family.yieldedArea.nonEmpty, "family capture requires actual family result", consumer)
+          requireValid(
+            family.yieldedArea.nonEmpty,
+            "family capture requires actual family result",
+            consumer
+          )
           family.path
         case None =>
-          val (region, argument) = arguments.getOrElse(path, fail("family capture has no exact argument", consumer))
-          requireValid(arms.get(region.path).exists(_._1.behavioralRoot.isEmpty) &&
-            argument.dataType == "GeneratedFamily" && argument.role == "family_capture",
-            "family capture requires exact non-Data structural arm argument", consumer)
+          val (region, argument) =
+            arguments.getOrElse(path, fail("family capture has no exact argument", consumer))
+          requireValid(
+            arms.get(region.path).exists(_._1.behavioralRoot.isEmpty) &&
+              argument.dataType == "GeneratedFamily" && argument.role == "family_capture",
+            "family capture requires exact non-Data structural arm argument",
+            consumer
+          )
           val index = region.arguments.indexWhere(_.path == path)
-          val source = region.captures.lift(index).getOrElse(fail("family argument has no capture edge", consumer))
+          val source = region.captures.lift(index).getOrElse(fail(
+            "family argument has no capture edge",
+            consumer
+          ))
           structuralFamilySource(source, owner, region.parentRegion, consumer, depth + 1)
 
     def requireVisible(
@@ -756,7 +775,12 @@ private[nodal] object DigitalValueMlir:
               argument.path
             )
             if expected == "GeneratedFamily" then
-              val _ = structuralFamilySource(argument.path, conditional.owner, Some(arm.path), argument.path)
+              val _ = structuralFamilySource(
+                argument.path,
+                conditional.owner,
+                Some(arm.path),
+                argument.path
+              )
           arm.yieldValue.foreach(requireVisible(
             _,
             conditional.owner,
@@ -879,16 +903,25 @@ private[nodal] object DigitalValueMlir:
       val ancestry = mutable.HashSet(value.path)
       while lexical.nonEmpty do
         val path = lexical.get
-        requireValid(ancestry.add(path) && ancestry.size <= 128,
-          "generated lexical ancestry contains a cycle or exceeds depth", value.path)
+        requireValid(
+          ancestry.add(path) && ancestry.size <= 128,
+          "generated lexical ancestry contains a cycle or exceeds depth",
+          value.path
+        )
         val parent = regions.getOrElse(path, fail("generated lexical parent is absent", value.path))
-        requireValid(parent.owner == value.owner &&
-          (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
-          "generated lexical ancestry requires owned Generate or structural arms", value.path)
+        requireValid(
+          parent.owner == value.owner &&
+            (generated.contains(path) || arms.get(path).exists(_._1.behavioralRoot.isEmpty)),
+          "generated lexical ancestry requires owned Generate or structural arms",
+          value.path
+        )
         if nearest.isEmpty && generated.contains(path) then nearest = Some(path)
         lexical = parent.parentRegion
-      requireValid(nearest == value.parent,
-        "generated ancestry differs from its actual lexical parent chain", value.path)
+      requireValid(
+        nearest == value.parent,
+        "generated ancestry differs from its actual lexical parent chain",
+        value.path
+      )
       requireValid(
         body.arguments.size == body.captures.size + 1 && body.arguments.size <= 4098 &&
           body.arguments.head.path == value.induction && body.arguments.head.dataType == "Integer" &&
@@ -922,7 +955,7 @@ private[nodal] object DigitalValueMlir:
           val storage = declarations.get(path).filter(_._1 == value.owner).map(_._2)
             .getOrElse(fail("generated storage has no actual module declaration", path))
           requireValid(
-            Set("wire", "register")(storage.kind) &&
+            (Set("wire", "register")(storage.kind) || generatedInstancePort(path)) &&
               storage.generatedScope.contains(KernelGeneratedScope(value.path, value.induction)),
             "family storage must retain its exact generated owner and induction",
             path
@@ -932,6 +965,7 @@ private[nodal] object DigitalValueMlir:
             exported.member.split("\\.", -1).forall(_.matches("[A-Za-z_][A-Za-z0-9_]*")) &&
               (if exported.kind == "storage" then
                  generatedDeclarationOwners.get(exported.target).exists(_.path == value.path) &&
+                 generatedStorage(exported.target) &&
                  Set("read_only", "read_write")(exported.access)
                else if exported.kind == "family" then
                  exported.access == "read_only" && generated.get(exported.target).exists(target =>
@@ -961,6 +995,23 @@ private[nodal] object DigitalValueMlir:
         )
       )
 
+    def generatedInstancePort(path: String): Boolean = declarations.get(path).exists:
+      (owner, declaration) =>
+        Set("instance-input", "instance-output")(declaration.kind) &&
+          declaration.generatedScope.exists(scope =>
+            generatedDeclarationOwners.get(path).exists(region =>
+              region.yieldedArea.nonEmpty && region.owner == owner && region.path == scope.owner &&
+                region.induction == scope.induction
+            ) && declaration.instancePort.exists(proxy =>
+              modules(owner).instances.exists(instance =>
+                instance.path == proxy.instance && instance.generatedScope.contains(scope)
+              )
+            )
+          )
+
+    def generatedDeclaration(path: String): Boolean =
+      generatedStorage(path) || generatedInstancePort(path)
+
     private def generatedAccess(exported: KernelGeneratedAreaExport, access: String): String =
       if access == "read_only" then "read"
       else
@@ -983,14 +1034,16 @@ private[nodal] object DigitalValueMlir:
             path
           )
           try
-            val region = regions.getOrElse(path, fail("generated lexical query owner is absent", path))
+            val region =
+              regions.getOrElse(path, fail("generated lexical query owner is absent", path))
             val parent = region.parentRegion.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
             generated.get(path) match
               case Some(family) => parent.generatedBody(family)
               case None => arms.get(path) match
-                case Some((conditional, arm)) if conditional.behavioralRoot.isEmpty =>
-                  parent.conditionalArm(conditional.parentRegion, arm)
-                case _ => fail("generated lexical query requires actual Generate or structural arm", path)
+                  case Some((conditional, arm)) if conditional.behavioralRoot.isEmpty =>
+                    parent.conditionalArm(conditional.parentRegion, arm)
+                  case _ =>
+                    fail("generated lexical query requires actual Generate or structural arm", path)
           finally activeGeneratedLexicalQueries.remove(path)
         }
       )
@@ -1011,39 +1064,56 @@ private[nodal] object DigitalValueMlir:
       )
       def ordinalValid(selectedFamily: KernelGeneratedRegionSnapshot, ordinal: String): Unit =
         ordinal.toLongOption match
-          case Some(value) => requireValid(ordinal == value.toString,
-            "generated ordinal literal must be canonical signed i64", expression.path)
+          case Some(value) => requireValid(
+              ordinal == value.toString,
+              "generated ordinal literal must be canonical signed i64",
+              expression.path
+            )
           case None =>
             requireVisible(ordinal, expression.owner, expression.region, expression.path)
             requireStaticPredicateInput(ordinal, expression.owner, topology = true)
         try
-          val headerQuery = selectedFamily.lexicalParent.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
+          val headerQuery =
+            selectedFamily.lexicalParent.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
           val query = expression.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
-          val originalHeader = Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
-            .map(headerQuery.resolve(selectedFamily.owner, _))
+          val originalHeader =
+            Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
+              .map(headerQuery.resolve(selectedFamily.owner, _))
           val bounds = originalHeader.map(headerQuery.bounds)
           val index = query.resolve(expression.owner, ordinal)
-          val domain = IterationDomain.structural(bounds(0), bounds(1), bounds(2), selectedFamily.maximum,
-            identicalBounds = originalHeader(0) == originalHeader(1))
+          val domain = IterationDomain.structural(
+            bounds(0),
+            bounds(1),
+            bounds(2),
+            selectedFamily.maximum,
+            identicalBounds = originalHeader(0) == originalHeader(1)
+          )
             .fold(problem => fail(problem.message, expression.path), identity)
           IterationDomain.verifyOrdinal(domain, query.bounds(index)).left.foreach: problem =>
             def imported(source: StructuralParameterBinding.Query, token: String): Int =
               val original = source.resolve(expression.owner, token)
               if source eq query then original
               else query.importValue(expression.owner, source.exportValues(Vector(original)))
-            val header = Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
-              .map(imported(headerQuery, _))
-            val coordinate = query.compose("analog_add", Vector(header(0), query.compose("analog_mul", Vector(index, header(2)))))
+            val header =
+              Vector(selectedFamily.lower, selectedFamily.upperExclusive, selectedFamily.step)
+                .map(imported(headerQuery, _))
+            val coordinate = query.compose(
+              "analog_add",
+              Vector(header(0), query.compose("analog_mul", Vector(index, header(2))))
+            )
             val proof = new StructuralPredicateOrdering.Query[String, Int](
               path =>
-                val predicate = predicates.getOrElse(path, fail("ordering predicate is absent", expression.path))
+                val predicate =
+                  predicates.getOrElse(path, fail("ordering predicate is absent", expression.path))
                 val source = predicate.region.map(generatedLexicalQuery).getOrElse(loopBoundQuery)
                 if Set("eq", "ne", "lt", "le", "gt", "ge")(predicate.operation) then
                   val operands = predicate.operands.map(imported(source, _))
                   StructuralPredicateOrdering.Compare(predicate.operation, operands(0), operands(1))
-                else StructuralPredicateOrdering.Logic(predicate.operation, predicate.operands),
+                else StructuralPredicateOrdering.Logic(predicate.operation, predicate.operands)
+              ,
               query.bounds,
-              _ == _)
+              _ == _
+            )
             def prove(left: Int, right: Int, inclusive: Boolean): Boolean =
               if proof.less(left, right, inclusive) then true
               else
@@ -1052,13 +1122,24 @@ private[nodal] object DigitalValueMlir:
                 var proved = false
                 while current.nonEmpty && !proved do
                   val path = current.get
-                  requireValid(visited.size < 128 && visited.add(path),
-                    "ordering lexical ancestry is cyclic or excessive", expression.path)
+                  requireValid(
+                    visited.size < 128 && visited.add(path),
+                    "ordering lexical ancestry is cyclic or excessive",
+                    expression.path
+                  )
                   arms.get(path).foreach: (conditional, arm) =>
                     if conditional.behavioralRoot.isEmpty then
-                      proved = proof.under(conditional.predicate, arm.path == conditional.falseArm.path,
-                        left, right, inclusive)
-                  current = regions.getOrElse(path, fail("ordering lexical region is absent", expression.path)).parentRegion
+                      proved = proof.under(
+                        conditional.predicate,
+                        arm.path == conditional.falseArm.path,
+                        left,
+                        right,
+                        inclusive
+                      )
+                  current = regions.getOrElse(
+                    path,
+                    fail("ordering lexical region is absent", expression.path)
+                  ).parentRegion
                 proved
             if !prove(query.literal(0L), index, true) || !prove(coordinate, header(1), false) then
               fail(problem.message, expression.path)
@@ -1068,14 +1149,32 @@ private[nodal] object DigitalValueMlir:
       var expected = member.selectionPrefix.headOption.map(_.family).getOrElse(member.family)
       val root =
         generated.getOrElse(expected, fail("selected family root is absent", expression.path))
-      member.familyInput.foreach(path => requireValid(arguments.get(path).exists(value =>
-        value._2.role == "family_capture" && value._2.dataType == "GeneratedFamily"),
-        "family input must name its actual non-Data structural capture argument", expression.path))
-      if member.familyInput.isEmpty then requireValid(root.lexicalParent == expression.region,
-        "selected family root escaped handle-definition scope", expression.path)
+      member.familyInput.foreach(path =>
+        requireValid(
+          arguments.get(path).exists(value =>
+            value._2.role == "family_capture" && value._2.dataType == "GeneratedFamily"
+          ),
+          "family input must name its actual non-Data structural capture argument",
+          expression.path
+        )
+      )
+      if member.familyInput.isEmpty then
+        requireValid(
+          root.lexicalParent == expression.region,
+          "selected family root escaped handle-definition scope",
+          expression.path
+        )
       val input = member.familyInput.getOrElse(root.path)
-      requireValid(structuralFamilySource(input, expression.owner, expression.region, expression.path) == root.path,
-        "selected family capture must retain its exact root producer", expression.path)
+      requireValid(
+        structuralFamilySource(
+          input,
+          expression.owner,
+          expression.region,
+          expression.path
+        ) == root.path,
+        "selected family capture must retain its exact root producer",
+        expression.path
+      )
       member.selectionPrefix.foreach: selection =>
         requireValid(
           selection.family == expected,
@@ -1090,7 +1189,9 @@ private[nodal] object DigitalValueMlir:
         requireValid(
           parent.owner == expression.owner && next.kind == "family" &&
             next.access == "read_only" && generated.get(next.target).exists(child =>
-              child.owner == expression.owner && child.parent.contains(parent.path) && child.lexicalParent.contains(parent.path)
+              child.owner == expression.owner && child.parent.contains(
+                parent.path
+              ) && child.lexicalParent.contains(parent.path)
             ),
           "selected family must follow an exact directly nested family export",
           expression.path
@@ -1645,7 +1746,7 @@ private[nodal] object DigitalValueMlir:
             wholeRegisterTarget(assignment.target))
         case _ => false
       requireValid(
-        valid && (target.generatedScope.isEmpty || generatedStorage(target.path)) &&
+        valid && (target.generatedScope.isEmpty || generatedDeclaration(target.path)) &&
           !privateMachineStorage(target.path),
         "digital assignment kind differs from its exact sink kind or uses an unsupported projected register update",
         assignment.path
@@ -2684,7 +2785,11 @@ private[nodal] object DigitalValueMlir:
             String,
             (String, String)
         ) => String,
-        renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String
+        renderMemoryWrite: (KernelMemoryWriteSnapshot, Vector[(String, String)]) => String,
+        renderGeneratedInstances: (
+            KernelGeneratedRegionSnapshot,
+            Map[String, (String, String)]
+        ) => Vector[String]
     ): Rendered =
       var crossingStateBits = BigInt(0)
       def bitPatternWidth(text: String, path: String, fixed: Boolean = false): BigInt =
@@ -3202,14 +3307,21 @@ private[nodal] object DigitalValueMlir:
                   clearRegion(arm.path)
                   blockArguments = arm.arguments.zipWithIndex.map: (argument, index) =>
                     requireValid(
-                      (argument.dataType == "GeneratedFamily" && expressionType(arm.captures(index)) == "GeneratedFamily") ||
-                        regionalTypeMatches(argument.dataType, expressionType(arm.captures(index)), argument.path),
+                      (argument.dataType == "GeneratedFamily" && expressionType(
+                        arm.captures(index)
+                      ) == "GeneratedFamily") ||
+                        regionalTypeMatches(
+                          argument.dataType,
+                          expressionType(arm.captures(index)),
+                          argument.path
+                        ),
                       "structural arm capture must preserve its exact complete type",
                       argument.path
                     )
                     val name = s"%structural_arm_${ordinal}_arg$index"
-                    val dataType = if argument.dataType == "GeneratedFamily" then "!nodal.generated_family"
-                      else computedType(argument.dataType, argument.path)
+                    val dataType = if argument.dataType == "GeneratedFamily" then
+                      "!nodal.generated_family"
+                    else computedType(argument.dataType, argument.path)
                     values.update(argument.path, name -> dataType)
                     heights.update(argument.path, heights(arm.captures(index)) + 1)
                     proofs.update(argument.path, proofs(arm.captures(index)))
@@ -3388,6 +3500,7 @@ private[nodal] object DigitalValueMlir:
                 if index == 0 then Unknown else proofs(body.captures(index - 1))
               )
               if argument.dataType == "Integer" then bindStaticArgument(argument.path, value)
+            local ++= renderGeneratedInstances(region, values.toMap)
             region.declarations.foreach(path => emit(path, depth + 1, Some(region.path), local))
             emitScope(region.path, depth + 1, local)
             region.exports.foreach: exported =>
@@ -4232,7 +4345,7 @@ private[nodal] object DigitalValueMlir:
                   val declaration = declarations(path)._2
                   requireValid(
                     declaration.generatedScope.isEmpty ||
-                      (generatedStorage(path) && declaration.generatedScope.exists(scope =>
+                      (generatedDeclaration(path) && declaration.generatedScope.exists(scope =>
                         region.contains(scope.owner)
                       )),
                     "digital operand cannot escape its exact generated declaration scope",
@@ -4291,6 +4404,9 @@ private[nodal] object DigitalValueMlir:
             value.generatedScope.isEmpty
         )
           .sortBy(_.path).foreach(value => emit(value.path, 0, None, lines))
+      // Actual parent physical controls are module-owned producers. A generated
+      // binding may consume them, but cannot relocate their physical identity.
+      hierarchy.physicalRoots(module).distinct.sorted.foreach(emit(_, 0, None, lines))
       val moduleChoices = conditionalsByRegion.getOrElse(module.path -> None, Vector.empty)
       // A value choice may contain writes. Materialize its dependencies on demand at the
       // authored effect position; retain the predecessor pure-root schedule otherwise.

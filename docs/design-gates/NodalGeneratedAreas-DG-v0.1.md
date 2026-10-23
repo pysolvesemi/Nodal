@@ -303,3 +303,35 @@ The existing compiler effect-summary protocol gains exact `StructuralFamily` pro
 Focused scratch proof before promotion used actual Scala3.8.4/JDK25.0.2 strict compilation: seven maintained draft groups, four actual replay profiles, a separate producer/helper JAR, four direct effect negatives and five imported effect/metadata negatives. All four replays and the separate-JAR actual MLIR passed `--nodal-gate-default` on frozen compiler83d54e05. This is focused prototype evidence, not target execution or full qualification. Shared-source acceptance is recorded separately after integration.
 
 Known remaining scope stays open: predicate-dependent ordinal existence such as count0..8 with count>0/select0 (N2b), guarded family export/merge/escape, generated Instance/Interface carriers, external selected writes, and remaining target coverage. These are not transferred to F159 general mixed-effect partitioning. Canonical queries are cached per lexical scope and traverse bounded actual templates/captures; no lane enumeration or per-lane source registry is introduced. The added conditional-arm lookup is one immutable snapshot index shared with child Query contexts, not repeated all-arm scans.
+
+## Foundation 58 body-local generated child checkpoint — 2026-10-20
+
+An actual child `instance(new Child)` may be authored inside an admitted Area-family
+Generate. The existing `InstanceRecord.generatedScope` and native hierarchy occurrence
+retain that exact ordered family ancestry; one source template does not become one
+physical lane or one unique resolved driver. Child construction uses its own Module
+lexical owner and existing constructor lifecycle. Parent captures cannot leak into
+child-local data, state or required-domain declarations.
+
+Inside the same family body, the existing Instance selector transports direct typed
+child input/output data ports with exact parameter/formal substitution and physical
+domain bindings. Original pending descriptors remain canonical type obligations
+after sealing: direct and regional assignments are rechecked against their final
+recursive types. Callback admission proves the actual child constructor and local
+Instance receiver, recursively checks binding operands/selectors, and admits only
+exact immutable Struct/StructField factories, not arbitrary library or helper effects.
+Ordinary Scala loops remain elaboration-only.
+
+Nested bound inference reuses the existing attained-domain owner for exact active
+ancestor induction and registered generated-body argument zero. Bridge queries use
+that same actual Generate context. This is not induction-dependent type admission,
+default-value proof, per-lane cloning, or selected-prefix specialization.
+
+Focused source/bridge/default-native checks cover scalar and Struct ports, stateful
+children, nested and empty families, late Integer overrides and causal ownership,
+type, callback and forged-transport rejection. This checkpoint does not establish
+actual generated HDL. Required continuations remain open: guarded physical-control
+capture through isolated structural arms; family-local and exported typed Interface
+views; exported Instance views and ordered selection prefixes; shaped lane-indexed
+clock/reset sources; selection-qualified resolved/CDC proof; and actual target
+instance generation. Existing conservative/analog boundaries are not widened.

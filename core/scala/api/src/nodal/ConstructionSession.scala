@@ -2347,7 +2347,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if activeEventProcess.nonEmpty && !assignment then
       eventFailure(s"$role is not permitted inside a digital event process")
     collectionStack.reverseIterator.find(region =>
-      !region.isLoop && !(assignment && region.permitsAssignment)
+      moduleStack.lastOption.exists(_.handle == region.reference.module) &&
+        !region.isLoop && !(assignment && region.permitsAssignment)
     ).foreach: region =>
       rejectCollection(
         "NODAL-COLLECTION-055-006",
@@ -5394,7 +5395,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
 
   def beginModule(module: Module): Unit =
-    requireNoCollectionEffect("Module declaration")
+    if activeGeneratedRegion.exists(_.areaFamily) then
+      requireAreaFamilyScope("Module declaration", requireBody = true)
+    else requireNoCollectionEffect("Module declaration")
     requireLoopEffect("Module declaration")
     if moduleIds.containsKey(module) then
       fail("NODAL-LIFECYCLE-016", "one Module entered construction twice")
@@ -5559,8 +5562,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       conservativeDimensions: Vector[Dimension] = Vector.empty
   ): Unit =
     closeBehavioralChain()
+    val generatedInstancePort =
+      Set(KernelSignalKind.InstanceInput, KernelSignalKind.InstanceOutput)(kind) &&
+        activeGeneratedRegion.exists(_.areaFamily) &&
+        instanceSelectionStack.lastOption.exists(selected =>
+          instanceRecord(selected).generatedScope == activeGeneratedRegion
+        )
     if activeGeneratedRegion.exists(_.areaFamily) &&
-      Set(KernelSignalKind.Wire, KernelSignalKind.Register)(kind)
+      (Set(KernelSignalKind.Wire, KernelSignalKind.Register)(kind) || generatedInstancePort)
     then requireAreaFamilyScope(s"${kind.label} declaration", requireBody = true)
     else requireNoCollectionEffect(s"${kind.label} declaration")
     requireLoopEffect(s"${kind.label} declaration")
@@ -5570,7 +5579,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val generatedAreaStorage = activeGeneratedRegion.exists(_.areaFamily) &&
       Set(KernelSignalKind.Wire, KernelSignalKind.Register)(kind)
     if kind != KernelSignalKind.AnalogNode && kind != KernelSignalKind.AnalogNodeArray &&
-      !activeGeneratedVariable && !generatedAreaStorage
+      !activeGeneratedVariable && !generatedAreaStorage && !generatedInstancePort
     then
       requireNoGeneratedEffect(s"generated ${kind.label} declaration")
     val module = currentModule
@@ -6041,12 +6050,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     if port.module != instance.child ||
       !Set(KernelSignalKind.Input, KernelSignalKind.Output)(declaration.kind) ||
       !isClockedDigitalType(value.dataType) || isBoundaryCapability(value.dataType) ||
-      activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty
+      ((activeValueRegion.nonEmpty || activeGeneratedRegion.nonEmpty) &&
+        !activeGeneratedRegion.exists(_.areaFamily))
     then
       fail(
         "NODAL-HIERARCHY-057-001",
         "instance selector requires its immediate child's direct digital data port"
       )
+    if activeGeneratedRegion.nonEmpty then
+      requireAreaFamilyScope("Instance digital port selection", requireBody = true)
     instanceDigitalPorts.iterator.collectFirst:
       case (reference, (existing, target)) if (existing eq instance) && target == port =>
         records(reference.module).declarations(reference.index).value.asInstanceOf[Signal[A]]
@@ -6335,16 +6347,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     try
       expressionValues.valuesIterator.toVector.foreach(visit(_, 0))
       operations.iterator.filter(operation =>
-        operation.digitalRegion.nonEmpty && Set("assignment", "value-connect")(operation.kind)
+        Set("assignment", "value-connect")(operation.kind)
       ).foreach: operation =>
-        val hadIntent = operation.values.collect { case value: Expr[?] => value }.exists: value =>
-          bindCollectionValue(value, operation.digitalRegion, operation.owner, create = false) match
-            case argument: KernelExpr[?] => argument.typeIntent.nonEmpty
-            case _ => false
-        if hadIntent then
+        val hadObligation = operation.values.collect { case value: Expr[?] => value }.exists:
+          value =>
+            DeferredResultType.hasTypeObligation(value) || operation.digitalRegion.exists: region =>
+              DeferredResultType.hasTypeObligation(
+                bindCollectionValue(value, Some(region), operation.owner, create = false)
+              )
+        if hadObligation then
           context(operation.owner, operation.digitalRegion)
-          DeferredResultType.requireFinal(operation.values, "regional assignment materialization")
-          validateRegionalAssignmentTypes(operation.values)
+          DeferredResultType.requireFinal(operation.values, "assignment type materialization")
+          validateAssignmentTypes(operation.values)
     finally
       moduleStack.clear(); moduleStack ++= previousModules
       collectionStack.clear(); collectionStack ++= previousRegions
@@ -8433,6 +8447,26 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     /** Predicate admission shares the same raw Integer DAG and checked arithmetic. An empty actual
       * Generate has no attained value: retain None while still checking every raw operand and op.
       */
+    private def generatedFact(
+        expression: KernelExpr[?],
+        generated: GeneratedRegionRecord
+    ): Option[StructuralBound] =
+      if !generationStack.contains(generated) then
+        invalid("Generate induction escaped its actual active lexical scope")
+      val domain =
+        loopRegions.valuesIterator.find(_.loop.exists(_.generated.contains(generated)))
+          .map(_.loop.get.domain).getOrElse(invalid(
+            "Generate induction lacks its actual domain"
+          ))
+      IterationDomain.attainedBounds(domain).map(bounds =>
+        StructuralBound(
+          expression,
+          bounds,
+          Vector.empty,
+          Some(intern((4, expressionPath(generated.induction), Vector.empty)))
+        )
+      )
+
     private val predicateCache = mutable.HashMap.empty[ExpressionRef, Option[StructuralBound]]
     private val predicateActive = mutable.HashSet.empty[ExpressionRef]
     def predicateBound(value: Expr[Integer]): Option[StructuralBound] = value match
@@ -8458,22 +8492,6 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             then
               invalid("static predicate Integer DAG is cyclic or exceeds its finite budget")
             try
-              def generatedFact(generated: GeneratedRegionRecord): Option[StructuralBound] =
-                if !generationStack.contains(generated) then
-                  invalid("Generate induction escaped its actual active lexical scope")
-                val domain =
-                  loopRegions.valuesIterator.find(_.loop.exists(_.generated.contains(generated)))
-                    .map(_.loop.get.domain).getOrElse(invalid(
-                      "Generate induction lacks its actual domain"
-                    ))
-                IterationDomain.attainedBounds(domain).map(bounds =>
-                  StructuralBound(
-                    expression,
-                    bounds,
-                    Vector.empty,
-                    Some(intern((4, expressionPath(generated.induction), Vector.empty)))
-                  )
-                )
               val result = collectionArguments.get(reference) match
                 case Some((region, _)) =>
                   region.captures.valuesIterator.find(_._2 eq expression) match
@@ -8481,7 +8499,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                     case None
                         if region.loop.exists(_.generated.nonEmpty) &&
                           (region.arguments.head._1 eq expression) =>
-                      generatedFact(region.loop.get.generated.get)
+                      generatedFact(expression, region.loop.get.generated.get)
                     case _ => invalid(
                         "procedural induction or unadmitted Integer formal in static predicate"
                       )
@@ -8489,7 +8507,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   if expression.operands.nonEmpty then invalid("malformed Generate induction")
                   val generated = records(owner).generatedRegions.find(_.induction == reference)
                     .getOrElse(invalid("static index lacks an actual Generate owner"))
-                  generatedFact(generated)
+                  generatedFact(expression, generated)
                 case None if expression.literal.nonEmpty => Some(literalBound(expression))
                 case None =>
                   val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
@@ -8552,7 +8570,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   case Some((source, _))
                       if expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) =>
                     apply(source.asInstanceOf[Expr[Integer]])
+                  case None
+                      if region.loop.exists(_.generated.nonEmpty) &&
+                        (region.arguments.head._1 eq expression) =>
+                    generatedFact(expression, region.loop.get.generated.get).getOrElse(
+                      invalid("empty Generate induction has no attained bound")
+                    )
                   case _ => invalid("unadmitted collection Integer formal")
+              case None if expression.operation.contains("generate_index") =>
+                if expression.operands.nonEmpty then invalid("malformed Generate induction")
+                val generated = records(owner).generatedRegions.find(_.induction == reference)
+                  .getOrElse(invalid("static index lacks an actual Generate owner"))
+                generatedFact(expression, generated).getOrElse(
+                  invalid("empty Generate induction has no attained bound")
+                )
               case None if expression.literal.nonEmpty => literalBound(expression)
               case None =>
                 val operation = expression.operation.flatMap(IterationDomain.staticArithmetic)
@@ -8918,17 +8949,25 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val unsupportedDeclaration = record.declarations.iterator
         .map(reference => module.declarations(reference.index))
         .find: declaration =>
+          val localInstancePort = areaFamily &&
+            Set(
+              KernelSignalKind.InstanceInput,
+              KernelSignalKind.InstanceOutput
+            )(declaration.kind) &&
+            instanceDigitalPorts.get(declaration.reference).exists: (instance, port) =>
+              module.instances.exists(_ eq instance) && instance.generatedScope.contains(record) &&
+                port.module == instance.child
           !(areaFamily && Set(
             KernelSignalKind.Wire,
             KernelSignalKind.Register
-          )(declaration.kind)) &&
-            declaration.kind != KernelSignalKind.AnalogNode &&
-            declaration.kind != KernelSignalKind.AnalogNodeArray &&
-            !(declaration.kind == KernelSignalKind.Variable &&
-              AnalogProceduralConstruction.retainsGeneratedVariable(
-                declaration.value,
-                generatedContext
-              ))
+          )(declaration.kind)) && !localInstancePort &&
+          declaration.kind != KernelSignalKind.AnalogNode &&
+          declaration.kind != KernelSignalKind.AnalogNodeArray &&
+          !(declaration.kind == KernelSignalKind.Variable &&
+            AnalogProceduralConstruction.retainsGeneratedVariable(
+              declaration.value,
+              generatedContext
+            ))
       unsupportedDeclaration.foreach: declaration =>
         fail(
           "NODAL-ITERATION-043-004",
@@ -9766,7 +9805,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   def operation(kind: String, values: Any*): Unit =
     captureOperation(kind, values.toVector, permitMemory = false)
 
-  private def validateRegionalAssignmentTypes(values: Vector[Any]): Unit =
+  private def validateAssignmentTypes(values: Vector[Any]): Unit =
     val exactType =
       for
         target <- values.headOption.collect { case value: Expr[?] => value }
@@ -9778,7 +9817,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         CandidateRuntime.typeDescriptor(sourceType)
       )
     if !exactType.contains(true) then
-      collectionFailure("digital loop assignment requires exactly matching recursive types")
+      collectionFailure("digital assignment requires exactly matching recursive types")
 
   private def captureOperation(kind: String, values: Vector[Any], permitMemory: Boolean): Unit =
     validateCollectionDependencies(values)
@@ -9849,7 +9888,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         FlatFsmRuntime.fail("private machine state cannot be assigned by source actions")
       if values.exists(DeferredResultType.pending) then
         val _ = requireDeferredValueScope(Some(region), currentModule.handle)
-      else validateRegionalAssignmentTypes(values)
+      else validateAssignmentTypes(values)
       values.foreach:
         case expression: Expr[?] =>
           val _ = bindCollectionValue(expression, Some(region), currentModule.handle)

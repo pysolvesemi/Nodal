@@ -1342,3 +1342,21 @@ The admitted profile is fixed scalar resolved physical pins and true external
 declarations. Split, generated and symbolic physical boundaries remain open
 at this checkpoint; no paired ordinary-assignment substitute is introduced.
 Foundation 58 remains incomplete.
+
+## Checkpoint 35 — body-local generated child source
+
+The exact 404-file source/fixture inventory in
+`.work/f58-generated-occurrence-shared` (manifest `9a18e6da`) adds 11 core Scala
+paths and nine frontend fixtures. Retained acceptance covers 75 groups, nine
+frontend refusals and 14 native cases on `9fbcef7b`/`14df2009`. Those native
+verifier prerequisites are preserved by checkpoint 32; later scalar target
+acceptance is separate and is not relabeled as this source replay. The exact
+frontend runner and only the scoped body-local GeneratedAreas contract section
+are included, preserving existing unrelated documentation.
+
+Existing InstanceRecord generated scope, constructor ownership and final type
+obligations retain actual body-local child inputs/outputs and physical bindings.
+Ordinary Scala loops remain elaboration-only. Guarded controls, exported and
+selected Instance/Interface prefixes, lane-indexed clocks/resets and generated
+child HDL remain separate required continuations. No actual target behavior or
+Foundation 58 completion is claimed by this source checkpoint.

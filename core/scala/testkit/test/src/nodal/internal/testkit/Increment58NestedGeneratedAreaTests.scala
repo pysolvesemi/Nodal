@@ -139,8 +139,12 @@ object Increment58NestedGeneratedAreaTests extends TestSuite:
         ),
         "scope"
       )
-    test("outer induction dependent inner domain remains explicitly outside this slice"):
-      val failure = scala.util.Try(
-        ConstructionKernel.inspect(new Increment58NestedGeneratedDependent)
-      ).failed.get
-      assert(failure.getMessage.contains("NODAL-ITERATION-043-001"))
+    test("ancestor induction supplies a bounded inner domain without selecting a lane"):
+      val snapshot = ConstructionKernel.inspect(new Increment58NestedGeneratedDependent)
+      assert(snapshot.generatedRegions.size == 2)
+      val outer = snapshot.generatedRegions.find(_.parent.isEmpty).get
+      val inner = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(inner.parent.contains(outer.path), inner.maximumTripCount == 2)
+      assert(inner.upperExclusive == outer.digitalBody.get.arguments.head.path)
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.linesIterator.count(_.contains("\"nodal.generate\"(")) == 2)

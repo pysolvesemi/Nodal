@@ -34,12 +34,12 @@ object Increment58DeferredArithmeticTests extends TestSuite:
       ).foreach: (mode, code) =>
         val failure = scala.util.Try(capture(mode = mode)).failed.get
         assert(failure.asInstanceOf[ConstructionException].diagnostic.code == code)
-    test("bridge rejects assignment to the old unexpanded width"):
+    test("source finalization rejects assignment to the old unexpanded width"):
       val failure =
         scala.util.Try(ScalaToMlirBridge.fromSnapshot(capture(mode = "wrong-width"))).failed.get
       assert(
-        failure.isInstanceOf[BridgeException],
-        failure.getMessage.contains("NODAL-BRIDGE-054-STORAGE")
+        failure.isInstanceOf[ConstructionException],
+        failure.getMessage.contains("NODAL-COLLECTION-055-005")
       )
     test("bridge independently rejects a forged arithmetic result descriptor"):
       val snapshot = capture()

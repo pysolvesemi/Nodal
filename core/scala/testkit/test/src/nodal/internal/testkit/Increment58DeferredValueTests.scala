@@ -48,8 +48,8 @@ object Increment58DeferredValueTests extends TestSuite:
     test("equal envelopes do not make independent parent parameters interchangeable"):
       val error =
         scala.util.Try(ScalaToMlirBridge.fromSnapshot(capture(mode = "wrong-width"))).failed.get
-      assert(error.isInstanceOf[BridgeException])
-      assert(error.getMessage.contains("NODAL-BRIDGE-054-STORAGE"))
+      assert(error.isInstanceOf[ConstructionException])
+      assert(error.getMessage.contains("NODAL-COLLECTION-055-005"))
     test("bridge independently rejects stale conversion and Struct result descriptors"):
       val snapshot = capture()
       val signed = snapshot.digitalExpressions.find(value =>

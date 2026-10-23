@@ -1656,3 +1656,15 @@ These are separate scopes; this snapshot does not grant public external-array
 source admission or broader generated electrical behavior. Native/target
 owner and dependency identities are matched rather than inferred from the
 subsequent analog-only probe. No new compiler or consumer execution occurs.
+
+## Checkpoint 51 — retained lexical Interface identity fixtures
+
+Four exact maintained source/test/replay fixtures from
+`.work/f58-generated-occurrences/lexical-interface/frozen-forward-identity`
+(manifest `2952b238`) are retained. Historical acceptance used API `dbc8d005`,
+bridge `72c3664a` and plugin `b17f58fc`: nine source groups, nine exports and nine
+positive native gates, a duplicate-identity negative and eight ordinary parity
+cases. These counts are not retroactively attributed to checkpoint 47's later
+source engine. Endpoint identity ownership is already retained there, but no
+new whole-testkit compilation is claimed. The broader selected Interface target
+runner's nested/nonunit/refusal input mapping remains separately audited.

@@ -1,4 +1,5 @@
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -13,6 +14,8 @@
 #include "nodal/Transforms/Passes.h"
 
 #include "llvm/Support/raw_ostream.h"
+
+#include <functional>
 using namespace mlir;
 namespace {
 const std::string bit = "!nodal.bits<1>", clockType = "!nodal.capability<\"clock\">",
@@ -283,6 +286,340 @@ std::string print(Operation *op) {
   return result;
 }
 } // namespace
+namespace resolved_target {
+namespace {
+const std::string tag = "interface_abi_version = 1 : i64";
+const std::string bits = "!nodal.bits<8>", boolean = "!nodal.bits<1>";
+std::string model(StringRef body, StringRef header = "") {
+  return "module attributes {nodal.root.module = @Fixture} { " + header.str() +
+         "\n \"nodal.module\"() <{sym_name = \"Fixture\", metadata = {}}> ({\n" + body.str() +
+         "}) : () -> () }\n";
+}
+std::string domain(StringRef name = "clock") {
+  return "\"nodal.domain\"() <{sym_name = \"" + name.str() +
+         "\", edge = \"rising\", reset_policy = \"sync\", metadata = {}}> : () -> ()\n";
+}
+std::string entry(StringRef path, StringRef access, StringRef role) {
+  return "{path = \"" + path.str() + "\", access = \"" + access.str() + "\", leaf_role = \"" +
+         role.str() + "\", nested_roles = [], nested_interfaces = []}";
+}
+std::string definition(StringRef type = bits, StringRef member = "data",
+                       StringRef protocol = "plain") {
+  std::string body;
+  for (auto pair :
+       {std::pair{"source", "out"}, std::pair{"sink", "in"}, std::pair{"monitor", "observe"}})
+    body += "\"nodal.interface_role\"() <{sym_name = \"" + std::string(pair.first) +
+            "\", kind = \"explicit\", metadata = {" + tag + ", access = [" +
+            entry(member, pair.second, pair.first) + "]}}> : () -> ()\n";
+  body += "\"nodal.interface_member\"() <{sym_name = \"" + member.str() +
+          "\", type = " + type.str() + ", protocol = \"" + protocol.str() +
+          "\", roles = [\"source\", \"sink\", \"monitor\"], metadata = {" + tag +
+          "}}> : () -> ()\n";
+  return "\"nodal.interface\"() <{sym_name = \"Bus\", metadata = {" + tag +
+         ", semantic_identity = \"pkg.Bus\"}}> ({\n" + body + "}) : () -> ()\n";
+}
+std::string instance(StringRef name, StringRef role, StringRef access, StringRef type = bits,
+                     StringRef dimensions = "", StringRef clock = "clock",
+                     StringRef member = "data") {
+  return "\"nodal.interface_instance\"() <{sym_name = \"" + name.str() +
+         "\", definition = @Bus, role = \"" + role.str() + "\", metadata = {" + tag +
+         ", domain = @" + clock.str() + ", dimensions = [" + dimensions.str() +
+         "], semantic_path = \"Fixture." + name.str() + "\"}}> : () -> ()\n" +
+         "\"nodal.interface_abi\"() <{logical_path = \"Fixture." + name.str() +
+         "\", layout_policy = \"structural\", members = [{path = \"" + member.str() +
+         "\", type = " + type.str() + ", role = \"" + role.str() + "\", access = \"" +
+         access.str() + "\", nested_roles = [], nested_interfaces = []}], metadata = {" + tag +
+         ", instance = @" + name.str() + "}}> : () -> ()\n";
+}
+std::string member(StringRef name, StringRef endpoint, StringRef type = bits, StringRef role = "",
+                   StringRef path = "data") {
+  return "%" + name.str() + " = \"nodal.member_access\"() <{instance = @" + endpoint.str() +
+         ", path = \"" + path.str() + "\", metadata = {" + tag +
+         (role.empty() ? "" : ", role = \"" + role.str() + "\"") + "}}> : () -> " + type.str() +
+         "\n";
+}
+std::string literal(StringRef name, StringRef type = bits, StringRef value = "1") {
+  return "%" + name.str() + " = \"nodal.const_literal\"() <{kind = \"integer\", spelling = \"" +
+         value.str() + "\", value = " + value.str() + " : i64, metadata = {}}> : () -> " +
+         type.str() + "\n";
+}
+std::string port(StringRef name, StringRef type, StringRef direction = "input",
+                 StringRef clock = "clock") {
+  return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + type.str() +
+         ", direction = \"" + direction.str() + "\", domain = @" + clock.str() +
+         ", metadata = {}}> : () -> ()\n%" + name.str() + " = \"nodal.port_value\"() <{port = @" +
+         name.str() + ", metadata = {}}> : () -> " + type.str() + "\n";
+}
+std::string observe(StringRef target = "a", StringRef type = bits) {
+  return "\"nodal.interface_observe\"(%" + target.str() + ") <{metadata = {" + tag + "}}> : (" +
+         type.str() + ") -> ()\n";
+}
+std::string resolved(StringRef mode = "push_pull", StringRef type = bits) {
+  return "!nodal.resolved<\"" + mode.str() + "\", " + type.str() + ">";
+}
+std::string net(StringRef name = "net", StringRef mode = "push_pull",
+                StringRef placement = "top_level_pin",
+                StringRef profile = "portable_boundary_only") {
+  return "%" + name.str() + " = \"nodal.resolved_net\"() <{name = \"" + name.str() +
+         "\", metadata = {" + tag + ", placement = \"" + placement.str() + "\", profile = \"" +
+         profile.str() + "\"}}> : () -> " + resolved(mode) + "\n";
+}
+std::string driver(StringRef name = "driver", StringRef target = "net",
+                   StringRef mode = "push_pull") {
+  return "%" + name.str() + " = \"nodal.net_driver\"(%" + target.str() + ") <{driver_id = \"" +
+         name.str() + "\", metadata = {" + tag + "}}> : (" + resolved(mode) +
+         ") -> !nodal.driver<" + bits + ">\n";
+}
+std::string netDrive(StringRef identity = "driver", StringRef target = "net",
+                     StringRef mode = "push_pull") {
+  return "\"nodal.net_drive\"(%" + target.str() + ", %" + identity.str() +
+         ", %value, %enable) <{mode = \"" + mode.str() + "\", metadata = {" + tag + "}}> : (" +
+         resolved(mode) + ", !nodal.driver<" + bits + ">, " + bits + ", " + boolean + ") -> ()\n";
+}
+std::string level(StringRef active = "low", StringRef mode = "open_drain") {
+  return "\"nodal.net_drive_level\"(%net, %driver, %enable) <{level = \"" + active.str() +
+         "\", metadata = {" + tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">, " +
+         boolean + ") -> ()\n";
+}
+std::string release(StringRef identity = "release", StringRef target = "net",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_release\"(%" + target.str() + ", %" + identity.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", !nodal.driver<" + bits + ">) -> ()\n";
+}
+std::string split(StringRef target = "net", StringRef mode = "push_pull") {
+  return "%write, %enabled = \"nodal.net_split\"(%" + target.str() + ") <{metadata = {" + tag +
+         "}}> : (" + resolved(mode) + ") -> (" + bits + ", " + boolean + ")\n";
+}
+std::string through(StringRef first = "net", StringRef second = "other",
+                    StringRef mode = "push_pull") {
+  return "\"nodal.net_pass_through\"(%" + first.str() + ", %" + second.str() + ") <{metadata = {" +
+         tag + "}}> : (" + resolved(mode) + ", " + resolved(mode) + ") -> ()\n";
+}
+std::string replace(std::string text, StringRef from, StringRef to) {
+  auto index = text.find(from.str());
+  if (index == std::string::npos)
+    return text;
+  text.replace(index, from.size(), to.str());
+  return text;
+}
+std::string resolvedDefinition() {
+  std::string result = definition(resolved(), "data", "resolved");
+  result = replace(result, "access = \"out\"", "access = \"drive\"");
+  return replace(result, "access = \"in\"", "access = \"connect\"");
+}
+
+std::string boundDomain() {
+  return domain() + port("clock_pin", "!nodal.capability<\"clock\">") +
+         port("reset_pin", "!nodal.capability<\"reset\">") +
+         "\"nodal.local_domain_binding\"(%clock_pin, %reset_pin) <{domain = @clock, reset_polarity "
+         "= \"active_high\", metadata = {}}> : (!nodal.capability<\"clock\">, "
+         "!nodal.capability<\"reset\">) -> ()\n";
+}
+std::string module(StringRef name, const std::string &body, bool external = false,
+                   StringRef physical = "ExternalPad") {
+  return "\"nodal.module\"() <{sym_name = \"" + name.str() + "\", metadata = {}" +
+         (external ? ", external_name = \"" + physical.str() + "\"" : "") + "}> ({\n" + body +
+         "}) : () -> ()\n";
+}
+std::string child(StringRef name = "child", StringRef target = "Child") {
+  return "\"nodal.instance\"() <{sym_name = \"" + name.str() + "\", module = @" + target.str() +
+         ", parameter_bindings = {}, domain_bindings = {}, metadata = {}}> : () -> ()\n";
+}
+std::string boundary(StringRef value = "view", StringRef instance = "child") {
+  return "%" + value.str() + " = \"nodal.net_boundary\"() <{instance = @" + instance.str() +
+         ", endpoint = \"pin\", metadata = {" + tag +
+         ", placement = \"black_box_pin\", profile = \"portable_boundary_only\", semantic_path = "
+         "\"Top." +
+         value.str() + "\"}}> : () -> " + resolved() + "\n";
+}
+std::string read(StringRef value = "observed", StringRef target = "net") {
+  return "%" + value.str() + " = \"nodal.net_read\"(%" + target.str() + ") <{metadata = {" + tag +
+         "}}> : (" + resolved() + ") -> " + bits + "\n";
+}
+std::string route(StringRef target, StringRef value) {
+  return "\"nodal.digital_assign\"(%" + target.str() + ", %" + value.str() +
+         ") <{kind = \"continuous\", metadata = {}}> : (" + bits + ", " + bits + ") -> ()\n";
+}
+std::string externalFixture(bool drive = false, bool repeated = false, bool unprojected = false) {
+  std::string body = boundDomain() + port("output", bits, "output") + net("pad") + child();
+  if (!unprojected)
+    body += boundary() + through("pad", "view");
+  body += read("observed", "pad") + route("output", "observed");
+  if (drive)
+    body += port("value", bits) + port("enable", boolean) + driver("driver", "pad") +
+            netDrive("driver", "pad");
+  if (repeated)
+    body += net("other") + child("sibling") + boundary("other_view", "sibling") +
+            through("other", "other_view");
+  return "module attributes {nodal.root.module = @Top} {\n" + module("Top", body) +
+         module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}\n";
+}
+std::string print(Operation *op) {
+  std::string out;
+  llvm::raw_string_ostream stream(out);
+  op->print(stream);
+  return out;
+}
+} // namespace
+std::pair<unsigned, unsigned> run() {
+  DialectRegistry registry;
+  registry.insert<nodal::NodalDialect>();
+  MLIRContext context(registry);
+  std::string diagnostics;
+  ScopedDiagnosticHandler handler(&context, [&](Diagnostic &d) {
+    llvm::raw_string_ostream out(diagnostics);
+    d.print(out);
+    out << '\n';
+    return success();
+  });
+  unsigned count = 0, failures = 0;
+  auto report = [&](StringRef name, bool ok) {
+    ++count;
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  auto positive = [&](StringRef name, const std::string &input,
+                      std::function<bool(mlir::ModuleOp)> check) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    PassManager pm(&context);
+    pm.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && succeeded(verify(*parsed)) && succeeded(pm.run(*parsed));
+    if (ok)
+      ok = check(*parsed);
+    report(name, ok);
+    if (!ok && parsed)
+      llvm::errs() << print(parsed->getOperation()) << '\n';
+  };
+  auto negative = [&](StringRef name, const std::string &input, StringRef diagnostic) {
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
+    std::string before = parsed ? print(parsed->getOperation()) : "";
+    PassManager pm(&context);
+    pm.addPass(nodal::createSequentialToCIRCTPass());
+    bool ok = parsed && failed(pm.run(*parsed)) && before == print(parsed->getOperation()) &&
+              StringRef(diagnostics).contains(diagnostic);
+    report(name, ok);
+  };
+  auto contains = [](StringRef token) {
+    return [=](mlir::ModuleOp op) { return StringRef(print(op)).contains(token); };
+  };
+  positive("declared-unaccessed-pin", model(net()), [](mlir::ModuleOp op) {
+    auto modules = op.getOps<circt::hw::HWModuleOp>();
+    if (modules.empty())
+      return false;
+    auto *body = (*modules.begin()).getBodyBlock();
+    return body->getNumArguments() == 1 &&
+           isa<circt::hw::InOutType>(body->getArgument(0).getType());
+  });
+  positive("conditional-driver-native-Z",
+           model(boundDomain() + net() + port("value", bits) + port("enable", boolean) + driver() +
+                 netDrive()),
+           contains("sv.constantZ"));
+  positive("explicit-release-native-Z", model(net() + driver("release") + release()),
+           contains("sv.constantZ"));
+  positive("open-drain-level",
+           model(boundDomain() + net("net", "open_drain") + port("enable", boolean) +
+                 driver("driver", "net", "open_drain") + level()),
+           contains("sv.constantZ"));
+  positive("two-local-public-pins-preserve-electrical-alias",
+           model(net() + net("other") + through()), [](mlir::ModuleOp op) {
+             unsigned aliases = 0;
+             op.walk(
+                 [&](circt::sv::VerbatimOp v) { aliases += v->hasAttr("nodal.resolved_alias"); });
+             return aliases == 1 && StringRef(print(op)).contains("tran ");
+           });
+  positive("read-native-resolved-value",
+           model(boundDomain() + net() + port("output", bits, "output") + read() +
+                 route("output", "observed")),
+           contains("sv.read_inout"));
+  positive("true-extern-not-body", externalFixture(), [](mlir::ModuleOp op) {
+    unsigned modules = 0, externs = 0, instances = 0;
+    op.walk([&](circt::hw::HWModuleOp) { ++modules; });
+    op.walk([&](circt::hw::HWModuleExternOp) { ++externs; });
+    op.walk([&](circt::hw::InstanceOp) { ++instances; });
+    return modules == 1 && externs == 1 && instances == 1 &&
+           StringRef(print(op)).contains("ExternalPad");
+  });
+  positive("extern-parent-conditional-drive", externalFixture(true), contains("sv.constantZ"));
+  positive("complete-unprojected-extern-pin", externalFixture(false, false, true),
+           contains("nodal.resolved_declaration"));
+  positive("reused-child-pins-never-global-shorted", externalFixture(false, true),
+           [](mlir::ModuleOp op) {
+             SmallVector<Value> pins;
+             op.walk([&](circt::hw::InstanceOp i) { pins.push_back(i->getOperand(0)); });
+             return pins.size() == 2 && pins[0] != pins[1];
+           });
+  std::string iface =
+      boundDomain() + resolvedDefinition() + instance("left", "sink", "connect", resolved());
+  positive("unaccessed-resolved-Interface-pin", model(iface), contains("true-inout"));
+  positive("repeated-Interface-member-aliases",
+           model(iface + member("a", "left", resolved()) + member("b", "left", resolved()) +
+                 observe("a", resolved()) + observe("b", resolved())),
+           [](mlir::ModuleOp op) {
+             unsigned wires = 0;
+             op.walk([&](circt::sv::WireOp) { ++wires; });
+             return wires == 0 && StringRef(print(op)).contains("true-inout");
+           });
+  negative("local-split-sideband-remains-explicit",
+           model(net() + literal("value") + literal("enable", boolean) + driver() + netDrive() +
+                 split()),
+           "resolved split target requires exact driver sideband transport");
+  negative("unsupported-internal-placement",
+           model(net("net", "push_pull", "internal_resolved_net", "full_resolved_simulation")),
+           "resolved physical target requires exact fixed scalar portable boundary pins");
+
+  std::string many;
+  for (unsigned i = 0; i < 64; ++i) {
+    std::string id = std::to_string(i), pin = "pad" + id, inst = "child" + id, view = "view" + id;
+    many += net(pin) + child(inst) + boundary(view, inst) + through(pin, view);
+  }
+  positive("64-independent-occurrences-share-one-external-signature",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", many) +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           [](mlir::ModuleOp op) {
+             SmallVector<Value> pins;
+             unsigned declarations = 0;
+             op.walk([&](circt::hw::HWModuleExternOp) { ++declarations; });
+             bool distinct = true;
+             op.walk([&](circt::hw::InstanceOp instance) {
+               Value value = instance->getOperand(0);
+               distinct &= !llvm::is_contained(pins, value);
+               pins.push_back(value);
+             });
+             return declarations == 1 && pins.size() == 64 && distinct;
+           });
+  std::string generated = R"mlir(
+    %low = "nodal.const_literal"() <{value = 0 : i64, spelling = "0", metadata = {}}> : () -> i64
+    %high = "nodal.const_literal"() <{value = 2 : i64, spelling = "2", metadata = {}}> : () -> i64
+    %step = "nodal.const_literal"() <{value = 1 : i64, spelling = "1", metadata = {}}> : () -> i64
+    %family = "nodal.generate"(%low, %high, %step) <{induction = "i", induction_path = "Top.family.i", region_id = "Top.family", metadata = {maximum_trip_count = 2 : i64}}> ({
+    ^bb0(%i: i64):
+  )mlir" +
+                          replace(child(), "module = @Child,",
+                                  "module = @Child, generated_owner = \"Top.family\", "
+                                  "generated_induction = \"Top.family.i\",") +
+                          "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  negative("generated-external-endpoint-needs-selected-physical-transport",
+           "module attributes {nodal.root.module = @Top} {" + module("Top", generated) +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           "generated resolved endpoint requires exact selected-lane physical transport");
+  negative("external-signature-document-is-not-executable-root",
+           "module attributes {nodal.root.module = @Child} {" +
+               module("Child", net("pin", "push_pull", "black_box_pin"), true) + "}",
+           "external signature cannot be the physical executable root");
+  negative("opaque-extern-cannot-prove-driver-uniqueness",
+           replace(externalFixture(true), read("observed", "pad"),
+                   read("observed", "pad") + split("pad")),
+           "opaque external contribution");
+  llvm::outs() << count << " resolved target cases, " << failures << " failures\n";
+  return {count, failures};
+}
+
+} // namespace resolved_target
+
 int main() {
   DialectRegistry registry;
   registry.insert<nodal::NodalDialect>();
@@ -685,6 +1022,9 @@ int main() {
     }
     report("fixed-derived-width-arithmetic-retains-mapped-width-and-sign", ok);
   }
+  auto [resolvedCount, resolvedFailures] = resolved_target::run();
+  count += resolvedCount;
+  failures += resolvedFailures;
   llvm::outs() << count << " hierarchy target cases, " << failures << " failures\n";
   return failures ? 1 : 0;
 }

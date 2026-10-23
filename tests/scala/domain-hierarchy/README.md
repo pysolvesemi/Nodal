@@ -152,3 +152,55 @@ observation only. Symbolic CDC payloads, dynamic/noncontiguous selection and
 physical timing/electrical certification are not claimed. The output directory
 contains actual gated input, CIRCT, unmodified SV, handwritten testbenches, exact
 commands and hashes. No generated artifacts are committed.
+
+## Scalar resolved pins and true external declarations
+
+The actual public source is
+`core/scala/testkit/test/src/nodal_external/Increment58ExternalInoutSource.scala`.
+The maintained native source selector writes eight full-gate inputs, of which
+seven have the bounded scalar physical target profile. With the JDK/tool setup
+above, reproduce the source inputs and four-state target checks as follows:
+
+```sh
+export NODAL_ROOT="$PWD"
+export NODAL_NODALC="$PWD/.work/native-build/bin/nodalc"
+flock .work/f58-mill.lock sh .work/cache/mill/download/1.1.7 \
+  --no-daemon core.scala.testkit.test.testOnly \
+  nodal.internal.testkit.Increment58ExternalInoutNativeTests
+python3 tests/scala/domain-hierarchy/run_resolved_target.py \
+  --input .work/f58-external-inout/native --out .work/f58-resolved-target-run \
+  --source core/scala/testkit/test/src/nodal_external/Increment58ExternalInoutSource.scala \
+  --nodalc .work/native-build/bin/nodalc \
+  --firtool .work/circt-toolchain/bin/firtool \
+  --iverilog .work/tools/iverilog/bin/iverilog \
+  --vvp .work/tools/iverilog/bin/vvp
+```
+
+Use `--profiles read drive` (or another subset) for a narrower run. The seven
+profiles are `read`, `drive`, `open-drain`, `repeated`, `independent`, `local-alias`
+and `interface-fixed`. They preserve actual inout ports, unknown external
+contributions and declared local pin identity. The runner checks both directions,
+all four-bit patterns, Z release, opposing/partial X, open-drain pullups, and
+independence of two occurrences of one reused external declaration. The fixed
+Interface profile retains the nested `bus.pad` member and canonical `connect`
+role. The `local-tag` source input contains a split and is deliberately not a
+passing physical target profile in this slice.
+
+The emitted DUT is never modified. A separate handwritten external model is the
+opaque environment for true `hw.module.extern` declarations, not a generated or
+substituted implementation. Multiple proven local public pin aliases use a bounded
+typed standard `tran` primitive because the pinned Icarus rejects SV `alias`.
+For example, actual `local-alias` output contains:
+
+```systemverilog
+tran __nodal_resolved_0_alias_1[3:0] (first, second);
+```
+
+No paired continuous assignment or ordinary input/output pair substitutes for
+bidirectionality. The receipt records exact physical pins, ABI, tool versions and
+hashes, every command and output hash, and an unchanged-SV check. Native target
+controls independently cover complete unaccessed pins, external-root and profile
+refusals, generated-lane refusal, opaque uniqueness rejection and 64 separately
+represented reused external instances. Symbolic/array resolved payloads,
+internal/hierarchy-pass-through placements, generated resolved pins and exact
+split sideband routes remain required continuations, not accepted by these runs.

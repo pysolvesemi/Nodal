@@ -476,3 +476,57 @@ full default native gate on frozen compiler
 `93a1af6b101831196cc9a4d954330a80601dc941cb59ff965ae55f1d720c7e9c`;
 each early/late pair has byte-identical transport. These are private-overlay
 prototype results, not yet matched shared-source or target execution acceptance.
+
+## Scalar resolved physical boundary consumer
+
+The bounded target profile consumes the successful existing hierarchy dependency
+query and the same complete logical-port plan used for ordinary digital ports.
+It does not create a second connectivity graph. Each physical endpoint retains
+its exact occurrence, actual declaration, optional immediate child, logical
+member path, original type/mode/profile/placement and canonical selected role.
+Unaccessed declared pins remain present. Missing represented SSA values do not
+mean a constant or authorize another semantic net.
+
+Only already-proven local component aliases share a local carrier. A parent join
+must not short otherwise independent ports inside a reused child definition.
+Ordinary roots may expose fixed scalar portable top-level/black-box resolved pins
+and scalar resolved Interface leaves. Actual module arguments and instance ports
+use `hw.inout`, reads use `sv.read_inout`, and owned conditional drives use native
+Z/mux/assign operations. Driver declarations remain compile-time capabilities.
+Release is real high impedance, not zero. An unconnected child pin has a physical
+wire correlated to that exact pin, not a newly fabricated Nodal net.
+
+A checked declaration-only external module becomes `hw.module.extern`, with its
+original exact physical name and complete authored pin signature. No ordinary
+body or zero-driving stub is emitted. Native signature proof and final target
+physical-name collision checking both apply. A signature-only external root is
+not an executable entry. Unknown external contributions remain unknown and
+cannot establish split-driver uniqueness.
+
+Two public local pins belonging to one proven component retain both port names.
+The pinned Icarus consumer rejects exported `sv.alias`, so the bounded consumer
+uses a fixed standard `tran` primitive with exactly two equal-width typed InOut
+operands. The target owns this template and collision-checked instance name;
+there is no user-supplied text, interpolated source name, paired assignment or
+post-export rewrite. Fixed widths and primitive bit counts are charged to the
+existing target limits. Other carrier/read/drive/extern operations remain native
+CIRCT operations. The failed alias consumer probe remains separate from actual
+Nodal output evidence.
+
+The maintained `tests/scala/domain-hierarchy/run_resolved_target.py` checks actual
+public source replays through the full gate, target lowering, unchanged emitted
+SV and four-state simulation. Its seven profiles cover inward and outward drive,
+all 16 four-bit patterns, release to Z, full and partial contention X, open-drain
+pullup/release, joined versus independently reused externs, typed multi-public-pin
+aliases and nested-role resolved Interface transport. The separate authored
+external model supplies the unknown environment; it is never a replacement DUT.
+Receipts retain input, source, compiler, exporter, simulator and output hashes,
+exact commands, physical pin checks and the explicit boundary ABI.
+
+This checkpoint excludes symbolic resolved widths, resolved Interface arrays,
+internal/hierarchy-pass-through/technology-specific placements, generated
+resolved occurrence transport and analog/control pins. Local and cross-occurrence
+split data/enable sidebands remain an explicit target refusal and a required next
+consumer, not permission to substitute resolved reads. Ordinary Interface, named
+Struct CDC and generated storage target predecessors remain unchanged. No
+physical timing/electrical certification or broader resolved profile is claimed.

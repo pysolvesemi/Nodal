@@ -1323,3 +1323,22 @@ shared 85-group receipt.
 Conservative arrays, signal-flow execution, analog CIRCT, mixed-interface
 erasure, broader generated/selected source and physical target completion
 remain open. Foundation 58 is not complete and no F72 qualification is claimed.
+
+## Checkpoint 34 — scalar resolved pins and true external target
+
+The exact native snapshot in `.work/f58-resolved-target/final-candidate`
+(manifest `13e3ad73`) changes two native paths and matches all 233 source hashes.
+Compiler `459fbe76` passed 245 focused checks: HierarchyTarget 57,
+SequentialTarget 157 and SymbolicHierarchy 31. Seven actual shared-source
+four-state waveform profiles use the already preserved 393-file source
+snapshot. Retained inputs, tool hashes and output receipts distinguish these
+physical behaviors from logical source acceptance. No new consumer execution
+is performed by preserving this checkpoint.
+
+The exact runner is included. Only the scalar-resolved sections of the accepted
+ABI contract and README are appended as fresh scoped documentation, preserving
+prior joins/CDC text and excluding unrelated missing arithmetic-runner material.
+The admitted profile is fixed scalar resolved physical pins and true external
+declarations. Split, generated and symbolic physical boundaries remain open
+at this checkpoint; no paired ordinary-assignment substitute is introduced.
+Foundation 58 remains incomplete.

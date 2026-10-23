@@ -33,15 +33,20 @@ object Increment58LexicalDeferredTests extends TestSuite:
         assert(failure.isInstanceOf[ConstructionException])
         assert(failure.getMessage.contains("exactly matching recursive types"))
     test("bridge independently rejects replacement by an unrelated child capture"):
-      val captured = ConstructionKernel.capture(new Increment58LexicalDeferredForgerySource)(module =>
-        Vector(module.selected, module.unrelated))
+      val captured =
+        ConstructionKernel.capture(new Increment58LexicalDeferredForgerySource)(module =>
+          Vector(module.selected, module.unrelated)
+        )
       val snapshot = captured.snapshot
       val selected = captured.references(0).path
       val foreign = captured.references(1).path
       val actual = snapshot.behavioralIfs.head
       assert(actual.trueArm.captures.contains(selected))
-      val arm = actual.trueArm.copy(captures = actual.trueArm.captures.map(value =>
-        if value == selected then foreign else value))
+      val arm = actual.trueArm.copy(captures =
+        actual.trueArm.captures.map(value =>
+          if value == selected then foreign else value
+        )
+      )
       val forged = snapshot.copy(behavioralIfs = Vector(actual.copy(trueArm = arm)))
       val failure = scala.util.Try(ScalaToMlirBridge.fromSnapshot(forged)).failed.get
       assert(failure.isInstanceOf[BridgeException])
@@ -49,11 +54,11 @@ object Increment58LexicalDeferredTests extends TestSuite:
     test("pure collections and procedural loops cannot borrow lexical finalization"):
       for mode <- Vector("collection", "procedural") do
         val failure = scala.util.Try(ConstructionKernel.inspect(
-          new Increment58LexicalDeferredForbiddenSource(mode))).failed.get
+          new Increment58LexicalDeferredForbiddenSource(mode)
+        )).failed.get
         assert(failure.isInstanceOf[ConstructionException])
-        assert(failure.getMessage.contains("deferred value requires actual structural or behavioral lexical ancestry"))
-    test("structural result join remains a distinct unsupported continuation"):
-      for late <- Vector(false, true) do
-        val failure = scala.util.Try(capture("join", late)).failed.get
-        assert(failure.isInstanceOf[ConstructionException])
-        assert(failure.getMessage.contains("symbolic digital width value must be owned by the active Module"))
+        assert(failure.getMessage.contains(
+          "deferred value requires actual structural or behavioral lexical ancestry"
+        ))
+    test("structural result join retains exact early and late parent types"):
+      equivalent("join")

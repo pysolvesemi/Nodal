@@ -1072,7 +1072,7 @@ private[nodal] object ReproducibilityContract:
       "digital_graph" -> digitalGraph(snapshot),
       "modules" -> array(
         snapshot.modules.sortBy(_.path).map: module =>
-          obj(
+          obj((Vector(
             "path" -> string(module.path),
             "class_name" -> string(module.className),
             "domains" -> array(
@@ -1102,6 +1102,8 @@ private[nodal] object ReproducibilityContract:
                   "resolved_boundary" -> interfaceBoundary(boundary)
                 ) ++ declaration.resolvedMember.toVector.map(member =>
                   "resolved_member" -> resolvedMember(member)
+                ) ++ declaration.conservativeMember.toVector.map(member =>
+                  "conservative_member" -> resolvedMember(member)
                 ) ++ Option.when(declaration.conservativeDimensions.nonEmpty)(
                   "conservative_dimensions" -> array(declaration.conservativeDimensions.map(string))
                 ).toVector ++ generatedScopeFields(declaration.generatedScope))*)
@@ -1116,7 +1118,7 @@ private[nodal] object ReproducibilityContract:
                   "parameter_bindings" -> attributes(instance.parameterBindings)
                 ) ++ generatedScopeFields(instance.generatedScope))*)
             )
-          )
+          ) ++ module.externalName.toVector.map(name => "external_name" -> string(name)))*)
       ),
       "interface_abi" -> array(
         snapshot.interfaceAbi.sortBy(_.logicalPath).map: entry =>
@@ -1309,7 +1311,7 @@ private[nodal] object ReproducibilityContract:
   private def interfaceBoundary(value: KernelInterfaceBoundarySnapshot): JsonValue =
     obj("instance" -> string(value.instance), "endpoint" -> string(value.endpoint))
 
-  private def resolvedMember(value: KernelResolvedMemberSnapshot): JsonValue =
+  private def resolvedMember(value: KernelInterfaceMemberOrigin): JsonValue =
     obj(
       "endpoint" -> string(value.endpoint),
       "member" -> string(value.member),

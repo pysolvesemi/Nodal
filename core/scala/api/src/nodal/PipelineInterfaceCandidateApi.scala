@@ -55,7 +55,7 @@ object InterfaceMember:
       mode: DriveMode.Value[M]
   ): DigitalResolved[A, M] = DigitalResolved(name, dataType, mode)
 
-  def terminal[D <: Discipline](name: String, discipline: D): InterfaceMember =
+  def terminal[D <: Discipline](name: String, discipline: D): Conservative[D] =
     Conservative(name, discipline)
 
   def analogSignal[D](name: String, dimension: String): InterfaceMember =
@@ -298,6 +298,40 @@ def interfaceArray[I <: Interface, R <: RoleKind](
 ): InterfaceArray[I, R] = new InterfaceArray(definition, role, count, name, domain)
 
 extension [I <: Interface, R <: RoleKind](endpoint: InterfacePort[I, R])
+  /** Select the exact conservative declaration and retain the actual role's rights. */
+  def connectTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Connect] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Connect](
+      endpoint,
+      field,
+      through.toVector,
+      "connect"
+    )
+
+  def senseTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Sense] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Sense](
+      endpoint,
+      field,
+      through.toVector,
+      "sense"
+    )
+
+  def contributeTerminal[D <: Discipline](
+      field: InterfaceMember.Conservative[D],
+      through: InterfaceMember.Nested[?]*
+  ): ConservativeView[D, ConservativeAccess.Contribute] =
+    ConstructionKernel.interfaceConservativeMember[D, ConservativeAccess.Contribute](
+      endpoint,
+      field,
+      through.toVector,
+      "contribute"
+    )
+
   /** Select an actual declared resolved member through its ordered declared nested fields. */
   def resolved[A <: Bits, M <: DriveMode](
       field: InterfaceMember.DigitalResolved[A, M],
@@ -549,9 +583,28 @@ object ConservativeAccess:
   object Monitor:
     given monitorSense: CanSense[Monitor] with {}
 
+/** A capability over one existing endpoint, never a fabricated standalone terminal. */
+sealed trait ConservativeView[D <: Discipline, A <: ConservativeAccess]:
+  def discipline: D
+  private[nodal] def permission: String
+  private[nodal] def conservativeIdentity: AnyRef
+
 final class TerminalView[D <: Discipline, A <: ConservativeAccess] private[nodal] (
-    val terminal: Terminal[D]
-)
+    val terminal: Terminal[D],
+    private[nodal] val permission: String
+) extends ConservativeView[D, A]:
+  def discipline: D = terminal.discipline
+  private[nodal] def conservativeIdentity: AnyRef = terminal
+
+private[nodal] final class InterfaceTerminalView[D <: Discipline, A <: ConservativeAccess](
+    val endpoint: InterfacePort[?, ?],
+    val declaration: InterfaceMember.Conservative[D],
+    val through: Vector[InterfaceMember.Nested[?]],
+    val member: String,
+    val permission: String
+) extends ConservativeView[D, A]:
+  def discipline: D = declaration.discipline
+  private[nodal] def conservativeIdentity: AnyRef = this
 
 object CanConnect {}
 object CanSense {}
@@ -561,16 +614,23 @@ def terminal[D <: Discipline](discipline: D, name: String): Terminal[D] =
   new Terminal(discipline, name)
 
 extension [D <: Discipline](endpoint: Terminal[D])
-  def connectView: TerminalView[D, ConservativeAccess.Connect] = new TerminalView(endpoint)
-  def senseView: TerminalView[D, ConservativeAccess.Sense] = new TerminalView(endpoint)
-  def contributeView: TerminalView[D, ConservativeAccess.Contribute] = new TerminalView(endpoint)
-  def terminalMonitorView: TerminalView[D, ConservativeAccess.Monitor] = new TerminalView(endpoint)
+  def connectView: TerminalView[D, ConservativeAccess.Connect] =
+    new TerminalView(endpoint, "connect")
+  def senseView: TerminalView[D, ConservativeAccess.Sense] = new TerminalView(endpoint, "sense")
+  def contributeView: TerminalView[D, ConservativeAccess.Contribute] =
+    new TerminalView(endpoint, "contribute")
+  def terminalMonitorView: TerminalView[D, ConservativeAccess.Monitor] =
+    new TerminalView(endpoint, "sense")
 
-extension [D <: Discipline, A <: ConservativeAccess](view: TerminalView[D, A])
+extension [D <: Discipline, A <: ConservativeAccess](view: ConservativeView[D, A])
   def connectTo[B <: ConservativeAccess](
-      other: TerminalView[D, B]
+      other: ConservativeView[D, B]
   )(using CanConnect[A], CanConnect[B]): Unit =
-    ConstructionKernel.operation("terminal-connect", view.terminal, other.terminal)
+    ConstructionKernel.operation(
+      "terminal-connect",
+      view.conservativeIdentity,
+      other.conservativeIdentity
+    )
 
   def potential(using CanSense[A]): Expr[Real] = CandidateRuntime.expr(view, "potential")
 
@@ -642,14 +702,14 @@ final case class BridgeContract(
 
 object MixedSignalBridge:
   def sample[D <: Discipline, A <: ConservativeAccess, O <: Data](
-      source: TerminalView[D, A],
+      source: ConservativeView[D, A],
       outputType: DataType[O],
       contract: BridgeContract
   )(using CanSense[A]): Expr[O] = CandidateRuntime.expr(source, outputType, contract)
 
   def drive[I <: Data, D <: Discipline, A <: ConservativeAccess](
       input: Expr[I],
-      destination: TerminalView[D, A],
+      destination: ConservativeView[D, A],
       contract: BridgeContract
   )(using CanContribute[A]): Unit = CandidateRuntime.statement(input, destination, contract)
 
@@ -660,7 +720,7 @@ object ConservativeSignalBridge:
       Q,
       R <: AnalogDirection
   ](
-      source: TerminalView[D, A],
+      source: ConservativeView[D, A],
       destination: AnalogSignal[Q, R],
       contract: BridgeContract
   )(using CanSense[A], CanDriveAnalog[R]): Unit =

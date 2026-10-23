@@ -26,19 +26,23 @@ private[nodal] object ConstructionInterfaceLayout:
       field: InterfaceMember.DigitalResolved[?, ?],
       through: Vector[InterfaceMember.Nested[?]]
   ): String =
+    exactMemberPath(definition, field, through)
+
+  def exactMemberPath(
+      definition: InterfaceType[?],
+      field: InterfaceMember,
+      through: Vector[InterfaceMember.Nested[?]]
+  ): String =
     if through.size > 128 then
-      DigitalInterfaceContract.fail(1, "resolved member nesting exceeds 128")
+      DigitalInterfaceContract.fail(1, "Interface member nesting exceeds 128")
     var current = definition
     through.foreach: nested =>
       if !current.members.exists(_ eq nested) then
-        DigitalInterfaceContract.fail(
-          3,
-          "resolved member requires its exact ordered nested declarations"
-        )
+        DigitalInterfaceContract.fail(3, "member requires its exact ordered nested declarations")
       current = nested.definition
     if !current.members.exists(_ eq field) then
-      DigitalInterfaceContract.fail(3, "resolved member requires its exact declared field witness")
-    (through.map(_.name) :+ field.name).mkString(".")
+      DigitalInterfaceContract.fail(3, "member requires its exact declared field witness")
+    (through.map(_.name) :+ memberName(field)).mkString(".")
 
   /** True selects the left sink. Declared roles never change across a boundary. */
   def connectionSink(left: String, leftBoundary: Boolean, right: String, rightBoundary: Boolean)

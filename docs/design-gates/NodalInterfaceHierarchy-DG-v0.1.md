@@ -399,3 +399,86 @@ must retain multiplicity and reject split until selection-qualified component
 proof exists. True top-level and declaration-only external inout transport need
 actual four-state generated-output witnesses, including released Z, open-drain
 pullup and contended X; two-state simulation alone cannot establish them.
+
+## F58 scalar conservative Interface capability amendment
+
+The Foundation implementation authorization selects an additive
+`ConservativeView[D, A]` shared by existing `TerminalView` and an internal
+Interface-member view. `TerminalView.terminal: Terminal[D]` and existing Node /
+Terminal operations remain compatible. `InterfaceMember.terminal` retains its
+existing concrete `Conservative[D]` witness type. `connectTerminal`,
+`senseTerminal` and `contributeTerminal` select that exact field plus ordered
+`Nested` witnesses. Two-endpoint `V` / `I` overloads accept the shared capability;
+this is not permission to manufacture a Terminal declaration or a digital value.
+
+ConstructionSession owns identity and capture. The existing Interface layout
+owner expands complete roles. Source, bridge and native Model independently
+check declaration ownership, selected role, exact discipline/natures and actual
+immediate-child occurrence. Repeated accesses to one endpoint/member share
+semantic identity, but monitor/sense rights remain attached to each use and
+cannot become connect/contribute rights through canonicalization. A neutral
+private origin record is shared with resolved members; existing resolved fields
+and artifact names are unchanged.
+
+Supported backend admission is scalar, all-conservative actual Interface
+inventories, including unaccessed leaves, through existing conservative topology
+and the supported Verilog-A scalar hierarchy path. Only after independent proof
+may the backend reify existing physical terminal operations. The bounded,
+versioned correspondence retains logical member, occurrence, root/leaf/nested
+roles, discipline/natures and flow orientation once per physical leaf.
+Proof-only Interface domain/control witnesses may be removed only with a closed
+SSA and symbol-use inventory. Real state/control use, mixed digital leaves,
+unknown consumers, shaped conservative boundaries and unsupported target paths
+still reject. Analog never enters digital payload connection, resolved-net union
+or CIRCT admission through this extension.
+
+Signal-flow declarations retain their existing directional/dimension metadata;
+this amendment does not supply drive/sample execution or a signal-flow backend.
+The approved scope is F58 conservative topology and its applicable backend, not
+F72-wide analog qualification. Focused matched implementation results belong in
+the F58 readiness record; this contract alone is not an acceptance claim.
+
+## Declaration-only external resolved signatures
+
+The bounded external profile reuses `Module` and `Instance` identity. The public
+`ExternalModule(externalName)` base marks the existing module record before its
+subclass declares pins. Its exact physical symbol is a validated field, never
+inferred from a class name, a `BlackBoxPin` placement or arbitrary metadata.
+Construction and bridge admission require a nonempty ordered signature of direct,
+fixed scalar Bits-family digital inout declarations with the portable boundary
+profile and black-box placement. Bool is not a public resolved carrier; native
+bit-pattern admission likewise remains with `DigitalTypeModel`. Domains,
+parameters, instances, state, generated/analog bodies and executable operations
+are not external declarations. Broader ordinary, control and analog external
+signatures are unsupported by this initial profile.
+
+Native verification independently checks the actual declaration-only body and
+exact pin types/modes. Physical external symbols cannot be duplicated or shadow
+another ordinary module definition. Source instances of the same exact class and
+signature reuse the existing structural definition deduplication, while keeping
+distinct actual occurrences. Conditional construction artifacts retain the exact
+external symbol without altering artifacts that contain no external definition.
+A declaration-only root is a valid signature document, not an executable target
+entry; the physical witness uses an ordinary root and reachable external child.
+
+The existing resolved topology owner identifies each opaque external contribution
+from its actual declaration. The occurrence composer preserves those facts along
+with every visible driver, exact endpoint and local component identity. Unknown
+external behavior is neither a constant nor a uniquely proved local driver. A
+split of any joined component touching it rejects, even when one visible driver
+has an attributed domain. Checked standalone net boundaries defer local source
+obligations to the same closed-root proof as Interface boundaries. No domain,
+Clock, Reset or ready authority is manufactured by the external signature.
+
+The successful hierarchy dependency query returns immutable component facts only
+after cycle and sampling checks. Original occurrence IDs and operations remain
+borrowed, and absent local representatives remain absent rather than allocating a
+net. Query-local indices and existing node/edge budgets bound this inventory;
+there is no persistent second connectivity registry or bit/lane enumeration.
+The target must preserve true bidirectional carriers, retain separate local pins
+inside reused definitions, and emit a real external declaration without a body
+or zero-driving stub. Conditional split sidebands remain a separate required
+transport. Generated resolved families remain refused without selection-qualified
+component proof. Final physical acceptance still requires actual unchanged
+four-state output witnesses for Z, contended X, open-drain pullup and independent
+reused occurrences; syntax or handwritten-CIRCT probes alone do not establish it.

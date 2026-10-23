@@ -357,7 +357,10 @@ private[nodal] object InterfaceMlir:
             binding.size == 1 && binding.head.actual == endpoint.domain &&
             endpoint.members.forall(value =>
               Set("plain", "valid", "stream").contains(value.protocol) ||
-                value.protocol == "resolved" && endpoint.dimensions.isEmpty
+                Set(
+                  "resolved",
+                  "conservative"
+                ).contains(value.protocol) && endpoint.dimensions.isEmpty
             ),
           "Interface projection changes exact child, selected roles, ABI or actual domain binding",
           endpoint.path
@@ -366,13 +369,18 @@ private[nodal] object InterfaceMlir:
         endpoint.members.foreach: member =>
           val formal = childMembers(member.name)
           requireValid(
-            instanceType(
-              actualType(endpoint, member),
-              formal.dataType,
-              member.path,
-              instance,
-              formal.path
-            ),
+            if member.protocol == "conservative" then
+              actualType(endpoint, member) == formal.dataType &&
+              member.analogAttributes == formal.analogAttributes
+            else
+              instanceType(
+                actualType(endpoint, member),
+                formal.dataType,
+                member.path,
+                instance,
+                formal.path
+              )
+            ,
             "Interface actual payload differs from its exact finalized child type",
             member.path
           )
@@ -784,6 +792,8 @@ private[nodal] object InterfaceMlir:
       )
     )
     boundaryNets.foreach((parent, child) => aliasNet(parent, child))
+    private val opaqueExternalComponents =
+      ExternalModuleContract.externalNetPaths(snapshot).map(component)
     private val boundaryNetComponents = boundaryNets.map((parent, _) => component(parent)).toSet
     private val drivers = driverOperations.groupBy(effect => component(effect.target))
     snapshot.digitalExpressions.filter(_.hierarchyDriver).foreach(expression =>
@@ -819,6 +829,11 @@ private[nodal] object InterfaceMlir:
         expression.path
       )
       val endpoint = net(expression.operands.head, expression.owner)
+      requireValid(
+        !opaqueExternalComponents(component(endpoint.path)),
+        "split cannot infer a unique driver across an opaque external contribution",
+        expression.path
+      )
       requireValid(
         drivers.getOrElse(component(endpoint.path), Vector.empty).size == 1,
         "split projection requires exactly one actual conditional value driver",
@@ -1100,6 +1115,53 @@ private[nodal] object InterfaceMlir:
               "metadata" -> metadata(sourceMetadata(endpoint.path), "instance" -> instance)
             )
       result.toVector
+
+    /** Render an exact conservative view as a member access, never a terminal declaration. */
+    def renderConservativeMember(
+        declaration: KernelDeclarationSnapshot,
+        result: String,
+        resultType: String,
+        nativeType: (String, String) => String,
+        symbol: (String, String) => String,
+        sourceMetadata: String => String,
+        sourceLocation: String => String
+    ): String =
+      val origin = declaration.conservativeMember.getOrElse(
+        fail("conservative view lost its exact origin", declaration.path)
+      )
+      val endpoint = endpoints.getOrElse(
+        origin.endpoint,
+        fail("conservative view requires an actual Interface", declaration.path)
+      )
+      val owner = declarations(declaration.path)._1.path
+      val selected = endpoint.roles.find(_.name == origin.role).toVector.flatMap(_.members)
+        .find(_.name == origin.member).getOrElse(
+          fail("conservative view lost its complete selected-role leaf", declaration.path)
+        )
+      val fields = declaration.attributes.toMap
+      requireValid(
+        owner == endpoint.owner && endpoint.dimensions.isEmpty &&
+          (origin.role == endpoint.role || (origin.role == "monitor" && endpoint.boundary.isEmpty)) &&
+          declaration.kind == "conservative-terminal" && declaration.generatedScope.isEmpty &&
+          declaration.resolvedMember.isEmpty && declaration.interfaceBoundary.isEmpty &&
+          selected.protocol == "conservative" &&
+          selected.analogAttributes.forall((key, value) => fields.get(key).contains(value)) &&
+          resultType == memberType(actualMember(endpoint, selected), nativeType),
+        "conservative member origin, type or discipline differs from its actual declaration",
+        declaration.path
+      )
+      operation(
+        "nodal.member_access",
+        Vector(result -> resultType),
+        Vector.empty,
+        sourceLocation(declaration.path),
+        "instance" -> ("@" + quoted(symbol(
+          "interface_instance",
+          declarations(endpoint.path)._2.name
+        ))),
+        "path" -> quoted(origin.member),
+        "metadata" -> metadata(sourceMetadata(declaration.path), "role" -> quoted(origin.role))
+      )
 
     def renderEffects(
         module: KernelModuleSnapshot,

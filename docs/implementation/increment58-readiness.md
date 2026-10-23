@@ -1299,3 +1299,27 @@ closure. Existing CDC target source is preserved. Generated selected-prefix,
 broader source and physical-target continuations remain separate required work.
 Historical build-generated headers are not newly reproduced or independently
 sealed here. Foundation 58 remains incomplete.
+
+## Checkpoint 33 — conservative/external interfaces and deferred joins
+
+The exact 393-file core/test snapshot in `.work/f58-external-join-shared`
+(manifest `b10500d6`) adds 20 source paths after checkpoint 31. Its focused
+combined 85 groups pass on native `9fbcef7b` and translator `14df2009`, now
+preserved by checkpoint 32. Sixteen join gates include eight byte-identical
+early-late pairs; eight external profiles and three conservative native groups
+retain their distinct receipts. The smaller manifest excludes 36 examples by
+filter, not deletion; all examples remain preserved. No broad predecessor
+certification or fresh test execution is claimed.
+
+Canonical Interface ownership adds scalar all-conservative capability and
+bounded declaration-only resolved external signatures. Deferred structural
+joins now retain complete ABI/capture authority: opposite-arm, poisoned capture,
+escaping arm and unsupported contexts still refuse. Prior join-refusal coverage
+is replaced by implemented early-late equivalence, not suppressed. The exact
+InterfaceHierarchy contract and scoped join contract addition are included;
+its historical private-overlay paragraph remains distinguished from the newer
+shared 85-group receipt.
+
+Conservative arrays, signal-flow execution, analog CIRCT, mixed-interface
+erasure, broader generated/selected source and physical target completion
+remain open. Foundation 58 is not complete and no F72 qualification is claimed.

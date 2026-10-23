@@ -448,3 +448,31 @@ forged capture edges, pure collection and procedural-loop contexts still reject.
 Structural branch-result joins, collection result inference and inferred-storage
 lifecycles remain separate required continuations. Source/native acceptance does
 not claim target support for every operation that can carry an intent.
+
+
+### Deferred structural result joins
+
+The lexical result-type owner extends to ordinary structural value conditionals.
+Each actual StructuralIfRecord retains its true and false yielded edges, captured
+once in authored order. Only this exact record/result pairing may add those two
+closed dependencies to the existing result-type intent. The bounded finalizer
+checks the actual arm registry, owner, parent, arm polarity and yielded identity,
+finalizes each edge in its own lexical scope, then uses the existing complete ABI
+export and same-type query to seal the parent result. Raw arm values are not
+captured into the parent merely because they have compatible types. No second
+inference engine, snapshot format, branch replay or parameter sampling is added.
+
+The maintained positive profiles are direct, nested, behavioral and generated
+conditional results with explicit storage types and early/late actual child
+bindings. Equal default/envelope or payload kind does not authorize mismatched
+branch ABIs. Opposite-arm forgery, escaped values, poisoned second-arm capture,
+pure collections and procedural contexts retain causal rejection. Collection
+result inference and inferred-storage lifecycles remain separate continuations.
+
+Before shared promotion, strict private source checks passed 41 focused groups:
+DeferredJoin 8, Lexical 8, DeferredHierarchy 5, DeferredArithmetic 4, DeferredValue 6
+and StructuralIf 10. Sixteen actual maintained-name source replays passed the
+full default native gate on frozen compiler
+`93a1af6b101831196cc9a4d954330a80601dc941cb59ff965ae55f1d720c7e9c`;
+each early/late pair has byte-identical transport. These are private-overlay
+prototype results, not yet matched shared-source or target execution acceptance.

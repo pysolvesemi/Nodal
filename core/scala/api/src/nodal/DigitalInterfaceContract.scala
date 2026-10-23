@@ -159,7 +159,8 @@ private[nodal] object DigitalInterfaceContract:
       captured: Capture,
       pathOf: Any => Option[String],
       ownerOf: Any => Option[String],
-      resolvedBoundaries: Vector[(String, String)] = Vector.empty
+      resolvedBoundaries: Vector[(String, String)] = Vector.empty,
+      externalNets: Set[String] = Set.empty
   ): Set[String] =
     val contextualSplits = mutable.HashSet.empty[String]
     val parents = mutable.HashMap.empty[String, String]
@@ -212,6 +213,7 @@ private[nodal] object DigitalInterfaceContract:
     val boundaries = resolvedBoundaries ++ interfaceBoundaries
     boundaries.foreach((parent, child) => alias(parent, child))
     val joined = boundaries.map((parent, _) => representative(parent)).toSet
+    val opaque = externalNets.map(representative)
     val drivers = driverOperations.groupBy(value => representative(value.target))
     expressions.foreach: (expression, owner) =>
       expression.operation.filter(ValueOperations.contains).foreach: operation =>
@@ -238,6 +240,8 @@ private[nodal] object DigitalInterfaceContract:
         if !expression.resultDescriptor.contains(expected) || expression.literal.nonEmpty then
           fail(8, "resolved-net expression has an incorrect exact result type")
         if operation != "digital_net_read" then
+          if opaque(representative(path)) then
+            fail(12, "split cannot infer a unique driver across an opaque external contribution")
           val selected = drivers.getOrElse(representative(path), Vector.empty)
           if selected.isEmpty then
             fail(12, "split requires an authored conditional driver; no write value is available")
@@ -328,6 +332,9 @@ private[nodal] object DigitalInterfaceContract:
           register(array.definition, array.role)
           pending.append((array.definition, 0))
         case view: InterfaceResolvedView[?, ?] =>
+          register(view.endpoint.definition, view.endpoint.role)
+          pending.append((view.endpoint.definition, 0))
+        case view: InterfaceTerminalView[?, ?] =>
           register(view.endpoint.definition, view.endpoint.role)
           pending.append((view.endpoint.definition, 0))
         case _ => ()

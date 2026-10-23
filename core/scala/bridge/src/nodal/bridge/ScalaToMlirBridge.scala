@@ -863,7 +863,9 @@ ${indent(body, 2)}
           ))
       val digital = snapshot.enumDefinitions.nonEmpty || snapshot.digitalExpressions.nonEmpty ||
         declarationKinds.exists(digitalKinds.contains) ||
-        snapshot.interfaceAbi.nonEmpty ||
+        snapshot.interfaceContracts.exists(_.members.exists(member =>
+          !Set("conservative", "signal-flow").contains(member.protocol)
+        )) ||
         snapshot.resolvedNets.nonEmpty
       (digital, analog) match
         case (true, true) => "mixed_signal"
@@ -1043,6 +1045,7 @@ ${indent(body, 2)}
       ).map(name => s"nodal.verify.$name" -> boolean(true))
 
     private def validate(): Unit =
+      ExternalModuleContract.validate(snapshot)
       requireUnique(
         modules.map(_.path),
         "NODAL-BRIDGE-001",
@@ -2451,7 +2454,11 @@ ${indent(body, 2)}
       val structuralHeaders = snapshot.generatedRegions
         .filter(region => region.owner == module.path && region.digitalBody.nonEmpty)
         .map(region =>
-          (region.lexicalParent, region.path, Vector(region.lower, region.upperExclusive, region.step))
+          (
+            region.lexicalParent,
+            region.path,
+            Vector(region.lower, region.upperExclusive, region.step)
+          )
         ) ++
         snapshot.digitalLoops.filter(loop =>
           loop.owner == module.path && snapshot.structuralIfs.exists(_.owner == module.path)
@@ -2953,27 +2960,38 @@ ${indent(body, 2)}
                 "flow_orientation" -> quoted("into_component")
               )
             case _ => Vector.empty
-          body += operation(
-            opName,
-            results = Vector(result),
-            resultTypes = Vector(resultType),
-            attributes = Vector(
-              "name" -> quoted(declaration.name),
-              "source_path" -> quoted(declaration.path),
-              "metadata" -> bridgeMetadata(
-                declaration.path,
-                Vector(
-                  "declaration_kind" -> quoted(declaration.kind),
-                  "declared_discipline" -> quoted(
-                    declaration.attributes.toMap.getOrElse("discipline", discipline)
+          if declaration.conservativeMember.nonEmpty then
+            body += interfaceValues.renderConservativeMember(
+              declaration,
+              result,
+              resultType,
+              interfaceNativeType,
+              stableLocalSymbol,
+              path => bridgeMetadata(path, Vector.empty),
+              location
+            )
+          else
+            body += operation(
+              opName,
+              results = Vector(result),
+              resultTypes = Vector(resultType),
+              attributes = Vector(
+                "name" -> quoted(declaration.name),
+                "source_path" -> quoted(declaration.path),
+                "metadata" -> bridgeMetadata(
+                  declaration.path,
+                  Vector(
+                    "declaration_kind" -> quoted(declaration.kind),
+                    "declared_discipline" -> quoted(
+                      declaration.attributes.toMap.getOrElse("discipline", discipline)
+                    )
+                  ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
+                    "allow_floating" -> boolean(true)
                   )
-                ) ++ Option.when(externallyBoundTerminals.contains(declaration.path))(
-                  "allow_floating" -> boolean(true)
                 )
-              )
-            ) ++ boundaryAttributes,
-            semanticPath = declaration.path
-          )
+              ) ++ boundaryAttributes,
+              semanticPath = declaration.path
+            )
           values.update(declaration.path, result -> resultType)
 
       val generatedStatic = mutable.ArrayBuffer.empty[String]
@@ -3239,7 +3257,7 @@ ${indent(body, 2)}
             module.path,
             Vector("class_name" -> quoted(module.className))
           )
-        ),
+        ) ++ module.externalName.toVector.map(name => "external_name" -> quoted(name)),
         regions = Vector(body.mkString("\n")),
         semanticPath = module.path
       )

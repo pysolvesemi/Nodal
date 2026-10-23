@@ -325,7 +325,7 @@ private object ConstructionExpressionFacts:
       case branch: Branch[?] => branch.positive.discipline
       case node: Node[?] => node.discipline
       case terminal: Terminal[?] => terminal.discipline
-      case view: TerminalView[?, ?] => view.terminal.discipline
+      case view: ConservativeView[?, ?] => view.discipline
     discipline.map(disciplineDimension(_, potential)).getOrElse:
       if potential then AnalogDimension.Voltage else AnalogDimension.Current
 

@@ -92,7 +92,8 @@ private[nodal] final case class KernelDeclarationSnapshot(
     instancePort: Option[KernelInstancePortSnapshot] = None,
     interfaceBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
     resolvedBoundary: Option[KernelInterfaceBoundarySnapshot] = None,
-    resolvedMember: Option[KernelResolvedMemberSnapshot] = None
+    resolvedMember: Option[KernelInterfaceMemberOrigin] = None,
+    conservativeMember: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelInstancePortSnapshot(
@@ -513,10 +514,11 @@ private[nodal] final case class KernelModuleSnapshot(
     className: String,
     domains: Vector[KernelDomainSnapshot],
     declarations: Vector[KernelDeclarationSnapshot],
-    instances: Vector[KernelInstanceSnapshot]
+    instances: Vector[KernelInstanceSnapshot],
+    externalName: Option[String] = None
 )
 
-private[nodal] final case class KernelResolvedMemberSnapshot(
+private[nodal] final case class KernelInterfaceMemberOrigin(
     endpoint: String,
     member: String,
     role: String
@@ -530,7 +532,7 @@ private[nodal] final case class KernelResolvedNetSnapshot(
     profile: String,
     operations: Vector[String],
     boundary: Option[KernelInterfaceBoundarySnapshot] = None,
-    member: Option[KernelResolvedMemberSnapshot] = None
+    member: Option[KernelInterfaceMemberOrigin] = None
 )
 
 private[nodal] final case class KernelTopologyEdge(
@@ -848,6 +850,7 @@ private final class ModuleRecord(
   var expressionCount: Int = 0
   var scaffoldExpressionCount: Int = 0
   var attached: Boolean = parentAtConstruction.isEmpty
+  var externalName: Option[String] = None
 
 private final case class Operation(
     owner: Long,
@@ -907,7 +910,8 @@ private[nodal] final class GeneratedFamilyArgument(
 )
 
 private[nodal] type DigitalCaptureValue = Expr[?] | GeneratedRegionRecord | GeneratedFamilyArgument
-private[nodal] type DigitalCaptureKey = DeclarationRef | ExpressionRef | GeneratedRegionRecord | GeneratedFamilyArgument
+private[nodal] type DigitalCaptureKey = DeclarationRef | ExpressionRef | GeneratedRegionRecord |
+  GeneratedFamilyArgument
 private[nodal] type DigitalRegionArgument = KernelExpr[?] | GeneratedFamilyArgument
 
 /** Mutable lexical capture state owned exclusively by ConstructionSession. */
@@ -939,7 +943,8 @@ private final class DigitalValueRegionRecord(
       true
     case DigitalRegionKind.Collection => false
   val arguments: mutable.ArrayBuffer[(DigitalRegionArgument, String)] = mutable.ArrayBuffer.empty
-  val captures: mutable.LinkedHashMap[DigitalCaptureKey, (DigitalCaptureValue, DigitalRegionArgument)] =
+  val captures
+      : mutable.LinkedHashMap[DigitalCaptureKey, (DigitalCaptureValue, DigitalRegionArgument)] =
     mutable.LinkedHashMap.empty
   var expressionCount: Int = 0
   var assignmentCount: Int = 0

@@ -884,6 +884,19 @@ def I[D <: Discipline](node: Node[D]): Expr[Real] =
 def I[D <: Discipline](positive: Node[D], negative: Node[D]): Expr[Real] =
   CandidateRuntime.analogExpr("flow_access", positive, negative)
 
+/** Two-terminal access keeps the existing branch and analog expression owners. */
+def V[D <: Discipline, A <: ConservativeAccess, B <: ConservativeAccess](
+    positive: ConservativeView[D, A],
+    negative: ConservativeView[D, B]
+)(using CanSense[A], CanSense[B]): Expr[Real] =
+  CandidateRuntime.analogExpr("potential_access", positive, negative)
+
+def I[D <: Discipline, A <: ConservativeAccess, B <: ConservativeAccess](
+    positive: ConservativeView[D, A],
+    negative: ConservativeView[D, B]
+)(using CanSense[A], CanSense[B]): Expr[Real] =
+  CandidateRuntime.analogExpr("flow_access", positive, negative)
+
 def ddt(value: Expr[Real]): Expr[Real] =
   CandidateRuntime.continuousOperator("analog_ddt", value, None)
 

@@ -122,6 +122,8 @@ private[nodal] object ConstructionKernel:
       )
 
   def beginModule(module: Module): Unit = active.foreach(_.beginModule(module))
+  def declareExternalModule(module: Module, name: String): Unit =
+    active.foreach(_.declareExternalModule(module, name))
 
   private def areaSession: ConstructionSession = active.getOrElse(
     failConstructor(
@@ -635,6 +637,16 @@ private[nodal] object ConstructionKernel:
     active.getOrElse(
       throw new IllegalStateException("instance selection requires active construction")
     ).instanceDigitalInout(value)
+
+  def interfaceConservativeMember[D <: Discipline, A <: ConservativeAccess](
+      endpoint: InterfacePort[?, ?],
+      field: InterfaceMember.Conservative[D],
+      through: Vector[InterfaceMember.Nested[?]],
+      permission: String
+  ): ConservativeView[D, A] =
+    active.getOrElse(
+      throw new IllegalStateException("conservative member selection requires active construction")
+    ).interfaceConservativeMember[D, A](endpoint, field, through, permission)
 
   def interfaceResolvedMember[A <: Bits, M <: DriveMode](
       endpoint: InterfacePort[?, ?],

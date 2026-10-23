@@ -1442,3 +1442,16 @@ This source extension precedes the later generated-domain target receipt: its
 fixture. No production API change or target acceptance is inferred solely from
 these source checks. The remaining selected-domain target profiles retain their
 separate original source identity.
+
+### Maintained nested target runner prerequisite
+
+The exact runner `ffdbb137` from
+`.work/f58-generated-target/nested/final-candidate/accepted-files` is retained
+before the generated-domain runner, which imports its `digest` and
+`pin_offsets` helpers. It has only standard-library imports and a guarded main.
+Both maintained fixture hashes already match the historical receipt in
+`nested/maintained-final/manifest.json`. On compiler `795f3ef4`, direct symbolic
+1/3/8, concrete 3 and nested 2x3/3x2/4x4 profiles pass with unchanged SV; range
+controls retain refusal at nine lanes and 5x3. This is matched historical
+two-state evidence, not a current-compiler rerun or four-state claim. The
+mismatched historical TARGET.md copy remains excluded; no fixtures are changed.

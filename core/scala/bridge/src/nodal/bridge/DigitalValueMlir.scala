@@ -60,6 +60,9 @@ private[nodal] object DigitalValueMlir:
       relationships: ClockRelationshipMlir.Plan
   ):
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
+    private val physicalRootsByOwner = snapshot.modules.map(module =>
+      module.path -> hierarchy.physicalRoots(module).toSet
+    ).toMap
     private val declarations = snapshot.modules.flatMap(module =>
       module.declarations.map(value => value.path -> (module.path, value))
     ).toMap
@@ -390,6 +393,46 @@ private[nodal] object DigitalValueMlir:
             consumer
           ))
           structuralFamilySource(source, owner, region.parentRegion, consumer, depth + 1)
+
+    /** Resolve only existing typed physical capture edges back to the original binding root. */
+    private def physicalControlSource(
+        path: String,
+        owner: String,
+        scope: Option[String],
+        consumer: String,
+        depth: Int = 0
+    ): String =
+      requireValid(depth < 128, "physical capture chain exceeds depth", consumer)
+      requireVisible(path, owner, scope, consumer)
+      requireStructuralFamilyScope(scope, consumer)
+      val dataType = expressionType(path)
+      requireValid(
+        Set("Clock", "Reset")(dataType),
+        "physical capture requires a scalar control",
+        consumer
+      )
+      arguments.get(path) match
+        case Some((region, argument)) =>
+          val offset = if generated.get(region.path).exists(_.yieldedArea.nonEmpty) then 1
+          else if arms.get(region.path).exists(_._1.behavioralRoot.isEmpty) then 0
+          else fail("physical capture requires an actual family or structural arm", consumer)
+          val index = region.arguments.indexWhere(_.path == path) - offset
+          val source = region.captures.lift(index).getOrElse(
+            fail("physical argument has no actual capture edge", consumer)
+          )
+          requireValid(
+            argument.role == "capture" && expressionType(source) == dataType,
+            "physical capture must preserve its exact control type and role",
+            consumer
+          )
+          physicalControlSource(source, owner, region.parentRegion, consumer, depth + 1)
+        case None =>
+          requireValid(
+            scope.isEmpty && physicalRootsByOwner(owner)(path),
+            "physical capture must terminate at an actual module-owned binding root",
+            consumer
+          )
+          path
 
     def requireVisible(
         path: String,
@@ -766,7 +809,8 @@ private[nodal] object DigitalValueMlir:
                                   else if isIterationIndex(arm.captures(index)) then "index_capture"
                                   else "static_capture") &&
                 (expected == "GeneratedFamily" && argument.dataType == expected ||
-                  expected == "Integer" || finiteType(expected)) &&
+                  expected == "Integer" || finiteType(expected) ||
+                  Set("Clock", "Reset")(expected) && argument.dataType == expected) &&
                 !expressions.contains(argument.path) && !staticExpressions.contains(
                   argument.path
                 ) &&
@@ -776,6 +820,13 @@ private[nodal] object DigitalValueMlir:
             )
             if expected == "GeneratedFamily" then
               val _ = structuralFamilySource(
+                argument.path,
+                conditional.owner,
+                Some(arm.path),
+                argument.path
+              )
+            if Set("Clock", "Reset")(expected) then
+              val _ = physicalControlSource(
                 argument.path,
                 conditional.owner,
                 Some(arm.path),
@@ -2812,6 +2863,10 @@ private[nodal] object DigitalValueMlir:
             Map[String, (String, String)]
         ) => Vector[String]
     ): Rendered =
+      def captureNativeType(argument: KernelDigitalRegionArgument): String =
+        if Set("Clock", "Reset")(argument.dataType) then
+          nativeType(argument.dataType, argument.path)
+        else computedType(argument.dataType, argument.path)
       var crossingStateBits = BigInt(0)
       def bitPatternWidth(text: String, path: String, fixed: Boolean = false): BigInt =
         var remaining = 65536
@@ -3328,9 +3383,13 @@ private[nodal] object DigitalValueMlir:
                   clearRegion(arm.path)
                   blockArguments = arm.arguments.zipWithIndex.map: (argument, index) =>
                     requireValid(
-                      (argument.dataType == "GeneratedFamily" && expressionType(
+                      (Set(
+                        "GeneratedFamily",
+                        "Clock",
+                        "Reset"
+                      )(argument.dataType) && expressionType(
                         arm.captures(index)
-                      ) == "GeneratedFamily") ||
+                      ) == argument.dataType) ||
                         regionalTypeMatches(
                           argument.dataType,
                           expressionType(arm.captures(index)),
@@ -3342,7 +3401,7 @@ private[nodal] object DigitalValueMlir:
                     val name = s"%structural_arm_${ordinal}_arg$index"
                     val dataType = if argument.dataType == "GeneratedFamily" then
                       "!nodal.generated_family"
-                    else computedType(argument.dataType, argument.path)
+                    else captureNativeType(argument)
                     values.update(argument.path, name -> dataType)
                     heights.update(argument.path, heights(arm.captures(index)) + 1)
                     proofs.update(argument.path, proofs(arm.captures(index)))
@@ -3500,14 +3559,16 @@ private[nodal] object DigitalValueMlir:
             clearRegion(region.path)
             body.arguments.zipWithIndex.foreach: (argument, index) =>
               val value = if index == 0 then induction -> "i64"
-              else captures(index - 1)._1 -> computedType(argument.dataType, argument.path)
+              else captures(index - 1)._1 -> captureNativeType(argument)
               if index != 0 then
                 requireValid(
-                  regionalTypeMatches(
-                    argument.dataType,
-                    expressionType(body.captures(index - 1)),
-                    argument.path
-                  ),
+                  (Set("Clock", "Reset")(argument.dataType) &&
+                    expressionType(body.captures(index - 1)) == argument.dataType) ||
+                    regionalTypeMatches(
+                      argument.dataType,
+                      expressionType(body.captures(index - 1)),
+                      argument.path
+                    ),
                   "Generate capture alias must preserve its exact type",
                   argument.path
                 )
@@ -3521,7 +3582,24 @@ private[nodal] object DigitalValueMlir:
                 if index == 0 then Unknown else proofs(body.captures(index - 1))
               )
               if argument.dataType == "Integer" then bindStaticArgument(argument.path, value)
-            local ++= renderGeneratedInstances(region, values.toMap)
+            val physicalAliases = body.arguments.drop(1).filter(argument =>
+              Set("Clock", "Reset")(argument.dataType)
+            ).map: argument =>
+              physicalControlSource(
+                argument.path,
+                region.owner,
+                Some(region.path),
+                argument.path
+              ) -> values(argument.path)
+            val requiredPhysical = module.instances.filter(
+              _.generatedScope.exists(_.owner == region.path)
+            ).flatMap(_.actualBindings.flatMap(binding => Vector(binding.clock) ++ binding.reset))
+            requireValid(
+              requiredPhysical.forall(physicalAliases.toMap.contains),
+              "generated instance requires the exact scoped capture for every physical binding",
+              region.path
+            )
+            local ++= renderGeneratedInstances(region, values.toMap ++ physicalAliases)
             region.declarations.foreach(path => emit(path, depth + 1, Some(region.path), local))
             emitScope(region.path, depth + 1, local)
             region.exports.foreach: exported =>

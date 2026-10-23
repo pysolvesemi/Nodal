@@ -1414,3 +1414,20 @@ back the physical pin or adding state/latency. Relative ABI variants preserve
 independent actual drivers. Fixed scalar Bits/UInt/SInt only is admitted here;
 symbolic, array and generated routes remain required continuations. Unchanged
 emitted SystemVerilog and four-state behavior are not electrical certification.
+
+## Checkpoint 39 — guarded generated physical capture source
+
+The matched 403-file snapshot in `.work/f58-guarded-domain-shared`
+(manifest `13502109`) adds nine core source paths plus five exact frontend
+fixtures and their maintained runner. Shared acceptance retains 54 groups,
+26 native inputs, 12 domain replays and 14 frontend stages on `660d55cb`;
+these counts remain separate. Existing nine frontend fixtures are preserved.
+Only the guarded-capture GeneratedAreas contract section is composed into the
+current gate. Later domain fixture extensions are explicitly not part of these
+results, and no current target compiler is substituted for the historical one.
+
+Canonical isolated structural-arm and constructor capture ownership preserve
+physical clock/reset provenance for guarded children. Positive-step and
+dependent domain source cases retain actual lexical bounds. Selected/exported
+Interface routes and actual generated HDL remain separate required consumers.
+This partial checkpoint is neither new test execution nor Foundation 58 closure.

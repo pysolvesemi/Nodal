@@ -4,6 +4,7 @@ import dotty.tools.dotc.ast.tpd
 import dotty.tools.dotc.ast.tpd.*
 import dotty.tools.dotc.core.Annotations.Annotation
 import dotty.tools.dotc.core.Constants.Constant
+import dotty.tools.dotc.core.DenotTransformers.IdentityDenotTransformer
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Flags.*
 import dotty.tools.dotc.core.NameKinds.DefaultGetterName
@@ -20,7 +21,8 @@ import scala.collection.mutable
   * symbols and actual same-compilation bodies are authoritative, never source spellings.
   * Unsupported host staging fails closed; this is deliberately not a general Scala effect system.
   */
-private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase:
+private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
+    with IdentityDenotTransformer:
   val phaseName = "nodalDigitalCollectionCallbacks"
   override val runsAfter = Set("nodalAreaCapture")
   override val runsBefore = Set("pickler")
@@ -631,6 +633,43 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
       rangeModule("nodal.RegNext", "apply", "uninitialized")
     rangeMethods ++= defaultGetters(rangeMethods ++ ranges ++ areaRanges)
 
+  private def indexDefinition(current: Tree)(using Context): Option[Symbol] =
+    current match
+      case definition: DefDef =>
+        structural.admitResult(definition.rhs, definition.tpt.tpe)
+        definitions(definition.symbol) = definition
+        sourceDefinitions(definition.symbol) = ((definition, ctx))
+        Some(definition.symbol)
+      case definition: ValDef =>
+        structural.admitResult(definition.rhs, definition.tpt.tpe)
+        values(definition.symbol) = definition
+        None
+      case typed: Typed =>
+        structural.admitResult(typed.expr, typed.tpt.tpe)
+        None
+      case definition: TypeDef => definition.rhs match
+          case template: Template =>
+            templates(definition.symbol) = template
+            sourceDefinitions(definition.symbol) = ((definition, ctx))
+            Some(definition.symbol)
+          case _ => None
+      case _ => None
+
+  /** Lambda lowering re-owns actual local symbols; retain their typed bodies, never stale
+    * summaries.
+    */
+  private def indexLoweredDefinitions(tree: Tree)(using
+      Context
+  )
+      : Vector[(Symbol, (Tree, Context))] =
+    val symbols = mutable.LinkedHashSet.empty[Symbol]
+    val collect = new TreeTraverser:
+      override def traverse(current: Tree)(using Context): Unit =
+        indexDefinition(current).foreach(symbols.add)
+        traverseChildren(current)
+    collect.traverse(tree)
+    symbols.toVector.map(symbol => symbol -> sourceDefinitions(symbol))
+
   override def prepareForUnit(tree: Tree)(using Context): Context =
     if !scanned then
       scanned = true
@@ -640,20 +679,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         given Context = scanBase.fresh.setCompilationUnit(unit)
         val collect = new TreeTraverser:
           override def traverse(current: Tree)(using Context): Unit =
+            val _ = indexDefinition(current)
             current match
-              case definition: DefDef =>
-                structural.admitResult(definition.rhs, definition.tpt.tpe)
-                definitions(definition.symbol) = definition
-                sourceDefinitions(definition.symbol) = ((definition, ctx))
-              case definition: ValDef =>
-                structural.admitResult(definition.rhs, definition.tpt.tpe)
-                values(definition.symbol) = definition
-              case typed: Typed => structural.admitResult(typed.expr, typed.tpt.tpe)
-              case definition: TypeDef => definition.rhs match
-                  case template: Template =>
-                    templates(definition.symbol) = template
-                    sourceDefinitions(definition.symbol) = ((definition, ctx))
-                  case _ => ()
               case reference: RefTree if immutableFsmRuntime(reference.symbol) =>
                 report.error(
                   "NODAL-FSM-058-UNROLL-FORGED: source must not call compiler-owned immutable graph attestation methods",
@@ -710,8 +737,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
         )
         behavioral.classifyAnalog(unit.tpdTree, definitions)
         behavioral.checkChains(unit.tpdTree)
-      publishEffectSummaries()
+      publishEffectSummaries(sourceDefinitions.toVector)
     ctx
+
+  override def transformUnit(tree: Tree)(using Context): Tree =
+    val actual = indexLoweredDefinitions(tree)
+    actual.foreach((symbol, _) => symbol.removeAnnotation(effectMarker))
+    publishEffectSummaries(actual)
+    tree
 
   private def effectMarker(using Context): ClassSymbol =
     requiredClass("nodal.ConstructorEffectSummary")
@@ -858,8 +891,8 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
             case _ => None
       case _ => None
 
-  private def publishEffectSummaries(): Unit =
-    sourceDefinitions.foreach: (symbol, entry) =>
+  private def publishEffectSummaries(entries: Vector[(Symbol, (Tree, Context))]): Unit =
+    entries.foreach: (symbol, entry) =>
       val (tree, context) = entry
       given Context = context
       effectKind(symbol).foreach: kind =>
@@ -930,7 +963,14 @@ private[compiler] final class DigitalCollectionCallbackPhase extends PluginPhase
     else
       val validation = new Validation(Profile.StructuralFamily, new Budget)
       if validation.structuralIf(tree, 0) then
-        structural.lower(tree, structural.predicate(tree.cond).get, structural.resultType(tree).get)
+        val lowered = structural.lower(
+          tree,
+          structural.predicate(tree.cond).get,
+          structural.resultType(tree).get,
+          this
+        )
+        val _ = indexLoweredDefinitions(lowered)
+        lowered
       else tree
 
   private def callbackArity(tree: Tree)(using Context): Int =

@@ -386,3 +386,36 @@ captured path/category/provenance/source, required eight-hex suffix and state
 identity, retaining repeat-snapshot and loop-scope checks. Its old mismatch was
 first reproduced against unmodified shared classes; no behavior check was
 removed or converted into an expected failure.
+
+## Guarded generated child physical captures — 2026-10-20
+
+Final resolved child-domain bindings now transport their actual scalar Clock and
+optional effective Reset through the existing ordered structural-arm and Generate
+capture edges. Default, named, inherited and late named selection retain the original
+module-owned physical roots and exact domain identity; an overridden binding does not
+leave an unused clock/reset capture. A forwarded required domain uses its actual
+parent-local capability projection. No additional binding registry is introduced.
+
+Source finalization reuses the existing lexical context installer and restores all
+construction stacks on failure. The bridge independently follows exact typed capture
+edges back to the actual binding roots, and supplies scoped SSA aliases only to the
+original generated-instance binding renderer. Existing structural-arm first-use
+ordering is unchanged. Ordinary digital values, storage fields, callbacks and yields
+do not acquire Clock/Reset authority.
+
+Nested structural lowering transfers actual branch definitions to the new closure
+owner while preserving their source symbol identities, then re-indexes the actual
+typed definitions in the existing effect inventory. Ordinary unused-source checks
+remain active. Final-symbol effect summaries are
+re-proved and republished from those bodies. Imported producer version, signature,
+profile, dependency and cycle checks remain unchanged; a stale signature is never
+accepted because a class or callback has a familiar name.
+
+Focused checks include default/named/inherited/resetless bindings, final late named
+policy, nested guards, shared physical roots and required-domain forwarding, plus
+independent bridge/native ownership and capture forgeries. This extends source and
+mandatory native semantic acceptance only. Exported Instance/Interface views,
+family-local typed Interface transport, selection-qualified resolved/CDC proof,
+shaped lane-indexed physical controls and actual generated-instance target execution
+remain required continuations. No generated HDL or analog/conservative widening is
+claimed by this checkpoint.

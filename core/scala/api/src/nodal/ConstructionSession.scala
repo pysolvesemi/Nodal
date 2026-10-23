@@ -2472,13 +2472,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       region: DigitalValueRegionRecord,
       dataType: DataType[?],
       role: String,
-      capture: Option[Expr[?]] = None
+      capture: Option[Expr[?]] = None,
+      physicalControl: Boolean = false
   ): KernelExpr[?] =
     if region.arguments.size >= DigitalReductionContract.MaximumArguments then
       collectionFailure("collection signature exceeds the 4098 argument budget")
     val intent = DeferredResultType.intent(capture.toVector):
       CandidateRuntime.typeDescriptor(CandidateRuntime.expressionDataType(capture.get).get)
-    if intent.nonEmpty then requireDeferredValueScope(Some(region), region.reference.module)
+    if physicalControl then requirePhysicalControlCapture(dataType, region)
+    else if intent.nonEmpty then requireDeferredValueScope(Some(region), region.reference.module)
     else if sequentialRegion(region) then
       validateSequentialValueType(dataType, region.reference.module)
     else if CandidateRuntime.typeDescriptor(dataType).kind != "Integer" then
@@ -2539,7 +2541,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       destination: Option[DigitalValueRegionRecord],
       owner: Long,
       create: Boolean = true,
-      predicateUse: Boolean = false
+      predicateUse: Boolean = false,
+      physicalControl: Boolean = false
   ): Expr[?] =
     if create then
       val _ = validateFsmObservations(Vector(value))
@@ -2564,7 +2567,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         case None =>
           collectionFailure("collection argument or body value escaped its lexical region")
         case Some(region) =>
-          val parentValue = bindCollectionValue(value, region.parent, owner, create, predicateUse)
+          if physicalControl then
+            requirePhysicalControlCapture(
+              CandidateRuntime.expressionDataType(value).getOrElse(
+                collectionFailure("physical capture requires an exact control type")
+              ),
+              region
+            )
+          val parentValue =
+            bindCollectionValue(value, region.parent, owner, create, predicateUse, physicalControl)
           val parentReference = valueReference(parentValue)
           region.captures.get(parentReference) match
             case Some((_: Expr[?], argument: KernelExpr[?])) => argument
@@ -2585,7 +2596,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 .exists(_._1.loop.get.generated.isEmpty)
               val pending = DeferredResultType.pending(parentValue)
               if pending then requireDeferredValueScope(Some(region), owner)
-              if !isStatic && !pending then
+              if !isStatic && !pending && !physicalControl then
                 validateShapeType(dataType, owner, cardinality = true, storageContext = true)
               else if isStatic && (!proceduralIndex || predicateUse) then
                 val analysis = new StructuralBoundAnalysis(owner, signed64Literals = true)
@@ -2610,10 +2621,11 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 dataType,
                 if proceduralIndex then "index_capture"
                 else if isStatic then "static_capture" else "capture",
-                capture = Some(parentValue)
+                capture = Some(parentValue),
+                physicalControl = physicalControl
               )
               region.captures.update(parentReference, parentValue -> argument)
-              if !isStatic && !pending then
+              if !isStatic && !pending && !physicalControl then
                 bindCollectionType(CandidateRuntime.typeDescriptor(dataType), Some(region), owner)
               argument
             case None => collectionFailure("collection free edge has no explicit capture argument")
@@ -6277,6 +6289,69 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       current = region.parent
     chain.reverse.toVector
 
+  private def installValueScope(owner: Long, scope: Option[DigitalValueRegionRecord]): Unit =
+    val chain = requireDeferredValueScope(scope, owner)
+    moduleStack.clear(); moduleStack += records(owner)
+    collectionStack.clear(); collectionStack ++= chain
+    generationStack.clear(); generationStack ++= chain.flatMap(_.loop.flatMap(_.generated))
+
+  private def requirePhysicalControlCapture(
+      dataType: DataType[?],
+      region: DigitalValueRegionRecord
+  ): Unit =
+    val descriptor = CandidateRuntime.typeDescriptor(dataType)
+    if !(descriptor == KernelTypeDescriptor("Clock") || descriptor == KernelTypeDescriptor(
+        "Reset"
+      )) ||
+      !requireDeferredValueScope(Some(region), region.reference.module).forall(scope =>
+        scope.structuralArm.nonEmpty || scope.loop.exists(_.generated.exists(_.areaFamily))
+      )
+    then collectionFailure("physical controls require exact scalar structural capture ancestry")
+
+  private def actualDomainControls(
+      actual: DomainRecord,
+      physical: DomainRecord
+  ): (Option[Expr[Clock]], Option[Expr[Reset]]) =
+    val reset = Option(effectiveResets.get(physical.domain)).map: value =>
+      if actual.kind == KernelDomainKind.Required then actual.domain.reset else value
+    actual.domain.clock -> reset
+
+  /** Final bindings, not eager binding calls, own the physical edges through isolated arms. */
+  private def materializeInstanceControlCaptures(resolved: Map[DomainRef, String]): Unit =
+    val byPath = records.valuesIterator.flatMap(_.domains).map(domain =>
+      domainPath(domain.reference) -> domain
+    ).toMap
+    val previousModules = moduleStack.toVector
+    val previousRegions = collectionStack.toVector
+    val previousGeneration = generationStack.toVector
+    try
+      records.valuesIterator.foreach: module =>
+        module.instances.foreach: instance =>
+          instance.generatedScope.foreach: family =>
+            val scope = family.digitalRegion.getOrElse(
+              collectionFailure("generated instance has no actual digital family body")
+            )
+            installValueScope(module.handle, Some(scope))
+            records(instance.child).domains.filter(_.kind == KernelDomainKind.Required).foreach:
+              requirement =>
+                val (actualRef, _, owner, ordinal) =
+                  selectedRequirementBindings(requirement.reference)
+                if owner != module.handle || ordinal != instance.ordinal then
+                  collectionFailure("physical binding lost its actual instance owner")
+                val actual = records(actualRef.module).domains(actualRef.index)
+                val (clock, reset) = actualDomainControls(actual, byPath(resolved(actualRef)))
+                (clock.toVector ++ reset.toVector).foreach: value =>
+                  val _ = bindCollectionValue(
+                    value,
+                    Some(scope),
+                    module.handle,
+                    physicalControl = true
+                  )
+    finally
+      moduleStack.clear(); moduleStack ++= previousModules
+      collectionStack.clear(); collectionStack ++= previousRegions
+      generationStack.clear(); generationStack ++= previousGeneration
+
   /** Seal the existing captured DAG once, including exact capture-edge type-copy intents. */
   private def materializeDeferredResultTypes(): Unit =
     val state = new java.util.IdentityHashMap[KernelExpr[?], java.lang.Integer]()
@@ -6284,11 +6359,6 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val previousModules = moduleStack.toVector
     val previousRegions = collectionStack.toVector
     val previousGeneration = generationStack.toVector
-    def context(owner: Long, scope: Option[DigitalValueRegionRecord]): Unit =
-      val chain = requireDeferredValueScope(scope, owner)
-      moduleStack.clear(); moduleStack += records(owner)
-      collectionStack.clear(); collectionStack ++= chain
-      generationStack.clear(); generationStack ++= chain.flatMap(_.loop.flatMap(_.generated))
     def visit(expression: KernelExpr[?], depth: Int): Unit =
       if depth > 128 || Option(state.get(expression)).contains(1) then
         fail("NODAL-HIERARCHY-058-TYPE", "deferred result type graph is cyclic or too deep")
@@ -6367,7 +6437,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                   case _ => ()
               case _ => ()
         DeferredResultType.requireFinal(intent.dependencies, "result type materialization")
-        context(reference.module, scope)
+        installValueScope(reference.module, scope)
         val actual = intent.resolve()
         validateShapeType(
           CandidateRuntime.dataTypeFromDescriptor(actual),
@@ -6390,7 +6460,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                 bindCollectionValue(value, Some(region), operation.owner, create = false)
               )
         if hadObligation then
-          context(operation.owner, operation.digitalRegion)
+          installValueScope(operation.owner, operation.digitalRegion)
           DeferredResultType.requireFinal(operation.values, "assignment type materialization")
           validateAssignmentTypes(operation.values)
     finally
@@ -11009,18 +11079,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           child.domains.filter(_.kind == KernelDomainKind.Required).flatMap: requirement =>
             val (actualRef, origin, _, _) = selectedRequirementBindings(requirement.reference)
             val actual = records(actualRef.module).domains(actualRef.index)
-            actual.domain.clock.toVector.map: clock =>
-              val physical = byPath(resolved(actualRef))
-              val reset = Option(effectiveResets.get(physical.domain)).map: value =>
-                if actual.kind == KernelDomainKind.Required then
-                  domainSourcePath(actual.domain.reset)
-                else domainSourcePath(value)
+            val (clock, reset) = actualDomainControls(actual, byPath(resolved(actualRef)))
+            clock.toVector.map: clock =>
               KernelInstanceDomainBindingSnapshot(
                 instancePath(module.handle, instance.ordinal) + "." + requirement.name,
                 domainPath(requirement.reference),
                 domainPath(actualRef),
                 domainSourcePath(clock),
-                reset,
+                reset.map(domainSourcePath),
                 origin
               )
         val parameters = instance.parameterOverrides.toVector.map:
@@ -12064,6 +12130,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           )
     semanticResult = Some(semanticOrigin.resolve())
     val resolved = resolveDomains()
+    materializeInstanceControlCaptures(resolved)
     markConservativeBindingDependencies()
     val interfaceFormalTypes = prepareInterfaceFormalTypes()
     if operations.exists(_.kind == "instance-node-array") || instanceDigitalPorts.nonEmpty ||

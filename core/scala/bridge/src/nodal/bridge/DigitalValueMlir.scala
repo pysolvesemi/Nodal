@@ -1164,7 +1164,7 @@ private[nodal] object DigitalValueMlir:
       val isStatic = expressionType(path) == "Integer" &&
         (staticExpressions.contains(path) || declarations.get(path).exists(value =>
           value._2.kind == "parameter"
-        ) || arguments.get(path).exists(_._2.role == "static_capture"))
+        ) || arguments.get(path).exists(_._2.role == "static_capture") || isGeneratedIndex(path))
       if isStatic then "static_capture" else "capture"
 
     private def validateSequentialArm(

@@ -1229,3 +1229,19 @@ only the immutable third runner is accepted. ODS changes are included in the
 tracked source inventory; generated build-directory headers are not separately
 sealed, so fresh generated-header reproduction is not claimed. Broader source
 and target profiles remain separately required before Foundation 58 can close.
+
+## Checkpoint 29 — shared resolved split and nested shape source
+
+The exact 416-file Scala snapshot in `.work/f58-split-shape-shared`
+(manifest `49f737b4`) is reconstructed with 15 changed paths and the matched
+InterfaceHierarchy design gate. Its 56 named executed groups pass; retained
+final `795f3ef4` replay checks six split and eight typed-member expected gate
+outcomes, including causal feedback refusal, in two repeated groups. Native
+prerequisites are now preserved by checkpoint 28. Complete before/after source
+inventories agree. These are existing matched results, not a new execution.
+
+The source slice preserves canonical generated shape and resolved-boundary
+owners. Separate maintained target behavior is not inferred from these checks.
+Target runners and TARGET.md are not changed by this checkpoint; a mismatched
+historical target-document receipt is excluded rather than labeled exact.
+Broader generated routing, analog and pending lifecycle work remains open.

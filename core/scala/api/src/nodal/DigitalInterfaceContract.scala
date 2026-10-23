@@ -160,7 +160,8 @@ private[nodal] object DigitalInterfaceContract:
       pathOf: Any => Option[String],
       ownerOf: Any => Option[String],
       resolvedBoundaries: Vector[(String, String)] = Vector.empty
-  ): Unit =
+  ): Set[String] =
+    val contextualSplits = mutable.HashSet.empty[String]
     val parents = mutable.HashMap.empty[String, String]
     def representative(path: String): String =
       var current = path
@@ -187,8 +188,20 @@ private[nodal] object DigitalInterfaceContract:
         connection.target,
         connection.source.getOrElse(fail(11, "pass-through lost its source"))
       )
-    // Retain strict local driver counting; a joined component needs the still-open
-    // closed-root data/enable transport, never a guessed imported driver.
+    // Preserve the local proof before extending the same component relation with
+    // exact child boundaries. No imported expression becomes parent-owned SSA.
+    val driverOperations = captured.connectivity.filter(value =>
+      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(value.kind) ||
+        value.kind == "interface-drive" && resolvedMembers(value.target)
+    )
+    val localComponents =
+      (captured.connectivity.flatMap(value =>
+        Vector(value.target) ++ value.source.toVector
+      ) ++ captured.resolvedAliases.flatMap((left, right) => Vector(left, right)) ++
+        resolvedBoundaries.flatMap((left, right) => Vector(left, right)) ++
+        captured.interfaces.flatMap(_.members.filter(_.mode.nonEmpty).map(_.path)))
+        .distinct.map(path => path -> representative(path)).toMap
+    val localDrivers = driverOperations.groupBy(value => representative(value.target))
     val interfaceBoundaries = captured.interfaces.flatMap(endpoint =>
       endpoint.boundary.toVector.flatMap(boundary =>
         endpoint.members.filter(_.mode.nonEmpty).map(member =>
@@ -196,13 +209,10 @@ private[nodal] object DigitalInterfaceContract:
         )
       )
     )
-    val joined = (resolvedBoundaries ++ interfaceBoundaries).flatMap((parent, child) =>
-      Vector(representative(parent), representative(child))
-    ).toSet
-    val drivers = captured.connectivity.filter(value =>
-      Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(value.kind) ||
-        value.kind == "interface-drive" && resolvedMembers(value.target)
-    ).groupBy(value => representative(value.target))
+    val boundaries = resolvedBoundaries ++ interfaceBoundaries
+    boundaries.foreach((parent, child) => alias(parent, child))
+    val joined = boundaries.map((parent, _) => representative(parent)).toSet
+    val drivers = driverOperations.groupBy(value => representative(value.target))
     expressions.foreach: (expression, owner) =>
       expression.operation.filter(ValueOperations.contains).foreach: operation =>
         val endpoint = expression.operands match
@@ -233,8 +243,17 @@ private[nodal] object DigitalInterfaceContract:
             fail(12, "split requires an authored conditional driver; no write value is available")
           if selected.size != 1 then
             fail(12, "split is ambiguous because the resolved net has multiple conditional drivers")
-          if joined(representative(path)) then
-            fail(12, "split on a child-boundary-joined component requires global driver transport")
+          if selected.head.kind == "interface-drive" then
+            fail(12, "split cannot invent an enable for an unconditional Interface drive")
+          val local = localDrivers.getOrElse(localComponents.getOrElse(path, path), Vector.empty)
+          if local.isEmpty then
+            if !joined(representative(path)) then
+              fail(12, "contextual split requires an actual closed-root boundary connection")
+            contextualSplits += pathOf(expression).getOrElse(fail(
+              11,
+              "contextual split has no exact expression identity"
+            ))
+    contextualSplits.toSet
 
   def capture(
       declarations: Vector[Declaration],

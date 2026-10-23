@@ -19,7 +19,8 @@ object Increment58GeneratedAreaReplay:
       "selected" -> (() => new Increment58GeneratedSelectedWhen),
       "guarded" -> (() => new Increment58GeneratedGuardedSelection),
       "lane-registers" -> (() => new Increment58GeneratedLaneRegisters),
-      "concrete-lane-registers" -> (() => new Increment58GeneratedConcreteLaneRegisters)
+      "concrete-lane-registers" -> (() => new Increment58GeneratedConcreteLaneRegisters),
+      "nested-lane-registers" -> (() => new Increment58NestedLaneRegisters)
     ).foreach: (name, source) =>
       val document = ScalaToMlirBridge.fromSnapshot(ConstructionKernel.inspect(source()))
       val _ = Files.writeString(directory.resolve(name + ".mlir"), document.text)

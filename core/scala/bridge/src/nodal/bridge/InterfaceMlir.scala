@@ -729,7 +729,13 @@ private[nodal] object InterfaceMlir:
         current = netComponents(current)
         steps += 1
         requireValid(steps <= netComponents.size, "resolved-net equivalence cycle", path)
-      current
+      val root = current
+      current = path
+      while netComponents(current) != current do
+        val next = netComponents(current)
+        netComponents.update(current, root)
+        current = next
+      root
     requireValid(
       nets.size <= 65536 && snapshot.digitalConnectivity.size <= 262144,
       "digital connectivity exceeds the finite structural budget",
@@ -761,22 +767,32 @@ private[nodal] object InterfaceMlir:
           )
         )
         componentDomains.update(key, endpoint.domain)
-    private val boundaryNetComponents =
-      (snapshot.resolvedNets.flatMap(net =>
-        net.boundary.toVector.flatMap(boundary =>
-          Vector(component(net.path), component(boundary.endpoint))
-        )
-      ) ++ snapshot.interfaceContracts.flatMap(endpoint =>
-        endpoint.boundary.toVector.flatMap(boundary =>
-          endpoint.members.filter(_.mode.nonEmpty).flatMap(member =>
-            Vector(component(member.path), component(s"${boundary.endpoint}.${member.name}"))
-          )
-        )
-      )).toSet
-    private val drivers = snapshot.digitalConnectivity.filter(effect =>
+    private val localComponents =
+      netComponents.keysIterator.map(path => path -> component(path)).toMap
+    private val driverOperations = snapshot.digitalConnectivity.filter(effect =>
       Set("inout-drive", "inout-drive-low", "inout-drive-high").contains(effect.kind) ||
         effect.kind == "interface-drive" && resolvedMemberPaths(effect.target)
-    ).groupBy(effect => component(effect.target))
+    )
+    private val localDrivers = driverOperations.groupBy(effect => component(effect.target))
+    private val boundaryNets = snapshot.resolvedNets.flatMap(net =>
+      net.boundary.toVector.map(boundary => net.path -> boundary.endpoint)
+    ) ++ snapshot.interfaceContracts.flatMap(endpoint =>
+      endpoint.boundary.toVector.flatMap(boundary =>
+        endpoint.members.filter(_.mode.nonEmpty).map(member =>
+          member.path -> s"${boundary.endpoint}.${member.name}"
+        )
+      )
+    )
+    boundaryNets.foreach((parent, child) => aliasNet(parent, child))
+    private val boundaryNetComponents = boundaryNets.map((parent, _) => component(parent)).toSet
+    private val drivers = driverOperations.groupBy(effect => component(effect.target))
+    snapshot.digitalExpressions.filter(_.hierarchyDriver).foreach(expression =>
+      requireValid(
+        Set("digital_net_write_view", "digital_net_enable_view").contains(expression.operation),
+        "hierarchy-driver intent requires an actual resolved split expression",
+        expression.path
+      )
+    )
     snapshot.digitalConnectivity.flatMap: effect =>
       effect.kind match
         case "interface-drive" if members(effect.target)._2.protocol != "resolved" =>
@@ -809,8 +825,15 @@ private[nodal] object InterfaceMlir:
         expression.path
       )
       requireValid(
-        !boundaryNetComponents(component(endpoint.path)),
-        "split on a child-boundary-joined component requires global driver transport",
+        drivers(component(endpoint.path)).head.kind != "interface-drive",
+        "split cannot invent an enable for an unconditional Interface drive",
+        expression.path
+      )
+      val local = localDrivers.getOrElse(localComponents(endpoint.path), Vector.empty)
+      requireValid(
+        expression.hierarchyDriver == local.isEmpty &&
+          (!expression.hierarchyDriver || boundaryNetComponents(component(endpoint.path))),
+        "split hierarchy-driver intent differs from its exact local and boundary component proof",
         expression.path
       )
 
@@ -943,7 +966,8 @@ private[nodal] object InterfaceMlir:
             outputs,
             operands,
             sourceLocation,
-            "metadata" -> metadata(sourceMetadata)
+            (Vector("metadata" -> metadata(sourceMetadata)) ++
+              Option.when(expression.hierarchyDriver)("hierarchy_driver" -> "unit"))*
           )),
           result -> resultType
         )

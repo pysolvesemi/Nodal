@@ -39,7 +39,9 @@ object Increment58StandaloneInoutTests extends TestSuite:
           text.sliding("\"nodal.resolved_net\"".length).count(_ == "\"nodal.resolved_net\"")
         assert(originals == (if mode == "pass-through" then 2 else 1))
         assert(text.contains("\"nodal.net_read\""))
-    test("equal bounds cannot satisfy final read type identity and joined split remains explicit"):
+    test(
+      "equal bounds cannot satisfy final type identity and joined split counts both actual drivers"
+    ):
       val wrong = scala.util.Try(capture("wrong-bitwise")).failed.get
       assert(wrong.isInstanceOf[ConstructionException])
       assert(wrong.asInstanceOf[ConstructionException].diagnostic.code == "NODAL-DIGITAL-055-003")
@@ -47,7 +49,7 @@ object Increment58StandaloneInoutTests extends TestSuite:
       assert(split.isInstanceOf[ConstructionException])
       assert(split.asInstanceOf[ConstructionException].diagnostic.code == "NODAL-INTERFACE-054-012")
       assert(split.getMessage.contains(
-        "child-boundary-joined component requires global driver transport"
+        "split is ambiguous because the resolved net has multiple conditional drivers"
       ))
     test("bridge independently rejects forged exact child mode policy and element proofs"):
       val snapshot = capture()

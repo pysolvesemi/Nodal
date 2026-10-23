@@ -6836,8 +6836,13 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               case _ => Vector.empty
           ))
           .orElse(shapeViews.get(expression).map(_.dimensions))
-          .orElse(shapeIndices.get(expression).filter(_.resultDimensions.nonEmpty)
-            .map(_.resultDimensions))
+          .orElse(shapeIndices.get(expression).flatMap: index =>
+            if index.resultDimensions.nonEmpty then Some(index.resultDimensions)
+            else expressionValues.get(expression).flatMap(CandidateRuntime.expressionDataType)
+              .map(CandidateRuntime.typeDescriptor).filter(_.kind == "Vec").map(descriptor =>
+                descriptor.arguments.lift(1).toVector.flatMap:
+                  case values: Seq[?] => values.toVector
+                  case _ => Vector.empty))
           .getOrElse(
             fail(code, "shape input is not a captured structural shaped result", Some(path))
           )
@@ -11326,7 +11331,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       : (Vector[ResolvedEnumAbi], Vector[KernelDigitalExpressionSnapshot]) =
     val expressions = expressionValues.toVector.map: (reference, expression) =>
       (expression, expressionPath(reference), modulePath(reference.module), reference.module)
-    DigitalInterfaceContract.validateValues(
+    val contextualSplits = DigitalInterfaceContract.validateValues(
       expressions.map((expression, _, owner, _) => expression -> owner),
       interfaces,
       pathOf,
@@ -11359,7 +11364,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               DigitalAggregateContract.Operations.contains(operation) ||
               DigitalCombinationalContract.ReachableBooleanOperations.contains(operation)
           ) => expression)
-    DigitalValueConstruction.snapshot(
+    val (enums, values) = DigitalValueConstruction.snapshot(
       records.valuesIterator.flatMap(
         _.declarations.iterator.flatMap(_.dataType)
       ).toVector ++ interfaces.dataTypes ++ flatFsms.valuesIterator.map(
@@ -11411,6 +11416,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       resetSnapshot,
       clockSnapshot,
       generatedMemberSnapshot
+    )
+    enums -> values.map(value =>
+      if contextualSplits(value.path) then value.copy(hierarchyDriver = true) else value
     )
 
   private def parameterExpressionSnapshots(

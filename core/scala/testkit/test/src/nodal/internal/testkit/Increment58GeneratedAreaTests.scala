@@ -218,3 +218,25 @@ object Increment58GeneratedAreaTests extends TestSuite:
         val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
         assert(text.linesIterator.count(_.contains("\"nodal.generate\"(")) == 1)
         assert(text.contains("!nodal.bits<8>"))
+
+    test("nested matrix retains lane-distinct input enable state and saved selected prefix"):
+      val snapshot = ConstructionKernel.inspect(new Increment58NestedLaneRegisters)
+      assert(snapshot.generatedRegions.size == 2)
+      val inner = snapshot.generatedRegions.find(_.parent.nonEmpty).get
+      assert(inner.exports.map(_.member) == Vector("stored"))
+      val storage = snapshot.modules.flatMap(_.declarations).filter(_.kind == "register")
+      assert(storage.size == 1, storage.head.generatedScope.exists(_.owner == inner.path))
+      assert(storage.head.dataType.contains("UInt(8)"))
+      val members = snapshot.digitalExpressions.flatMap(_.generatedMember)
+      assert(members.size == 2, members(0).family == members(1).family)
+      assert(members(0).selectionPrefix == members(1).selectionPrefix)
+      assert(members.forall(value =>
+        value.ordinal == "1" && value.selectionPrefix.head.ordinal == "1"
+      ))
+      assert(snapshot.behavioralIfs.size == 1)
+      assert(snapshot.behavioralIfs.head.trueArm.arguments.exists(value =>
+        value.role == "static_capture" && value.dataType == "Integer"
+      ))
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.linesIterator.count(_.contains("\"nodal.generate\"(")) == 2)
+      assert(text.linesIterator.count(_.contains("\"nodal.generated_member\"(")) == 4)

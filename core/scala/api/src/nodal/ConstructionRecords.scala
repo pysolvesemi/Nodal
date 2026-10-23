@@ -176,7 +176,8 @@ private[nodal] final case class KernelDigitalExpressionSnapshot(
     reset: Option[KernelResetSnapshot] = None,
     clock: Option[KernelClockSnapshot] = None,
     waiver: Option[KernelExecutableWaiverSnapshot] = None,
-    generatedMember: Option[KernelGeneratedMemberSnapshot] = None
+    generatedMember: Option[KernelGeneratedMemberSnapshot] = None,
+    hierarchyDriver: Boolean = false
 )
 
 private[nodal] final case class KernelClockSnapshot(

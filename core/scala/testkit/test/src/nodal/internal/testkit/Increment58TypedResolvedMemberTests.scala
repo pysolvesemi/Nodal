@@ -102,11 +102,14 @@ object Increment58TypedResolvedMemberTests extends TestSuite:
         assert(failure.asInstanceOf[BridgeException].diagnostic.code ==
           "NODAL-BRIDGE-054-INTERFACE")
         assert(ReproducibilityContract.canonicalSnapshot(forged) != artifact)
-    test("joined split remains explicit rather than borrowing a hidden child driver"):
-      val failure = scala.util.Try(capture("split")).failed.get
-      assert(failure.isInstanceOf[ConstructionException])
-      assert(failure.asInstanceOf[ConstructionException].diagnostic.code ==
-        "NODAL-INTERFACE-054-012")
+    test("joined split retains exact contextual obligation for the actual child driver"):
+      val snapshot = capture("split")
+      val splits = snapshot.digitalExpressions.filter(value =>
+        Set("digital_net_write_view", "digital_net_enable_view").contains(value.operation)
+      )
+      assert(splits.nonEmpty, splits.forall(_.hierarchyDriver))
+      val text = ScalaToMlirBridge.fromSnapshot(snapshot).text
+      assert(text.contains("hierarchy_driver = unit"), text.contains("\"nodal.net_split\""))
 
     test("mixed resolved component retains exact Interface domain constraints transitively"):
       val failure = scala.util.Try(ConstructionKernel.inspect(
@@ -150,39 +153,47 @@ object Increment58TypedResolvedMemberNativeTests extends TestSuite:
     test(
       "actual typed nested member source passes default gates and preserves causal child feedback"
     ):
-      Vector("read", "copy", "drive", "pass-through", "feedback", "local", "same-domain").foreach:
-        mode =>
-          val snapshot = ConstructionKernel.inspect:
-            mode match
-              case "local" => new nodal_external.Increment58LocalResolvedMemberSource
-              case "same-domain" => new nodal_external.Increment58ResolvedDomainSource
-              case _ => new Increment58TypedResolvedMemberSource(mode)
-          val document = ScalaToMlirBridge.fromSnapshot(snapshot)
-          val directory =
-            Path.of(sys.env("NODAL_ROOT"), ".work", "f58-typed-resolved", "native", mode)
-          Files.createDirectories(directory)
-          val _ = Files.writeString(directory.resolve("input.mlir"), document.text)
-          val result = NativeCompilerClient.run(
-            document,
-            NativeCompilerRequest(
-              Path.of(sys.env("NODAL_NODALC")).toAbsolutePath,
-              Vector("--nodal-gate-default"),
-              directory,
-              timeout = Duration.ofSeconds(90)
-            )
+      Vector(
+        "read",
+        "copy",
+        "drive",
+        "pass-through",
+        "feedback",
+        "local",
+        "same-domain",
+        "split"
+      ).foreach: mode =>
+        val snapshot = ConstructionKernel.inspect:
+          mode match
+            case "local" => new nodal_external.Increment58LocalResolvedMemberSource
+            case "same-domain" => new nodal_external.Increment58ResolvedDomainSource
+            case _ => new Increment58TypedResolvedMemberSource(mode)
+        val document = ScalaToMlirBridge.fromSnapshot(snapshot)
+        val directory =
+          Path.of(sys.env("NODAL_ROOT"), ".work", "f58-typed-resolved", "native", mode)
+        Files.createDirectories(directory)
+        val _ = Files.writeString(directory.resolve("input.mlir"), document.text)
+        val result = NativeCompilerClient.run(
+          document,
+          NativeCompilerRequest(
+            Path.of(sys.env("NODAL_NODALC")).toAbsolutePath,
+            Vector("--nodal-gate-default"),
+            directory,
+            timeout = Duration.ofSeconds(90)
           )
-          val _ = Files.writeString(directory.resolve("output.mlir"), result.standardOutput)
-          val _ = Files.writeString(directory.resolve("diagnostics.txt"), result.standardError)
-          if mode == "feedback" then
-            assert(result.isInstanceOf[NativeCompilerFailure])
-            assert(result.standardError.contains("NODAL-DIGITAL-055-010"))
-            assert(result.standardError.contains(
-              "hierarchy connection contains a causal combinational dependency cycle"
-            ))
-          else
-            result match
-              case _: NativeCompilerSuccess => ()
-              case failure: NativeCompilerFailure =>
-                throw new java.lang.AssertionError(
-                  s"${failure.diagnostic}\n${failure.standardError}"
-                )
+        )
+        val _ = Files.writeString(directory.resolve("output.mlir"), result.standardOutput)
+        val _ = Files.writeString(directory.resolve("diagnostics.txt"), result.standardError)
+        if mode == "feedback" then
+          assert(result.isInstanceOf[NativeCompilerFailure])
+          assert(result.standardError.contains("NODAL-DIGITAL-055-010"))
+          assert(result.standardError.contains(
+            "hierarchy connection contains a causal combinational dependency cycle"
+          ))
+        else
+          result match
+            case _: NativeCompilerSuccess => ()
+            case failure: NativeCompilerFailure =>
+              throw new java.lang.AssertionError(
+                s"${failure.diagnostic}\n${failure.standardError}"
+              )

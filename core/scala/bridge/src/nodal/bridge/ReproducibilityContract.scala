@@ -419,7 +419,7 @@ private[nodal] object ReproducibilityContract:
             )
           ))
         ).toVector)*)
-      ))
+      ) ++ Option.when(value.hierarchyDriver)("hierarchy_driver" -> JBoolean(true)))
     )),
     "assignments" -> array(snapshot.digitalAssignments.sortBy(_.path).map(value =>
       JObject(Vector(

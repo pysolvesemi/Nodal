@@ -313,11 +313,89 @@ constraint field; boundary metadata cannot invent one. Actual driver-domain
 provenance remains the existing occurrence-qualified dependency proof. Resolved
 Interface member constraints remain intact when those components are joined.
 
-This native seam does not by itself establish the public selector or emission.
-The source carrier must use the shared once-sealed boundary descriptor lifecycle,
-preserve that exact relation in snapshots and reproducibility artifacts, and
-render the alias operation. New boundary-joined split transport still rejects
-explicitly without relaxing local unique-driver checks. Full split transport,
-typed Interface member reads, generated carriers and supported-profile target
-emission remain required continuations. New operations remain target-unsupported
-until the target owner supplies the corresponding physical proof.
+This native seam did not by itself establish the public selector or emission.
+The subsequent source carrier uses the shared once-sealed boundary descriptor
+lifecycle, preserves the exact relation in snapshots and reproducibility artifacts,
+and renders the alias operation. The initial boundary-joined split rejection is
+superseded by the checked logical continuation below, not by a physical transport
+claim. Generated carriers and supported-profile target emission remain required.
+Resolved operations remain target-unsupported until the target owner supplies the
+corresponding physical proof.
+
+## Typed resolved Interface member capability
+
+The additive scalar selector consumes the existing typed `DigitalResolved`
+declaration and an ordered sequence of actual `Nested` declarations. Factory
+return types narrow to those existing case classes while remaining subtypes of
+`InterfaceMember`. Capture validates object identity at every nesting step and
+reuses complete canonical role expansion. Caller strings, copied same-name
+fields and caller-supplied types do not create member authority. This avoids a
+parallel public witness hierarchy; the ordinary Interface API currently has
+only effect selectors, and a storable `StructMember` cannot represent net roles.
+
+A sealed shared `ResolvedDigital[A, M]` capability exposes element type, mode and
+read semantics. Existing `DigitalInout` implements it and retains its public
+placement/profile and factory types. A private Interface member view implements
+the same capability with exact origin but no fabricated standalone placement.
+Existing drive, release, level, split and pass-through methods delegate through
+the same construction operation path. Physical pad adapters remain standalone
+only. The source Interface contract remains the sole mode and role policy owner;
+static mode evidence never grants a role's absent read, drive or connect right.
+
+The construction session owns view reuse and contextual type finalization. An
+immutable snapshot origin retains the actual Interface endpoint, complete named
+member path and selected role, separately from standalone boundary identity.
+Bridge ingress independently checks that origin against the complete formal and
+actual Interface contract and emits existing `member_access`, not a new net or
+boundary. Local observation and split checks reuse their existing component union.
+Native Interface topology and hierarchy occurrence composition remain unchanged.
+
+The capability does not by itself imply physical split transport,
+indexed/generated member selection, analog/conservative projection or resolved
+physical emission. Those remain required obligations. Focused acceptance is recorded in readiness after
+actual public source, forged-ingress and full native-gate checks execute.
+
+
+## Closed-root conditional split proof
+
+Existing `split` now supports direct concrete hierarchy components with exactly
+one actual conditional driver. Source and bridge preserve their existing local
+component proof before joining independently checked child-boundary identities.
+Only a locally driverless split receives the closed `hierarchy_driver` intent.
+Bridge ingress derives that obligation again; it cannot be asserted on unrelated
+expressions, a locally driven component or an unjoined endpoint. Zero drivers,
+release-only components, multiple drivers and unconditional Interface writers
+cannot fabricate split data or enable. Historical local strict checks remain.
+
+Native admission independently demands closed-root proof even without clocks or
+sequential uses. The existing occurrence-qualified component union counts every
+actual driver and split, including otherwise unused ones. All joined splits,
+including locally proved splits, recheck the final unique-driver condition.
+Dependencies then follow the original driver data and enable in their exact
+occurrence; a checked low/high driver contributes a constant level but retains
+its actual enable dependency. Reused definition pointers do not merge distinct
+occurrences. Unreachable obligations, missing actual boundaries and causal
+cross-occurrence feedback reject rather than becoming domainless constants.
+
+The existing hierarchy dependency query may return immutable successful
+`DigitalResolvedSplitBinding` facts after all cycle and sampling checks pass.
+These retain split, driver and component occurrences, original operations and
+values, and an optional checked level. They introduce neither a second graph nor
+parent-owned copies of foreign SSA. Source artifacts conditionally retain the
+intent; absent fields preserve predecessor artifacts. Focused source and full
+native gates cover both directions, late symbolic widths, nested typed members,
+level/local splits, forged intent, repeated definitions and causal feedback.
+
+Union-find and the existing node/edge budgets bound represented endpoints,
+drivers, splits and at most two dependency edges per split. No bits, lanes,
+parameter settings or transitive provenance sets are enumerated. The Interface
+bridge compresses alias paths within its existing query-local map. These are
+structural growth observations, not a measured speedup claim.
+
+This logical proof does not emit bidirectional nets or driver sidebands. The
+shared target adapter must preserve one physical inout identity and separately
+route proved split data/enable where necessary. Generated occurrence families
+must retain multiplicity and reject split until selection-qualified component
+proof exists. True top-level and declaration-only external inout transport need
+actual four-state generated-output witnesses, including released Z, open-drain
+pullup and contended X; two-state simulation alone cannot establish them.

@@ -1846,3 +1846,64 @@ The profile remains single-level, fixed, nonempty and scalar with literal
 selection; parent-reference/expression actuals, explicit native override forms,
 arrays, nested/symbolic families and the fixture's shared-scalar star topology
 remain open. C1 and broader Foundation 58 completion are not claimed.
+
+## Checkpoint 56: bounded internal construction epochs
+
+ConstructionSession remains the single owner of incremental preparation, epoch
+tickets and final publication. Its existing queues now discover later work,
+validate region/signature and authored identity freezes, retire stale snapshots,
+and avoid replaying completed work on a second drain. Final-name validation
+failures in the guarded closure poison that owner before publication. Static
+query snapshots are not emitted metadata: final snapshots retain sealed counts
+and types, while unsupported post-freeze changes are refused rather than
+automatically resealed. The checkpoint-55 literal-parameter admission is retained.
+
+Canonical Interface layout, enum, reduction, structural-query and semantic-origin
+consumers share the same unchanged cumulative 65,536 work allowance. Source lookup,
+reads and parsing use an invocation-local snapshot/cache with owner accounting
+and restoration on failure. Ordinary/no-owner behavior remains inert. This
+reuses existing consumers and registries instead of adding a second construction
+or inference engine. Empty drains still pay integrity-scan costs; opaque iterator
+execution time and arbitrary same-size filesystem rewrites are not bounded or
+detected merely by charging element visits and checking file attributes.
+
+Focused acceptance covers 12 incremental runtime groups, including discovery,
+Area/generated members, epoch identity, descriptor work and shared meters, plus
+final-name poisoning and isolated capture accounting. The maintained runner
+compiled 17 formatted fixtures. Its expanded Interface fixture initially refused
+at the work limit; reviewed selective imports shortened the same two real port
+calls without changing operations, provenance, fees or assertions. After that
+leaf alone was recompiled into the same output, all seven maintained groups
+passed, including counts 2/3, second-batch publication, no reappend, stale tickets,
+recovery and work/cache controls. This is composed fresh-17 plus targeted-1
+evidence, not a successful exit of the original failed all-suite invocation.
+
+A separate authentic Session/materializer control exhausts inside captureSite
+before origin append, poisons publication, retires its query and proves fresh
+recovery. A larger i64 Interface fixture really captures its parent Integer but
+naturally refuses final preparation; successful i64 publication is not claimed.
+Source bytes, discovery paths and parsing remain real charged work. The preserved
+formatter-expanded refusal makes that sensitivity explicit, not a path-independent
+capacity guarantee or evidence for 65,536 records.
+
+Original checkpoint-53 comparison remains 24/25 raw matches because two old
+parameter-diagnostic expectations became stale in checkpoint 55. A separate
+runner successor changes only those expectations: exact 55 and this composition
+both pass with five byte-identical outputs, including recovery. Three actual
+checkpoint-55 literal/default/two-child source runtimes also pass against the
+composed API and matched bridge, reusing their existing classes. This is runtime
+compatibility, not fresh fixture compilation or additional native acceptance.
+These checks overlap earlier evidence and are not summed as new feature counts.
+
+All seven production Scala files and 17 maintained fixtures passed the pinned
+formatter. Independent contract/source and focused evidence review cover the
+exact 73 API compile inputs plus 24 bridge dependencies. Commands, source hashes,
+failed attempts and compact receipts are retained locally. The previous scratch
+43 MiB cap was exceeded; current allocation fits the revised 46 MiB cap and
+235 MiB free-space reserve. An earlier rebuild peak was not sampled, and its
+conservative coexistence estimate is not proof of historical cap compliance.
+See [the maintained runner guide](../../tests/scala/domain-hierarchy/BOUNDARY_CLOSURE_C1.md)
+for explicit inputs, cases and limits. No CI, full qualification or new target
+consumer run was performed. Public pending-geometry callbacks, context/provenance/
+source-order scheduling, nested callback admission and the rest of Foundation 58
+remain open. This is an internal prerequisite checkpoint, not increment completion.

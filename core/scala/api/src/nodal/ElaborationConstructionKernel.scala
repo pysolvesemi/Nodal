@@ -10,11 +10,18 @@ private[nodal] object ConstructionKernel:
     AnalogUserFunctionRuntime.rejectEffect()
     if Current.isBound then Some(Current.get) else None
 
+  // Metering is not a hardware effect: do not route this through active()'s effect guard.
+  def boundaryWorkActive: Boolean = Current.isBound && Current.get.boundaryWorkActive
+
+  def chargeBoundaryWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargeBoundaryWork(units)
+
   private def elaborate[M <: Module](
       top: => M,
       options: EmitOptions,
       stimulusOnly: Boolean = false
   )(select: M => Vector[AnyRef]): KernelSelectedCapture =
+    if boundaryWorkActive then Current.get.rejectNestedBoundaryElaboration()
     ConstructorCaptureRuntime.withSession:
       AnalogProceduralConstruction.withSession:
         val session = new ConstructionSession(options, stimulusOnly)

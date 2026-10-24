@@ -37,12 +37,22 @@ private[nodal] object ConstructionInterfaceLayout:
     if through.size > 128 then
       DigitalInterfaceContract.fail(1, "Interface member nesting exceeds 128")
     var current = definition
+    def containsExact(member: InterfaceMember): Boolean =
+      if ConstructionKernel.boundaryWorkActive then
+        current.members.iterator.map: value =>
+          ConstructionKernel.chargeBoundaryWork(1L)
+          value
+        .exists(_ eq member)
+      else current.members.exists(_ eq member)
     through.foreach: nested =>
-      if !current.members.exists(_ eq nested) then
+      ConstructionKernel.chargeBoundaryWork(1L + nested.name.length.toLong)
+      if !containsExact(nested) then
         DigitalInterfaceContract.fail(3, "member requires its exact ordered nested declarations")
       current = nested.definition
-    if !current.members.exists(_ eq field) then
+    if !containsExact(field) then
       DigitalInterfaceContract.fail(3, "member requires its exact declared field witness")
+    ConstructionKernel.chargeBoundaryWork(1L + memberName(field).length.toLong +
+      through.size.toLong)
     (through.map(_.name) :+ memberName(field)).mkString(".")
 
   /** True selects the left sink. Declared roles never change across a boundary. */
@@ -110,9 +120,11 @@ private[nodal] object ConstructionInterfaceLayout:
   def monitorRole(definition: InterfaceType[?]): Role[MonitorRole] =
     Role[MonitorRole](
       "monitor",
-      definition.members.map:
-        case value: InterfaceMember.Conservative[?] => RoleAccess.Sense(value.name)
-        case member => RoleAccess.Observe(memberName(member))
+      definition.members.map: member =>
+        ConstructionKernel.chargeBoundaryWork(1L)
+        member match
+          case value: InterfaceMember.Conservative[?] => RoleAccess.Sense(value.name)
+          case value => RoleAccess.Observe(memberName(value))
       *
     )
 
@@ -124,7 +136,8 @@ private[nodal] object ConstructionInterfaceLayout:
   def leaves(
       definition: InterfaceType[?],
       role: Role[?],
-      resolveRole: (InterfaceType[?], String) => Role[?] = explicitRole
+      resolveRole: (InterfaceType[?], String) => Role[?] = explicitRole,
+      charge: Long => Unit = ConstructionKernel.chargeBoundaryWork
   ): Vector[Leaf] =
     var count = 0
     def expand(
@@ -135,8 +148,17 @@ private[nodal] object ConstructionInterfaceLayout:
         nestedInterfaces: Vector[(String, String)],
         depth: Int
     ): Vector[Leaf] =
+      charge(1L)
       if depth > 128 then DigitalInterfaceContract.fail(1, "interface nesting exceeds 128")
-      val names = current.members.map(memberName)
+      // Interface members/accesses are arbitrary Seq, not guaranteed constant-time size.
+      // Debit before consumption; five following inventory passes use this bounded Vector.
+      val members = if ConstructionKernel.boundaryWorkActive then
+        current.members.iterator.map: member =>
+          charge(5L)
+          member
+        .toVector
+      else current.members
+      val names = members.map(memberName)
       if current.name.trim.isEmpty ||
         names.exists(name => name.trim.isEmpty || name.contains('.')) ||
         names.distinct.size != names.size
@@ -145,7 +167,13 @@ private[nodal] object ConstructionInterfaceLayout:
       val effective = if selected.name == "monitor" && selected.access.isEmpty then
         monitorRole(current)
       else selected
-      val grouped = effective.access.groupBy(accessMember)
+      val accesses = if ConstructionKernel.boundaryWorkActive then
+        effective.access.iterator.map: access =>
+          charge(3L)
+          access
+        .toVector
+      else effective.access
+      val grouped = accesses.groupBy(accessMember)
       if effective.name.trim.isEmpty || grouped.keySet != names.toSet ||
         grouped.values.exists(_.size != 1)
       then
@@ -153,7 +181,8 @@ private[nodal] object ConstructionInterfaceLayout:
           "NODAL-ROLE-COMPLETE-016",
           s"role '${effective.name}' is incomplete for Interface '${current.name}'"
         ))).get
-      current.members.toVector.flatMap: member =>
+      members.toVector.flatMap: member =>
+        charge(1L)
         count += 1
         if count > 65536 then
           DigitalInterfaceContract.fail(1, "interface expansion exceeds 65536 members")
@@ -208,7 +237,9 @@ private[nodal] object ConstructionInterfaceLayout:
           case value: InterfaceMember.StreamChannel[?] => protocol(value.payloadType, true)
           case value: InterfaceMember.Nested[?] =>
             val childRole = access match
-              case RoleAccess.Nested(_, selectedName) => resolveRole(value.definition, selectedName)
+              case RoleAccess.Nested(_, selectedName) =>
+                charge(value.definition.roles.size.toLong)
+                resolveRole(value.definition, selectedName)
               case _ => monitorRole(value.definition)
             expand(
               value.definition,

@@ -40,7 +40,7 @@ private[nodal] object DigitalReductionContract:
   ): Transfer[A] =
     var work = 0
     def charge(depth: Int): Unit =
-      work += 1
+      work += chargedUnit(1L)
       graph.charge(1)
       if work > MaximumWork || depth > 512 then fail("reduction transfer exceeds analysis budget")
     def dependent(value: A, depth: Int): Boolean =
@@ -135,11 +135,11 @@ private[nodal] object DigitalReductionContract:
   def schemaWork(descriptor: KernelTypeDescriptor): Int =
     var count = 0
     def visit(value: KernelTypeDescriptor, depth: Int): Unit =
-      count += 1
+      count += chargedUnit(1L + value.arguments.size.toLong)
       if count > MaximumWork || depth > 128 then fail("reduction type exceeds structural budget")
       value.arguments.foreach:
         case nested: DataType[?] => visit(CandidateRuntime.typeDescriptor(nested), depth + 1)
-        case fields: Seq[?] => fields.foreach:
+        case fields: Seq[?] => visitSchemaFields(fields):
             case field: StructField[?] =>
               visit(CandidateRuntime.typeDescriptor(field.dataType), depth + 1)
             case _ => ()
@@ -162,7 +162,7 @@ private[nodal] object DigitalReductionContract:
       : KernelTypeDescriptor =
     var work = 0
     def visit(value: KernelTypeDescriptor, depth: Int): KernelTypeDescriptor =
-      work += 1
+      work += chargedUnit(1L)
       if work > MaximumWork || depth > 128 then fail("reduction type exceeds structural budget")
       value.kind match
         case "Bits" | "UInt" | "SInt" =>
@@ -186,7 +186,7 @@ private[nodal] object DigitalReductionContract:
             case _ => fail("reduction Vec requires an exact element and dimensions")
         case "Struct" => value.arguments match
             case Vector(name: String, fields: Seq[?]) =>
-              val mapped = fields.toVector.map:
+              val mapped = orderedFields(fields).map:
                 case field: StructField[?] =>
                   StructField(
                     field.name,
@@ -245,3 +245,26 @@ private[nodal] object DigitalReductionContract:
           BigInt(literal.value),
           DigitalScalarContract.widthBounds(literal.dataType)._1
         )
+
+  // Keep the existing source-bearing replace(width) callsite physically stable above.
+  private def chargedUnit(units: Long): Int =
+    ConstructionKernel.chargeBoundaryWork(units)
+    1
+
+  private def visitSchemaFields(fields: Seq[?])(visit: Any => Unit): Unit =
+    if ConstructionKernel.boundaryWorkActive then
+      val iterator = fields.iterator
+      while iterator.hasNext do
+        ConstructionKernel.chargeBoundaryWork(1L)
+        visit(iterator.next())
+    else fields.foreach(visit)
+
+  private def orderedFields(fields: Seq[?]): Vector[Any] =
+    if ConstructionKernel.boundaryWorkActive then
+      val result = Vector.newBuilder[Any]
+      val iterator = fields.iterator
+      while iterator.hasNext do
+        ConstructionKernel.chargeBoundaryWork(1L)
+        result += iterator.next()
+      result.result()
+    else fields.toVector

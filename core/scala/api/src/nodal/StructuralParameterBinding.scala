@@ -6,6 +6,70 @@ import scala.collection.mutable
   * and expression snapshots remain authoritative; interned IDs are never serialized.
   */
 private[nodal] object StructuralParameterBinding:
+  /** Caller-owned accounting and epoch lease. Failures deliberately propagate unchanged. */
+  trait WorkMeter:
+    def checkLive(): Unit
+    def charge(units: Int): Unit
+    def exported(graph: ResolvedDimensions): Unit = ()
+    def consumeGraph(graph: ResolvedDimensions): Unit = ()
+
+  object WorkMeter:
+    object Unmetered extends WorkMeter:
+      def checkLive(): Unit = ()
+      def charge(units: Int): Unit = ()
+
+  // Charge before each bounded scan. Long arithmetic prevents size-sum/multiplier overflow;
+  // chunks keep the caller interface Int-sized without truncation or saturated accounting.
+  private def work(meter: WorkMeter, units: Long): Unit =
+    meter.checkLive()
+    var left = units
+    while left > 0L do
+      val chunk = math.min(left, Int.MaxValue.toLong).toInt
+      meter.charge(chunk)
+      left -= chunk.toLong
+
+  /** Upper bound on canonical-index passes, not a constant snapshot toll. Every vector element and
+    * nested argument/arm is counted before the original index construction. Descendants sharing
+    * indices pay only the outer-vector bound for their repeated size validation.
+    */
+  private def indexWork(
+      snapshot: ConstructionSnapshot,
+      meter: WorkMeter,
+      buildIndices: Boolean = true
+  ): Unit =
+    if meter ne WorkMeter.Unmetered then
+      work(
+        meter,
+        16L *
+          (snapshot.modules.size.toLong + snapshot.parameterExpressions.size.toLong +
+            snapshot.digitalCollections.size.toLong + snapshot.digitalLoops.size.toLong +
+            snapshot.structuralIfs.size.toLong + snapshot.behavioralIfs.size.toLong +
+            snapshot.generatedRegions.size.toLong + snapshot.flatFsms.size.toLong +
+            snapshot.enumSwitches.size.toLong)
+      )
+      if buildIndices then
+        snapshot.modules.foreach: value =>
+          work(meter, 16L * (value.declarations.size.toLong + value.instances.size.toLong))
+        snapshot.digitalCollections.foreach(value => work(meter, 16L * value.arguments.size.toLong))
+        snapshot.digitalLoops.foreach(value => work(meter, 16L * value.arguments.size.toLong))
+        def arm(value: KernelStructuralArmSnapshot): Unit =
+          work(meter, 16L * (1L + value.arguments.size.toLong + value.captures.size.toLong))
+        snapshot.structuralIfs.foreach(value => { arm(value.trueArm); arm(value.falseArm) })
+        snapshot.behavioralIfs.foreach(value => { arm(value.trueArm); arm(value.falseArm) })
+        snapshot.flatFsms.foreach: machine =>
+          work(meter, 16L * machine.actions.size.toLong)
+          machine.actions.foreach(value =>
+            work(meter, 16L * (value.arguments.size.toLong + value.captures.size.toLong))
+          )
+        snapshot.enumSwitches.foreach: value =>
+          work(meter, 16L * value.arms.size.toLong)
+          value.arms.foreach(arm)
+          arm(value.invalidArm)
+        snapshot.generatedRegions.foreach: value =>
+          value.digitalBody.foreach(body =>
+            work(meter, 16L * (body.arguments.size.toLong + body.captures.size.toLong))
+          )
+
   private def invalid(message: String): Nothing =
     scala.util.Failure[Nothing](
       new IllegalArgumentException(s"NODAL-SHAPE-043-007: $message")
@@ -44,8 +108,44 @@ private[nodal] object StructuralParameterBinding:
       domains: Map[String, IterationDomain.Bounds] = Map.empty,
       enclosing: Option[Query] = None,
       generatedDomains: Map[String, IterationDomain.Structural] = Map.empty,
-      captures: Map[String, String] = Map.empty
+      captures: Map[String, String] = Map.empty,
+      meter: WorkMeter = WorkMeter.Unmetered
   ):
+    // Retain the original JVM constructor for already compiled complete-snapshot consumers.
+    def this(
+        snapshot: ConstructionSnapshot,
+        instance: Option[(String, KernelInstanceSnapshot)],
+        scope: Option[String],
+        exact: Map[String, ResolvedDimensions],
+        domains: Map[String, IterationDomain.Bounds],
+        enclosing: Option[Query],
+        generatedDomains: Map[String, IterationDomain.Structural],
+        captures: Map[String, String]
+    ) = this(
+      snapshot,
+      instance,
+      scope,
+      exact,
+      domains,
+      enclosing,
+      generatedDomains,
+      captures,
+      WorkMeter.Unmetered
+    )
+
+    private[StructuralParameterBinding] val workMeter: WorkMeter =
+      if meter eq WorkMeter.Unmetered then enclosing.map(_.workMeter).getOrElse(meter)
+      else meter
+    private[StructuralParameterBinding] def consume(units: Long = 1L): Unit =
+      enclosing.foreach(_.workMeter.checkLive())
+      work(workMeter, units)
+    consume()
+    if enclosing.exists(parent => parent.workMeter ne workMeter) then
+      invalid("enclosing Integer context must share its caller work meter")
+    indexWork(snapshot, workMeter, buildIndices = enclosing.isEmpty)
+    consume(8L *
+      (exact.size.toLong + domains.size.toLong +
+        generatedDomains.size.toLong + captures.size.toLong))
     if snapshot.parameterExpressions.size > 65536 ||
       snapshot.digitalCollections.size + snapshot.digitalLoops.size +
         (snapshot.structuralIfs.size + snapshot.behavioralIfs.size) * 2 +
@@ -146,6 +246,7 @@ private[nodal] object StructuralParameterBinding:
       if !rawCaptures.get(argument).contains(source) || enclosing.isEmpty then
         invalid("Integer capture differs from its actual parent operand")
     generatedDomains.foreach: (path, supplied) =>
+      consume(snapshot.generatedRegions.size.toLong)
       val generated = snapshot.generatedRegions.find(value =>
         value.induction == path &&
           scope.contains(value.path) &&
@@ -183,18 +284,23 @@ private[nodal] object StructuralParameterBinding:
     private var retainedInstanceOverrides: Option[Map[String, ResolvedDimensions]] = None
 
     def selectedGenerated(owner: String): SelectedGeneratedContext =
+      consume()
       val _ = module(owner)
       new SelectedGeneratedContext(snapshot, owner, this)
 
-    private def admitsGeneratedInduction(path: String): Boolean = generatedDomains.contains(path)
+    private def admitsGeneratedInduction(path: String): Boolean =
+      consume()
+      generatedDomains.contains(path)
 
     private def originalInstanceOverrides(originalBody: Query): Vector[(String, Int)] =
+      consume()
       val (owner, occurrence) = instance.getOrElse(
         invalid("generated Instance query requires its actual occurrence")
       )
       val generated = occurrence.generatedScope.getOrElse(
         invalid("generated Instance query requires its actual generated scope")
       )
+      consume(snapshot.generatedRegions.size.toLong)
       if retainedInstanceOverrides.nonEmpty || facts.nonEmpty || memo.nonEmpty ||
         !(originalBody.sourceSnapshot eq snapshot) ||
         !originalBody.scope.contains(generated.owner) ||
@@ -205,6 +311,7 @@ private[nodal] object StructuralParameterBinding:
         )
       then invalid("generated Instance binding requires a fresh query and exact original body")
       overrides.toVector.flatMap: (name, token) =>
+        consume(module(occurrence.childModule).declarations.size.toLong)
         val formal = module(occurrence.childModule).declarations.find(_.name == name)
           .getOrElse(invalid("override names an unknown child parameter"))
         if formal.kind != "parameter" then invalid("override names a non-parameter declaration")
@@ -212,6 +319,7 @@ private[nodal] object StructuralParameterBinding:
         else Some(name -> originalBody.resolve(owner, token))
 
     private[StructuralParameterBinding] def installOriginalInstance(originalBody: Query): Unit =
+      consume()
       val originals = originalInstanceOverrides(originalBody)
       retainedInstanceOverrides = Some(originals.map((name, value) =>
         name -> originalBody.exportValues(Vector(value))
@@ -221,12 +329,14 @@ private[nodal] object StructuralParameterBinding:
         context: SelectedGeneratedContext,
         originalBody: Query
     ): Unit =
+      consume()
       val originals = originalInstanceOverrides(originalBody)
       val (owner, occurrence) = instance.get
       context.freezeFor(snapshot, owner, occurrence.generatedScope.get)
       val selected = originals.map: (name, original) =>
         val value = context.importValues(originalBody, Vector(original)).head
         val closed = context.query.exportValues(Vector(value))
+        consume(closed.nodes.size.toLong)
         if closed.nodes.exists(_.parameter.exists(arguments.contains)) then
           invalid("selected Instance override retains an unselected regional Integer atom")
         name -> closed
@@ -234,6 +344,7 @@ private[nodal] object StructuralParameterBinding:
 
     /** Enter one actual conditional arm through its unchanged explicit capture substitution. */
     def conditionalArm(parentRegion: Option[String], arm: KernelStructuralArmSnapshot): Query =
+      consume(4L * (arm.arguments.size.toLong + arm.captures.size.toLong))
       if scope != parentRegion || !conditionalArmIndex.get(arm.path).exists: actual =>
           actual.path == arm.path && actual.captures == arm.captures &&
             actual.arguments.takeRight(actual.captures.size) ==
@@ -253,6 +364,8 @@ private[nodal] object StructuralParameterBinding:
 
     /** Enter one actual generated body using its canonical parent bounds and capture edges. */
     def generatedBody(region: KernelGeneratedRegionSnapshot): Query =
+      consume()
+      consume(snapshot.generatedRegions.size.toLong)
       if scope != region.lexicalParent || !snapshot.generatedRegions.exists(_ eq region) ||
         region.digitalBody.isEmpty
       then invalid("Generate Integer context requires its actual lexical parent and body")
@@ -269,6 +382,7 @@ private[nodal] object StructuralParameterBinding:
             limits(0).lower >= limits(1).upper)
       ).fold(problem => invalid(problem.message), identity)
       val body = region.digitalBody.get
+      consume(4L * (body.arguments.size.toLong + body.captures.size.toLong))
       new Query(
         snapshot,
         scope = Some(region.path),
@@ -280,10 +394,13 @@ private[nodal] object StructuralParameterBinding:
       )
 
     private def unique[A](values: Vector[(String, A)], role: String): Map[String, A] =
+      consume()
+      consume(3L * values.size.toLong)
       if values.map(_._1).distinct.size != values.size then invalid(s"duplicate $role identity")
       values.toMap
 
     private def intern(key: Key, bounds: IterationDomain.Bounds): Int =
+      consume()
       ids.getOrElseUpdate(
         key, {
           if facts.size >= 65536 then invalid("Integer query exceeds the bounded node budget")
@@ -292,18 +409,23 @@ private[nodal] object StructuralParameterBinding:
       )
 
     def literal(value: Long): Int =
+      consume()
       intern(Key.Literal(value), IterationDomain.Bounds(value, value))
 
     private def module(owner: String): KernelModuleSnapshot =
+      consume()
       modules.getOrElse(owner, invalid("Integer expression has no owned module"))
 
     private def declaration(owner: String, token: String): Option[KernelDeclarationSnapshot] =
+      consume()
+      consume(module(owner).declarations.size.toLong)
       val candidates =
         module(owner).declarations.filter(value => value.path == token || value.name == token)
       if candidates.size > 1 then invalid("ambiguous parameter declaration")
       candidates.headOption
 
     private def attributes(value: KernelDeclarationSnapshot): Map[String, String] =
+      consume()
       unique(value.attributes, "parameter attribute")
 
     private def interval(
@@ -311,6 +433,7 @@ private[nodal] object StructuralParameterBinding:
         declaration: KernelDeclarationSnapshot,
         defaults: Boolean
     ): IterationDomain.Bounds =
+      consume()
       val attrs = attributes(declaration)
       val lower = attrs.get("integer_range_lower").map(resolve(owner, _, defaults))
       val upper = attrs.get("integer_range_upper").map(resolve(owner, _, defaults))
@@ -331,11 +454,13 @@ private[nodal] object StructuralParameterBinding:
         value: Int,
         defaults: Boolean
     ): Unit =
+      consume()
       val allowed = interval(owner, declaration, defaults)
       val actual = facts(value).bounds
       if actual.lower < allowed.lower || actual.upper > allowed.upper then
         invalid(s"actual Integer envelope escapes formal '${declaration.path}' range")
       val attrs = attributes(declaration)
+      consume(attrs.size.toLong)
       if attrs.keys.exists(_.startsWith("exclude")) then
         invalid("parameter exclusion proof is unavailable for this captured constraint form")
 
@@ -344,6 +469,7 @@ private[nodal] object StructuralParameterBinding:
         declaration: KernelDeclarationSnapshot,
         defaults: Boolean
     ): Int =
+      consume()
       if declaration.kind != "parameter" || !declaration.dataType.contains("Integer") then
         invalid("structural extent requires an owned Integer parameter")
       val attrs = attributes(declaration)
@@ -387,6 +513,7 @@ private[nodal] object StructuralParameterBinding:
             intern(Key.Parameter(declaration.path), bounds)
 
     private def arithmetic(expression: KernelParameterExpressionSnapshot, defaults: Boolean): Int =
+      consume()
       if expression.dataType != "Integer" || expression.unit.exists(_.nonEmpty) then
         invalid("structural expression must be dimensionless Integer")
       expression.literal match
@@ -404,6 +531,7 @@ private[nodal] object StructuralParameterBinding:
           )
 
     def compose(operationName: String, operands: Vector[Int]): Int =
+      consume()
       val operation = IterationDomain.staticArithmetic(operationName).getOrElse(
         invalid("structural expression is not supported pure Integer arithmetic")
       )
@@ -423,6 +551,7 @@ private[nodal] object StructuralParameterBinding:
 
     private def simplifiedOperand(operation: IterationDomain.Arithmetic, operands: Vector[Int])
         : Option[Int] =
+      consume()
       if operation == IterationDomain.Arithmetic.Maximum && operands(0) == operands(1) then
         Some(operands(0))
       else if operation == IterationDomain.Arithmetic.ChooseZero then
@@ -440,96 +569,114 @@ private[nodal] object StructuralParameterBinding:
           )
         ).map(operands)
 
-    def bounds(index: Int): IterationDomain.Bounds = facts(index).bounds
+    def bounds(index: Int): IterationDomain.Bounds =
+      consume()
+      facts(index).bounds
 
-    def operation(index: Int): Option[(String, Vector[Int])] = facts(index).key match
-      case Key.Apply(name, operands) => Some(name -> operands)
-      case _ => None
+    def operation(index: Int): Option[(String, Vector[Int])] =
+      consume()
+      facts(index).key match
+        case Key.Apply(name, operands) => Some(name -> operands)
+        case _ => None
 
     def exportValues(indices: Vector[Int]): ResolvedDimensions =
+      consume()
       exportReachable(indices, Map.empty)
 
     private def exportReachable(
         indices: Vector[Int],
         existing: Map[Int, String]
     ): ResolvedDimensions =
+      consume()
       // Export the reachable graph only. Copying the full query arena for every width binding
       // would make a wide record's context plan quadratic in unrelated static definitions.
       val mapped = mutable.HashMap.empty[Int, Int]
       val nodes = mutable.ArrayBuffer.empty[IntegerNode]
-      def copy(index: Int, depth: Int): Int = mapped.getOrElseUpdate(
-        index, {
-          if depth > 512 then invalid("exported Integer proof exceeds the bounded depth")
-          val fact = facts(index)
-          val value = fact.key match
-            case Key.Literal(value) =>
-              IntegerNode(Some(value), None, None, Vector.empty, fact.bounds)
-            case Key.Parameter(path) =>
-              IntegerNode(None, Some(path), None, Vector.empty, fact.bounds)
-            case Key.Apply(operation, operands) =>
-              IntegerNode(
-                None,
-                None,
-                Some(operation),
-                operands.map(copy(_, depth + 1)),
-                fact.bounds
-              )
-          val result = nodes.size
-          nodes += value
-          result
-        }
-      )
+      def copy(index: Int, depth: Int): Int =
+        consume()
+        mapped.getOrElseUpdate(
+          index, {
+            if depth > 512 then invalid("exported Integer proof exceeds the bounded depth")
+            val fact = facts(index)
+            val value = fact.key match
+              case Key.Literal(value) =>
+                IntegerNode(Some(value), None, None, Vector.empty, fact.bounds)
+              case Key.Parameter(path) =>
+                IntegerNode(None, Some(path), None, Vector.empty, fact.bounds)
+              case Key.Apply(operation, operands) =>
+                IntegerNode(
+                  None,
+                  None,
+                  Some(operation),
+                  operands.map(copy(_, depth + 1)),
+                  fact.bounds
+                )
+            val result = nodes.size
+            nodes += value
+            result
+          }
+        )
+      consume(indices.size.toLong + existing.size.toLong)
       val roots = indices.map(copy(_, 0))
-      ResolvedDimensions(
+      exported(ResolvedDimensions(
         roots,
         nodes.toVector,
         existing.iterator.flatMap((original, path) =>
           mapped.get(original).map(_ -> path)
         ).toMap
-      )
+      ))
+
+    private def exported(graph: ResolvedDimensions): ResolvedDimensions =
+      workMeter.exported(graph)
+      graph
 
     def importValue(owner: String, value: ResolvedDimensions): Int =
+      consume()
+      workMeter.consumeGraph(value)
       if value.dimensions.size != 1 || value.nodes.size > 65536 then
         invalid("exact Integer binding must contain one bounded expression")
       val imported = mutable.HashMap.empty[Int, Int]
       val visiting = mutable.HashSet.empty[Int]
-      def node(index: Int): Int = imported.getOrElseUpdate(
-        index, {
-          if index < 0 || index >= value.nodes.size || visiting.size >= 512 || !visiting.add(index)
-          then
-            invalid("exact Integer binding is cyclic, absent or excessively deep")
-          try
-            val source = value.nodes(index)
-            val result = (source.literal, source.parameter, source.operation) match
-              case (Some(number), None, None) if source.operands.isEmpty => literal(number)
-              case (None, Some(path), None) if source.operands.isEmpty =>
-                arguments.get(path) match
-                  case Some((collection, _)) =>
-                    val parent = enclosing.getOrElse(
-                      invalid("exact binding contains an unadmitted formal atom")
-                    )
-                    // A captured ancestor induction retains its original identity after passing
-                    // through an arm. It must already be an admitted atom in the parent query;
-                    // do not pretend that its original block argument belongs to this arm.
-                    val checked = parent.ids.get(Key.Parameter(path)).getOrElse(
-                      parent.resolve(collection.owner, path)
-                    )
-                    if parent.bounds(checked) != source.bounds then
-                      invalid("formal atom bounds differ from enclosing proof")
-                    // A parent's exact replacement must not be relabeled as an opaque atom.
-                    val proof = parent.exportValues(Vector(checked))
-                    if proof.nodes(proof.dimensions.head).parameter != Some(path) then
-                      invalid("exact binding forged an enclosing atom")
-                    intern(Key.Parameter(path), source.bounds)
-                  case None => resolve(owner, path)
-              case (None, None, Some(operation)) => compose(operation, source.operands.map(node))
-              case _ => invalid("exact Integer binding has malformed node facts")
-            if facts(result).bounds != source.bounds then
-              invalid("exact Integer binding bounds differ from checked arithmetic")
-            result
-          finally { val _ = visiting.remove(index) }
-        }
-      )
+      def node(index: Int): Int =
+        consume()
+        imported.getOrElseUpdate(
+          index, {
+            if index < 0 || index >= value.nodes.size || visiting.size >= 512 ||
+              !visiting.add(index)
+            then
+              invalid("exact Integer binding is cyclic, absent or excessively deep")
+            try
+              val source = value.nodes(index)
+              val result = (source.literal, source.parameter, source.operation) match
+                case (Some(number), None, None) if source.operands.isEmpty => literal(number)
+                case (None, Some(path), None) if source.operands.isEmpty =>
+                  arguments.get(path) match
+                    case Some((collection, _)) =>
+                      val parent = enclosing.getOrElse(
+                        invalid("exact binding contains an unadmitted formal atom")
+                      )
+                      // A captured ancestor induction retains its original identity after passing
+                      // through an arm. It must already be an admitted atom in the parent query;
+                      // do not pretend that its original block argument belongs to this arm.
+                      val checked = parent.ids.get(Key.Parameter(path)).getOrElse(
+                        parent.resolve(collection.owner, path)
+                      )
+                      if parent.bounds(checked) != source.bounds then
+                        invalid("formal atom bounds differ from enclosing proof")
+                      // A parent's exact replacement must not be relabeled as an opaque atom.
+                      val proof = parent.exportValues(Vector(checked))
+                      if proof.nodes(proof.dimensions.head).parameter != Some(path) then
+                        invalid("exact binding forged an enclosing atom")
+                      intern(Key.Parameter(path), source.bounds)
+                    case None => resolve(owner, path)
+                case (None, None, Some(operation)) => compose(operation, source.operands.map(node))
+                case _ => invalid("exact Integer binding has malformed node facts")
+              if facts(result).bounds != source.bounds then
+                invalid("exact Integer binding bounds differ from checked arithmetic")
+              result
+            finally { val _ = visiting.remove(index) }
+          }
+        )
       node(value.dimensions.head)
 
     /** Import a checked lexical DAG at an actual selected-family use. Only exact prior family
@@ -542,9 +689,11 @@ private[nodal] object StructuralParameterBinding:
         selected: Map[String, Int],
         charge: () => Unit
     ): Vector[Int] =
+      consume()
       if !(source.sourceSnapshot eq sourceSnapshot) || selected.size >= 128 then
         invalid("selected Integer import requires one snapshot and bounded actual prefix")
       selected.foreach: (path, replacement) =>
+        consume(snapshot.generatedRegions.size.toLong)
         val actual = snapshot.generatedRegions.find(region =>
           region.owner == owner &&
             region.induction == path &&
@@ -560,38 +709,44 @@ private[nodal] object StructuralParameterBinding:
       val graph = source.exportValues(values)
       val memo = mutable.HashMap.empty[Int, Int]
       val active = mutable.HashSet.empty[Int]
-      def visit(index: Int): Int = memo.getOrElseUpdate(
-        index, {
-          charge()
-          if index < 0 || index >= graph.nodes.size || active.size >= 128 || !active.add(index) then
-            invalid("selected Integer DAG is absent, cyclic or exceeds depth")
-          try
-            val original = graph.nodes(index)
-            (original.literal, original.parameter, original.operation) match
-              case (Some(value), None, None) if original.operands.isEmpty => literal(value)
-              case (None, Some(path), None) if original.operands.isEmpty =>
-                selected.get(path) match
-                  case Some(replacement) => replacement
-                  case None =>
-                    arguments.get(path) match
-                      case Some((collection, argument))
-                          if scope.contains(collection.path) && collection.owner == owner &&
-                            argument.role == "induction" && generatedDomains.contains(path) =>
-                        val admitted = resolve(owner, path)
-                        if bounds(admitted) != original.bounds then
-                          invalid(
-                            "selected header disagrees with its actual current induction proof"
-                          )
-                        admitted
-                      case _ => importValue(owner, graph.copy(dimensions = Vector(index)))
-              case (None, None, Some(operation)) => compose(operation, original.operands.map(visit))
-              case _ => invalid("selected Integer DAG lost its canonical definition")
-          finally active.remove(index)
-        }
-      )
+      def visit(index: Int): Int =
+        consume()
+        memo.getOrElseUpdate(
+          index, {
+            charge()
+            if index < 0 || index >= graph.nodes.size || active.size >= 128 || !active.add(index)
+            then
+              invalid("selected Integer DAG is absent, cyclic or exceeds depth")
+            try
+              val original = graph.nodes(index)
+              (original.literal, original.parameter, original.operation) match
+                case (Some(value), None, None) if original.operands.isEmpty => literal(value)
+                case (None, Some(path), None) if original.operands.isEmpty =>
+                  selected.get(path) match
+                    case Some(replacement) => replacement
+                    case None =>
+                      arguments.get(path) match
+                        case Some((collection, argument))
+                            if scope.contains(collection.path) && collection.owner == owner &&
+                              argument.role == "induction" && generatedDomains.contains(path) =>
+                          val admitted = resolve(owner, path)
+                          if bounds(admitted) != original.bounds then
+                            invalid(
+                              "selected header disagrees with its actual current induction proof"
+                            )
+                          admitted
+                        case _ =>
+                          importValue(owner, exported(graph.copy(dimensions = Vector(index))))
+                case (None, None, Some(operation)) =>
+                  compose(operation, original.operands.map(visit))
+                case _ => invalid("selected Integer DAG lost its canonical definition")
+            finally active.remove(index)
+          }
+        )
       graph.dimensions.map(visit)
 
     def resolve(owner: String, token: String, defaults: Boolean = false): Int =
+      consume()
       token.toLongOption match
         case Some(value) if value.toString == token => literal(value)
         case Some(_) => invalid("Integer token is not canonical")
@@ -637,98 +792,110 @@ private[nodal] object StructuralParameterBinding:
       * Numeric/type callers keep using resolve, which fails if an attained value is necessary.
       */
     def resolveIfAttained(owner: String, token: String): Option[Int] =
+      consume()
       val visited = mutable.HashMap.empty[String, Option[Int]]
       val visiting = mutable.HashSet.empty[String]
-      def visit(path: String): Option[Int] = visited.getOrElseUpdate(
-        path, {
-          if visiting.size >= 128 || visited.size >= 65536 || !visiting.add(path) then
-            invalid("static predicate dependency is cyclic or exceeds its finite budget")
-          try
-            captures.get(path) match
-              case Some(source) =>
-                val parent = enclosing.get
-                parent.resolveIfAttained(owner, source).map(value =>
-                  importValue(owner, parent.exportValues(Vector(value)))
-                )
-              case None if generatedDomains.contains(path) =>
-                generatedDomains.get(path).flatMap(IterationDomain.attainedBounds)
-                  .map(bounds => intern(Key.Parameter(path), bounds))
-              case None => expressions.get(path) match
-                  case Some(expression) if expression.literal.isEmpty =>
-                    if expression.owner != owner ||
-                      expression.region.nonEmpty && expression.region != scope ||
-                      expression.dataType != "Integer" || expression.unit.exists(_.nonEmpty)
-                    then
-                      invalid("predicate Integer expression has invalid scope, type or units")
-                    val operation = IterationDomain.staticArithmetic(expression.operation)
-                      .getOrElse(invalid("predicate Integer expression has unsupported arithmetic"))
-                    if expression.operands.size != operation.arity then
-                      invalid("predicate Integer expression has wrong arity")
-                    val operands = expression.operands.map(visit)
-                    if operands.forall(_.nonEmpty) then
-                      Some(compose(expression.operation, operands.flatten))
-                    else None
-                  case _ => Some(resolve(owner, path))
-          finally visiting.remove(path)
-        }
-      )
+      def visit(path: String): Option[Int] =
+        consume()
+        visited.getOrElseUpdate(
+          path, {
+            if visiting.size >= 128 || visited.size >= 65536 || !visiting.add(path) then
+              invalid("static predicate dependency is cyclic or exceeds its finite budget")
+            try
+              captures.get(path) match
+                case Some(source) =>
+                  val parent = enclosing.get
+                  parent.resolveIfAttained(owner, source).map(value =>
+                    importValue(owner, parent.exportValues(Vector(value)))
+                  )
+                case None if generatedDomains.contains(path) =>
+                  generatedDomains.get(path).flatMap(IterationDomain.attainedBounds)
+                    .map(bounds => intern(Key.Parameter(path), bounds))
+                case None => expressions.get(path) match
+                    case Some(expression) if expression.literal.isEmpty =>
+                      if expression.owner != owner ||
+                        expression.region.nonEmpty && expression.region != scope ||
+                        expression.dataType != "Integer" || expression.unit.exists(_.nonEmpty)
+                      then
+                        invalid("predicate Integer expression has invalid scope, type or units")
+                      val operation = IterationDomain.staticArithmetic(expression.operation)
+                        .getOrElse(invalid(
+                          "predicate Integer expression has unsupported arithmetic"
+                        ))
+                      if expression.operands.size != operation.arity then
+                        invalid("predicate Integer expression has wrong arity")
+                      val operands = expression.operands.map(visit)
+                      if operands.forall(_.nonEmpty) then
+                        Some(compose(expression.operation, operands.flatten))
+                      else None
+                    case _ => Some(resolve(owner, path))
+            finally visiting.remove(path)
+          }
+        )
       visit(token)
 
     def checkedLiteral(owner: String, reference: String): Long =
+      consume()
       facts(resolve(owner, reference, defaults = true)).key match
         case Key.Literal(value) => value
         case _ => invalid("declaration default is not a checked Integer constant")
 
     def positive(index: Int): Unit =
+      consume()
       if facts(index).bounds.lower <= 0 then invalid("effective shape extent must remain positive")
 
     def exportDimensions(owner: String, dimensions: Vector[Int]): ResolvedDimensions =
+      consume()
       // Reuse is an identity lookup over facts already proved for the selected instance.
       // Unrelated Integer defaults do not acquire shape-envelope obligations merely because
       // they are present in the parent. Required consumers still go through resolve above.
       val existing = mutable.LinkedHashMap.empty[Int, String]
       val matched = mutable.HashMap.empty[String, Option[Int]]
       val visiting = mutable.HashSet.empty[String]
-      def candidate(token: String): Option[Int] = matched.getOrElseUpdate(
-        token,
-        if visiting.size >= 512 || !visiting.add(token) then None
-        else
-          try
-            token.toLongOption.filter(_.toString == token).flatMap(value =>
-              ids.get(Key.Literal(value))
-            )
-              .orElse(declaration(owner, token).filter(value =>
-                value.kind == "parameter" && value.dataType.contains("Integer")
+      def candidate(token: String): Option[Int] =
+        consume()
+        matched.getOrElseUpdate(
+          token,
+          if visiting.size >= 512 || !visiting.add(token) then None
+          else
+            try
+              token.toLongOption.filter(_.toString == token).flatMap(value =>
+                ids.get(Key.Literal(value))
               )
-                .flatMap(value => ids.get(Key.Parameter(value.path))))
-              .orElse(expressions.get(token).filter(value =>
-                value.owner == owner &&
-                  value.dataType == "Integer" && value.unit.forall(_.isEmpty)
-              ).flatMap: expression =>
-                expression.literal match
-                  case Some(value)
-                      if expression.operation == "integer" && expression.operands.isEmpty =>
-                    value.toLongOption.flatMap(value => ids.get(Key.Literal(value)))
-                  case Some(_) => None
-                  case None =>
-                    val operands = expression.operands.map(candidate)
-                    if operands.exists(_.isEmpty) then None
-                    else
-                      val inputs = operands.flatten
-                      ids.get(Key.Apply(expression.operation, inputs)).orElse:
-                        val operation = IterationDomain.staticArithmetic(expression.operation)
-                        operation.filter(op => inputs.size == op.arity)
-                          .flatMap(op => simplifiedOperand(op, inputs))
-                          .orElse(operation.filter(op => inputs.size == op.arity)
-                            .filter(_ =>
-                              inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
-                            )
-                            .flatMap(op =>
-                              IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
-                            )
-                            .flatMap(value => ids.get(Key.Literal(value.lower)))))
-          finally { val _ = visiting.remove(token) }
-      )
+                .orElse(declaration(owner, token).filter(value =>
+                  value.kind == "parameter" && value.dataType.contains("Integer")
+                )
+                  .flatMap(value => ids.get(Key.Parameter(value.path))))
+                .orElse(expressions.get(token).filter(value =>
+                  value.owner == owner &&
+                    value.dataType == "Integer" && value.unit.forall(_.isEmpty)
+                ).flatMap: expression =>
+                  expression.literal match
+                    case Some(value)
+                        if expression.operation == "integer" && expression.operands.isEmpty =>
+                      value.toLongOption.flatMap(value => ids.get(Key.Literal(value)))
+                    case Some(_) => None
+                    case None =>
+                      val operands = expression.operands.map(candidate)
+                      if operands.exists(_.isEmpty) then None
+                      else
+                        val inputs = operands.flatten
+                        ids.get(Key.Apply(expression.operation, inputs)).orElse:
+                          val operation = IterationDomain.staticArithmetic(expression.operation)
+                          operation.filter(op => inputs.size == op.arity)
+                            .flatMap(op => simplifiedOperand(op, inputs))
+                            .orElse(operation.filter(op => inputs.size == op.arity)
+                              .filter(_ =>
+                                inputs.forall(index => facts(index).key.isInstanceOf[Key.Literal])
+                              )
+                              .flatMap(op =>
+                                IterationDomain.arithmetic(op, inputs.map(facts(_).bounds)).toOption
+                              )
+                              .flatMap(value => ids.get(Key.Literal(value.lower)))))
+            finally { val _ = visiting.remove(token) }
+        )
+      consume(3L *
+        (module(owner).declarations.size.toLong + snapshot.parameterExpressions.size.toLong))
       (module(owner).declarations.filter(value =>
         value.kind == "parameter" && value.dataType.contains("Integer")
       ).map(_.path) ++
@@ -736,19 +903,22 @@ private[nodal] object StructuralParameterBinding:
         candidate(path).foreach(id => existing.getOrElseUpdate(id, path))
       exportReachable(dimensions, existing.toMap)
 
-    def validateOverrides(): Unit = instance.foreach: (_, value) =>
-      val child = module(value.childModule)
-      overrides.keys.foreach: name =>
-        val declaration = child.declarations.find(
-          _.name == name
-        ).getOrElse(invalid("override names an unknown child parameter"))
-        if declaration.kind != "parameter" then
-          invalid("override names a non-parameter declaration")
-        // Non-Integer overrides retain the inherited hierarchy verifier; structural dependencies
-        // cannot consume them because resolve independently checks their scalar type.
-        if declaration.dataType.contains("Integer") then {
-          val _ = resolve(child.path, declaration.path)
-        }
+    def validateOverrides(): Unit =
+      consume()
+      instance.foreach: (_, value) =>
+        val child = module(value.childModule)
+        overrides.keys.foreach: name =>
+          consume(child.declarations.size.toLong)
+          val declaration = child.declarations.find(
+            _.name == name
+          ).getOrElse(invalid("override names an unknown child parameter"))
+          if declaration.kind != "parameter" then
+            invalid("override names a non-parameter declaration")
+          // Non-Integer overrides retain the inherited hierarchy verifier; structural dependencies
+          // cannot consume them because resolve independently checks their scalar type.
+          if declaration.dataType.contains("Integer") then {
+            val _ = resolve(child.path, declaration.path)
+          }
 
   /** Query-local selected coordinates are capabilities of this exact numerical proof, never a raw
     * binding map. Consumers still verify actual export and capture rights.
@@ -763,11 +933,14 @@ private[nodal] object StructuralParameterBinding:
     private var frozen = false
     private var remaining = 65536
     private def charge(): Unit =
+      query.consume()
       remaining -= 1
       if remaining < 0 then invalid("selected family Integer proof exceeds work budget")
 
     def importValues(original: Query, values: Vector[Int]): Vector[Int] =
       charge()
+      original.workMeter.checkLive()
+      query.consume(values.size.toLong)
       if (original eq query) && coordinates.isEmpty then values
       else query.importGeneratedValues(owner, original, values, coordinates, () => charge())
 
@@ -778,6 +951,7 @@ private[nodal] object StructuralParameterBinding:
         proveLess: (Int, Int, Boolean) => Boolean
     ): Unit =
       charge()
+      query.consume(snapshot.generatedRegions.size.toLong)
       if frozen || families.size >= 128 || family.owner != owner ||
         !snapshot.generatedRegions.exists(_ eq family) ||
         originalHeader.scope != family.lexicalParent || coordinates.contains(family.induction) ||
@@ -829,6 +1003,7 @@ private[nodal] object StructuralParameterBinding:
         actualOwner: String,
         actualScope: KernelGeneratedScope
     ): Unit =
+      query.consume()
       if !(snapshot eq actualSnapshot) || owner != actualOwner ||
         !families.lastOption.exists(family =>
           family.path == actualScope.owner && family.induction == actualScope.induction
@@ -867,8 +1042,24 @@ private[nodal] object StructuralParameterBinding:
     new Query(snapshot, None).checkedLiteral(owner, reference)
 
   /** Query-local reuse of immutable snapshot indices and exact occurrence substitutions. */
-  final class InstanceQueries(snapshot: ConstructionSnapshot, sharedQuery: Option[Query] = None):
-    private lazy val shared = sharedQuery.getOrElse(new Query(snapshot))
+  final class InstanceQueries(
+      snapshot: ConstructionSnapshot,
+      sharedQuery: Option[Query] = None,
+      meter: WorkMeter = WorkMeter.Unmetered
+  ):
+    def this(snapshot: ConstructionSnapshot, sharedQuery: Option[Query]) =
+      this(snapshot, sharedQuery, WorkMeter.Unmetered)
+    private val workMeter =
+      if meter eq WorkMeter.Unmetered then sharedQuery.map(_.workMeter).getOrElse(meter)
+      else meter
+    private def consume(units: Long = 1L): Unit =
+      sharedQuery.foreach(_.workMeter.checkLive())
+      work(workMeter, units)
+    consume()
+    if sharedQuery.exists(query => query.workMeter ne workMeter) then
+      invalid("shared Integer context must share its caller work meter")
+    indexWork(snapshot, workMeter)
+    private lazy val shared = sharedQuery.getOrElse(new Query(snapshot, meter = workMeter))
     private val modules = snapshot.modules.map(value => value.path -> value).toMap
     private val occurrences = snapshot.modules.flatMap(module =>
       module.instances.map(value => (module.path, value.path) -> value)
@@ -882,6 +1073,7 @@ private[nodal] object StructuralParameterBinding:
     private val queries = mutable.HashMap.empty[(String, String), Query]
     def declaration(ownerPath: String, instancePath: String, portPath: String)
         : (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
+      consume()
       val owner = modules.getOrElse(ownerPath, invalid("binding owner is missing"))
       val instance = occurrences.getOrElse(
         ownerPath -> instancePath,
@@ -893,13 +1085,19 @@ private[nodal] object StructuralParameterBinding:
       )
       (owner, instance, port)
     def query(ownerPath: String, instancePath: String): Query =
+      consume()
       queries.getOrElseUpdate(
         ownerPath -> instancePath, {
           val instance = occurrences.getOrElse(
             ownerPath -> instancePath,
             invalid("binding is not owned by the exact immediate instance")
           )
-          val result = new Query(snapshot, Some(ownerPath -> instance), enclosing = Some(shared))
+          val result = new Query(
+            snapshot,
+            Some(ownerPath -> instance),
+            enclosing = Some(shared),
+            meter = workMeter
+          )
           result.validateOverrides()
           result
         }
@@ -909,12 +1107,18 @@ private[nodal] object StructuralParameterBinding:
       * verified body-local consumer may use this uncached query for materialization.
       */
     def generated(ownerPath: String, instancePath: String, originalBody: Query): Query =
+      consume()
       val occurrence = occurrences.getOrElse(
         ownerPath -> instancePath,
         invalid("binding is not owned by the exact immediate instance")
       )
       val result =
-        new Query(snapshot, Some(ownerPath -> occurrence), enclosing = Some(originalBody))
+        new Query(
+          snapshot,
+          Some(ownerPath -> occurrence),
+          enclosing = Some(originalBody),
+          meter = workMeter
+        )
       result.installOriginalInstance(originalBody)
       result.validateOverrides()
       result
@@ -926,6 +1130,7 @@ private[nodal] object StructuralParameterBinding:
         context: SelectedGeneratedContext,
         originalBody: Query
     ): Query =
+      consume()
       val occurrence = occurrences.getOrElse(
         ownerPath -> instancePath,
         invalid("binding is not owned by the exact immediate instance")
@@ -933,7 +1138,12 @@ private[nodal] object StructuralParameterBinding:
       // Selected legality cannot conceal a bad original lane or formal constraint.
       val _ = generated(ownerPath, instancePath, originalBody)
       val result =
-        new Query(snapshot, Some(ownerPath -> occurrence), enclosing = Some(context.query))
+        new Query(
+          snapshot,
+          Some(ownerPath -> occurrence),
+          enclosing = Some(context.query),
+          meter = workMeter
+        )
       result.installSelectedInstance(context, originalBody)
       result.validateOverrides()
       result
@@ -943,8 +1153,10 @@ private[nodal] object StructuralParameterBinding:
         instancePath: String,
         childDeclarationPath: String
     ): ResolvedDimensions =
-      val (owner, instance, count) =
-        interfaceArray(declaration(ownerPath, instancePath, childDeclarationPath))
+      consume()
+      val boundary = declaration(ownerPath, instancePath, childDeclarationPath)
+      consume(boundary._3.attributes.size.toLong)
+      val (owner, instance, count) = interfaceArray(boundary)
       val context = query(ownerPath, instancePath)
       val dimension = context.resolve(instance.childModule, count)
       context.positive(dimension)
@@ -955,8 +1167,10 @@ private[nodal] object StructuralParameterBinding:
         childDeclarationPath: String,
         actualDimensions: Vector[String]
     ): Unit =
-      val (owner, instance, count) =
-        interfaceArray(declaration(ownerPath, instancePath, childDeclarationPath))
+      consume()
+      val boundary = declaration(ownerPath, instancePath, childDeclarationPath)
+      consume(boundary._3.attributes.size.toLong)
+      val (owner, instance, count) = interfaceArray(boundary)
       if actualDimensions.size != 1 then invalid("Interface array lost its declared rank")
       val context = query(ownerPath, instancePath)
       val expected = context.resolve(instance.childModule, count)
@@ -973,8 +1187,16 @@ private[nodal] object StructuralParameterBinding:
       portPath: String
   )
       : (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
-    val (owner, instance, port) =
-      new InstanceQueries(snapshot).declaration(ownerPath, instancePath, portPath)
+    instancePort(new InstanceQueries(snapshot), ownerPath, instancePath, portPath)
+
+  private def instancePort(
+      queries: InstanceQueries,
+      ownerPath: String,
+      instancePath: String,
+      portPath: String
+  )
+      : (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot) =
+    val (owner, instance, port) = queries.declaration(ownerPath, instancePath, portPath)
     if !Set("analog-input", "analog-output", "analog-inout").contains(port.kind) ||
       port.conservativeDimensions.isEmpty
     then invalid("instance array requires a conservative child boundary declaration")
@@ -1025,9 +1247,27 @@ private[nodal] object StructuralParameterBinding:
       instance: String,
       port: String
   ): ResolvedDimensions =
-    val (parent, occurrence, declaration) = instancePort(snapshot, owner, instance, port)
-    val query = new Query(snapshot, Some(parent.path -> occurrence))
+    val boundary = instancePort(snapshot, owner, instance, port)
+    val query = new Query(snapshot, Some(boundary._1.path -> boundary._2))
     query.validateOverrides()
+    exportConservativeDimensions(boundary, query)
+
+  /** Construction-time caller keeps the exact epoch query owner and its shared work budget. */
+  def resolveDimensions(
+      queries: InstanceQueries,
+      owner: String,
+      instance: String,
+      port: String
+  ): ResolvedDimensions =
+    val boundary = instancePort(queries, owner, instance, port)
+    // InstanceQueries.query validates overrides when creating the canonical cached query.
+    exportConservativeDimensions(boundary, queries.query(owner, instance))
+
+  private def exportConservativeDimensions(
+      boundary: (KernelModuleSnapshot, KernelInstanceSnapshot, KernelDeclarationSnapshot),
+      query: Query
+  ): ResolvedDimensions =
+    val (parent, occurrence, declaration) = boundary
     val dimensions =
       declaration.conservativeDimensions.map(query.resolve(occurrence.childModule, _))
     dimensions.foreach(query.positive)

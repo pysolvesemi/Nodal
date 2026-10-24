@@ -126,6 +126,61 @@ private final case class NameCandidate(
 private final case class ResolvedName(name: String, provenance: String)
 
 private[nodal] final class SemanticOriginBuilder:
+  // Scoped to one synchronous resolution; the caller owns the cumulative epoch budget.
+  // ControlThrowable deliberately bypasses existing best-effort Exception catches.
+  private final class ResolutionWorkAborted(val original: Throwable)
+      extends scala.util.control.ControlThrowable
+  private var resolutionWork: Option[Int => Unit] = None
+  private final case class SourceFileStamp(
+      size: Long,
+      modified: java.nio.file.attribute.FileTime,
+      key: Option[AnyRef],
+      regular: Boolean
+  )
+  private final case class ResolutionSourceLines(
+      stamp: SourceFileStamp,
+      lines: Vector[String]
+  )
+  // Immutable entries and map snapshots; lifetime is exactly one metered call.
+  // Attribute equality detects observable changes, not cryptographic immutability.
+  private var resolutionSourceLines: Option[Map[Path, ResolutionSourceLines]] = None
+
+  private def chargeWork(units: Long = 1L): Unit =
+    resolutionWork.foreach: charge =>
+      var remaining = units
+      while remaining > 0L do
+        val part = math.min(remaining, Int.MaxValue.toLong).toInt
+        try charge(part)
+        catch case failure: Throwable => throw new ResolutionWorkAborted(failure)
+        remaining -= part
+
+  private def chargeSquare(size: Long, multiplier: Int = 1): Unit =
+    if resolutionWork.nonEmpty then
+      var row = 0L
+      while row < size do
+        chargeWork(size * multiplier.toLong)
+        row += 1L
+
+  /** Same eager resolver and namespace as resolve(), with caller-owned work accounting. Canonical
+    * record scans/sorts are conservatively prepaid by 64*N*N + 128*N units, where N is the total
+    * captured record count plus one. This covers the fixed passes, nested namespace scans, and up
+    * to four generated entries per captured record. Reflection, source bytes, recursive
+    * collections, ancestry and collision retries are additional charges, not assumed to fit the
+    * canonical-record bound. Units measure structural work, not elapsed time inside user
+    * collection/reflection implementations or filesystem operations. Source lines are reused only
+    * within this call after attribute revalidation; no cross-epoch cache or proof ownership.
+    */
+  def resolveWithWork(charge: Int => Unit): SemanticOriginResult =
+    val previous = resolutionWork
+    val previousLines = resolutionSourceLines
+    resolutionWork = Some(charge)
+    resolutionSourceLines = Some(Map.empty)
+    try resolve()
+    catch case aborted: ResolutionWorkAborted => throw aborted.original
+    finally
+      resolutionSourceLines = previousLines
+      resolutionWork = previous
+
   private val walker =
     StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
   private val sourceCache: mutable.HashMap[(String, String), Option[Path]] =
@@ -286,41 +341,67 @@ private[nodal] final class SemanticOriginBuilder:
   def captureSemanticSource(): Option[SourceSpan] = captureSite().span
 
   private def captureSite(): KernelSourceSite =
-    val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>
-      stream.limit(96).toList
-    ).asScala.toVector
-    val userFrames = frames.zipWithIndex.filter: (frame, _) =>
-      isUserFrame(frame)
-    val locatedConstructor = (candidate: (StackWalker.StackFrame, Int)) =>
-      val (frame, _) = candidate
-      frame.getMethodName == "<init>" &&
-      Option(frame.getFileName)
-        .flatMap(fileName => locateSource(fileName, frame.getClassName))
-        .nonEmpty
-    val userCandidate = userFrames.find(locatedConstructor).map: constructor =>
-      // A lexical body executes before its owning constructor returns. Its nearest
-      // same-class frame carries the authored statement location; the constructor
-      // frame only identifies the call that entered the body.
-      userFrames.find: candidate =>
-        candidate._2 < constructor._2 &&
-          candidate._1.getClassName == constructor._1.getClassName
-      .getOrElse(constructor)
-    .orElse(userFrames.headOption)
-    val userIndex = userCandidate.map(_._2).getOrElse(-1)
-    val user = userCandidate.map(_._1)
-    val api =
-      if userIndex > 0 then frames.take(userIndex).reverseIterator.find(isApiFrame)
-      else None
-    val located = user.flatMap: frame =>
-      Option(frame.getFileName).map(fileName =>
-        locateSpan(fileName, frame.getClassName, frame.getLineNumber)
+    // Source capture may occur during structural materialization, outside resolveWithWork.
+    // Reuse its existing meter if present; otherwise borrow only the active boundary debit.
+    // No owner, budget, or transaction-wide source-bytes cache is created here.
+    val previousWork = resolutionWork
+    val previousLines = resolutionSourceLines
+    val installed = resolutionWork.isEmpty && ConstructionKernel.boundaryWorkActive
+    if installed then
+      resolutionWork = Some(units => ConstructionKernel.chargeBoundaryWork(units.toLong))
+      resolutionSourceLines = Some(Map.empty)
+    try
+      chargeWork() // Before stack-walk/stream/vector allocation.
+      val frames = walker.walk[java.util.List[StackWalker.StackFrame]](stream =>
+        if resolutionWork.isEmpty then stream.limit(96).toList
+        else
+          stream.limit(96).peek(frame =>
+            // Fixed bounded stack passes plus actual frame strings used by selection.
+            chargeWork(16L)
+            if resolutionWork.nonEmpty then
+              chargeWork(4L *
+                (frame.getClassName.length.toLong +
+                  Option(frame.getFileName).fold(0L)(_.length.toLong) +
+                  frame.getMethodName.length.toLong + 1L))
+          ).toList
+      ).asScala.toVector
+      val userFrames = frames.zipWithIndex.filter: (frame, _) =>
+        isUserFrame(frame)
+      val locatedConstructor = (candidate: (StackWalker.StackFrame, Int)) =>
+        val (frame, _) = candidate
+        frame.getMethodName == "<init>" &&
+        Option(frame.getFileName)
+          .flatMap(fileName => locateSource(fileName, frame.getClassName))
+          .nonEmpty
+      val userCandidate = userFrames.find(locatedConstructor).map: constructor =>
+        // A lexical body executes before its owning constructor returns. Its nearest
+        // same-class frame carries the authored statement location; the constructor
+        // frame only identifies the call that entered the body.
+        userFrames.find: candidate =>
+          candidate._2 < constructor._2 &&
+            candidate._1.getClassName == constructor._1.getClassName
+        .getOrElse(constructor)
+      .orElse(userFrames.headOption)
+      val userIndex = userCandidate.map(_._2).getOrElse(-1)
+      val user = userCandidate.map(_._1)
+      val api =
+        if userIndex > 0 then frames.take(userIndex).reverseIterator.find(isApiFrame)
+        else None
+      val located = user.flatMap: frame =>
+        Option(frame.getFileName).map(fileName =>
+          locateSpan(fileName, frame.getClassName, frame.getLineNumber)
+        )
+      KernelSourceSite(
+        located.map(_._1),
+        api.map(frame => normalizeOwner(frame.getClassName)).getOrElse("user"),
+        api.map(frame => normalizeOperation(frame.getMethodName)).getOrElse("construct"),
+        located.flatMap(_._2)
       )
-    KernelSourceSite(
-      located.map(_._1),
-      api.map(frame => normalizeOwner(frame.getClassName)).getOrElse("user"),
-      api.map(frame => normalizeOperation(frame.getMethodName)).getOrElse("construct"),
-      located.flatMap(_._2)
-    )
+    catch case aborted: ResolutionWorkAborted if installed => throw aborted.original
+    finally
+      if installed then
+        resolutionSourceLines = previousLines
+        resolutionWork = previousWork
 
   private def isUserFrame(frame: StackWalker.StackFrame): Boolean =
     val owner = frame.getClassName
@@ -339,6 +420,7 @@ private[nodal] final class SemanticOriginBuilder:
     Option(frame.getFileName).exists(apiSourceFiles.contains)
 
   private def normalizeOwner(raw: String): String =
+    chargeWork(raw.length.toLong + 1L)
     val simple = raw.split("\\.").lastOption.getOrElse(raw)
     val cleaned = simple
       .replace("$package", "")
@@ -350,6 +432,7 @@ private[nodal] final class SemanticOriginBuilder:
     cleanIdentifier(cleaned, "api")
 
   private def normalizeOperation(raw: String): String =
+    chargeWork(raw.length.toLong + 1L)
     val cleaned =
       if raw == "<init>" then "construct"
       else
@@ -369,12 +452,13 @@ private[nodal] final class SemanticOriginBuilder:
     source match
       case Some(path) =>
         try
-          val lines = Files.readAllLines(path).asScala.toVector
+          val lines = readSourceLines(path)
           val currentIndex = math.min(line - 1, math.max(0, lines.size - 1))
           val binding = bindingNear(lines, currentIndex)
           val startIndex = binding.map(_._1).getOrElse(currentIndex)
           val startText = lines.lift(startIndex).getOrElse("")
           val endText = lines.lift(currentIndex).getOrElse(startText)
+          chargeWork(startText.length.toLong + 1L)
           val startColumn = startText.indexWhere(character => !character.isWhitespace) match
             case -1 => 1
             case value => value + 1
@@ -395,6 +479,7 @@ private[nodal] final class SemanticOriginBuilder:
       lines: Vector[String],
       currentIndex: Int
   ): Option[(Int, String)] =
+    if resolutionWork.nonEmpty then chargeWork(lines(currentIndex).length.toLong + 1L)
     declarationPattern
       .findFirstMatchIn(lines(currentIndex))
       .map(matched => currentIndex -> matched.group(1))
@@ -404,10 +489,12 @@ private[nodal] final class SemanticOriginBuilder:
     (raw"(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s*:\s*)?" + "$").r
 
   private def ownerPackage(ownerClass: String): Option[String] =
+    chargeWork(ownerClass.length.toLong + 1L)
     val separator = ownerClass.lastIndexOf('.')
     if separator <= 0 then None else Some(ownerClass.substring(0, separator))
 
   private def ownerTypeName(ownerClass: String): Option[String] =
+    chargeWork(ownerClass.length.toLong + 1L)
     ownerClass
       .split("\\.")
       .lastOption
@@ -419,12 +506,18 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def sourceIdentityScore(path: Path, ownerClass: String): Int =
     try
-      val source = Files.readString(path)
+      val source =
+        if resolutionWork.isEmpty then Files.readString(path)
+        else readSourceText(path)
+      // Fixed package/type regex passes; structural character accounting, not CPU time.
+      chargeWork(source.length.toLong * 4L + 1L)
       val ownerPackageValue = ownerPackage(ownerClass)
       val ownerTypeValue = ownerTypeName(ownerClass)
       val packages = sourcePackagePattern
         .findAllMatchIn(source)
-        .map(_.group(1))
+        .map: matched =>
+          chargeWork(matched.group(1).length.toLong + 1L)
+          matched.group(1)
         .toSet
       val packageScore = ownerPackageValue
         .filter(packages.contains)
@@ -480,10 +573,24 @@ private[nodal] final class SemanticOriginBuilder:
   // Constructor selection and span lookup share one transaction-owned cache, including misses.
   // Synthesized region captures must not re-walk the source tree at every dependency edge.
   private def locateSource(fileName: String, ownerClass: String): Option[Path] =
-    sourceCache.getOrElseUpdate(fileName -> ownerClass, findSource(fileName, ownerClass))
+    chargeWork(fileName.length.toLong + ownerClass.length.toLong + 1L)
+    sourceCache.getOrElseUpdate(
+      fileName -> ownerClass, {
+        val found = findSource(fileName, ownerClass)
+        chargeWork(fileName.length.toLong + ownerClass.length.toLong + 1L)
+        found.foreach(chargeSourcePath)
+        found
+      }
+    )
+
+  private def chargeSourcePath(path: Path): Unit =
+    if resolutionWork.nonEmpty then
+      chargeWork(path.getNameCount.toLong + path.toString.length.toLong + 1L)
 
   private def findSource(fileName: String, ownerClass: String): Option[Path] =
     val root = repositoryRoot
+    chargeSourcePath(root)
+    chargeWork(5L) // Root directory and repository marker checks.
     if !Files.isDirectory(root) then None
     else
       val candidates = mutable.ArrayBuffer.empty[Path]
@@ -501,6 +608,7 @@ private[nodal] final class SemanticOriginBuilder:
                 directory: Path,
                 attributes: BasicFileAttributes
             ): FileVisitResult =
+              chargeSourcePath(directory)
               if directory != root &&
                 attributes.isDirectory &&
                 (generatedScratch.contains(directory) ||
@@ -512,23 +620,33 @@ private[nodal] final class SemanticOriginBuilder:
                 file: Path,
                 attributes: BasicFileAttributes
             ): FileVisitResult =
+              chargeSourcePath(file)
               if attributes.isRegularFile && file.getFileName.toString == fileName
-              then candidates += file
+              then
+                chargeWork()
+                candidates += file
               FileVisitResult.CONTINUE
 
             override def visitFileFailed(
                 _file: Path,
                 _exception: java.io.IOException
             ): FileVisitResult =
+              chargeWork()
               FileVisitResult.CONTINUE
 
             override def postVisitDirectory(
                 _directory: Path,
                 _exception: java.io.IOException
             ): FileVisitResult =
+              chargeWork()
               FileVisitResult.CONTINUE
         )
       catch case _: java.io.IOException => ()
+      if resolutionWork.nonEmpty then
+        chargeWork(candidates.size.toLong * 8L)
+        candidates.foreach: path =>
+          // Sorting comparisons can revisit every candidate path; prepaid conservatively.
+          chargeWork(candidates.size.toLong * (path.toString.length.toLong + 1L))
       val ordered = candidates.toVector
         .filter(path => sourceSegments(path).intersect(ignoredSourceSegments).isEmpty)
         .sortBy(path => (path.getNameCount, repositoryPath(path)))
@@ -543,9 +661,12 @@ private[nodal] final class SemanticOriginBuilder:
           if bestScore > 0 && winners.size == 1 then winners.headOption else None
 
   private def sourceSegments(path: Path): Set[String] =
+    chargeSourcePath(path)
     path.iterator().asScala.map(_.toString).toSet
 
   private def repositoryPath(path: Path): String =
+    chargeSourcePath(path)
+    chargeSourcePath(repositoryRoot)
     val root = repositoryRoot
     val relative =
       try root.relativize(path.toAbsolutePath.normalize()).toString
@@ -553,6 +674,7 @@ private[nodal] final class SemanticOriginBuilder:
     relative.replace('\\', '/')
 
   private def cleanIdentifier(raw: String, fallback: String): String =
+    chargeWork(raw.length.toLong + 1L)
     val normalized = raw
       .replaceAll("[^A-Za-z0-9_]+", "_")
       .replaceAll("_+", "_")
@@ -575,6 +697,7 @@ private[nodal] final class SemanticOriginBuilder:
       case None => raw
 
   private def stableDigest(parts: String*): String =
+    parts.foreach(part => chargeWork(part.length.toLong + 1L))
     val bytes = MessageDigest
       .getInstance("SHA-256")
       .digest(parts.mkString("\u001f").getBytes(StandardCharsets.UTF_8))
@@ -589,12 +712,19 @@ private[nodal] final class SemanticOriginBuilder:
 
   private def memberFields(clazz: Class[?]): Vector[Field] =
     val classes = Iterator
-      .iterate(Option(clazz))(_.flatMap(current => Option(current.getSuperclass)))
+      .iterate(Option(clazz))(_.flatMap: current =>
+        chargeWork()
+        Option(current.getSuperclass))
       .takeWhile(_.nonEmpty)
       .flatten
       .toVector
-    classes
-      .flatMap(_.getDeclaredFields.toVector)
+    val fields = classes.flatMap: current =>
+      chargeWork()
+      val declared = current.getDeclaredFields
+      chargeWork(declared.length.toLong)
+      declared.toVector
+    chargeSquare(fields.size.toLong)
+    fields
       .filterNot(field =>
         field.isSynthetic ||
           Modifier.isStatic(field.getModifiers) ||
@@ -631,23 +761,38 @@ private[nodal] final class SemanticOriginBuilder:
             then discovered.put(value, candidate)
           case None => discovered.put(value, candidate)
 
-    def visit(value: Any, candidate: String): Unit = value match
-      case option: Option[?] =>
-        option.foreach(element => visit(element, candidate))
-      case indexed: IndexedSeq[?] =>
-        indexed.zipWithIndex.foreach: (element, index) =>
-          visit(element, s"${candidate}_$index")
-      case list: List[?] =>
-        list.zipWithIndex.foreach: (element, index) =>
-          visit(element, s"${candidate}_$index")
-      case array: Array[?] =>
-        array.zipWithIndex.foreach: (element, index) =>
-          visit(element, s"${candidate}_$index")
-      case reference: AnyRef => retain(reference, candidate)
-      case _ => ()
+    def visit(value: Any, candidate: String): Unit =
+      chargeWork(candidate.length.toLong + 1L)
+      value match
+        case option: Option[?] =>
+          option.foreach(element => visit(element, candidate))
+        case indexed: IndexedSeq[?] =>
+          if resolutionWork.isEmpty then
+            indexed.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+          else
+            indexed.iterator.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+        case list: List[?] =>
+          if resolutionWork.isEmpty then
+            list.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+          else
+            list.iterator.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+        case array: Array[?] =>
+          if resolutionWork.isEmpty then
+            array.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+          else
+            array.iterator.zipWithIndex.foreach: (element, index) =>
+              visit(element, s"${candidate}_$index")
+        case reference: AnyRef => retain(reference, candidate)
+        case _ => ()
 
     modules.sortBy(_.handle).foreach: capture =>
       memberFields(capture.module.getClass).foreach: field =>
+        chargeWork()
         try
           if field.trySetAccessible() then
             Option(field.get(capture.module)).foreach: value =>
@@ -658,28 +803,167 @@ private[nodal] final class SemanticOriginBuilder:
           case _: RuntimeException => ()
     discovered
 
+  private def sourceChanged(): Nothing =
+    throw new ResolutionWorkAborted(new IllegalStateException(
+      "semantic source changed during metered resolution"
+    ))
+
+  private def sourceStamp(path: Path): SourceFileStamp =
+    chargeWork() // Stat operation; paid before filesystem access.
+    val attributes = Files.readAttributes(path, classOf[BasicFileAttributes])
+    SourceFileStamp(
+      attributes.size(),
+      attributes.lastModifiedTime(),
+      Option(attributes.fileKey()),
+      attributes.isRegularFile()
+    )
+
+  private def readSourceLines(path: Path): Vector[String] =
+    if resolutionWork.isEmpty then Files.readAllLines(path).asScala.toVector
+    else
+      // No realpath or filesystem walk. Pay lexical path work before normalization.
+      chargeWork(path.getNameCount.toLong + 1L)
+      chargeWork(path.toString.length.toLong + 1L)
+      val key = path.normalize()
+      chargeWork() // Map lookup.
+      val cached = resolutionSourceLines.flatMap(_.get(key))
+      val before =
+        try sourceStamp(key)
+        catch
+          case _: java.io.IOException if cached.nonEmpty => sourceChanged()
+          case _: SecurityException if cached.nonEmpty => sourceChanged()
+      cached match
+        case Some(entry) =>
+          if entry.stamp != before then sourceChanged()
+          entry.lines
+        case None =>
+          if !before.regular then Vector.empty
+          else
+            val lines = readBoundedSourceLines(key, before.size)
+            val after =
+              try sourceStamp(key)
+              catch
+                case _: java.io.IOException => sourceChanged()
+                case _: SecurityException => sourceChanged()
+            if before != after then sourceChanged()
+            // First-read bytes bound retained text; pay retained key and entry before storage.
+            chargeWork(key.getNameCount.toLong + key.toString.length.toLong + 1L)
+            chargeWork()
+            resolutionSourceLines = resolutionSourceLines.map(
+              _.updated(key, ResolutionSourceLines(before, lines))
+            )
+            lines
+
+  // Prepay advertised UTF-8 bytes and a separate EOF probe (no size+1 overflow).
+  // The stream refuses growth; matching metadata is still only a best-effort snapshot.
+  private def readBoundedSourceLines(path: Path, advertised: Long): Vector[String] =
+    withBoundedSourceReader(path, advertised)(_.lines().iterator().asScala.toVector)
+
+  private def readSourceText(path: Path): String =
+    chargeSourcePath(path)
+    val before = sourceStamp(path)
+    if !before.regular then throw new java.io.IOException("source is not a regular file")
+    val text = withBoundedSourceReader(path, before.size): reader =>
+      val result = new java.lang.StringBuilder
+      val buffer = new Array[Char](8192)
+      var count = reader.read(buffer)
+      while count != -1 do
+        val _ = result.append(buffer, 0, count)
+        count = reader.read(buffer)
+      result.toString
+    val after =
+      try sourceStamp(path)
+      catch
+        case _: java.io.IOException => sourceChanged()
+        case _: SecurityException => sourceChanged()
+    if before != after then sourceChanged()
+    text
+
+  private def withBoundedSourceReader[A](path: Path, advertised: Long)(
+      read: java.io.BufferedReader => A
+  ): A =
+    chargeWork(advertised)
+    chargeWork()
+    val input = new java.io.FilterInputStream(Files.newInputStream(path)):
+      private var remaining = advertised
+      private var checkedEnd = false
+
+      private def checkEnd(): Int =
+        if !checkedEnd then
+          checkedEnd = true
+          if in.read() != -1 then
+            throw new ResolutionWorkAborted(new IllegalStateException(
+              "semantic source grew beyond its prepaid byte bound"
+            ))
+        -1
+
+      override def read(): Int =
+        if remaining == 0L then checkEnd()
+        else
+          val value = in.read()
+          if value >= 0 then remaining -= 1L
+          value
+
+      override def read(bytes: Array[Byte], offset: Int, length: Int): Int =
+        if length == 0 then 0
+        else if remaining == 0L then checkEnd()
+        else
+          val count = in.read(bytes, offset, math.min(length.toLong, remaining).toInt)
+          if count > 0 then remaining -= count.toLong
+          count
+
+    val reader = new java.io.BufferedReader(new java.io.InputStreamReader(
+      input,
+      StandardCharsets.UTF_8.newDecoder()
+    ))
+    var primary: Option[Throwable] = None
+    try read(reader)
+    catch
+      case failure: Throwable =>
+        primary = Some(failure)
+        throw failure
+    finally
+      try reader.close()
+      catch
+        case closing: Throwable => primary match
+            case Some(failure) => if closing ne failure then failure.addSuppressed(closing)
+            case None => throw closing
+
   private def sourceLines(
       site: KernelSourceSite
   ): Option[(Vector[String], Int)] =
     site.span.flatMap: source =>
+      if resolutionWork.nonEmpty then chargeWork(source.path.length.toLong + 1L)
       val capturedPath = Path.of(source.path)
       val path =
-        if capturedPath.isAbsolute then capturedPath.normalize()
+        if resolutionWork.nonEmpty then
+          chargeWork(repositoryRoot.toString.length.toLong + source.path.length.toLong +
+            capturedPath.getNameCount.toLong + 1L)
+          if capturedPath.isAbsolute then capturedPath else repositoryRoot.resolve(capturedPath)
+        else if capturedPath.isAbsolute then capturedPath.normalize()
         else repositoryRoot.resolve(capturedPath).normalize()
-      if !Files.isRegularFile(path) then None
+      if resolutionWork.isEmpty && !Files.isRegularFile(path) then None
       else
         try
-          val lines = Files.readAllLines(path).asScala.toVector
+          val lines = readSourceLines(path)
           if lines.isEmpty then None
           else
             val observedIndex = math.max(0, math.min(lines.size - 1, source.endLine - 1))
             Some(lines -> observedIndex)
         catch case _: Exception => None
 
+  // Parser accounting charges each visited line/context character for the fixed
+  // declaration regex and each token search. These are structural scan units,
+  // assuming this bounded, fixed regex; not a universal regex-engine CPU bound.
   private def declarationContext(lines: Vector[String], index: Int): String =
+    chargeWork(5L) // At most five line references copied by slice.
     val tail = lines.slice(index, math.min(lines.size, index + 5))
     val continuation = tail.headOption.toVector ++
-      tail.drop(1).takeWhile(line => declarationPattern.findFirstMatchIn(line).isEmpty)
+      tail.drop(1).takeWhile: line =>
+        chargeWork(line.length.toLong + 1L)
+        declarationPattern.findFirstMatchIn(line).isEmpty
+    if resolutionWork.nonEmpty then
+      continuation.foreach(line => chargeWork(line.length.toLong + 1L))
     continuation.mkString(" ")
 
   private def bindingForTokens(
@@ -690,13 +974,19 @@ private[nodal] final class SemanticOriginBuilder:
     sourceLines(site).flatMap: (lines, observedIndex) =>
       val lower = math.max(0, observedIndex - radius)
       val upper = math.min(lines.size - 1, observedIndex + radius)
+      chargeSquare(upper.toLong - lower.toLong + 1L)
       val indexes = (lower to upper).sortBy: index =>
         (math.abs(index - observedIndex), if index <= observedIndex then 0 else 1)
       indexes.iterator
         .flatMap: index =>
+          chargeWork(lines(index).length.toLong + 1L)
           declarationPattern.findFirstMatchIn(lines(index)).flatMap: matched =>
             val context = declarationContext(lines, index)
-            if tokens.isEmpty || tokens.exists(context.contains) then
+            if tokens.isEmpty || tokens.exists(token =>
+                chargeWork(context.length.toLong + token.length.toLong + 1L)
+                context.contains(token)
+              )
+            then
               Some(matched.group(1))
             else None
         .nextOption()
@@ -755,6 +1045,7 @@ private[nodal] final class SemanticOriginBuilder:
       var salt = 0
       var selected = base
       while used.contains(selected) do
+        chargeWork()
         selected = s"${base}_${stableDigest(candidate.key, salt.toString).take(8)}"
         salt += 1
       used += selected
@@ -792,27 +1083,37 @@ private[nodal] final class SemanticOriginBuilder:
   private def objectPath(
       paths: IdentityHashMap[AnyRef, String],
       value: Any
-  ): Option[String] = value match
-    case option: Option[?] => option.iterator.flatMap(objectPath(paths, _)).nextOption()
-    case sequence: Seq[?] => sequence.iterator.flatMap(objectPath(paths, _)).nextOption()
-    case reference: AnyRef => Option(paths.get(reference))
-    case _ => None
+  ): Option[String] =
+    chargeWork()
+    value match
+      case option: Option[?] => option.iterator.flatMap(objectPath(paths, _)).nextOption()
+      case sequence: Seq[?] => sequence.iterator.flatMap(objectPath(paths, _)).nextOption()
+      case reference: AnyRef => Option(paths.get(reference))
+      case _ => None
 
   private def referencedPaths(
       paths: IdentityHashMap[AnyRef, String],
       value: Any
-  ): Vector[String] = value match
-    case option: Option[?] => option.toVector.flatMap(referencedPaths(paths, _))
-    case sequence: Seq[?] => sequence.toVector.flatMap(referencedPaths(paths, _))
-    case reference: AnyRef => Option(paths.get(reference)).toVector
-    case _ => Vector.empty
+  ): Vector[String] =
+    chargeWork()
+    value match
+      case option: Option[?] => option.toVector.flatMap(referencedPaths(paths, _))
+      case sequence: Seq[?] =>
+        if resolutionWork.isEmpty then sequence.toVector.flatMap(referencedPaths(paths, _))
+        else sequence.iterator.flatMap(referencedPaths(paths, _)).toVector
+      case reference: AnyRef => Option(paths.get(reference)).toVector
+      case _ => Vector.empty
 
-  private def renderIndex(value: Any): String = value match
-    case integer: Int => integer.toString
-    case long: Long => long.toString
-    case text: String => generatedStem(text)
-    case sequence: Seq[?] => sequence.map(renderIndex).mkString("_")
-    case _ => "value"
+  private def renderIndex(value: Any): String =
+    chargeWork()
+    value match
+      case integer: Int => integer.toString
+      case long: Long => long.toString
+      case text: String => generatedStem(text)
+      case sequence: Seq[?] =>
+        if resolutionWork.isEmpty then sequence.map(renderIndex).mkString("_")
+        else sequence.iterator.map(renderIndex).mkString("_")
+      case _ => "value"
 
   private def explicitExpressionName(
       capture: OriginExpressionCapture
@@ -863,6 +1164,14 @@ private[nodal] final class SemanticOriginBuilder:
     s"origin-${stableDigest(kind, path, operation, location, parents.mkString("|"), sink.getOrElse("")).take(24)}"
 
   def resolve(): SemanticOriginResult =
+    if resolutionWork.nonEmpty then
+      val count = 1L + modules.size + domains.size + declarations.size +
+        expressions.size + instances.size + operations.size
+      chargeWork(128L * count)
+      chargeSquare(count, 64)
+      // Operand vectors are not bounded by the number of capture records.
+      expressions.foreach(capture => chargeWork(capture.operands.size.toLong))
+      operations.foreach(capture => chargeWork(capture.values.size.toLong * 4L))
     val members = discoverMemberNames()
     val moduleByHandle = modules.iterator.map(capture => capture.handle -> capture).toMap
     val instanceByChild = instances.iterator.map(capture => capture.child -> capture).toMap
@@ -890,6 +1199,7 @@ private[nodal] final class SemanticOriginBuilder:
 
     val modulePaths = mutable.HashMap.empty[Long, String]
     def modulePath(handle: Long): String =
+      chargeWork()
       modulePaths.getOrElseUpdate(
         handle,
         moduleByHandle(handle).parent match
@@ -1069,6 +1379,7 @@ private[nodal] final class SemanticOriginBuilder:
         var salt = 0
         var name = base
         while used.contains(name) do
+          chargeWork()
           name = s"${base}_${stableDigest(key, salt.toString).take(8)}"
           salt += 1
         used += name
@@ -1203,8 +1514,10 @@ private[nodal] final class SemanticOriginBuilder:
     expressions.foreach: capture =>
       val key = capture.module -> capture.index
       val path = expressionPaths(key)
-      val parents = capture.operands
+      val referenced = capture.operands
         .flatMap(referencedPaths(objectPaths, _))
+      chargeSquare(referenced.size.toLong)
+      val parents = referenced
         .filterNot(_ == path)
         .distinct
         .sorted

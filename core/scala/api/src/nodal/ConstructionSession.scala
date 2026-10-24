@@ -7065,27 +7065,105 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ) && parameter.attributes.iterator.map(_._1).toSet.size == parameter.attributes.size &&
         parameter.attributes.find(_._1 == "classification").forall(_._2 == "ordinary") &&
         parameter.attributes.find(_._1 == "unit").forall(_._2 == "")
-    def directParentReal(value: Any): Boolean = value match
-      case parameter: Param[?] =>
-        // Admit the exact declaration, not its default or a derived expression.
-        Option(declarationIds.get(parameter)).exists: reference =>
-          reference.module == currentModule.handle &&
-            currentModule.declarations.lift(reference.index).exists(declaration =>
-              (declaration.reference eq reference) && (declaration.value eq parameter) &&
-                ordinaryDimensionlessReal(declaration)
-            ) && !currentModule.generatedRegions.exists(_.declarations.contains(reference))
-      case _ => false
+    val parent = currentModule
+    val generatedDeclarations = parent.generatedRegions.iterator.flatMap(_.declarations).toSet
+    val analogExpressions = analogRegions.iterator.flatMap(_.expressions).toSet
+    def parentReal(value: Any): Boolean =
+      val heights = new IdentityHashMap[AnyRef, java.lang.Integer]()
+      val active = new IdentityHashMap[AnyRef, java.lang.Boolean]()
+      var work = 0
+      // Admission follows canonical identities without evaluating arithmetic or reading defaults.
+      // Charge every edge, even memo hits; retain subtree heights for shared deep paths.
+      def visit(value: Any, depth: Int, before: Long): Int =
+        work += 1
+        if work > 65536 || depth >= 512 then
+          invalid(
+            "selected conservative parent Real expression exceeds its finite work/depth budget"
+          )
+        val (identity, reference): (AnyRef, DeclarationRef | ExpressionRef) = value match
+          case parameter: Param[?] =>
+            val reference = Option(declarationIds.get(parameter)).getOrElse(
+              invalid("selected conservative parent parameter has no canonical identity")
+            )
+            if reference.module != parent.handle || generatedDeclarations.contains(reference) ||
+              !parent.declarations.lift(reference.index).exists(declaration =>
+                (declaration.reference eq reference) && (declaration.value eq parameter) &&
+                  ordinaryDimensionlessReal(declaration)
+              )
+            then invalid("selected conservative parameter must be an exact ordinary parent Real")
+            parameter -> reference
+          case expression: KernelExpr[?] =>
+            val reference = Option(expressionIds.get(expression)).getOrElse(
+              invalid("selected conservative parent expression has no canonical identity")
+            )
+            if reference.module != parent.handle || reference.index < 0 ||
+              !expressionValues.get(reference).exists(_ eq expression) ||
+              expressionRegions.contains(reference) || analogExpressions.contains(reference) ||
+              !expression.constructionFinalized ||
+              !expression.resultDescriptor.contains(KernelTypeDescriptor("Real"))
+            then invalid("selected conservative expression must be an exact module-owned Real")
+            expression -> reference
+          case _ => invalid("selected conservative expression has a non-static Real operand")
+        val allocation = reference.constructionAllocation.getOrElse(
+          invalid("selected conservative parent value lost its original allocation")
+        )
+        if (allocation.session ne this) || (allocation.module ne parent) ||
+          allocation.serial >= before
+        then invalid("selected conservative operands must precede their authored consumer")
+        if active.containsKey(identity) then
+          invalid("selected conservative parent expression is cyclic")
+        Option(heights.get(identity)) match
+          case Some(height) =>
+            if depth + height.intValue >= 512 then
+              invalid(
+                "selected conservative parent Real expression exceeds its finite depth budget"
+              )
+            height.intValue
+          case None =>
+            active.put(identity, java.lang.Boolean.TRUE)
+            val height = identity match
+              case _: Param[?] => 0
+              case expression: KernelExpr[?] if expression.literal.nonEmpty =>
+                if !realLiteral(expression) ||
+                  !expression.literal.exists(_.dataType == KernelTypeDescriptor("Real")) ||
+                  !expression.operation.contains("real_literal") ||
+                  !(expression.operands match
+                    case Vector(number: Double, unit: String) =>
+                      number.isFinite && unit.isEmpty && expression.literal.exists(
+                        _.value == java.lang.Double.toString(number)
+                      )
+                    case _ => false
+                  )
+                then
+                  invalid("selected conservative expression requires finite unitless Real literals")
+                0
+              case expression: KernelExpr[?] =>
+                val arity = expression.operation match
+                  case Some("analog_add" | "analog_sub" | "analog_mul") => 2
+                  case Some("analog_neg") => 1
+                  case _ => invalid("selected conservative parent Real operation is unsupported")
+                if expression.operands.size != arity then
+                  invalid("selected conservative parent Real operation has invalid arity")
+                expression.operands.iterator.map(operand =>
+                  visit(operand, depth + 1, allocation.serial) + 1
+                ).max
+              case _ => invalid("selected conservative parent Real identity is unsupported")
+            active.remove(identity)
+            heights.put(identity, java.lang.Integer.valueOf(height))
+            height
+      visit(value, 0, Long.MaxValue)
+      true
     val parameters = child.declarations.filter(_.kind == KernelSignalKind.Parameter)
     if !parameters.forall(parameter =>
         ordinaryDimensionlessReal(parameter) &&
           parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2))
       ) || !instance.parameterOverrides.forall((_, value) =>
-        realLiteral(value) || directParentReal(value)
+        realLiteral(value) || parentReal(value)
       )
     then
       invalid(
         "selected conservative child parameters require ordinary dimensionless Real literals " +
-          "or direct parent Real references, with literal child defaults"
+          "or parent Real arithmetic, with literal child defaults"
       )
     val analysis = new StructuralBoundAnalysis(
       currentModule.handle,
@@ -10564,39 +10642,42 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     def declaration(reference: DeclarationRef): DeclarationRecord =
       records(reference.module).declarations(reference.index)
 
-    def visit(candidate: Any): Unit = candidate match
-      case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
-      case parameter: Param[?] =>
-        Option(declarationIds.get(parameter)) match
-          case Some(reference) =>
-            referencedDeclarationOwners += reference.module
-            if declaration(reference).kind != KernelSignalKind.Parameter then
-              dynamicDependency = true
-          case None => dynamicDependency = true
-      case expression: KernelExpr[?] =>
-        if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
-          Option(expressionIds.get(expression)) match
-            case Some(reference) => expressionOwners += reference.module
-            case None if expression.literal.nonEmpty => ()
-            case None => dynamicDependency = true
-          if expression.literal.isEmpty then
-            expression.operation match
-              case Some(operation) => operations += operation
-              case None => operations += "<unknown>"
-          expression.operands.foreach(visit)
-      case reference: AnyRef =>
-        Option(declarationIds.get(reference)) match
-          case Some(declarationReference) =>
-            referencedDeclarationOwners += declarationReference.module
-            if declaration(declarationReference).kind != KernelSignalKind.Parameter then
-              dynamicDependency = true
-          case None =>
-            Option(expressionIds.get(reference)) match
-              case Some(expressionReference) => expressionOwners += expressionReference.module
+    val pending = mutable.ArrayBuffer[Iterator[Any]](Iterator.single(value))
+    while pending.nonEmpty do
+      val current = pending.last
+      if !current.hasNext then pending.remove(pending.size - 1)
+      else
+        current.next() match
+          case _: String | _: Int | _: Long | _: Double | _: Float | _: Boolean | _: BigInt => ()
+          case parameter: Param[?] =>
+            Option(declarationIds.get(parameter)) match
+              case Some(reference) =>
+                referencedDeclarationOwners += reference.module
+                if declaration(reference).kind != KernelSignalKind.Parameter then
+                  dynamicDependency = true
               case None => dynamicDependency = true
-      case _ => ()
-
-    visit(value)
+          case expression: KernelExpr[?] =>
+            if Option(visited.put(expression, java.lang.Boolean.TRUE)).isEmpty then
+              Option(expressionIds.get(expression)) match
+                case Some(reference) => expressionOwners += reference.module
+                case None if expression.literal.nonEmpty => ()
+                case None => dynamicDependency = true
+              if expression.literal.isEmpty then
+                expression.operation match
+                  case Some(operation) => operations += operation
+                  case None => operations += "<unknown>"
+              pending += expression.operands.iterator
+          case reference: AnyRef =>
+            Option(declarationIds.get(reference)) match
+              case Some(declarationReference) =>
+                referencedDeclarationOwners += declarationReference.module
+                if declaration(declarationReference).kind != KernelSignalKind.Parameter then
+                  dynamicDependency = true
+              case None =>
+                Option(expressionIds.get(reference)) match
+                  case Some(expressionReference) => expressionOwners += expressionReference.module
+                  case None => dynamicDependency = true
+          case _ => ()
 
     val targetType = target.dataType.map(renderType(_, instance.child))
     val requiresDimension =

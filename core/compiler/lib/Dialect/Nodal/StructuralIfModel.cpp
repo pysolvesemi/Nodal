@@ -328,6 +328,7 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                                                     "generated_induction", "metadata"},
                                 attribute.getName().getValue()))
           return reject(op, "generated parameter override carries an unsupported field");
+      // One ParameterModel admission proof owns parent Real expression DAGs.
       if (failed(boundary) || boundary->instance->getParentOp() != family || !parameter ||
           !declared || op->getNumOperands() != 1 ||
           op->getOperand(0).getType() != declared.getValue() || failed(mlir::verify(op, false)) ||
@@ -338,8 +339,8 @@ LogicalResult verifyBody(Operation *op, const ParameterIntegerEnvironment &envir
                 isStructuralParameter(parameter) ? ParameterIntegerMode::Storage
                                                  : ParameterIntegerMode::MathematicalSigned64)))))
         return reject(op, "generated child parameter override requires exact all-lane Integer "
-                          "formal/actual proof or exact direct parent ordinary dimensionless "
-                          "Real reference");
+                          "formal/actual proof or a bounded parent ordinary dimensionless "
+                          "Real expression");
       return success();
     }
     if (llvm::isa<InstanceDomainBindingOp>(op))

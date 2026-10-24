@@ -85,13 +85,14 @@ object ReplayParentForwarding:
         assert(bindings.head.contains("parameter = @gain"))
         assert(bindings.head.contains("source_value = \"" + source.path + "\""))
       val _ = Files.writeString(output.resolveSibling(name + ".mlir"), emitted)
-    val expression = scala.util.Try(ConstructionKernel.inspect(new SelectedParentExpressionActual))
-    assert(expression.isFailure)
-    assert(expression.failed.get.toString.contains("ordinary dimensionless Real literals"))
+    val expression = ConstructionKernel.inspect(new SelectedParentExpressionActual)
+    val expressionText = ScalaToMlirBridge.fromSnapshot(expression, Backend.VerilogA).text
+    assert(expressionText.contains("operator_name = \"add\""))
+    val _ = Files.writeString(output.resolveSibling("parent-expression-actual.mlir"), expressionText)
     val foreign = scala.util.Try(ConstructionKernel.inspect(new SelectedParentForeignActual))
     assert(foreign.isFailure)
     assert(foreign.failed.get.toString.contains("NODAL-HIERARCHY-031"))
     assert(ConstructionKernel.inspect(new SelectedLiteralParentReference).modules.nonEmpty)
     println(
-      "PASS exact parent identity, differing/equal defaults, deterministic symbolic transport, expression refusal and recovery"
+      "PASS exact parent identity, differing/equal defaults, deterministic symbolic transport, arithmetic promotion and recovery"
     )

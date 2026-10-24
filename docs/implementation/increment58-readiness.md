@@ -2514,3 +2514,150 @@ the final flat documentation successor is separately admitted at no more than
 246,808,576-byte free reserve. The reviewed source increment is 1.5 MiB, including
 both document versions and bounded finalization receipts; no production or fixture
 source is duplicated.
+
+## Checkpoint 69: bounded parent Real expression actuals
+
+Local prototype acceptance passes for this existing-API F-058.B continuation.
+The approved
+[construction gate](../design-gates/NodalAnalogHierarchyConstruction-DG-v0.1.md)
+covers the unchanged `Instance.param` spelling. Actuals now include parent-Module-owned,
+dimensionless Real DAGs using `+`, `-`, `*` and unary minus. Leaves are finite
+Real literals or exact ordinary parent Real parameters. Literal overrides and
+direct references retain their carriers; standalone native SSA literals are not
+a new override form. Division, unknown/runtime/stateful operations, foreign or
+nested producers, generated-local parameters and type/unit changes remain outside
+this expression profile. Generated-Area Real arithmetic uses the existing
+Module-static classification, not a new capture or hoisting rule.
+
+Architecture review retains canonical construction identity, `overrideEvidence`,
+override policy, immutable bridge inventories and `emitStaticValue` transport.
+The non-evaluating ParameterModel query remains the single native admission owner
+shared with StructuralIf. It checks exact instance/formal linkage, parent-context
+f64 identity, Module ownership, order before the family and strict producer order
+on every operand edge. ConservativeConnectivity independently inspects selected
+actuals; it retains the original scalar one-level topology, literal family bounds,
+literal child defaults, unique symbolic formals and literal/SSA collision checks.
+
+The necessary shared-layer correction memoizes completed results within each
+invocation of the existing native constant evaluator. Its arithmetic body is
+unchanged; there is no second evaluator or persistent cache. Active identities
+and cached dependency peaks preserve cycle rejection and the existing 512-level
+value-entry check, including the terminal-default distinction. Parent expression
+defaults remain supported without a new default policy or global evaluator work
+cap. Existing default agreement, fixed-formal rejection, normalization and
+constraint checks remain authoritative. Defaults are not substituted for symbolic
+identity, and no all-legal Real-envelope proof is claimed.
+
+Each new actual-DAG admission query permits at most 65,536 root/operand visits
+and 512 dependency nodes on a path, including shared incoming edges. Bounded
+traversals and memoized heights prevent sharing from hiding a longer path. Native
+parent-symbol inventories are indexed once per query. ParameterModel and the
+renderer retain the separate 1 MiB expanded-text guard; ConservativeConnectivity's
+graph admission does not promise renderability. Scala's selected helper remains
+bounded recursive. No construction default-budget or production-capacity decision,
+new public spelling, topology widening or measured performance improvement is
+claimed.
+
+The matched API/bridge builds, three changed native units and corrected probe
+relink pass. Eight inherited ParameterModel unused-variable warnings remain;
+this is not a warning-clean native build. The first probe compilation failed
+because five calls used unavailable `OpBuilder.getSymbolRefAttr`; its source,
+diagnostics and failed receipt are retained. A separately frozen v2 changes only
+those five probe calls to the installed `FlatSymbolRefAttr` API. Production sources
+and their compiled objects were not changed to accommodate the failure.
+
+One complete focused run freshly compiles the selected fixtures with strict Scala
+warnings and passes three Scala mains plus 36 native invocations. These include
+14 independent PM/CC query controls, eight generic-evaluator sharing/depth/cycle
+controls, actual arithmetic/default-constraint checks, generated-Integer
+predecessors, direct scalar forwarding and compound MaterializedScalar refusal.
+The controls distinguish admission from downstream contracts: fixed formals,
+nonfinite evaluated arithmetic and selected child-expression defaults do not gain
+permission merely because a lower-level query admits their representation.
+Repeated arithmetic emission is byte-identical. This is not a rerun of the entire
+checkpoint-68 selection, a full C++ unit suite or simulator qualification.
+
+The source witness is
+[ParentArithmeticSource.scala](../../tests/scala/domain-hierarchy/fixtures/selected-conservative-parameters/ParentArithmeticSource.scala).
+Its relevant Scala excerpt is:
+
+```scala
+val parentFirst = param(5.0.real)
+val parentSecond = param(5.0.real)
+val shared = parentFirst + parentSecond
+val amplified = shared * 2.0.real
+val firstGain = amplified - (-parentFirst)
+val secondGain = amplified - (-parentSecond)
+```
+
+Inside the existing `hdlRange(2, 8, 2)` Area, the two child instances use
+`.param(_.gain, firstGain)` and `.param(_.gain, secondGain)`. The actual generated
+named-hierarchy Verilog-A retains these exact parameter-association excerpts,
+respectively, rather than either default or the folded value 25:
+
+```verilog
+.gain((((parentFirst + parentSecond) * 2.0) - (-parentFirst)))
+.gain((((parentFirst + parentSecond) * 2.0) - (-parentSecond)))
+```
+
+Both parent declarations remain `parameter real ... = 5;`, the child declaration
+remains `parameter real gain = 2;`, and the generated loop retains
+`for (i = 2; i < 8; i = i + 2)`. The full output is retained at
+`.work/f58-parent-real-expressions/test-output/focused-v1/main/parent-arithmetic-emit.stdout`
+(SHA-256 `8f8aa78a2d00a3def4945118ed6f2fd579b832badf27ad16200bfb8fcca0bd08`).
+It was generated by the matching `conservative-probe` with
+`test-output/focused-v1/main/parent-arithmetic.mlir emit`, relative to that stage.
+The [focused runner](../../tests/scala/domain-hierarchy/run_parent_arithmetic.py)
+and retained `test-output/focused-v1/command.json` / `main/commands.json` record
+its exact Scala compilation, artifact arguments, backend commands and outcomes.
+Compound actuals remain unsupported by MaterializedScalar; its existing direct
+substitution profile is deliberately unchanged.
+
+For reproduction, use canonical checkpoint-69 sources, not a mixed worktree.
+Rebuild the full matched Scala API and bridge using the repository's
+[Scala recipe](../development/scala-build.md), with the matching plugin and
+explicit annotation/support dependencies. Use the existing locked native
+[build recipe](../development/native-compiler.md) to rebuild ParameterModel,
+ConservativeConnectivity and StructuralIfModel against the matching header, then
+compile and relink the canonical
+[shared probe](../../tests/compiler/fixtures/increment58/generated-conservative-adapter/generated_conservative_adapter_probe.cpp)
+against those objects and coherent native dependencies; exclude stale duplicate
+implementations. There is no new native probe build target. The runner consumes
+these explicit artifacts, not the local receipts above:
+
+```sh
+python3 -I -B tests/scala/domain-hierarchy/run_parent_arithmetic.py \
+  --repository-root "$REPOSITORY" --java "$JAVA" \
+  --compiler-classpath "$SCALA_COMPILER_CLASSPATH" \
+  --runtime-classpath "$SCALA_RUNTIME_CLASSPATH" \
+  --api-jar "$API_JAR" --bridge-jar "$BRIDGE_JAR" \
+  --plugin-jar "$PLUGIN_JAR" --probe "$CONSERVATIVE_PROBE" \
+  --output-root "$REPOSITORY/.work/f58-parent-real-expressions/test-output/fresh" \
+  --timeout 120
+```
+
+Run from the canonical source root; the script locates fixtures relative to itself
+and checks the unchanged HEAD68 `build.mill` marker. Classpaths contain explicit
+files. If artifacts are overlays, supply their matched support using repeatable
+`--api-support-jar` / `--bridge-support-jar`, as specified in the
+[selected guide](../../tests/scala/domain-hierarchy/SELECTED_CONSERVATIVE_PARAMETERS.md).
+Hold the existing Scala/native locks externally, retain the 246,808,576-byte free
+reserve and require a fresh output directory. This is an input/rebuild contract,
+not a claim that the local receipt paths or hashes are portable.
+
+The source base is HEAD68 `18f3a7c7df11f73a0d315bd718b9cc436806cb8b`.
+The stage's `reviewed-source-freeze.json` records the six reviewed production
+hashes, `probe-v2-recipe.json` pins the corrected probe source, and
+`focused-freeze.json` pins the executed tools and inputs (SHA-256
+`294e592ee975890b8dd9eec34f1610b29ce8bbd90ba50949a27da9ba92131430`).
+The accepted result has an empty failure aggregate and preserves raw outputs.
+Its sampled owned/combined maxima are 20,500,480 / 105,021,440 bytes, with
+382,287,872 bytes free at completion against the unchanged 246,808,576-byte
+reserve. These are sampled run observations, not continuous or later
+finalization peaks.
+
+Foundation 58, F-058.B.1/B.2, the default 65,536-unit admission gap and automatic
+pending-cell completion remain open. Diagnostic 131,072 is not production
+capacity, and ExtendedAPI remains pending. No CI, full qualification, CIRCT
+comparator/firtool pipeline, installation or publication retry ran. Publication
+remains held; this focused acceptance does not complete Foundation 58.

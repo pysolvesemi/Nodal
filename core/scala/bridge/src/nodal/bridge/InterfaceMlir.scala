@@ -131,6 +131,14 @@ private[nodal] object InterfaceMlir:
     private val instanceQueries =
       new StructuralParameterBinding.InstanceQueries(snapshot, Some(shapeQuery))
 
+    private lazy val selectedDeclarationInventory = snapshot.modules.flatMap(module =>
+      module.declarations.map(value => value.path -> (module, value))
+    ).groupMap(_._1)(_._2)
+    private lazy val selectedExpressionInventory = snapshot.parameterExpressions.zipWithIndex
+      .groupBy(_._1.path)
+    private lazy val selectedRuntimeExpressions = snapshot.analogRegions.flatMap(_.expressions)
+      .map(_.path).toSet ++ snapshot.digitalExpressions.map(_.path)
+
     /** Independently check selected child capability from original immutable inventories. */
     private def validateSelectedConservativeChild(endpoint: KernelInterfaceSnapshot): Unit =
       val path = endpoint.path
@@ -167,7 +175,6 @@ private[nodal] object InterfaceMlir:
       // Immutable snapshot admission only; canonical parameter transport owns binding semantics.
       val parameters = modules(instance.childModule).declarations.filter(_.kind == "parameter")
       val parameterNames = parameters.iterator.map(_.name).toSet
-      val parentDeclarations = owner.declarations.groupBy(_.path)
       val bindingsByName = instance.parameterBindings.groupBy(_._1)
       def literal(value: String): Boolean = value.toDoubleOption.exists(_.isFinite)
       def ordinaryDimensionlessReal(parameter: KernelDeclarationSnapshot): Boolean =
@@ -179,10 +186,76 @@ private[nodal] object InterfaceMlir:
           parameter.kind == "parameter" && parameter.dataType.contains("Real") &&
           values.get("classification").forall(_ == "ordinary") &&
           values.get("unit").forall(_.isEmpty)
-      def directParentReal(value: String): Boolean = parentDeclarations.get(value) match
-        case Some(Vector(parameter)) =>
-          parameter.generatedScope.isEmpty && ordinaryDimensionlessReal(parameter)
-        case _ => false
+      def parentReal(value: String): Boolean =
+        val heights = mutable.HashMap.empty[String, Int]
+        val active = mutable.HashSet.empty[String]
+        var work = 0
+        // The original ordered inventory, not a path spelling or substituted default, owns each node.
+        def visit(value: String, depth: Int, before: Int): Int =
+          work += 1
+          requireValid(
+            work <= 65536 && depth < 512,
+            "selected conservative parent Real expression exceeds its finite work/depth budget",
+            path
+          )
+          val expression =
+            (selectedDeclarationInventory.get(value), selectedExpressionInventory.get(value)) match
+              case (Some(Vector((module, parameter))), None)
+                  if module.path == owner.path && parameter.generatedScope.isEmpty &&
+                    ordinaryDimensionlessReal(parameter) => None
+              case (None, Some(Vector((expression, ordinal))))
+                  if expression.owner == owner.path && expression.region.isEmpty && ordinal < before &&
+                    expression.dataType == "Real" && expression.unit.forall(_.isEmpty) &&
+                    !selectedRuntimeExpressions(value) => Some(expression -> ordinal)
+              case _ =>
+                fail(
+                  "selected conservative parent Real value lacks its unique owned identity",
+                  path
+                )
+          requireValid(
+            !active(value),
+            "selected conservative parent Real expression is cyclic",
+            path
+          )
+          heights.get(value) match
+            case Some(height) =>
+              requireValid(
+                depth + height < 512,
+                "selected conservative parent Real expression exceeds its finite depth budget",
+                path
+              )
+              height
+            case None =>
+              active += value
+              val height = expression match
+                case None => 0
+                case Some((expression, _)) if expression.literal.nonEmpty =>
+                  requireValid(
+                    expression.operation == "real_literal" && expression.operands.isEmpty &&
+                      expression.literal.exists(literal),
+                    "selected conservative expression requires finite unitless Real literals",
+                    path
+                  )
+                  0
+                case Some((expression, ordinal)) =>
+                  val arity = expression.operation match
+                    case "analog_add" | "analog_sub" | "analog_mul" => 2
+                    case "analog_neg" => 1
+                    case _ =>
+                      fail("selected conservative parent Real operation is unsupported", path)
+                  requireValid(
+                    expression.operands.size == arity,
+                    "selected conservative parent Real operation has invalid arity",
+                    path
+                  )
+                  expression.operands.iterator.map(operand =>
+                    visit(operand, depth + 1, ordinal) + 1
+                  ).max
+              active -= value
+              heights(value) = height
+              height
+        visit(value, 0, Int.MaxValue)
+        true
       requireValid(
         parameterNames.size == parameters.size && parameters.forall(parameter =>
           ordinaryDimensionlessReal(parameter) &&
@@ -190,10 +263,10 @@ private[nodal] object InterfaceMlir:
         ) && instance.parameterBindings.forall((name, value) =>
           // Preserve literal duplicate transport; symbolic bindings must have one representation.
           parameterNames.contains(name) && (literal(value) ||
-            (bindingsByName(name).size == 1 && directParentReal(value)))
+            (bindingsByName(name).size == 1 && parentReal(value)))
         ),
         "selected conservative child parameters require ordinary dimensionless Real literals " +
-          "or direct parent Real references, with literal child defaults",
+          "or parent Real arithmetic, with literal child defaults",
         path
       )
       val indices = Vector(

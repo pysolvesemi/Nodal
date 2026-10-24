@@ -181,45 +181,6 @@ Operation *findDirectSymbol(Operation *module, llvm::StringRef name,
   return nullptr;
 }
 
-bool isDirectParentRealReference(Value value, Operation *parent, Operation *child,
-                                 Operation *formal) {
-  Operation *reference = value ? value.getDefiningOp() : nullptr;
-  if (!llvm::isa_and_nonnull<nodal::ConstParameterRefOp>(reference) ||
-      reference->getParentOp() != parent || reference->getNumOperands() != 0 ||
-      reference->getNumResults() != 1 || !value.getType().isF64() || reference->hasAttr("unit") ||
-      reference->hasAttr("generated_owner") || reference->hasAttr("generated_induction"))
-    return false;
-
-  // Resolve by exact direct declaration identity, never by a rendered path or
-  // the referenced default value. Ambiguous symbols are not a forwarding proof.
-  auto uniqueParameter = [](Operation *module, llvm::StringRef name) -> Operation * {
-    Block *body = structuralBody(module);
-    if (!body || name.empty())
-      return nullptr;
-    Operation *result = nullptr;
-    for (Operation &candidate : *body) {
-      if (symbolName(&candidate) != name)
-        continue;
-      if (result || !llvm::isa<nodal::ParameterOp>(candidate))
-        return nullptr;
-      result = &candidate;
-    }
-    return result;
-  };
-  auto parameter = reference->getAttrOfType<FlatSymbolRefAttr>("parameter");
-  Operation *source = parameter ? uniqueParameter(parent, parameter.getValue()) : nullptr;
-  auto ordinaryReal = [](Operation *parameter, Operation *owner) {
-    auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-    return parameter && parameter->getParentOp() == owner && type && type.getValue().isF64() &&
-           !parameter->hasAttr("unit") && !parameter->hasAttr("generated_owner") &&
-           !parameter->hasAttr("generated_induction") &&
-           nodal::getParameterKind(parameter) == "real" &&
-           nodal::getParameterClassification(parameter) == "ordinary";
-  };
-  return ordinaryReal(source, parent) && ordinaryReal(formal, child) &&
-         uniqueParameter(child, symbolName(formal)) == formal;
-}
-
 ConstantKind kindForType(Type type) {
   if (type.isF64())
     return ConstantKind::Real;
@@ -570,8 +531,54 @@ Operation *findParameterEnvelope(Operation *module, llvm::StringRef parameter, b
   return found;
 }
 
+// Query-local memoization preserves symbolic declarations and the existing
+// arithmetic evaluator. A shared dependency is folded once, never tree-expanded.
+struct ConstantEvaluationContext {
+  struct Fact {
+    EvaluatedConstant value;
+    // Relative depth of the deepest evaluateValue entry, before its insertion.
+    // A terminal parameter attribute has no such entry. This retains the legacy
+    // distinction between the value depth check and terminal default lookup.
+    std::optional<unsigned> valueEntryDepth;
+  };
+  llvm::DenseSet<Operation *> active;
+  llvm::DenseMap<Operation *, Fact> completed;
+  llvm::SmallVector<std::optional<unsigned>> valueEntryDepths;
+
+  void recordChild(std::optional<unsigned> depth) {
+    if (!depth || valueEntryDepths.empty())
+      return;
+    auto &parent = valueEntryDepths.back();
+    parent = std::max(parent.value_or(0), *depth + 1);
+  }
+};
+
+FailureOr<EvaluatedConstant>
+memoizedConstant(Operation *operation, bool valueEntry, ConstantEvaluationContext &context,
+                 llvm::function_ref<FailureOr<EvaluatedConstant>()> evaluate) {
+  const unsigned depth = context.active.size();
+  if (!operation || (valueEntry && depth >= 512) || context.active.contains(operation))
+    return failure();
+  if (auto found = context.completed.find(operation); found != context.completed.end()) {
+    const auto &fact = found->second;
+    if (fact.valueEntryDepth && depth + *fact.valueEntryDepth >= 512)
+      return failure();
+    context.recordChild(fact.valueEntryDepth);
+    return fact.value;
+  }
+  context.active.insert(operation);
+  context.valueEntryDepths.push_back(valueEntry ? std::optional<unsigned>(0) : std::nullopt);
+  auto result = evaluate();
+  auto peak = context.valueEntryDepths.pop_back_val();
+  context.active.erase(operation);
+  if (succeeded(result))
+    context.completed.try_emplace(operation, ConstantEvaluationContext::Fact{*result, peak});
+  context.recordChild(peak);
+  return result;
+}
+
 FailureOr<EvaluatedConstant> evaluateValue(Value value, Operation *scope,
-                                           llvm::DenseSet<Operation *> &parameterStack);
+                                           ConstantEvaluationContext &context);
 int compareConstants(const EvaluatedConstant &lhs, const EvaluatedConstant &rhs);
 
 FailureOr<EvaluatedConstant> adoptParameterUnit(EvaluatedConstant value, Operation *parameter) {
@@ -591,25 +598,24 @@ FailureOr<EvaluatedConstant> adoptParameterUnit(EvaluatedConstant value, Operati
 }
 
 FailureOr<EvaluatedConstant> evaluateParameterDefault(Operation *parameter,
-                                                      llvm::DenseSet<Operation *> &parameterStack) {
-  if (!parameter || !parameterStack.insert(parameter).second)
-    return failure();
-  Operation *module = enclosingNodalModule(parameter);
-  Operation *value = findParameterValue(module, symbolName(parameter));
-  FailureOr<EvaluatedConstant> result = failure();
-  if (value) {
-    result = evaluateValue(value->getOperand(0), parameter, parameterStack);
-  } else {
-    auto type = parameter->getAttrOfType<TypeAttr>("type");
-    Attribute defaultValue = parameter->getAttr("default_value");
-    Operation *unit = resolveUnit(parameter, parameter->getAttrOfType<FlatSymbolRefAttr>("unit"));
-    if (type && defaultValue)
-      result = constantFromAttribute(defaultValue, type.getValue(), unit);
-  }
-  if (succeeded(result))
-    result = adoptParameterUnit(*result, parameter);
-  parameterStack.erase(parameter);
-  return result;
+                                                      ConstantEvaluationContext &context) {
+  return memoizedConstant(parameter, false, context, [&]() -> FailureOr<EvaluatedConstant> {
+    Operation *module = enclosingNodalModule(parameter);
+    Operation *value = findParameterValue(module, symbolName(parameter));
+    FailureOr<EvaluatedConstant> result = failure();
+    if (value) {
+      result = evaluateValue(value->getOperand(0), parameter, context);
+    } else {
+      auto type = parameter->getAttrOfType<TypeAttr>("type");
+      Attribute defaultValue = parameter->getAttr("default_value");
+      Operation *unit = resolveUnit(parameter, parameter->getAttrOfType<FlatSymbolRefAttr>("unit"));
+      if (type && defaultValue)
+        result = constantFromAttribute(defaultValue, type.getValue(), unit);
+    }
+    if (succeeded(result))
+      result = adoptParameterUnit(*result, parameter);
+    return result;
+  });
 }
 
 FailureOr<EvaluatedConstant>
@@ -801,40 +807,37 @@ evaluateExpression(Operation *operation,
 }
 
 FailureOr<EvaluatedConstant> evaluateValue(Value value, Operation *scope,
-                                           llvm::DenseSet<Operation *> &parameterStack) {
+                                           ConstantEvaluationContext &context) {
   Operation *operation = value ? value.getDefiningOp() : nullptr;
-  if (!operation || operation->getNumResults() != 1 || parameterStack.size() >= 512 ||
-      !parameterStack.insert(operation).second)
+  if (!operation || operation->getNumResults() != 1)
     return failure();
-  auto finish = [&](FailureOr<EvaluatedConstant> result) {
-    parameterStack.erase(operation);
-    return result;
-  };
-  llvm::StringRef name = operation->getName().getStringRef();
-  if (name == "nodal.const_expr")
-    return finish(evaluateExpression(
-        operation, [&](Value operand) { return evaluateValue(operand, scope, parameterStack); }));
-  if (operation->getNumOperands() != 0)
-    return finish(failure());
-  if (name == "nodal.const_literal") {
-    Operation *unit = resolveUnit(operation, operation->getAttrOfType<FlatSymbolRefAttr>("unit"));
-    if (operation->hasAttr("unit") && !unit)
-      return finish(failure());
-    return finish(constantFromAttribute(operation->getAttr("value"), value.getType(), unit));
-  }
-  if (name == "nodal.const_parameter_ref") {
-    auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
-    Operation *module = enclosingNodalModule(operation);
-    Operation *parameter =
-        reference ? findDirectSymbol(module, reference.getValue(), "nodal.parameter") : nullptr;
-    auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-    if (!type || type.getValue() != value.getType() || operation->hasAttr("unit"))
-      return finish(failure());
-    return finish(evaluateParameterDefault(parameter, parameterStack));
-  }
-  if (name == "nodal.constant")
-    return finish(constantFromAttribute(operation->getAttr("value"), value.getType()));
-  return finish(failure());
+  return memoizedConstant(operation, true, context, [&]() -> FailureOr<EvaluatedConstant> {
+    llvm::StringRef name = operation->getName().getStringRef();
+    if (name == "nodal.const_expr")
+      return evaluateExpression(
+          operation, [&](Value operand) { return evaluateValue(operand, scope, context); });
+    if (operation->getNumOperands() != 0)
+      return failure();
+    if (name == "nodal.const_literal") {
+      Operation *unit = resolveUnit(operation, operation->getAttrOfType<FlatSymbolRefAttr>("unit"));
+      if (operation->hasAttr("unit") && !unit)
+        return failure();
+      return constantFromAttribute(operation->getAttr("value"), value.getType(), unit);
+    }
+    if (name == "nodal.const_parameter_ref") {
+      auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *module = enclosingNodalModule(operation);
+      Operation *parameter =
+          reference ? findDirectSymbol(module, reference.getValue(), "nodal.parameter") : nullptr;
+      auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+      if (!type || type.getValue() != value.getType() || operation->hasAttr("unit"))
+        return failure();
+      return evaluateParameterDefault(parameter, context);
+    }
+    if (name == "nodal.constant")
+      return constantFromAttribute(operation->getAttr("value"), value.getType());
+    return failure();
+  });
 }
 
 FailureOr<EvaluatedConstant> normalizeForParameter(const EvaluatedConstant &value,
@@ -997,7 +1000,7 @@ LogicalResult checkConstraints(Operation *parameter, const EvaluatedConstant &ca
                                llvm::StringRef code, Operation *diagnosticOwner) {
   Operation *module = enclosingNodalModule(parameter);
   for (Operation *constraint : findParameterConstraints(module, symbolName(parameter))) {
-    llvm::DenseSet<Operation *> stack;
+    ConstantEvaluationContext stack;
     llvm::SmallVector<EvaluatedConstant, 2> values;
     for (Value operand : constraint->getOperands()) {
       auto evaluated = evaluateValue(operand, constraint, stack);
@@ -1669,7 +1672,7 @@ LogicalResult verifyParameterDefaultContract(Operation *parameter) {
   if (hasDuplicateParameterValue(owner, symbolName(parameter)))
     return parameter->emitOpError(
         "NODAL-PARAMETER-DEFAULT-001: parameter has multiple default expressions");
-  llvm::DenseSet<Operation *> stack;
+  ConstantEvaluationContext stack;
   auto evaluated = evaluateParameterDefault(parameter, stack);
   if (failed(evaluated))
     return parameter->emitOpError(
@@ -2628,6 +2631,112 @@ private:
   llvm::DenseSet<Operation *> active;
 };
 
+// Admission only: defaults and constraints remain with the existing evaluator.
+// Explicit frames and cached heights keep sharing linear without losing a long
+// dependency path. The renderer retains its separate expanded-text budget.
+bool isParentRealExpression(Value root, Operation *parent, Operation *child, Operation *formal,
+                            Operation *family) {
+  Operation *rootOperation = root ? root.getDefiningOp() : nullptr;
+  if (!llvm::isa_and_nonnull<nodal::ConstParameterRefOp, nodal::ConstExprOp>(rootOperation))
+    return false;
+  Type realType = Float64Type::get(parent->getContext());
+  if (child->getContext() != parent->getContext())
+    return false;
+  auto ordinaryReal = [&](Operation *parameter, Operation *owner) {
+    auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
+    return llvm::isa_and_nonnull<nodal::ParameterOp>(parameter) &&
+           parameter->getParentOp() == owner && parameter->getContext() == parent->getContext() &&
+           type && type.getValue() == realType && !parameter->hasAttr("unit") &&
+           !parameter->hasAttr("generated_owner") && !parameter->hasAttr("generated_induction") &&
+           nodal::getParameterKind(parameter) == "real" &&
+           nodal::getParameterClassification(parameter) == "ordinary";
+  };
+  if (!ordinaryReal(formal, child) || symbolName(formal).empty())
+    return false;
+  unsigned formalMatches = 0;
+  for (Operation &candidate : *structuralBody(child))
+    if (symbolName(&candidate) == symbolName(formal)) {
+      if (&candidate != formal)
+        return false;
+      ++formalMatches;
+    }
+  if (formalMatches != 1)
+    return false;
+  llvm::StringMap<Operation *> parentSymbols;
+  for (Operation &candidate : *structuralBody(parent)) {
+    auto name = symbolName(&candidate);
+    if (name.empty())
+      continue;
+    auto inserted = parentSymbols.try_emplace(name, &candidate);
+    if (!inserted.second)
+      inserted.first->second = nullptr;
+  }
+
+  struct Frame {
+    Value value;
+    bool finish;
+  };
+  llvm::SmallVector<Frame> pending{{root, false}};
+  llvm::DenseSet<Value> active;
+  llvm::DenseMap<Value, unsigned> heights;
+  unsigned work = 0;
+  while (!pending.empty()) {
+    Frame frame = pending.pop_back_val();
+    Operation *operation = frame.value.getDefiningOp();
+    if (frame.finish) {
+      unsigned height = 1;
+      for (Value operand : operation->getOperands())
+        height = std::max(height, heights.lookup(operand) + 1);
+      if (height > 512)
+        return false;
+      active.erase(frame.value);
+      heights.try_emplace(frame.value, height);
+      continue;
+    }
+    // Charge every incoming DAG edge, including a completed shared dependency.
+    if (++work > 65536)
+      return false;
+    if (heights.contains(frame.value))
+      continue;
+    if (!operation || operation->getParentOp() != parent ||
+        operation->getContext() != parent->getContext() || operation->getNumResults() != 1 ||
+        operation->getNumRegions() || operation->getNumSuccessors() ||
+        frame.value.getType() != realType || operation->hasAttr("unit") ||
+        operation->hasAttr("generated_owner") || operation->hasAttr("generated_induction") ||
+        !operation->isBeforeInBlock(family) || active.size() >= 512 ||
+        !active.insert(frame.value).second)
+      return false;
+    if (llvm::isa<nodal::ConstParameterRefOp>(operation)) {
+      auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("parameter");
+      Operation *source = reference ? parentSymbols.lookup(reference.getValue()) : nullptr;
+      if (operation->getNumOperands() || !ordinaryReal(source, parent))
+        return false;
+    } else if (llvm::isa<nodal::ConstLiteralOp>(operation)) {
+      auto value = operation->getAttrOfType<FloatAttr>("value");
+      if (operation->getNumOperands() || !value || value.getType() != realType ||
+          !value.getValue().isFinite())
+        return false;
+    } else if (llvm::isa<nodal::ConstExprOp>(operation)) {
+      auto opcode = textAttr(operation, "operator_name");
+      if (!oneOf(opcode, {"add", "sub", "mul", "neg"}) ||
+          operation->getNumOperands() != (opcode == "neg" ? 1u : 2u))
+        return false;
+      for (Value operand : operation->getOperands()) {
+        Operation *producer = operand.getDefiningOp();
+        if (!producer || producer->getParentOp() != parent || operand.getType() != realType ||
+            producer == operation || !producer->isBeforeInBlock(operation))
+          return false;
+      }
+    } else {
+      return false;
+    }
+    pending.push_back({frame.value, true});
+    for (Value operand : llvm::reverse(operation->getOperands()))
+      pending.push_back({operand, false});
+  }
+  return succeeded(ParameterRenderBudget().check(root));
+}
+
 // One formatter shared by authored parameter SSA and checked proof DAGs.
 // Arithmetic/type/provenance validation remains with their canonical owners.
 FailureOr<std::string> formatParameterOperator(llvm::StringRef operatorName,
@@ -3344,8 +3453,8 @@ bool nodal::isGeneratedParentRealParameterOverride(Operation *operation, Operati
       resolveStructuralInstance(operation, instanceReference) != instance ||
       formal->getParentOp() != child || formalReference.getValue() != symbolName(formal))
     return false;
-  return isDirectParentRealReference(operation->getOperand(0), parent, child, formal) &&
-         operation->getOperand(0).getDefiningOp()->isBeforeInBlock(family) &&
+  return structuralBody(child) &&
+         isParentRealExpression(operation->getOperand(0), parent, child, formal, family) &&
          succeeded(verifyGeneratedStructuralOwnership(operation)) &&
          succeeded(verifyGeneratedStructuralOwnership(instance));
 }
@@ -4375,7 +4484,7 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
               "NODAL-PARAMETER-OVERRIDE-001: generated override lacks all-lane formal proof");
         continue;
       }
-      // Direct parent Real forwarding bypasses only the generated Integer
+      // Parent Real expression forwarding bypasses only the generated Integer
       // proof. Its default still passes through the shared parameter contract.
       Operation *actual =
           operation.getNumOperands() == 1 ? operation.getOperand(0).getDefiningOp() : nullptr;
@@ -4390,7 +4499,7 @@ LogicalResult nodal::verifyParameterModel(mlir::ModuleOp module) {
           declared.getValue() != actualType)
         return operation.emitOpError(
             "NODAL-ENUM-054-020: enum override requires the exact semantic enum type");
-      llvm::DenseSet<Operation *> stack;
+      ConstantEvaluationContext stack;
       auto evaluated = evaluateValue(operation.getOperand(0), &operation, stack);
       FailureOr<EvaluatedConstant> normalized = failure();
       if (!failed(evaluated))
@@ -4429,7 +4538,7 @@ FailureOr<std::string> nodal::renderParameterConstantExpression(Value value,
   if (!unit || getParameterKind(targetParameter) != "real")
     return rendered;
 
-  llvm::DenseSet<Operation *> stack;
+  ConstantEvaluationContext stack;
   auto evaluated = evaluateValue(value, targetParameter, stack);
   if (failed(evaluated))
     return failure();

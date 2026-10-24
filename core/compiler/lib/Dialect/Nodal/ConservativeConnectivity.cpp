@@ -1610,8 +1610,8 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
           !value.getValue().isFinite())
         return failure();
     }
-    // This low-level admission query independently checks direct parent Real
-    // references. Evaluation and constraint semantics remain in ParameterModel.
+    // Independently inspect the selected actual DAG. ParameterModel remains the
+    // evaluator/constraint owner; this query never substitutes parent defaults.
     auto uniqueParameter = [](Block *body, llvm::StringRef name) -> Operation * {
       if (!body || name.empty())
         return nullptr;
@@ -1625,11 +1625,15 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       }
       return result;
     };
-    auto ordinaryReal = [](Operation *parameter, Operation *owner) {
+    Type realType = Float64Type::get(operation->getContext());
+    auto ordinaryReal = [&](Operation *parameter, Operation *owner) {
       auto type = parameter ? parameter->getAttrOfType<TypeAttr>("type") : TypeAttr();
-      return parameter && parameter->getParentOp() == owner && type && type.getValue().isF64() &&
-             !parameter->hasAttr("unit") && !parameter->hasAttr("generated_owner") &&
-             !parameter->hasAttr("generated_induction") && getParameterKind(parameter) == "real" &&
+      return parameter && parameter->getParentOp() == owner &&
+             parameter->getContext() == operation->getContext() &&
+             owner->getContext() == operation->getContext() && type &&
+             type.getValue() == realType && !parameter->hasAttr("unit") &&
+             !parameter->hasAttr("generated_owner") && !parameter->hasAttr("generated_induction") &&
+             getParameterKind(parameter) == "real" &&
              getParameterClassification(parameter) == "ordinary";
     };
     Operation *parent = operation->getParentOp();
@@ -1637,12 +1641,92 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
     Block *familyBody = structuralBody(proof->family);
     if (!parentBody || !familyBody)
       return failure();
+    llvm::StringMap<Operation *> parentSymbols;
+    for (Operation &candidate : *parentBody) {
+      auto name = textAttr(&candidate, "sym_name");
+      if (name.empty())
+        continue;
+      auto inserted = parentSymbols.try_emplace(name, &candidate);
+      if (!inserted.second)
+        inserted.first->second = nullptr;
+    }
+    // This trust boundary bounds graph inspection. Expanded target text is
+    // independently bounded by ParameterModel and the existing backend renderer.
+    auto parentRealExpression = [&](Value root) {
+      Operation *rootOperation = root ? root.getDefiningOp() : nullptr;
+      if (!llvm::isa_and_nonnull<ConstParameterRefOp, ConstExprOp>(rootOperation))
+        return false;
+      struct Frame {
+        Value value;
+        bool finish;
+      };
+      llvm::SmallVector<Frame> pending{{root, false}};
+      llvm::DenseSet<Value> active;
+      llvm::DenseMap<Value, unsigned> heights;
+      unsigned work = 0;
+      while (!pending.empty()) {
+        Frame frame = pending.pop_back_val();
+        Operation *actual = frame.value.getDefiningOp();
+        if (frame.finish) {
+          unsigned height = 1;
+          for (Value operand : actual->getOperands())
+            height = std::max(height, heights.lookup(operand) + 1);
+          if (height > 512)
+            return false;
+          active.erase(frame.value);
+          heights.try_emplace(frame.value, height);
+          continue;
+        }
+        if (++work > 65536)
+          return false;
+        if (heights.contains(frame.value))
+          continue;
+        if (!actual || actual->getParentOp() != parent ||
+            actual->getContext() != parent->getContext() || actual->getNumResults() != 1 ||
+            actual->getNumRegions() || actual->getNumSuccessors() ||
+            frame.value.getType() != realType || actual->hasAttr("unit") ||
+            actual->hasAttr("generated_owner") || actual->hasAttr("generated_induction") ||
+            !actual->isBeforeInBlock(proof->family) || active.size() >= 512 ||
+            !active.insert(frame.value).second)
+          return false;
+        if (llvm::isa<ConstParameterRefOp>(actual)) {
+          auto reference = actual->getAttrOfType<FlatSymbolRefAttr>("parameter");
+          Operation *source = reference ? parentSymbols.lookup(reference.getValue()) : nullptr;
+          if (actual->getNumOperands() || !llvm::isa_and_nonnull<ParameterOp>(source) ||
+              !ordinaryReal(source, parent))
+            return false;
+        } else if (llvm::isa<ConstLiteralOp>(actual)) {
+          auto value = actual->getAttrOfType<FloatAttr>("value");
+          if (actual->getNumOperands() || !value || value.getType() != realType ||
+              !value.getValue().isFinite())
+            return false;
+        } else if (llvm::isa<ConstExprOp>(actual)) {
+          auto opcode = textAttr(actual, "operator_name");
+          if (!oneOf(opcode, {"add", "sub", "mul", "neg"}) ||
+              actual->getNumOperands() != (opcode == "neg" ? 1u : 2u))
+            return false;
+          for (Value operand : actual->getOperands()) {
+            Operation *producer = operand.getDefiningOp();
+            if (!producer || producer->getParentOp() != parent || operand.getType() != realType ||
+                producer == actual || !producer->isBeforeInBlock(actual))
+              return false;
+          }
+        } else {
+          return false;
+        }
+        pending.push_back({frame.value, true});
+        for (Value operand : llvm::reverse(actual->getOperands()))
+          pending.push_back({operand, false});
+      }
+      return true;
+    };
     llvm::StringSet<> symbolicFormals;
     for (Operation &candidate : *familyBody) {
       if (!llvm::isa<ParameterOverrideOp>(candidate) ||
           candidate.getAttrOfType<FlatSymbolRefAttr>("instance") != reference)
         continue;
       if (candidate.getNumOperands() != 1 || candidate.getNumResults() != 0 ||
+          candidate.getNumRegions() || candidate.getNumSuccessors() ||
           resolveStructuralInstance(&candidate, reference) != instance ||
           failed(verifyGeneratedStructuralOwnership(&candidate)) ||
           failed(verifyGeneratedStructuralOwnership(instance)))
@@ -1650,21 +1734,11 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       auto formalReference = candidate.getAttrOfType<FlatSymbolRefAttr>("parameter");
       Operation *formal =
           formalReference ? uniqueParameter(body, formalReference.getValue()) : nullptr;
-      Operation *actual = candidate.getOperand(0).getDefiningOp();
       if (!formalReference || !ordinaryReal(formal, module) ||
           textAttr(formal, "variability") != "symbolic" ||
           !symbolicFormals.insert(formalReference.getValue()).second ||
           bindings.get(formalReference.getValue()) ||
-          !llvm::isa_and_nonnull<ConstParameterRefOp>(actual) || actual->getParentOp() != parent ||
-          actual->getNumOperands() != 0 || actual->getNumResults() != 1 ||
-          !candidate.getOperand(0).getType().isF64() || actual->hasAttr("unit") ||
-          actual->hasAttr("generated_owner") || actual->hasAttr("generated_induction") ||
-          !structurallyPrecedes(actual, &candidate))
-        return failure();
-      auto sourceReference = actual->getAttrOfType<FlatSymbolRefAttr>("parameter");
-      Operation *source =
-          sourceReference ? uniqueParameter(parentBody, sourceReference.getValue()) : nullptr;
-      if (!ordinaryReal(source, parent))
+          !parentRealExpression(candidate.getOperand(0)))
         return failure();
     }
     declaration = childSymbols.lookup(textAttr(operation, "endpoint"));

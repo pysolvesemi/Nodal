@@ -95,7 +95,7 @@ object ReplayForgedParentForwarding:
       )
     )
     val cases = Vector(
-      "parent-expression-actual" -> expression,
+      "unknown-expression-opcode" -> expression,
       "foreign-same-name-same-default" ->
         foreignActual.copy(modules = foreignActual.modules :+ foreign),
       "child-owned-actual" -> actual(child.declarations.find(_.name == "gain").get.path),

@@ -377,10 +377,13 @@ mlir::LogicalResult verifyGeneratedStructuralOwnership(mlir::Operation *operatio
 mlir::Operation *resolveStructuralInstance(mlir::Operation *use, mlir::FlatSymbolRefAttr reference);
 mlir::Operation *resolveInstanceModuleDefinition(mlir::Operation *instance);
 
-/// Classify only an exact direct parent ordinary dimensionless Real reference
-/// into a child formal in a one-level Generate directly owned by a Module.
+/// Classify an exact parent ordinary dimensionless Real reference or bounded
+/// add/sub/mul/neg DAG into a child formal in a one-level Module-owned Generate.
 /// Rechecks the override's linkage to the supplied instance and formal identities.
-/// The module-body reference must precede its generated family.
+/// Every producer is in the parent Module before the family, and each operand
+/// precedes its consumer. Literal leaves are finite f64; parameter leaves retain
+/// their exact declarations, never substituted defaults. Sharing/cycles, 512-level
+/// depth, 65536 traversal work and the existing expanded-text budget are checked.
 /// This non-evaluating admission query is not a parameter-contract or all-legal-
 /// Real proof: fixed/default/constraint checks remain in verifyParameterModel,
 /// and selected topology restrictions remain independently owned by consumers.

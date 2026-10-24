@@ -1381,26 +1381,106 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
     Operation *family = instance ? instance->getParentOp() : nullptr;
     auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
     if (!isa_and_nonnull<InstanceOp>(instance) || !isa_and_nonnull<PortOp>(port) ||
-        !isa_and_nonnull<GenerateOp>(family) || family->getParentOp() != module ||
+        !isa_and_nonnull<GenerateOp>(family) ||
         text(port, "direction") != "input" || !type || !scalar(type.getValue()) ||
         failed(verifyHierarchyInstanceOperation(instance)) ||
         port->getParentOp() != resolveInstanceModuleDefinition(instance))
-      return refuse(module, "selected input requires an original direct generated child scalar input");
-    unsigned remaining = limits.maximumGuardWork - guardWorkCount;
-    unsigned before = remaining;
-    auto domain = resolveGeneratedDomain(family, remaining);
-    guardWorkCount += before - remaining;
-    if (failed(domain) || !literal(domain->lower) || !literal(domain->upperExclusive) ||
-        !literal(domain->step) || !domain->maximumTripCount ||
-        !domain->attainedInductionBounds)
-      return refuse(instance, "selected input requires a fixed nonempty direct family");
+      return refuse(module, "selected input requires an original generated child scalar input");
+    // Keep the exact lexical axes, never a flattened terminal ordinal. Only an
+    // unguarded direct family or one directly nested independent family is in
+    // this execution profile; the shared selector remains the provenance owner.
+    SmallVector<Operation *, 2> families{family};
+    Operation *outer = family->getParentOp();
+    if (isa_and_nonnull<GenerateOp>(outer)) {
+      families.insert(families.begin(), outer);
+      outer = outer->getParentOp();
+    }
+    if (outer != module)
+      return refuse(instance, "selected input requires one or two unguarded direct family axes");
+    SmallVector<GeneratedDomain, 2> domains;
+    uint64_t cardinality = 1;
+    unsigned remaining = 0, before = 0;
+    for (Operation *axis : families) {
+      if (failed(guardWork(axis)))
+        return failure();
+      remaining = limits.maximumGuardWork - guardWorkCount;
+      before = remaining;
+      auto domain = resolveGeneratedDomain(axis, remaining);
+      guardWorkCount += before - remaining;
+      if (failed(domain) || !literal(domain->lower) || !literal(domain->upperExclusive) ||
+          !literal(domain->step) || domain->step.root->literal <= 0 ||
+          !domain->maximumTripCount || !domain->attainedInductionBounds)
+        return refuse(instance, "selected input requires fixed nonempty independent family axes");
+      if (domain->maximumTripCount > std::numeric_limits<uint64_t>::max() / cardinality)
+        return refuse(instance, "selected input family product exceeds exact cardinality range");
+      cardinality *= domain->maximumTripCount;
+      domains.push_back(std::move(*domain));
+    }
+    if (families.size() == 2) {
+      // The outer body groups this one inner family. Retain only compile-time
+      // Integer producers actually needed by the inner bounds; parent values
+      // remain implicit captures, not additional owned outer executable logic.
+      // Executable outer behavior cannot be silently omitted or multiplied.
+      DenseSet<Operation *> structural;
+      SmallVector<Value, 8> pending(family->getOperands().begin(), family->getOperands().end());
+      while (!pending.empty()) {
+        Value value = pending.pop_back_val();
+        Operation *definition = value.getDefiningOp();
+        if (failed(guardWork(family)))
+          return failure();
+        if (!definition || definition->getParentOp() != families.front() ||
+            !structural.insert(definition).second)
+          continue;
+        if (!isa<ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(definition) ||
+            definition->getNumRegions() || definition->getNumSuccessors() ||
+            definition->getNumResults() != 1 || !value.getType().isSignlessInteger(64))
+          return refuse(definition, "selected input outer family permits only structural Integer bounds");
+        remaining = limits.maximumGuardWork - guardWorkCount;
+        before = remaining;
+        auto bound = resolveStructuralIntegerExpression(value, family, remaining);
+        guardWorkCount += before - remaining;
+        if (failed(bound) || !bound->expression)
+          return refuse(definition, "selected input outer bound lost its canonical Integer proof");
+        for (Value operand : definition->getOperands()) {
+          if (failed(guardWork(definition)))
+            return failure();
+          pending.push_back(operand);
+        }
+      }
+      for (Operation &operation : families.front()->getRegion(0).front()) {
+        if (failed(guardWork(&operation)))
+          return failure();
+        if (&operation == family)
+          continue;
+        if (structural.contains(&operation)) {
+          for (Operation *use : operation.getResult(0).getUsers()) {
+            if (failed(guardWork(use)))
+              return failure();
+            if (use != family && !family->isProperAncestor(use) && !structural.contains(use))
+              return refuse(use, "selected input outer bound escapes its admitted structural closure");
+          }
+          continue;
+        }
+        if (isa<GeneratedExportOp>(operation) && text(&operation, "kind") == "family" &&
+            operation.getNumOperands() == 1 &&
+            operation.getOperand(0).getDefiningOp() == family &&
+            succeeded(verifyGeneratedExportOperation(&operation)))
+          continue;
+        return refuse(&operation, "selected input outer family must only group its exact inner family");
+      }
+    }
     auto owner = instancePortOwners.find(key);
     if (owner == instancePortOwners.end())
       return refuse(instance, "selected input requires complete authored lane coverage");
     auto inventory = writers.find(owner->second);
-    if (inventory == writers.end() || inventory->second.size() != domain->maximumTripCount)
+    if (inventory == writers.end() || inventory->second.size() != cardinality)
       return refuse(instance, "selected input requires complete authored lane coverage");
     DigitalSelectedInputAssignment entry{instance, port, family, {}};
+    struct CheckedLane {
+      SmallVector<int64_t, 2> ordinals;
+      DigitalSelectedInputLane lane;
+    };
+    SmallVector<CheckedLane, 4> checked;
     for (unsigned index : inventory->second) {
       if (relationCount >= limits.maximumRelations || failed(guardWork(instance)))
         return refuse(instance, "selected input assignments exceed finite relation or work budget");
@@ -1428,31 +1508,59 @@ AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operat
       before = remaining;
       auto proof = inspectGeneratedSelection(root->getOperand(0), root->getOperand(1),
                                               text(root, "member"), root, uses, remaining);
-      auto ordinal = succeeded(proof)
-                         ? resolveStructuralIntegerExpression(root->getOperand(1), root, remaining)
-                         : FailureOr<StructuralIntegerFacts>(failure());
       guardWorkCount += before - remaining;
       auto symbol = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
                                     : FailureOr<Operation *>(failure());
       if (failed(proof) || failed(symbol) || *symbol != instance || proof->family != family ||
-          proof->selections.size() != 1 || proof->selections.front().family != family ||
-          proof->selections.front().ordinal != root->getOperand(1) || uses.size() != 1 ||
-          uses.front() != root || root->getOperand(0) != family->getResult(0) ||
-          failed(ordinal) || !ordinal->expression || !literal(*ordinal->expression))
-        return refuse(root, "selected input requires exact direct ordered selection provenance");
-      int64_t lane = ordinal->expression->root->literal;
-      if (lane < 0 || static_cast<uint64_t>(lane) >= domain->maximumTripCount)
-        return refuse(root, "selected input ordinal is outside its exact family");
-      entry.lanes.push_back({lane, write.operation, source, std::move(*proof)});
+          proof->selections.size() != families.size() || uses.size() != families.size() ||
+          uses.back() != root)
+        return refuse(root, "selected input requires exact ordered selection provenance");
+      SmallVector<int64_t, 2> ordinals;
+      for (unsigned axis = 0; axis != families.size(); ++axis) {
+        const auto &selection = proof->selections[axis];
+        Operation *use = uses[axis];
+        if (failed(guardWork(root)))
+          return failure();
+        if (selection.family != families[axis] || use->getParentOp() != module ||
+            use->getNumOperands() != 2 || selection.ordinal != use->getOperand(1) ||
+            (axis == 0 ? use->getOperand(0) != families.front()->getResult(0)
+                       : use->getOperand(0).getDefiningOp() != uses[axis - 1]))
+          return refuse(root, "selected input requires exact ordered selection provenance");
+        remaining = limits.maximumGuardWork - guardWorkCount;
+        before = remaining;
+        auto ordinal = resolveStructuralIntegerExpression(selection.ordinal, use, remaining);
+        guardWorkCount += before - remaining;
+        if (failed(ordinal) || !ordinal->expression || !literal(*ordinal->expression))
+          return refuse(root, "selected input requires literal ordered selection ordinals");
+        int64_t lane = ordinal->expression->root->literal;
+        if (lane < 0 || static_cast<uint64_t>(lane) >= domains[axis].maximumTripCount)
+          return refuse(root, "selected input ordinal is outside its exact family");
+        ordinals.push_back(lane);
+      }
+      int64_t terminal = ordinals.back();
+      checked.push_back({std::move(ordinals),
+                         {terminal, write.operation, source, std::move(*proof)}});
     }
-    llvm::sort(entry.lanes, [](const auto &left, const auto &right) {
-      return left.ordinal < right.ordinal;
+    bool sortExhausted = false;
+    llvm::sort(checked, [&](const auto &left, const auto &right) {
+      if (!sortExhausted && failed(guardWork(instance)))
+        sortExhausted = true;
+      return std::lexicographical_compare(left.ordinals.begin(), left.ordinals.end(),
+                                          right.ordinals.begin(), right.ordinals.end());
     });
-    // Cardinality plus distinct in-range authored ordinals establishes exact
-    // coverage without enumerating a domain or treating coordinates as ordinals.
-    for (auto [index, lane] : llvm::enumerate(entry.lanes))
-      if (lane.ordinal != static_cast<int64_t>(index))
-        return refuse(lane.assignment, "selected input requires unique complete authored lane coverage");
+    if (sortExhausted)
+      return failure();
+    // Checked product cardinality plus distinct in-range authored tuples proves
+    // exact coverage. No missing lane is enumerated; coordinates remain distinct
+    // from ordinals, and equal terminal ordinals in different rows are legal.
+    for (unsigned index = 0; index != checked.size(); ++index) {
+      if (failed(guardWork(checked[index].lane.assignment)))
+        return failure();
+      if (index && checked[index - 1].ordinals == checked[index].ordinals)
+        return refuse(checked[index].lane.assignment,
+                      "selected input requires unique complete authored lane coverage");
+      entry.lanes.push_back(std::move(checked[index].lane));
+    }
     result.push_back(std::move(entry));
   }
   return result;
@@ -1883,11 +1991,12 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     return id;
   };
   // A complete authored selected-input inventory can establish every execution
-  // context of one direct fixed family. Coalesce by original occurrence/family,
+  // context of one admitted fixed family chain. Coalesce by original occurrence/family,
   // never by proxy, port, source equality or an observed output selection.
   struct FamilyTransfer {
     unsigned occurrence;
     Operation *family;
+    SmallVector<Operation *, 2> families;
     SmallVector<unsigned, 4> contexts;
   };
   SmallVector<FamilyTransfer, 4> transfers;
@@ -1895,6 +2004,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   for (auto [at, occurrence] : llvm::enumerate(hierarchy->occurrences())) {
     const auto &local = definitions[indexes.lookup(occurrence.module)];
     auto transferInput = [&](Operation *instance, Operation *family,
+                             ArrayRef<Operation *> families,
                              ArrayRef<std::pair<Operation *, Operation *>> lanes) -> LogicalResult {
       if (failed(spendSelection(instance)))
         return failure();
@@ -1903,7 +2013,10 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
       auto key = std::make_pair(static_cast<unsigned>(at), family);
       auto [position, inserted] = transferIndexes.try_emplace(key, transfers.size());
       if (inserted)
-        transfers.push_back({static_cast<unsigned>(at), family, {}});
+        transfers.push_back({static_cast<unsigned>(at), family,
+                             SmallVector<Operation *, 2>(families.begin(), families.end()), {}});
+      else if (ArrayRef<Operation *>(transfers[position->second].families) != families)
+        return reject(instance, "selected input facts disagree on exact family ancestry");
       SmallVector<unsigned, 4> contexts;
       for (auto [effect, selection] : lanes) {
         if (failed(spendSelection(effect)))
@@ -1913,6 +2026,17 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         auto context = selectedContext(selection, 0, at);
         if (failed(context) || !*context)
           return failure();
+        const auto &selected = graph.selectionContexts[*context].selections;
+        if (selected.size() != families.size())
+          return reject(effect, "selected input execution lost its complete family context");
+        for (Operation *axis : families) {
+          if (failed(spendSelection(effect, 1 + selected.size())))
+            return failure();
+          if (!llvm::any_of(selected, [&](const auto &entry) {
+                return entry.occurrence == at && entry.selection.family == axis;
+              }))
+            return reject(effect, "selected input execution lost its complete family context");
+        }
         contexts.push_back(*context);
       }
       auto &transfer = transfers[position->second];
@@ -1924,16 +2048,23 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     };
     for (const auto &fact : local.selectedInputs) {
       SmallVector<std::pair<Operation *, Operation *>, 4> lanes;
+      SmallVector<Operation *, 2> families;
+      if (fact.lanes.empty())
+        return reject(fact.instance, "selected input execution requires complete authored contexts");
+      for (const auto &selection : fact.lanes.front().proof.selections)
+        families.push_back(selection.family);
       for (const auto &lane : fact.lanes)
         lanes.emplace_back(lane.assignment, lane.assignment->getOperand(0).getDefiningOp());
-      if (failed(transferInput(fact.instance, fact.family, lanes)))
+      if (failed(transferInput(fact.instance, fact.family, families, lanes)))
         return failure();
     }
     for (const auto &fact : local.selectedInterfaceInputs) {
       SmallVector<std::pair<Operation *, Operation *>, 4> lanes;
       for (const auto &lane : fact.lanes)
         lanes.emplace_back(lane.effect, lane.selection);
-      if (failed(transferInput(fact.instance, fact.family, lanes)))
+      // Interface execution retains its existing direct rank-one contract.
+      SmallVector<Operation *, 2> families{fact.family};
+      if (failed(transferInput(fact.instance, fact.family, families, lanes)))
         return failure();
     }
   }
@@ -1952,17 +2083,36 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
                      transfer.family->isProperAncestor(owner);
       if (!inherited && !lexical)
         continue;
-      if (found != noTransfer || actual.generatedScopes.size() > (inherited ? 1u : 0u)) {
-        (void)reject(owner, "selected input execution forbids nested generated products");
+      if (found != noTransfer ||
+          actual.generatedScopes.size() != (inherited ? transfer.families.size() : 0u)) {
+        (void)reject(owner, "selected input execution forbids unadmitted generated products");
         return failure();
       }
+      if (inherited)
+        for (auto [axis, scope] : llvm::enumerate(actual.generatedScopes)) {
+          if (failed(spendSelection(owner)))
+            return failure();
+          if (scope.occurrence != transfer.occurrence || scope.family != transfer.families[axis]) {
+            (void)reject(owner, "selected input execution requires its exact admitted family chain");
+            return failure();
+          }
+        }
+      unsigned lexicalAxes = 0;
       for (Operation *scope = owner; scope && scope != actual.module; scope = scope->getParentOp()) {
         if (failed(spendSelection(owner)))
           return failure();
-        if (isa<GenerateOp>(scope) && scope != transfer.family) {
-          (void)reject(owner, "selected input execution forbids nested generated products");
+        if (!isa<GenerateOp>(scope))
+          continue;
+        if (inherited || lexicalAxes >= transfer.families.size() ||
+            scope != transfer.families[transfer.families.size() - 1 - lexicalAxes]) {
+          (void)reject(owner, "selected input execution forbids unadmitted generated products");
           return failure();
         }
+        ++lexicalAxes;
+      }
+      if (!inherited && lexicalAxes != transfer.families.size()) {
+        (void)reject(owner, "selected input execution requires its complete lexical family chain");
+        return failure();
       }
       found = index;
     }

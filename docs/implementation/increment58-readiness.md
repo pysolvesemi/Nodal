@@ -4162,3 +4162,129 @@ No full unit suite, CI, held CIRCT/comparator/firtool pipeline, external exporte
 installation or capacity promotion ran. Construction and native proof limits
 remain unchanged. Broader hierarchy and downstream consumer acceptance, along
 with Foundation 58 and F-058.B.1/B.2, remain open.
+
+
+## Checkpoint 85: two-axis selected generated child scalar input routing
+
+### Bounded amendment — 2026-10-24
+
+This extends checkpoint 78's whole ordinary scalar child-input writes to exactly
+two independent, literal, nonempty positive-step Generate axes. Source bounds
+are host `Int` values; the native literal-domain profile is somewhat broader.
+Captured Nodal `Integer` aliases and general constant-DAG source bounds are not
+claimed. Checkpoints 78 and 79 above remain historical records. Symbolic,
+dependent or guarded axes, rank greater than two/general products, nested
+Interface writes, aggregates, state, resolved and crossing profiles remain closed.
+F-058.B.2.2, B.2, D.1 and Foundation 58 remain open.
+
+The existing `GeneratedSymbolSelectionRecord` and full
+`GeneratedSelectionProof.selections` retain ordered family/ordinal/coordinate
+identity. A terminal ordinal alone is not a tuple identity. Lexicographically
+ordered checked tuples, checked product cardinality and distinct in-range writers
+establish complete coverage, including unused child inputs. The outer group must
+contain one inner family with exact exports and only necessary Integer bound
+producers; discarded outer Bool expressions or other effects are not ignored.
+
+Canonical Assignment ownership, actual RHS/domain checks and native trust-boundary
+verification remain authoritative. Existing context vectors transfer every node,
+unused descendant, sample and observation before template retirement. This reuses
+the existing hierarchy graph rather than introducing another registry, evaluator,
+public layout or semantic budget. Rank-one routing remains supported. The target
+packs a four-bit parent input into two-bit outer rows and one-bit inner lanes,
+retains both shared helper loops and binds the original child only in the terminal
+helper. Product and routing work remain checked against existing limits; no
+measured speedup or broader whole-model capacity repair is claimed.
+
+### Focused evidence and preserved failures
+
+The matched build compiled two production native compilation units and both test
+mains. The original 397-case Hierarchy run exited 1: 396 passed and one child-local
+`out := out` assertion expected different wording from the canonical
+`NODAL-DIGITAL-055-010` storage-read-cycle rejection. Its losslessly archived raw
+failure and logs are preserved. Independently reviewed causal evidence composes
+396 passes plus that one canonical rejection; this is not a fresh 397-case whole
+pass. The maintained one-string expectation correction was not recompiled.
+The target native suite passed 43/43.
+
+ConstructionSession plus unchanged SemanticOriginKernel and bridge DigitalValueMlir
+compiled and packed. Full owner inventories retain unchanged named descriptors.
+Strict ABI audits remain false for 16 API and 203 bridge internal helper
+renumberings; separate exact-target consumer reviews found zero references and
+recorded narrowly scoped exceptions, not a rewritten strict pass or a public ABI
+change.
+
+At the unchanged default construction limit 65536, actual v3 Scala source capture,
+bridge emission, native verification and CIRCT IR verification pass for four
+nested witnesses (two, reverse, nonunit and matching), the rank-one two-lane
+scalar predecessor and the rank-one Interface predecessor: six positives in all.
+Eight causal source controls pass their expected diagnostics:
+nested missing writer, duplicate alias, foreign domain and discarded outer Bool;
+rank-one scalar missing writer, duplicate alias and output write; and rank-one
+Interface duplicate alias. Both missing-writer
+cases reject during source publication; no native fallback was invoked for them.
+
+The failed v1 fixture used a host conditional inside a captured body; the unchanged
+plugin rejected it. Version 2 failed unchanged fatal unused-induction-variable
+warnings; v3 adds explicit discards. Every failed result is preserved, with no
+production rebuild for those fixture corrections.
+
+The Interface predecessor harness retains all nine origin assertions; only its
+test-only ConstructionSession-origin split changed. The strengthened maintained
+actual-output checker passes all four nested modes and is independently reviewed:
+it authenticates original source instance/export/port identity and the complete
+helper/leaf call-return chain. Its SHA256 is
+`45150bb0c0f17dc67544c3a552af1ade65aae2daf8d72525cdfcdd134b337608`.
+The retained `test-output/scala-focused-v3/nested-output-checks-v2.json` receipt has
+SHA256 `2a1c717d1131f5e8924a1668341c956655896a7df20c5b673286956614532f14`.
+
+### Actual source and CIRCT IR witness
+
+The maintained source is
+`core/scala/testkit/test/src/nodal_external/Increment58SelectedInputSource.scala`,
+with `Increment58SelectedInputReplay.scala` in the adjacent internal testkit.
+`Increment58SelectedInputNestedTwo` selects `outer(0).inner(0).child` through
+`outer(1).inner(1).child`, writes four distinct parent Bool RHS values and observes
+four distinct outputs. Reverse mode reverses writer order without changing tuple
+routing; nonunit mode uses outer coordinates 2, 4 and inner coordinates 3, 6.
+Selections remain ordinal tuples, not those physical coordinates. The actual
+source writes the selected children as follows:
+
+```scala
+lanes00(_.input) := first
+lanes01(_.input) := second
+lanes10(_.input) := third
+if mode != "nested-missing" then lanes11(_.input) := fourth
+```
+
+Actual `nested-two` CIRCT IR contains this parent packing:
+
+```mlir
+%6 = comb.concat %fourth, %third : i1, i1
+%7 = comb.concat %6, %second : i2, i1
+%8 = comb.concat %7, %first : i3, i1
+```
+
+Both `sv.generate.for` loops remain, with four ordered selection paths and output
+slices at offsets 0, 1, 2 and 3. This is actual CIRCT IR, not Verilog-* export or
+simulator acceptance. The matched local command is:
+
+```sh
+.work/f58-nested-selected-input-routing/bin/GeneratedOccurrenceCIRCTTest --lower-selected-input .work/f58-nested-selected-input-routing/test-output/scala-focused-v3/source/nested-two.mlir
+```
+
+The first source IR SHA256 is
+`7f1a2dadd42a20529a983c8ed168a4bd47a143a1e016a93c2d48ec02ae8a8092`;
+its target IR is
+`65a9b00a2bf01da54767cd5aa7ad3c07a98cbf92ef6240bf01a9cc3a25cf22a2`;
+the matched executable is
+`f057a28c93d77c0c1b45ec04c92ff24aa88672e13dc413d336194ca247cdb614`.
+Commands, matched freezes and preserved failures are retained under ignored
+`.work/f58-nested-selected-input-routing`; actual source/target results are in
+`test-output/scala-focused-v3`. The maintained checker is
+`tests/compiler/fixtures/increment58/selected-input/check_nested_outputs.py`.
+
+Construction default 65536 and independent native limits are unchanged. The
+previous broader whole-model capacity gap stays open. CI and full qualification
+were not run; neither were the held CIRCT HW comparator repair, firtool,
+`check.py`, installation, external exporter or simulator acceptance. This adds no
+public API or Extended policy and closes no parent or roadmap checkbox.

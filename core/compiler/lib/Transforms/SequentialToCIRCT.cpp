@@ -2185,10 +2185,16 @@ private:
     uint64_t maximumBits;
     DictionaryAttr layout;
   };
+  struct GeneratedInstanceInputLane {
+    DigitalSelectedInterfaceInputLane transport;
+    // Scalar inputs retain the Assignment owner's complete ordered selection
+    // proof. Interface facts keep their existing exact certified selection.
+    GeneratedSelectionProof proof;
+  };
   struct GeneratedInstanceInput {
     Operation *family;
     Type originalType, laneType;
-    SmallVector<DigitalSelectedInterfaceInputLane> lanes;
+    SmallVector<GeneratedInstanceInputLane> lanes;
   };
   llvm::MapVector<InstanceLogicalPortKey, GeneratedInstanceInput> generatedInstanceInputs;
   llvm::DenseSet<Operation *> selectedInstanceInputs;
@@ -2219,7 +2225,13 @@ private:
     StringAttr name, indexName, genvarName;
     SmallVector<LogicalPortPlan> ports;
     SmallVector<Value> captures;
-    SmallVector<InstanceLogicalPortKey> inputs;
+    struct Input {
+      InstanceLogicalPortKey key;
+      // The terminal helper receives a scalar; its enclosing helper receives
+      // the exact row carrier. Neither transport type is semantic identity.
+      Type laneType;
+    };
+    SmallVector<Input> inputs;
     SmallVector<GeneratedOutput> outputs;
     SmallVector<Operation *> operations, registers, instances;
     SmallVector<std::pair<Value, Operation *>> connectionSeeds;
@@ -2517,9 +2529,27 @@ private:
         cost += assignment.lanes.size() + 16;
         InstanceLogicalPortKey key{assignment.instance, {assignment.port, Attribute()}};
         GeneratedInstanceInput input{assignment.family, original, type, {}};
-        for (const auto &lane : assignment.lanes)
-          input.lanes.push_back({lane.ordinal, lane.assignment->getOperand(0), lane.source,
-                                 lane.assignment, nullptr});
+        for (const auto &lane : assignment.lanes) {
+          const auto &proof = lane.proof;
+          if (proof.family != assignment.family || proof.selections.empty() ||
+              proof.selections.size() > 2 || proof.selections.back().family != assignment.family ||
+              proof.selections.size() > maximumGeneratedOperations - cost)
+            return reject(lane.assignment,
+                          "selected input lost its bounded canonical selection proof");
+          cost += proof.selections.size();
+          const auto &first = assignment.lanes.front().proof;
+          if (proof.selections.size() != first.selections.size() ||
+              proof.exportOperation != first.exportOperation)
+            return reject(lane.assignment, "selected input changed its original selection route");
+          for (auto [axis, selection] : llvm::enumerate(proof.selections))
+            if (selection.family != first.selections[axis].family || !selection.ordinal ||
+                !selection.coordinate.root)
+              return reject(lane.assignment,
+                            "selected input lost its ordered family and coordinate proof");
+          input.lanes.push_back({{lane.ordinal, lane.assignment->getOperand(0), lane.source,
+                                  lane.assignment, nullptr},
+                                 proof});
+        }
         generatedInstanceInputs.try_emplace(key, std::move(input));
         for (const auto &lane : assignment.lanes)
           staticOperations.insert(lane.assignment); // Consumed by the exact input transport.
@@ -2536,7 +2566,8 @@ private:
       cost += fact.lanes.size() + 16;
       InstanceLogicalPortKey key{fact.instance, {fact.endpoint, fact.path}};
       GeneratedInstanceInput input{fact.family, fact.type, type, {}};
-      llvm::append_range(input.lanes, fact.lanes);
+      for (const auto &lane : fact.lanes)
+        input.lanes.push_back({lane, {}});
       if (!generatedInstanceInputs.try_emplace(key, std::move(input)).second)
         return reject(fact.instance, "selected Interface input repeats its original logical leaf");
       for (const auto &lane : fact.lanes) {
@@ -2589,7 +2620,7 @@ private:
             if (cost >= maximumGeneratedOperations)
               return reject(effect, "selected Interface observation exceeds target operation budget");
             ++cost;
-            if (lane.selection == access.identity.selection) {
+            if (lane.transport.selection == access.identity.selection) {
               certifiedSelection = true;
               break;
             }
@@ -2838,6 +2869,22 @@ private:
           for (Value value : nested->captures)
             if (failed(capture(value)))
               return WalkResult::interrupt();
+          for (const auto &route : nested->inputs) {
+            const auto &input = generatedInstanceInputs.find(route.key)->second;
+            const auto &proof = input.lanes.front().proof;
+            if (parent || op.getParentOp() != source.getOperation() ||
+                proof.selections.size() != 2 || proof.selections.front().family != &op ||
+                proof.selections.back().family != child || input.family != child) {
+              (void)reject(child, "selected input requires its exact two-axis scalar route");
+              return WalkResult::interrupt();
+            }
+            Type row = generatedBusType(route.laneType, nested->capacity);
+            if (!row || !generatedBusType(row, family.capacity)) {
+              (void)reject(child, "selected input row exceeds its checked carrier shape");
+              return WalkResult::interrupt();
+            }
+            family.inputs.push_back({route.key, row});
+          }
           return WalkResult::skip();
         }
         if (isa<ConstLiteralOp, ConstExprOp, ConstParameterRefOp>(child) &&
@@ -3284,16 +3331,24 @@ private:
           auto input = generatedInstanceInputs.find(key);
           if (input == generatedInstanceInputs.end())
             continue;
-          if (parent || input->second.family != &op ||
-              op.getParentOp() != source.getOperation() || !port.input || port.inout ||
+          const auto &proof = input->second.lanes.front().proof;
+          bool direct = !parent && op.getParentOp() == source.getOperation() &&
+                        (proof.selections.empty() || proof.selections.size() == 1);
+          bool nested = parent && !parent->parent &&
+                        parent->operation->getParentOp() == source.getOperation() &&
+                        proof.selections.size() == 2 &&
+                        proof.selections.front().family == parent->operation &&
+                        proof.selections.back().family == &op;
+          if ((!direct && !nested) || input->second.family != &op || !port.input || port.inout ||
               port.splitRoute || !generatedBusType(input->second.laneType, family.capacity))
-            return reject(instance, "selected input requires its exact direct ordinary family");
-          family.inputs.push_back(key);
-          appendGeneratedPort(family.ports, {}, true,
-                              family.captures.size() + family.inputs.size() - 1,
-                              input->second.laneType, key.second.first,
-                              input->second.originalType);
+            return reject(instance, "selected input requires its exact ordinary family route");
+          family.inputs.push_back({key, input->second.laneType});
         }
+      }
+      for (auto [index, route] : llvm::enumerate(family.inputs)) {
+        const auto &input = generatedInstanceInputs.find(route.key)->second;
+        appendGeneratedPort(family.ports, {}, true, family.captures.size() + index, route.laneType,
+                            route.key.second.first, input.originalType);
       }
       for (auto [index, out] : llvm::enumerate(family.outputs))
         appendGeneratedOutputPort(family.ports, out, false, index, out.laneType);
@@ -3847,8 +3902,8 @@ private:
           leaves.push_back(body->getArgument(inputIndex++));
         Value actual = joinBoundary(port.key.first, port.targetType, leaves);
         if (port.references.empty()) {
-          auto key = family.inputs[selectedInputIndex++];
-          generatedInstanceInputValues[key] = actual;
+          const auto &route = family.inputs[selectedInputIndex++];
+          generatedInstanceInputValues[route.key] = actual;
         } else
           values[port.references.front()] = actual;
       }
@@ -3897,11 +3952,15 @@ private:
       }
       values[original] = actual;
     }
-    for (auto key : family.inputs) {
-      auto references = instancePortValues.find(key);
+    for (const auto &route : family.inputs) {
+      // Only the terminal helper exposes original child-port references. The
+      // enclosing helper's row is transport, not a scalar child input value.
+      if (generatedInstanceInputs.find(route.key)->second.family != family.operation)
+        continue;
+      auto references = instancePortValues.find(route.key);
       if (references != instancePortValues.end())
         for (Value reference : references->second)
-          values[reference] = generatedInstanceInputValues.lookup(key);
+          values[reference] = generatedInstanceInputValues.lookup(route.key);
     }
     for (Operation *instance : family.instances)
       if (failed(lowerInstance(instance))) {
@@ -4165,20 +4224,29 @@ private:
       if (family.parent != parent)
         return reject(&operation, "generated scope lost its exact family plan owner");
       SmallVector<Value> inputBuses;
-      for (auto key : family.inputs) {
-        const auto &input = generatedInstanceInputs.find(key)->second;
-        SmallVector<Value> lanes;
-        // comb.concat is MSB-first; checked ordinal zero occupies the low slice.
-        for (const auto &lane : llvm::reverse(input.lanes)) {
-          Value actual = values.lookup(capturedValue(lane.source));
-          if (!actual || actual.getType() != input.laneType)
-            return reject(lane.effect, "selected input actual RHS did not map");
-          lanes.push_back(actual);
+      for (const auto &route : family.inputs) {
+        const auto &input = generatedInstanceInputs.find(route.key)->second;
+        Value bus;
+        if (parent) {
+          // The exact outer helper argument already contains this row. Parent
+          // RHS values must never be looked up from an outlined helper scope.
+          bus = generatedInstanceInputValues.lookup(route.key);
+        } else {
+          SmallVector<Value> lanes;
+          // Assignment orders complete scalar tuples outer-to-inner. Interface
+          // inputs retain their existing rank-one order. comb.concat is
+          // MSB-first, so the first certified tuple occupies the low slice.
+          for (const auto &lane : llvm::reverse(input.lanes)) {
+            Value actual = values.lookup(capturedValue(lane.transport.source));
+            if (!actual || actual.getType() != input.laneType)
+              return reject(lane.transport.effect, "selected input actual RHS did not map");
+            lanes.push_back(actual);
+          }
+          bus = lanes.front();
+          for (Value lane : ArrayRef<Value>(lanes).drop_front())
+            bus = circt::comb::ConcatOp::create(builder, family.operation->getLoc(), bus, lane);
         }
-        Value bus = lanes.front();
-        for (Value lane : ArrayRef<Value>(lanes).drop_front())
-          bus = circt::comb::ConcatOp::create(builder, family.operation->getLoc(), bus, lane);
-        if (bus.getType() != generatedBusType(input.laneType, family.capacity))
+        if (!bus || bus.getType() != generatedBusType(route.laneType, family.capacity))
           return reject(family.operation, "selected input lost its complete fixed carrier");
         inputBuses.push_back(bus);
       }

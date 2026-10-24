@@ -84,6 +84,83 @@ module attributes {nodal.root.module = @Top, nodal.root.parameter_bindings = {}}
 
 )mlir";
 }
+// Literal 2x2 counterpart: four authored parent RHS Values, no local input
+// proxy, and all four original child outputs selected through both family axes.
+std::string nestedSelectedInputFixture(bool reverse = false, bool strided = false) {
+  const std::string bit = "!nodal.bits<1>";
+  auto port = [&](StringRef name, StringRef direction, StringRef domain) {
+    return "\"nodal.port\"() <{sym_name = \"" + name.str() + "\", type = " + bit +
+           ", direction = \"" + direction.str() + "\", domain = @" + domain.str() +
+           ", metadata = {}}> : () -> ()\n%" + name.str() + " = \"nodal.port_value\"() <{port = @" +
+           name.str() + ", metadata = {}}> : () -> " + bit + "\n";
+  };
+  auto literal = [](StringRef name, int value) {
+    return "%" + name.str() + " = \"nodal.const_literal\"() <{value = " + std::to_string(value) +
+           " : i64, spelling = \"" + std::to_string(value) + "\", metadata = {}}> : () -> i64\n";
+  };
+  auto family = [&](StringRef name, int lower, int upper, int step, const std::string &body) {
+    std::string n = name.str();
+    return literal(n + "_lo", lower) + literal(n + "_hi", upper) + literal(n + "_step", step) +
+           "%" + n + " = \"nodal.generate\"(%" + n + "_lo, %" + n + "_hi, %" + n +
+           "_step) <{induction = \"i\", region_id = \"Top." + n + "\", induction_path = \"Top." +
+           n + ".index\", metadata = {maximum_trip_count = 2 : i64, semantic_path = \"Top." + n +
+           "\"}}> ({^bb0(%" + n + "_index: i64):\n" + body +
+           "}) : (i64, i64, i64) -> !nodal.generated_family\n";
+  };
+  std::string top = R"mlir(
+    "nodal.domain"() <{sym_name = "core", edge = "rising", reset_policy = "none", metadata = {}}> : () -> ()
+    "nodal.port"() <{sym_name = "clock", type = !nodal.capability<"clock">, direction = "input", domain = @core, metadata = {}}> : () -> ()
+    %clock = "nodal.port_value"() <{port = @clock, metadata = {}}> : () -> !nodal.capability<"clock">
+    "nodal.local_domain_binding"(%clock) <{domain = @core, reset_polarity = "active_high", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+)mlir";
+  for (StringRef name : {"x00", "x01", "x10", "x11"})
+    top += port(name, "input", "core");
+  std::string child = R"mlir(
+    "nodal.instance"() <{sym_name = "child", module = @Child, parameter_bindings = {}, domain_bindings = {required = @core}, generated_owner = "Top.outer.inner", generated_induction = "Top.outer.inner.index", metadata = {}}> : () -> ()
+    "nodal.instance_domain_binding"(%clock) <{instance = @child, requirement = @required, actual = @core, origin = "named", metadata = {}}> : (!nodal.capability<"clock">) -> ()
+    "nodal.generated_export"() <{target = @child, member = "child", kind = "instance", access = "read", metadata = {}}> : () -> ()
+)mlir";
+  auto inner = family("outer.inner", strided ? 5 : 0, strided ? 11 : 2, strided ? 3 : 1, child);
+  inner += "\"nodal.generated_export\"(%outer.inner) <{member = \"inner\", kind = \"family\", "
+           "access = \"read\", metadata = {}}> : (!nodal.generated_family) -> ()\n";
+  top += family("outer", strided ? 3 : 0, strided ? 7 : 2, strided ? 2 : 1, inner);
+  top += literal("zero", 0) + literal("one", 1);
+  for (unsigned row = 0; row < 2; ++row)
+    top += "%row" + std::to_string(row) + " = \"nodal.generated_member\"(%outer, %" +
+           std::string(row ? "one" : "zero") +
+           ") <{member = \"inner\", kind = \"family\", "
+           "access = \"read\", metadata = {}}> : (!nodal.generated_family, i64) -> "
+           "!nodal.generated_family\n";
+  for (unsigned i = 0; i < 4; ++i) {
+    auto suffix = std::to_string(i / 2) + std::to_string(i % 2);
+    for (StringRef direction : {"input", "output"})
+      top += "%" + direction.str() + suffix + " = \"nodal.instance_port\"(%row" +
+             std::to_string(i / 2) + ", %" + std::string(i % 2 ? "one" : "zero") +
+             ") <{instance = @child, member = \"child\", port = \"" + direction.str() +
+             "\", direction = \"" + direction.str() +
+             "\", metadata = {}}> : (!nodal.generated_family, i64) -> " + bit + "\n";
+    top += port("y" + suffix, "output", "core") + "\"nodal.digital_assign\"(%y" + suffix +
+           ", %output" + suffix + ") <{kind = \"continuous\", metadata = {}}> : (" + bit + ", " +
+           bit + ") -> ()\n";
+  }
+  for (unsigned i = 0; i < 4; ++i) {
+    unsigned index = reverse ? 3 - i : i;
+    auto suffix = std::to_string(index / 2) + std::to_string(index % 2);
+    top += "\"nodal.digital_assign\"(%input" + suffix + ", %x" + suffix +
+           ") <{kind = \"continuous\", metadata = {}}> : (" + bit + ", " + bit + ") -> ()\n";
+  }
+  std::string definition =
+      "\"nodal.domain_requirement\"() <{sym_name = \"required\", metadata = {}}> : () -> ()\n"
+      "%required_clock = \"nodal.requirement_clock\"() <{requirement = @required, metadata = {}}> "
+      ": () -> !nodal.capability<\"clock\">\n" +
+      port("input", "input", "required") + port("output", "output", "required") +
+      "\"nodal.digital_assign\"(%output, %input) <{kind = \"continuous\", metadata = {}}> : (" +
+      bit + ", " + bit + ") -> ()\n";
+  return "module attributes {nodal.root.module = @Top, nodal.root.parameter_bindings = {}} {\n"
+         "\"nodal.module\"() <{sym_name = \"Top\", metadata = {}}> ({\n" +
+         top + "}) : () -> ()\n\"nodal.module\"() <{sym_name = \"Child\", metadata = {}}> ({\n" +
+         definition + "}) : () -> ()\n}\n";
+}
 std::string printed(Operation *operation) {
   std::string result;
   llvm::raw_string_ostream stream(result);
@@ -615,6 +692,205 @@ int main(int argc, char **argv) {
       "\"nodal.interface_drive\"(%small0, %rhs0)",
       "\"nodal.interface_drive\"(%small0, %small1)");
   negative("selected-interface-destination-cannot-be-rhs", readInterfaceInput, "selected");
+  auto nestedPositive = [&](StringRef name, const std::string &source, bool strided = false) {
+    diagnostics.clear();
+    auto module = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    bool valid = module && succeeded(verify(*module)) && succeeded(lower(*module));
+    circt::hw::HWModuleOp top, outer, inner, child;
+    Operation *outerInstance = nullptr, *innerInstance = nullptr, *childInstance = nullptr;
+    Operation *outerLoop = nullptr, *innerLoop = nullptr;
+    unsigned definitions = 0, helpers = 0, loops = 0, instances = 0;
+    if (valid) {
+      module->walk([&](Operation *op) {
+        valid &= op->getName().getDialectNamespace() != "nodal";
+        if (auto definition = dyn_cast<circt::hw::HWModuleOp>(op)) {
+          ++definitions;
+          auto family = op->getAttrOfType<StringAttr>("nodal.generated_template");
+          if (family) {
+            ++helpers;
+            if (family.getValue() == "Top.outer")
+              outer = definition;
+            if (family.getValue() == "Top.outer.inner")
+              inner = definition;
+          } else {
+            auto name = op->getAttrOfType<StringAttr>("sym_name");
+            if (name && name.getValue() == "Top")
+              top = definition;
+            if (name && name.getValue() == "Child")
+              child = definition;
+          }
+        }
+        if (op->getName().getStringRef() == "sv.generate.for") {
+          ++loops;
+          auto owner = op->getParentOfType<circt::hw::HWModuleOp>();
+          auto family = owner->getAttrOfType<StringAttr>("nodal.generated_template");
+          if (!family)
+            outerLoop = op;
+          else if (family.getValue() == "Top.outer")
+            innerLoop = op;
+        }
+        if (auto instance = dyn_cast<circt::hw::InstanceOp>(op)) {
+          ++instances;
+          auto owner = op->getParentOfType<circt::hw::HWModuleOp>();
+          auto family = owner->getAttrOfType<StringAttr>("nodal.generated_template");
+          if (instance.getModuleName() == "Child")
+            childInstance = op;
+          else if (!family)
+            outerInstance = op;
+          else if (family.getValue() == "Top.outer")
+            innerInstance = op;
+        }
+      });
+      valid &= definitions == 4 && helpers == 2 && loops == 2 && instances == 3 && top && outer &&
+               inner && child && outerInstance && innerInstance && childInstance && outerLoop &&
+               innerLoop;
+    }
+    if (valid) {
+      auto integerValue = [](Value value, int64_t expected) {
+        auto op = value.getDefiningOp();
+        auto actual = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+        return actual && actual.getInt() == expected;
+      };
+      // No simulation or alternate evaluator: inspect the actual source-to-bus,
+      // per-axis part-select and child-argument edges emitted by the real pass.
+      auto sliceMatches = [&](Operation *slice, Value carrier, Operation *loop, unsigned width,
+                              int64_t lower, int64_t step) {
+        bool normalized = lower != 0 || step != 1;
+        if (!slice || slice->getName().getStringRef() != "sv.verbatim.expr" ||
+            slice->getNumOperands() != (normalized ? 5u : 3u) || slice->getOperand(0) != carrier ||
+            slice->getOperand(1) != loop->getRegion(0).front().getArgument(0) ||
+            !integerValue(slice->getOperand(2), width) ||
+            (normalized && (!integerValue(slice->getOperand(3), lower) ||
+                            !integerValue(slice->getOperand(4), step))))
+          return false;
+        auto format = slice->getAttrOfType<StringAttr>("format_string");
+        return format && format.getValue() ==
+                             (normalized ? "{{0}}[(({{1}} - {{3}}) / {{4}}) * {{2}} +: {{2}}]"
+                                         : "{{0}}[{{1}} * {{2}} +: {{2}}]");
+      };
+      auto *topBody = top.getBodyBlock();
+      auto *outerBody = outer.getBodyBlock();
+      auto *innerBody = inner.getBodyBlock();
+      valid &= topBody->getNumArguments() == 5 && outerBody->getNumArguments() >= 1 &&
+               innerBody->getNumArguments() >= 1 && outerInstance->getNumResults() == 1 &&
+               innerInstance->getNumResults() == 1 && childInstance->getNumResults() == 1 &&
+               outerInstance->getNumOperands() >= 1 && innerInstance->getNumOperands() >= 1 &&
+               childInstance->getNumOperands() >= 1;
+      if (!valid) {
+        report(name, false);
+        return;
+      }
+      Value rowInput = outerBody->getArguments().back();
+      Value scalarInput = innerBody->getArguments().back();
+      auto *rowSlice = outerInstance->getOperands().back().getDefiningOp();
+      auto *scalarSlice = innerInstance->getOperands().back().getDefiningOp();
+      valid &= rowInput.getType().isInteger(2) && scalarInput.getType().isInteger(1) &&
+               childInstance->getOperand(0) == scalarInput && rowSlice &&
+               rowSlice->getNumOperands() == (strided ? 5u : 3u);
+      Value bus = rowSlice && rowSlice->getNumOperands() ? rowSlice->getOperand(0) : Value();
+      valid &= bus && bus.getType().isInteger(4);
+      if (valid) {
+        // Three actual left-associated concatenations, MSB first. Ordinal tuple
+        // 00 is the LSB; both 00 versus 10 and 01 versus 10 remain distinguishable.
+        Value concat = bus;
+        for (unsigned i = 0; i < 3; ++i) {
+          auto operation = concat.getDefiningOp();
+          valid &= operation && operation->getName().getStringRef() == "comb.concat" &&
+                   operation->getNumOperands() == 2;
+          if (!valid)
+            break;
+          valid &= operation->getOperand(1) == topBody->getArgument(i + 1);
+          concat = operation->getOperand(0);
+        }
+        valid &=
+            concat == topBody->getArgument(4) &&
+            sliceMatches(rowSlice, bus, outerLoop, 2, strided ? 3 : 0, strided ? 2 : 1) &&
+            sliceMatches(scalarSlice, rowInput, innerLoop, 1, strided ? 5 : 0, strided ? 3 : 1);
+      }
+      valid &= innerBody->getTerminator()->getNumOperands() == 1 &&
+               innerBody->getTerminator()->getOperand(0) == childInstance->getResult(0) &&
+               outerBody->getTerminator()->getNumOperands() == 1 &&
+               outerBody->getTerminator()->getOperand(0).getType().isInteger(2) &&
+               topBody->getTerminator()->getNumOperands() == 4;
+      Value outputBus;
+      if (valid)
+        for (unsigned i = 0; i < 4; ++i) {
+          auto output = topBody->getTerminator()->getOperand(i).getDefiningOp();
+          auto prefixes =
+              output ? output->getAttrOfType<ArrayAttr>("nodal.generated_selection") : ArrayAttr();
+          valid &= output && output->getName().getStringRef() == "sv.verbatim.expr" &&
+                   output->getNumOperands() == 3 && output->getResult(0).getType().isInteger(1) &&
+                   prefixes && prefixes.size() == 2;
+          if (!valid)
+            break;
+          if (!outputBus)
+            outputBus = output->getOperand(0);
+          valid &= output->getOperand(0) == outputBus && outputBus.getType().isInteger(4) &&
+                   integerValue(output->getOperand(1), i) && integerValue(output->getOperand(2), 1);
+          for (unsigned axis = 0; axis < 2; ++axis) {
+            auto prefix = dyn_cast<DictionaryAttr>(prefixes[axis]);
+            auto family = prefix ? prefix.getAs<StringAttr>("family") : StringAttr();
+            auto ordinal = prefix ? prefix.getAs<IntegerAttr>("ordinal") : IntegerAttr();
+            auto coordinate = prefix ? prefix.getAs<IntegerAttr>("coordinate") : IntegerAttr();
+            auto stride = prefix ? prefix.getAs<IntegerAttr>("stride_bits") : IntegerAttr();
+            int64_t expectedOrdinal = axis ? i % 2 : i / 2;
+            int64_t expectedCoordinate =
+                strided ? (axis ? 5 + 3 * expectedOrdinal : 3 + 2 * expectedOrdinal)
+                        : expectedOrdinal;
+            valid &= family && family.getValue() == (axis ? "Top.outer.inner" : "Top.outer") &&
+                     ordinal && ordinal.getInt() == expectedOrdinal && coordinate &&
+                     coordinate.getInt() == expectedCoordinate && stride &&
+                     stride.getInt() == (axis ? 1 : 2);
+          }
+        }
+      auto outputConnected = [&](Value read, Operation *instance, Operation *loop, unsigned width,
+                                 int64_t lower, int64_t step) {
+        auto readOp = read ? read.getDefiningOp() : nullptr;
+        if (!readOp || readOp->getName().getStringRef() != "sv.read_inout" ||
+            readOp->getNumOperands() != 1)
+          return false;
+        unsigned connections = 0;
+        loop->walk([&](Operation *op) {
+          if (op->getName().getStringRef() != "sv.assign" || op->getNumOperands() != 2 ||
+              op->getOperand(1) != instance->getResult(0))
+            return;
+          connections += sliceMatches(op->getOperand(0).getDefiningOp(), readOp->getOperand(0),
+                                      loop, width, lower, step);
+        });
+        return connections == 1;
+      };
+      if (valid)
+        valid &= outputConnected(outputBus, outerInstance, outerLoop, 2, strided ? 3 : 0,
+                                 strided ? 2 : 1) &&
+                 outputConnected(outerBody->getTerminator()->getOperand(0), innerInstance,
+                                 innerLoop, 1, strided ? 5 : 0, strided ? 3 : 1) &&
+                 succeeded(verify(*module));
+    }
+    report(name, valid);
+  };
+  const auto nestedInputs = nestedSelectedInputFixture();
+  nestedPositive("nested-selected-input-two-real-loops-four-exact-rhs-output-tuples", nestedInputs);
+  nestedPositive("nested-selected-input-reverse-writer-order-same-physical-routing",
+                 nestedSelectedInputFixture(true));
+  nestedPositive("nested-selected-input-two-strided-axes-exact-row-and-scalar-slices",
+                 nestedSelectedInputFixture(false, true), true);
+  const std::string nestedWriter =
+      "\"nodal.digital_assign\"(%input10, %x10) <{kind = \"continuous\", metadata = {}}> "
+      ": (!nodal.bits<1>, !nodal.bits<1>) -> ()\n";
+  negative("nested-selected-input-missing-tuple-is-transactional",
+           replace(nestedInputs, nestedWriter, ""), "selected input");
+  negative("nested-selected-input-equal-count-duplicate-omission-is-transactional",
+           replace(nestedInputs, "%input10, %x10", "%input00, %x10"), "overlapping");
+  negative("nested-selected-input-wrong-child-is-transactional",
+           replace(nestedInputs, "instance = @child, member = \"child\", port = \"input\"",
+                   "instance = @missing, member = \"child\", port = \"input\""),
+           "selected");
+  negative("nested-selected-input-extra-outer-executable-is-transactional",
+           replace(nestedInputs, "%outer.inner_lo =",
+                   "%extra = \"nodal.digital_expr\"(%x00, %x01) <{operator_name = \"or\", "
+                   "metadata = {}}> : (!nodal.bits<1>, !nodal.bits<1>) -> !nodal.bits<1>\n"
+                   "%outer.inner_lo ="),
+           "selected input");
   if (emitSelectedInput && !emittedSelectedInput)
     report("selected-input-representative-was-not-emitted", false);
   auto &summary = emitSelectedInput ? llvm::errs() : llvm::outs();

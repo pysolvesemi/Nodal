@@ -1463,6 +1463,77 @@ private[nodal] object DigitalValueMlir:
           expression.path
         )
 
+    // Query-local admitted profiles only; original Generate/export records remain authoritative.
+    private val selectedInputOuterFamilies = mutable.HashMap.empty[String, String]
+
+    private def selectedInputFamilyProfile(
+        family: KernelGeneratedRegionSnapshot,
+        selection: KernelGeneratedMemberSnapshot,
+        path: String
+    ): Boolean =
+      def fixedAxis(value: KernelGeneratedRegionSnapshot): Boolean =
+        value.digitalBody.nonEmpty && value.yieldedArea.nonEmpty && value.maximumTripCount > 0 &&
+          Vector(value.lower, value.upperExclusive, value.step).forall(_.toLongOption.nonEmpty) &&
+          value.step.toLongOption.exists(_ > 0L)
+      if selection.selectionPrefix.isEmpty then
+        family.parent.isEmpty && family.lexicalParent.isEmpty
+      else selection.selectionPrefix match
+        case Vector(prefix) =>
+          val outer = generated(prefix.family)
+          val valid = fixedAxis(outer) && fixedAxis(family) && outer.parent.isEmpty &&
+            outer.lexicalParent.isEmpty && family.parent.contains(outer.path) &&
+            family.lexicalParent.contains(outer.path) && prefix.ordinal.toLongOption.exists(value =>
+              value >= 0L && value < outer.maximumTripCount.toLong
+            )
+          if valid then
+            selectedInputOuterFamilies.get(outer.path) match
+              case Some(inner) => requireValid(
+                  inner == family.path,
+                  "selected input outer family must retain one exact inner family",
+                  path
+                )
+              case None =>
+                requireValid(
+                  outer.declarations.isEmpty && !modules(outer.owner).instances.exists(
+                    _.generatedScope.exists(_.owner == outer.path)
+                  ) && outer.exports.nonEmpty && outer.exports.forall(exported =>
+                    exported.kind == "family" && exported.access == "read_only" &&
+                      exported.target == family.path
+                  ),
+                  "selected input outer family must only export its exact inner family",
+                  path
+                )
+                val structural = mutable.HashSet.empty[String]
+                val pending = mutable.ArrayDeque(family.lower, family.upperExclusive, family.step)
+                while pending.nonEmpty do
+                  val input = pending.removeLast()
+                  staticExpressions.get(input).filter(_.region.contains(outer.path)).foreach: value =>
+                    if structural.add(input) then
+                      val pure = value.literal match
+                        case Some(_) => value.operation == "integer" && value.operands.isEmpty
+                        case None => IterationDomain.staticArithmetic(value.operation).exists(
+                            _.arity == value.operands.size
+                          )
+                      requireValid(
+                        value.owner == outer.owner && value.dataType == "Integer" &&
+                          value.unit.forall(_.isEmpty) && pure,
+                        "selected input outer bounds require actual pure Integer producers",
+                        input
+                      )
+                      pending ++= value.operands
+                requireValid(
+                  staticByRegion.getOrElse(Some(outer.path), Vector.empty).forall(value =>
+                    structural(value.path)
+                  ) && byRegion.getOrElse(Some(outer.path), Vector.empty).isEmpty &&
+                    predicatesByRegion.getOrElse(Some(outer.path), Vector.empty).isEmpty &&
+                    indicesByRegion.getOrElse(outer.path, Vector.empty).isEmpty,
+                  "selected input outer family permits only necessary Integer bound producers",
+                  path
+                )
+                selectedInputOuterFamilies.update(outer.path, family.path)
+          valid
+        case _ => false
+
     private def selectedInstanceExport(declaration: KernelDeclarationSnapshot)
         : (
             KernelGeneratedRegionSnapshot,
@@ -2113,9 +2184,8 @@ private[nodal] object DigitalValueMlir:
             assignment.eventProcess.isEmpty && assignment.target == target.path &&
             target.kind == "instance-input" && boundary.direction == "input" &&
             boundary.region.isEmpty && target.generatedScope.isEmpty &&
-            selection.selectionPrefix.isEmpty && selection.familyInput.isEmpty &&
-            !selection.member.contains(".") && family.parent.isEmpty &&
-            family.lexicalParent.isEmpty && family.digitalBody.nonEmpty &&
+            selection.familyInput.isEmpty && !selection.member.contains(".") &&
+            selectedInputFamilyProfile(family, selection, assignment.path) && family.digitalBody.nonEmpty &&
             Vector(family.lower, family.upperExclusive, family.step).forall(_.toLongOption.nonEmpty) &&
             family.maximumTripCount > 0 && selection.ordinal.toLongOption.exists(ordinal =>
               ordinal >= 0L && ordinal < family.maximumTripCount.toLong
@@ -3524,6 +3594,12 @@ private[nodal] object DigitalValueMlir:
               () => emitGenerated(value, depth + 1, output)
             )
           )
+        selectedInputOuterFamilies.get(region).foreach: inner =>
+          requireValid(
+            effects.size == 1 && effects.head._2 == inner,
+            "selected input outer family must only execute its exact inner family",
+            region
+          )
         requireValid(
           effects.map(_._1).distinct.size == effects.size,
           "digital regional effects require distinct source ordinals",
@@ -4163,7 +4239,13 @@ private[nodal] object DigitalValueMlir:
                   emitInterface(path, depth + 1, Some(region.path), local)
               else emit(path, depth + 1, Some(region.path), local)
             emitScope(region.path, depth + 1, local)
-            local ++= renderGeneratedTopology(region, values.toMap)
+            val topology = renderGeneratedTopology(region, values.toMap)
+            requireValid(
+              !selectedInputOuterFamilies.contains(region.path) || topology.isEmpty,
+              "selected input outer family cannot own generated topology",
+              region.path
+            )
+            local ++= topology
             region.exports.foreach: exported =>
               val symbolExport = Set("instance", "interface")(exported.kind)
               val value = if symbolExport then Vector.empty

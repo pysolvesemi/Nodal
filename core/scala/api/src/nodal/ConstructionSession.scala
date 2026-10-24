@@ -3850,6 +3850,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           continuousDrivers.getOrElse(target, Vector.empty) ++ Vector(operation.values(1)) ++
             selection ++ causalControls(operation.digitalRegion)
         )
+    verifySelectedInputOuterFamilies(selectedInputInstances)
     val parentInputReferences = publicationElements(instanceDigitalPorts.iterator).collect {
       case (proxy, binding)
           if binding.generated.isEmpty && records(proxy.module).declarations(
@@ -14952,6 +14953,67 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
     case _ => fail("NODAL-DIGITAL-054-010", "digital assignment requires an actual typed value")
 
+  /** Query-local admission of the outer grouping body, using the existing captured owners. */
+  private def verifySelectedInputOuterFamilies(instances: IterableOnce[InstanceRecord]): Unit =
+    val nested = mutable.LinkedHashMap.empty[GeneratedRegionRecord, GeneratedRegionRecord]
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-001",
+      "selected input outer family must only group its exact inner family and necessary Integer bounds"
+    )
+    publicationElements(instances).foreach: instance =>
+      instance.generatedScope.foreach: inner =>
+        inner.parentOrdinal.foreach: ordinal =>
+          publicationCharge(3L) // original parent lookup and query-local deduplication
+          val outer = records(inner.owner).generatedRegions(ordinal)
+          if nested.get(outer).exists(_ ne inner) then invalid()
+          nested.update(outer, inner)
+    if nested.nonEmpty then
+      val boundClosures = mutable.HashMap.empty[DigitalValueRegionRecord, Set[ExpressionRef]]
+      publicationElements(nested.iterator).foreach: (outer, inner) =>
+        publicationCharge(5L)
+        val body = outer.digitalRegion.getOrElse(invalid())
+        if outer.declarations.nonEmpty || body.assignmentCount != 1 ||
+          !inner.digitalRegion.exists(region =>
+            region.parent.contains(body) && region.loop.exists(_.sourceOrdinal == 0)
+          )
+        then invalid()
+        val target = generatedRegionPath(inner)
+        val exports = generatedAreaExports(outer)
+        if exports.isEmpty || !publicationElements(exports).forall(exported =>
+            publicationCharge(3L)
+            exported.kind == "family" && exported.access == "read_only" && exported.target == target
+          )
+        then invalid()
+        // Capture arguments are aliases to parent-owned values, not executable outer producers.
+        // Host Int bounds need no source nodes; their i64 producers are emitted by the bridge.
+        val closure = capturedExpressionClosure(Iterator(inner.lower, inner.upperExclusive, inner.step))
+        publicationCharge(1L)
+        boundClosures.update(body, closure)
+      publicationElements(records.valuesIterator).foreach: module =>
+        publicationElements(module.instances).foreach: instance =>
+          publicationCharge(2L)
+          if instance.generatedScope.exists(nested.contains) then invalid()
+      publicationElements(expressionRegions.iterator).foreach: (reference, region) =>
+        publicationCharge(2L)
+        boundClosures.get(region).foreach: closure =>
+          publicationCharge(1L)
+          collectionArguments.get(reference) match
+            case Some((actual, index)) =>
+              publicationCharge(4L)
+              if (actual ne region) || !actual.arguments.lift(index).exists((argument, role) =>
+                  Option(expressionIds.get(argument)).contains(reference) &&
+                    Set("induction", "capture", "static_capture", "index_capture")(role)
+                )
+              then invalid()
+            case None =>
+              publicationCharge(3L)
+              val structural = expressionValues.get(reference).exists(expression =>
+                expression.resultDescriptor.contains(KernelTypeDescriptor("Integer")) &&
+                  (expression.literal.exists(_.kind == "integer") ||
+                    expression.operation.flatMap(IterationDomain.staticArithmetic).nonEmpty)
+              )
+              if !closure(reference) || !structural then invalid()
+
   /** Admission only: writer coverage remains owned by the existing assignment proof. */
   private def requireSelectedInputTarget(
       root: DeclarationRef,
@@ -14974,12 +15036,31 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         dataType.arguments.size == 1 &&
         conservativeIntegerLiteral(dataType.arguments.head).exists(_ > 0L)
     )
+    def fixedAxis(value: GeneratedRegionRecord): Boolean =
+      publicationCharge(12L) // fixed-size owned axis facts, including three literal bounds
+      value.owner == owner && value.areaFamily && value.yieldedArea.nonEmpty &&
+        value.familyHandle.exists(_.generatedRegion eq value) && value.digitalRegion.nonEmpty &&
+        Vector(value.lower, value.upperExclusive, value.step).forall(_.isInstanceOf[Int]) &&
+        conservativeIntegerLiteral(value.step).exists(_ > 0L) && value.maximumTripCount > 0
+    val direct = reference.family.selectionPrefix.isEmpty &&
+      family.familyHandle.exists(_ eq reference.family) && family.parentOrdinal.isEmpty &&
+      family.digitalRegion.exists(_.parent.isEmpty)
+    val nested = reference.family.selectionPrefix match
+      case Vector(prefix) if fixedAxis(family) && fixedAxis(prefix.family) =>
+        val outer = prefix.family
+        publicationCharge(records(owner).generatedRegions.size.toLong + prefix.members.size.toLong + 5L)
+        outer.parentOrdinal.isEmpty && outer.digitalRegion.exists(_.parent.isEmpty) &&
+          records(owner).generatedRegions.exists(_ eq outer) && prefix.members.nonEmpty &&
+          conservativeIntegerLiteral(prefix.ordinal).exists(value =>
+            value >= 0L && value < outer.maximumTripCount.toLong
+          ) && generatedAreaPath(outer, prefix.members.dropRight(1)).members
+            .get(prefix.members.last).exists(member =>
+              generatedFamilyExportTarget(outer, member) eq family
+            )
+      case _ => false
     boundDomainCharge(records(owner).generatedRegions.size.toLong + records(owner).instances.size.toLong)
     if root.module != owner || family.owner != owner || !family.areaFamily ||
-      !records(owner).generatedRegions.exists(_ eq family) ||
-      !family.familyHandle.exists(_ eq reference.family) ||
-      family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
-      family.digitalRegion.exists(_.parent.nonEmpty) || reference.family.selectionPrefix.nonEmpty ||
+      !records(owner).generatedRegions.exists(_ eq family) || (!direct && !nested) ||
       reference.members.nonEmpty || binding.scope.nonEmpty ||
       !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
         conservativeIntegerLiteral(value).nonEmpty
@@ -15070,15 +15151,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
   private def sameSelectedInputLane(
       left: GeneratedSymbolSelectionRecord,
       right: GeneratedSymbolSelectionRecord
-  ): Boolean =
-    val a = left.reference
-    val b = right.reference
-    (a.family.generatedRegion eq b.family.generatedRegion) &&
-      a.family.selectionPrefix.isEmpty && b.family.selectionPrefix.isEmpty &&
-      a.members == b.members && left.member == right.member &&
-      conservativeIntegerLiteral(a.ordinal).exists(value =>
-        conservativeIntegerLiteral(b.ordinal).contains(value)
-      )
+  ): Boolean = left == right
 
   /** Resolve only actual canonical shape edges, never an operation spelling or materialized alias.
     */

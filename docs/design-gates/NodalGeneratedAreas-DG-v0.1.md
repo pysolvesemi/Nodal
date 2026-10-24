@@ -487,3 +487,28 @@ symbolic/nested selected writes, state/aggregate/crossing source profiles and
 Verilog export remain outside this amendment. B.2.2 and Foundation 58 stay open;
 this adds no Extended policy, default whole-model capacity claim or downstream
 qualification credit.
+
+
+## Two-axis selected scalar-input amendment — 2026-10-24
+
+[Checkpoint 85](../implementation/increment58-readiness.md#checkpoint-85-two-axis-selected-generated-child-scalar-input-routing)
+extends checkpoint 78 only to two independent literal nonempty positive-step
+Generate axes, with host `Int` source bounds. Full ordered canonical selection
+records, checked product cardinality and distinct in-range writer tuples retain
+complete coverage; terminal ordinals alone never identify nested occurrences.
+The outer group admits one inner family, exact exports and necessary Integer bound
+producers, not discarded runtime Bool work or effects. Existing hierarchy contexts
+transfer all nodes, unused descendants, observations and samples before retirement.
+
+The actual 2-by-2 Bool source routes four distinct RHS values through shared outer
+and inner helpers, including reverse writer order and nonzero lower/nonunit-step
+coordinates. CIRCT IR preserves four-bit parent, two-bit row and one-bit terminal
+routing with the original child bound only at the terminal helper. Focused results,
+composed failure evidence and independently reviewed actual-output checks are
+recorded in checkpoint 85; this is not Verilog export or simulator acceptance.
+
+Rank-one support remains. Nested Interface writes, symbolic/dependent/guarded axes,
+rank greater than two/general products, captured Integer alias/general constant-DAG
+source bounds and aggregate/state/resolved/crossing profiles remain outside this
+amendment. No new registry, evaluator, public layout, capacity or budget is added.
+The earlier whole-model capacity gap and F-058.B.2.2/B.2/D.1/Foundation 58 stay open.

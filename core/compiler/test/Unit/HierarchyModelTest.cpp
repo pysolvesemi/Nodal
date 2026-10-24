@@ -2289,6 +2289,329 @@ int main() {
   selectedInputQuery("selected-input-folded-inactive-guard-refused",
                      replace(guardedInput, "comparison = \"eq\"", "comparison = \"ne\""), false);
 
+  // Two independent axes share terminal ordinals. The full original selection
+  // vector, rather than ordinal or alias identity, owns each authored input.
+  auto nestedInputProxy = [&](StringRef name, unsigned row, unsigned column, bool output = false) {
+    return "%" + name.str() + " = \"nodal.instance_port\"(%row" + std::to_string(row) + ", %" +
+           std::string(column ? "one" : "zero") +
+           ") <{member = \"child\", instance = @lane, port = \"" +
+           std::string(output ? "out" : "in") + "\", direction = \"" +
+           std::string(output ? "output" : "input") +
+           "\", metadata = {}}> : (!nodal.generated_family, i64) -> " + bit + "\n";
+  };
+  auto nestedInputFamily = [&] {
+    auto body = generatedChild("outer.lanes");
+    body.erase(body.find(proxy("lane_in", "lane", "in", "input")));
+    auto inner = generatedFamily("outer.lanes", "2", body + exportLane);
+    inner += "\"nodal.generated_export\"(%outer.lanes) <{member = \"inner\", access = \"read\", "
+             "kind = \"family\", metadata = {}}> : (!nodal.generated_family) -> ()\n";
+    return generatedFamily("outer", "2", inner);
+  };
+  auto nestedInputSource = [&](bool reverse = false, bool observe = true) {
+    std::string parent = domain("a") + domain("b");
+    for (StringRef name : {"x00", "x01", "x10", "x11"})
+      parent += port(name, "input", "a");
+    parent += nestedInputFamily();
+    parent += "%zero = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+              "metadata = {}}> : () -> i64\n"
+              "%one = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", "
+              "metadata = {}}> : () -> i64\n";
+    for (unsigned row = 0; row < 2; ++row)
+      parent += "%row" + std::to_string(row) + " = \"nodal.generated_member\"(%outer, %" +
+                std::string(row ? "one" : "zero") +
+                ") <{member = \"inner\", access = \"read\", kind = \"family\", metadata = {}}> "
+                ": (!nodal.generated_family, i64) -> !nodal.generated_family\n";
+    for (unsigned row = 0; row < 2; ++row)
+      for (unsigned column = 0; column < 2; ++column) {
+        auto suffix = std::to_string(row) + std::to_string(column);
+        parent += nestedInputProxy("input" + suffix, row, column);
+        if (observe)
+          parent += nestedInputProxy("output" + suffix, row, column, true) +
+                    port("observed" + suffix, "output", "a") +
+                    assign("observed" + suffix, "output" + suffix);
+      }
+    for (unsigned i = 0; i < 4; ++i) {
+      unsigned index = reverse ? 3 - i : i;
+      auto suffix = std::to_string(index / 2) + std::to_string(index % 2);
+      parent += assign("input" + suffix, "x" + suffix);
+    }
+    return "module attributes {nodal.root.module = @Top} {\n" + module("Top", parent) +
+           module("Lane", requirement("req") + port("in", "input", "req") +
+                              port("out", "output", "req") + assign("out", "in")) +
+           "}\n";
+  };
+  auto nestedInputQuery = [&](StringRef name, const std::string &source, bool expected,
+                              unsigned budget = 0, bool strided = false,
+                              StringRef outerPath = "Top.outer", StringRef marker = "") {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    Operation *top = nullptr, *child = nullptr, *input = nullptr, *outer = nullptr;
+    SmallVector<Value, 4> sources(4);
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        auto name = op->getAttrOfType<StringAttr>("sym_name");
+        if (isa<nodal::ModuleOp>(op) && name && name.getValue() == "Top")
+          top = op;
+        if (isa<nodal::InstanceOp>(op)) {
+          auto owner = op->getAttrOfType<StringAttr>("generated_owner");
+          if (owner && owner.getValue() == outerPath.str() + ".lanes")
+            child = op;
+        }
+        if (isa<nodal::GenerateOp>(op)) {
+          auto region = op->getAttrOfType<StringAttr>("region_id");
+          if (region && region.getValue() == outerPath)
+            outer = op;
+        }
+        if (isa<nodal::PortOp>(op) && name && name.getValue() == "in")
+          input = op;
+        if (isa<nodal::PortValueOp>(op)) {
+          auto port = op->getAttrOfType<FlatSymbolRefAttr>("port");
+          for (unsigned i = 0; i < 4; ++i)
+            if (port && port.getValue() == "x" + std::to_string(i / 2) + std::to_string(i % 2))
+              sources[i] = op->getResult(0);
+        }
+      });
+    bool ok = parsed && top && child && input && outer;
+    if (ok) {
+      nodal::DigitalAssignmentProofLimits limits;
+      if (budget == 1)
+        limits.maximumRelations = 0;
+      if (budget == 2)
+        limits.maximumGuardWork = 1;
+      if (budget == 3)
+        limits.maximumNodes = 1;
+      SmallVector<std::pair<Operation *, Operation *>, 1> seeds{{child, input}};
+      auto facts = nodal::inspectGeneratedSelectedInputAssignments(top, seeds, limits);
+      ok = succeeded(facts) == expected;
+      if (expected && succeeded(facts)) {
+        ok &= facts->size() == 1;
+        if (facts->size() == 1) {
+          const auto &fact = facts->front();
+          ok &= fact.instance == child && fact.port == input &&
+                fact.family == child->getParentOp() && fact.lanes.size() == 4;
+          for (auto [i, lane] : llvm::enumerate(fact.lanes)) {
+            ok &= i < sources.size() && lane.source == sources[i] && lane.assignment &&
+                  lane.assignment->getOperand(1) == lane.source &&
+                  lane.ordinal == static_cast<int64_t>(i % 2) && lane.proof.family == fact.family &&
+                  lane.proof.selections.size() == 2;
+            if (lane.proof.selections.size() != 2)
+              continue;
+            const auto &row = lane.proof.selections[0];
+            const auto &column = lane.proof.selections[1];
+            int64_t rowCoordinate = strided ? 3 + 2 * static_cast<int64_t>(i / 2) : i / 2;
+            int64_t columnCoordinate = strided ? 5 + 3 * static_cast<int64_t>(i % 2) : i % 2;
+            ok &= row.family == outer && column.family == fact.family &&
+                  row.coordinate.bounds.lower == rowCoordinate &&
+                  row.coordinate.bounds.upper == rowCoordinate &&
+                  column.coordinate.bounds.lower == columnCoordinate &&
+                  column.coordinate.bounds.upper == columnCoordinate;
+          }
+          if (fact.lanes.size() == 4) {
+            // (0,0) != (1,0), and (0,1) != (1,0), despite shared terminal
+            // ordinals in the former and tempting summed offsets in the latter.
+            ok &= fact.lanes[0].source != fact.lanes[2].source &&
+                  fact.lanes[1].source != fact.lanes[2].source &&
+                  fact.lanes[0].ordinal == fact.lanes[2].ordinal;
+          }
+        }
+      }
+    }
+    ok &= marker.empty() || StringRef(diagnostics).contains(marker);
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  const auto nestedInputs = nestedInputSource();
+  nestedInputQuery("nested-selected-input-full-tuples-four-distinct-rhs", nestedInputs, true);
+  nestedInputQuery("nested-selected-input-reversed-writer-order", nestedInputSource(true), true);
+  nestedInputQuery("nested-selected-input-no-observed-child", nestedInputSource(false, false),
+                   true);
+  check("nested-selected-input-four-observed-outputs", nestedInputs, true);
+  check("nested-selected-input-unobserved-child-obligations", nestedInputSource(false, false),
+        true);
+  auto nestedMissing = replace(nestedInputs, assign("input10", "x10"), "");
+  nestedInputQuery("nested-selected-input-missing-tuple", nestedMissing, false);
+  check("nested-selected-input-missing-unobserved-tuple",
+        replace(nestedInputSource(false, false), assign("input10", "x10"), ""), false);
+  nestedInputQuery("nested-selected-input-equal-writer-count-duplicate-and-omission",
+                   replace(nestedInputs, assign("input10", "x10"), assign("input00", "x10")),
+                   false);
+  nestedInputQuery(
+      "nested-selected-input-swapped-prefix-does-not-cover-tuple",
+      replace(nestedInputs, nestedInputProxy("input01", 0, 1), nestedInputProxy("input01", 1, 0)),
+      false);
+  nestedInputQuery("nested-selected-input-forged-child",
+                   replace(nestedInputs, "member = \"child\", instance = @lane, port = \"in\"",
+                           "member = \"child\", instance = @missing, port = \"in\""),
+                   false);
+  nestedInputQuery("nested-selected-input-wrong-port",
+                   replace(nestedInputs, "instance = @lane, port = \"in\", direction = \"input\"",
+                           "instance = @lane, port = \"out\", direction = \"input\""),
+                   false);
+  auto wrongNestedType = replace(
+      nestedInputs, nestedInputProxy("input00", 0, 0),
+      "%wide_rhs = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", metadata = {}}> "
+      ": () -> !nodal.bits<2>\n" +
+          replace(nestedInputProxy("input00", 0, 0), bit, "!nodal.bits<2>"));
+  wrongNestedType = replace(
+      wrongNestedType, assign("input00", "x00"),
+      "\"nodal.digital_assign\"(%input00, %wide_rhs) <{kind = \"continuous\", metadata = {}}> "
+      ": (!nodal.bits<2>, !nodal.bits<2>) -> ()\n");
+  nestedInputQuery("nested-selected-input-wrong-selected-type", wrongNestedType, false);
+  nestedInputQuery(
+      "nested-selected-input-template-writer-collision",
+      replace(nestedInputs, exportLane,
+              proxy("local_in", "lane", "in", "input") + assign("local_in", "x00") + exportLane),
+      false);
+  auto foreignFamily = nestedInputFamily();
+  for (size_t at = 0; (at = foreignFamily.find("outer", at)) != std::string::npos; at += 7)
+    foreignFamily.replace(at, 5, "foreign");
+  auto foreignPrefix =
+      replace(nestedInputs, nestedInputFamily(), foreignFamily + nestedInputFamily());
+  foreignPrefix = replace(foreignPrefix, "generated_member\"(%outer, %zero)",
+                          "generated_member\"(%foreign, %zero)");
+  nestedInputQuery("nested-selected-input-foreign-family-prefix", foreignPrefix, false);
+  auto outerExecutable =
+      replace(nestedInputs, "%outer.lanes_lo =",
+              "%outer_extra = \"nodal.digital_expr\"(%x00, %x01) <{operator_name = \"or\", "
+              "metadata = {}}> : (" +
+                  bit + ", " + bit + ") -> " + bit + "\n%outer.lanes_lo =");
+  nestedInputQuery("nested-selected-input-extra-outer-executable-refused", outerExecutable, false);
+  nestedInputQuery("nested-selected-input-sibling-family-refused",
+                   replace(nestedInputs, "%outer.lanes_lo =",
+                           generatedFamily("outer.sibling", "2", "") + "%outer.lanes_lo ="),
+                   false);
+  nestedInputQuery("nested-selected-input-dependent-axis-refused",
+                   replace(nestedInputs,
+                           "nodal.generate\"(%outer.lanes_lo, %outer.lanes_hi, %outer.lanes_step)",
+                           "nodal.generate\"(%outer_index, %outer.lanes_hi, %outer.lanes_step)"),
+                   false);
+  auto symbolicNested = replace(
+      nestedInputs, "%outer_lo =",
+      "\"nodal.parameter\"() <{sym_name = \"COUNT\", type = i64, default_value = 2 : i64, "
+      "classification = \"structural\", variability = \"symbolic\", metadata = {}}> : () -> ()\n"
+      "%count_min = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", metadata = {}}> "
+      ": () -> i64\n"
+      "%count_max = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\", metadata = {}}> "
+      ": () -> i64\n"
+      "\"nodal.parameter_constraint\"(%count_min, %count_max) <{parameter = @COUNT, "
+      "constraint_kind = \"range\", lower_inclusive = true, upper_inclusive = true, metadata = "
+      "{}}> : (i64, i64) -> ()\n"
+      "\"nodal.parameter_envelope\"() <{parameter = @COUNT, policy = \"static_generate\", "
+      "effects = [\"rank\", \"shape\", \"topology\"], metadata = {}}> : () -> ()\n"
+      "%count = \"nodal.const_parameter_ref\"() <{parameter = @COUNT, metadata = {}}> : () -> i64\n"
+      "%outer_lo =");
+  symbolicNested = replace(symbolicNested, "nodal.generate\"(%outer_lo, %outer_hi, %outer_step)",
+                           "nodal.generate\"(%outer_lo, %count, %outer_step)");
+  nestedInputQuery("nested-selected-input-symbolic-axis-refused", symbolicNested, false, 0, false,
+                   "Top.outer", "fixed nonempty independent family axes");
+  auto rankThree =
+      replace(nestedInputs, nestedInputFamily(),
+              generatedFamily("grand", "2",
+                              nestedInputFamily() +
+                                  "\"nodal.generated_export\"(%outer) <{member = \"outer\", "
+                                  "kind = \"family\", access = \"read\", metadata = {}}> : "
+                                  "(!nodal.generated_family) -> ()\n"));
+  rankThree =
+      replace(rankThree, "%row0 =",
+              "%grand_view = \"nodal.generated_member\"(%grand, %zero) <{member = \"outer\", "
+              "kind = \"family\", access = \"read\", metadata = {}}> "
+              ": (!nodal.generated_family, i64) -> !nodal.generated_family\n%row0 =");
+  rankThree = replace(rankThree, "generated_member\"(%outer, %zero)",
+                      "generated_member\"(%grand_view, %zero)");
+  rankThree = replace(rankThree, "generated_member\"(%outer, %one)",
+                      "generated_member\"(%grand_view, %one)");
+  for (size_t at = 0; (at = rankThree.find("Top.outer", at)) != std::string::npos; at += 15)
+    rankThree.replace(at, 9, "Top.grand.outer");
+  nestedInputQuery("nested-selected-input-rank-three-refused", rankThree, false, 0, false,
+                   "Top.grand.outer", "one or two unguarded direct family axes");
+  // Reuse the already checked structural-if fixture spelling, changing only its
+  // selected destination/source. A folded-true guard still is not unguarded.
+  auto guardStart = guardedInput.find("%input_predicate =");
+  auto guardEnd = guardedInput.find(" : (!nodal.static_predicate,", guardStart);
+  guardEnd = guardedInput.find('\n', guardEnd) + 1;
+  auto nestedGuardBody = guardedInput.substr(guardStart, guardEnd - guardStart);
+  nestedGuardBody = replace(nestedGuardBody, "%input0, %x)", "%input00, %x00)");
+  nestedInputQuery("nested-selected-input-guarded-parent-write-refused",
+                   replace(nestedInputs, assign("input00", "x00"), nestedGuardBody), false);
+  for (unsigned budget : {1u, 2u, 3u})
+    nestedInputQuery("nested-selected-input-tiny-proof-budget", nestedInputs, false, budget);
+  auto stridedNested = nestedInputs;
+  for (auto entry : {std::make_tuple("outer", 3, 7, 2), std::make_tuple("outer.lanes", 5, 11, 3)}) {
+    auto [family, lower, upper, step] = entry;
+    for (auto bound : {std::make_tuple("lo", 0, lower), std::make_tuple("hi", 2, upper),
+                       std::make_tuple("step", 1, step)}) {
+      auto [suffix, before, after] = bound;
+      auto spelling =
+          "%" + std::string(family) + "_" + suffix + " = \"nodal.const_literal\"() <{value = ";
+      stridedNested = replace(stridedNested,
+                              spelling + std::to_string(before) + " : i64, spelling = \"" +
+                                  std::to_string(before) + "\"",
+                              spelling + std::to_string(after) + " : i64, spelling = \"" +
+                                  std::to_string(after) + "\"");
+    }
+  }
+  nestedInputQuery("nested-selected-input-both-axis-coordinate-normalization", stridedNested, true,
+                   0, true);
+  check("nested-selected-input-strided-whole-hierarchy", stridedNested, true);
+  auto nestedDag = replace(nestedInputs, assign("input00", "x00"), assign("input00", "output10"));
+  check("nested-selected-input-equal-terminal-ordinal-dag", nestedDag, true);
+  check("nested-selected-input-equal-terminal-ordinal-reciprocal-cycle",
+        replace(nestedDag, assign("input10", "x10"), assign("input10", "output00")), false,
+        "combinational dependency cycle");
+  auto nestedCrossTuple =
+      replace(nestedInputs, assign("input01", "x01"), assign("input01", "output10"));
+  check("nested-selected-input-transposed-tuple-dag", nestedCrossTuple, true);
+  check("nested-selected-input-transposed-tuple-reciprocal-cycle",
+        replace(nestedCrossTuple, assign("input10", "x10"), assign("input10", "output01")), false,
+        "combinational dependency cycle");
+  check("nested-selected-input-unobserved-child-cycle",
+        replace(nestedInputSource(false, false), assign("out", "in"), assign("out", "out")), false,
+        "NODAL-DIGITAL-055-010: ordinary digital assignment contains a combinational storage-read cycle");
+  std::string nestedChild =
+      requirement("req") + port("in", "input", "req") + port("out", "output", "req");
+  std::string nestedDescendant =
+      "\"nodal.instance\"() <{sym_name = \"leaf\", module = @Leaf, parameter_bindings = {}, "
+      "domain_bindings = {req = @req}, metadata = {}}> : () -> ()\n"
+      "\"nodal.instance_domain_binding\"(%req_clock) <{instance = @leaf, requirement = @req, "
+      "actual = @req, origin = \"named\", metadata = {}}> : (" +
+      clockType + ") -> ()\n" + proxy("leaf_in", "leaf", "in", "input") +
+      proxy("leaf_out", "leaf", "out", "output") + assign("leaf_in", "leaf_out") +
+      assign("out", "in");
+  check("nested-selected-input-unused-descendant-cycle",
+        replace(nestedInputSource(false, false), module("Lane", nestedChild + assign("out", "in")),
+                module("Lane", nestedChild + nestedDescendant) +
+                    module("Leaf", nestedChild + assign("out", "in"))),
+        false, "combinational dependency cycle");
+  std::string nestedSample = "%nested_sample = \"nodal.digital_storage\"() <{name = "
+                             "\"nested_sample\", kind = \"register\", "
+                             "domain = @req, metadata = {}}> : () -> " +
+                             bit + "\n" + assign("nested_sample", "in", "register_next");
+  auto sampledNested = replace(nestedInputSource(false, false), assign("out", "in"),
+                               nestedSample + assign("out", "in"));
+  check("nested-selected-input-unused-child-matching-domain-sample", sampledNested, true);
+  check("nested-selected-input-unused-child-foreign-domain-sample",
+        replace(sampledNested, port("x10", "input", "a"), port("x10", "input", "b")), false,
+        "NODAL-CDC-001");
+  ++count;
+  diagnostics.clear();
+  auto nestedBudgetModule =
+      parseSourceString<mlir::ModuleOp>(nestedInputs, ParserConfig(&context, false));
+  bool nestedBudgetRejected = false;
+  if (nestedBudgetModule) {
+    auto hierarchy = nodal::HierarchyModel::create(nestedBudgetModule->getOperation());
+    nodal::DigitalAssignmentProofLimits limits;
+    limits.maximumGuardWork = 1;
+    nestedBudgetRejected =
+        succeeded(hierarchy) && failed(nodal::verifyHierarchyDependencies(*hierarchy, limits));
+  }
+  if (!nestedBudgetRejected) {
+    ++failures;
+    llvm::errs() << "FAIL nested-selected-input-tiny-hierarchy-budget\n" << diagnostics;
+  }
+
   auto nestedSelected = [&] {
     auto inner = generatedFamily("outer.lanes", "3", generatedChild("outer.lanes") + exportLane);
     inner += "\"nodal.generated_export\"(%outer.lanes) <{member = \"inner\", access = \"read\", "

@@ -193,7 +193,9 @@ inspectGeneratedTemplateAssignments(mlir::Operation *module,
                                     DigitalAssignmentProofLimits limits = {});
 
 /// One checked authored write, not an enumerated or synthesized family lane.
-/// Ordinal is the zero-based lane index; proof retains lower/step coordinates.
+/// Ordinal is the terminal axis zero-based index, retained for compatibility.
+/// The authoritative full ordered tuple is proof.selections, including each
+/// original ordinal and lower/step coordinate; it is never a flattened index.
 struct DigitalSelectedInputLane {
   int64_t ordinal = 0;
   mlir::Operation *assignment = nullptr;
@@ -203,15 +205,18 @@ struct DigitalSelectedInputLane {
 struct DigitalSelectedInputAssignment {
   mlir::Operation *instance = nullptr;
   mlir::Operation *port = nullptr;
+  /// Immediate (terminal) family; outer axes remain in each lane proof.
   mlir::Operation *family = nullptr;
   llvm::SmallVector<DigitalSelectedInputLane, 4> lanes;
 };
 /// Complete canonical writer inventory for original (InstanceOp, input PortOp)
 /// keys, independent of proxy aliases or observed reads. Returns one result per
-/// distinct key in first-seed order, with checked lanes sorted by ordinal. Only
-/// direct fixed nonempty Module-owned families and whole ordinary scalar writes
-/// from the parent Module are admitted. Lexical guards, nested/symbolic families,
-/// partial writes and template/selected mixtures refuse. The actual sources and
+/// distinct key in first-seed order, with checked lanes sorted lexicographically
+/// by their full outer-to-inner ordinal tuples. Admits one fixed nonempty family
+/// or exactly two independent literal positive-step axes, with structural-only
+/// outer grouping, and whole ordinary scalar writes from the parent Module.
+/// Guards, symbolic/dependent or higher-rank axes, partial writes and
+/// template/selected mixtures refuse. The actual sources and
 /// selection proofs remain borrowed IR facts, not hierarchy dependency cuts;
 /// callers must preserve normal closed-hierarchy dependency verification.
 mlir::FailureOr<llvm::SmallVector<DigitalSelectedInputAssignment, 4>>

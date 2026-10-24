@@ -55,6 +55,26 @@ The initial public architecture includes:
 
 A target-visible generate loop and a Scala construction loop are distinct operations with distinct source diagnostics.
 
+### Additive bounded extension (2026-10-23)
+
+The original stage decision above remains historical. The approved
+[StructuralIf](../design-gates/NodalStructuralIf-DG-v0.1.md),
+[AreasHierarchy](../design-gates/NodalAreasHierarchy-DG-v0.1.md) and
+[GeneratedAreas](../design-gates/NodalGeneratedAreas-DG-v0.1.md) gates compose the
+bounded F-058.A.1 extension. Compiler-recognized symbolic `if` captures structural
+IR through exact typed predicates; it does not convert a symbolic value to Scala
+`Boolean`, evaluate a parameter default, or change ordinary host control.
+Lightweight lexical Areas and `hdlRange`-yielded Areas preserve canonical
+module/domain, member, ordinal and guard ownership. Context, effect and capability
+admission follows those gates, not the surface type alone. Read-only branch
+results do not grant writable or hierarchy capabilities.
+
+The [A.1 reconciliation](../implementation/increment58-readiness.md#checkpoint-76-additive-area-contract-reconciliation)
+records historical compile prototypes and current owner review separately.
+Contract closure is not F-058.B.2.2 implementation closure: selected generated
+external writes still require ordinal-aware assignment proof and remain
+unsupported and required implementation work.
+
 ## Numeric and width semantics
 
 Ordinary arithmetic is lossless by default within finite-width integer semantics.

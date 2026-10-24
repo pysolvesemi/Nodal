@@ -12,7 +12,8 @@ The [prototype policy](../../AGENTS.md#prototype-validation-and-merge) applies:
 focused local positive, negative, boundary and affected predecessor checks;
 no CI, full qualification or hourly automation. The initial ownership and
 execution decisions below are not acceptance evidence; executed checkpoints
-are recorded separately. All F-058 children remain open.
+are recorded separately. All F-058 children were open at this initial baseline;
+later child acceptance is recorded in the checkpoints and authoritative checklists.
 
 ## Required scope and authoritative owners
 
@@ -3276,3 +3277,89 @@ capacity gap and symbolic native capacity questions remain separate and open.
 Independent scoped source/outcome review accepted this increment. No limits were
 raised, no full-suite qualification or CI ran, and no held CIRCT comparator/firtool
 pipeline or installation was invoked.
+
+## Checkpoint 76: additive Area contract reconciliation
+
+On 2026-10-23, F-058.A.1 is accepted as a bounded public-contract and compile-
+prototype reconciliation, reviewed against canonical source
+`d8929f1942bf4f30f2d9047fa69a3a37a6761ad1` (checkpoint 75). The approved
+[StructuralIf](../design-gates/NodalStructuralIf-DG-v0.1.md),
+[AreasHierarchy](../design-gates/NodalAreasHierarchy-DG-v0.1.md) and
+[GeneratedAreas](../design-gates/NodalGeneratedAreas-DG-v0.1.md) records compose
+this contract. ADR0009 retains its historical decision and adds the bounded
+extension; the public API reference and gate index now link the same owners.
+Only A.1 closes here. F-058.A, B.2/B.2.2 and Foundation 58 remain open; the earlier
+B.3 acceptance is unchanged.
+
+### Contract and prototype crosswalk
+
+- Exact Integer comparisons/equality, Boolean composition, stage/context
+  diagnostics and read-only branch results: `tests/scala/structural-if/run.py`
+  and its positive, negative, no-plugin, helper/base/consumer and host-control
+  fixtures; `Increment55StructuralIfTests.scala` and
+  `nodal_external/Increment55PublicStructuralIf.scala` supply semantic witnesses.
+  The [F55 structural acceptance](increment55-readiness.md#final-structural-checkpoint-acceptance)
+  records eight successful frontend commands and 19 expected compiler rejections,
+  bytecode/default-evaluation controls and separately scoped native evidence.
+  Its positive syntax amalgam is frontend typing evidence, not whole-model HDL
+  acceptance. Invalid reversed/non-Integer operators retain Scala typing errors;
+  symbolic stage is proved from ownership, not merely `Expr[Integer]` typing.
+- Lexical/member rules and compatibility: `tests/scala/areas/run.py` compiles
+  `AreaPositive.scala`, separate `ReusableArea.scala`, `AreaFactory.scala` and
+  `AreaConsumer.scala`, seven lexical negatives and missing-plugin/metadata
+  controls. Checkpoint 3 records the six Area groups within 52 combined groups,
+  with ordering, ownership, failure poisoning and separately scoped native
+  lexical/external-write witnesses. Ordinary lexical writes do not prove
+  selected generated writes.
+- Typed collections, ordinal/static references, guarded existence and common
+  source: the same Area runner compiles separate generated producer/factory/
+  consumer artifacts, five generated negatives and nine guarded effect/metadata
+  cases. `Increment58GeneratedAreaSource.scala` covers `for`/`hdlRange`/`yield`/
+  `new Area`, structural `if`, behavioral `when` and static member selection.
+  `Increment58GeneratedLaneRegisters.scala`, checked by
+  `Increment58GeneratedAreaTests.scala`, supplies the exact Bits, per-lane-enable
+  and reset witness, rather than substituting the earlier UInt/shared-enable
+  example. Selected-dependent fixtures cover nested/guarded reference ownership.
+- Historical executed composition: checkpoint 7 retains its original diagnostic
+  mismatch and subsequent successful 12-group correction, not a wholly passing
+  original run. Checkpoint 23 records the accepted Area harness, 49 source groups
+  and a later overlapping 13 artifact/guarded groups. Checkpoints 35 and 37 record
+  body-local children and shared-source/native follow-up with their exact source
+  and compiler identities. Counts are not added across overlapping runs or
+  retroactively applied to subsequently extended maintained runners.
+
+### Current lineage and acceptance boundary
+
+Read-only review verified that
+`core/scala/frontend/plugin/src/nodal/internal/frontend/compiler/StructuralIfCapture.scala`
+still checks exact symbols, Integer typing and bounded direct Boolean grammar. Owners are not all
+unchanged since checkpoint 23: structural lowering later re-owned lambda-local
+symbols, member derivation gained Instance/Interface dispatch and Area capture
+added InterfaceValueRef. Checkpoints 39, 47 and 53–54 record the corresponding
+focused compilation and predecessor work. `git diff e3da389..d8929f1` is empty for
+`core/scala/frontend/plugin` and the four files under `core/scala/api/src/nodal/`:
+`AreaConstruction.scala`, `GeneratedAreaApi.scala`, `GeneratedAreaDerivation.scala`
+and `StructuralIfRuntime.scala`. ConstructionSession changed substantially afterward; this lineage
+review is not current runtime acceptance of every historical fixture. Retained
+artifact and shared-source receipts were inspected separately, including the
+checkpoint-23 artifact exit/manifest success and later 14/14 generated and 73/73
+family-source results; they remain historical executions.
+
+Architecture review reuses the approved gates and canonical construction,
+iteration, hierarchy, effect and naming owners. No evaluator, registry, policy,
+public spelling or mutable state is introduced. Thus no performance/scale claim
+or benchmark is applicable. Focused validation checks the five-document diff,
+relative links, exact fixture/owner references, and checklist consistency. No
+compiler/runtime suite, CI or downstream consumer was run for this change.
+
+Selected generated Instance-input and Interface writes still fail closed pending
+ordinal-aware assignment/driver proof; they are required B.2.2 implementation,
+not excluded from the accepted contract. Runtime hierarchy selection, capability
+widening, general host effects and unbounded proof remain unsupported. Default
+construction 65536, pending Extended-policy design and independent native proof
+limits remain unchanged. Historical SystemVerilog/two-state evidence is not
+portable Verilog-2005 or universal generated-hierarchy certification.
+
+The current increment does not affect generated Verilog-*. It only reconciles
+current contract references and composed historical prototype evidence; no new
+output is claimed or required for this documentation-only child closure.

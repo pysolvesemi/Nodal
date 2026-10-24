@@ -425,6 +425,50 @@ private[nodal] object InterfaceMlir:
       sameShape(left, right) && left.zip(right).forall: (a, b) =>
         a.copy(path = a.name, dataType = "") == b.copy(path = b.name, dataType = "")
 
+    private val nonModuleInterfaceDeclarations =
+      snapshot.generatedRegions.iterator.flatMap(_.declarations).toSet ++
+        snapshot.areas.iterator.flatMap(_.declarations).toSet
+    private val externalInterfaceDeclarations = ExternalModuleContract.externalInterfacePaths(snapshot)
+
+    /** Independent snapshot admission; ordinary declarations outside forwarding stay unchanged. */
+    private def classifyConservativeArray(endpoint: KernelInterfaceSnapshot): Boolean =
+      declarations.get(endpoint.path).exists: (_, declaration) =>
+        declaration.kind == "interface-array" && declaration.generatedScope.isEmpty &&
+          !nonModuleInterfaceDeclarations(endpoint.path) &&
+          endpoint.definitionContexts.isEmpty && endpoint.domain.nonEmpty &&
+          !externalInterfaceDeclarations(endpoint.path) &&
+          endpoint.dimensions.size == 1 && endpoint.dimensions.head.toIntOption.exists(count =>
+            count > 0 && count.toString == endpoint.dimensions.head
+          ) && endpoint.members.nonEmpty && endpoint.members.forall(member =>
+            member.protocol == "conservative" && member.access == "connect" && member.mode.isEmpty &&
+              member.dataType == "Terminal(electrical)" &&
+              actualType(endpoint, member) == member.dataType &&
+              member.analogAttributes.size == 3 && member.analogAttributes.toMap == Map(
+                "discipline" -> "electrical",
+                "potential_nature" -> "voltage",
+                "flow_nature" -> "current"
+              )
+          ) && endpoint.boundary.forall(boundary =>
+            boundary.instance.nonEmpty && boundary.selection.isEmpty && boundary.region.isEmpty &&
+              modules.get(endpoint.owner).exists(_.instances.exists(instance =>
+                boundary.instance.contains(instance.path) && instance.generatedScope.isEmpty
+              ))
+          )
+    private val conservativeArrayEndpoints = snapshot.interfaceContracts
+      .filter(classifyConservativeArray).map(_.path).toSet
+    private def conservativeArrayProfile(endpoint: KernelInterfaceSnapshot): Boolean =
+      conservativeArrayEndpoints(endpoint.path)
+
+    private def conservativeForwardPair(
+        left: KernelInterfaceSnapshot,
+        right: KernelInterfaceSnapshot
+    ): Boolean =
+      conservativeArrayProfile(left) && conservativeArrayProfile(right) &&
+        left.path != right.path && left.owner == right.owner &&
+        (left.boundary.isEmpty != right.boundary.isEmpty) &&
+        left.identity == right.identity && left.role == right.role &&
+        left.domain == right.domain && left.dimensions == right.dimensions
+
     private def analog(member: KernelInterfaceMemberSnapshot): String =
       dictionary(member.analogAttributes.map((name, value) => name -> quoted(value))*)
 
@@ -668,7 +712,9 @@ private[nodal] object InterfaceMlir:
                 selectedConservative && value.protocol == "conservative" ||
                 boundary.selection.isEmpty &&
                 (value.protocol == "resolved" && instance.forall(_.generatedScope.isEmpty) ||
-                  value.protocol == "conservative" && endpoint.dimensions.isEmpty &&
+                  value.protocol == "conservative" &&
+                  (endpoint.dimensions.isEmpty ||
+                    conservativeArrayProfile(endpoint) && conservativeArrayProfile(child)) &&
                   instance.forall(instance =>
                     instance.generatedScope.forall(scope =>
                       declaration.generatedScope.contains(scope) && boundary.region.contains(
@@ -1004,7 +1050,9 @@ private[nodal] object InterfaceMlir:
             effect.dataType.contains(actualType(endpoint, target)) &&
             effect.role.contains(target.role) && effect.access.contains(target.access) &&
             effect.nestedRoles == target.nestedRoles &&
-            !Set("conservative", "signal-flow").contains(target.protocol) && effect.enable.isEmpty,
+            (target.protocol != "signal-flow" &&
+              (target.protocol != "conservative" || effect.kind == "interface-connect")) &&
+            effect.enable.isEmpty,
           "interface effect differs from its selected actual role map",
           effect.path
         )
@@ -1015,42 +1063,57 @@ private[nodal] object InterfaceMlir:
               effect.owner,
               effect.sourceEndpointRole
             )
-            val sink = ConstructionInterfaceLayout.connectionSink(
-              target.access,
-              endpoint.boundary.exists(_.instance.nonEmpty),
-              source.access,
-              other.boundary.exists(_.instance.nonEmpty)
-            )
-            requireValid(
-              !sink.exists(left =>
-                (if left then endpoint else other).boundary
-                  .exists(_.selection.nonEmpty)
-              ),
-              "selected Interface writes require exact selection-qualified driver proof",
-              effect.path
-            )
-            requireValid(
-              endpoint.identity == other.identity && endpoint.definitionContexts == other.definitionContexts &&
-                (endpoint.domain.isEmpty || other.domain.isEmpty || endpoint.domain == other.domain) &&
-                sameDimensions(endpoint, other) &&
-                target.name == source.name &&
-                sameType(actualType(endpoint, target), actualType(other, source), target.path) &&
-                target.protocol == source.protocol && target.mode == source.mode &&
-                target.nestedInterfaces == source.nestedInterfaces &&
-                effect.sourceRole.contains(source.role) &&
-                effect.sourceAccess.contains(source.access) &&
-                effect.sourceNestedRoles == source.nestedRoles && effect.value.isEmpty &&
-                (ConstructionInterfaceLayout.connectionSink(
-                  target.access,
-                  endpoint.boundary.exists(_.instance.nonEmpty),
-                  source.access,
-                  other.boundary.exists(_.instance.nonEmpty)
-                ).nonEmpty ||
-                  (target.protocol == "resolved" && target.access == "connect" &&
-                    source.access == "connect")),
-              "exact connection changes identity, shape, domain, protocol or complementary access",
-              effect.path
-            )
+            if target.protocol == "conservative" then
+              requireValid(
+                conservativeForwardPair(endpoint, other) &&
+                  effect.endpointRole.contains(endpoint.role) &&
+                  effect.sourceEndpointRole.contains(other.role) &&
+                  target.name == source.name && target.role == source.role &&
+                  target.nestedRoles == source.nestedRoles &&
+                  effect.sourceRole.contains(source.role) &&
+                  effect.sourceAccess.contains(source.access) &&
+                  effect.sourceNestedRoles == source.nestedRoles &&
+                  effect.value.isEmpty && effect.region.isEmpty && effect.sourceOrdinal.isEmpty,
+                "conservative forwarding requires one exact ordinary whole-array identity map",
+                effect.path
+              )
+            else
+              val sink = ConstructionInterfaceLayout.connectionSink(
+                target.access,
+                endpoint.boundary.exists(_.instance.nonEmpty),
+                source.access,
+                other.boundary.exists(_.instance.nonEmpty)
+              )
+              requireValid(
+                !sink.exists(left =>
+                  (if left then endpoint else other).boundary
+                    .exists(_.selection.nonEmpty)
+                ),
+                "selected Interface writes require exact selection-qualified driver proof",
+                effect.path
+              )
+              requireValid(
+                endpoint.identity == other.identity && endpoint.definitionContexts == other.definitionContexts &&
+                  (endpoint.domain.isEmpty || other.domain.isEmpty || endpoint.domain == other.domain) &&
+                  sameDimensions(endpoint, other) &&
+                  target.name == source.name &&
+                  sameType(actualType(endpoint, target), actualType(other, source), target.path) &&
+                  target.protocol == source.protocol && target.mode == source.mode &&
+                  target.nestedInterfaces == source.nestedInterfaces &&
+                  effect.sourceRole.contains(source.role) &&
+                  effect.sourceAccess.contains(source.access) &&
+                  effect.sourceNestedRoles == source.nestedRoles && effect.value.isEmpty &&
+                  (ConstructionInterfaceLayout.connectionSink(
+                    target.access,
+                    endpoint.boundary.exists(_.instance.nonEmpty),
+                    source.access,
+                    other.boundary.exists(_.instance.nonEmpty)
+                  ).nonEmpty ||
+                    (target.protocol == "resolved" && target.access == "connect" &&
+                      source.access == "connect")),
+                "exact connection changes identity, shape, domain, protocol or complementary access",
+                effect.path
+              )
           case "interface-drive" =>
             requireValid(
               !endpoint.boundary.exists(_.selection.nonEmpty),
@@ -1138,6 +1201,33 @@ private[nodal] object InterfaceMlir:
     .toSet
     private val netComponents =
       mutable.HashMap.from((nets.keySet ++ resolvedMemberPaths).map(path => path -> path))
+    private val conservativeForwardEdges = snapshot.digitalConnectivity.filter(effect =>
+      effect.kind == "interface-connect" && members(effect.target)._2.protocol == "conservative"
+    )
+    private val conservativeForwardGroups = conservativeForwardEdges.groupBy: effect =>
+      val left = members(effect.target)._1
+      val right = members(effect.source.get)._1
+      if left.boundary.isEmpty then left.path -> right.path else right.path -> left.path
+    conservativeForwardGroups.foreach: (pair, edges) =>
+      val expected = endpoints(pair._1).members.map(_.name)
+      val actual = edges.map(effect => members(effect.target)._2.name)
+      requireValid(
+        actual == expected && sameRole(endpoints(pair._1).members, endpoints(pair._2).members),
+        "conservative forwarding must cover each ordered member exactly once",
+        pair._2
+      )
+    private val conservativeForwardChildren =
+      conservativeForwardGroups.keysIterator.toVector.groupMapReduce(_._2)(_ => 1)(_ + _)
+    snapshot.interfaceContracts.filter(endpoint =>
+      endpoint.boundary.nonEmpty && endpoint.dimensions.nonEmpty &&
+        endpoint.members.exists(_.protocol == "conservative")
+    ).foreach: endpoint =>
+      requireValid(
+        conservativeForwardChildren.getOrElse(endpoint.path, 0) == 1,
+        "every adapted conservative child array requires one complete forwarding pair",
+        endpoint.path
+      )
+
     private def component(path: String): String =
       var current = path
       var steps = 0
@@ -1216,7 +1306,8 @@ private[nodal] object InterfaceMlir:
       effect.kind match
         case "interface-drive" if members(effect.target)._2.protocol != "resolved" =>
           Vector(effect.target)
-        case "interface-connect" if members(effect.target)._2.protocol != "resolved" =>
+        case "interface-connect"
+            if !Set("resolved", "conservative")(members(effect.target)._2.protocol) =>
           val target = members(effect.target)._1
           val source = members(effect.source.get)._1
           val leftSink = ConstructionInterfaceLayout.connectionSink(
@@ -1864,6 +1955,23 @@ private[nodal] object InterfaceMlir:
           effect.sourceOrdinal.toVector.map(ordinal => "source_ordinal" -> s"$ordinal : i64")*
         )
         effect.kind match
+          case "interface-connect" if members(effect.target)._2.protocol == "conservative" =>
+            output += operation(
+              "nodal.connect_array",
+              Vector.empty,
+              Vector(
+                member(effect.target, effect.endpointRole),
+                member(effect.source.get, effect.sourceEndpointRole)
+              ),
+              sourceLocation(effect.path),
+              "connection_id" -> quoted(effect.path),
+              "source_path" -> quoted(effect.path),
+              "metadata" -> metadata(
+                sourceMetadata(effect.path),
+                "left_path" -> quoted(effect.target),
+                "right_path" -> quoted(effect.source.get)
+              )
+            )
           case "interface-connect" =>
             output += operation(
               "nodal.interface_connect",

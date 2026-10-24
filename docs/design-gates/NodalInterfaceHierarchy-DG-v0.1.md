@@ -438,6 +438,49 @@ The approved scope is F58 conservative topology and its applicable backend, not
 F72-wide analog qualification. Focused matched implementation results belong in
 the F58 readiness record; this contract alone is not an acceptance claim.
 
+## F58 fixed conservative InterfaceArray forwarding amendment
+
+**Status:** Focused prototype acceptance, checkpoint 75
+**Scope:** Existing API and compiler boundary
+
+Existing `InterfaceArray.forwardExact` admits positive authored Int rank-one
+extents with nonempty all-Electrical conservative Connect inventories. Endpoints
+must retain the same selected role, complete ordered member/nested-interface ABI,
+exact domain binding and whole-array identity map. One endpoint is a direct export
+of the ordinary parent Module, the other its authenticated immediate-child
+projection. Each adapted child requires a complete once-only forwarding map.
+
+ConstructionSession owns actual declaration/instance/scope authentication. Typed
+capture and immutable bridge validation preserve represented facts without a new
+API, schema or mutable semantic registry. Conservative relations stay outside
+ordinary digital driver/observation graphs and lower through existing shaped
+member accesses and `connect_array`. The shared native Interface classifier,
+ConservativeConnectivity and boundary adapter independently prove geometry,
+actual child incidence and full leaf coverage, including unaccessed declarations
+and missing projections. Only original local declarations participate in the
+adapter's all-child inventory; an internal child projection is not another export.
+Existing electrical vectors and whole-array bindings carry the target semantics.
+
+This is a narrow exception to earlier shaped-conservative forwarding rejection,
+not permission for scalar conservative `forwardExact`, generated/symbolic arrays,
+mixed/signal-flow inventories, rank-two forwarding, indexing or partial maps.
+Existing scalar member operations, declaration-only profiles and empty digital
+Interface behavior remain unchanged. No construction or native proof limit changes.
+
+Source checks authenticate authored Int syntax, the Electrical singleton and Area
+allocation ownership. Transport independently checks canonical literal geometry,
+electrical discipline/nature attributes and represented ownership. It cannot
+recover erased Int-versus-literal-expression syntax, identically rendered
+NamedDiscipline identity, or Area allocation versus an Area alias of a
+Module-allocated instance. Area member references are not allocation evidence.
+Target correspondence retains semantic identity; binding `source_location` remains
+unknown and is not claimed as authored file/line provenance.
+
+[Checkpoint 75](../implementation/increment58-readiness.md#checkpoint-75--fixed-conservative-interfacearray-forwarding)
+records composed source checks, actual compact Verilog-A, transactional refusals
+and directly affected predecessor parity. This does not close F-058.B.1,
+F-058.B.2 or Foundation 58.
+
 ## F58 bounded symbolic conservative family amendment
 
 **Status:** Narrow prototype accepted in checkpoint 70; broader family work remains open

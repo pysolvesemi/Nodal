@@ -242,6 +242,71 @@ struct Instance {
   llvm::StringMap<Type> actualTypes;
   Operation *selection = nullptr;
 };
+DigitalInterfaceLeaf leafFacts(const Member &member, const Entry &entry) {
+  DigitalInterfaceLeaf leaf;
+  leaf.declaration = member.operation;
+  leaf.path = member.operation->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+  leaf.type = member.type;
+  leaf.protocol = member.operation->getAttrOfType<StringAttr>("protocol");
+  leaf.role = entry.dictionary.getAs<StringAttr>("leaf_role");
+  leaf.access = entry.dictionary.getAs<StringAttr>("access");
+  leaf.nestedRoles = entry.nestedRoles;
+  leaf.nestedInterfaces = entry.nestedInterfaces;
+  leaf.analogMetadata = member.analogMetadata;
+  leaf.analogReferences = member.analogReferences;
+  return leaf;
+}
+
+// Fact-only admission: callers authenticate the declaration/role first. In
+// particular this must never call the full Interface or connectivity models.
+LogicalResult fixedConservativeArrayProfile(const DigitalInterfaceEndpoint &endpoint,
+                                           unsigned &remaining) {
+  auto charge = [&]() { if (!remaining) return false; --remaining; return true; };
+  auto invalid = [&]() {
+    if (!endpoint.operation) return failure();
+    return reject(endpoint.operation,
+                  "conservative Interface array requires direct fixed rank-one Electrical connect leaves");
+  };
+  if (!charge() || !endpoint.operation || !endpoint.declaration || !endpoint.domainOwner ||
+      !endpoint.declarationOwner || !endpoint.selectedRole || !endpoint.domain ||
+      endpoint.selection || endpoint.operation->getParentOp() != endpoint.domainOwner ||
+      endpoint.declaration->getParentOp() != endpoint.declarationOwner ||
+      !llvm::isa<ModuleOp>(endpoint.domainOwner) ||
+      !llvm::isa<ModuleOp>(endpoint.declarationOwner) ||
+      endpoint.domainOwner->hasAttr("external_name") ||
+      endpoint.declarationOwner->hasAttr("external_name") ||
+      (endpoint.instance && endpoint.instance->getParentOp() != endpoint.domainOwner) ||
+      !endpoint.dimensions || endpoint.dimensions.size() != 1 || endpoint.leaves.empty())
+    return invalid();
+  auto formalDimensions = metadata(endpoint.declaration).getAs<ArrayAttr>("dimensions");
+  auto actualDimensions = metadata(endpoint.operation).getAs<ArrayAttr>("dimensions");
+  if (!formalDimensions || formalDimensions.size() != 1 ||
+      !actualDimensions || actualDimensions.size() != 1)
+    return invalid();
+  int64_t extent = 0;
+  for (auto [owner, dimensions] :
+       {std::make_pair(endpoint.domainOwner, actualDimensions),
+        std::make_pair(endpoint.declarationOwner, formalDimensions)}) {
+    if (!charge()) return invalid();
+    auto token = llvm::dyn_cast<StringAttr>(dimensions[0]);
+    if (!token) return invalid();
+    auto axis = resolveStaticShapeDimension(owner, token.getValue(), "shape", remaining);
+    if (failed(axis) || axis->parameter || axis->expression || axis->literal <= 0 ||
+        (extent && extent != axis->literal))
+      return invalid();
+    extent = axis->literal;
+  }
+  for (const auto &leaf : endpoint.leaves) {
+    if (!charge()) return invalid();
+    auto terminal = llvm::dyn_cast<TerminalType>(leaf.type);
+    if (!leaf.protocol || leaf.protocol.getValue() != "conservative" || !terminal ||
+        terminal.getDiscipline() != "electrical" || !leaf.access ||
+        leaf.access.getValue() != "connect")
+      return invalid();
+  }
+  return success();
+}
+
 // Only the independently admitted declaration-only external endpoint has no
 // clock-domain constraint. An ordinary missing domain is never a wildcard.
 static bool unconstrainedExternal(const Instance &instance) {
@@ -985,6 +1050,34 @@ LogicalResult Model::boundary(Operation *operation) {
     }
   const bool selectedConservativeEndpoint = scalarConservativeInventory && shape.empty() &&
       succeeded(resolveConservativeGeneratedSelection(operation));
+  bool fixedConservativeArray = false;
+  if (!shape.empty() && llvm::any_of(original.definition->members, [](const auto &entry) {
+        return entry.second.protocol == "conservative";
+      })) {
+    DigitalInterfaceEndpoint facts;
+    facts.operation = operation;
+    facts.declaration = boundary->endpoint;
+    facts.declarationOwner = boundary->module;
+    facts.domainOwner = module;
+    facts.instance = boundary->instance;
+    facts.selectedRole = original.role->operation;
+    facts.domain = boundary->domain;
+    facts.dimensions = actualDimensions;
+    facts.selection = boundary->selection;
+    for (Operation &member : original.definition->operation->getRegion(0).front()) {
+      if (!llvm::isa<InterfaceMemberOp>(member)) continue;
+      if (++work > digitalTypeMaximumNodes)
+        return reject(operation, "conservative array inventory exceeds structural budget");
+      auto found = original.definition->members.find(symbol(&member));
+      facts.leaves.push_back(leafFacts(found->second,
+          original.role->entries.find(found->getKey())->second));
+    }
+    unsigned remaining = digitalTypeMaximumNodes - work;
+    auto status = fixedConservativeArrayProfile(facts, remaining);
+    work = digitalTypeMaximumNodes - remaining;
+    if (failed(status)) return failure();
+    fixedConservativeArray = true;
+  }
   llvm::StringMap<Type> actualTypes;
   unsigned memberIndex = 0;
   for (Operation &memberOperation : original.definition->operation->getRegion(0).front()) {
@@ -1002,7 +1095,7 @@ LogicalResult Model::boundary(Operation *operation) {
     if ((boundary->selection &&
          ((analog(member.protocol) && !selectedConservative) || resolved ||
           isDigitalControlBoundaryType(member.type))) ||
-        (conservative && !shape.empty()) || member.protocol == "signal_flow" ||
+        (conservative && !shape.empty() && !fixedConservativeArray) || member.protocol == "signal_flow" ||
         isDigitalControlBoundaryType(member.type) ||
         (!conservative &&
          failed(inferDigitalBitPatternMaximumBits(payload, original.definition->operation))))
@@ -1762,7 +1855,7 @@ LogicalResult Model::verify() {
                       "conservative Interface use lacks its actual selected-role permission");
       return success();
     };
-    if (llvm::isa<ConnectOp, AliasOp, ReferenceOp>(operation)) {
+    if (llvm::isa<ConnectOp, ConnectArrayOp, AliasOp, ReferenceOp>(operation)) {
       for (Value operand : operation->getOperands())
         if (failed(requireAccess(operand, "connect")))
           return WalkResult::interrupt();
@@ -1828,17 +1921,7 @@ LogicalResult Model::endpoints(SmallVectorImpl<DigitalInterfaceEndpoint> &result
         return reject(&operation, "Interface leaf projection exceeds its structural budget");
       auto member = instance.definition->members.find(symbol(&memberOperation));
       const Entry &entry = instance.role->entries.find(member->getKey())->second;
-      DigitalInterfaceLeaf leaf;
-      leaf.declaration = &memberOperation;
-      leaf.path = memberOperation.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
-      leaf.type = member->second.type;
-      leaf.protocol = memberOperation.getAttrOfType<StringAttr>("protocol");
-      leaf.role = entry.dictionary.getAs<StringAttr>("leaf_role");
-      leaf.access = entry.dictionary.getAs<StringAttr>("access");
-      leaf.nestedRoles = entry.nestedRoles;
-      leaf.nestedInterfaces = entry.nestedInterfaces;
-      leaf.analogMetadata = member->second.analogMetadata;
-      leaf.analogReferences = member->second.analogReferences;
+      DigitalInterfaceLeaf leaf = leafFacts(member->second, entry);
       auto component = resolvedMembers.find(std::make_pair(&operation, leaf.path.getValue().str()));
       if (component != resolvedMembers.end())
         leaf.resolvedComponent = component->second;
@@ -2322,6 +2405,11 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
 }
 
 } // namespace
+
+LogicalResult checkFixedConservativeInterfaceArrayProfile(
+    const DigitalInterfaceEndpoint &endpoint, unsigned &remainingWork) {
+  return fixedConservativeArrayProfile(endpoint, remainingWork);
+}
 
 FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *operation) {
   const unsigned operands = operation ? operation->getNumOperands() : 0;

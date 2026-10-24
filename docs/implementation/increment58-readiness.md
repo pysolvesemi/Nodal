@@ -3173,3 +3173,106 @@ reuse and actual routing. Symbolic rank-two capacity, broader hierarchy contract
 the separately recorded default-policy workload gap and remaining F-058 children
 stay open. No capacity promotion, CI, CIRCT comparator/firtool pipeline, installation
 or broader qualification was performed.
+
+
+## Checkpoint 75 — fixed conservative InterfaceArray forwarding
+
+**Status:** Focused prototype acceptance for the selected existing-API slice.
+Foundation 58, F-058.B.1 and F-058.B.2 remain open.
+
+Existing `InterfaceArray.forwardExact` now supports whole positive authored-Int
+rank-one Electrical conservative arrays across ordinary immediate-child Module
+boundaries. Both endpoints must select the same Connect role, complete ordered
+member/nested-interface ABI and exact domain binding. One endpoint is a direct
+local export and the other an authenticated child projection; every child member
+must have exactly one complete whole-array forwarding map. The focused witnesses
+include one and three lanes, reversed call orientation, two hierarchy levels and
+two actual instances sharing one child definition. No new public spelling or
+snapshot schema was added.
+
+`ConstructionSession` authenticates live declaration, instance and scope identity;
+`DigitalInterfaceContract` owns typed capture, and `InterfaceMlir` independently
+validates snapshots before lowering shaped member accesses and existing
+`connect_array`. Conservative edges are excluded from ordinary digital driver and
+observation processing. The shared native Interface owner classifies the narrow
+fixed conservative profile, while `ConservativeConnectivity` proves actual roots,
+geometry and complete once-only child coverage. The existing boundary adapter
+independently refuses missing physical incidence plans, including an entirely
+unreferenced child, before mutation. It emits existing electrical terminal arrays
+and compact whole-array bindings, not per-lane instances or digital assignments.
+
+The actual two-level test exposed an adapter inventory bug: an internal child
+boundary projection was being treated as a local exported declaration. The
+reviewed two-line `InterfaceInstanceOp` filter fixes that inventory while retaining
+the existing work charge and all genuine child incidence obligations. Only that
+owner was rebuilt for the repair; the final link reuses exact accepted objects
+with explicit additive-header ABI/dependency provenance. This is not a claim that
+all header consumers were freshly rebuilt.
+
+Focused evidence:
+
+- Five source positives, eight capture refusals and seven forged-snapshot refusals
+  compose the retained v2 prefix and corrected v3 tail under the unchanged default
+  construction policy. The authoritative source projection uses the shared marker
+  and emitted-location preflight. No original failed runner is relabeled as green.
+- All five actual bridge witnesses emit verified compact Verilog-A. The maintained
+  `check_outputs.py` checks executable vector declarations, full independent p/n
+  mappings, actual top-to-middle-to-leaf references, shared-definition multiplicity,
+  decoded semantic correspondence and adapted operation inventory. It is independent
+  of module serialization order. Four direct target outputs and extent3 adaptation
+  are byte-identical before/after the two-line repair; repeated extent3 emission is
+  byte-identical. Generic positive emission does not claim an in-memory input-IR
+  parity check that its probe does not perform.
+- Eight native derivatives cover missing/unaccessed leaves, duplicate whole maps,
+  projected children without members, zero parent projection, cross-member wiring,
+  local-local relations, signed32 target overflow and unused rank-two declarations.
+  Five reject verification with their exact cause; three preserve declaration-only
+  verification and then reject emission transactionally, with empty target and
+  unchanged in-memory input. All three transactions also pass with the repaired
+  executable. `make_controls.py` reproduces all eight inputs and corrected
+  expectations byte-for-byte without depending on private scratch guard modules.
+- The matched executable passes the retained 732 checks at unchanged 512/64 mapper
+  and 16384/1024 topology limits. Retained nested and anchor target outputs are
+  byte-identical to checkpoint 74. The original anchor call accidentally selected
+  the eight-point-specific wrapper mode; its exit89 remains retained, separate from
+  the successful replay using the exact prior generic `emit` command.
+- Four existing ordinary digital forwarding/drive/array/resolved captures pass;
+  all eight snapshot/MLIR artifacts are byte-identical to retained accepted outputs,
+  with actual emitted source-path postchecks. Five existing scalar conservative
+  source/bridge groups pass. Those five groups discard their MLIR, so no retained
+  scalar emitted-path or fresh scalar native-target claim is made. An initial
+  ordinary replay omitted a fixture class directory; the preserved pre-case failure
+  was corrected with a pinned isolated retained fixture directory, not a production
+  change or broad stale classpath.
+
+The final executable SHA256 is
+`94f1e3442a4256065f4669e1ec90cd60367cf87f4464c5011795306b72465b84`.
+The actual two-level Verilog-A SHA256 is
+`0e8efd22829cfe15164b745d74abb4c43acdee6a4c37180c5278d864780b3f20`;
+extent3 is `b7bcc4aae42e5b7917beb2f443ada03f50e2f21c9c2e0569c464c63ea2565870`.
+Exact source projections, compile/link recipes, original failures, lossless retained
+artifacts and concise receipts remain in ignored
+`.work/f58-conservative-interface-array`. Representative focused replay commands:
+
+```sh
+.work/f58-conservative-interface-array/scalar-revision2/bin/conservative-interface-array-probe-v2 .work/f58-conservative-interface-array/test-output/scala-v2/two-level.mlir emit
+python3 -I -B tests/compiler/fixtures/increment58/conservative-interface-array/check_outputs.py .work/f58-conservative-interface-array/test-output/native-v2 --two-level
+python3 -I -B tests/compiler/fixtures/increment58/conservative-interface-array/make_controls.py ACTUAL_EXTENT3_MLIR FRESH_OUTPUT_DIRECTORY
+```
+
+Source authentication distinguishes authored Int counts, the actual Electrical
+singleton and Area allocation ownership. Snapshots/native IR prove their canonical
+represented dimensions, discipline/nature attributes and ownership, not erased
+syntax or allocation distinctions. An Area member may merely alias a Module-allocated
+instance, so it is not allocation evidence. Target binding metadata currently has
+`source_location: unknown`; semantic identity survives, but authored file/line
+provenance is not claimed for that target field.
+
+Generated/symbolic/mixed/signal-flow arrays, rank-two forwarding, slices/partial
+maps, scalar conservative `forwardExact` and broader hierarchy contracts remain
+outside this slice. Existing scalar member operations, empty digital interfaces
+and broader declaration-only admission are preserved. The default construction
+capacity gap and symbolic native capacity questions remain separate and open.
+Independent scoped source/outcome review accepted this increment. No limits were
+raised, no full-suite qualification or CI ran, and no held CIRCT comparator/firtool
+pipeline or installation was invoked.

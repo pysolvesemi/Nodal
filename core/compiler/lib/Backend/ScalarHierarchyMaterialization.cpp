@@ -129,9 +129,12 @@ public:
           continue;
         }
         const bool local = llvm::isa<GenerateOp>(endpoint.operation->getParentOp());
+        const bool array = !endpoint.dimensions.empty();
         OperationState state(endpoint.operation->getLoc(),
-                             local ? NodeOp::getOperationName() : TerminalOp::getOperationName());
-        state.addTypes(leaf.type);
+                             array ? TerminalArrayOp::getOperationName()
+                                   : local ? NodeOp::getOperationName() : TerminalOp::getOperationName());
+        state.addTypes(array ? Type(ShapedType::get(outer.getContext(), entry.extent, leaf.type))
+                             : leaf.type);
         state.addAttribute("name", builder.getStringAttr(leaf.name));
         if (local) {
           Operation *scope = endpoint.operation->getParentOp();
@@ -141,8 +144,14 @@ public:
           state.addAttribute("direction", builder.getStringAttr("inout"));
           state.addAttribute("flow_orientation", builder.getStringAttr("into_component"));
         }
-        state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
-        state.addAttribute("metadata", metadata(endpoint, leaf, false));
+        const std::string physicalPath = path(endpoint.domainOwner).str() + "." + leaf.name;
+        state.addAttribute("source_path", builder.getStringAttr(array ? physicalPath : leaf.logical));
+        auto attrs = NamedAttrList(metadata(endpoint, leaf, false));
+        if (array) {
+          attrs.set("semantic_path", builder.getStringAttr(physicalPath));
+          attrs.set("storage", builder.getStringAttr("structural"));
+        }
+        state.addAttribute("metadata", attrs.getDictionary(outer.getContext()));
         leaf.value = builder.create(state)->getResult(0);
         record(endpoint, leaf, local ? "local_node" : "into_component");
       }
@@ -159,8 +168,11 @@ public:
         auto port = llvm::find_if(target.leaves, [&](const Leaf &candidate) {
           return candidate.path == leaf.path;
         });
-        OperationState state(endpoint.operation->getLoc(), InstanceTerminalOp::getOperationName());
-        state.addTypes(leaf.type);
+        const bool array = !endpoint.dimensions.empty();
+        OperationState state(endpoint.operation->getLoc(), array ? InstanceTerminalArrayOp::getOperationName()
+                                                                : InstanceTerminalOp::getOperationName());
+        state.addTypes(array ? Type(ShapedType::get(outer.getContext(), entry.extent, leaf.type))
+                             : leaf.type);
         state.addAttribute("instance", FlatSymbolRefAttr::get(
             outer.getContext(), text(endpoint.instance, "sym_name")));
         state.addAttribute("port", builder.getStringAttr(port->name));
@@ -172,8 +184,20 @@ public:
           state.addAttribute("generated_owner", scope->getAttr("region_id"));
           state.addAttribute("generated_induction", scope->getAttr("induction_path"));
         }
-        state.addAttribute("source_path", builder.getStringAttr(leaf.logical));
-        state.addAttribute("metadata", metadata(endpoint, leaf, true));
+        auto attrs = NamedAttrList(metadata(endpoint, leaf, true));
+        std::string sourcePath = leaf.logical;
+        if (array) {
+          auto instanceMetadata = endpoint.instance->getAttrOfType<DictionaryAttr>("metadata");
+          auto childPath = instanceMetadata ? instanceMetadata.getAs<StringAttr>("child_path") : StringAttr();
+          sourcePath = childPath && !childPath.getValue().empty()
+                           ? childPath.getValue().str() + "." + port->name
+                           : path(target.endpoint.domainOwner).str() + "." + port->name;
+          attrs.set("semantic_path", builder.getStringAttr(path(endpoint.domainOwner).str() + "." + leaf.name));
+          attrs.set("storage", builder.getStringAttr("structural"));
+          if (childPath && !childPath.getValue().empty()) attrs.set("child_path", childPath);
+        }
+        state.addAttribute("source_path", builder.getStringAttr(sourcePath));
+        state.addAttribute("metadata", attrs.getDictionary(outer.getContext()));
         Value terminal = builder.create(state)->getResult(0);
         if (entry.family) {
           OperationState connection(endpoint.operation->getLoc(), ConnectOp::getOperationName());
@@ -386,9 +410,18 @@ private:
         if ((endpoint.selection && failed(resolveConservativeGeneratedSelection(endpoint.operation))) ||
             !llvm::isa<ModuleOp, GenerateOp>(endpoint.operation->getParentOp()))
           return invalid(endpoint.operation, "generated conservative Interface requires selected occurrence routing");
-        if (!endpoint.dimensions.empty())
-          return invalid(endpoint.operation, "conservative Interface emission requires scalar endpoints");
         Endpoint entry{endpoint, {}};
+        if (!endpoint.dimensions.empty()) {
+          unsigned remaining = unsigned(kOperations - work), before = remaining;
+          auto status = checkFixedConservativeInterfaceArrayProfile(endpoint, remaining);
+          work += before - remaining;
+          if (failed(status)) return failure();
+          auto dimensions = endpoint.operation->getAttrOfType<DictionaryAttr>("metadata")
+                                .getAs<ArrayAttr>("dimensions");
+          entry.extent = llvm::cast<StringAttr>(dimensions[0]).getValue().str();
+          if (failed(resolveTargetShapedLayout(endpoint.domainOwner, entry.extent)))
+            return invalid(endpoint.operation, "conservative Interface array exceeds signed32 target layout");
+        }
         for (const auto &leaf : endpoint.leaves) {
           if (++leaves > kOperations)
             return invalid(endpoint.operation, "conservative Interface leaf plan exceeds finite budget");
@@ -619,15 +652,47 @@ private:
       if (exports.wasInterrupted())
         return failure();
     }
+    // An absent projection cannot manufacture an unbound child vector during
+    // adaptation. The conservative owner checks per-leaf coverage for represented
+    // incidences; this physical-plan check also closes the zero-reference case.
+    const bool directArrays = llvm::any_of(endpoints, [](const Endpoint &entry) {
+      return !entry.endpoint.dimensions.empty();
+    });
+    if (directArrays) for (Operation *instance : structuralInstances) {
+      Operation *definition = resolveInstanceModuleDefinition(instance);
+      if (!definition || definition->getNumRegions() != 1 || definition->getRegion(0).empty())
+        return invalid(instance, "Interface array child definition is unavailable");
+      for (Operation &declaration : definition->getRegion(0).front()) {
+        if (++work > kOperations)
+          return invalid(instance, "Interface array incidence inventory exceeds finite budget");
+        if (!llvm::isa<InterfaceInstanceOp>(declaration))
+          continue;
+        auto position = positions.find(&declaration);
+        if (position == positions.end() || endpoints[position->second].endpoint.dimensions.empty())
+          continue;
+        bool represented = false;
+        for (const auto &entry : endpoints) {
+          if (++work > kOperations)
+            return invalid(instance, "Interface array incidence lookup exceeds finite budget");
+          if (entry.endpoint.instance == instance && entry.endpoint.declaration == &declaration) {
+            represented = true;
+            break;
+          }
+        }
+        if (!represented)
+          return invalid(instance, "every child Interface array requires an exact physical incidence plan");
+      }
+    }
     for (const auto &entry : endpoints)
       if (entry.endpoint.instance && !positions.count(entry.endpoint.declaration))
         return invalid(entry.endpoint.operation, "Interface child endpoint has no exact physical plan");
     for (const auto &access : accesses) {
       if (access.leaf.protocol.getValue() != "conservative" || !positions.count(access.projection))
         return invalid(access.value.getDefiningOp(), "member has no conservative physical plan");
+      const bool array = !endpoints[positions.lookup(access.projection)].endpoint.dimensions.empty();
       for (Operation *user : access.value.getUsers())
-        if (!llvm::isa<ConnectOp, BranchOp>(user))
-          return invalid(user, "conservative Interface member requires supported connection or branch use");
+        if (array ? !llvm::isa<ConnectArrayOp>(user) : !llvm::isa<ConnectOp, BranchOp>(user))
+          return invalid(user, "conservative Interface member requires its supported whole-array or scalar use");
     }
     // Keep domain erasure bounded to the exact Interface witness closure. Unknown
     // producers or any surviving SSA/symbol consumer fail before mutation.

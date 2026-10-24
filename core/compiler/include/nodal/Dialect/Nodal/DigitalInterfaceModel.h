@@ -94,6 +94,11 @@ struct DigitalInterfaceEndpoint {
   /// Retains selected occurrence provenance without copying a family/prefix registry.
   mlir::Operation *selection = nullptr;
 };
+/// Narrow physical-forwarding profile over already verified borrowed endpoint facts.
+/// Does not verify a Model, collect endpoints or own connectivity. Every inspected
+/// endpoint, axis and leaf consumes the caller's remaining structural work.
+mlir::LogicalResult checkFixedConservativeInterfaceArrayProfile(
+    const DigitalInterfaceEndpoint &endpoint, unsigned &remainingWork);
 /// Validate once per owning module and transactionally append all endpoints and
 /// complete selected-role leaves in authored declaration order. These are
 /// borrowed IR facts, valid only while the IR remains alive and unchanged.

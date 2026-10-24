@@ -186,6 +186,43 @@ private[nodal] object DigitalInterfaceContract:
           RoleAccess.Nested(_, _) => ()
       case _ => fail(4, "automatic inversion requires fully complementary digital member access")
 
+  /** The bounded ordinary whole-array forwarding profile, not a declaration restriction. */
+  private[nodal] def conservativeArrayProfile(
+      endpoint: InterfaceEndpoint,
+      leaves: Vector[ConstructionInterfaceLayout.Leaf],
+      charge: Long => Unit = ConstructionKernel.chargePublicationWork
+  ): Boolean =
+    var work = 0
+    def electricalDefinition(definition: InterfaceType[?], depth: Int): Boolean =
+      charge(1L)
+      if depth > 128 then fail(1, "interface nesting exceeds 128")
+      definition.constructionContext.isEmpty && definition.members.iterator.forall(member =>
+        charge(1L)
+        work += 1
+        if work > 65536 then fail(1, "interface expansion exceeds 65536 members")
+        member match
+          case value: InterfaceMember.Conservative[?] => value.discipline == Electrical
+          case nested: InterfaceMember.Nested[?] => electricalDefinition(nested.definition, depth + 1)
+          case _ => false
+      )
+    endpoint match
+      case array: InterfaceArray[?, ?] =>
+        array.origin.isEmpty && electricalDefinition(array.definition, 0) &&
+          (array.formalCount match
+            case count: Int => count > 0
+            case _ => false) && leaves.nonEmpty && leaves.forall(leaf =>
+            charge(1L)
+            leaf.protocol == "conservative" && leaf.access == "connect" && leaf.mode.isEmpty &&
+              leaf.dataType.isEmpty && leaf.analogType.contains("Terminal(electrical)") &&
+              leaf.definition.constructionContext.isEmpty &&
+              leaf.analogAttributes.toMap == Map(
+                "discipline" -> "electrical",
+                "potential_nature" -> "voltage",
+                "flow_nature" -> "current"
+              ) && leaf.analogAttributes.size == 3
+          )
+      case _ => false
+
   def root(endpoint: InterfaceEndpoint): InterfaceEndpoint = endpoint match
     case port: InterfacePort[?, ?] => root(port)
     case array: InterfaceArray[?, ?] => root(array)
@@ -716,6 +753,7 @@ private[nodal] object DigitalInterfaceContract:
         fail(8, "ordinary read changed its exact contextual member type")
     val ordinals = mutable.HashMap.empty[String, Int]
     val driven = mutable.HashSet.empty[String]
+    val conservativePairs = mutable.HashSet.empty[(String, String)]
     def effect(
         operation: Operation,
         target: String,
@@ -776,6 +814,20 @@ private[nodal] object DigitalInterfaceContract:
             )
           val leftLeaves = endpointLeaves(left)
           val rightLeaves = endpointLeaves(right)
+          val conservative = leftLeaves.exists(_.protocol == "conservative") ||
+            rightLeaves.exists(_.protocol == "conservative")
+          if conservative then
+            val local = if a.boundary.isEmpty then a else b
+            val child = if a.boundary.nonEmpty then a else b
+            if !conservativeArrayProfile(left, leftLeaves) ||
+              !conservativeArrayProfile(right, rightLeaves) ||
+              (a.boundary.isEmpty == b.boundary.isEmpty) ||
+              !child.boundary.exists(value => value.instance.nonEmpty &&
+                value.selection.isEmpty && value.region.isEmpty) ||
+              left.role.name != right.role.name || a.domain.isEmpty || a.domain != b.domain ||
+              operation.region.nonEmpty || operation.sourceOrdinal.nonEmpty ||
+              !conservativePairs.add(local.path -> child.path)
+            then fail(3, "conservative forwarding requires one exact ordinary fixed array pair once")
           if leftLeaves.size != rightLeaves.size then
             fail(5, "exact interface connection changed members")
           leftLeaves.zip(rightLeaves).map: (first, second) =>
@@ -794,9 +846,13 @@ private[nodal] object DigitalInterfaceContract:
             val complementary = sink.nonEmpty ||
               (first.protocol == "resolved" && first.access == "connect" &&
                 second.access == "connect")
-            if first.analogType.nonEmpty || !complementary then
+            if conservative && (first.role != second.role ||
+                first.nestedRoles != second.nestedRoles ||
+                first.analogAttributes != second.analogAttributes)
+            then fail(5, "conservative forwarding changed its exact ordered role or nature ABI")
+            if !conservative && (first.analogType.nonEmpty || !complementary) then
               fail(3, "exact digital interface connection requires complementary digital access")
-            if first.protocol != "resolved" then
+            if !conservative && first.protocol != "resolved" then
               val sinkContext = if sink.contains(true) then a else b
               if sinkContext.boundary.exists(_.selection.nonEmpty) then
                 fail(3, "selected Interface writes require exact lane-qualified driver proof")
@@ -933,6 +989,11 @@ private[nodal] object DigitalInterfaceContract:
             )
           Vector(effect(operation, a.path, source = Some(b.path), dataType = Some(expected)))
         case _ => fail(11, s"malformed typed digital connectivity operation '${operation.kind}'")
+    val forwardedChildren = conservativePairs.toVector.groupMapReduce(_._2)(_ => 1)(_ + _)
+    interfaces.filter(endpoint => endpoint.boundary.nonEmpty && endpoint.dimensions.nonEmpty &&
+      endpoint.members.exists(_.protocol == "conservative")).foreach: endpoint =>
+      if forwardedChildren.getOrElse(endpoint.path, 0) != 1 then
+        fail(3, "every adapted conservative child array requires one complete forwarding pair")
     val declarationsByPath = publicationScan(
       publicationScan(declarations).map(value => publicationKey(value.path) -> value)
     ).toMap
@@ -1046,7 +1107,9 @@ private[nodal] object DigitalInterfaceContract:
     var dependencyEdges = 0
     val boundaries =
       interfaces.filter(_.boundary.exists(_.instance.nonEmpty)).flatMap(_.members.map(_.path)).toSet
-    connectivity.foreach: edge =>
+    val conservativeMembers = interfaces.iterator.flatMap(_.members)
+      .filter(_.protocol == "conservative").map(_.path).toSet
+    connectivity.filterNot(edge => conservativeMembers(edge.target)).foreach: edge =>
       val target = canonical(edge.target)
       val values = (edge.value.toVector ++ edge.enable.toVector).map(path =>
         expressions.getOrElse(path, fail(7, "digital dependency has no actual captured value"))

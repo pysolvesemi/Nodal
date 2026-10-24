@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/NatureDiscipline.h"
 #include "nodal/Dialect/Nodal/DigitalInterfaceModel.h"
 #include "nodal/Dialect/Nodal/DigitalStorageModel.h"
+#include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
 #include "nodal/Dialect/Nodal/ParameterModel.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
@@ -1848,6 +1849,89 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
                                         std::move(checkedDomains), extentParameter};
 }
 
+namespace {
+using BoundaryPortKey = std::pair<Operation *, StringAttr>;
+
+bool logicalConservativeArray(Value value) {
+  auto shape = value ? llvm::dyn_cast<nodal::ShapedType>(value.getType()) : nodal::ShapedType();
+  return shape && llvm::isa<nodal::TerminalType>(shape.getElementType()) &&
+         llvm::isa_and_nonnull<nodal::MemberAccessOp>(value.getDefiningOp());
+}
+
+// One immutable inventory per ingress query, never a second connectivity owner.
+LogicalResult collectInterfaceArrayFacts(
+    Operation *module, llvm::SmallVectorImpl<nodal::DigitalInterfaceEndpoint> &endpoints,
+    llvm::SmallVectorImpl<nodal::DigitalInterfaceAccess> *accesses, unsigned &remaining) {
+  // The existing collector accepts consumed work, not a residual. Reserve the
+  // unavailable prefix so it stops inside this query's actual remaining budget.
+  unsigned allowance = std::min(remaining, nodal::digitalTypeMaximumNodes);
+  unsigned initial = nodal::digitalTypeMaximumNodes - allowance;
+  unsigned work = initial;
+  auto status = nodal::collectDigitalInterfaceEndpoints(module, endpoints, accesses, work);
+  if (failed(status)) { remaining = 0; return failure(); }
+  remaining -= work - initial;
+  return success();
+}
+
+const nodal::DigitalInterfaceEndpoint *arrayEndpointFacts(
+    Operation *projection, ArrayRef<nodal::DigitalInterfaceEndpoint> endpoints,
+    unsigned &remaining) {
+  for (const auto &endpoint : endpoints) {
+    if (!remaining) return nullptr;
+    --remaining;
+    if (endpoint.operation == projection) return &endpoint;
+  }
+  return nullptr;
+}
+const nodal::DigitalInterfaceAccess *arrayAccessFacts(
+    Value value, ArrayRef<nodal::DigitalInterfaceAccess> accesses, unsigned &remaining) {
+  for (const auto &access : accesses) {
+    if (!remaining) return nullptr;
+    --remaining;
+    if (access.value == value) return &access;
+  }
+  return nullptr;
+}
+
+FailureOr<nodal::ConservativeEndpoint> logicalArrayEndpoint(
+    Value value, Operation *use, const nodal::DigitalInterfaceAccess &access,
+    const nodal::DigitalInterfaceEndpoint &facts, unsigned &remaining) {
+  Operation *module = enclosingNodalModule(use);
+  if (!logicalConservativeArray(value) || use->getParentOp() != module ||
+      value.getDefiningOp()->getParentOp() != module ||
+      !structurallyPrecedes(value.getDefiningOp(), use) ||
+      access.projection != facts.operation || access.identity.endpoint != facts.declaration ||
+      access.identity.instance != facts.instance || access.identity.selection ||
+      access.leaf.access.getValue() != "connect" ||
+      failed(nodal::checkFixedConservativeInterfaceArrayProfile(facts, remaining)))
+    return failure();
+  auto projection = nodal::resolveStaticShapeProjection(access.canonicalValue, use);
+  if (failed(projection) || !projection->wholeRoot || !projection->projections.empty())
+    return failure();
+  nodal::ConservativeEndpoint result;
+  result.value = value;
+  result.shape = {access.canonicalValue.getDefiningOp(), std::move(*projection)};
+  result.instance = facts.instance;
+  result.port = facts.declaration;
+  result.declarationScope = module;
+  result.useScope = module;
+  return result;
+}
+
+std::optional<BoundaryPortKey> boundaryPortKey(
+    const nodal::ConservativeEndpoint &endpoint, unsigned &remaining) {
+  if (!remaining || !endpoint.port) return std::nullopt;
+  --remaining;
+  if (!llvm::isa<nodal::MemberAccessOp>(endpoint.value.getDefiningOp()))
+    return BoundaryPortKey{endpoint.port, StringAttr()};
+  auto member = nodal::inspectDigitalInterfaceMember(endpoint.value.getDefiningOp());
+  if (failed(member) || member->instance != endpoint.instance ||
+      member->endpoint != endpoint.port || !member->path)
+    return std::nullopt;
+  return BoundaryPortKey{member->endpoint, member->path};
+}
+} // namespace
+
 FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value value,
                                                                           Operation *use) {
   if (!value || !use)
@@ -1862,6 +1946,17 @@ FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value 
   ConservativeEndpoint endpoint;
   endpoint.value = value;
   endpoint.useScope = scope;
+  if (logicalConservativeArray(value)) {
+    unsigned remaining = 16384;
+    llvm::SmallVector<DigitalInterfaceEndpoint> logical;
+    llvm::SmallVector<DigitalInterfaceAccess> accesses;
+    if (failed(collectInterfaceArrayFacts(module, logical, &accesses, remaining)))
+      return failure();
+    const auto *access = arrayAccessFacts(value, accesses, remaining);
+    const auto *facts = access ? arrayEndpointFacts(access->projection, logical, remaining) : nullptr;
+    if (!facts) return failure();
+    return logicalArrayEndpoint(value, use, *access, *facts, remaining);
+  }
   if (llvm::isa<ShapedType>(value.getType()) || isNodeArraySelection(definition)) {
     auto shape = resolveConservativeShape(value, use);
     if (failed(shape))
@@ -1959,8 +2054,55 @@ FailureOr<nodal::ConservativeRelation> nodal::resolveConservativeRelation(Operat
   if (operation->getNumOperands() != 2 || !structuralBody(operation->getParentOp()) ||
       failed(verifyGeneratedStructuralOwnership(operation)))
     return reject("endpoint relation requires two actual operands in one structural scope");
-  auto left = resolveConservativeEndpoint(operation->getOperand(0), operation);
-  auto right = resolveConservativeEndpoint(operation->getOperand(1), operation);
+  FailureOr<ConservativeEndpoint> left = failure(), right = failure();
+  bool logicalLeft = logicalConservativeArray(operation->getOperand(0));
+  bool logicalRight = logicalConservativeArray(operation->getOperand(1));
+  if (logicalLeft || logicalRight) {
+    if (!logicalLeft || !logicalRight || !llvm::isa<ConnectArrayOp>(operation) ||
+        !llvm::isa<ModuleOp>(operation->getParentOp()))
+      return reject("logical Interface array forwarding requires two direct whole member roots");
+    unsigned remaining = 16384;
+    llvm::SmallVector<DigitalInterfaceEndpoint> logical;
+    llvm::SmallVector<DigitalInterfaceAccess> accesses;
+    if (failed(collectInterfaceArrayFacts(operation->getParentOp(), logical, &accesses, remaining)))
+      return reject("logical Interface array inventory is invalid or exceeds its work budget");
+    const auto *a = arrayAccessFacts(operation->getOperand(0), accesses, remaining);
+    const auto *b = arrayAccessFacts(operation->getOperand(1), accesses, remaining);
+    const auto *x = a ? arrayEndpointFacts(a->projection, logical, remaining) : nullptr;
+    const auto *y = b ? arrayEndpointFacts(b->projection, logical, remaining) : nullptr;
+    if (!x || !y || bool(x->instance) == bool(y->instance) || x->selection || y->selection ||
+        x->operation == y->operation || x->domainOwner != y->domainOwner ||
+        !x->domain || x->domain != y->domain || x->semanticIdentity != y->semanticIdentity ||
+        textAttr(x->selectedRole, "sym_name") != textAttr(y->selectedRole, "sym_name") ||
+        a->identity.path != b->identity.path || a->leaf.role != b->leaf.role ||
+        a->leaf.access != b->leaf.access || a->leaf.nestedRoles != b->leaf.nestedRoles ||
+        a->leaf.nestedInterfaces != b->leaf.nestedInterfaces ||
+        a->leaf.type != b->leaf.type || a->leaf.analogMetadata != b->leaf.analogMetadata ||
+        a->leaf.analogReferences != b->leaf.analogReferences)
+      return reject("logical Interface array requires exact same-role local-child member and domain");
+    if (x->leaves.size() != y->leaves.size())
+      return reject("logical Interface array forwarding changes the complete leaf inventory");
+    for (auto [aLeaf, bLeaf] : llvm::zip(x->leaves, y->leaves)) {
+      if (!remaining)
+        return reject("logical Interface array ABI comparison exceeds its work budget");
+      --remaining;
+      if (aLeaf.path != bLeaf.path || aLeaf.type != bLeaf.type ||
+          aLeaf.protocol != bLeaf.protocol || aLeaf.role != bLeaf.role ||
+          aLeaf.access != bLeaf.access || aLeaf.nestedRoles != bLeaf.nestedRoles ||
+          aLeaf.nestedInterfaces != bLeaf.nestedInterfaces ||
+          aLeaf.analogMetadata != bLeaf.analogMetadata ||
+          aLeaf.analogReferences != bLeaf.analogReferences)
+        return reject("logical Interface array forwarding changes an ordered complete member ABI");
+    }
+    const auto &child = x->instance ? *x : *y;
+    if (resolveInstanceModuleDefinition(child.instance) != child.declarationOwner)
+      return reject("logical Interface child must retain its actual immediate module definition");
+    left = logicalArrayEndpoint(operation->getOperand(0), operation, *a, *x, remaining);
+    right = logicalArrayEndpoint(operation->getOperand(1), operation, *b, *y, remaining);
+  } else {
+    left = resolveConservativeEndpoint(operation->getOperand(0), operation);
+    right = resolveConservativeEndpoint(operation->getOperand(1), operation);
+  }
   if (failed(left) || failed(right))
     return reject("endpoint relation requires actual visible conservative roots and maps");
   Type lhs = operation->getOperand(0).getType(), rhs = operation->getOperand(1).getType();
@@ -2009,7 +2151,6 @@ FailureOr<nodal::ConservativeRelation> nodal::resolveConservativeRelation(Operat
 }
 
 namespace {
-using BoundaryPortKey = std::pair<Operation *, StringAttr>;
 struct BoundaryAliasSummary {
   llvm::DenseMap<BoundaryPortKey, unsigned> groups;
   llvm::DenseSet<BoundaryPortKey> touched;
@@ -2024,18 +2165,6 @@ collectChildBoundaryUncertainty(Operation *module,
                                 unsigned &remaining) {
   using namespace nodal;
   auto charge = [&]() { if (!remaining) return false; --remaining; return true; };
-  auto key = [&](const nodal::ConservativeEndpoint &endpoint)
-      -> std::optional<BoundaryPortKey> {
-    if (!charge() || !endpoint.port)
-      return std::nullopt;
-    if (!llvm::isa<MemberAccessOp>(endpoint.value.getDefiningOp()))
-      return BoundaryPortKey{endpoint.port, StringAttr()};
-    auto member = inspectDigitalInterfaceMember(endpoint.value.getDefiningOp());
-    if (failed(member) || member->instance != endpoint.instance ||
-        member->endpoint != endpoint.port || !member->path)
-      return std::nullopt;
-    return BoundaryPortKey{member->endpoint, member->path};
-  };
   llvm::DenseMap<Operation *, BoundaryAliasSummary> summaries;
   llvm::DenseMap<Operation *, unsigned> visiting;
   llvm::SmallVector<std::pair<Operation *, bool>, 8> pending{{module, false}};
@@ -2063,7 +2192,8 @@ collectChildBoundaryUncertainty(Operation *module,
       if (llvm::isa<MemberAccessOp>(operation)) {
         auto member = inspectDigitalInterfaceMember(operation);
         if (failed(member)) { status = failure(); return; }
-        if (!member->instance || !llvm::isa<TerminalType>(operation->getResult(0).getType()))
+        if (!member->instance || (!llvm::isa<TerminalType>(operation->getResult(0).getType()) &&
+                                  !logicalConservativeArray(operation->getResult(0))))
           return;
       }
       auto exists = active(operation, definition);
@@ -2085,7 +2215,7 @@ collectChildBoundaryUncertainty(Operation *module,
     if (child == summaries.end()) return failure();
     llvm::SmallVector<std::optional<BoundaryPortKey>, 4> keys;
     for (const auto &endpoint : endpoints) {
-      auto port = key(endpoint);
+      auto port = boundaryPortKey(endpoint, remaining);
       if (!remaining) return failure();
       keys.push_back(port && child->second.groups.count(*port) ? port : std::nullopt);
     }
@@ -3208,22 +3338,51 @@ LogicalResult nodal::verifyConservativeArrayBindings(Operation *scope) {
   Block *body = structuralBody(scope);
   if (!body)
     return success();
-  using PortKey = std::pair<Operation *, Operation *>;
+  using PortKey = std::pair<Operation *, BoundaryPortKey>;
+  unsigned remaining = 16384;
+  bool logicalArrays = false;
+  uint64_t logicalScopeWork = 0;
+  // Declaration-only local arrays do not opt a scope into forwarding coverage.
+  // A projected child with no member SSA still does, so omissions cannot hide.
+  for (Operation &operation : *body) {
+    if (operation.getNumResults() == 1 && logicalConservativeArray(operation.getResult(0)))
+      logicalArrays = true;
+    if (!llvm::isa<InterfaceBoundaryOp>(operation)) continue;
+    auto metadata = operation.getAttrOfType<DictionaryAttr>("metadata");
+    auto dimensions = metadata ? metadata.getAs<ArrayAttr>("dimensions") : ArrayAttr();
+    if (!dimensions || dimensions.empty()) continue;
+    auto boundary = inspectDigitalInterfaceBoundary(&operation);
+    if (failed(boundary)) return failure();
+    auto definition = resolveDigitalInterfaceDefinition(boundary->endpoint);
+    if (failed(definition)) return failure();
+    for (Operation &member : (*definition)->getRegion(0).front()) {
+      ++logicalScopeWork;
+      if (llvm::isa<InterfaceMemberOp>(member) && textAttr(&member, "protocol") == "conservative")
+        logicalArrays = true;
+    }
+  }
+  if (logicalArrays) {
+    if (logicalScopeWork > remaining)
+      return scope->emitOpError("NODAL-SHAPE-043-009: Interface array scope budget exhausted");
+    remaining -= unsigned(logicalScopeWork);
+  }
+  // Borrowed, query-local definition inventory, reused by distinct incidences.
+  llvm::DenseMap<Operation *, llvm::SmallVector<DigitalInterfaceEndpoint>> childInventories;
   struct Coverage {
     Value root;
     llvm::SmallVector<StaticShapeRegion, 4> regions;
     llvm::StringSet<> keys;
     bool whole = false;
   };
-  std::map<PortKey, Coverage> coverage;
-  std::map<PortKey, Operation *> references;
+  llvm::DenseMap<PortKey, Coverage> coverage;
+  llvm::DenseMap<PortKey, Operation *> references;
   llvm::StringSet<> occurrences, connectionIds;
   for (Operation &operation : *body) {
     if (llvm::isa<InstanceTerminalArrayOp>(operation)) {
       auto resolved = resolveArrayPort(&operation);
       if (failed(resolved) || failed(verifyConservativeInstanceArray(&operation)))
         return failure();
-      if (!references.emplace(PortKey{resolved->instance, resolved->port}, &operation).second)
+      if (!references.try_emplace(PortKey{resolved->instance, {resolved->port, StringAttr()}}, &operation).second)
         return operation.emitOpError("NODAL-VERIFY-HIERARCHY-010: duplicate child array reference");
     }
     if (!isConservativeRelation(&operation))
@@ -3248,10 +3407,16 @@ LogicalResult nodal::verifyConservativeArrayBindings(Operation *scope) {
                                      "unsupported transitive alias closure");
     }
     for (const ConservativeEndpoint *endpoint : {&relation->left, &relation->right}) {
-      if (!endpoint->port || !llvm::isa<TerminalArrayOp>(endpoint->port))
+      bool logical = logicalConservativeArray(endpoint->value);
+      if (!endpoint->port || (!llvm::isa<TerminalArrayOp>(endpoint->port) &&
+                              !(logical && endpoint->instance)))
         continue;
+      auto key = logical ? boundaryPortKey(*endpoint, remaining)
+                         : std::optional<BoundaryPortKey>(BoundaryPortKey{endpoint->port, StringAttr()});
+      if (!key)
+        return operation.emitOpError("NODAL-SHAPE-043-009: child array identity proof exhausted");
       const auto &projection = endpoint->shape.projection;
-      auto &entry = coverage[{endpoint->instance, endpoint->port}];
+      auto &entry = coverage[{endpoint->instance, *key}];
       if (entry.root && entry.root != projection.root)
         return operation.emitOpError(
             "NODAL-VERIFY-HIERARCHY-010: child port has multiple physical roots");
@@ -3278,10 +3443,46 @@ LogicalResult nodal::verifyConservativeArrayBindings(Operation *scope) {
     Block *childBody = moduleBody(definition);
     if (!childBody)
       continue; // Existing hierarchy closure owns unknown module targets.
+    // Inventory declarations, not only represented parent references. Missing
+    // members remain missing even when no member_access was ever authored.
+    if (logicalArrays && llvm::any_of(*childBody, [](Operation &candidate) {
+          auto metadata = candidate.getAttrOfType<DictionaryAttr>("metadata");
+          auto dimensions = metadata ? metadata.getAs<ArrayAttr>("dimensions") : ArrayAttr();
+          return llvm::isa<InterfaceInstanceOp>(candidate) && dimensions && !dimensions.empty();
+        })) {
+      auto [inventory, inserted] = childInventories.try_emplace(definition);
+      if (inserted && failed(collectInterfaceArrayFacts(definition, inventory->second, nullptr, remaining)))
+        return operation.emitOpError("NODAL-SHAPE-043-009: child Interface inventory exceeds its proof budget");
+      for (const auto &endpoint : inventory->second) {
+        if (!remaining)
+          return operation.emitOpError("NODAL-SHAPE-043-009: child Interface coverage budget exhausted");
+        --remaining;
+        if (endpoint.instance || endpoint.selection || endpoint.operation->getParentOp() != definition ||
+            endpoint.dimensions.empty() ||
+            llvm::none_of(endpoint.leaves, [](const DigitalInterfaceLeaf &leaf) {
+              return leaf.protocol.getValue() == "conservative";
+            }))
+          continue;
+        if (failed(checkFixedConservativeInterfaceArrayProfile(endpoint, remaining)))
+          return failure();
+        for (const auto &leaf : endpoint.leaves) {
+          if (!remaining)
+            return operation.emitOpError("NODAL-SHAPE-043-009: child Interface leaf budget exhausted");
+          --remaining;
+          auto found = coverage.find({&operation, {endpoint.declaration, leaf.path}});
+          if (found == coverage.end() || !found->second.whole || found->second.regions.size() != 1)
+            return operation.emitOpError(
+                "NODAL-VERIFY-HIERARCHY-012: every child Interface array leaf requires exact whole coverage once");
+          if (verifyStaticShapeRegionPartition(found->second.root, found->second.regions, &operation) !=
+              ShapeRegionProofStatus::Proved)
+            return operation.emitOpError("NODAL-SHAPE-043-009: child Interface coverage is unproved");
+        }
+      }
+    }
     for (Operation &port : *childBody) {
       if (!llvm::isa<TerminalArrayOp>(port))
         continue;
-      auto found = coverage.find({&operation, &port});
+      auto found = coverage.find({&operation, {&port, StringAttr()}});
       if (found == coverage.end() || found->second.regions.empty())
         return operation.emitOpError(
             "NODAL-VERIFY-HIERARCHY-012: every child array port requires exact complete coverage");

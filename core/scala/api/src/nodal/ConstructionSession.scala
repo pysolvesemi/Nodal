@@ -7725,6 +7725,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
     val leaves =
       ConstructionInterfaceLayout.leaves(value.definition, value.role, charge = closureCharge)
+    val ordinaryConservativeArray =
+      DigitalInterfaceContract.conservativeArrayProfile(value, leaves, closureCharge) &&
+        selected.generated.isEmpty && instance.generatedScope.isEmpty &&
+        activeGeneratedRegion.isEmpty && activeValueRegion.isEmpty && activeArea.isEmpty &&
+        valueRegion(port).isEmpty &&
+        !areas.exists(area => area.declarations.contains(port) || area.instances.exists(_ eq instance)) &&
+        (value match
+          case array: InterfaceArray[?, ?] => array.exported
+          case _ => false)
     val generatedConservative =
       selected.generated.isEmpty && kind == KernelSignalKind.InterfacePort &&
         activeGeneratedRegion.exists(generated =>
@@ -7749,7 +7758,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         (((selected.generated.nonEmpty && !selectedConservative) || instance.generatedScope.nonEmpty && !generatedConservative && !selectedConservative) &&
           (leaf.analogType.nonEmpty || leaf.mode.nonEmpty)) ||
           (leaf.analogType.nonEmpty && (leaf.protocol != "conservative" ||
-            kind == KernelSignalKind.InterfaceArray)) || leaf.dataType.exists(
+            kind == KernelSignalKind.InterfaceArray && !ordinaryConservativeArray)) || leaf.dataType.exists(
             isBoundaryCapability
           )
       )
@@ -12476,6 +12485,46 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
               fail("NODAL-INTERFACE-054-003", "Interface endpoint escaped its exact use region")
           reference
     else Vector.empty
+    if kind == "interface-connect" && values.exists {
+        case endpoint: InterfaceEndpoint =>
+          ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+            .exists(_.protocol == "conservative")
+        case _ => false
+      }
+    then
+      if activeGeneratedRegion.nonEmpty || activeValueRegion.nonEmpty || activeArea.nonEmpty ||
+        values.size != 2 ||
+        interfaceReferences.size != 2
+      then fail("NODAL-INTERFACE-058-ANALOG", "conservative forwarding requires ordinary whole arrays")
+      val endpoints = values.collect { case value: InterfaceEndpoint => value }
+      endpoints.zip(interfaceReferences).foreach: (endpoint, reference) =>
+        val leaves = ConstructionInterfaceLayout.leaves(
+          endpoint.definition, endpoint.role, charge = closureCharge
+        )
+        if !DigitalInterfaceContract.conservativeArrayProfile(endpoint, leaves, closureCharge) ||
+          valueRegion(reference).nonEmpty || areas.exists(_.declarations.contains(reference)) ||
+          records(reference.module).generatedRegions.exists(_.declarations.contains(reference))
+        then fail("NODAL-INTERFACE-058-ANALOG", "conservative forwarding lost its direct fixed array")
+        instanceInterfacePorts.get(reference) match
+          case None =>
+            endpoint match
+              case array: InterfaceArray[?, ?] if array.exported && !array.boundary => ()
+              case _ => fail("NODAL-INTERFACE-058-ANALOG", "forwarding needs an exported local array")
+          case Some(binding) =>
+            if binding.generated.nonEmpty || binding.scope.nonEmpty ||
+              !binding.instance.exists(instance =>
+                currentModule.instances.exists(_ eq instance) && instance.generatedScope.isEmpty &&
+                  !areas.exists(_.instances.exists(_ eq instance)) &&
+                  instance.child == binding.port.module) || valueRegion(binding.port).nonEmpty ||
+              areas.exists(_.declarations.contains(binding.port)) ||
+              records(binding.port.module).generatedRegions.exists(_.declarations.contains(binding.port))
+            then fail("NODAL-INTERFACE-058-ANALOG", "forwarding needs an ordinary immediate child")
+            records(binding.port.module).declarations(binding.port.index).value match
+              case array: InterfaceArray[?, ?]
+                  if array.exported && !array.boundary && array.origin.isEmpty => ()
+              case _ => fail("NODAL-INTERFACE-058-ANALOG", "forwarding child is not directly exported")
+      if interfaceReferences.count(instanceInterfacePorts.contains) != 1 then
+        fail("NODAL-INTERFACE-058-ANALOG", "forwarding requires one local and one child array")
     val orderedInterface = interfaceEffect && (activeValueRegion.nonEmpty ||
       interfaceReferences.exists(reference =>
         instanceInterfacePorts.get(reference).exists(_.generated.nonEmpty)

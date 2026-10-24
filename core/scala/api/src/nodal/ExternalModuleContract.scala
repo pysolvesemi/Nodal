@@ -1,8 +1,8 @@
 package nodal
 
 /** An explicit declaration-only flavor of Module. External behavior belongs to the supplied
-  * implementation, not an executable Nodal body. Signatures support fixed scalar digital inout
-  * pins and fixed positive all-resolved Interface arrays with portable black-box placement.
+  * implementation, not an executable Nodal body. Signatures support fixed scalar digital inout pins
+  * and fixed positive all-resolved Interface arrays with portable black-box placement.
   */
 abstract class ExternalModule(externalName: String) extends Module:
   ConstructionKernel.declareExternalModule(this, externalName)
@@ -103,7 +103,10 @@ private[nodal] object ExternalModuleContract:
     * verification independently checks the actual emitted declaration body.
     */
   def validate(snapshot: ConstructionSnapshot): Unit =
-    val external = snapshot.modules.filter(_.externalName.nonEmpty)
+    ConstructionKernel.chargePublicationWork(1L) // Filter dispatch, even with no external owner.
+    val external = snapshot.modules.filter: module =>
+      ConstructionKernel.chargePublicationWork(1L)
+      module.externalName.nonEmpty
     if external.nonEmpty then
       val arrayOwners =
         external.filter(_.declarations.exists(_.kind == "interface-array")).map(_.path).toSet

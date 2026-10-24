@@ -125,6 +125,7 @@ private[nodal] object AnalogEquationRuntime:
   )
 
   def sourceMap(snapshot: Snapshot): Vector[SourceMapEntry] =
+    ConstructionKernel.chargePublicationWork(3L) // Dispatch and two empty-inventory tests.
     if snapshot.components.isEmpty && snapshot.states.isEmpty then Vector.empty
     else
       val entries = snapshot.components.map(record => record.identity -> record.source) ++
@@ -178,6 +179,12 @@ private[nodal] object AnalogEquationRuntime:
     private val equationRecords = mutable.LinkedHashMap.empty[EquationIdentity, EquationRecord]
     private val contributionRecords =
       mutable.LinkedHashMap.empty[ContributionIdentity, ContributionRecord]
+
+    /** No snapshot construction or context mutation; caller charges seven inspections. */
+    def publicationEmpty: Boolean =
+      componentRecords.isEmpty && stateRecords.isEmpty && unsupportedRecords.isEmpty &&
+        componentStack.isEmpty && activeRegion.isEmpty && equationRecords.isEmpty &&
+        contributionRecords.isEmpty
 
     def region[A](kind: RegionKind)(body: => A): Either[Diagnostic, A] =
       if activeRegion.nonEmpty then
@@ -260,6 +267,8 @@ private[nodal] object AnalogEquationRuntime:
           )
 
     def snapshot: Snapshot =
+      // Audited empty copies/group/map/sorts plus dispatch and Snapshot construction.
+      ConstructionKernel.chargePublicationWork(15L)
       val orderedEquations = equationRecords.values.toVector.sortBy(_.identity.value)
       val buckets = contributionRecords.values.toVector
         .groupBy(_.target)

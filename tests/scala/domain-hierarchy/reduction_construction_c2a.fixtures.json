@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "default_suites": [
+    "original15",
+    "default6",
+    "naming5",
+    "publication3"
+  ],
+  "fixtures": [
+    {
+      "name": "C2aAssignedRoot.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aAssignedRoot.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aAssignedRoot.scala",
+      "sha256": "d689b1a727933549aa1afe706e38b7e8b42841ea4c963737c8b4371a1794d776"
+    },
+    {
+      "name": "C2aControls.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aControls.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aControls.scala",
+      "sha256": "64fbd64877185ed5c2cb466d8f77c9679e156c56586079aa2afdaeddf84490a4"
+    },
+    {
+      "name": "C2aDrivenLeaf.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aDrivenLeaf.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aDrivenLeaf.scala",
+      "sha256": "1b545b511207b5804e961aa5fc0d4c4a34509a4cb869951ec8d78d83b7e83774"
+    },
+    {
+      "name": "C2aFactory.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aFactory.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aFactory.scala",
+      "sha256": "9279b5e91aba135b18494a9135f9e5c6395a2a18a6f4beddeabb3468ad5ae168"
+    },
+    {
+      "name": "C2aLeaf.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aLeaf.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aLeaf.scala",
+      "sha256": "9499d3108816b486b7b9c323175ce41aa8411a4547551c60f1297dbdfe4fe120"
+    },
+    {
+      "name": "C2aManualRoot.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aManualRoot.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aManualRoot.scala",
+      "sha256": "c4dcebf156a860a5ef9a29fc66193ff8212835672f8ac763705f1a6ee253a09a"
+    },
+    {
+      "name": "C2aRoot.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aRoot.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aRoot.scala",
+      "sha256": "546b781d0fb96937d8e5f77caa5fde2013fee7550ca0b4ba0c410d4ee221eef7"
+    },
+    {
+      "name": "C2aAccountingControls.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/C2aAccountingControls.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aAccountingControls.scala",
+      "sha256": "416b54247c5862b2c2b1eeadd74319a2d07605dc7bf8e522aa2dcaaaf716a55a"
+    },
+    {
+      "name": "NamingControls.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/NamingControls.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/NamingControls.scala",
+      "sha256": "2eaf2fa5e018d4a722e238cfeb1745bc91893bd243f55a01fa13db4d32462263"
+    },
+    {
+      "name": "NamingParityRoot.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/NamingParityRoot.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/NamingParityRoot.scala",
+      "sha256": "35730674a9d53e3922e4fa03998782a6a3ca9f4846d077b951c33dedd1524928"
+    },
+    {
+      "name": "NamingPoisonRoot.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/NamingPoisonRoot.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/NamingPoisonRoot.scala",
+      "sha256": "090b580851dc1231b4197bd3b09a16e11478ed91b52838f737dd306cf9e81461"
+    },
+    {
+      "name": "PublicationControls.scala",
+      "maintained_path": "fixtures/reduction-construction-c2a/PublicationControls.scala",
+      "source_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/PublicationControls.scala",
+      "sha256": "b72608b2e53cc48e56619dc74b390938761d17d69dbcbeb41c08e11b4e2e7dec"
+    }
+  ],
+  "suites": {
+    "original15": {
+      "main": "nodal.internal.testkit.C2aControls",
+      "fixtures": [
+        "C2aAssignedRoot.scala",
+        "C2aControls.scala",
+        "C2aDrivenLeaf.scala",
+        "C2aFactory.scala",
+        "C2aLeaf.scala",
+        "C2aManualRoot.scala",
+        "C2aRoot.scala"
+      ],
+      "success": [
+        "PASS 15 C2a singleton construction controls;"
+      ]
+    },
+    "default6": {
+      "main": "nodal.internal.testkit.C2aAccountingControls",
+      "fixtures": [
+        "C2aAssignedRoot.scala",
+        "C2aControls.scala",
+        "C2aDrivenLeaf.scala",
+        "C2aFactory.scala",
+        "C2aLeaf.scala",
+        "C2aManualRoot.scala",
+        "C2aRoot.scala",
+        "C2aAccountingControls.scala"
+      ],
+      "success": [
+        "PASS 6 C2a accounting controls"
+      ]
+    },
+    "naming5": {
+      "main": "nodal.internal.testkit.NamingControls",
+      "fixtures": [
+        "NamingControls.scala",
+        "NamingParityRoot.scala",
+        "NamingPoisonRoot.scala"
+      ],
+      "success": [
+        "PASS naming real hierarchy raw result parity",
+        "PASS naming collision generated temporary shared oversized operands raw parity",
+        "PASS naming nested legacy mode and entry sentinel scope restoration",
+        "PASS naming actual Session canonical scan exhaustion poison and stale ticket",
+        "PASS naming fresh ordinary recovery"
+      ]
+    },
+    "publication3": {
+      "main": "nodal.internal.testkit.PublicationControls",
+      "fixtures": [
+        "C2aAssignedRoot.scala",
+        "C2aControls.scala",
+        "C2aDrivenLeaf.scala",
+        "C2aFactory.scala",
+        "C2aLeaf.scala",
+        "C2aManualRoot.scala",
+        "C2aRoot.scala",
+        "C2aAccountingControls.scala",
+        "PublicationControls.scala"
+      ],
+      "success": [
+        "PASS publication ineligible profile before scope",
+        "PASS publication scan exhaustion restores scope and poisons owner/ticket/publication",
+        "PASS publication fresh ordinary recovery and no-owner facade"
+      ]
+    }
+  }
+}

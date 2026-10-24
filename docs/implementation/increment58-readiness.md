@@ -2005,3 +2005,49 @@ for these limits and matching build requirements. The small handoff retains
 owned allocation remains below 36 MiB, with borrowed preexisting source inodes
 reported separately and the 235 MiB free-space reserve preserved. No CI, target
 consumer run or held CIRCT repair was performed. Foundation 58 remains incomplete.
+
+## Checkpoint 59: bounded internal singleton construction prerequisite
+
+Registered construction intent now uses the existing Session closure and retained
+result cell to seal a root singleton and publish its canonical shape-index side
+record. Unregistered, late, non-root and nonsingleton requests remain refused;
+callbacks are not invoked. This is an internal C2a prerequisite, not public
+pending-outer reduction admission. No second importer or scheduler is introduced.
+
+Construction-only snapshot, naming and publication accounting preserves the
+65,536-unit budget, existing validators and source/reflection/descriptor fees.
+The exact publication profile is root-local singleton shape inspection in one
+external synchronous-reset domain with checked canonical metadata and control
+identities. Other profiles retain coarse accounting. Charges describe structural
+visits, copies, comparisons and explicit string probes, not universal JVM hashing
+or CPU bounds. Scoped accounting restores on failure and poisons the owning
+transaction and stale tickets rather than permitting partial publication.
+
+The maintained runner freshly compiles twelve formatted fixture sources and
+passes four groups: fifteen singleton controls, six accounting controls, five
+naming controls and three publication/failure controls. Separate retained-class
+compatibility passes seven C1 groups, the five naming controls, twenty-six pending
+controls and eleven lifecycle controls. All fourteen pending outputs are raw
+byte-identical to baseline; these compatibility runs are not fresh consumer
+compilation. Explicit legacy JVM constructors and the reflection entrypoint are
+preserved. The final API compiles 73 sources with 24 pinned bridge dependencies.
+See [the maintained focused guide](../../tests/scala/domain-hierarchy/REDUCTION_CONSTRUCTION_C2A.md).
+
+Earlier registry, budget, syntax, compatibility and provenance failures remain
+recorded as failures. A natural helper relocation preserves the original authored
+callsite; no output normalization, span spoofing or weakened assertion was used.
+The causal publication control separately injects monotone budget exhaustion in
+a real export scan and proves restoration, poison, refusal and fresh recovery.
+Diagnostic counting comparisons are not hardware-capacity claims.
+
+The final matched build used a 44 MiB owned cap and a 246,808,576-byte free-space
+reserve. Verified raw-plus-archive coexistence was 44,855,296 owned bytes with
+252,043,264 bytes free. Complete archive verification preceded raw-output cleanup;
+sampled measurements do not establish an unobserved continuous global peak.
+Sources, rebuild recipes and concise receipts are retained for compacted outputs.
+
+C2b capture/context/source-order/final-name lifecycle and C2c multi-element
+invocation remain open. Public zero, invalid and nonsingleton callback semantics
+are not newly enabled; pending inner geometry is unchanged. Foundation 58 remains
+incomplete. No CI, broad qualification, held target consumer repair or publication
+retry was performed.

@@ -881,3 +881,13 @@ private[nodal] object ConstructionKernel:
       ))).get
 
   def operation(kind: String, values: Any*): Unit = active.foreach(_.operation(kind, values*))
+
+  // Snapshot accounting is not a hardware effect and cannot create a Session/owner.
+  def chargeSnapshotWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargeSnapshotWork(units)
+
+  // Read-only debit routing; never invokes active() or creates an owner.
+  def publicationAccountingEnabled: Boolean =
+    Current.isBound && Current.get.publicationAccountingEnabled
+  def chargePublicationWork(units: Long): Unit =
+    if Current.isBound then Current.get.chargePublicationWork(units)

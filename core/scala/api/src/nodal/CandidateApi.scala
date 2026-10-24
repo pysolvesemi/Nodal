@@ -82,6 +82,21 @@ private[nodal] final class KernelExpr[A <: Data] private (
   )
 
   private var constructionState = if payload.nonEmpty then 2 else 0
+  private var registeredConstructionKind: Option[String] = None
+  private[nodal] def constructionKind: Option[String] = registeredConstructionKind
+  private[nodal] def registerConstructionIntent(owner: AnyRef, kind: String): Unit =
+    requireOwner(owner)
+    require(
+      constructionState == 0 && reservedSourceSlot.nonEmpty &&
+        registeredConstructionKind.isEmpty,
+      "construction intent may register only once"
+    )
+    registeredConstructionKind = Some(kind)
+  private[nodal] def registeredConstructionOwnedBy(owner: AnyRef): Boolean =
+    constructionOwner.exists(_ eq owner) && registeredConstructionKind.nonEmpty &&
+      reservedSourceSlot.nonEmpty
+  private[nodal] def pendingConstructionOwnedBy(owner: AnyRef): Boolean =
+    constructionState == 0 && registeredConstructionOwnedBy(owner)
   private var reservedSourceSlot: Option[Int] = None
   private[nodal] def constructionSourceSlot: Int = reservedSourceSlot.getOrElse(
     throw new IllegalStateException("reserved expression has no source slot")
@@ -1711,6 +1726,7 @@ private[nodal] object CandidateRuntime:
     expression
 
   def proceduralShapeSource(value: Any, depth: Int = 0): Boolean =
+    ConstructionKernel.chargeSnapshotWork(1L)
     if depth >= 512 then false
     else
       value match

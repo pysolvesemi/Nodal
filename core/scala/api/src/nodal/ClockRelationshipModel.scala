@@ -60,66 +60,95 @@ private[nodal] object ClockRelationshipModel:
     val arithmetic = new Arithmetic(reject)
     val _ = arithmetic.normalize(intent)
 
-  private[nodal] final class Arithmetic(fail: String => Nothing):
+  private[nodal] final class Arithmetic(
+      fail: String => Nothing,
+      charge: Long => Unit
+  ):
+    def this(fail: String => Nothing) = this(fail, _ => ())
+    // Each primitive remains bounded by the existing 4096-bit contract.
+    private def arithmetic[A](body: => A): A =
+      charge(1L)
+      body
     private val bits = 4096
-    private val maximum = (BigInt(1) << bits) - 1
+    private val maximum = arithmetic((BigInt(1) << bits) - 1)
     private def checked(n: BigInt, d: BigInt): Rational =
+      charge(1L)
       if d == 0 || n.abs.bitLength > bits || d.abs.bitLength > bits then
         fail("exact relationship arithmetic exceeds its 4096-bit budget")
-      val g = n.gcd(d)
+      val g = arithmetic(n.gcd(d))
       val sign = if d < 0 then -1 else 1
-      Rational(n / g * sign, d.abs / g)
+      Rational(arithmetic(arithmetic(n / g) * sign), arithmetic(d.abs / g))
     private def product(a: BigInt, b: BigInt): BigInt =
-      if b != 0 && a.abs > maximum / b.abs then
+      charge(1L)
+      if b != 0 && a.abs > arithmetic(maximum / b.abs) then
         fail("exact relationship multiplication exceeds its 4096-bit budget")
-      a * b
+      arithmetic(a * b)
     final case class Rational private[Arithmetic] (n: BigInt, d: BigInt):
       def +(other: Rational): Rational =
-        val g = d.gcd(other.d)
-        val a = product(n, other.d / g)
-        val b = product(other.n, d / g)
-        if a.signum == b.signum && a.abs > maximum - b.abs then
+        val g = arithmetic(d.gcd(other.d))
+        val a = product(n, arithmetic(other.d / g))
+        val b = product(other.n, arithmetic(d / g))
+        if a.signum == b.signum && a.abs > arithmetic(maximum - b.abs) then
           fail("exact relationship addition exceeds its 4096-bit budget")
-        checked(a + b, product(d, other.d / g))
-      def unary_- : Rational = Rational(-n, d)
+        checked(arithmetic(a + b), product(d, arithmetic(other.d / g)))
+      def unary_- : Rational = Rational(arithmetic(-n), d)
       def -(other: Rational): Rational = this + -other
       def *(other: Rational): Rational =
-        val g = n.gcd(other.d)
-        val h = other.n.gcd(d)
-        checked(product(n / g, other.n / h), product(d / h, other.d / g))
+        val g = arithmetic(n.gcd(other.d))
+        val h = arithmetic(other.n.gcd(d))
+        checked(
+          product(arithmetic(n / g), arithmetic(other.n / h)),
+          product(arithmetic(d / h), arithmetic(other.d / g))
+        )
       def /(other: Rational): Rational = this * checked(other.d, other.n)
       def modulo(period: Rational): Rational =
         val quotient = this / period
-        val remainder = quotient.n % quotient.d
-        checked(if remainder < 0 then remainder + quotient.d else remainder, quotient.d) * period
-      def isZero: Boolean = n == 0
+        val remainder = arithmetic(quotient.n % quotient.d)
+        checked(
+          if remainder < 0 then arithmetic(remainder + quotient.d) else remainder,
+          quotient.d
+        ) * period
+      def isZero: Boolean = arithmetic(n == 0)
     val zero = checked(0, 1)
     val one = checked(1, 1)
     def integer(value: Int): Rational = checked(value, 1)
     def decimal(value: String): Rational =
-      if value.length > 1400 || !value.matches("[+-]?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?") then
+      charge(1L)
+      if value.length > 1400 || !arithmetic({
+          charge(value.length.toLong)
+          value.matches("[+-]?[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+        })
+      then
         fail("relationship number requires a bounded exact decimal")
+      charge(value.length.toLong)
       val exponentParts = value.split("[eE]", -1)
       val exponent = if exponentParts.length == 1 then 0
       else
+        charge(exponentParts(1).length.toLong)
         exponentParts(1).toIntOption.filter(v => v >= -1232 && v <= 1232).getOrElse(
           fail("relationship decimal exponent exceeds its arithmetic budget")
         )
       val significand = exponentParts(0)
+      charge(significand.length.toLong)
       val point = significand.indexOf('.')
       val fraction = if point < 0 then 0 else significand.length - point - 1
       val scale = fraction - exponent
       if scale.abs > 1232 then fail("relationship decimal exponent exceeds its arithmetic budget")
       var unscaled = BigInt(0)
-      significand.filter(_.isDigit).foreach: digit =>
+      significand.filter { character =>
+        charge(1L)
+        character.isDigit
+      }.foreach: digit =>
+        charge(1L)
         val next = product(unscaled, 10)
-        val increment = BigInt(digit - '0')
-        if next > maximum - increment then
+        val increment = arithmetic(BigInt(digit - '0'))
+        if next > arithmetic(maximum - increment) then
           fail("relationship decimal exceeds its arithmetic budget")
-        unscaled = next + increment
-      if significand.startsWith("-") then unscaled = -unscaled
-      if scale >= 0 then checked(unscaled, BigInt(10).pow(scale))
-      else checked(product(unscaled, BigInt(10).pow(-scale)), 1)
+        unscaled = arithmetic(next + increment)
+      charge(1L)
+      if significand.startsWith("-") then unscaled = arithmetic(-unscaled)
+      if scale >= 0 then checked(unscaled, arithmetic(BigInt(10).pow(scale)))
+      else checked(product(unscaled, arithmetic(BigInt(10).pow(-scale))), 1)
 
     final case class NormalizedIntent(period: Rational, phase: Rational)
     def normalize(intent: RelationIntent): NormalizedIntent =
@@ -148,22 +177,34 @@ private[nodal] object ClockRelationshipModel:
         NormalizedIntent(period, (decimal(value) / integer(360)).modulo(one))
 
   /** Path-compressed union index, reused for distinct permission and consistency equivalences. */
-  private final class Components(paths: Iterable[String]):
-    private val parent = mutable.Map.from(paths.iterator.map(p => p -> p))
-    private val rank = mutable.Map.from(paths.iterator.map(p => p -> 0))
+  private final class Components(paths: Iterable[String], charge: Long => Unit):
+    private val parent = mutable.Map.from(paths.iterator.map { p =>
+      charge(1L + p.length.toLong)
+      p -> p
+    })
+    private val rank = mutable.Map.from(paths.iterator.map { p =>
+      charge(1L + p.length.toLong)
+      p -> 0
+    })
     def representative(path: String): String =
+      charge(1L + path.length.toLong)
       var current = path
-      while parent(current) != current do current = parent(current)
+      while parent(current) != current do
+        charge(1L + current.length.toLong)
+        current = parent(current)
       current
     def root(path: String): String =
+      charge(1L + path.length.toLong)
       val current = representative(path)
       var entry = path
       while parent(entry) != entry do
+        charge(1L + entry.length.toLong)
         val next = parent(entry)
         parent(entry) = current
         entry = next
       current
     def join(left: String, right: String): Unit =
+      charge(1L + left.length.toLong + right.length.toLong)
       val a = root(left)
       val b = root(right)
       if a != b then
@@ -175,16 +216,33 @@ private[nodal] object ClockRelationshipModel:
   final class Index(
       endpoints: Vector[Endpoint],
       relations: Vector[KernelClockRelationshipSnapshot],
-      reject: (String, String) => Nothing
+      reject: (String, String) => Nothing,
+      charge: Long => Unit
   ):
-    private val nodes = endpoints.map(e => e.path -> e).toMap
+    def this(
+        endpoints: Vector[Endpoint],
+        relations: Vector[KernelClockRelationshipSnapshot],
+        reject: (String, String) => Nothing
+    ) = this(endpoints, relations, reject, _ => ())
+    charge(1L)
+    private def measured[A](units: Long)(body: => A): A =
+      charge(units)
+      body
+    private val strings: Ordering[String] = new Ordering[String]:
+      def compare(left: String, right: String): Int =
+        charge(1L + left.length.toLong + right.length.toLong)
+        left.compareTo(right)
+    private val pairs: Ordering[(String, String)] = Ordering.Tuple2(using strings, strings)
+    private val nodes = measured(endpoints.size.toLong) {
+      endpoints.map(e => measured(1L + e.path.length.toLong)(e.path -> e)).toMap
+    }
     private def fail(message: String, path: String): Nothing = reject(message, path)
     if nodes.size != endpoints.size || nodes.size > 65536 || relations.size > 65536 then
       fail(
         "relationship graph requires unique bounded domain identities",
         endpoints.headOption.map(_.path).getOrElse("")
       )
-    private val same = new Components(nodes.keys)
+    private val same = new Components(nodes.keys, charge)
     private def find(path: String): String = same.root(path)
     private def union(left: String, right: String): Unit = same.join(left, right)
     def permitsSampling(source: String, destination: String): Boolean =
@@ -192,7 +250,7 @@ private[nodal] object ClockRelationshipModel:
         nodes.contains(source) && nodes.contains(destination) && find(source) == find(destination)
 
     private var activePath = endpoints.headOption.map(_.path).getOrElse("")
-    private val a = new Arithmetic(message => fail(message, activePath))
+    private val a = new Arithmetic(message => fail(message, activePath), charge)
     import a.Rational
     private final case class Constraint(
         source: String,
@@ -246,14 +304,25 @@ private[nodal] object ClockRelationshipModel:
           relation.path
         )
     // Exact physical aliases are zero-phase timing constraints, not an implicit Same declaration.
-    endpoints.groupBy(e => (e.owner, e.identity, e.edge)).values.foreach: aliases =>
-      val ordered = aliases.sortBy(_.path)
+    endpoints.groupBy(e =>
+      measured(
+        1L + e.owner.length.toLong + e.identity.length.toLong + e.edge.length.toLong
+      )((e.owner, e.identity, e.edge))
+    ).values.foreach: aliases =>
+      charge(1L)
+      val ordered = measured(aliases.size.toLong)(aliases.sortBy(_.path)(using strings))
+      charge(math.max(0, ordered.size - 1).toLong)
       ordered.drop(1).foreach(e =>
         constraints += Constraint(ordered.head.path, e.path, a.one, a.zero, e.path)
       )
     // Duplicate claims normalize both structural aliases and proved Same, not timing ratios.
-    private val claims = new Components(nodes.keys)
-    endpoints.groupBy(e => (e.owner, e.identity, e.edge)).values.foreach: aliases =>
+    private val claims = new Components(nodes.keys, charge)
+    endpoints.groupBy(e =>
+      measured(
+        1L + e.owner.length.toLong + e.identity.length.toLong + e.edge.length.toLong
+      )((e.owner, e.identity, e.edge))
+    ).values.foreach: aliases =>
+      charge(1L + math.max(0, aliases.size - 1).toLong)
       aliases.drop(1).foreach(e => claims.join(aliases.head.path, e.path))
     relations.filter(_.kind == "same").foreach(r => claims.join(r.source, r.destination))
     relations.filter(_.kind != "unknown").sortBy(_.path).foreach: relation =>
@@ -273,12 +342,16 @@ private[nodal] object ClockRelationshipModel:
     private val offsets = mutable.Map.empty[String, Rational]
     private val components = mutable.Map.empty[String, String]
     private var work = 0L
-    nodes.keys.toVector.sorted.foreach: root =>
+    measured(nodes.size.toLong) {
+      measured(nodes.size.toLong)(nodes.keys.toVector).sorted(using strings)
+    }.foreach: root =>
+      charge(1L + root.length.toLong)
       if !periods.contains(root) then
         periods(root) = a.one
         offsets(root) = a.zero
         val pending = mutable.ArrayDeque(root)
         while pending.nonEmpty do
+          charge(1L)
           val current = pending.removeHead()
           components(current) = root
           adjacency.getOrElse(current, mutable.ArrayBuffer.empty).sortBy((c, reverse) =>
@@ -305,22 +378,26 @@ private[nodal] object ClockRelationshipModel:
         fail("inconsistent ratio or phase through aliases, cycles or alternative paths", c.path)
     private val absolute = mutable.Map.empty[String, Rational]
     private val physicalFrequency = mutable.Map.empty[(String, String), Rational]
-    endpoints.sortBy(_.path).foreach: e =>
+    measured(endpoints.size.toLong)(endpoints.sortBy(_.path)(using strings)).foreach: e =>
+      charge(1L + e.path.length.toLong)
       activePath = e.path
       e.frequency.foreach: spelling =>
+        charge(1L)
         val frequency = a.decimal(spelling)
         if frequency.n <= 0 then fail("known clock frequency must be positive", e.path)
         val key = (e.owner, e.identity)
         physicalFrequency.get(key).foreach: known =>
+          charge(1L)
           if known != frequency then
             fail("physical clock aliases have inconsistent frequencies", e.path)
         physicalFrequency(key) = frequency
         val rootPeriod = a.one / frequency / periods(e.path)
         absolute.get(components(e.path)).foreach: known =>
+          charge(1L)
           if known != rootPeriod then
             fail("known clock frequency contradicts exact relationship", e.path)
         absolute(components(e.path)) = rootPeriod
-    private val timing = new Components(nodes.keys)
+    private val timing = new Components(nodes.keys, charge)
     private def timingRoot(path: String): String = timing.root(path)
     private def joinTiming(left: String, right: String): Unit = timing.join(left, right)
     constraints.foreach(c => joinTiming(c.source, c.destination))
@@ -351,14 +428,29 @@ private[nodal] object ClockRelationshipModel:
     // One producer record retains independent coordinate witnesses, at most one per
     // timing component (the two active-edge groups for a valid physical clock).
     // The same bounded comparison serves global consistency and read-only queries.
-    private val frequencySources = endpoints.filter(e => absolute.contains(components(e.path)))
-      .groupBy(e => (e.owner, e.identity)).view.mapValues(values =>
-        values.groupBy(e => components(e.path)).values.map(_.minBy(_.path).path).toVector.sorted
-      ).toMap
+    private val frequencySources = endpoints.filter(e =>
+      measured(1L + e.path.length.toLong)(absolute.contains(components(e.path)))
+    ).groupBy(e =>
+      measured(1L + e.owner.length.toLong + e.identity.length.toLong)(
+        (e.owner, e.identity)
+      )
+    ).view.mapValues { values =>
+      charge(1L)
+      val groups = values.groupBy(e =>
+        measured(1L + e.path.length.toLong)(components(e.path))
+      )
+      val paths = groups.values.map { group =>
+        charge(2L + group.size.toLong)
+        group.minBy(_.path)(using strings).path
+      }.toVector
+      charge(paths.size.toLong)
+      paths.sorted(using strings)
+    }.toMap
 
     private def frequency(identity: (String, String)): Option[Rational] =
       var known: Option[Rational] = None
       frequencySources.getOrElse(identity, Vector.empty).foreach: path =>
+        charge(1L + path.length.toLong)
         val value = a.one / (absolute(components(path)) * periods(path))
         if known.exists(_ != value) then
           fail(
@@ -367,7 +459,11 @@ private[nodal] object ClockRelationshipModel:
           )
         known = Some(value)
       known
-    frequencySources.toVector.sortBy(_._1).foreach: (identity, witnesses) =>
+    measured(frequencySources.size.toLong) {
+      measured(frequencySources.size.toLong)(frequencySources.toVector)
+        .sortBy(_._1)(using pairs)
+    }.foreach: (identity, witnesses) =>
+      charge(1L)
       if witnesses.size > 1 then
         activePath = witnesses.last
         val _ = frequency(identity)

@@ -18,7 +18,8 @@ private[nodal] object DeferredResultType:
 
   /** The existing descriptor/intent remains the proof obligation after once-only sealing. */
   def hasTypeObligation(value: Any): Boolean = value match
-    case expression: KernelExpr[?] => expression.typeIntent.nonEmpty
+    case expression: KernelExpr[?] =>
+      !expression.constructionFinalized || expression.typeIntent.nonEmpty
     case signal: Signal[?] => signal.dataType.isInstanceOf[KernelInstanceDataType[?]]
     case register: Register[?] =>
       register.dataType.exists(_.isInstanceOf[KernelInstanceDataType[?]])

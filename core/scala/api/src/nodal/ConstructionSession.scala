@@ -7010,7 +7010,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     case _ => None
 
   /** Selected conservative views retain a real authored body boundary, not invented incidence. */
-  private def requireSelectedConservativeChild(binding: InterfaceBoundaryRecord): Unit =
+  private def requireSelectedConservativeChild(
+      binding: InterfaceBoundaryRecord
+  ): Option[DeclarationRef] =
     def invalid(message: String): Nothing = fail("NODAL-INTERFACE-058-ANALOG", message)
     val instance = binding.instance.getOrElse(
       invalid("selected conservative endpoint requires its child instance")
@@ -7174,9 +7176,33 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val inputs = Vector(family.lower, family.upperExclusive, family.step).map(value =>
       analysis(value.asInstanceOf[Dimension])
     )
-    if inputs.exists(value =>
-        value.parameters.nonEmpty || value.bounds.lower != value.bounds.upper
-      ) ||
+    val fixedFamily = inputs.forall(value =>
+      value.parameters.isEmpty && value.bounds.lower == value.bounds.upper
+    )
+    def integerLiteral(value: Any, expected: Long): Boolean = value match
+      case value: Int => value.toLong == expected
+      case value: KernelExpr[?] =>
+        value.literal.exists(literal =>
+          literal.kind == "integer" && literal.value.toLongOption.contains(expected)
+        )
+      case _ => false
+    // Admit source identity, not an arithmetic expression normalized to the same bounds.
+    val symbolicExtent = family.upperExclusive match
+      case parameter: Param[?]
+          if integerLiteral(family.lower, 0L) && integerLiteral(family.step, 1L) =>
+        Option(declarationIds.get(parameter)).filter: reference =>
+          val declaration = records(reference.module).declarations(reference.index)
+          reference.module == parent.handle &&
+          (declaration.value.asInstanceOf[AnyRef] eq parameter) &&
+          inputs(1).parameters == Vector(reference) && !generatedDeclarations.contains(reference) &&
+          declaration.kind == KernelSignalKind.Parameter && declaration.dataType.exists(
+            CandidateRuntime.typeDescriptor(_) == KernelTypeDescriptor("Integer")
+          ) && declaration.attributes.iterator.map(
+            _._1
+          ).toSet.size == declaration.attributes.size &&
+          declaration.attributes.contains("classification" -> "structural")
+      case _ => None
+    if (!fixedFamily && symbolicExtent.isEmpty) ||
       family.maximumTripCount <= 0 || inputs(2).bounds.lower <= 0 ||
       !IterationDomain.verifyOrdinal(
         analysis.selectedGeneratedDomain(family),
@@ -7184,7 +7210,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ).isRight
     then
       invalid(
-        "selected conservative child requires a fixed nonempty signed32 family and literal ordinal"
+        "selected conservative child requires a fixed family or direct structural Integer extent and a universal literal ordinal"
       )
     val authenticBody = instanceInterfacePorts.exists: (reference, body) =>
       body.instance.exists(_ eq instance) && body.port == binding.port && body.generated.isEmpty &&
@@ -7192,6 +7218,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         family.declarations.contains(reference)
     if !authenticBody then
       invalid("selected conservative child requires its authentic authored body Interface boundary")
+    symbolicExtent
 
   private def requireConservativeInterfaceScope(endpoint: InterfacePort[?, ?]): DeclarationRef =
     val root = DigitalInterfaceContract.root(endpoint)
@@ -7206,7 +7233,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
     instanceInterfacePorts.get(
       reference
-    ).filter(_.generated.nonEmpty).foreach(requireSelectedConservativeChild)
+    ).filter(_.generated.nonEmpty).foreach(binding =>
+      val _ = requireSelectedConservativeChild(binding)
+    )
     requireGeneratedDeclarationScope(reference)
     activeGeneratedRegion match
       case None => requireNoGeneratedEffect("conservative Interface member selection")
@@ -7683,7 +7712,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     val binding =
       InterfaceBoundaryRecord(Some(instance), port, selected.generated, activeValueRegion)
     val selectedConservative = selected.generated.nonEmpty && leaves.exists(_.analogType.nonEmpty)
-    if selectedConservative then requireSelectedConservativeChild(binding)
+    val symbolicExtent =
+      if selectedConservative then requireSelectedConservativeChild(binding) else None
     if leaves.exists(leaf =>
         (((selected.generated.nonEmpty && !selectedConservative) || instance.generatedScope.nonEmpty && !generatedConservative && !selectedConservative) &&
           (leaf.analogType.nonEmpty || leaf.mode.nonEmpty)) ||
@@ -7697,11 +7727,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         "NODAL-HIERARCHY-058-INTERFACE",
         "child Interface requires digital/resolved leaves or scalar conservative components"
       )
-    projectInterfaceEndpoint(
+    val projection = projectInterfaceEndpoint(
       value,
       kind,
       binding
     )
+    // Only a successfully admitted boundary adapts the symbolic family into conservative shape.
+    symbolicExtent.foreach(markStructuralParameterEffect(_, "shape"))
+    projection
 
   private def projectInterfaceEndpoint(
       value: InterfaceEndpoint,

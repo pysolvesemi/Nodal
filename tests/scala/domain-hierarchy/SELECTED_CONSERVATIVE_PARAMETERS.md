@@ -159,3 +159,27 @@ source root; the input hashes and command records are run-local evidence only.
 Keep generated receipts, logs, binaries, sealed snapshots and historical exports
 out of commits. Only this guide, runner and authored Scala fixtures are maintained
 source assets.
+
+## Bounded symbolic family profile (checkpoint 70)
+
+The selected continuation admits `hdlRange(0, LANES)` with literal step 1,
+where `LANES` directly identifies a bounded parent structural Integer. A literal
+selected ordinal must exist for every legal value. Keep the exact symbolic
+physical extent and original induction SSA through independent construction,
+bridge and native boundary checks; do not replace them with defaults or bounds.
+Shape effects commit only after successful boundary projection.
+
+Focused evidence must retain actual symbolic Verilog-A and cover universal
+ordinal existence, forged extent/induction/ownership, failed projection without
+partial effects, and fixed/nonunit plus supported Real parameter/arithmetic
+predecessors. The selected topology remains scalar and one-level. Nested
+families, Interface arrays, symbolic steps, arithmetic upper bounds and
+generated-local family expansion remain rejected by this continuation.
+
+Focused runtime results and actual generated output are recorded in the
+[F58 readiness record](../../../docs/implementation/increment58-readiness.md#checkpoint-70--bounded-symbolic-conservative-families).
+The maintained runner includes the original symbolic cases and affected mapper
+controls. Acceptance composes a passing prefix, inspected paired output and one
+capture tail; the interrupted batch is not a whole-runner pass. Historical
+invocation counts and checkpoint-68 results remain facts about their original
+profiles. No default construction or independent native proof limit was raised.

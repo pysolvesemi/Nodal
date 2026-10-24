@@ -438,6 +438,42 @@ The approved scope is F58 conservative topology and its applicable backend, not
 F72-wide analog qualification. Focused matched implementation results belong in
 the F58 readiness record; this contract alone is not an acceptance claim.
 
+## F58 bounded symbolic conservative family amendment
+
+**Status:** Narrow prototype accepted in checkpoint 70; broader family work remains open
+**Scope:** public-api
+
+The approved Foundation continuation uses the existing `hdlRange(0, LANES)`
+API, literal step 1, a direct bounded parent structural Integer, and a literal
+selected ordinal proved present for every legal value. It retains the scalar,
+one-level selected-child conservative Interface profile. This is an additive
+exception to the selected adapter's historical literal-family restriction, not
+permission for general symbolic conservative topology.
+
+A shared `ShapeModel` identity correction is a prerequisite: preflight must
+prove the exact symbolic physical extent and original induction SSA before the
+existing adapter projects the boundary. Commit the shape effect only after that
+projection succeeds. Construction, immutable bridge transport and native
+`ConservativeConnectivity` each independently verify their boundary. Reuse the
+canonical shape/parameter owners and existing adapter; no new evaluator,
+mutable registry, default substitution or per-lane expansion is accepted.
+
+Preserve supported fixed/nonunit families and Real parameter/arithmetic actuals.
+Reject nested families, Interface arrays, symbolic steps, arithmetic upper bounds
+and generated-local family expansion. Equal bounds/defaults or rendered names
+cannot substitute for identity; a default-valid ordinal is insufficient. The
+public API and core/library ownership boundary do not acquire new spellings or
+owners. This narrow reuse is preferred to a parallel symbolic-family engine.
+
+Focused checks must cover actual symbolic target preservation, universal ordinal
+existence, independent ownership/extent/induction forgeries, failed-projection
+transactionality and directly affected fixed/nonunit and Real predecessors.
+Results and actual Verilog-A evidence belong in the existing F58 readiness
+record. Checkpoint 70 records composed focused runtime acceptance, including exact
+OTHER extent/induction preservation. Private checked-context threading removes
+repeated validation, not proof obligations or budget limits; the symbolic upper
+reference must precede its family. This is not Foundation completion.
+
 ## Declaration-only external resolved signatures
 
 The bounded external profile reuses `Module` and `Instance` identity. The public

@@ -276,10 +276,34 @@ private[nodal] object InterfaceMlir:
       ).map(shapeQuery.resolve(endpoint.owner, _))
       val graph = shapeQuery.exportValues(indices)
       val bounds = indices.map(shapeQuery.bounds)
+      val fixedFamily = graph.nodes.forall(_.parameter.isEmpty) && bounds.forall(value =>
+        value.lower == value.upper
+      )
+      val roots = graph.dimensions.map(graph.nodes(_))
+      val symbolicFamily =
+        family.lower == "0" && family.step == "1" &&
+          roots(0).literal.contains(0L) && roots(2).literal.contains(1L) &&
+          roots(1).literal.isEmpty && roots(1).operation.isEmpty && roots(1).operands.isEmpty &&
+          roots(1).parameter.contains(family.upperExclusive) &&
+          (selectedDeclarationInventory.get(family.upperExclusive) match
+            case Some(Vector((parameterOwner, parameter))) if parameterOwner.path == owner.path =>
+              val attributes = parameter.attributes
+              val values = attributes.toMap
+              parameter.kind == "parameter" && parameter.dataType.contains("Integer") &&
+              parameter.generatedScope.isEmpty &&
+              !snapshot.generatedRegions.exists(_.declarations.contains(parameter.path)) &&
+              attributes.size == values.size && values.get(
+                "classification"
+              ).contains("structural") &&
+              values.get("structural_effects").exists(_.split(",").contains("shape")) &&
+              values.get("integer_range_lower").flatMap(_.toIntOption).exists(value =>
+                value.toLong == bounds(1).lower
+              ) && values.get("integer_range_upper").flatMap(_.toIntOption).exists(value =>
+                value.toLong == bounds(1).upper
+              )
+            case _ => false)
       requireValid(
-        graph.nodes.forall(_.parameter.isEmpty) && bounds.forall(value =>
-          value.lower == value.upper
-        ) &&
+        (fixedFamily || symbolicFamily) &&
           bounds(2).lower > 0 &&
           IterationDomain.structural(bounds(0), bounds(1), bounds(2), family.maximum)
             .toOption.exists(domain =>
@@ -289,7 +313,7 @@ private[nodal] object InterfaceMlir:
                   IterationDomain.Bounds(selection.ordinal.toLong, selection.ordinal.toLong)
                 ).isRight
             ),
-        "selected conservative child requires a fixed nonempty signed32 family and literal ordinal",
+        "selected conservative child requires a fixed family or direct structural Integer extent and a universal literal ordinal",
         path
       )
       requireValid(

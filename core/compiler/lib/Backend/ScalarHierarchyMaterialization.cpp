@@ -95,7 +95,7 @@ public:
         if (entry.family) {
           builder.setInsertionPoint(entry.family);
           OperationState array(endpoint.operation->getLoc(), NodeArrayOp::getOperationName());
-          array.addTypes(ShapedType::get(outer.getContext(), std::to_string(entry.cardinality), leaf.type));
+          array.addTypes(ShapedType::get(outer.getContext(), entry.extent, leaf.type));
           array.addAttribute("name", builder.getStringAttr(leaf.name));
           const std::string arrayPath = path(endpoint.domainOwner).str() + "." + leaf.name;
           array.addAttribute("source_path", builder.getStringAttr(arrayPath));
@@ -263,6 +263,7 @@ private:
     llvm::SmallVector<Leaf> leaves;
     Operation *family = nullptr;
     uint64_t cardinality = 0;
+    std::string extent;
   };
   LogicalResult invalid(Operation *site, llvm::StringRef message) {
     return emitMappedFailure(site, "NODAL-BACKEND-INTERFACE-CONSERVATIVE-001", message);
@@ -460,6 +461,35 @@ private:
       }
       original.family = proof->family;
       original.cardinality = proof->cardinality;
+      original.extent = std::to_string(proof->cardinality);
+      if (proof->extentParameter) {
+        original.extent = text(proof->extentParameter, "sym_name").str();
+        // Preflight owns the shared authored-operation budget until its final
+        // residual is transferred to run(). Charge these proofs into that same
+        // counter instead of consuming the not-yet-initialized run residual.
+        unsigned queryWork = unsigned(kOperations - work);
+        const unsigned queryBudget = queryWork;
+        auto dimension = resolveStaticShapeDimension(proof->family->getParentOp(), original.extent,
+                                                     "shape", queryWork);
+        Value induction = proof->family->getRegion(0).front().getArgument(0);
+        InstantiatedIntegerExpression normalized;
+        const bool invalidIdentity = failed(dimension) || dimension->parameter != proof->extentParameter ||
+            uint64_t(dimension->bounds.upper) != proof->cardinality ||
+            resolveGeneratedInductionOrdinal(proof->family, induction, original.endpoint.operation,
+                                             normalized, queryWork) !=
+                ShapeRegionProofStatus::Proved ||
+            !normalized.root ||
+            normalized.root->kind != InstantiatedIntegerNode::Kind::OpaqueValue ||
+            normalized.root->identity != induction;
+        work += queryBudget - queryWork;
+        if (invalidIdentity)
+          return invalid(
+              entry.endpoint.operation,
+              "symbolic conservative extent requires exact parent and induction identity");
+        // No expression emission or new proof may fail after NodeArray creation
+        // on this identity path. All leaves reuse the original induction SSA.
+        normalizedIndices.try_emplace(proof->family, induction);
+      }
     }
     llvm::StringSet<> physicalNames;
     bool namingBudget = false;

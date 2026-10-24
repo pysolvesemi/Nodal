@@ -2661,3 +2661,102 @@ pending-cell completion remain open. Diagnostic 131,072 is not production
 capacity, and ExtendedAPI remains pending. No CI, full qualification, CIRCT
 comparator/firtool pipeline, installation or publication retry ran. Publication
 remains held; this focused acceptance does not complete Foundation 58.
+
+## Checkpoint 70 — bounded symbolic conservative families
+
+The approved existing-API continuation extends the selected scalar, one-level
+child conservative Interface family from literal bounds to `hdlRange(0, LANES)`
+with literal step 1. `LANES` must be an exact directly referenced, bounded,
+parent-owned structural Integer. A selected literal collection ordinal must
+exist over every legal parameter value, not merely at the default. The
+[Interface gate amendment](../design-gates/NodalInterfaceHierarchy-DG-v0.1.md#f58-bounded-symbolic-conservative-family-amendment)
+records this capability extension, not completion of the broader family work.
+
+The prerequisite shared `ShapeModel` correction proves exact symbolic physical
+extent identity and the original induction SSA in preflight. Equal defaults,
+equal envelopes and rendered names are not identity evidence. Construction,
+immutable bridge transport and `ConservativeConnectivity` retain independent
+checks; the shape effect is committed only after boundary projection succeeds.
+Reuse the existing shape/parameter owners and topology adapter, not a second
+Integer evaluator, occurrence registry or per-lane expansion. Traversals remain
+bounded by authored structure and existing budgets; no measured speedup is claimed.
+
+Existing fixed/nonunit families and supported Real parameters/arithmetic remain
+unchanged. Nested families, Interface arrays, symbolic steps, arithmetic upper
+bounds and generated-local family expansion are not admitted by this slice.
+
+Matched build passed: 73 API sources, the changed bridge owner, ten fresh
+native objects and link. The first runtime attempt passed Scala compilation and
+both replays, then exposed an uninitialized preflight budget residual. The
+reviewed correction charges the symbolic proofs to the existing preflight work
+counter and carries the true remaining budget into execution. No limit changed.
+Only the materializer was rebuilt and relinked; original failure evidence remains.
+
+The corrected native prefix emits symbolic families for defaults 3 and 4 and
+unused selections, preserving four distinct child/leaf roots, original induction
+and selected ordinal 1. Literal/nonunit, symbolic NodeArray and parent Real-DAG
+predecessors pass. A later test-only OTHER-identity mutation omitted the separate
+canonical range constraint; its refusal is correct, not a production regression.
+The failed probe and output remain retained. The corrected maintained probe
+copies the canonical constraint as well as its parameter. The valid independent
+dual-parameter control exposed the native mapper's existing 512-unit limit:
+its first source derivation charged 427 units, then destination derivation
+exhausted the remaining 85. Exact baseline output and failure parity were retained.
+
+The canonical `TypedGeometry` repair threads an immediately checked context for
+the identical SSA value through private dimension/expression helpers. It removes
+two duplicate context validations per cache miss, not a unique proof obligation.
+Capture/order/cycle checks, exact cache keys, owned-expression resolution and all
+limits remain unchanged. A separate native selection repair rejects an upper
+reference that does not precede its generated family in the same block.
+
+Focused acceptance composes the earlier Scala/bridge checks and unaffected native
+controls with 15 repaired-native outcomes: six byte-identical Verilog-A outputs,
+dual-parameter emission/adaptation, valid/identity/order queries, view/slice and
+mutation freshness, and three existing mapper subsets. The repaired batch checked
+its first 13 cases; its paired case exited zero with 305 checks and no failures,
+but a receipt-headroom guard stopped before the runner assertion. Independent
+inspection discharged that result, and a separately admitted capture tail passed
+33 checks. The original failed batch is preserved, not claimed as a whole pass.
+The view/slice helper passed 10 checks and the anchor subset passed 192 checks.
+
+Actual dual-parameter output retains `OTHER`, not equal-default `LANES`, in all
+four physical extents and the generated loop. Adapted IR uses the original loop
+block argument in all four generated shape indices. This closes the observed
+native failure without raising its 512-unit limit. Independent architecture and
+exact-source review accepted this narrow prototype scope.
+
+The authored witness uses existing APIs (see `SymbolicFamilySource.scala`):
+
+```scala
+val LANES = param(3.integer, range = 2 to 5)
+val lanes =
+  for lane <- hdlRange(0, LANES) yield new Area:
+    val _ = lane
+    val first =
+      instance(new SelectedTwoChildConservativeLeaf).domain(core).param(_.gain, 3.0.real)
+// The fixture also authors a second child with gain 7 and four body connections.
+val childA = lanes(1).first
+val selectedA = childA(_.endpoint)
+```
+
+Actual named-hierarchy Verilog-A excerpt from `symbolic-3-emit.stdout` (unrelated
+ports and connections omitted; physical spelling retained):
+
+```verilog
+  parameter integer LANES = 3 from [2:5];
+  electrical [0:(LANES - 1)] nodal_i696e7374616e63655f305f696e746572666163655f33_6e;
+    for (i = 0; i < LANES; i = i + 1) begin : generate_0
+```
+
+The actual two child instances retain `.gain(3)` and `.gain(7)` while the child
+module default remains 2. This is symbolic generation, not expansion to the
+default or maximum 5. Backend: Verilog-A only. Scoped implementation and focused
+acceptance are recorded in checkpoint 70 (this commit). The maintained
+`run_symbolic_family.py` preserves the original cases and adds the affected mapper
+controls; this evidence does not claim a fresh end-to-end run of that whole runner.
+The separate ordinary construction-work gap remains open at the unchanged
+65,536-unit default; the 131,072 profile remains diagnostic, not default acceptance.
+No Extended public policy API is introduced. Preserve historical results above.
+Foundation 58 and its required unfinished children remain open; no CI, full qualification or held downstream
+consumer/comparator/firtool pipeline is authorized by this continuation.

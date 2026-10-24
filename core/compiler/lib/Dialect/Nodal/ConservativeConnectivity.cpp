@@ -1745,10 +1745,6 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
     if (!llvm::isa_and_nonnull<InterfaceInstanceOp>(declaration) ||
         declaration->getParentOp() != module)
       return failure();
-    // Original exact one-step family only. No parameterized domain is silently
-    // specialized and no nested/guarded prefix is truncated by this profile.
-    for (Value bound : proof->family->getOperands())
-      if (!bound.getDefiningOp<ConstLiteralOp>()) return failure();
   } else if (operation->hasAttr("instance") ||
              textAttr(proof->exportOperation, "kind") != "interface" ||
              !llvm::isa<InterfaceInstanceOp>(*target) ||
@@ -1774,8 +1770,39 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       domain->maximumTripCount > 2147483647 ||
       uint64_t(*ordinal) >= domain->maximumTripCount)
     return failure();
-  return ConservativeGeneratedSelection{declaration, proof->family,
-                                         operation->getOperand(1), domain->maximumTripCount};
+  Operation *extentParameter = nullptr;
+  if (!proof->family->getOperand(1).getDefiningOp<ConstLiteralOp>()) {
+    // Only an immediate child can acquire a symbolic physical family extent.
+    // The shared rank proof above checks exact literal zero/unit-step and the
+    // original induction. Selection inspection already proves all-legal presence.
+    Operation *upper = proof->family->getOperand(1).getDefiningOp();
+    const auto &expression = domain->upperExclusive;
+    if (!child || literal(proof->family->getOperand(0)) != 0 ||
+        literal(proof->family->getOperand(2)) != 1 ||
+        !llvm::isa_and_nonnull<ConstParameterRefOp>(upper) ||
+        upper->getParentOp() != operation->getParentOp() ||
+        upper->getContext() != operation->getContext() ||
+        upper->getBlock() != proof->family->getBlock() ||
+        !upper->isBeforeInBlock(proof->family) || !expression.root ||
+        expression.root->kind != InstantiatedIntegerNode::Kind::ParentParameter)
+      return failure();
+    extentParameter = expression.root->parameter;
+    if (!extentParameter || extentParameter->getParentOp() != operation->getParentOp())
+      return failure();
+    auto extent = resolveStaticShapeDimension(
+        operation->getParentOp(), textAttr(extentParameter, "sym_name"), "shape", remaining);
+    if (failed(extent) || extent->parameter != extentParameter ||
+        extent->bounds.lower != expression.bounds.lower ||
+        extent->bounds.upper != expression.bounds.upper)
+      return failure();
+  } else if (child) {
+    // Preserve the existing literal/nonunit child admission unchanged.
+    for (Value bound : proof->family->getOperands())
+      if (!bound.getDefiningOp<ConstLiteralOp>())
+        return failure();
+  }
+  return ConservativeGeneratedSelection{declaration, proof->family, operation->getOperand(1),
+                                        domain->maximumTripCount, extentParameter};
 }
 
 FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value value,

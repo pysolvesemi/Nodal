@@ -88,6 +88,7 @@ FailureOr<std::string> indexKey(Operation *module, Value value, Operation *use) 
     return "l:" + std::to_string(identity->literal);
   return identityPrefix(identity->kind) + pointerKey(identity->root);
 }
+class RegionQuery;
 // Geometry retains the exact typed SSA use. Types are uniqued across regions,
 // but their semantic-path tokens are not an authority to choose a region.
 class TypedGeometry {
@@ -141,7 +142,20 @@ public:
     auto use = context(value);
     if (failed(use))
       return failure();
-    auto key = std::make_pair(value, *use);
+    return dimensionsInContext(value, *use);
+  }
+  Operation *module;
+  unsigned &remainingWork;
+
+private:
+  friend class RegionQuery;
+
+  // Only callers inside this owner, or RegionQuery immediately after context(),
+  // may reuse the checked context for this exact original SSA value. Do not
+  // accept a context inferred from an equal type or from another value.
+  FailureOr<SmallVector<StaticShapeDimension, 4>>
+  dimensionsInContext(Value value, Operation *use) {
+    auto key = std::make_pair(value, use);
     if (auto found = cache.find(key); found != cache.end())
       return found->second;
     auto shape = physicalShape(value.getType());
@@ -151,9 +165,9 @@ public:
     for (auto token : shape->dimensions) {
       if (!spend())
         return failure();
-      auto proof = !(*use)->getParentOfType<GenerateOp>()
+      auto proof = !use->getParentOfType<GenerateOp>()
                        ? resolveStaticShapeDimension(module, token.trim(), "shape", remainingWork)
-                       : resolveGeneratedTypeDimension(*use, token.trim(), "shape", remainingWork);
+                       : resolveGeneratedTypeDimension(use, token.trim(), "shape", remainingWork);
       if (failed(proof))
         return failure();
       result.push_back(*proof);
@@ -161,10 +175,10 @@ public:
     cache.try_emplace(key, result);
     return result;
   }
-  FailureOr<SmallVector<InstantiatedIntegerExpression, 4>> expressions(Value value) {
-    auto use = context(value);
-    auto proven = dimensions(value);
-    if (failed(use) || failed(proven))
+  FailureOr<SmallVector<InstantiatedIntegerExpression, 4>>
+  expressionsInContext(Value value, Operation *use) {
+    auto proven = dimensionsInContext(value, use);
+    if (failed(proven))
       return failure();
     SmallVector<InstantiatedIntegerExpression, 4> result;
     for (const auto &dimension : *proven) {
@@ -175,11 +189,11 @@ public:
       if (dimension.parameter)
         expression = resolveOwnedIntegerParameter(module, dimension.parameter, remainingWork);
       else if (dimension.expression) {
-        if (!(*use)->getParentOfType<GenerateOp>())
+        if (!use->getParentOfType<GenerateOp>())
           expression = resolveOwnedIntegerExpression(module, dimension.expression, remainingWork);
         else {
           auto facts =
-              resolveStructuralIntegerExpression(dimension.expression, *use, remainingWork);
+              resolveStructuralIntegerExpression(dimension.expression, use, remainingWork);
           if (failed(facts) || !facts->expression)
             return failure();
           expression = *facts->expression;
@@ -191,10 +205,6 @@ public:
     }
     return result;
   }
-  Operation *module;
-  unsigned &remainingWork;
-
-private:
   llvm::DenseMap<std::pair<Value, Operation *>, SmallVector<StaticShapeDimension, 4>> cache;
 };
 std::string dimensionExpressionKey(Value value) {
@@ -713,11 +723,38 @@ static ShapeRegionProofStatus resolveGeneratedInductionOrdinalImpl(
   auto literal = [](const InstantiatedIntegerExpression &e) {
     return e.root && e.root->kind == InstantiatedIntegerNode::Kind::Literal;
   };
-  if (!literal(domain->lower) || !literal(domain->upperExclusive) ||
-      !literal(domain->step) || domain->step.bounds.lower <= 0)
-    return unsupported();
   auto facts = resolveStructuralIntegerExpression(induction, use, work);
   if (failed(facts) || !facts->expression)
+    return unsupported();
+  // Identity rank only: preserve the original opaque SSA atom, never replace a
+  // variable trip count by its maximum or synthesize a new induction identity.
+  if (!literal(domain->upperExclusive)) {
+    Operation *upper = family->getOperand(1).getDefiningOp();
+    auto reference =
+        upper ? upper->getAttrOfType<FlatSymbolRefAttr>("parameter") : FlatSymbolRefAttr();
+    const auto &bound = domain->upperExclusive;
+    const auto &actual = *facts->expression;
+    if (!literal(domain->lower) || domain->lower.bounds.lower != 0 || !literal(domain->step) ||
+        domain->step.bounds.lower != 1 ||
+        !isa_and_nonnull<ConstLiteralOp>(family->getOperand(0).getDefiningOp()) ||
+        !isa_and_nonnull<ConstLiteralOp>(family->getOperand(2).getDefiningOp()) ||
+        !isa_and_nonnull<ConstParameterRefOp>(upper) ||
+        upper->getParentOp() != family->getParentOp() || !reference || !bound.root ||
+        bound.root->kind != InstantiatedIntegerNode::Kind::ParentParameter ||
+        !bound.root->parameter || bound.root->parameter->getParentOp() != family->getParentOp() ||
+        SymbolTable::lookupSymbolIn(family->getParentOp(), reference) != bound.root->parameter ||
+        bound.bounds.lower <= 0 || bound.bounds.upper != int64_t(domain->maximumTripCount) ||
+        domain->attainedInductionBounds->lower != 0 ||
+        domain->attainedInductionBounds->upper != int64_t(domain->maximumTripCount - 1) ||
+        !actual.root || actual.root->kind != InstantiatedIntegerNode::Kind::OpaqueValue ||
+        actual.root->identity != induction || actual.bounds.lower != 0 ||
+        actual.bounds.upper != domain->attainedInductionBounds->upper ||
+        failed(chargeCoordinate(actual, work)))
+      return unsupported();
+    result = actual;
+    return Status::Proved;
+  }
+  if (!literal(domain->lower) || !literal(domain->step) || domain->step.bounds.lower <= 0)
     return unsupported();
   // The certificate is the actual original Generate progression, not the atom's
   // interval. Its kth occurrence is lower+k*step for every 0 <= k < count.
@@ -1164,7 +1201,7 @@ public:
     auto key = std::make_pair(value, *context);
     if (auto found = dimensionCache.find(key); found != dimensionCache.end())
       return found->second;
-    auto result = geometry.expressions(value);
+    auto result = geometry.expressionsInContext(value, *context);
     if (failed(result)) {
       if (!remaining)
         status = RegionStatus::ResourceLimit;

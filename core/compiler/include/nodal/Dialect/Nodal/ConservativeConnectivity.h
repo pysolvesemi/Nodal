@@ -24,7 +24,10 @@ struct ConservativeGeneratedSelection {
   mlir::Operation *declaration = nullptr;
   mlir::Operation *family = nullptr;
   mlir::Value ordinal;
+  /// Maximum count is a resource envelope, not a symbolic physical extent.
   uint64_t cardinality = 0;
+  /// Borrowed exact parent declaration for the admitted symbolic child family.
+  mlir::Operation *extentParameter = nullptr;
 };
 mlir::FailureOr<ConservativeGeneratedSelection>
 resolveConservativeGeneratedSelection(mlir::Operation *boundary);

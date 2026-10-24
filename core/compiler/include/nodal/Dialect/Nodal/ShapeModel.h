@@ -216,6 +216,8 @@ struct StaticShapeRegion {
 };
 enum class ShapeRegionProofStatus { Proved, Unsupported, Invalid, ResourceLimit };
 /// Exact original direct fixed nonempty Generate progression to normalized rank.
+/// Also admits literal zero/unit-step with a direct parent Integer upper bound;
+/// that identity case retains the original induction SSA and finite domain.
 /// The induction must be the actual family argument, not an equal-bound atom.
 /// No arbitrary expression inversion or selected/nested rebasing is admitted.
 ShapeRegionProofStatus resolveGeneratedInductionOrdinal(

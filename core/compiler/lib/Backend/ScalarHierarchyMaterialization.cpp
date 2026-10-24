@@ -9,6 +9,7 @@
 #include "nodal/Dialect/Nodal/DigitalTypeModel.h"
 #include "nodal/Dialect/Nodal/TargetCapabilities.h"
 #include "nodal/Backend/Backend.h"
+#include "nodal/Backend/ShapedValueBackend.h"
 #include "nodal/Diagnostics/DiagnosticSupport.h"
 #include "nodal/Dialect/Nodal/ConservativeConnectivity.h"
 #include "nodal/Dialect/Nodal/NodalOps.h"
@@ -93,7 +94,7 @@ public:
       builder.setInsertionPoint(endpoint.operation);
       for (auto &leaf : entry.leaves) {
         if (entry.family) {
-          builder.setInsertionPoint(entry.family);
+          builder.setInsertionPoint(entry.families.front());
           OperationState array(endpoint.operation->getLoc(), NodeArrayOp::getOperationName());
           array.addTypes(ShapedType::get(outer.getContext(), entry.extent, leaf.type));
           array.addAttribute("name", builder.getStringAttr(leaf.name));
@@ -105,21 +106,25 @@ public:
           array.addAttribute("metadata", attrs.getDictionary(outer.getContext()));
           leaf.array = builder.create(array)->getResult(0);
           builder.setInsertionPoint(endpoint.operation);
-          Value ordinal = normalizedIndices.lookup(entry.family);
-          if (!ordinal) {
-            Value induction = entry.family->getRegion(0).front().getArgument(0);
-            InstantiatedIntegerExpression expression;
-            if (resolveGeneratedInductionOrdinal(entry.family, induction, endpoint.operation,
-                                                 expression, remainingIntegerWork) !=
-                    ShapeRegionProofStatus::Proved ||
-                materializeStructuralIntegerExpression(
-                    expression, endpoint.operation, {induction},
-                    (text(entry.family, "region_id") + ".normalized_index").str(),
-                    ordinal, remainingIntegerWork) != IntegerExpressionEmissionStatus::Proved)
-              return invalid(endpoint.operation, "generated conservative ordinal cannot be materialized safely");
-            normalizedIndices.try_emplace(entry.family, ordinal);
+          llvm::SmallVector<Value, 2> ordinals;
+          for (Operation *family : entry.families) {
+            Value ordinal = normalizedIndices.lookup(family);
+            if (!ordinal) {
+              Value induction = family->getRegion(0).front().getArgument(0);
+              InstantiatedIntegerExpression expression;
+              if (resolveGeneratedInductionOrdinal(family, induction, endpoint.operation,
+                                                   expression, remainingIntegerWork) !=
+                      ShapeRegionProofStatus::Proved ||
+                  materializeStructuralIntegerExpression(
+                      expression, endpoint.operation, {induction},
+                      (text(family, "region_id") + ".normalized_index").str(),
+                      ordinal, remainingIntegerWork) != IntegerExpressionEmissionStatus::Proved)
+                return invalid(endpoint.operation, "generated conservative ordinal cannot be materialized safely");
+              normalizedIndices.try_emplace(family, ordinal);
+            }
+            ordinals.push_back(ordinal);
           }
-          leaf.value = select(entry, leaf, ordinal, endpoint.operation);
+          leaf.value = select(entry, leaf, ordinals, endpoint.operation);
           record(endpoint, leaf, "local_node");
           continue;
         }
@@ -195,7 +200,7 @@ public:
         builder.setInsertionPoint(endpoint.operation);
         for (auto &leaf : entry.leaves) {
           auto source = llvm::find_if(original.leaves, [&](const Leaf &item) { return item.path == leaf.path; });
-          leaf.value = select(original, *source, endpoint.selection->getOperand(1), endpoint.operation);
+          leaf.value = select(original, *source, entry.selectedOrdinals, endpoint.operation);
           // Correspondence names the same physical array root as the checked view.
           leaf.name = source->name;
           record(endpoint, leaf, endpoint.instance ? "out_of_component" : "local_node");
@@ -262,7 +267,8 @@ private:
     DigitalInterfaceEndpoint endpoint;
     llvm::SmallVector<Leaf> leaves;
     Operation *family = nullptr;
-    uint64_t cardinality = 0;
+    llvm::SmallVector<Operation *, 2> families;
+    llvm::SmallVector<Value, 2> selectedOrdinals;
     std::string extent;
   };
   LogicalResult invalid(Operation *site, llvm::StringRef message) {
@@ -310,22 +316,27 @@ private:
         builder.getNamedAttr("analog", leaf.analog),
         builder.getNamedAttr("analog_refs", leaf.references)}));
   }
-  Value select(const Endpoint &entry, const Leaf &leaf, Value ordinal, Operation *site) {
+  Value select(const Endpoint &entry, const Leaf &leaf, ArrayRef<Value> ordinals,
+               Operation *site) {
     Operation *scope = site->getParentOp();
     std::string token;
-    if (llvm::isa<BlockArgument>(ordinal))
-      token = "induction:" + text(entry.family, "induction_path").str();
-    else if (llvm::isa<ConstExprOp>(ordinal.getDefiningOp()))
-      token = "expression:" + path(ordinal.getDefiningOp()).str();
-    else
-      token = "literal:" + std::to_string(
-          ordinal.getDefiningOp()->getAttrOfType<IntegerAttr>("value").getInt());
+    for (Value ordinal : ordinals) {
+      if (!token.empty()) token += ',';
+      if (auto argument = llvm::dyn_cast<BlockArgument>(ordinal))
+        token += "induction:" + text(argument.getOwner()->getParentOp(), "induction_path").str();
+      else if (llvm::isa<ConstExprOp>(ordinal.getDefiningOp()))
+        token += "expression:" + path(ordinal.getDefiningOp()).str();
+      else
+        token += "literal:" + std::to_string(
+            ordinal.getDefiningOp()->getAttrOfType<IntegerAttr>("value").getInt());
+    }
     const std::string arrayPath = path(entry.endpoint.domainOwner).str() + "." + leaf.name;
     std::string selectedPath = arrayPath + ".at(" + token + ")";
     if (llvm::isa<GenerateOp>(scope))
       selectedPath += ".in(" + text(scope, "region_id").str() + ")";
     OperationState state(site->getLoc(), ShapeIndexOp::getOperationName());
-    state.addOperands({leaf.array, ordinal});
+    state.addOperands(leaf.array);
+    state.addOperands(ordinals);
     state.addTypes(leaf.type);
     if (llvm::isa<GenerateOp>(scope)) {
       state.addAttribute("generated_owner", scope->getAttr("region_id"));
@@ -426,17 +437,19 @@ private:
       if (!bodyIncidences.emplace(key, index).second)
         ambiguousIncidences.insert(key);
     }
-    for (const auto &entry : endpoints) {
+    for (auto &entry : endpoints) {
       if (!entry.endpoint.selection)
         continue;
       if (++work > kOperations)
         return invalid(entry.endpoint.operation, "selected child incidence lookup exceeds operation budget");
       auto proof = resolveConservativeGeneratedSelection(entry.endpoint.operation);
-      if (failed(proof) || entry.leaves.empty() || !positions.count(proof->declaration))
+      if (failed(proof) || proof->selection.selections.empty() ||
+          proof->selection.selections.size() != proof->domains.size() ||
+          entry.leaves.empty() || !positions.count(proof->declaration))
         return invalid(entry.endpoint.operation, "selected conservative endpoint lacks exact scalar export plan");
       unsigned originalIndex = positions.lookup(proof->declaration);
       if (entry.endpoint.instance) {
-        ChildKey key{proof->family, entry.endpoint.instance, proof->declaration};
+        ChildKey key{proof->selection.family, entry.endpoint.instance, proof->declaration};
         if (ambiguousIncidences.count(key))
           return invalid(entry.endpoint.operation, "selected child has multiple body incidence plans");
         auto found = bodyIncidences.find(key);
@@ -459,9 +472,44 @@ private:
           return invalid(entry.endpoint.operation,
                          "selected conservative leaf changes original ordered typed role identity");
       }
-      original.family = proof->family;
-      original.cardinality = proof->cardinality;
-      original.extent = std::to_string(proof->cardinality);
+      llvm::SmallVector<Operation *, 2> families;
+      std::string extent;
+      for (auto [axis, domain] : llvm::zip(proof->selection.selections, proof->domains)) {
+        families.push_back(axis.family);
+        entry.selectedOrdinals.push_back(axis.ordinal);
+        if (!extent.empty()) extent += ',';
+        extent += std::to_string(domain.maximumTripCount);
+      }
+      if (!original.families.empty() && original.families != families)
+        return invalid(entry.endpoint.operation, "selected child changes original ordered family ancestry");
+      original.family = proof->selection.family;
+      original.families = std::move(families);
+      original.extent = std::move(extent);
+      if (original.families.size() == 2) {
+        if (proof->extentParameter ||
+            failed(resolveTargetShapedLayout(entry.endpoint.domainOwner, original.extent)))
+          return invalid(entry.endpoint.operation, "nested conservative carrier exceeds signed32 target layout");
+        for (auto [axis, domain] : llvm::zip(proof->selection.selections, proof->domains))
+          normalizedIndices.try_emplace(axis.family, domain.induction);
+        // The canonical inspector already checked this original prefix. Reuse
+        // its owner to identify the exact proof-only consumer closure, not an
+        // operation-kind whitelist or a second family/occurrence registry.
+        Operation *prefix = entry.endpoint.operation->getOperand(0).getDefiningOp();
+        if (!llvm::isa_and_nonnull<GeneratedMemberOp>(prefix))
+          return invalid(entry.endpoint.operation, "nested conservative selection has no original prefix");
+        llvm::SmallVector<Operation *, 2> uses;
+        unsigned remaining = unsigned(kOperations - work), before = remaining;
+        auto member = inspectGeneratedMember(prefix, uses, remaining);
+        work += before - remaining;
+        if (failed(member) || !member->familyView || member->selections.size() != 1 ||
+            member->family != original.families.front() ||
+            member->storage.getDefiningOp() != original.family ||
+            prefix->getParentOp() != entry.endpoint.domainOwner ||
+            member->selections.front().ordinal != entry.selectedOrdinals.front())
+          return invalid(entry.endpoint.operation, "nested conservative prefix lost its original family export");
+        selectionWitnesses.insert(prefix);
+        selectionWitnesses.insert(member->exportOperation);
+      }
       if (proof->extentParameter) {
         original.extent = text(proof->extentParameter, "sym_name").str();
         // Preflight owns the shared authored-operation budget until its final
@@ -469,13 +517,13 @@ private:
         // counter instead of consuming the not-yet-initialized run residual.
         unsigned queryWork = unsigned(kOperations - work);
         const unsigned queryBudget = queryWork;
-        auto dimension = resolveStaticShapeDimension(proof->family->getParentOp(), original.extent,
+        auto dimension = resolveStaticShapeDimension(proof->selection.family->getParentOp(), original.extent,
                                                      "shape", queryWork);
-        Value induction = proof->family->getRegion(0).front().getArgument(0);
+        Value induction = proof->selection.family->getRegion(0).front().getArgument(0);
         InstantiatedIntegerExpression normalized;
         const bool invalidIdentity = failed(dimension) || dimension->parameter != proof->extentParameter ||
-            uint64_t(dimension->bounds.upper) != proof->cardinality ||
-            resolveGeneratedInductionOrdinal(proof->family, induction, original.endpoint.operation,
+            uint64_t(dimension->bounds.upper) != proof->domains.front().maximumTripCount ||
+            resolveGeneratedInductionOrdinal(proof->selection.family, induction, original.endpoint.operation,
                                              normalized, queryWork) !=
                 ShapeRegionProofStatus::Proved ||
             !normalized.root ||
@@ -488,8 +536,38 @@ private:
               "symbolic conservative extent requires exact parent and induction identity");
         // No expression emission or new proof may fail after NodeArray creation
         // on this identity path. All leaves reuse the original induction SSA.
-        normalizedIndices.try_emplace(proof->family, induction);
+        normalizedIndices.try_emplace(proof->selection.family, induction);
       }
+    }
+    // Every nested proof consumer must belong to the admitted original graph.
+    // Keep both Generate bodies/results, but erase only their now-replaced
+    // selected views and exact family-export witnesses. Unknown consumers fail.
+    llvm::DenseSet<Operation *> checkedFamilies;
+    for (const auto &entry : endpoints) {
+      if (entry.families.size() != 2) continue;
+      for (Operation *family : entry.families) {
+        if (!checkedFamilies.insert(family).second) continue;
+        for (Value result : family->getResults())
+          for (OpOperand &use : result.getUses()) {
+            if (++work > kOperations)
+              return invalid(family, "nested conservative consumer closure exceeds operation budget");
+            Operation *user = use.getOwner();
+            bool selected = positions.count(user) &&
+                            endpoints[positions.lookup(user)].endpoint.selection;
+            if (use.getOperandNumber() != 0 || (!selected && !selectionWitnesses.contains(user)))
+              return invalid(user, "nested conservative family has an unplanned consumer");
+          }
+      }
+    }
+    for (Operation *witness : selectionWitnesses) {
+      for (Value result : witness->getResults())
+        for (OpOperand &use : result.getUses()) {
+          if (++work > kOperations || use.getOperandNumber() != 0 ||
+              !positions.count(use.getOwner()) ||
+              !endpoints[positions.lookup(use.getOwner())].endpoint.selection)
+            return invalid(witness, "nested conservative prefix has an unplanned consumer");
+        }
+      erase.insert(witness);
     }
     llvm::StringSet<> physicalNames;
     bool namingBudget = false;
@@ -575,7 +653,8 @@ private:
       // Selected family/ordinal operands belong to the retained structural
       // program, not the erased domain-witness closure. The complete selected
       // endpoint plan above independently checked both operands.
-      if (positions.count(operation) && endpoints[positions.lookup(operation)].endpoint.selection)
+      if ((positions.count(operation) && endpoints[positions.lookup(operation)].endpoint.selection) ||
+          selectionWitnesses.contains(operation))
         continue;
       for (Value operand : operation->getOperands()) {
         Operation *producer = operand.getDefiningOp();
@@ -643,6 +722,14 @@ private:
       WalkResult digital = module->walk([&](Operation *operation) {
         if (erase.contains(operation) || operation->getParentOfType<InterfaceOp>())
           return WalkResult::advance();
+        // Family proof records are neutral, not digital target capabilities.
+        // Only the exact inspected witness closure may disappear; unrelated
+        // handles must fail before any physical endpoint is materialized.
+        if (llvm::isa<GeneratedMemberOp>(operation) ||
+            (llvm::isa<GeneratedExportOp>(operation) && text(operation, "kind") == "family")) {
+          (void)invalid(operation, "unplanned generated family proof consumer survives adaptation");
+          return WalkResult::interrupt();
+        }
         if (hasDigitalTargetCapability(operation)) {
           (void)invalid(operation, "real digital behavior remains outside conservative Interface emission");
           return WalkResult::interrupt();
@@ -664,7 +751,7 @@ private:
   llvm::SmallVector<DigitalInterfaceAccess> accesses;
   llvm::DenseMap<Operation *, unsigned> positions, selectedPlans;
   llvm::SmallVector<Value, 8> selectedPhysical;
-  llvm::DenseSet<Operation *> domains, erase;
+  llvm::DenseSet<Operation *> domains, erase, selectionWitnesses;
   llvm::SmallVector<Attribute> correspondence;
 };
 

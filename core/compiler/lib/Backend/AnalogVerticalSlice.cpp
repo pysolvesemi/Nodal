@@ -2983,14 +2983,68 @@ LogicalResult verifyUnselectedStructuralInstanceExport(Operation *operation) {
   Operation *family = operation ? operation->getParentOp() : nullptr;
   auto kind = operation ? operation->getAttrOfType<StringAttr>("kind") : StringAttr();
   if (!exported || !kind || kind.getValue() != "instance" ||
-      !llvm::isa_and_nonnull<GenerateOp>(family) ||
-      !llvm::isa<ModuleOp>(family->getParentOp()) || failed(exported.verify()))
+      !llvm::isa_and_nonnull<GenerateOp>(family) || failed(exported.verify()))
     return failure();
+  Operation *parent = family->getParentOp();
+  const bool nested = llvm::isa_and_nonnull<GenerateOp>(parent);
+  if (!llvm::isa_and_nonnull<ModuleOp>(parent)) {
+    if (!nested || !llvm::isa<ModuleOp>(parent->getParentOp()))
+      return failure();
+    auto literal = [](Value value) -> std::optional<int64_t> {
+      auto op = value.getDefiningOp<ConstLiteralOp>();
+      auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+      if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+        return std::nullopt;
+      return attr.getValue().getSExtValue();
+    };
+    for (Operation *axis : {parent, family}) {
+      if (axis->getNumOperands() != 3 || literal(axis->getOperand(0)) != 0 ||
+          literal(axis->getOperand(2)) != 1)
+        return failure();
+      auto upper = literal(axis->getOperand(1));
+      if (!upper || *upper <= 0 || *upper > std::numeric_limits<int32_t>::max())
+        return failure();
+    }
+  }
   auto target = inspectGeneratedExportSymbol(operation);
   if (failed(target) || !llvm::isa<InstanceOp>(*target) ||
       (*target)->getParentOp() != family ||
       llvm::any_of(family->getResults(), [](Value result) { return !result.use_empty(); }))
     return failure();
+  if (nested) {
+    auto bindings = (*target)->getAttrOfType<DictionaryAttr>("parameter_bindings");
+    Operation *child = resolveInstanceModuleDefinition(*target);
+    if (!bindings || !child || child->hasAttr("external_name") ||
+        child->getNumRegions() != 1 || !llvm::hasSingleElement(child->getRegion(0)))
+      return failure();
+    for (NamedAttribute binding : bindings) {
+      auto value = llvm::dyn_cast<FloatAttr>(binding.getValue());
+      if (!value || !value.getType().isF64() || !value.getValue().isFinite())
+        return failure();
+    }
+    for (Operation &candidate : family->getRegion(0).front())
+      if (llvm::isa<ParameterOverrideOp>(candidate) &&
+          candidate.getAttrOfType<FlatSymbolRefAttr>("instance") ==
+              FlatSymbolRefAttr::get(operation->getContext(), symbolName(*target)))
+        return failure();
+    for (Operation &parameter : child->getRegion(0).front()) {
+      if (llvm::isa<ParameterValueOp>(parameter)) {
+        if (parameter.getNumOperands() != 1) return failure();
+        auto literal = parameter.getOperand(0).getDefiningOp<ConstLiteralOp>();
+        auto value = literal ? literal->getAttrOfType<FloatAttr>("value") : FloatAttr();
+        if (!literal || literal->hasAttr("unit") || !value || !value.getType().isF64() ||
+            !value.getValue().isFinite())
+          return failure();
+      }
+      if (!llvm::isa<ParameterOp>(parameter)) continue;
+      auto type = parameter.getAttrOfType<TypeAttr>("type");
+      auto value = parameter.getAttrOfType<FloatAttr>("default_value");
+      if (!type || !type.getValue().isF64() || !value || !value.getValue().isFinite() ||
+          parameter.hasAttr("unit") || getParameterKind(&parameter) != "real" ||
+          getParameterClassification(&parameter) != "ordinary")
+        return failure();
+    }
+  }
   auto scope = resolveConservativeStructuralScope(family);
   return success(succeeded(scope) && llvm::is_contained(scope->instances, *target));
 }

@@ -7,6 +7,7 @@ classes are loaded. See SELECTED_CONSERVATIVE_PARAMETERS.md for composition.
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -166,8 +167,13 @@ def main():
                              timeout=args.timeout, check=False)
     require(ignored.returncode == 0, 'output must be git-ignored')
     require(shutil.disk_usage(repo).free >= RESERVE, 'need at least 200 MiB free')
-    for marker in ('build.mill', 'core/scala', 'docs'):
-        require((source / marker).exists(), 'canonical source root missing ' + marker)
+    projection_spec = importlib.util.spec_from_file_location(
+        "nodal_source_projection", Path(__file__).resolve().with_name("source_projection.py"))
+    require(projection_spec is not None and projection_spec.loader is not None,
+            "source projection helper is unavailable")
+    projection = importlib.util.module_from_spec(projection_spec)
+    projection_spec.loader.exec_module(projection)
+    projection.require_source_projection(source)
     fixtures = [source / FIXTURES / name for name in NAMES]
     def files(paths):
         result = [Path(p).resolve(strict=True) for p in paths]

@@ -6,6 +6,7 @@ lookup tree, native targets, or frontend plugin. See BOUNDARY_CLOSURE_C1.md.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -78,8 +79,13 @@ def main():
                              timeout=args.timeout, check=False)
     require(ignored.returncode == 0, "output must be git-ignored")
     require(shutil.disk_usage(repo).free >= RESERVE, "need at least 200 MiB free")
-    for marker in ("build.mill", "core/scala", "docs"):
-        require((source / marker).exists(), "coherent source root missing " + marker)
+    projection_spec = importlib.util.spec_from_file_location(
+        "nodal_source_projection", Path(__file__).resolve().with_name("source_projection.py"))
+    require(projection_spec is not None and projection_spec.loader is not None,
+            "source projection helper is unavailable")
+    projection = importlib.util.module_from_spec(projection_spec)
+    projection_spec.loader.exec_module(projection)
+    projection.require_source_projection(source)
     selected = args.suite or manifest["default_suites"]
     if "all" in selected:
         require(selected == ["all"], "--suite all cannot be mixed with individual suites")

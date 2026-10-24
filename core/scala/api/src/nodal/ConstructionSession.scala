@@ -7009,6 +7009,26 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       ))
     case _ => None
 
+  private def conservativeIntegerLiteral(value: Any): Option[Long] = value match
+    case value: Int => Some(value.toLong)
+    case value: KernelExpr[?] =>
+      value.literal.filter(_.kind == "integer").flatMap(_.value.toLongOption)
+    case _ => None
+
+  /** The additive nested profile is exactly two original rectangular literal axes. */
+  private def nestedConservativeFamily(family: GeneratedRegionRecord): Boolean =
+    def axis(value: GeneratedRegionRecord): Boolean =
+      value.areaFamily && value.digitalRegion.nonEmpty &&
+        conservativeIntegerLiteral(value.lower).contains(0L) &&
+        conservativeIntegerLiteral(value.step).contains(1L) &&
+        conservativeIntegerLiteral(value.upperExclusive).exists(_ > 0L)
+    family.parentOrdinal.flatMap(index => currentModule.generatedRegions.find(_.ordinal == index))
+      .exists(parent =>
+        (parent ne family) && parent.owner == family.owner && parent.parentOrdinal.isEmpty &&
+          parent.digitalRegion.exists(_.parent.isEmpty) &&
+          family.digitalRegion.exists(_.parent == parent.digitalRegion) && axis(parent) && axis(family)
+      )
+
   /** Selected conservative views retain a real authored body boundary, not invented incidence. */
   private def requireSelectedConservativeChild(
       binding: InterfaceBoundaryRecord
@@ -7035,6 +7055,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case _ => invalid("selected conservative child requires a scalar Interface")
     val leaves =
       ConstructionInterfaceLayout.leaves(endpoint.definition, endpoint.role, charge = closureCharge)
+    val nested = selection.reference.family.selectionPrefix.size == 1 &&
+      nestedConservativeFamily(family)
     val literalOrdinal = selection.reference.ordinal match
       case _: Int => true
       case value: KernelExpr[?] => value.literal.exists(_.kind == "integer")
@@ -7043,10 +7065,14 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       binding.port.module != instance.child || original.kind != KernelSignalKind.InterfacePort ||
       endpoint.boundary || endpoint.origin.nonEmpty ||
       activeGeneratedRegion.nonEmpty || activeValueRegion.nonEmpty || binding.scope.nonEmpty ||
-      family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty || family.digitalRegion.exists(
-        _.parent.nonEmpty
-      ) ||
-      selection.reference.family.selectionPrefix.nonEmpty || !literalOrdinal ||
+      (!nested && (family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
+        family.digitalRegion.exists(_.parent.nonEmpty) ||
+        selection.reference.family.selectionPrefix.nonEmpty)) || !literalOrdinal ||
+      (nested && !selection.reference.family.selectionPrefix.forall(value =>
+        conservativeIntegerLiteral(value.ordinal).exists(ordinal =>
+          ordinal >= 0L && conservativeIntegerLiteral(value.family.upperExclusive).exists(ordinal < _)
+        )
+      )) ||
       !instance.generatedScope.contains(family) ||
       leaves.isEmpty || !leaves.forall(leaf =>
         leaf.protocol == "conservative" && leaf.mode.isEmpty && leaf.analogType.nonEmpty &&
@@ -7160,7 +7186,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         ordinaryDimensionlessReal(parameter) &&
           parameter.attributes.find(_._1 == "default").exists(entry => realLiteral(entry._2))
       ) || !instance.parameterOverrides.forall((_, value) =>
-        realLiteral(value) || parentReal(value)
+        realLiteral(value) || (!nested && parentReal(value))
       )
     then
       invalid(
@@ -7242,13 +7268,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       case Some(generated) =>
         requireAreaFamilyScope("conservative Interface member selection", requireBody = true)
         val boundary = instanceInterfacePorts.get(reference)
+        val nested = nestedConservativeFamily(generated)
         val leaves = ConstructionInterfaceLayout.leaves(
           endpoint.definition,
           endpoint.role,
           charge = closureCharge
         )
-        if generated.parentOrdinal.nonEmpty || generated.digitalRegion != activeValueRegion ||
-          activeValueRegion.exists(_.parent.nonEmpty) ||
+        if (nested && (boundary.isEmpty || !leaves.forall(_.access == "connect"))) ||
+          (!nested &&
+            (generated.parentOrdinal.nonEmpty || activeValueRegion.exists(_.parent.nonEmpty))) ||
+          generated.digitalRegion != activeValueRegion ||
           !generated.declarations.contains(reference) || leaves.isEmpty ||
           !leaves.forall(leaf =>
             leaf.protocol == "conservative" && leaf.mode.isEmpty &&
@@ -7700,14 +7729,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       selected.generated.isEmpty && kind == KernelSignalKind.InterfacePort &&
         activeGeneratedRegion.exists(generated =>
           generated.areaFamily &&
-            generated.parentOrdinal.isEmpty && generated.digitalRegion == activeValueRegion &&
-            activeValueRegion.forall(_.parent.isEmpty) && instance.generatedScope.contains(
+            (nestedConservativeFamily(generated) ||
+              (generated.parentOrdinal.isEmpty && activeValueRegion.forall(_.parent.isEmpty))) &&
+            generated.digitalRegion == activeValueRegion && instance.generatedScope.contains(
               generated
             )
         ) &&
         leaves.nonEmpty && leaves.forall(leaf =>
           leaf.protocol == "conservative" && leaf.mode.isEmpty &&
-            leaf.analogType.nonEmpty && leaf.dataType.isEmpty
+            leaf.analogType.nonEmpty && leaf.dataType.isEmpty &&
+            (activeGeneratedRegion.forall(_.parentOrdinal.isEmpty) || leaf.access == "connect")
         )
     val binding =
       InterfaceBoundaryRecord(Some(instance), port, selected.generated, activeValueRegion)

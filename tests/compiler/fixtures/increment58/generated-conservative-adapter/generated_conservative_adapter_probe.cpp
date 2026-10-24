@@ -303,7 +303,7 @@ int symbolicFamilyQuery(mlir::ModuleOp module, llvm::StringRef mutation) {
     return status == nodal::ShapeRegionProofStatus::ResourceLimit &&
                    before == probeText(module) ? 0 : 32;
   }
-  bool exact = accepted && selection->extentParameter == expectedParameter && selection->cardinality == 5;
+  bool exact = accepted && selection->extentParameter == expectedParameter && selection->domains.size() == 1 && selection->domains.front().maximumTripCount == 5;
   llvm::outs() << "parsed_valid=1 cc=" << accepted << " exact_extent=" << exact
                << " unchanged=" << (before == probeText(module)) << "\n";
   if (mutation == "valid" || mutation == "upper-identity") return exact && before == probeText(module) ? 0 : 32;

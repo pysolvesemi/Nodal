@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
 #include "nodal/Dialect/Nodal/ShapeModel.h"
+#include "nodal/Dialect/Nodal/DigitalStorageModel.h"
 
 namespace nodal {
 
@@ -18,15 +19,14 @@ mlir::LogicalResult materializeConservativeConnectivity(mlir::ModuleOp module);
 /// do not claim a complete local equation boundary.
 bool isPartialPhysicalComponent(mlir::Operation *module);
 
-/// Bounded checked view of an actual direct exported local conservative family.
-/// This is a query result over source SSA, not a physical endpoint registry.
+/// Bounded checked view of an actual exported conservative occurrence.
+/// The shared inspector owns the ordered original selection tuple; ParameterModel
+/// owns its positionally matched domains. Borrowed SSA survives through adaptation.
 struct ConservativeGeneratedSelection {
   mlir::Operation *declaration = nullptr;
-  mlir::Operation *family = nullptr;
-  mlir::Value ordinal;
-  /// Maximum count is a resource envelope, not a symbolic physical extent.
-  uint64_t cardinality = 0;
-  /// Borrowed exact parent declaration for the admitted symbolic child family.
+  GeneratedSelectionProof selection;
+  llvm::SmallVector<GeneratedDomain, 2> domains;
+  /// Only the existing one-axis child profile admits a symbolic physical extent.
   mlir::Operation *extentParameter = nullptr;
 };
 mlir::FailureOr<ConservativeGeneratedSelection>

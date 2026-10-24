@@ -1560,13 +1560,23 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
                    : FailureOr<GeneratedSelectionProof>(failure());
   auto target = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
                                 : FailureOr<Operation *>(failure());
-  if (failed(proof) || failed(target) || proof->selections.size() != 1 ||
-      proof->family != (*target)->getParentOp() ||
-      proof->family->getParentOp() != operation->getParentOp() ||
-      proof->family->getNumOperands() != 3)
+  if (failed(proof) || failed(target) || proof->selections.empty() ||
+      proof->selections.size() > 2 || proof->family != (*target)->getParentOp())
+    return failure();
+  const bool nested = proof->selections.size() == 2;
+  Operation *parentScope = operation->getParentOp();
+  for (const auto &axis : proof->selections) {
+    if (!llvm::isa_and_nonnull<GenerateOp>(axis.family) ||
+        axis.family->getParentOp() != parentScope || axis.family->getNumOperands() != 3)
+      return failure();
+    parentScope = axis.family;
+  }
+  if (parentScope != proof->family)
     return failure();
   Operation *declaration = *target;
   const bool child = textAttr(proof->exportOperation, "kind") == "instance";
+  if (nested && !child)
+    return failure();
   if (child) {
     auto instance = llvm::dyn_cast<InstanceOp>(*target);
     auto reference = operation->getAttrOfType<FlatSymbolRefAttr>("instance");
@@ -1725,7 +1735,9 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       if (!llvm::isa<ParameterOverrideOp>(candidate) ||
           candidate.getAttrOfType<FlatSymbolRefAttr>("instance") != reference)
         continue;
-      if (candidate.getNumOperands() != 1 || candidate.getNumResults() != 0 ||
+      // Nested selection admits dictionary literal actuals only. In particular,
+      // a literal-backed override is still an SSA override, not that profile.
+      if (nested || candidate.getNumOperands() != 1 || candidate.getNumResults() != 0 ||
           candidate.getNumRegions() || candidate.getNumSuccessors() ||
           resolveStructuralInstance(&candidate, reference) != instance ||
           failed(verifyGeneratedStructuralOwnership(&candidate)) ||
@@ -1759,17 +1771,48 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
     return attr.getValue().getSExtValue();
   };
   unsigned remaining = 16384;
-  auto domain = resolveGeneratedDomain(proof->family, remaining);
-  InstantiatedIntegerExpression normalized;
-  if (failed(domain) || !domain->induction ||
-      resolveGeneratedInductionOrdinal(proof->family, domain->induction, *target,
-                                       normalized, remaining) != ShapeRegionProofStatus::Proved)
-    return failure();
-  auto ordinal = literal(operation->getOperand(1));
-  if (!ordinal || *ordinal < 0 || !domain->maximumTripCount ||
-      domain->maximumTripCount > 2147483647 ||
-      uint64_t(*ordinal) >= domain->maximumTripCount)
-    return failure();
+  llvm::SmallVector<GeneratedDomain, 2> checkedDomains;
+  for (const auto &axis : proof->selections) {
+    auto domain = resolveGeneratedDomain(axis.family, remaining);
+    if (failed(domain) || !domain->induction)
+      return failure();
+    if (!nested) {
+      InstantiatedIntegerExpression normalized;
+      if (resolveGeneratedInductionOrdinal(axis.family, domain->induction, *target,
+                                           normalized, remaining) != ShapeRegionProofStatus::Proved)
+        return failure();
+    }
+    auto ordinal = literal(axis.ordinal);
+    if (!ordinal || *ordinal < 0 || !domain->maximumTripCount ||
+        domain->maximumTripCount > 2147483647 ||
+        uint64_t(*ordinal) >= domain->maximumTripCount)
+      return failure();
+    if (nested) {
+      auto upper = literal(axis.family->getOperand(1));
+      if (literal(axis.family->getOperand(0)) != 0 ||
+          literal(axis.family->getOperand(2)) != 1 || !upper || *upper <= 0 ||
+          uint64_t(*upper) != domain->maximumTripCount ||
+          domain->module != operation->getParentOp() || !domain->attainedInductionBounds ||
+          domain->attainedInductionBounds->lower != 0 ||
+          domain->attainedInductionBounds->upper != *upper - 1 ||
+          (!checkedDomains.empty() && checkedDomains.front().induction == domain->induction))
+        return failure();
+      // Zero/unit literal domains make the original induction its ordinal.
+      // Authenticate that atom at the actual nested use through ParameterModel;
+      // the older direct-Module normalization helper intentionally stays narrow.
+      auto facts = resolveStructuralIntegerExpression(domain->induction, *target, remaining);
+      if (failed(facts) || !facts->expression || !facts->expression->root ||
+          facts->expression->root->kind != InstantiatedIntegerNode::Kind::OpaqueValue ||
+          facts->expression->root->identity != domain->induction ||
+          facts->expression->bounds.lower != 0 || facts->expression->bounds.upper != *upper - 1)
+        return failure();
+    }
+    checkedDomains.push_back(std::move(*domain));
+  }
+  if (nested)
+    return ConservativeGeneratedSelection{declaration, std::move(*proof),
+                                          std::move(checkedDomains), nullptr};
+  const auto *domain = &checkedDomains.front();
   Operation *extentParameter = nullptr;
   if (!proof->family->getOperand(1).getDefiningOp<ConstLiteralOp>()) {
     // Only an immediate child can acquire a symbolic physical family extent.
@@ -1801,8 +1844,8 @@ nodal::resolveConservativeGeneratedSelection(Operation *operation) {
       if (!bound.getDefiningOp<ConstLiteralOp>())
         return failure();
   }
-  return ConservativeGeneratedSelection{declaration, proof->family, operation->getOperand(1),
-                                        domain->maximumTripCount, extentParameter};
+  return ConservativeGeneratedSelection{declaration, std::move(*proof),
+                                        std::move(checkedDomains), extentParameter};
 }
 
 FailureOr<nodal::ConservativeEndpoint> nodal::resolveConservativeEndpoint(Value value,

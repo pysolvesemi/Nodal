@@ -11,6 +11,23 @@ import scala.collection.mutable
   * owns all operand traversal, and the existing native type renderer owns every payload proof.
   */
 private[nodal] object InterfaceMlir:
+  /** Shared snapshot profile for the two-axis conservative body and its selected views. */
+  def nestedConservativeFamily(
+      family: KernelGeneratedRegionSnapshot,
+      parent: Option[KernelGeneratedRegionSnapshot]
+  ): Boolean =
+    def axis(value: KernelGeneratedRegionSnapshot): Boolean =
+      value.digitalBody.nonEmpty && value.yieldedArea.nonEmpty && value.lower == "0" &&
+        value.step == "1" && value.upperExclusive.toLongOption.exists(upper =>
+          upper > 0L && value.upperExclusive == upper.toString &&
+            value.maximumTripCount.toLong == upper
+        )
+    parent.exists(value =>
+      value.path != family.path && value.owner == family.owner && value.parent.isEmpty &&
+        value.lexicalParent.isEmpty && family.parent.contains(value.path) &&
+        family.lexicalParent.contains(value.path) && axis(value) && axis(family)
+    )
+
   private def fail(message: String, path: String): Nothing =
     scala.util.Failure[Nothing](
       new BridgeException(BridgeDiagnostic("NODAL-BRIDGE-054-INTERFACE", message, Some(path)))
@@ -155,13 +172,30 @@ private[nodal] object InterfaceMlir:
       )
       val family = snapshot.generatedRegions.find(_.path == selection.family)
         .getOrElse(fail("selected conservative child family is absent", path))
+      val nested = selection.selectionPrefix.size == 1 && nestedConservativeFamily(
+        family,
+        family.parent.flatMap(parent => snapshot.generatedRegions.find(_.path == parent))
+      )
+      val nestedSelection = nested && selection.selectionPrefix.forall(prefix =>
+        snapshot.generatedRegions.filter(_.path == prefix.family) match
+          case Vector(parent) =>
+            family.parent.contains(parent.path) && prefix.ordinal.toLongOption.exists(ordinal =>
+              prefix.ordinal == ordinal.toString && ordinal >= 0L &&
+                parent.upperExclusive.toLongOption.exists(ordinal < _)
+            ) && parent.exports.count(exported =>
+              exported.member == prefix.member && exported.target == family.path &&
+                exported.kind == "family" && exported.access == "read_only"
+            ) == 1
+          case _ => false
+      )
       val scope = KernelGeneratedScope(family.path, family.induction)
       requireValid(
         boundary.region.isEmpty && declarations(path)._2.generatedScope.isEmpty &&
-          selection.selectionPrefix.isEmpty && selection.ordinal.toLongOption.exists(value =>
+          (nestedSelection || (selection.selectionPrefix.isEmpty && family.parent.isEmpty &&
+            family.lexicalParent.isEmpty)) && selection.ordinal.toLongOption.exists(value =>
             selection.ordinal == value.toString
           ) &&
-          family.owner == endpoint.owner && family.parent.isEmpty && family.lexicalParent.isEmpty &&
+          family.owner == endpoint.owner &&
           family.digitalBody.nonEmpty && family.yieldedArea.nonEmpty && family.maximumTripCount > 0 &&
           instance.generatedScope.contains(scope) &&
           child.owner == instance.childModule && child.boundary.isEmpty &&
@@ -263,7 +297,7 @@ private[nodal] object InterfaceMlir:
         ) && instance.parameterBindings.forall((name, value) =>
           // Preserve literal duplicate transport; symbolic bindings must have one representation.
           parameterNames.contains(name) && (literal(value) ||
-            (bindingsByName(name).size == 1 && parentReal(value)))
+            (!nested && bindingsByName(name).size == 1 && parentReal(value)))
         ),
         "selected conservative child parameters require ordinary dimensionless Real literals " +
           "or parent Real arithmetic, with literal child defaults",
@@ -543,7 +577,11 @@ private[nodal] object InterfaceMlir:
                 ) ||
                   endpoint.dimensions.isEmpty && endpoint.members.nonEmpty &&
                   endpoint.members.forall(_.protocol == "conservative") &&
-                  family.parent.isEmpty && family.lexicalParent.isEmpty)
+                  ((family.parent.isEmpty && family.lexicalParent.isEmpty) ||
+                    (nestedConservativeFamily(family, family.parent.flatMap(parent =>
+                      snapshot.generatedRegions.find(_.path == parent)
+                    )) && endpoint.boundary.nonEmpty &&
+                      endpoint.members.forall(_.access == "connect"))))
             )
           ) &&
           declaration.interfaceBoundary == endpoint.boundary &&
@@ -1706,8 +1744,13 @@ private[nodal] object InterfaceMlir:
           declaration.generatedScope.forall(scope =>
             snapshot.generatedRegions.exists(family =>
               family.owner == owner && family.path == scope.owner &&
-                family.induction == scope.induction && family.yieldedArea.nonEmpty && family.parent.isEmpty &&
-                family.lexicalParent.isEmpty && family.declarations.contains(declaration.path) &&
+                family.induction == scope.induction && family.yieldedArea.nonEmpty &&
+                ((family.parent.isEmpty && family.lexicalParent.isEmpty) ||
+                  (nestedConservativeFamily(family, family.parent.flatMap(parent =>
+                    snapshot.generatedRegions.find(_.path == parent)
+                  )) && endpoint.boundary.nonEmpty &&
+                    endpoint.members.forall(_.access == "connect"))) &&
+                family.declarations.contains(declaration.path) &&
                 family.declarations.contains(endpoint.path)
             ) &&
               endpoint.boundary.forall(boundary =>

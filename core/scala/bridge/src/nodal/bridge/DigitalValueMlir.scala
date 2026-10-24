@@ -1138,14 +1138,20 @@ private[nodal] object DigitalValueMlir:
           declaration.generatedScope.exists(scope =>
             generatedDeclarationOwners.get(path).exists(family =>
               family.owner == owner && family.path == scope.owner && family.induction == scope.induction &&
-                family.yieldedArea.nonEmpty && family.parent.isEmpty && family.lexicalParent.isEmpty
+                family.yieldedArea.nonEmpty &&
+                ((family.parent.isEmpty && family.lexicalParent.isEmpty) ||
+                  InterfaceMlir.nestedConservativeFamily(family, family.parent.flatMap(generated.get)))
             ) &&
               declaration.conservativeMember.exists(origin =>
                 generatedInterfaceDeclaration(origin.endpoint) &&
                   declarations(origin.endpoint)._2.generatedScope.contains(scope) &&
                   interfaceEndpoints.get(origin.endpoint).exists(endpoint =>
                     endpoint.owner == owner && endpoint.dimensions.isEmpty && endpoint.members.nonEmpty &&
-                      endpoint.members.forall(_.protocol == "conservative")
+                      endpoint.members.forall(_.protocol == "conservative") &&
+                      generatedDeclarationOwners.get(path).forall(family =>
+                        family.parent.isEmpty || (endpoint.boundary.nonEmpty &&
+                          endpoint.members.forall(_.access == "connect"))
+                      )
                   )
               )
           )

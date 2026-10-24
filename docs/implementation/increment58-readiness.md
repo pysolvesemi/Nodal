@@ -3020,3 +3020,156 @@ or authorization to enlarge native capacity. The CMake/CTest route and broader
 no-argument suite were not run. Frontend/adapter/Verilog-A integration, signed-32
 target handoff, full suites, CI, held CIRCT/comparator/firtool pipeline and
 installation remain unrun. Foundation 58 and its open parents/children remain open.
+
+
+## Checkpoint 74 — literal nested conservative target integration
+
+This bounded existing-API slice connects checkpoint 72/73 native proofs to actual
+Scala construction, bridge lowering, conservative boundary adaptation and
+Verilog-A emission. It does not close F-058.B.1/B.2, their parents or Foundation 58.
+The supported profile is exactly two original rectangular literal `hdlRange(0,
+positiveLiteral)` axes, unit step, complete in-bounds literal ordered selections,
+and scalar conservative Connect leaves with the existing role/domain/child proofs.
+Nested child parameters use finite ordinary dimensionless Real literal defaults
+and dictionary actuals only. Nested SSA overrides, symbolic axes, nonzero/nonunit
+axes and arbitrary additional family consumers remain refused. Rank-one symbolic,
+nonunit and parent-expression behavior is preserved rather than widened here.
+
+### Canonical owner and implementation
+
+`ConstructionSession`, `InterfaceMlir` and `DigitalValueMlir` admit only that
+literal rank-two profile through existing APIs and the existing ordered selection
+prefix. There is no public API, snapshot or MLIR schema change.
+`ConservativeConnectivity` remains the sole conservative selection-admission owner:
+its internal
+selection result retains the original canonical ordered selection proof and an
+equal-length ordered domain vector. The adapter consumes those facts, retains
+both original Generate operations and induction SSA values, creates Module-owned
+rank-two carriers, and emits one direct two-axis ShapeIndex per projection.
+It does not introduce another evaluator, flatten source topology or clone each
+lane. Exact inspected proof consumers are removed; unrelated surviving family
+consumers are rejected. `ShapedValueBackend` remains the owner of row-major target
+layout, with the adapter checking the signed32 product before materialization.
+
+The new result changes internal native layout. All eight direct header users and
+the focused probe were compiled against the changed header; retained archive
+consumers were checked for compatible source/object/type lineage. This is not a
+fresh whole-compiler rebuild. The frontend build compiled all 73 API sources and
+the two changed bridge owners over pinned retained support layers, not a fresh
+24-owner bridge build. No production proof or construction limits changed:
+construction default 65536, native mapper 512/64 and topology caller 16384/1024.
+The separately recorded larger construction-policy diagnostic and pending
+Extended API question are not promoted by this slice.
+
+### Actual source and Verilog-A demonstration
+
+The maintained source is
+`tests/scala/domain-hierarchy/fixtures/nested-conservative-target/Source.scala`.
+Its actual nested body contains:
+
+```scala
+val rows =
+  for row <- hdlRange(0, 2) yield new Area:
+    val _ = row
+    val columns =
+      for column <- hdlRange(0, 3) yield new Area:
+        val _ = column
+        val first = instance(new NestedConservativeLeaf).domain(core).param(_.gain, 3.0.real)
+        val second = instance(new NestedConservativeLeaf).domain(core).param(_.gain, 7.0.real)
+```
+
+The complete fixture connects p-to-p and n-to-n between the two child instances
+and selects original tuples (0,0), (0,1), (1,0), plus the second child's (0,0).
+The matched Verilog-A output actually contains these loop and address lines:
+
+```verilog
+    for (i = 0; i < 2; i = i + 1) begin : generate_0
+      genvar i_1;
+      for (i_1 = 0; i_1 < 3; i_1 = i_1 + 1) begin : generate_1
+        localparam integer node_map_nodal_i696e7374616e63655f305f696e746572666163655f33_70_0_0 = ((i * 3) + i_1);
+```
+
+There are four Module-owned `electrical [0:5]` carriers, four actual child-port
+routes, and separate p-to-p/n-to-n alias statements. Both authored child instances
+retain literal gain overrides 3 and 7 while sharing one emitted child definition.
+That definition retains `parameter real gain = 2;` and the actual private equation
+`V(observed, reference) <+ (gain * 1);`. The private equation proves parameter
+emission, not that gain drives the exported Interface leaves. Unused selected
+projections need not survive target output; their exact original tuple/carrier
+identity is checked in-process during adaptation. The separate AnchorSource
+witness checks two visible Module connections for repeated tuple (0,0), using the
+same canonical selected boundary and actual nested carrier routing.
+
+### Focused results and reproduction boundary
+
+Default-policy Source, Controls and Anchor replay passed with the full authoritative
+source projection and exact maintained source paths. Controls cover 11 source
+refusals, three forged-prefix snapshot refusals and positive recovery. The shared
+`tests/scala/domain-hierarchy/source_projection.py` preflight now requires a regular
+build marker and both core/scala and docs directories; focused regressions cover
+missing/wrong markers, hash mismatch and bare/foreign emitted author locations.
+Four existing focused runners use that same helper. Their full suites were not
+rerun as part of this helper extraction.
+
+The matched native executable passed all eight positive calls: 732 predecessor
+checks with zero failures, exact nested adaptation, nested emission, anchor
+adaptation/emission, and rank-one literal-nonunit, symbolic-family and
+parent-arithmetic emission. The last three outputs are byte-identical to their
+retained accepted references. Nested emission runs twice internally with identical
+bytes and unchanged original IR. Adapter assertions retain both loop/induction
+identities, four carriers, four body points and all eight selected leaf tuples,
+with exact correspondence and no surviving Interface/family proof records.
+The maintained `check_output.py` also passed on both actual emitted witnesses,
+checking loops, actual port statements, ordered addresses, separate joins,
+shared definition and anchor connections. No simulator or held consumer ran.
+
+Four maintained native derivatives produced six actual calls. Forged family-prefix
+provenance refused verification with absent-export-inventory and consequent
+unchecked-family-view authentication diagnostics.
+A correctly typed literal-backed nested Real SSA override, with its original
+literal dictionary binding removed, refused selected-boundary admission through
+`NODAL-INTERFACE-054-001`. The original runner expected the later generated-override
+diagnostic and therefore recorded an expectation failure; source review confirms
+the earlier canonical CC/Interface refusal is the intended unsupported-profile
+boundary. That receipt remains a failure, not a whole-runner pass.
+
+The untouched four-call tail used identical compiled code and input bytes. An
+authentic unused family-prefix consumer and the balanced 46341-by-46341 extent
+each passed ordinary native verification, then failed public backend emission
+with their distinct unplanned-consumer/signed32-layout diagnostic,
+`failure_is_transactional=1`, empty target and unchanged in-memory input.
+The product 2147488281 exceeds signed32 target layout without altering semantic
+proof budgets. `make_controls.py` reproduces these four derivative inputs from
+the actual bridge output. Matched 732 predecessor checks separately cover
+authenticated child coupling and conservative Unknown/topology refusal; they do
+not establish an end-to-end coupled-child adapter transaction.
+
+The exact successful Verilog-A SHA256 is
+`87946987436dbee3dfdf5b9000ffdc683e2d845cb70418f1f01221ad524525c6`;
+the anchor output is
+`036605c5d698d8e0a5aacca39ad2b17e9b337a3582c8fdc37cb96fe350ae5ba0`.
+Matched executable SHA256 is
+`65555271026ad581b1157663ce404144e4ad911337962e2548ee6c106a7dfa83`.
+The projected sources, exact compile/link recipes, raw outputs and concise
+per-case receipts remain in ignored `.work/f58-nested-conservative-target`.
+The final wrapper source is the retained `probe-v3` correction. Representative
+commands using that matched build are:
+
+```sh
+.work/f58-nested-conservative-target/bin/conservative-probe-v3 --literal-groundwork
+.work/f58-nested-conservative-target/bin/conservative-probe-v3 .work/f58-nested-conservative-target/test-output/scala-v2/nested.mlir nested-adapt
+.work/f58-nested-conservative-target/bin/conservative-probe-v3 .work/f58-nested-conservative-target/test-output/scala-v2/nested.mlir nested-emit
+python3 -I -B tests/compiler/fixtures/increment58/nested-conservative-target/check_output.py .work/f58-nested-conservative-target/test-output/native-v3/nested-emit.stdout .work/f58-nested-conservative-target/test-output/native-v3/anchor-emit.stdout
+```
+
+Earlier source-root fallback outputs, rejected header-provenance attempts,
+lexical-path validation mismatches and the initial post-order test-wrapper failure
+are retained unchanged. The authoritative source replay, canonical-header repair,
+explicit dependency validation and two-line PreOrder wrapper correction are
+separately recorded; none of those earlier attempts is relabeled as acceptance.
+These are focused composed prototype results, not a fresh whole-runner/full-suite
+qualification claim. Source review accepted canonical ownership, bounded proof
+reuse and actual routing. Symbolic rank-two capacity, broader hierarchy contracts,
+the separately recorded default-policy workload gap and remaining F-058 children
+stay open. No capacity promotion, CI, CIRCT comparator/firtool pipeline, installation
+or broader qualification was performed.

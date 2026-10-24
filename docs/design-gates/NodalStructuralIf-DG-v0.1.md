@@ -308,7 +308,10 @@ source/runtime controls and retained predecessor parity, recorded in
 [checkpoint 82](../implementation/increment58-readiness.md#checkpoint-82-unit-step-guarded-legacy-foreach).
 The shared NodalOps owner now proves exact arm-local index literals without an
 integer environment, retaining existing scope/order/type checks and budgets.
-Nonunit construction can emit IR, but even a fully driven step-2 singleton is
-refused by existing shared residue-coalescing coverage. Nonunit native support,
-direct indexed writes outside Generate, F-159.B.4.2 and broader mixed-effect
-obligations remain open. No generated Verilog-* acceptance is claimed.
+Checkpoint 82 retained a fully driven step-2 singleton coverage refusal.
+[Checkpoint 83](../implementation/increment58-readiness.md#checkpoint-83-single-occurrence-coverage-normalization)
+repairs that exact shared-owner gap for universally proved, invariant single-map
+single occurrences; the original failed evidence is preserved. General nonunit
+coverage, nested residue completion, direct indexed writes outside Generate,
+F-159.B.4.2 and broader mixed-effect obligations remain open. No generated
+Verilog-* acceptance is claimed.

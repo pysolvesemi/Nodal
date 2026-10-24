@@ -3934,3 +3934,85 @@ Generate remain unsupported; a failed complementary-write fixture is preserved.
 F-159.B.4.2, F-058.B.2.2, F-159.C.3.2 and broader mixed-effect/emission parents
 remain open. Architecture review accepts this narrow shared-owner repair and
 unit-step evidence only; no full feature, target HDL or whole-suite claim follows.
+
+## Checkpoint 83: single-occurrence coverage normalization
+
+Accepted focused shared-owner repair for the fully driven nonunit singleton
+refused at checkpoint 82. `ShapeModel.cpp` alone changes production behavior;
+there is no Scala/frontend, public image/header, ABI, target exporter or capacity
+change. General nonunit and nested residue completion remain outside this repair.
+
+### Ownership and soundness
+
+Both coverage entry points reuse one private normalization helper on their local,
+independently rederived regions. The original exact-strided-read fast path runs
+first. Only a nonempty single map, with no outer maps, universally proved trip
+count one, positive occurrence width and invariant owned geometry is normalized.
+The exact mapped physical lower plus checked occurrence width forms a Box or
+Interval even when the authored hull was classified Whole. Thus `[0,2)` with
+step 3 does not falsely cover lane 1. The complete temporary writer list is
+normalized before residue grouping; duplicate writers remain separate and fail
+exact-once coverage. The selected read uses the same local geometry correction.
+
+Original iteration/projection identities remain authoritative for public images,
+overlap, ordering, same-occurrence and mapping. Supplied region facts still
+rederive from actual SSA; a forged count, selected default or maximum-trip-count
+metadata cannot establish universal singleton coverage. Empty, uncertain,
+multi-occurrence and nested images retain existing handling. Existing arithmetic,
+invariance and work accounting are reused, including ResourceLimit propagation.
+There is no second evaluator, cache, lane enumeration or proof-limit increase.
+The extra traversal is bounded by authored regions, not physical lane counts;
+no measured performance improvement is claimed.
+
+### Focused evidence
+
+- `ShapeIterationImageTest`: **264/264**, comprising 173 retained assertions and
+  91 focused assertions covering both coverage/partition APIs, universal symbolic
+  singleton versus maybe-empty/default-one/multiple counts, authored-hull holes,
+  complements, duplicates, original map/overlap identity, forged-count rederivation,
+  actual Generate versus nested maps, and shifted physical interval `[8,9)`.
+- `StructuralIfModelTest`: **129/129** on the same new production owner.
+- Seven unchanged Scala-generated MLIR positives pass, including the previously
+  rejected Vec1 step-2 witness. The original incomplete multi-lane stride-2
+  artifact still rejects with `NODAL-DIGITAL-055-010`. These reuse checkpoint 82's
+  actual Scala bytes and provenance; no fresh Scala compilation is claimed here.
+- Independent review checked both source patches, exact compiler dependencies,
+  canonical headers, 14 direct project/test objects plus five CRT objects and
+  archive exclusions. Tiny `{1,1}` resource tests cover entry-level exhaustion;
+  propagation inside the new helper is source-reviewed, not a measured cutoff test.
+
+The first structural run actually passed, but its summary parser expected the
+wrong format and recorded `accepted:false`. That original receipt is unchanged.
+A versioned parser correction then reran the same binary successfully, reproducing
+the same output without source changes or recompilation. This is an executed
+corrected replay, not retroactive relabeling of the first receipt.
+
+Exact source SHA256: `17849966e1c9c862a315c204bfc78b0de4e03d30fdb0963a306d1979a0754181`.
+Final native binary SHA256: `c6218856c6d08cd6a6e9e83b4d2309d8d631819e118b0b677467fcf5d3fcc4f4`.
+Commands, frozen source/dependency recipes, retained failures and results are in
+ignored `.work/f58-singleton-coverage/run.py` and `final-summary.json`
+(SHA256 `e71dcf513e185cf357a36ec59cebefac04af795f72ba5384b9c5404da57975df`).
+The reviewed baseline remains checkpoint 82 `09a8a1e80213da0d3da2a78591ef56c518637488`.
+
+### Actual demonstration and limits
+
+The previously compiled `Increment58GuardedLegacyNonunitSingleLaneSource` has
+Vec1 input/output and the following guarded body, with a whole-input assignment
+in its else arm:
+
+```scala
+hdlRange(0, 1, 2): i =>
+  output.writable.at(i) := input.at(i)
+```
+
+The unchanged actual Nodal MLIR retains lower 0, upper 1, step 2 and
+`maximum_trip_count = 1`; its SHA256 is
+`04babb3efe4143f512b712c2c04c814b0e4c94012a1ec6b28ba78c113cffbc38`.
+It now passes native verification without rewriting stride, source identity or
+emitted IR. This demonstrates a native coverage correction, not generated
+Verilog-* execution or acceptance.
+
+No ShapeRegionTest run, full qualification, CI, held exporter or firtool is
+credited. The default construction budget of 65536 and independent proof limits remain unchanged;
+the earlier whole-model construction gap is not repaired. F-159.B.4.2,
+F-058.B.2.2, F-159.C.3.2 and Foundation58 remain open.

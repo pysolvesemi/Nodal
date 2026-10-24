@@ -86,6 +86,20 @@ Static/affine queries use at most 65,536 actual edge visits and 128 active recur
 frames; memo hits still validate actual ownership. This is an active-stack bound,
 not a full-DAG height or whole-pipeline linearity claim.
 
+### Universally single-occurrence coverage
+
+[Checkpoint 83](../implementation/increment58-readiness.md#checkpoint-83-single-occurrence-coverage-normalization)
+normalizes only private coverage geometry for an independently rederived,
+nonempty, single-map image whose trip count is universally one. The physical
+lower boundary plus positive occurrence width defines the exact box/interval;
+the authored upper bound is not a coverage hull. Domain, offset and retained
+boundaries must be invariant under existing checked parameter proofs. A default
+of one, maximum count one, or possibly-empty count does not establish this fact.
+Original stride, occurrence identity, overlap/order proofs and public images stay
+unchanged. Nested maps and multi-occurrence residue completion retain their
+existing rules. Work remains charged to the same bounded query, with no lane
+expansion, new evaluator/cache, or budget increase.
+
 ## Planning, resources and acceptance
 
 Target-neutral plans distinguish bounded unrolled expansion from a compact

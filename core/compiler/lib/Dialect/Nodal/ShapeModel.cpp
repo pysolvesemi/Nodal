@@ -2098,10 +2098,56 @@ compareStridedImages(const StaticShapeRegion &a, const StaticShapeRegion &b, Reg
              : ShapeRegionOverlap::Unknown;
 }
 
-// Coalesce only an authored complete set of residues with identical finite
-// ordinal counts. The work is bounded by supplied families, never step or lanes.
-RegionStatus coalesceResidues(llvm::ArrayRef<StaticShapeRegion> input, RegionQuery &query,
+// A universally single-occurrence image has no stride holes. Tighten only the
+// private coverage geometry, retaining the original maps for every other API.
+// A proof miss leaves the image unchanged; exhaustion is never a proof miss.
+RegionStatus normalizeSingletonCoverage(StaticShapeRegion &region, RegionQuery &query) {
+  if (query.status != RegionStatus::Proved || !query.spend())
+    return query.status;
+  if (region.kind == StaticShapeRegion::Kind::Empty || !region.iteration ||
+      !region.outerIterations.empty() || region.iteration->empty || region.iteration->stride <= 1)
+    return query.status;
+  const auto &map = *region.iteration;
+  if (!query.less(query.one, map.tripCount, true) ||
+      !query.less(map.tripCount, query.one, true) ||
+      !query.less(query.zero, map.occurrenceWidth) || !query.invariant(map.domain.lower) ||
+      !query.invariant(map.domain.upperExclusive) || !query.invariant(map.offset) ||
+      !query.invariant(map.occurrenceWidth))
+    return query.status;
+  if (map.varyingAxis) {
+    if (*map.varyingAxis >= region.axes.size())
+      return query.status;
+    for (const auto &axis : region.axes)
+      if (!query.invariant(axis.lower) || !query.invariant(axis.upperExclusive))
+        return query.status;
+  } else if (!query.invariant(region.interval.lower) ||
+             !query.invariant(region.interval.upperExclusive)) {
+    return query.status;
+  }
+  // The authored hull may be Whole although only its first occurrence exists.
+  // Its mapped lower boundary already retains offsets, slices and views.
+  auto &axis = map.varyingAxis ? region.axes[*map.varyingAxis] : region.interval;
+  auto end = query.apply("add", axis.lower, map.occurrenceWidth);
+  if (!end)
+    return query.status;
+  axis.upperExclusive = *end;
+  region.kind = map.varyingAxis ? StaticShapeRegion::Kind::Box : StaticShapeRegion::Kind::Interval;
+  region.iteration.reset();
+  region.projection.reset();
+  return query.status;
+}
+
+// Normalize the complete private writer list before grouping residues, so a
+// singleton cannot join or consume another family. Duplicate boxes stay separate.
+// Coalesce only an authored complete set with identical finite ordinal counts;
+// work is bounded by supplied families, never step or lanes.
+RegionStatus coalesceResidues(llvm::MutableArrayRef<StaticShapeRegion> input, RegionQuery &query,
                               SmallVectorImpl<StaticShapeRegion> &output) {
+  for (auto &region : input) {
+    auto status = normalizeSingletonCoverage(region, query);
+    if (status != RegionStatus::Proved)
+      return status;
+  }
   std::vector<bool> consumed(input.size(), false);
   for (unsigned i = 0; i != input.size(); ++i) {
     if (consumed[i] || input[i].kind == StaticShapeRegion::Kind::Empty)
@@ -2921,8 +2967,7 @@ verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
   }
   if (selected.kind == StaticShapeRegion::Kind::Empty)
     return RegionStatus::Proved;
-  const bool stridedRead = stridedImage(selected);
-  if (stridedRead) {
+  if (stridedImage(selected)) {
     // An exact mapped family read can be covered without filling its holes.
     for (unsigned i = 0; i != regions.size(); ++i) {
       if (!sameImage(selected, regions[i], query))
@@ -2945,6 +2990,10 @@ verifyStaticShapeProjectionCoverage(const StaticShapeProjection &read,
         return query.status;
     }
   }
+  status = normalizeSingletonCoverage(selected, query);
+  if (status != RegionStatus::Proved)
+    return status;
+  const bool stridedRead = stridedImage(selected);
   SmallVector<StaticShapeRegion, 4> solid;
   status = coalesceResidues(regions, query, solid);
   if (status != RegionStatus::Proved)

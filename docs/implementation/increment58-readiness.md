@@ -2265,3 +2265,46 @@ The complete fixture slice used 2,060,288 allocated bytes within its separately
 approved 2 MiB allowance, while the existing 62 MiB stage cap and free-space reserve
 remained intact. No API rebuild, CI, broad qualification, publication retry or held
 consumer action was performed.
+
+## Checkpoint 65: exact accounting for one canonical InstanceInput assignment
+
+Scoped accounting groundwork extends ConstructionSession's existing bound-domain
+proof for one finalized registered singleton driving its actual root InstanceInput.
+The canonical driver, request, declaration, literal type/domain and complete ordinal
+inventory are proved before exact work. Existing preparation, naming, validation
+and exporters still run with newly live work charged at their existing owners.
+Unknown shapes retain coarse fallback; a post-admission mismatch poisons rather
+than replaying or refunding. No duplicate registry/engine, higher limit, validator
+bypass or public callback admission is introduced. Zero-assignment and domain-free
+fees retain their old branches. This is the reviewed narrow shared-layer design.
+
+Nine freshly compiled groups pass 25 focused suites, including the driven 17 cases
+plus calibration, raw structural/ordinal exclusions, exact post-admission poison,
+actual exporter exhaustion/restoration/stale-query/no-rollback/fresh recovery, six
+exporter seams and complete snapshot parity. Same compiled baseline/candidate full
+snapshots are byte-identical at 11,653 bytes, including final source-map assembly;
+matched accounting costs are 123,636 versus 88,366, not a CPU speedup claim. Six C2a
+controls, an organic domain-free three-assignment witness and automatic precompleted
+activation have identical observed old/new fees on identical anchored lookups.
+Sixteen retained groups and fourteen raw outputs also pass/match; retained classes
+were not freshly compiled and use the previously accepted exact-arity helper.
+
+The maintained runner requires correctly typed repository markers and hash-pins
+build.mill. Earlier markerless scratch projections silently selected the real
+repository; their receipts are preserved but not used as projected-source evidence.
+Anchored fresh replays establish this checkpoint. Historical costs are not silently
+rewritten or equated across source locations and observation routes. See the
+[single-assignment accounting guide](../../tests/scala/domain-hierarchy/single-assignment-accounting/SINGLE_ASSIGNMENT.md).
+
+The unchanged 65,536-unit driven positive still fails the assignment descriptor
+proof, with five units remaining in the separately retained final run. Diagnostic
+131,072 remains diagnostic-only; default admission, automatic pending-cell
+completion, broader C2b/C2c and Foundation 58 remain open. The current increment
+does not affect generated Verilog-*: only accounting eligibility/charges change,
+and complete captured hardware snapshots match. No new generation claim is made.
+
+The final maintained replay stayed below the 62 MiB owned-stage cap with more than
+246,808,576 bytes free; sampled measurements are not a continuous-peak guarantee.
+No API rebuild during this recovery, CI, full qualification, publication retry or
+held consumer action occurred. All source changes remain locally checkpointed
+while the explicit publication denial remains in force.

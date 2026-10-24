@@ -97,8 +97,12 @@ def main():
             require(path.is_relative_to(root), 'lookup pin outside supplied root')
         for virtual, item in mapping.items():
             pin(root / relative(virtual), item['sha256'])
-        for marker in ('build.mill', 'core/scala', 'docs'):
-            require((root / marker).exists(), 'incoherent lookup root: missing ' + marker)
+        # SemanticOrigin falls back to another repository when these markers have
+        # the wrong type or are absent. Fail closed rather than misattribute evidence.
+        require((root / 'build.mill').is_file(), 'incoherent lookup root: missing build.mill file')
+        pin(root / 'build.mill')
+        for marker in ('core/scala', 'docs'):
+            require((root / marker).is_dir(), 'incoherent lookup root: missing directory ' + marker)
         fixtures[group] = []
         for entry in spec['fixtures']:
             bundled = maintained / relative(entry['maintained_path'])

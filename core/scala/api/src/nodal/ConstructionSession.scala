@@ -3809,14 +3809,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       if operation.eventProcess.isEmpty &&
         records(target.module).declarations(target.index).kind != KernelSignalKind.Register
       then
+        boundDomainCharge(3L) // count lookup/update and canonical declaration lookup
         continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
         val declaration = records(target.module).declarations(target.index)
         // A projected target carries its actual selectors; revisiting the root is cut by the
         // shared sampler's identity worklist, not by an annotation or a synthetic source.
+        boundDomainCharge() // direct target: no selector value or generated cone
         val selection =
           Option.when(operation.values.head.asInstanceOf[AnyRef] ne declaration.value)(
             operation.values.head
           ).toVector
+        // Under the one-assignment proof the old driver vector, selection and causal controls
+        // are empty: pay three concat dispatches, RHS singleton creation/visit, map read/write
+        // and the None causal-control dispatch. No variable input scan is hidden in this unit.
+        boundDomainCharge(8L)
         continuousDrivers.update(
           target,
           continuousDrivers.getOrElse(target, Vector.empty) ++ Vector(operation.values(1)) ++
@@ -4714,6 +4720,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
             generatedScope = assignmentGeneratedScope(operation)
           )
         val declaration = records(target.module).declarations(target.index)
+        boundDomainCharge() // exact empty private-state lookup
         if privateFsmStorage(target) then
           FlatFsmRuntime.fail("private machine state cannot have external updates")
         if declaration.kind == KernelSignalKind.Register then
@@ -14340,6 +14347,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       allowRootRegister: Boolean,
       generatedScope: Option[GeneratedRegionRecord] = activeGeneratedRegion
   ): DeclarationRef =
+    boundDomainCharge()
     val selected = assignmentReference(value)
     var current = selected
     val visited = mutable.HashSet.empty[ExpressionRef]
@@ -14462,9 +14470,12 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         allowRootRegister = true,
         generatedScope = assignmentGeneratedScope(operation)
       )
+      boundDomainCharge(2L) // ordinal map read and write
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)
+      boundDomainCharge() // cached module path dispatch
       val owner = modulePath(operation.owner)
+      boundDomainCharge(2L) // canonical declaration lookup and bounded scalar capability test
       val declaration = records(target.module).declarations(target.index)
       if declaration.dataType.exists(isBoundaryCapability) then
         if declaration.kind != KernelSignalKind.Output then
@@ -14472,6 +14483,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         operation.values(1) match
           case value: Expr[?] => validateBoundarySource(value, declaration, resolved)
           case _ => fail("NODAL-DIGITAL-054-018", "capability assignment requires a typed source")
+      // This scoped profile has exactly ordinal zero. Pay the emitted path characters and
+      // the record/tuple constructions; existing operand-path probes remain unchanged.
+      boundDomainCharge(owner.length.toLong + ".digital_assignment_0".length.toLong + 2L)
       KernelDigitalAssignmentSnapshot(
         s"$owner.digital_assignment_$ordinal",
         owner,
@@ -15650,7 +15664,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         root: Module,
         requirementBindingsAbsent: => Boolean,
         digitalPortsAbsent: => Boolean,
-        boundChild: Option[Module] = None
+        boundChild: Option[Module] = None,
+        rootAssignmentOrdinal: Boolean = false
     ): Boolean =
       def checked(test: => Boolean): Boolean = bdChecked(test)
       val absent =
@@ -15693,7 +15708,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         !checked(
           domainStack.isEmpty && generationStack.isEmpty && analogStack.isEmpty && analogSemanticContext.isEmpty
         ) ||
-        !checked(nextDigitalEffectOrdinal.isEmpty && digitalPortsAbsent) ||
+        !checked((nextDigitalEffectOrdinal.isEmpty || (rootAssignmentOrdinal && {
+          charge(2L)
+          nextDigitalEffectOrdinal.size == 1 && nextDigitalEffectOrdinal.get(rootHandle).contains(1)
+        })) && digitalPortsAbsent) ||
         !checked(
           reductionExact.isEmpty && reductionDomains.isEmpty && !reductionChecking && !reductionProofBuilding
         )
@@ -15724,7 +15742,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         reset: DeclarationRef,
         boundary: KernelExpr[?],
         singletonReference: ExpressionRef,
-        singleton: KernelExpr[?]
+        singleton: KernelExpr[?],
+        assignment: Option[(Operation, Int)]
     )
 
     // Zero-debit routing only, keeping eager/C1/no-intent/domain-free/root-local fees intact.
@@ -15828,7 +15847,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           rootObject.get,
           requirementBindingsAbsent = true,
           digitalPortsAbsent = true,
-          boundChild = Some(childObject.get)
+          boundChild = Some(childObject.get),
+          rootAssignmentOrdinal = true
         )
       then return None
       if !bdChecked(directPortRequest.isEmpty && directPortPermit.isEmpty &&
@@ -15878,30 +15898,45 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
 
       var externalMetadata = 0
       var frequencyMetadata = 0
+      var assignment = Option.empty[Operation]
       if !bdEvery(operations) { operation =>
           charge(1L + operation.values.size.toLong + operation.kind.length.toLong)
-          operation.owner == rootHandle && operation.kind == "metadata" &&
-          operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
-          operation.eventProcess.isEmpty && operation.source.isEmpty &&
-          operation.sourceOrdinal == 0 && (operation.values match
-            case Vector(
-                  edge: ClockEdge,
-                  policy: ResetPolicy,
-                  polarity: ResetPolarity,
-                  frequency: Frequency
-                ) =>
-              val valid = domain.edge.contains(edge) && domain.resetPolicy.contains(policy) &&
-                domain.resetPolarity.contains(polarity) &&
-                domain.frequency.exists(_ eq frequency)
-              if valid then externalMetadata += 1
-              valid
-            case Vector(hertz: Double, unit: String) =>
-              val valid = bdTextEqual(unit, "Hz") && java.lang.Double.isFinite(hertz) &&
-                hertz > 0.0 && domain.frequency.exists(_.hertz == hertz)
-              if valid then frequencyMetadata += 1
-              valid
-            case _ => false)
-        } || !bdChecked(externalMetadata == 1 && frequencyMetadata <= 1)
+          if operation.kind == "assignment" then
+            bdChecked(assignment.isEmpty && operation.owner == rootHandle &&
+              operation.values.size == 2 && operation.generatedScope.isEmpty &&
+              operation.digitalRegion.isEmpty && operation.eventProcess.isEmpty &&
+              operation.source.nonEmpty && operation.sourceOrdinal == 0) && {
+              charge(1L) // retain the canonical candidate, not a copied operation graph
+              assignment = Some(operation)
+              true
+            }
+          else
+            operation.owner == rootHandle && operation.kind == "metadata" &&
+            operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+            operation.eventProcess.isEmpty && operation.source.isEmpty &&
+            operation.sourceOrdinal == 0 && (operation.values match
+              case Vector(
+                    edge: ClockEdge,
+                    policy: ResetPolicy,
+                    polarity: ResetPolarity,
+                    frequency: Frequency
+                  ) =>
+                val valid = domain.edge.contains(edge) && domain.resetPolicy.contains(policy) &&
+                  domain.resetPolarity.contains(polarity) &&
+                  domain.frequency.exists(_ eq frequency)
+                if valid then externalMetadata += 1
+                valid
+              case Vector(hertz: Double, unit: String) =>
+                val valid = bdTextEqual(unit, "Hz") && java.lang.Double.isFinite(hertz) &&
+                  hertz > 0.0 && domain.frequency.exists(_.hertz == hertz)
+                if valid then frequencyMetadata += 1
+                valid
+              case _ => false)
+        } || !bdChecked(externalMetadata == 1 && frequencyMetadata <= 1 &&
+          (if assignment.isEmpty then nextDigitalEffectOrdinal.isEmpty
+           else
+             nextDigitalEffectOrdinal.size == 1 &&
+             nextDigitalEffectOrdinal.get(rootHandle).contains(1)))
       then return None
       // ClockDomain.required emits expressions, NOT a metadata operation. Any extra
       // child or unknown operation is rejected above instead of ignored by a whitelist.
@@ -16016,6 +16051,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         if !declarationIdentity(declaration, owner) then false
         else if declaration.reference eq clock.get then true
         else if declaration.reference eq reset.get then true
+        else if assignment.nonEmpty &&
+          Set(KernelSignalKind.Output, KernelSignalKind.InstanceOutput).contains(declaration.kind)
+        then false
         else
           declaration.kind match
             case KernelSignalKind.InstanceInput | KernelSignalKind.InstanceOutput =>
@@ -16139,7 +16177,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           root.expressionCount == 2 && child.expressionCount == 2 &&
           shapeIndices.size == (if singleton.get._2.constructionFinalized then 1 else 0))
       then return None
-      Some(BoundDomainAccountingProof(
+      if assignment.nonEmpty then charge(2L) // optional identity/count evidence
+      val proof = BoundDomainAccountingProof(
         rootObject.get,
         childObject.get,
         root,
@@ -16151,8 +16190,78 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         reset.get,
         resetExpression.get,
         singleton.get._1,
-        singleton.get._2
-      ))
+        singleton.get._2,
+        assignment.map(_ -> operations.size)
+      )
+      if assignment.nonEmpty && !boundAssignmentValid(proof, checkInventory = false) then None
+      else Some(proof)
+
+    // Only canonical identities and bounded scalar facts. No derived-map/name access is
+    // needed for raw admission; the normal resolver rechecks its own binding later.
+    private def boundAssignmentValid(
+        proof: BoundDomainAccountingProof,
+        checkInventory: Boolean
+    ): Boolean = proof.assignment.forall { (operation, count) =>
+      val present = !checkInventory || {
+        charge(1L)
+        val iterator = operations.iterator
+        var found = false
+        while iterator.hasNext do
+          charge(1L)
+          if iterator.next() eq operation then found = true
+        bdChecked(found && operations.size == count)
+      }
+      if !present || !bdChecked(operation.owner == rootHandle &&
+          operation.kind == "assignment" && operation.values.size == 2 &&
+          operation.generatedScope.isEmpty && operation.digitalRegion.isEmpty &&
+          operation.eventProcess.isEmpty && operation.source.nonEmpty &&
+          operation.sourceOrdinal == 0 && nextDigitalEffectOrdinal.size == 1 &&
+          nextDigitalEffectOrdinal.get(rootHandle).contains(1))
+      then false
+      else
+        charge(2L)
+        val targetValue = operation.values.head.asInstanceOf[AnyRef]
+        val target = Option(declarationIds.get(targetValue))
+        if !bdChecked(target.nonEmpty && target.get.module == rootHandle &&
+            (operation.values(1).asInstanceOf[AnyRef] eq proof.singleton) &&
+            proof.singleton.constructionFinalized && proof.singleton.typeFinalized)
+        then false
+        else
+          val reference = target.get
+          val declaration = proof.root.declarations.lift(reference.index)
+          val binding = instanceDigitalPorts.get(reference)
+          if !bdChecked(declaration.nonEmpty && binding.nonEmpty &&
+              (declaration.get.reference eq reference) &&
+              (declaration.get.value eq targetValue) &&
+              declaration.get.kind == KernelSignalKind.InstanceInput &&
+              (binding.get.instance eq proof.occurrence) &&
+              binding.get.port.module == proof.child.handle && binding.get.generated.isEmpty &&
+              binding.get.scope.isEmpty)
+          then false
+          else
+            val childPort = proof.child.declarations.lift(binding.get.port.index)
+            val input = proof.singleton.constructionRequest.get.inputReference
+            val rootInput = input match
+              case reference: DeclarationRef => proof.root.declarations.lift(reference.index)
+              case _: ExpressionRef => None
+            if !bdChecked(childPort.nonEmpty && rootInput.nonEmpty &&
+                (childPort.get.reference eq binding.get.port) &&
+                childPort.get.kind == KernelSignalKind.Input &&
+                rootInput.get.reference.eq(input) &&
+                rootInput.get.domainCandidate.exists(_ eq proof.actual.domain))
+            then false
+            else
+              declaration.get.dataType match
+                case Some(dataType: KernelInstanceDataType[?]) if dataType.finalized =>
+                  val targetType = dataType.kernelDescriptor
+                  val sourceType = proof.singleton.resultDescriptor
+                  val authored = childPort.get.dataType.map(CandidateRuntime.typeDescriptor)
+                  bdChecked(sourceType.nonEmpty && authored.nonEmpty) &&
+                  bdScalar(targetType) && bdScalar(sourceType.get) && bdScalar(authored.get) &&
+                  bdSameLiteralDescriptor(targetType, sourceType.get) &&
+                  bdSameLiteralDescriptor(targetType, authored.get)
+                case _ => false
+    }
 
     /** Once raw exact work started, mismatches poison instead of selecting coarse fallback. Call
       * immediately after resolveDomains and again before snapshot/export. Derivation is still owned
@@ -16241,6 +16350,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         clockRecords.isEmpty && provedClockIdentities.isEmpty && rawClockResets.isEmpty,
         "resolution introduced an unsupported clock proof/alias"
       )
+      if proof.assignment.nonEmpty && !boundAssignmentValid(proof, checkInventory = true) then
+        reject("bound-domain accounting: assignment identity changed during preparation")
       // Raw proof is rerun once at the NEXT phase boundary; do not rerun here and then fall
       // back on None. The resolver has no user callbacks in this audited profile. Its ordinary
       // safety validation must still run and remains charged by the preparation owner.
@@ -17368,17 +17479,20 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       val modules = publicationProbe(snapshots(resolved))
       val assignmentRecords = publicationProbe(digitalAssignmentRecords(resolved))
       val assignmentSources = exportFlatMap(assignmentRecords): (assignment, record) =>
+        boundDomainCharge(3L) // declaration identity/slot lookup and empty attributes dispatch
         val syntheticDefault =
           Option(declarationIds.get(record.values.head.asInstanceOf[AnyRef])).exists: reference =>
             records(reference.module).declarations(reference.index).attributes.exists:
               case ("stream_ready_default", value: Expr[?]) =>
                 value eq record.values(1).asInstanceOf[AnyRef]
               case _ => false
+        boundDomainCharge() // exact retained source; synthetic fallback is not evaluated
         val source = record.source.orElse(
           Option.when(syntheticDefault)(
             sourceByPath.get(assignment.target).orElse(sourceByPath.get(assignment.value))
           ).flatten
         )
+        boundDomainCharge() // source entry construction; exportFlatMap owns visits/copies
         source.map(SourceMapEntry(assignment.path, _))
       // A member projection is generated from its actual endpoint declaration. Preserve any
       // more precise captured leaf span; otherwise retain that declaration, never invent a line.

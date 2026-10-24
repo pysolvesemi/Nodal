@@ -1,0 +1,545 @@
+{
+  "schema": 1,
+  "api_sha256": "a55f3114691b9d00df0e96105d67188d1647cce28ebf13c843466d2ad539ecb5",
+  "baseline_api_sha256": "790f927c6eb3e251737ad0d54eec613aeee7d8f9ca75bd53856b80376ee6832b",
+  "groups": {
+    "automatic": {
+      "fixtures": [
+        {
+          "maintained_path": "automatic/AutomaticPolicy.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/automatic-policy/AutomaticPolicy.scala",
+          "sha256": "9be69b93575d5e7e407becc0d096bb7bc0463625eaff631003dc4091a1bc71b2",
+          "bytes": 5269,
+          "compile": true
+        },
+        {
+          "maintained_path": "automatic/AutomaticPolicyRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/automatic-policy/AutomaticPolicyRoot.scala",
+          "sha256": "c5dd9f9ca4c07a21499d88f40dd182a578639efecef431f4f73605a07b3fc153",
+          "bytes": 403,
+          "compile": true
+        }
+      ]
+    },
+    "boundaries": {
+      "fixtures": [
+        {
+          "maintained_path": "boundaries/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "ccae191ec033b78515c4bf599e5f7810d54d5004864c037e39d4f3ff0ccb8eea",
+          "bytes": 29232,
+          "compile": true
+        },
+        {
+          "maintained_path": "boundaries/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    },
+    "domainfree": {
+      "fixtures": [
+        {
+          "maintained_path": "domainfree/C2aAssignedRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aAssignedRoot.scala",
+          "sha256": "d689b1a727933549aa1afe706e38b7e8b42841ea4c963737c8b4371a1794d776",
+          "bytes": 381,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aControls.scala",
+          "sha256": "1fa403ca58230263899df116de8137c575f5496a47073c8215294415091b7f04",
+          "bytes": 27327,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aDrivenLeaf.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aDrivenLeaf.scala",
+          "sha256": "1b545b511207b5804e961aa5fc0d4c4a34509a4cb869951ec8d78d83b7e83774",
+          "bytes": 176,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aFactory.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aFactory.scala",
+          "sha256": "9279b5e91aba135b18494a9135f9e5c6395a2a18a6f4beddeabb3468ad5ae168",
+          "bytes": 321,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aLeaf.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aLeaf.scala",
+          "sha256": "9499d3108816b486b7b9c323175ce41aa8411a4547551c60f1297dbdfe4fe120",
+          "bytes": 134,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aManualRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aManualRoot.scala",
+          "sha256": "c4dcebf156a860a5ef9a29fc66193ff8212835672f8ac763705f1a6ee253a09a",
+          "bytes": 480,
+          "compile": true
+        },
+        {
+          "maintained_path": "domainfree/C2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aRoot.scala",
+          "sha256": "546b781d0fb96937d8e5f77caa5fde2013fee7550ca0b4ba0c410d4ee221eef7",
+          "bytes": 492,
+          "compile": true
+        }
+      ]
+    },
+    "driven": {
+      "fixtures": [
+        {
+          "maintained_path": "driven/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "fd0cb0d666df3bf797cf2796501282dc0c4220ab6a1808044ef29525a515adb5",
+          "bytes": 24729,
+          "compile": true
+        },
+        {
+          "maintained_path": "driven/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    },
+    "export": {
+      "fixtures": [
+        {
+          "maintained_path": "export/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "71c27d41d8cf87f78bebd2231db9b548201dc1b821ded57df9e2b443896b9410",
+          "bytes": 28317,
+          "compile": true
+        },
+        {
+          "maintained_path": "export/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    },
+    "fees": {
+      "fixtures": [
+        {
+          "maintained_path": "fees/C2aAccountingControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aAccountingControls.scala",
+          "sha256": "0a265ade4278e3ae1ba714447254a34e07bb0239b33ddb339b93c6b5a47f6f56",
+          "bytes": 10213,
+          "compile": true
+        },
+        {
+          "maintained_path": "fees/C2aLeaf.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/reduction-construction-c2a/C2aLeaf.scala",
+          "sha256": "9499d3108816b486b7b9c323175ce41aa8411a4547551c60f1297dbdfe4fe120",
+          "bytes": 134,
+          "compile": true
+        }
+      ]
+    },
+    "gates": {
+      "fixtures": [
+        {
+          "maintained_path": "gates/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "fbb8113c671cf1ce3b63426a5e87bd1cb636774c9085445e7945d16581cd66f1",
+          "bytes": 27244,
+          "compile": true
+        },
+        {
+          "maintained_path": "gates/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    },
+    "seams": {
+      "fixtures": [
+        {
+          "maintained_path": "seams/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "a437d8663d28c9b5f1d57c1dea8b88b3402a0a3f880019c0ce929ae637cd9a45",
+          "bytes": 27960,
+          "compile": true
+        },
+        {
+          "maintained_path": "seams/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    },
+    "whole": {
+      "fixtures": [
+        {
+          "maintained_path": "whole/C2b2aControls.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aControls.scala",
+          "sha256": "49a4633d11321c04031219020528426f396b560fde05c413d6a20a908f9019e7",
+          "bytes": 23986,
+          "compile": true
+        },
+        {
+          "maintained_path": "whole/C2b2aRoot.scala",
+          "virtual_path": "tests/scala/domain-hierarchy/fixtures/driven-diagnostic/C2b2aRoot.scala",
+          "sha256": "cd16a9827aed0c4b2f0437ee37636e55e368229a5f07797f43dac7f1deed2710",
+          "bytes": 1102,
+          "compile": true
+        }
+      ]
+    }
+  },
+  "suites": {
+    "driven17": {
+      "group": "driven",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "diagnostic"
+      ],
+      "success": [
+        "PASS C2b2a fresh recovery",
+        "PASS C2b2a same-route full-finish calibration"
+      ],
+      "api": "candidate"
+    },
+    "raw-gates": {
+      "group": "gates",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "diagnostic"
+      ],
+      "success": [
+        "PASS assignment corruption fallback duplicate_canonical_record",
+        "PASS C2b2a new proxy"
+      ],
+      "api": "candidate"
+    },
+    "export-exhaustion": {
+      "group": "export",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "diagnostic"
+      ],
+      "success": [
+        "PASS assignment-record exporter seam raw parity",
+        "PASS assignment-record fresh-session recovery"
+      ],
+      "api": "candidate"
+    },
+    "broader-seams": {
+      "group": "seams",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [],
+      "success": [
+        "PASS broader exporter seams"
+      ],
+      "api": "candidate"
+    },
+    "boundary-ordinal_without_assignment": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "ordinal_without_assignment"
+      ],
+      "success": [
+        "PASS structural fallback ordinal_without_assignment"
+      ],
+      "api": "candidate"
+    },
+    "boundary-assignment_empty_ordinals": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "assignment_empty_ordinals"
+      ],
+      "success": [
+        "PASS structural fallback assignment_empty_ordinals"
+      ],
+      "api": "candidate"
+    },
+    "boundary-extra_child_ordinal": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "extra_child_ordinal"
+      ],
+      "success": [
+        "PASS structural fallback extra_child_ordinal"
+      ],
+      "api": "candidate"
+    },
+    "boundary-wrong_literal": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "wrong_literal"
+      ],
+      "success": [
+        "PASS structural fallback wrong_literal"
+      ],
+      "api": "candidate"
+    },
+    "boundary-pending_source": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "pending_source"
+      ],
+      "success": [
+        "PASS structural fallback pending_source"
+      ],
+      "api": "candidate"
+    },
+    "boundary-wrong_binding": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "wrong_binding"
+      ],
+      "success": [
+        "PASS structural fallback wrong_binding"
+      ],
+      "api": "candidate"
+    },
+    "boundary-generated_scope": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "generated_scope"
+      ],
+      "success": [
+        "PASS structural fallback generated_scope"
+      ],
+      "api": "candidate"
+    },
+    "boundary-event_process": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "event_process"
+      ],
+      "success": [
+        "PASS structural fallback event_process"
+      ],
+      "api": "candidate"
+    },
+    "boundary-digital_region": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "digital_region"
+      ],
+      "success": [
+        "PASS structural fallback digital_region"
+      ],
+      "api": "candidate"
+    },
+    "boundary-output_declaration": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "output_declaration"
+      ],
+      "success": [
+        "PASS structural fallback output_declaration"
+      ],
+      "api": "candidate"
+    },
+    "boundary-register_declaration": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "register_declaration"
+      ],
+      "success": [
+        "PASS structural fallback register_declaration"
+      ],
+      "api": "candidate"
+    },
+    "boundary-post_admission_ordinals": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "post_admission_ordinals"
+      ],
+      "success": [
+        "PASS fresh owner recovery after post-admission poison"
+      ],
+      "api": "candidate"
+    },
+    "whole-baseline": {
+      "group": "whole",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "baseline",
+        "{runtime}/whole-baseline.txt"
+      ],
+      "success": [
+        "PASS same compiled fixture full snapshot baseline=true"
+      ],
+      "api": "baseline"
+    },
+    "fees-baseline": {
+      "group": "fees",
+      "main": "C2aAccountingControls",
+      "arguments": [],
+      "success": [
+        "PASS 6 C2a accounting controls"
+      ],
+      "api": "baseline"
+    },
+    "domainfree-baseline": {
+      "group": "domainfree",
+      "main": "C2aControls",
+      "arguments": [
+        "assignment-fees"
+      ],
+      "success": [
+        "PASS domain-free actual assignment fee parity"
+      ],
+      "api": "baseline"
+    },
+    "automatic-baseline": {
+      "group": "automatic",
+      "main": "automaticpolicy.AutomaticPolicy",
+      "arguments": [],
+      "success": [
+        "PASS automatic policy=registered-construction-diagnostic-131072"
+      ],
+      "api": "baseline"
+    },
+    "whole-candidate": {
+      "group": "whole",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "candidate",
+        "{runtime}/whole-candidate.txt"
+      ],
+      "success": [
+        "PASS same compiled fixture full snapshot baseline=false"
+      ],
+      "api": "candidate"
+    },
+    "fees-candidate": {
+      "group": "fees",
+      "main": "C2aAccountingControls",
+      "arguments": [],
+      "success": [
+        "PASS 6 C2a accounting controls"
+      ],
+      "api": "candidate"
+    },
+    "domainfree-candidate": {
+      "group": "domainfree",
+      "main": "C2aControls",
+      "arguments": [
+        "assignment-fees"
+      ],
+      "success": [
+        "PASS domain-free actual assignment fee parity"
+      ],
+      "api": "candidate"
+    },
+    "automatic-candidate": {
+      "group": "automatic",
+      "main": "automaticpolicy.AutomaticPolicy",
+      "arguments": [],
+      "success": [
+        "PASS automatic policy=registered-construction-diagnostic-131072"
+      ],
+      "api": "candidate"
+    },
+    "boundary-composition_observation": {
+      "group": "boundaries",
+      "main": "drivendiagnostic.C2b2aControls",
+      "arguments": [
+        "composition_observation_owner"
+      ],
+      "success": [
+        "PASS structural fallback composition_observation_owner"
+      ],
+      "api": "candidate"
+    }
+  },
+  "default_suites": [
+    "driven17",
+    "raw-gates",
+    "export-exhaustion",
+    "broader-seams",
+    "boundary-ordinal_without_assignment",
+    "boundary-assignment_empty_ordinals",
+    "boundary-extra_child_ordinal",
+    "boundary-wrong_literal",
+    "boundary-pending_source",
+    "boundary-wrong_binding",
+    "boundary-generated_scope",
+    "boundary-event_process",
+    "boundary-digital_region",
+    "boundary-output_declaration",
+    "boundary-register_declaration",
+    "boundary-composition_observation",
+    "boundary-post_admission_ordinals",
+    "whole-baseline",
+    "fees-baseline",
+    "domainfree-baseline",
+    "automatic-baseline",
+    "whole-candidate",
+    "fees-candidate",
+    "domainfree-candidate",
+    "automatic-candidate"
+  ],
+  "comparisons": [
+    {
+      "suites": [
+        "whole-baseline",
+        "whole-candidate"
+      ],
+      "files": [
+        "runtime/whole-baseline.txt",
+        "runtime/whole-candidate.txt"
+      ]
+    },
+    {
+      "suites": [
+        "fees-baseline",
+        "fees-candidate"
+      ],
+      "files": [
+        "fees-baseline.stdout",
+        "fees-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "domainfree-baseline",
+        "domainfree-candidate"
+      ],
+      "files": [
+        "domainfree-baseline.stdout",
+        "domainfree-candidate.stdout"
+      ]
+    },
+    {
+      "suites": [
+        "automatic-baseline",
+        "automatic-candidate"
+      ],
+      "files": [
+        "automatic-baseline.stdout",
+        "automatic-candidate.stdout"
+      ]
+    }
+  ]
+}

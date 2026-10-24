@@ -209,3 +209,27 @@ Name preparation uses per-Area ownership sets rather than a member-by-declaratio
 quadratic scan. Construction and snapshot work are linear in captured entries
 apart from the bounded lexical-depth factor; this is a complexity review, not a
 measured performance improvement.
+
+
+## Narrow ordinary-Area alias repair (checkpoint 81)
+
+Already compiler-captured alternate Area binders are metadata on the original
+canonical Area identity, not additional Areas or hardware. The existing session
+records feed the semantic naming owner through a read-only per-resolution
+projection; ordinary nongenerated Areas alone participate. Effective aliases
+exclude the preferred binder and are deterministically sorted and deduplicated.
+Allocation source stays on each name entry. Area names do not claim sourceMap
+paths, reserve auxiliary hardware names, or alter materialization policy.
+
+Callback scans, alias comparisons/copies, ancestry and merged-name work are
+metered in both resolver modes. Module-path copying is invocation-local and lazy;
+zero-Area sessions avoid new callback charges. This is source-level accounting
+review plus scoped resolver evidence, not a measured alias-heavy Session bound.
+
+Helper/priority, real memory-write source-path collision and corrected generic
+consumer mutation/restoration checks passed. Six predecessor fee controls retain
+exact output; whole-model 131072 diagnostic snapshot/output parity also passed.
+The default 65536 limit and its prior whole-model gap are unchanged. Generic
+transport uses the existing bridge and reproducibility schema. The initial
+domain-invalid consumer failure is retained. No native or Verilog-*
+acceptance, general structured-name contract, or full F-153 closure is claimed.

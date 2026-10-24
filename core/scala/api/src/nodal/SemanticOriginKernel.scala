@@ -125,7 +125,14 @@ private final case class NameCandidate(
 
 private final case class ResolvedName(name: String, provenance: String)
 
-private[nodal] final class SemanticOriginBuilder:
+private[nodal] final class SemanticOriginBuilder private (
+    areaNames: Option[(() => Map[Long, String], Long => Unit) => Vector[KernelNameSnapshot]]
+):
+  // Retain the existing JVM constructor, its accounting, and all resolver entry points.
+  def this() = this(None)
+  def this(project: (() => Map[Long, String], Long => Unit) => Vector[KernelNameSnapshot]) =
+    this(Some(project))
+
   // Scoped to one synchronous resolution; the caller owns the cumulative epoch budget.
   // ControlThrowable deliberately bypasses existing best-effort Exception catches.
   private final class ResolutionWorkAborted(val original: Throwable)
@@ -2120,13 +2127,58 @@ private[nodal] final class SemanticOriginBuilder:
       (entry.owner, entry.category, entry.name)
     ))
 
-    val sortedNames = canonicalSort(canonicalVector(nameSnapshots))(entry =>
+    val sortedHardwareNames = canonicalSort(canonicalVector(nameSnapshots))(entry =>
       (entry.semanticPath, entry.category, entry.name)
     )
+    // Evaluate the session-owned projection inside this invocation's work scope. The map
+    // contains this resolution's final module identities, never a cached session result.
+    val lexicalAreaNames = areaNames match
+      case None => Vector.empty
+      case Some(project) =>
+        // A no-Area session must not copy/charge a map it will never inspect.
+        lazy val paths =
+          chargeWork(modulePaths.size.toLong)
+          modulePaths.toMap
+        project(() => paths, units => chargeWork(units))
+    if resolutionWork.nonEmpty && lexicalAreaNames.nonEmpty then
+      val added = lexicalAreaNames.size.toLong
+      val count = 1L + modules.size + domains.size + declarations.size +
+        expressions.size + instances.size + operations.size
+      chargeWork(128L * added)
+      if !canonicalAccounting then
+        // 64 * ((count + added)^2 - count^2), paid row by row before merge/sort.
+        // Do not form a potentially overflowing squared/product total.
+        var row = 0L
+        while row < count do
+          chargeWork(64L * added)
+          row += 1L
+        row = 0L
+        while row < added do
+          chargeWork(64L * (count + added))
+          row += 1L
+    val sortedNames = if lexicalAreaNames.isEmpty then sortedHardwareNames
+    else
+      val size = sortedHardwareNames.size.toLong + lexicalAreaNames.size.toLong
+      chargeWork(size) // Merged vector before allocation.
+      val merged = sortedHardwareNames ++ lexicalAreaNames
+      chargeWork(size) // Sort buffer before allocation.
+      val tupleOrder = summon[Ordering[(String, String, String)]]
+      val ordering = new Ordering[(String, String, String)]:
+        def compare(left: (String, String, String), right: (String, String, String)): Int =
+          chargeWork(1L + left._1.length.toLong + left._2.length.toLong +
+            left._3.length.toLong + right._1.length.toLong + right._2.length.toLong +
+            right._3.length.toLong)
+          tupleOrder.compare(left, right)
+      merged.sortBy(entry =>
+        chargeWork(1L)
+        (entry.semanticPath, entry.category, entry.name)
+      )(using ordering)
     val sortedOrigins = canonicalSort(canonicalVector(origins))(entry =>
       (entry.semanticPath, entry.kind, entry.id)
     )
-    val sourceEntries = canonicalFlatMap(sortedNames)(entry =>
+    // Area allocation sources stay on their name rows. Adding them to sourceMap could
+    // collide with later session auxiliary paths, which use the hardware namespace.
+    val sourceEntries = canonicalFlatMap(sortedHardwareNames)(entry =>
       entry.source.map(source => canonicalProbe(SourceMapEntry(entry.semanticPath, source)))
     )
     val sourceGroups = canonicalSort(canonicalVector(sourceEntries.groupBy(entry =>

@@ -3773,3 +3773,65 @@ The current increment does not affect generated Verilog-*.
 It reconciles an existing source/compiler deliverable; the maintained lane
 source and historical native replays above are the existing demonstration,
 not newly generated RTL or portable Verilog-2005 acceptance.
+
+
+## Checkpoint 81: narrow ordinary-Area alias preservation
+
+This focused Foundation repair retains alternate binders already captured by the
+Area compiler phase. The original session-owned AreaRecord remains authoritative;
+a read-only callback projects its current aliases into SemanticOriginBuilder on
+each resolution, using that invocation's module paths. There is no second naming
+ledger, new hardware object, or change to public API v0.3.
+
+Only ordinary nongenerated Areas with effective aliases gain an `area` semantic
+name entry. The existing canonical binder and hardware paths stay unchanged.
+Aliases exclude the canonical binder and are sorted and deduplicated. Allocation
+source is attached to the name entry, not added to sourceMap: an Area named
+`memory_write_0` must not displace or duplicate the real memory-write source path.
+The existing generic bridge name inventory and reproducibility transport are
+reused; aliases do not request a wire, observation point, or materialization.
+
+The actual helper fixture captures:
+```scala
+def helper(value: Expr[Bits]): Increment58ReusableArea =
+  val local = new Increment58ReusableArea(value)
+  local
+val first = helper(input)
+```
+Its name entry has category `area`, name `first`, and aliases `[local]`.
+
+The two API source owners were compiled and wholly replaced, including paired
+TASTy. Named/unexempted nonprivate JVM descriptors and the explicit no-argument
+SemanticOriginBuilder constructor are preserved. The pack-only ABI amendment
+admits only reviewed compiler-generated anonymous/lifted implementation changes;
+retained external consumers have no references to those exempted symbols. The
+original blocked pack receipt remains evidence, not a passing ABI check.
+
+Focused helper, priority/deduplication and actual auxiliary-memory collision
+checks passed. A separate same-binary resolver check passed for fresh projection,
+both metered entry points, exhaustion propagation and retry. That resolver check
+uses a synthetic callback; it does not establish alias-heavy Session exhaustion.
+
+The corrected consumer replay passed using the domain-valid memory fixture:
+alias-only changes alter generic source MLIR, construction and manifest artifacts;
+restoring names restores the artifacts exactly. The initial domain-invalid
+consumer failure (NODAL-BRIDGE-015) is retained, not counted as an all-group pass.
+
+Six predecessor fee controls retain exact baseline-79/candidate output, including
+zero-Area Session accounting. The whole-model 131072 diagnostic replay retains
+exact snapshot and output parity. All four paired runs exited zero. This does not
+change the production default 65536 limit or resolve its prior whole-model gap.
+
+This is Scala/generic-artifact evidence only. No native semantic admission,
+exporter/firtool execution, generated Verilog-* acceptance, broader scale claim,
+or full F-153 child/parent closure follows. Structured caller/local identities,
+raw spelling and broader declaration/expression contexts remain open.
+
+The current increment does not affect generated Verilog-*.
+
+Focused recipes are retained under `.work/f58-area-alias-identity/`: original
+`run_fixture_v2.py all` and `resolver`, corrected fixture-only
+`run_fixture_v3.py compile`, `pack`, and `consumers`, and
+`run_area_predecessor_parity_v1.py`. The original fixture source and failure
+are preserved separately; its old freeze is not a claim about the corrected
+current test source. No production rebuild was needed for the fixture correction.

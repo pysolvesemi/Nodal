@@ -2311,7 +2311,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       : mutable.ArrayBuffer[(ExpressionRef, String, String, Vector[Expr[Real]], String)] =
     mutable.ArrayBuffer.empty
   private var waveformForbiddenDepth = 0
-  private val semanticOrigin = new SemanticOriginBuilder
+  private val semanticOrigin = new SemanticOriginBuilder(areaAliasNames)
   private var semanticResult: Option[SemanticOriginResult] = None
   private val rootParameterBindings: mutable.ArrayBuffer[(Any, Any)] =
     mutable.ArrayBuffer.empty
@@ -6644,19 +6644,94 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       )
 
   private def areaComponents(record: AreaRecord): Vector[String] =
-    closureCharge(1L + record.name.fold(33L + record.source.path.length.toLong)(_.length.toLong))
+    areaComponents(record, closureCharge)
+
+  private def areaComponents(record: AreaRecord, charge: Long => Unit): Vector[String] =
+    charge(1L + record.name.fold(33L + record.source.path.length.toLong)(_.length.toLong))
     val local = record.name.getOrElse(
       "area_" + java.lang.Integer.toUnsignedString(
         (record.source.path + ":" + record.source.line + ":" + record.source.column).hashCode,
         16
       )
     )
-    val parent = record.parent.map(areaComponents).getOrElse(Vector.empty)
+    val parent = record.parent.map(parent => areaComponents(parent, charge)).getOrElse(Vector.empty)
     val family = record.generatedScope.filterNot(value =>
       record.parent.flatMap(_.generatedScope).contains(value)
     )
-    closureCharge(parent.size.toLong + 1L + family.size.toLong)
+    charge(parent.size.toLong + 1L + family.size.toLong)
     parent ++ family.toVector.map(value => s"generate_${value.ordinal}") :+ local
+
+  /** Metadata only: read original lexical captures afresh within each resolver's work scope.
+    * Alias labels never allocate another Area or a hardware name/source-map entry.
+    */
+  private def areaAliasNames(
+      modulePaths: () => Map[Long, String],
+      charge: Long => Unit
+  ): Vector[KernelNameSnapshot] =
+    if areas.isEmpty then Vector.empty
+    else
+      charge(1L)
+      val result = Vector.newBuilder[KernelNameSnapshot]
+      areas.foreach: record =>
+        charge(1L)
+        if record.generatedScope.isEmpty && record.aliases.nonEmpty then
+          charge(1L)
+          val canonical = record.name.getOrElse(
+            fail("NODAL-AREA-058-NAME", "Area aliases require their canonical lexical binder")
+          )
+          val retained = mutable.ArrayBuffer.empty[String]
+          record.aliases.foreach: alias =>
+            charge(2L + alias.length.toLong + canonical.length.toLong)
+            if alias != canonical then
+              charge(1L)
+              retained += alias
+          if retained.nonEmpty then
+            charge(retained.size.toLong)
+            val labels = retained.toVector
+            charge(labels.size.toLong)
+            val ordering = new Ordering[String]:
+              def compare(left: String, right: String): Int =
+                charge(1L + left.length.toLong + right.length.toLong)
+                left.compareTo(right)
+            val sorted = labels.sorted(using ordering)
+            charge(1L)
+            val unique = Vector.newBuilder[String]
+            var previous = Option.empty[String]
+            sorted.foreach: alias =>
+              charge(1L)
+              val duplicate = previous.exists(value =>
+                charge(1L + value.length.toLong + alias.length.toLong)
+                value == alias
+              )
+              if !duplicate then
+                charge(1L)
+                unique += alias
+                previous = Some(alias)
+            charge(1L)
+            val aliases = unique.result()
+            // The shared algorithm pays record traversal and vector copies. Pay component text
+            // at each ancestor too, so repeated nested-path construction is never free.
+            var ancestor = Option(record)
+            while ancestor.nonEmpty do
+              charge(1L)
+              var component = ancestor
+              while component.nonEmpty do
+                val current = component.get
+                charge(1L + current.name.fold(33L + current.source.path.length.toLong)(_.length.toLong))
+                component = current.parent
+              ancestor = ancestor.get.parent
+            val components = areaComponents(record, charge)
+            charge(1L)
+            val owner = modulePaths()(record.owner)
+            charge(2L + owner.length.toLong + components.size.toLong)
+            components.foreach(value => charge(1L + value.length.toLong))
+            val path = (Vector(owner) ++ components).mkString(".")
+            charge(1L)
+            result += KernelNameSnapshot(
+              path, canonical, "area", "scala-declaration", Some(record.source), aliases
+            )
+      charge(1L)
+      result.result()
 
   private def prepareAreaNames(): Unit =
     closureCharge(areas.size.toLong)

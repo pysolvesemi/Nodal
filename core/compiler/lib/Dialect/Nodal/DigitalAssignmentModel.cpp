@@ -83,8 +83,14 @@ public:
   LogicalResult verify();
   FailureOr<SmallVector<DigitalTemplateAssignment, 4>>
   templateAssignments(ArrayRef<std::pair<Value, Operation *>> seeds);
+  FailureOr<SmallVector<DigitalSelectedInputAssignment, 4>>
+  selectedInputAssignments(ArrayRef<std::pair<Operation *, Operation *>> seeds,
+                           unsigned *chargedWork = nullptr);
   FailureOr<DigitalDependencyGraph> graph(ArrayRef<std::pair<Value, Operation *>> seeds,
-                                          SmallVectorImpl<DependencyGuard> *guardOutput = nullptr) {
+                                          SmallVectorImpl<DependencyGuard> *guardOutput = nullptr,
+                                          SmallVectorImpl<std::pair<Operation *, Operation *>>
+                                              *selectedInputOutput = nullptr,
+                                          unsigned *selectedInventoryWork = nullptr) {
     DigitalDependencyGraph result;
     for (auto [value, use] : seeds) {
       Operation *localRoot = value ? value.getDefiningOp() : nullptr;
@@ -99,6 +105,36 @@ public:
     }
     if (failed(verify()))
       return failure();
+    if (selectedInputOutput) {
+      DenseSet<std::pair<Operation *, Operation *>> seen;
+      unsigned selected = 0;
+      // Reuse the complete canonical inventory, including inactive writers.
+      // No raw-target Shape traversal or parallel driver inventory is needed.
+      for (const Write &write : writes) {
+        Operation *root = write.target.root.getDefiningOp();
+        if (!isa_and_nonnull<InstancePortOp>(root) || !root->getNumOperands() ||
+            text(root, "direction") != "input")
+          continue;
+        if (failed(guardWork(root)))
+          return failure();
+        ++selected;
+        auto boundary = inspectInstancePort(root);
+        if (failed(boundary))
+          return failure();
+        auto key = std::make_pair(boundary->instance, boundary->port);
+        if (seen.insert(key).second)
+          selectedInputOutput->push_back(key);
+      }
+      if (selected) {
+        if (writes.size() > limits.maximumGuardWork - guardWorkCount) {
+          (void)reject(module, "selected input inventory exceeds finite proof-work budget");
+          return failure();
+        }
+        guardWorkCount += writes.size();
+        if (selectedInventoryWork)
+          *selectedInventoryWork = writes.size() + selected;
+      }
+    }
     for (Node &node : nodes) {
       if (guardOutput) {
         DependencyGuard actual;
@@ -1302,7 +1338,126 @@ AssignmentQuery::templateAssignments(ArrayRef<std::pair<Value, Operation *>> see
   }
   return result;
 }
+FailureOr<SmallVector<DigitalSelectedInputAssignment, 4>>
+AssignmentQuery::selectedInputAssignments(ArrayRef<std::pair<Operation *, Operation *>> seeds,
+                                           unsigned *chargedWork) {
+  auto charge = llvm::scope_exit([&] {
+    if (chargedWork)
+      *chargedWork = guardWorkCount;
+  });
+  auto refuse = [&](Operation *use, StringRef reason)
+      -> FailureOr<SmallVector<DigitalSelectedInputAssignment, 4>> {
+    (void)reject(use ? use : module, reason);
+    return failure();
+  };
+  if (seeds.size() > limits.maximumNodes)
+    return refuse(module, "selected input batch exceeds its finite seed budget");
+  // This is the same inventory and graph as the ordinary assignment verifier,
+  // including aliases not supplied by the caller, inactive lexical writers and
+  // actual operand-one dependencies. Never build a parallel writer registry.
+  if (failed(verify()))
+    return failure();
+  SmallVector<DigitalSelectedInputAssignment, 4> result;
+  DenseSet<std::pair<Operation *, Operation *>> seen;
+  auto literal = [](const InstantiatedIntegerExpression &value) {
+    return value.root && value.root->kind == InstantiatedIntegerNode::Kind::Literal;
+  };
+  auto scalar = [](Type type) {
+    return isa<BitsType, UIntType, SIntType>(type) || type.isSignlessInteger(1);
+  };
+  for (auto key : seeds) {
+    Operation *instance = key.first, *port = key.second;
+    if (failed(guardWork(module)))
+      return failure();
+    if (!seen.insert(key).second)
+      continue;
+    Operation *family = instance ? instance->getParentOp() : nullptr;
+    auto type = port ? port->getAttrOfType<TypeAttr>("type") : TypeAttr();
+    if (!isa_and_nonnull<InstanceOp>(instance) || !isa_and_nonnull<PortOp>(port) ||
+        !isa_and_nonnull<GenerateOp>(family) || family->getParentOp() != module ||
+        text(port, "direction") != "input" || !type || !scalar(type.getValue()) ||
+        failed(verifyHierarchyInstanceOperation(instance)) ||
+        port->getParentOp() != resolveInstanceModuleDefinition(instance))
+      return refuse(module, "selected input requires an original direct generated child scalar input");
+    unsigned remaining = limits.maximumGuardWork - guardWorkCount;
+    unsigned before = remaining;
+    auto domain = resolveGeneratedDomain(family, remaining);
+    guardWorkCount += before - remaining;
+    if (failed(domain) || !literal(domain->lower) || !literal(domain->upperExclusive) ||
+        !literal(domain->step) || !domain->maximumTripCount ||
+        !domain->attainedInductionBounds)
+      return refuse(instance, "selected input requires a fixed nonempty direct family");
+    auto owner = instancePortOwners.find(key);
+    if (owner == instancePortOwners.end())
+      return refuse(instance, "selected input requires complete authored lane coverage");
+    auto inventory = writers.find(owner->second);
+    if (inventory == writers.end() || inventory->second.size() != domain->maximumTripCount)
+      return refuse(instance, "selected input requires complete authored lane coverage");
+    DigitalSelectedInputAssignment entry{instance, port, family, {}};
+    for (unsigned index : inventory->second) {
+      if (relationCount >= limits.maximumRelations || failed(guardWork(instance)))
+        return refuse(instance, "selected input assignments exceed finite relation or work budget");
+      ++relationCount;
+      const Write &write = writes[index];
+      Operation *root = write.target.root.getDefiningOp();
+      if (!isa_and_nonnull<InstancePortOp>(root) || root->getParentOp() != module ||
+          root->getNumOperands() != 2 || write.operation->getParentOp() != module ||
+          write.loop || write.guard || text(write.operation, "kind") != "continuous" ||
+          !write.target.projections.empty() ||
+          write.operation->getOperand(0) != write.target.root ||
+          !scalar(write.target.root.getType()))
+        return refuse(write.operation, "selected input requires whole unguarded parent-local writes");
+      auto actualOwner = storageOwner(write.target, write.operation);
+      auto boundary = inspectInstancePort(root);
+      if (failed(actualOwner) || *actualOwner != owner->second || failed(boundary) ||
+          boundary->instance != instance || boundary->port != port || boundary->selection != root)
+        return refuse(root, "selected input writer lost its original child and port identity");
+      Value source = write.operation->getOperand(1);
+      Operation *producer = source.getDefiningOp();
+      if (!producer || producer->getParentOp() != module || !scalar(source.getType()))
+        return refuse(write.operation, "selected input source must retain parent Module ownership");
+      SmallVector<Operation *, 2> uses;
+      remaining = limits.maximumGuardWork - guardWorkCount;
+      before = remaining;
+      auto proof = inspectGeneratedSelection(root->getOperand(0), root->getOperand(1),
+                                              text(root, "member"), root, uses, remaining);
+      auto ordinal = succeeded(proof)
+                         ? resolveStructuralIntegerExpression(root->getOperand(1), root, remaining)
+                         : FailureOr<StructuralIntegerFacts>(failure());
+      guardWorkCount += before - remaining;
+      auto symbol = succeeded(proof) ? inspectGeneratedExportSymbol(proof->exportOperation)
+                                    : FailureOr<Operation *>(failure());
+      if (failed(proof) || failed(symbol) || *symbol != instance || proof->family != family ||
+          proof->selections.size() != 1 || proof->selections.front().family != family ||
+          proof->selections.front().ordinal != root->getOperand(1) || uses.size() != 1 ||
+          uses.front() != root || root->getOperand(0) != family->getResult(0) ||
+          failed(ordinal) || !ordinal->expression || !literal(*ordinal->expression))
+        return refuse(root, "selected input requires exact direct ordered selection provenance");
+      int64_t lane = ordinal->expression->root->literal;
+      if (lane < 0 || static_cast<uint64_t>(lane) >= domain->maximumTripCount)
+        return refuse(root, "selected input ordinal is outside its exact family");
+      entry.lanes.push_back({lane, write.operation, source, std::move(*proof)});
+    }
+    llvm::sort(entry.lanes, [](const auto &left, const auto &right) {
+      return left.ordinal < right.ordinal;
+    });
+    // Cardinality plus distinct in-range authored ordinals establishes exact
+    // coverage without enumerating a domain or treating coordinates as ordinals.
+    for (auto [index, lane] : llvm::enumerate(entry.lanes))
+      if (lane.ordinal != static_cast<int64_t>(index))
+        return refuse(lane.assignment, "selected input requires unique complete authored lane coverage");
+    result.push_back(std::move(entry));
+  }
+  return result;
+}
 } // namespace
+
+FailureOr<SmallVector<DigitalSelectedInputAssignment, 4>>
+inspectGeneratedSelectedInputAssignments(
+    Operation *module, ArrayRef<std::pair<Operation *, Operation *>> seeds,
+    DigitalAssignmentProofLimits limits) {
+  return AssignmentQuery(module, limits).selectedInputAssignments(seeds);
+}
 
 FailureOr<SmallVector<DigitalTemplateAssignment, 4>>
 inspectGeneratedTemplateAssignments(Operation *module,
@@ -1343,6 +1498,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     std::map<std::tuple<Operation *, Operation *, std::string>, SmallVector<unsigned, 2>>
         instanceInterfaces;
     DenseMap<Operation *, DigitalInterfaceMember> interfaceFacts;
+    SmallVector<DigitalSelectedInputAssignment, 4> selectedInputs;
   };
   DenseMap<Operation *, unsigned> indexes;
   SmallVector<LocalGraph, 0> definitions;
@@ -1351,8 +1507,9 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   SmallVector<unsigned> offsets;
   SmallVector<SequentialSample, 8> samples;
   SmallVector<unsigned> sampleRoots;
+  SmallVector<unsigned> receiverContexts, observationOccurrences;
   SmallVector<DependencyGuard> baseGuards;
-  unsigned edges = 0, guardCopies = 0;
+  unsigned edges = 0, guardCopies = 0, selectedInputWork = 0;
   // Seed actual reset producers in their existing local graph. A formal query
   // can be the only consumer, so ordinary local SSA uses do not suffice. The
   // occurrence owner resolves forwarding; no foreign SSA enters a definition.
@@ -1387,6 +1544,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     SmallVector<std::pair<Value, Operation *>> seeds;
     for (const auto &sample : *localSamples)
       seeds.emplace_back(sample.value, sample.use);
+    SmallVector<std::pair<Operation *, Operation *>, 4> selectedInputKeys;
     unsigned portWork = 0;
     auto portInventory = context.module->walk([&](Operation *op) {
       if (++portWork > limits.maximumNodes) {
@@ -1407,11 +1565,27 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     if (resetRoots != resetSeeds.end())
       seeds.append(resetRoots->second.begin(), resetRoots->second.end());
     LocalGraph local;
-    auto localGraph = AssignmentQuery(context.module, limits).graph(seeds, &local.guards);
+    unsigned inventoryWork = 0;
+    auto localGraph = AssignmentQuery(context.module, limits)
+                          .graph(seeds, &local.guards, &selectedInputKeys, &inventoryWork);
     if (failed(localGraph))
       return failure();
     local.graph = std::move(*localGraph);
     local.samples = std::move(*localSamples);
+    if (!selectedInputKeys.empty()) {
+      if (inventoryWork > limits.maximumGuardWork - selectedInputWork)
+        return reject(context.module, "selected input inventory exceeds finite proof-work budget");
+      selectedInputWork += inventoryWork;
+      auto queryLimits = limits;
+      queryLimits.maximumGuardWork = limits.maximumGuardWork - selectedInputWork;
+      unsigned charged = 0;
+      auto facts = AssignmentQuery(context.module, queryLimits)
+                       .selectedInputAssignments(selectedInputKeys, &charged);
+      selectedInputWork += charged;
+      if (failed(facts))
+        return failure();
+      local.selectedInputs = std::move(*facts);
+    }
     for (unsigned i = 0; i < seeds.size(); ++i)
       local.values.try_emplace(seeds[i].first, local.graph.roots[i]);
     for (auto [value, node] : local.values) {
@@ -1506,6 +1680,7 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
         sampleRoots.push_back(root + offset);
       }
       graph.observations.push_back(std::move(group));
+      observationOccurrences.push_back(occurrence);
     }
     for (unsigned i = 0; i < local.samples.size(); ++i) {
       auto sample = local.samples[i];
@@ -1535,7 +1710,10 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   DenseMap<unsigned, DigitalDependencySelectionContext> evaluatedContexts;
   DenseSet<unsigned> activeEvaluations;
   DenseMap<std::pair<unsigned, unsigned>, unsigned> contextualNodes;
-  uint64_t selectionWork = guardCopies;
+  uint64_t selectionWork = uint64_t(guardCopies) + selectedInputWork;
+  if (selectionWork > limits.maximumGuardWork)
+    return reject(hierarchy->occurrences().front().module,
+                  "selected input and guard inventory exceeds finite proof-work budget");
   auto spendSelection = [&](Operation *use, uint64_t work = 1) {
     if (work > limits.maximumGuardWork - std::min<uint64_t>(selectionWork, limits.maximumGuardWork))
       return reject(use, "selected dependency contexts exceed finite proof-work budget");
@@ -1626,9 +1804,15 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     return failed(proof) ? FailureOr<unsigned>(failure())
                          : extendContext(original, occurrence, proof->selections, uses, selection);
   };
+  DenseSet<unsigned> retainedTemplates;
   auto contextNode = [&](unsigned base, unsigned context, Operation *use) -> FailureOr<unsigned> {
-    if (!context)
+    if (!context) {
+      if (retainedTemplates.contains(base)) {
+        (void)reject(use, "selected input family requires its actual execution context");
+        return failure();
+      }
       return base;
+    }
     const auto &original = baseNodes[base];
     const auto &occurrence = hierarchy->occurrences()[original.occurrence];
     Operation *owner = original.value ? original.value.getDefiningOp() : original.use;
@@ -1659,8 +1843,13 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     auto canonical = internContext(std::move(relevant), std::move(origins), use);
     if (failed(canonical))
       return failure();
-    if (!*canonical)
+    if (!*canonical) {
+      if (retainedTemplates.contains(base)) {
+        (void)reject(use, "selected input family lost its relevant execution context");
+        return failure();
+      }
       return base;
+    }
     if (original.crossing || original.waiver || original.eventProcess || original.eventTrigger ||
         original.externalContribution ||
         (original.value && isDigitalControlBoundaryType(original.value.getType()))) {
@@ -1684,6 +1873,183 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
     contextualNodes.try_emplace(key, id);
     return id;
   };
+  // A complete authored selected-input inventory can establish every execution
+  // context of one direct fixed family. Coalesce by original occurrence/family,
+  // never by proxy, port, source equality or an observed output selection.
+  struct FamilyTransfer {
+    unsigned occurrence;
+    Operation *family;
+    SmallVector<unsigned, 4> contexts;
+  };
+  SmallVector<FamilyTransfer, 4> transfers;
+  DenseMap<std::pair<unsigned, Operation *>, unsigned> transferIndexes;
+  for (auto [at, occurrence] : llvm::enumerate(hierarchy->occurrences())) {
+    const auto &local = definitions[indexes.lookup(occurrence.module)];
+    for (const auto &fact : local.selectedInputs) {
+      if (failed(spendSelection(fact.instance)))
+        return failure();
+      if (!occurrence.generatedScopes.empty())
+        return reject(fact.instance, "selected input execution forbids nested generated products");
+      auto key = std::make_pair(static_cast<unsigned>(at), fact.family);
+      auto [position, inserted] = transferIndexes.try_emplace(key, transfers.size());
+      if (inserted)
+        transfers.push_back({static_cast<unsigned>(at), fact.family, {}});
+      SmallVector<unsigned, 4> contexts;
+      for (const auto &lane : fact.lanes) {
+        if (failed(spendSelection(lane.assignment)))
+          return failure();
+        // The complete query proved an exact whole target operand. Reinspect
+        // that actual selection through the existing charged context owner.
+        auto context = selectedContext(lane.assignment->getOperand(0).getDefiningOp(), 0, at);
+        if (failed(context) || !*context)
+          return failure();
+        contexts.push_back(*context);
+      }
+      auto &transfer = transfers[position->second];
+      if (inserted)
+        transfer.contexts = std::move(contexts);
+      else if (transfer.contexts != contexts)
+        return reject(fact.instance, "selected input facts disagree on exact family execution contexts");
+    }
+  }
+  const unsigned noTransfer = std::numeric_limits<unsigned>::max();
+  auto transferFor = [&](unsigned occurrence, Operation *owner) -> FailureOr<unsigned> {
+    const auto &actual = hierarchy->occurrences()[occurrence];
+    unsigned found = noTransfer;
+    for (auto [index, transfer] : llvm::enumerate(transfers)) {
+      if (failed(spendSelection(owner, 1 + actual.generatedScopes.size())))
+        return failure();
+      bool inherited = llvm::any_of(actual.generatedScopes, [&](const auto &scope) {
+        return scope.occurrence == transfer.occurrence && scope.family == transfer.family;
+      });
+      bool lexical = occurrence == transfer.occurrence && owner &&
+                     transfer.family->isProperAncestor(owner);
+      if (!inherited && !lexical)
+        continue;
+      if (found != noTransfer || actual.generatedScopes.size() > (inherited ? 1u : 0u)) {
+        (void)reject(owner, "selected input execution forbids nested generated products");
+        return failure();
+      }
+      for (Operation *scope = owner; scope && scope != actual.module; scope = scope->getParentOp()) {
+        if (failed(spendSelection(owner)))
+          return failure();
+        if (isa<GenerateOp>(scope) && scope != transfer.family) {
+          (void)reject(owner, "selected input execution forbids nested generated products");
+          return failure();
+        }
+      }
+      found = index;
+    }
+    return found;
+  };
+  if (!transfers.empty()) {
+    // Physical resolved inventories are not scalar execution obligations. Do
+    // not leave their template facts active after transferring ordinary nodes.
+    for (auto [at, occurrence] : llvm::enumerate(hierarchy->occurrences())) {
+      const auto &local = definitions[indexes.lookup(occurrence.module)];
+      for (const auto &component : local.graph.resolved.components) {
+        auto transfer = transferFor(at, component.value.getDefiningOp());
+        if (failed(transfer))
+          return failure();
+        if (*transfer != noTransfer)
+          return reject(component.value.getDefiningOp(),
+                        "selected input execution requires scalar, not resolved, family obligations");
+      }
+      for (const auto &endpoint : local.graph.resolved.endpoints) {
+        auto transfer = transferFor(at, endpoint.operation);
+        if (failed(transfer))
+          return failure();
+        if (*transfer != noTransfer)
+          return reject(endpoint.operation,
+                        "selected input execution requires scalar, not resolved, family obligations");
+      }
+    }
+    SmallVector<unsigned> pendingRetirement;
+    // Transfer every original node, including unused logic and ordinary
+    // descendant instances, so no cycle or sampling duty disappears with a
+    // template. contextNode independently rejects unsupported capabilities.
+    for (auto [base, node] : llvm::enumerate(baseNodes)) {
+      Operation *owner = node.value ? node.value.getDefiningOp() : node.use;
+      if (!owner)
+        if (auto argument = dyn_cast<BlockArgument>(node.value))
+          owner = argument.getOwner()->getParentOp();
+      auto transfer = transferFor(node.occurrence, owner);
+      if (failed(transfer))
+        return failure();
+      if (*transfer == noTransfer)
+        continue;
+      for (unsigned context : transfers[*transfer].contexts) {
+        if (failed(spendSelection(node.use)))
+          return failure();
+        auto copied = contextNode(base, context, node.use);
+        if (failed(copied) || *copied == base)
+          return reject(node.use, "selected input execution lost a complete contextual node transfer");
+      }
+      pendingRetirement.push_back(base);
+    }
+    SmallVector<SequentialSample, 8> transferredSamples;
+    SmallVector<unsigned> transferredRoots;
+    auto appendSample = [&](SequentialSample sample, unsigned root,
+                            unsigned receiver) -> LogicalResult {
+      if (failed(spendSelection(sample.use)) || transferredSamples.size() >= limits.maximumNodes)
+        return reject(sample.use, "selected sample transfer exceeds finite obligation budget");
+      transferredSamples.push_back(sample);
+      transferredRoots.push_back(root);
+      receiverContexts.push_back(receiver);
+      return success();
+    };
+    for (unsigned index = 0; index < samples.size(); ++index) {
+      const auto &sample = samples[index];
+      auto transfer = transferFor(sample.occurrence, sample.use);
+      if (failed(transfer))
+        return failure();
+      if (*transfer == noTransfer) {
+        if (failed(appendSample(sample, sampleRoots[index], 0)))
+          return failure();
+        continue;
+      }
+      for (unsigned context : transfers[*transfer].contexts) {
+        auto root = contextNode(sampleRoots[index], context, sample.use);
+        if (failed(root) || failed(appendSample(sample, *root, context)))
+          return failure();
+      }
+    }
+    SmallVector<DigitalObservationGroup> transferredObservations;
+    for (auto [index, observation] : llvm::enumerate(graph.observations)) {
+      auto transfer = transferFor(observationOccurrences[index], observation.use);
+      if (failed(transfer))
+        return failure();
+      if (*transfer == noTransfer) {
+        transferredObservations.push_back(observation);
+        continue;
+      }
+      for (unsigned context : transfers[*transfer].contexts) {
+        if (failed(spendSelection(observation.use)) ||
+            transferredObservations.size() >= limits.maximumNodes)
+          return reject(observation.use, "selected observation transfer exceeds finite obligation budget");
+        DigitalObservationGroup group;
+        group.use = observation.use;
+        for (unsigned original : observation.roots) {
+          if (failed(spendSelection(observation.use)))
+            return failure();
+          auto root = contextNode(original, context, observation.use);
+          if (failed(root))
+            return failure();
+          group.roots.push_back(*root);
+        }
+        transferredObservations.push_back(std::move(group));
+      }
+    }
+    samples = std::move(transferredSamples);
+    sampleRoots = std::move(transferredRoots);
+    graph.observations = std::move(transferredObservations);
+    // Commit retirement only after all physical nodes and obligations exist.
+    // Original proof/edge work remains charged: retirement refunds no budget.
+    for (unsigned base : pendingRetirement) {
+      retainedTemplates.insert(base);
+      graph.nodes[base].dependencies.clear();
+    }
+  }
   auto matchesContext = [&](Operation *selection, unsigned requested,
                             unsigned occurrence) -> FailureOr<bool> {
     if (!selection)
@@ -1922,6 +2288,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   // occurrence plus original local graph node, so repeated definitions never
   // share state, synchronizers, physical inputs or cached dependency facts.
   for (unsigned id = 0; id < graph.nodes.size(); ++id) {
+    if (retainedTemplates.contains(id))
+      continue; // Complete contextual execution and obligation transfer proved above.
     auto node = graph.nodes[id];
     auto save = llvm::scope_exit([&] { graph.nodes[id] = std::move(node); });
     node.dependencies.clear();
@@ -2545,7 +2913,8 @@ verifyHierarchyDependencies(std::shared_ptr<const HierarchyModel> hierarchy,
   if (failed(verifyCrossingSourceDependencies(root, graph, sampleLimits)) ||
       failed(verifyWaiverSourceDependencies(root, graph, sampleLimits)))
     return failure();
-  if (failed(verifySequentialSampleDependencies(root, samples, graph, sampleRoots, sampleLimits)))
+  if (failed(verifySequentialSampleDependencies(root, samples, graph, sampleRoots,
+                                                receiverContexts, sampleLimits)))
     return failure();
   if (splitBindings)
     splitBindings->append(collectedSplitBindings.begin(), collectedSplitBindings.end());

@@ -81,6 +81,16 @@ mlir::LogicalResult verifySequentialSampleDependencies(mlir::Operation *module,
                                                        llvm::ArrayRef<unsigned> roots,
                                                        SequentialModelLimits limits = {},
                                                        unsigned alreadyCharged = 0);
+/// Additive physical receiver contexts for an already checked selected graph.
+/// IDs refer to graph.selectionContexts and qualify the original sample owner,
+/// not its source root (whose context may acquire further source selections).
+/// An empty companion preserves the original all-zero caller contract. Nonzero
+/// contexts must exactly retain the receiver's lexical/inherited family axes.
+mlir::LogicalResult verifySequentialSampleDependencies(
+    mlir::Operation *module, llvm::ArrayRef<SequentialSample> samples,
+    const DigitalDependencyGraph &graph, llvm::ArrayRef<unsigned> roots,
+    llvm::ArrayRef<unsigned> receiverContexts, SequentialModelLimits limits,
+    unsigned alreadyCharged = 0);
 mlir::LogicalResult verifySequentialSamples(mlir::Operation *module,
                                             llvm::ArrayRef<SequentialSample> samples,
                                             SequentialModelLimits limits = {},

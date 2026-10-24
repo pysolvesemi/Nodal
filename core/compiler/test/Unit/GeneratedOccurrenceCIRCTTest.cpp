@@ -98,7 +98,15 @@ std::string replace(std::string input, StringRef from, StringRef to) {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  const bool emitSelectedInput = argc == 2 && StringRef(argv[1]) == "--emit-selected-input";
+  const bool lowerSelectedInput = argc == 3 && StringRef(argv[1]) == "--lower-selected-input";
+  if (argc != 1 && !emitSelectedInput && !lowerSelectedInput) {
+    llvm::errs() << "usage: " << argv[0]
+                 << " [--emit-selected-input | --lower-selected-input <file>]\n";
+    return 2;
+  }
+  bool emittedSelectedInput = false;
   DialectRegistry registry;
   registry.insert<nodal::NodalDialect>();
   MLIRContext context(registry);
@@ -126,14 +134,45 @@ int main() {
     manager.addPass(std::move(pass));
     return manager.run(module);
   };
+  if (lowerSelectedInput) {
+    auto module = parseSourceFile<mlir::ModuleOp>(argv[2], ParserConfig(&context, false));
+    if (!module || failed(verify(*module)) || failed(lower(*module))) {
+      llvm::errs() << "SELECTED_INPUT_FILE_CONVERSION_FAIL\n" << diagnostics;
+      return 1;
+    }
+    bool residualNodal = false;
+    module->walk([&](Operation *operation) {
+      residualNodal |= operation->getName().getDialectNamespace() == "nodal";
+    });
+    if (residualNodal || failed(verify(*module))) {
+      llvm::errs() << "SELECTED_INPUT_FILE_CONVERSION_FAIL residual-Nodal-or-invalid-IR\n"
+                   << diagnostics;
+      return 1;
+    }
+    module->print(llvm::outs());
+    llvm::outs() << '\n';
+    llvm::errs() << "SELECTED_INPUT_FILE_CONVERSION_OK\n";
+    return 0;
+  }
   auto positive = [&](StringRef name, const std::string &input, unsigned childResults = 1,
-                      unsigned helperResults = 1) {
+                      unsigned helperResults = 1, bool selectedInputTransport = false,
+                      bool normalizedInputSlice = false) {
     diagnostics.clear();
     auto module = parseSourceString<mlir::ModuleOp>(input, ParserConfig(&context, false));
     bool valid = module && succeeded(verify(*module)) && succeeded(lower(*module));
     unsigned definitions = 0, helpers = 0, loops = 0, instances = 0, children = 0;
+    unsigned exactInputBuses = 0, exactInputSlices = 0, exactChildInputs = 0;
     if (valid) {
       module->walk([&](Operation *operation) {
+        if (selectedInputTransport && operation->getName().getStringRef() == "comb.concat" &&
+            operation->getNumOperands() == 2 && operation->getResult(0).getType().isInteger(16)) {
+          auto high = operation->getOperand(0).getDefiningOp();
+          auto low = operation->getOperand(1).getDefiningOp();
+          auto highValue = high ? high->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+          auto lowValue = low ? low->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+          exactInputBuses +=
+              highValue && lowValue && highValue.getInt() == 34 && lowValue.getInt() == 17;
+        }
         definitions += isa<circt::hw::HWModuleOp>(operation);
         helpers += operation->hasAttr("nodal.generated_template");
         if (operation->hasAttr("nodal.generated_template"))
@@ -146,16 +185,46 @@ int main() {
             ++children;
             valid &= operation->getParentOp()->hasAttr("nodal.generated_template") &&
                      instance.getNumResults() == childResults;
+            if (selectedInputTransport) {
+              auto actual = dyn_cast<BlockArgument>(operation->getOperand(0));
+              exactChildInputs += actual && actual.getType().isInteger(8) &&
+                                  actual.getArgNumber() + 1 == actual.getOwner()->getNumArguments();
+            }
             auto parameters = instance.getParameters();
             valid &= parameters.size() == 1 &&
                      isa<circt::hw::ParamDeclRefAttr>(
                          cast<circt::hw::ParamDeclAttr>(parameters[0]).getValue());
+          } else if (selectedInputTransport) {
+            auto slice = operation->getOperands().back().getDefiningOp();
+            exactInputSlices += slice && slice->getName().getStringRef() == "sv.verbatim.expr" &&
+                                slice->getNumOperands() == (normalizedInputSlice ? 5u : 3u) &&
+                                slice->getOperand(0).getDefiningOp() &&
+                                slice->getOperand(0).getDefiningOp()->getName().getStringRef() ==
+                                    "comb.concat";
+            if (normalizedInputSlice && slice && slice->getNumOperands() == 5) {
+              auto lower = slice->getOperand(3).getDefiningOp();
+              auto step = slice->getOperand(4).getDefiningOp();
+              auto lowerValue = lower ? lower->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+              auto stepValue = step ? step->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+              auto format = slice->getAttrOfType<StringAttr>("format_string");
+              valid &= lowerValue && stepValue && lowerValue.getInt() == 3 &&
+                       stepValue.getInt() == 2 && format &&
+                       format.getValue() == "{{0}}[(({{1}} - {{3}}) / {{4}}) * {{2}} +: {{2}}]";
+            }
           }
       });
+      if (selectedInputTransport)
+        valid &= exactInputBuses == 1 && exactInputSlices == 1 && exactChildInputs == 1;
       valid &= definitions == 3 && helpers == 1 && loops == 1 && instances == 2 && children == 1 &&
                succeeded(verify(*module));
     }
     report(name, valid);
+    if (emitSelectedInput && !emittedSelectedInput && valid &&
+        name == "selected-inputs-distinct-rhs-both-output-lanes-no-body-proxy") {
+      module->print(llvm::outs());
+      llvm::outs() << '\n';
+      emittedSelectedInput = true;
+    }
   };
   auto negative = [&](StringRef name, const std::string &input, StringRef marker) {
     diagnostics.clear();
@@ -316,13 +385,87 @@ int main() {
   selectedOver = replace(selectedOver, "maximum_trip_count = 256", "maximum_trip_count = 257");
   negative("selected-original-output-over-physical-carrier-limit", selectedOver,
            "selected original instance output exceeds family carrier budget");
+  // Fixed selected inputs have no body-local input proxy at all. Both lanes
+  // have distinct actual RHS values and both child results reach parent pins.
+  auto selectedInputs = selected;
+  for (auto line : {"      %v15 =", "      %v18 =", "      \"nodal.digital_assign\"(%v15",
+                    "    %v11 =", "    %v12 =", "    \"nodal.digital_assign\"(%v12"}) {
+    auto at = selectedInputs.find(line);
+    selectedInputs.erase(at, selectedInputs.find('\n', at) - at + 1);
+  }
+  for (auto name : {"input", "output"}) {
+    auto at = selectedInputs.find("    \"nodal.port\"() <{direction = \"" +
+                                  std::string(name) +
+                                  "\", domain = @core, metadata = {}, sym_name = \"" + name + "\"");
+    selectedInputs.erase(at, selectedInputs.find('\n', at) - at + 1);
+  }
+  const std::string symbolicScalar = "!nodal.digital<\"uint\", \"WIDTH\">";
+  for (size_t at = selectedInputs.find(symbolicScalar); at != std::string::npos;
+       at = selectedInputs.find(symbolicScalar))
+    selectedInputs.replace(at, symbolicScalar.size(), "!nodal.uint<8>");
+  selectedInputs = replace(selectedInputs, "nodal.generate\"(%v8, %v9, %v10)",
+                            "nodal.generate\"(%v8, %two, %v10)");
+  selectedInputs = replace(selectedInputs, "maximum_trip_count = 8", "maximum_trip_count = 2");
+  auto familyStart = selectedInputs.find("    %v13 =");
+  selectedInputs.insert(familyStart, R"mlir(
+    %two = "nodal.const_literal"() <{metadata = {}, spelling = "2", value = 2 : i64}> : () -> i64
+    %rhs0 = "nodal.const_literal"() <{metadata = {}, spelling = "17", value = 17 : i64}> : () -> !nodal.uint<8>
+    %rhs1 = "nodal.const_literal"() <{metadata = {}, spelling = "34", value = 34 : i64}> : () -> !nodal.uint<8>
+    "nodal.port"() <{direction = "output", domain = @core, metadata = {}, sym_name = "second", type = !nodal.uint<8>}> : () -> ()
+    %second = "nodal.port_value"() <{metadata = {}, port = @second}> : () -> !nodal.uint<8>
+)mlir");
+  auto selectedStart = selectedInputs.find("    %v20 =");
+  selectedInputs.insert(selectedStart, R"mlir(
+    %input0 = "nodal.instance_port"(%v13, %v8) <{direction = "input", instance = @child, member = "child", port = "input", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.uint<8>
+    %input1 = "nodal.instance_port"(%v13, %v10) <{direction = "input", instance = @child, member = "child", port = "input", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.uint<8>
+    "nodal.digital_assign"(%input0, %rhs0) <{kind = "continuous", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
+    "nodal.digital_assign"(%input1, %rhs1) <{kind = "continuous", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
+    %output1 = "nodal.instance_port"(%v13, %v10) <{direction = "output", instance = @child, member = "child", port = "output", metadata = {}}> : (!nodal.generated_family, i64) -> !nodal.uint<8>
+    "nodal.digital_assign"(%second, %output1) <{kind = "continuous", metadata = {}}> : (!nodal.uint<8>, !nodal.uint<8>) -> ()
+)mlir");
+  positive("selected-inputs-distinct-rhs-both-output-lanes-no-body-proxy", selectedInputs, 1, 1, true);
+  auto reversedInputs = selectedInputs;
+  auto firstWrite = reversedInputs.find("    \"nodal.digital_assign\"(%input0");
+  auto secondWrite = reversedInputs.find("    \"nodal.digital_assign\"(%input1");
+  auto firstLine =
+      reversedInputs.substr(firstWrite, reversedInputs.find('\n', firstWrite) - firstWrite + 1);
+  auto secondLine =
+      reversedInputs.substr(secondWrite, reversedInputs.find('\n', secondWrite) - secondWrite + 1);
+  reversedInputs.replace(firstWrite, firstLine.size() + secondLine.size(), secondLine + firstLine);
+  positive("selected-input-writer-text-order-does-not-change-lane-order", reversedInputs, 1, 1, true);
+  auto steppedInputs = selectedInputs;
+  steppedInputs.insert(steppedInputs.find("    %v13 ="), R"mlir(
+    %lower = "nodal.const_literal"() <{metadata = {}, spelling = "3", value = 3 : i64}> : () -> i64
+    %upper = "nodal.const_literal"() <{metadata = {}, spelling = "7", value = 7 : i64}> : () -> i64
+)mlir");
+  steppedInputs = replace(steppedInputs, "nodal.generate\"(%v8, %two, %v10)",
+                          "nodal.generate\"(%lower, %upper, %two)");
+  // Selected operands are ordinals 0/1, not authored coordinates 3/5.
+  // Only the loop and its physical slice translate to the authored domain.
+  positive("selected-input-nonzero-domain-normalizes-lower-and-step", steppedInputs, 1, 1,
+           true, true);
+  auto incompleteInputs = selectedInputs;
+  secondWrite = incompleteInputs.find("    \"nodal.digital_assign\"(%input1");
+  incompleteInputs.erase(secondWrite, incompleteInputs.find('\n', secondWrite) - secondWrite + 1);
+  negative("selected-input-incomplete-coverage-even-with-observed-output", incompleteInputs,
+           "selected input");
+  auto unobservedIncomplete = incompleteInputs;
+  for (auto line : {"    %output1 =", "    \"nodal.digital_assign\"(%second", "    %second =",
+                    "    \"nodal.port\"() <{direction = \"output\", domain = @core, metadata = {}, sym_name = \"second\""}) {
+    auto at = unobservedIncomplete.find(line);
+    unobservedIncomplete.erase(at, unobservedIncomplete.find('\n', at) - at + 1);
+  }
+  negative("selected-input-unobserved-lane-still-requires-its-writer", unobservedIncomplete,
+           "selected input");
   auto selectedInput = replace(selected, "direction = \"output\", instance = @child, member",
                                "direction = \"input\", instance = @child, member");
   selectedInput = replace(selectedInput, "member = \"child\", port = \"output\"",
                           "member = \"child\", port = \"input\"");
   negative("selected-input-view-never-becomes-an-output-carrier", selectedInput,
-           "selected instance target currently admits original generated outputs only");
-  llvm::outs() << "GENERATED_OCCURRENCE_SUMMARY cases=" << cases << " failures=" << failures
-               << '\n';
+           "selected input");
+  if (emitSelectedInput && !emittedSelectedInput)
+    report("selected-input-representative-was-not-emitted", false);
+  auto &summary = emitSelectedInput ? llvm::errs() : llvm::outs();
+  summary << "GENERATED_OCCURRENCE_SUMMARY cases=" << cases << " failures=" << failures << '\n';
   return failures != 0;
 }

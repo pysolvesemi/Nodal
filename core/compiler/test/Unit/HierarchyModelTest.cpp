@@ -1933,6 +1933,296 @@ int main() {
   authoredAssignments("template-authored-empty-partial-writer-refused", partialWriter, false, 0,
                       "partial or foreign-family writers");
 
+  // The selected-input query is keyed by original declarations, not a body
+  // proxy or an observed read. This fixture deliberately has no local proxy.
+  auto selectedInputProxy = [&](StringRef name, StringRef ordinal) {
+    return "%" + name.str() + " = \"nodal.instance_port\"(%lanes, %" + ordinal.str() +
+           ") <{member = \"child\", instance = @lane, port = \"in\", direction = \"input\", "
+           "metadata = {}}> : (!nodal.generated_family, i64) -> " + bit + "\n";
+  };
+  auto selectedInputSource = [&](bool reverse = false) {
+    auto body = generatedChild("lanes");
+    body.erase(body.find(proxy("lane_in", "lane", "in", "input")));
+    std::string parent = domain("a") + port("x", "input", "a") + port("y", "input", "a") +
+                         generatedFamily("lanes", "2", body + exportLane);
+    parent += "%zero = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\", "
+              "metadata = {}}> : () -> i64\n"
+              "%one = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\", "
+              "metadata = {}}> : () -> i64\n";
+    parent += selectedInputProxy("input0", "zero") + selectedInputProxy("input1", "one");
+    parent += reverse ? assign("input1", "y") + assign("input0", "x")
+                      : assign("input0", "x") + assign("input1", "y");
+    return "module attributes {nodal.root.module = @Top} {\n" + module("Top", parent) +
+           module("Lane", requirement("req") + port("in", "input", "req") +
+                              port("out", "output", "req") + assign("out", "in")) + "}\n";
+  };
+  // Closed hierarchy checks, unlike the writer-fact query below, must transfer
+  // every generated child obligation to its exact selected receiver context.
+  check("selected-input-complete-unobserved-child", selectedInputSource(), true);
+  auto selectedInputFeedback = [&](unsigned mode) {
+    auto source = selectedInputSource();
+    auto output = [&](StringRef name, StringRef ordinal) {
+      return replace(replace(selectedInputProxy(name, ordinal), "port = \"in\"",
+                             "port = \"out\""),
+                     "direction = \"input\"", "direction = \"output\"");
+    };
+    source = replace(source, selectedInputProxy("input1", "one"),
+                     selectedInputProxy("input1", "one") + output("output0", "zero") +
+                         output("output1", "one"));
+    source = replace(source, assign("input0", "x"),
+                     assign("input0", mode == 0 ? "output0" : "output1"));
+    if (mode == 2)
+      source = replace(source, assign("input1", "y"), assign("input1", "output0"));
+    return source;
+  };
+  check("selected-input-same-lane-feedback", selectedInputFeedback(0), false,
+        "combinational dependency cycle");
+  check("selected-input-cross-lane-acyclic", selectedInputFeedback(1), true);
+  check("selected-input-reciprocal-lane-feedback", selectedInputFeedback(2), false,
+        "combinational dependency cycle");
+  auto selectedInputDescendant = [&](bool unusedCycle) {
+    auto source = selectedInputSource();
+    std::string child = requirement("req") + port("in", "input", "req") +
+                        port("out", "output", "req");
+    std::string descendant =
+        "\"nodal.instance\"() <{sym_name = \"leaf\", module = @Leaf, "
+        "parameter_bindings = {}, domain_bindings = {req = @req}, metadata = {}}> : () -> ()\n"
+        "\"nodal.instance_domain_binding\"(%req_clock) <{instance = @leaf, requirement = @req, "
+        "actual = @req, origin = \"named\", metadata = {}}> : (" + clockType + ") -> ()\n" +
+        proxy("leaf_in", "leaf", "in", "input") + proxy("leaf_out", "leaf", "out", "output");
+    descendant += assign("leaf_in", unusedCycle ? "leaf_out" : "in");
+    descendant += assign("out", unusedCycle ? "in" : "leaf_out");
+    return replace(source, module("Lane", child + assign("out", "in")),
+                   module("Lane", child + descendant) +
+                       module("Leaf", child + assign("out", "in")));
+  };
+  check("selected-input-ordinary-descendant", selectedInputDescendant(false), true);
+  check("selected-input-unused-descendant-cycle", selectedInputDescendant(true), false,
+        "combinational dependency cycle");
+  check("selected-input-hierarchy-missing-unobserved-lane",
+        replace(selectedInputSource(), assign("input1", "y"), ""), false,
+        "complete authored lane coverage");
+
+  // Native graph coverage only: source-level selected RHS capture still refuses
+  // crossings. These ordinary parent crossings are not generated capabilities.
+  auto selectedInputObservations = [&](bool sameLane) {
+    auto source = replace(selectedInputSource(), domain("a"), domain("a") + domain("b"));
+    source = replace(source, "%lanes_lo =", crossing("sync0", "x", "a", "b", "Top") +
+                                               crossing("sync1", "x", "a", "b", "Top") +
+                                               "%lanes_lo =");
+    source = replace(source, "domain_bindings = {req = @a}", "domain_bindings = {req = @b}");
+    source = replace(source, binding("lane", "req", "a"), binding("lane", "req", "b"));
+    source = replace(source, assign("input0", "x"), assign("input0", "sync0"));
+    source = replace(source, assign("input1", "y"), assign("input1", "sync1"));
+    if (sameLane) {
+      source = replace(source, port("out", "output", "req"),
+                       port("other", "input", "req") + port("out", "output", "req"));
+      source = replace(source, assign("out", "in"),
+                       "%joined_inputs = \"nodal.digital_expr\"(%in, %other) "
+                       "<{operator_name = \"or\", metadata = {}}> : (" + bit + ", " + bit +
+                           ") -> " + bit + "\n" + assign("out", "joined_inputs"));
+      auto other = [&](StringRef name, StringRef ordinal) {
+        return replace(selectedInputProxy(name, ordinal), "port = \"in\"", "port = \"other\"");
+      };
+      source = replace(source, assign("input1", "sync1"),
+                       assign("input1", "sync1") + other("other0", "zero") +
+                           other("other1", "one") + assign("other0", "sync1") +
+                           assign("other1", "sync1"));
+    }
+    return source;
+  };
+  check("selected-input-independent-receiver-observations", selectedInputObservations(false), true);
+  check("selected-input-within-lane-reconvergence", selectedInputObservations(true), false,
+        "NODAL-CDC-057-002");
+
+  // Validate the companion API against real ordinary graph facts. No fabricated
+  // hierarchy selection is admitted merely to exercise the receiver argument.
+  auto receiverContract = [&](StringRef name, unsigned mode, bool expected) {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(
+        "module {" + module("Receiver", domain("a") + port("x", "input", "a") +
+                                             port("out", "output", "a") + assign("out", "x")) + "}",
+        ParserConfig(&context, false));
+    Operation *owner = nullptr, *use = nullptr;
+    Value input;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        if (isa<nodal::ModuleOp>(op))
+          owner = op;
+        if (isa<nodal::PortValueOp>(op) &&
+            op->getAttrOfType<FlatSymbolRefAttr>("port").getValue() == "x") {
+          input = op->getResult(0);
+        }
+        if (isa<nodal::DigitalAssignOp>(op))
+          use = op; // Actual later consumer, never the producer itself.
+      });
+    bool ok = parsed && owner && use && succeeded(verify(*parsed));
+    if (ok) {
+      SmallVector<std::pair<Value, Operation *>, 1> seeds{{input, use}};
+      auto graph = nodal::analyzeDigitalAssignmentDependencies(owner, seeds);
+      ok = succeeded(graph);
+      if (ok) {
+        nodal::SequentialSample sample{input, FlatSymbolRefAttr::get(&context, "a"), use};
+        SmallVector<nodal::SequentialSample, 1> samples{sample};
+        SmallVector<unsigned, 2> receivers;
+        if (mode == 1)
+          receivers.push_back(0);
+        if (mode == 2)
+          receivers.append({0, 0});
+        if (mode == 3)
+          receivers.push_back(1);
+        nodal::SequentialModelLimits limits;
+        if (mode == 4)
+          limits.maximumOperations = 1;
+        auto result = mode == 0
+                          ? nodal::verifySequentialSampleDependencies(owner, samples, *graph,
+                                                                      graph->roots)
+                          : nodal::verifySequentialSampleDependencies(owner, samples, *graph,
+                                                                      graph->roots, receivers,
+                                                                      limits, mode == 4 ? 2 : 0);
+        ok = succeeded(result) == expected;
+        if (mode == 2)
+          ok &= StringRef(diagnostics).contains("receiver contexts must exactly match");
+        if (mode == 3)
+          ok &= StringRef(diagnostics).contains("receiver lacks its checked hierarchy context");
+        if (mode == 4)
+          ok &= StringRef(diagnostics).contains("aggregate operation budget");
+      }
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  receiverContract("receiver-context-legacy-zero", 0, true);
+  receiverContract("receiver-context-explicit-zero", 1, true);
+  receiverContract("receiver-context-wrong-companion-length", 2, false);
+  receiverContract("receiver-context-without-checked-hierarchy", 3, false);
+  receiverContract("receiver-context-prior-work-is-not-refunded", 4, false);
+
+  auto selectedInputQuery = [&](StringRef name, std::string source, bool expected,
+                                 unsigned mutation = 0, int64_t lower = 0, int64_t step = 1) {
+    ++count;
+    diagnostics.clear();
+    auto parsed = parseSourceString<mlir::ModuleOp>(source, ParserConfig(&context, false));
+    Operation *top = nullptr, *child = nullptr, *input = nullptr, *output = nullptr;
+    SmallVector<Value, 2> sources;
+    if (parsed)
+      parsed->walk([&](Operation *op) {
+        auto name = op->getAttrOfType<StringAttr>("sym_name");
+        if (isa<nodal::ModuleOp>(op) && name && name.getValue() == "Top")
+          top = op;
+        if (isa<nodal::InstanceOp>(op) && name && name.getValue() == "lane")
+          child = op;
+        if (isa<nodal::PortOp>(op) && name && name.getValue() == "in")
+          input = op;
+        if (isa<nodal::PortOp>(op) && name && name.getValue() == "out")
+          output = op;
+        if (isa<nodal::PortValueOp>(op)) {
+          auto port = op->getAttrOfType<FlatSymbolRefAttr>("port");
+          if (port && (port.getValue() == "x" || port.getValue() == "y"))
+            sources.push_back(op->getResult(0));
+        }
+      });
+    bool ok = parsed && top && child && input;
+    if (ok) {
+      SmallVector<std::pair<Operation *, Operation *>, 2> seeds{{child, input}};
+      if (mutation == 1 || mutation == 5)
+        seeds.push_back(seeds.front());
+      if (mutation == 2)
+        seeds.front().second = output;
+      nodal::DigitalAssignmentProofLimits limits;
+      if (mutation == 3)
+        limits.maximumRelations = 0;
+      if (mutation == 4)
+        limits.maximumGuardWork = 1;
+      if (mutation == 5)
+        limits.maximumNodes = 1;
+      auto facts = nodal::inspectGeneratedSelectedInputAssignments(top, seeds, limits);
+      ok = succeeded(facts) == expected;
+      if (expected && succeeded(facts)) {
+        ok &= facts->size() == 1 && sources.size() == 2;
+        if (facts->size() == 1) {
+          const auto &fact = facts->front();
+          ok &= fact.instance == child && fact.port == input &&
+                fact.family == child->getParentOp() && fact.lanes.size() == 2;
+          for (auto [i, lane] : llvm::enumerate(fact.lanes)) {
+            ok &= lane.ordinal == static_cast<int64_t>(i) && lane.assignment &&
+                  lane.assignment->getOperand(1) == lane.source &&
+                  i < sources.size() && lane.source == sources[i] &&
+                  lane.proof.family == fact.family && lane.proof.selections.size() == 1;
+            if (lane.proof.selections.size() == 1) {
+              auto bounds = lane.proof.selections.front().coordinate.bounds;
+              ok &= bounds.lower == lower + step * static_cast<int64_t>(i) &&
+                    bounds.upper == bounds.lower;
+            }
+          }
+        }
+      }
+    }
+    if (!ok) {
+      ++failures;
+      llvm::errs() << "FAIL " << name << '\n' << diagnostics;
+    }
+  };
+  selectedInputQuery("selected-input-two-distinct-parent-sources", selectedInputSource(), true);
+  selectedInputQuery("selected-input-reversed-authored-writers", selectedInputSource(true), true);
+  selectedInputQuery("selected-input-repeated-key-is-one-fact", selectedInputSource(), true, 1);
+  selectedInputQuery("selected-input-output-key-refused", selectedInputSource(), false, 2);
+  selectedInputQuery("selected-input-relation-budget", selectedInputSource(), false, 3);
+  selectedInputQuery("selected-input-proof-work-budget", selectedInputSource(), false, 4);
+  selectedInputQuery("selected-input-repeated-seeds-charge-budget", selectedInputSource(), false, 5);
+  selectedInputQuery("selected-input-missing-unobserved-lane",
+                     replace(selectedInputSource(), assign("input1", "y"), ""), false);
+  auto unusedInput = replace(selectedInputSource(), assign("out", "in"), "");
+  selectedInputQuery("selected-input-missing-unused-child-input-lane",
+                     replace(unusedInput, assign("input1", "y"), ""), false);
+  selectedInputQuery("selected-input-omitted-alias-duplicate",
+                     replace(selectedInputSource(), assign("input1", "y"),
+                             assign("input1", "y") + selectedInputProxy("alias", "zero") +
+                                 assign("alias", "x")), false);
+  selectedInputQuery("selected-input-template-collision",
+                     replace(selectedInputSource(), exportLane,
+                             proxy("lane_in", "lane", "in", "input") +
+                                 assign("lane_in", "x") + exportLane), false);
+  selectedInputQuery("selected-input-forged-original-instance",
+                     replace(selectedInputSource(), "member = \"child\", instance = @lane",
+                             "member = \"child\", instance = @forged"), false);
+  selectedInputQuery("selected-input-outside-family-ordinal",
+                     replace(selectedInputSource(), selectedInputProxy("input1", "one"),
+                             selectedInputProxy("input1", "lanes_hi")), false);
+  selectedInputQuery("selected-input-nested-family-refused", generatedFixture("2", true), false);
+  selectedInputQuery("selected-input-guarded-family-refused", guardedGeneratedFixture(), false);
+  auto stridedInputs = replace(selectedInputSource(),
+                               "%lanes_lo = \"nodal.const_literal\"() <{value = 0 : i64, spelling = \"0\"",
+                               "%lanes_lo = \"nodal.const_literal\"() <{value = 5 : i64, spelling = \"5\"");
+  stridedInputs = replace(stridedInputs,
+                         "%lanes_hi = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\"",
+                         "%lanes_hi = \"nodal.const_literal\"() <{value = 9 : i64, spelling = \"9\"");
+  stridedInputs = replace(stridedInputs,
+                         "%lanes_step = \"nodal.const_literal\"() <{value = 1 : i64, spelling = \"1\"",
+                         "%lanes_step = \"nodal.const_literal\"() <{value = 2 : i64, spelling = \"2\"");
+  selectedInputQuery("selected-input-ordinal-is-not-induction-coordinate", stridedInputs, true,
+                     0, 5, 2);
+  auto selectedShape = selectedInputSource();
+  for (size_t at = 0; (at = selectedShape.find(bit, at)) != std::string::npos;
+       at += templateShape.size())
+    selectedShape.replace(at, bit.size(), templateShape);
+  selectedInputQuery("selected-input-shaped-type-refused", selectedShape, false);
+  auto guardedInput = replace(
+      selectedInputSource(), assign("input0", "x"),
+      R"mlir(%input_predicate = "nodal.static_compare"(%zero, %zero) <{comparison = "eq", metadata = {semantic_path = "Top.input_guard.predicate"}}> : (i64, i64) -> !nodal.static_predicate
+"nodal.structural_if"(%input_predicate, %input0, %x) <{contract_version = "structural-if-v1", region_id = "Top.input_guard", operandSegmentSizes = array<i32: 1, 2, 0>, metadata = {semantic_path = "Top.input_guard"}}> ({^bb0(%arm_input: !nodal.bits<1>, %arm_data: !nodal.bits<1>):
+"nodal.digital_assign"(%arm_input, %arm_data) <{kind = "continuous", metadata = {}}> : (!nodal.bits<1>, !nodal.bits<1>) -> ()
+"nodal.structural_yield"() <{metadata = {semantic_path = "Top.input_guard.then.yield"}}> : () -> ()
+}, {
+"nodal.structural_yield"() <{metadata = {semantic_path = "Top.input_guard.else.yield"}}> : () -> ()}) : (!nodal.static_predicate, !nodal.bits<1>, !nodal.bits<1>) -> ()
+)mlir");
+  selectedInputQuery("selected-input-folded-active-guard-refused", guardedInput, false);
+  selectedInputQuery("selected-input-folded-inactive-guard-refused",
+                     replace(guardedInput, "comparison = \"eq\"", "comparison = \"ne\""), false);
+
   auto nestedSelected = [&] {
     auto inner = generatedFamily("outer.lanes", "3", generatedChild("outer.lanes") + exportLane);
     inner += "\"nodal.generated_export\"(%outer.lanes) <{member = \"inner\", access = \"read\", "

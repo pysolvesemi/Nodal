@@ -2108,6 +2108,11 @@ private:
           inputs.push_back(found->second);
           continue;
         }
+        auto selected = generatedInstanceInputValues.find({instance, port.key});
+        if (selected != generatedInstanceInputValues.end()) {
+          llvm::append_range(inputs, splitBoundary(instance, selected->second));
+          continue;
+        }
         auto &references = instancePortValues.find({instance, port.key})->second;
         auto leaves = splitBoundary(instance, values.lookup(references.front()));
         llvm::append_range(inputs, leaves);
@@ -2177,6 +2182,13 @@ private:
     uint64_t maximumBits;
     DictionaryAttr layout;
   };
+  struct GeneratedInstanceInput {
+    DigitalSelectedInputAssignment assignment;
+    Type laneType;
+  };
+  llvm::MapVector<InstanceLogicalPortKey, GeneratedInstanceInput> generatedInstanceInputs;
+  llvm::DenseSet<Operation *> selectedInstanceInputs;
+  llvm::DenseMap<InstanceLogicalPortKey, Value> generatedInstanceInputValues;
   struct SelectedInstanceRead {
     InstanceLogicalPortKey key;
     GeneratedSelectionProof proof;
@@ -2202,6 +2214,7 @@ private:
     StringAttr name, indexName, genvarName;
     SmallVector<LogicalPortPlan> ports;
     SmallVector<Value> captures;
+    SmallVector<InstanceLogicalPortKey> inputs;
     SmallVector<GeneratedOutput> outputs;
     SmallVector<Operation *> operations, registers, instances;
     SmallVector<std::pair<Value, Operation *>> connectionSeeds;
@@ -2439,6 +2452,7 @@ private:
   }
   LogicalResult planSelectedInstanceOutputs() {
     unsigned visited = 0;
+    SmallVector<std::pair<Operation *, Operation *>> inputSeeds;
     auto walked = source->walk<WalkOrder::PreOrder>([&](Operation *op) {
       if (op != source.getOperation() && isa<ModuleOp>(op))
         return WalkResult::skip();
@@ -2449,6 +2463,22 @@ private:
       if (!isa<InstancePortOp>(op) || op->getNumOperands() == 0)
         return WalkResult::advance();
       auto boundary = inspectInstancePort(op);
+      if (succeeded(boundary) && boundary->selection && text(op, "direction") == "input") {
+        for (OpOperand &use : op->getResult(0).getUses()) {
+          if (cost >= maximumGeneratedOperations) {
+            (void)reject(op, "selected input uses exceed target operation budget");
+            return WalkResult::interrupt();
+          }
+          ++cost;
+          if (!isa<DigitalAssignOp>(use.getOwner()) || use.getOperandNumber() != 0) {
+            (void)reject(op, "selected input view requires destination-only transport");
+            return WalkResult::interrupt();
+          }
+        }
+        inputSeeds.emplace_back(boundary->instance, boundary->port);
+        selectedInstanceInputs.insert(op);
+        return WalkResult::advance();
+      }
       if (failed(boundary) || !boundary->selection || text(op, "direction") != "output" ||
           !isa<GenerateOp>(boundary->instance->getParentOp())) {
         (void)reject(op,
@@ -2468,6 +2498,26 @@ private:
     });
     if (walked.wasInterrupted())
       return failure();
+    if (!inputSeeds.empty()) {
+      auto assignments = inspectGeneratedSelectedInputAssignments(source, inputSeeds);
+      if (failed(assignments))
+        return failure();
+      for (const auto &assignment : *assignments) {
+        Type original = assignment.port->getAttrOfType<TypeAttr>("type").getValue();
+        auto type = dyn_cast_if_present<IntegerType>(targetValueType(original));
+        if (!type || assignment.lanes.empty() ||
+            assignment.lanes.size() > maximumWidth / type.getWidth() ||
+            assignment.lanes.size() + 16 > maximumGeneratedOperations - cost)
+          return reject(assignment.instance, "selected input exceeds fixed scalar carrier budget");
+        cost += assignment.lanes.size() + 16;
+        InstanceLogicalPortKey key{assignment.instance, {assignment.port, Attribute()}};
+        generatedInstanceInputs.try_emplace(key, GeneratedInstanceInput{assignment, type});
+        for (const auto &lane : assignment.lanes)
+          staticOperations.insert(lane.assignment); // Consumed by the exact input transport.
+      }
+      for (Operation *op : selectedInstanceInputs)
+        staticOperations.insert(op); // A destination view, never an output read or SSA producer.
+    }
     for (const auto &access : interfaceAccesses) {
       if (cost >= maximumGeneratedOperations)
         return reject(access.value.getDefiningOp(),
@@ -2824,7 +2874,8 @@ private:
           }
           Value value = child->getResult(0);
           instancePortValues[{boundary->instance, {boundary->port, Attribute()}}].push_back(value);
-          if (text(child, "direction") == "input")
+          if (text(child, "direction") == "input" &&
+              !generatedInstanceInputs.count({boundary->instance, {boundary->port, Attribute()}}))
             family.connectionSeeds.emplace_back(value, &op.getRegion(0).front().back());
           family.operations.push_back(child);
           return WalkResult::advance();
@@ -3154,6 +3205,24 @@ private:
       llvm::erase_if(family.captures, [&](Value value) { return outputRoots.contains(value); });
       for (auto [index, value] : llvm::enumerate(family.captures))
         appendGeneratedPort(family.ports, value, true, index, targetValueType(value.getType()));
+      for (Operation *instance : family.instances) {
+        const auto &child = hierarchy->variants[variant->children.lookup(instance)];
+        for (const auto &port : child.ports) {
+          InstanceLogicalPortKey key{instance, port.key};
+          auto input = generatedInstanceInputs.find(key);
+          if (input == generatedInstanceInputs.end())
+            continue;
+          if (parent || input->second.assignment.family != &op ||
+              op.getParentOp() != source.getOperation() || !port.input || port.inout ||
+              port.splitRoute || !generatedBusType(input->second.laneType, family.capacity))
+            return reject(instance, "selected input requires its exact direct ordinary family");
+          family.inputs.push_back(key);
+          appendGeneratedPort(family.ports, {}, true,
+                              family.captures.size() + family.inputs.size() - 1,
+                              input->second.laneType, key.second.first,
+                              key.second.first->getAttrOfType<TypeAttr>("type").getValue());
+        }
+      }
       for (auto [index, out] : llvm::enumerate(family.outputs))
         appendGeneratedOutputPort(family.ports, out, false, index, out.laneType);
       uint64_t physicalPins = 0;
@@ -3245,8 +3314,8 @@ private:
           for (Region &region : op.getRegions())
             if (failed(planScope(region.front(), depth + 1)))
               return failure();
-        } else if (selectedInstanceReads.count(&op)) {
-          // The demanded original output and actual prefix were checked before family planning.
+        } else if (selectedInstanceReads.count(&op) || selectedInstanceInputs.count(&op)) {
+          // Original output reads and destination-only input views were checked before planning.
         } else if (isa<GeneratedMemberOp>(op)) {
           auto member = inspectGeneratedMember(&op);
           if (failed(member))
@@ -3339,6 +3408,8 @@ private:
             return reject(instance,
                           "generated resolved child requires exact physical lane routing");
           if (port.input) {
+            if (generatedInstanceInputs.count({instance, port.key}))
+              continue;
             auto references = instancePortValues.find({instance, port.key});
             if (references == instancePortValues.end() ||
                 !family.aliases.count(references->second.front()))
@@ -3668,11 +3739,14 @@ private:
     OpBuilder::InsertionGuard insertion(builder);
     auto parentValues = std::move(values);
     auto parentInstanceValues = std::move(generatedInstanceValues);
+    auto parentInputValues = std::move(generatedInstanceInputValues);
     values.clear();
     generatedInstanceValues.clear();
+    generatedInstanceInputValues.clear();
     auto restoreValues = llvm::scope_exit([&] {
       values = std::move(parentValues);
       generatedInstanceValues = std::move(parentInstanceValues);
+      generatedInstanceInputValues = std::move(parentInputValues);
     });
     SmallVector<circt::hw::PortInfo> ports;
     unsigned inputIndex = 0, outputIndex = 0;
@@ -3693,12 +3767,18 @@ private:
     Block *body = family.target.getBodyBlock();
     builder.setInsertionPoint(body->getTerminator());
     inputIndex = 0;
+    unsigned selectedInputIndex = 0;
     for (const auto &port : family.ports)
       if (port.input) {
         SmallVector<Value> leaves;
         for (unsigned i = 0; i != port.pins.size(); ++i)
           leaves.push_back(body->getArgument(inputIndex++));
-        values[port.references.front()] = joinBoundary(port.key.first, port.targetType, leaves);
+        Value actual = joinBoundary(port.key.first, port.targetType, leaves);
+        if (port.references.empty()) {
+          auto key = family.inputs[selectedInputIndex++];
+          generatedInstanceInputValues[key] = actual;
+        } else
+          values[port.references.front()] = actual;
       }
     for (auto *ancestor = &family; ancestor; ancestor = ancestor->parent)
       values[ancestor->domain.induction] = circt::hw::ParamValueOp::create(
@@ -3744,6 +3824,12 @@ private:
         return reject(original.getDefiningOp(), "generated canonical RHS did not map");
       }
       values[original] = actual;
+    }
+    for (auto key : family.inputs) {
+      auto references = instancePortValues.find(key);
+      if (references != instancePortValues.end())
+        for (Value reference : references->second)
+          values[reference] = generatedInstanceInputValues.lookup(key);
     }
     for (Operation *instance : family.instances)
       if (failed(lowerInstance(instance))) {
@@ -4006,6 +4092,24 @@ private:
       auto &family = *owned;
       if (family.parent != parent)
         return reject(&operation, "generated scope lost its exact family plan owner");
+      SmallVector<Value> inputBuses;
+      for (auto key : family.inputs) {
+        const auto &input = generatedInstanceInputs.find(key)->second;
+        SmallVector<Value> lanes;
+        // comb.concat is MSB-first; checked ordinal zero occupies the low slice.
+        for (const auto &lane : llvm::reverse(input.assignment.lanes)) {
+          Value actual = values.lookup(capturedValue(lane.source));
+          if (!actual || actual.getType() != input.laneType)
+            return reject(lane.assignment, "selected input actual RHS did not map");
+          lanes.push_back(actual);
+        }
+        Value bus = lanes.front();
+        for (Value lane : ArrayRef<Value>(lanes).drop_front())
+          bus = circt::comb::ConcatOp::create(builder, family.operation->getLoc(), bus, lane);
+        if (bus.getType() != generatedBusType(input.laneType, family.capacity))
+          return reject(family.operation, "selected input lost its complete fixed carrier");
+        inputBuses.push_back(bus);
+      }
       SmallVector<Value> wires, buses;
       for (const auto &out : family.outputs) {
         Value wire = make(family.operation, "sv.wire", circt::hw::InOutType::get(out.busType), {},
@@ -4032,9 +4136,17 @@ private:
         Value index = body.addArgument(builder.getI32Type(), family.operation->getLoc());
         builder.setInsertionPointToEnd(&body);
         SmallVector<Value> inputs;
+        unsigned selectedInputIndex = 0;
         for (const auto &port : family.ports)
           if (port.input) {
-            Value input = values.lookup(port.references.front());
+            Value input;
+            if (port.references.empty())
+              input = generatedSlice(family.operation, inputBuses[selectedInputIndex++], index,
+                                     port.targetType, false,
+                                     family.ordinalTransport ? family.lower : TypedAttr(),
+                                     family.ordinalTransport ? family.step : TypedAttr());
+            else
+              input = values.lookup(port.references.front());
             if (!input)
               return reject(family.operation, "generated template capture did not map");
             llvm::append_range(inputs, splitBoundary(port.key.first, input));

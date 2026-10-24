@@ -2098,6 +2098,34 @@ private[nodal] object DigitalValueMlir:
         "event update requires its exact process reference and ordinary assignments cannot carry one",
         assignment.path
       )
+      target.instancePort.filter(_.selection.nonEmpty).foreach: boundary =>
+        val selection = boundary.selection.get
+        val (family, exported, _) = selectedInstanceExport(target)
+        val instance = modules(assignment.owner).instances.find(_.path == boundary.instance)
+          .getOrElse(fail("selected input instance is absent", assignment.path))
+        val port = modules(instance.childModule).declarations.find(_.path == boundary.port)
+          .getOrElse(fail("selected input child port is absent", assignment.path))
+        val fixedScalar = target.dataType.exists(value =>
+          value == "Bool" || value.matches("(?:UInt|Bits)\\([1-9][0-9]*\\)")
+        )
+        requireValid(
+          assignment.kind == "continuous" && assignment.region.isEmpty &&
+            assignment.eventProcess.isEmpty && assignment.target == target.path &&
+            target.kind == "instance-input" && boundary.direction == "input" &&
+            boundary.region.isEmpty && target.generatedScope.isEmpty &&
+            selection.selectionPrefix.isEmpty && selection.familyInput.isEmpty &&
+            !selection.member.contains(".") && family.parent.isEmpty &&
+            family.lexicalParent.isEmpty && family.digitalBody.nonEmpty &&
+            Vector(family.lower, family.upperExclusive, family.step).forall(_.toLongOption.nonEmpty) &&
+            family.maximumTripCount > 0 && selection.ordinal.toLongOption.exists(ordinal =>
+              ordinal >= 0L && ordinal < family.maximumTripCount.toLong
+            ) && instance.generatedScope.exists(_.owner == family.path) &&
+            exported.kind == "instance" && exported.target == instance.path &&
+            port.kind == "input" && port.generatedScope.isEmpty && fixedScalar &&
+            target.dataType == port.dataType,
+          "selected input requires a whole scalar port of a direct fixed generated Instance",
+          assignment.path
+        )
       val valid = assignment.kind match
         case "event_update" => target.kind == "output" && assignment.region.isEmpty &&
           assignment.target == target.path && assignment.eventProcess.exists(path =>

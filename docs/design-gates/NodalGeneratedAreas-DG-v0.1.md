@@ -419,3 +419,38 @@ family-local typed Interface transport, selection-qualified resolved/CDC proof,
 shaped lane-indexed physical controls and actual generated-instance target execution
 remain required continuations. No generated HDL or analog/conservative widening is
 claimed by this checkpoint.
+
+## Selected generated Instance-input amendment — 2026-10-23
+
+[Checkpoint 78](../implementation/increment58-readiness.md#checkpoint-78-selected-generated-child-scalar-input-routing)
+adds a narrow implemented profile to the earlier staged-admission boundary:
+whole ordinary scalar inputs on direct fixed nonempty generated child Instances,
+with exact static lane ordinals and complete authored writer coverage. Actual
+two-lane neutral and domain-matching Scala examples pass native and CIRCT IR
+conversion. This does not close F-058.B.2.2 or the broader generated-write contract.
+
+Canonical source identity and AssignmentQuery's existing writer inventory own
+child/port/RHS identity, omitted-alias and template collisions, ordinary scalar
+capability, domain provenance, ordered selection and complete coverage, including
+unused inputs. Shape/GeneratedDomain remain the independent ordinal/coordinate
+owners; lower/step coordinates are not replaced by collection ordinals. Whole
+continuous parent-local input writes are not general writable selected views.
+Writes through selected outputs, symbolic/nested selected writes, Interface writes and unsupported
+state/aggregate/crossing source profiles remain unavailable.
+
+The existing hierarchy graph transfers every affected family-local and ordinary
+descendant node, observation and sample into checked actual contexts before
+retiring template execution. Missing contexts reject rather than selecting a
+representative lane or merging drivers. Actual RHS edges and unused-cycle checks
+remain intact. Sequential sampling adds a receiver-context companion without
+changing original public layouts or the old all-zero API. Receiver identity is
+not reconstructed from a source-extended root. Construction and proof fees,
+finite work/graph bounds and poison/recovery behavior remain effective; no reset,
+refund, new evaluator/driver registry or raised default budget is introduced.
+
+Focused acceptance is source-default 65536, exact checkpoint-75 fee parity,
+347 hierarchy cases, 25 target cases and verified actual-source CIRCT IR. Whole-
+model 131072 evidence is diagnostic parity only. The original failed receiver
+helper run is preserved; only its later consuming test-use location was corrected.
+No new Verilog-* export, simulation, full qualification or performance claim is
+made; held exporter and downstream operations remain unrun.

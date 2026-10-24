@@ -3352,6 +3352,10 @@ or benchmark is applicable. Focused validation checks the five-document diff,
 relative links, exact fixture/owner references, and checklist consistency. No
 compiler/runtime suite, CI or downstream consumer was run for this change.
 
+The following is the checkpoint-76 boundary as of its dated acceptance; see the
+[narrow checkpoint-78 amendment](#checkpoint-78-selected-generated-child-scalar-input-routing)
+for subsequent selected scalar Instance-input implementation.
+
 Selected generated Instance-input and Interface writes still fail closed pending
 ordinal-aware assignment/driver proof; they are required B.2.2 implementation,
 not excluded from the accepted contract. Runtime hierarchy selection, capability
@@ -3483,3 +3487,123 @@ turns an unavailable consumer into a passing result.
 
 The current increment does not affect generated Verilog-*. It only names existing
 actual output witnesses and future consumer expectations; it generates no new HDL.
+
+## Checkpoint 78: selected generated child scalar-input routing
+
+On 2026-10-23, this partial B.2.2 checkpoint extends canonical checkpoint-77
+source `359113b52b9f9f6db9ed877a534f9daffd94ec36`. Publication commit is pending.
+It admits whole ordinary scalar inputs of direct fixed generated child Instances,
+with two distinct authored lane inputs demonstrated through actual Scala,
+mandatory native checks and CIRCT IR conversion. F-058.B.2.2, B.2 and Foundation
+58 remain open. This is the narrow amendment to checkpoint 76's dated statement
+that selected Instance-input and Interface writes were still closed; Interface
+writes and the broader required generated-write contract remain closed.
+
+### Canonical ownership and bounded execution
+
+Source construction retains original Instance/input-Port identity, actual RHS,
+ordinal and domain provenance. The native sibling query reuses AssignmentQuery's
+complete canonical writer inventory, including omitted aliases and template
+writers. It checks actual whole continuous parent-local writes, original child
+and port, direct fixed nonempty GeneratedDomain, ordered selection proofs and
+exact coverage of every input lane, even when unobserved or unused. Sorted
+represented writer ordinals prove coverage without enumerating an abstract domain;
+ordinals remain distinct from lower/step induction coordinates. The existing
+whole-template query is unchanged. No second driver registry or evaluator is added.
+
+Complete checked input facts establish actual family contexts in the existing
+hierarchy dependency graph. Every affected original node, including unused logic,
+family-local sinks and ordinary descendant instances, and every observation/sample
+obligation transfers before its template ceases to be an extra execution lane.
+An empty or relevance-filtered-away context cannot reach a retired template.
+Actual parent RHS dependencies, cross-lane routes and cycle detection remain live.
+The existing Sequential sampling owner receives an additive receiver-context
+companion: the original API/layout and all-zero caller behavior remain intact.
+Receiver identity is captured before source selections extend the root context,
+so independent lanes do not falsely reconverge and real same-lane reconvergence
+still rejects. Source/root context equality is not substituted for receiver proof.
+
+Actual construction/proof fees remain charged; no reset, refund, default-lane
+choice, wildcard union or budget increase admits this slice. Node, edge, relation,
+Shape and proof-work bounds remain finite. The new transfer traverses represented
+writers and original nodes/obligations under those limits; this is source-level
+complexity reasoning, not a measured speedup or broad scalability claim.
+
+### Focused results and preserved failures
+
+- Source positives use the unchanged default construction budget 65536. Duplicate
+  aliases, writes through selected outputs, missing lanes, foreign-domain sources
+  and neutral-child/attributed-source mismatches retain negative checks.
+- The retained checkpoint-75 baseline and candidate have byte-identical fee
+  output for six C2a accounting controls, including real ticket poisoning and
+  recovery. The separate whole-model 131072 comparison is diagnostic parity
+  only, not default-budget acceptance or an Extended-policy implementation.
+- `HierarchyModelTest-v2` passes 347 cases, including whole-writer coverage,
+  lower/step semantics, ordinary descendants, unused cycles, cross-lane DAGs,
+  actual feedback cycles, independent-lane versus same-lane reconvergence,
+  companion validation and existing template predecessors.
+- `GeneratedOccurrenceCIRCTTest --emit-selected-input` passes 25 focused cases.
+  `--lower-selected-input` on actual Scala neutral and domain-matching input MLIR
+  passes conversion and target-IR verification; these are not Verilog exports.
+- The first successor hierarchy run failed five receiver-test helper cases
+  because the helper used a PortValue at its own definition rather than a later
+  consuming use. Its original receipt/diagnostics are preserved. Correcting only
+  that test helper produced the 347-case pass; production source was unchanged.
+  Earlier missing-context target failures are preserved, not relabeled as passes.
+
+Commands, frozen source/tool hashes and original receipts are retained under
+`.work/f58-selected-input-routing/` and `.work/f58-selected-input-contexts/`.
+The latter's `test-output/native/{hierarchy-v2,suite,scala-two,domain-matching}.command.json`
+records the exact executed commands; corresponding result files establish outcomes.
+The accepted hierarchy executable hash is
+`5af5328894760d54bf9b5051fdaa5e48d1c583946dc166abc93da6d980f57df3`;
+the matched target executable hash is
+`56a34ea01c540e14ac52e7b804abef743d827b98c57cc43435b1b74adc26f364`.
+Retained executable archives require verified restoration before any future replay.
+
+### Actual Scala to CIRCT IR witness, not generated Verilog
+
+The domain-matching source is
+`core/scala/testkit/test/src/nodal_external/Increment58SelectedInputDomainSource.scala`
+(retained candidate under `.work/f58-selected-input-routing/domain-source-v3/`).
+This actual excerpt is inside the checked `core` domain, with distinct `first`
+and `second` inputs; the child simply forwards its input to its output:
+
+```scala
+val lanes =
+  for _lane <- hdlRange(0, 2) yield new Area:
+    val _ = _lane
+    val child = instance(new Increment58SelectedInputDomainLeaf).domain(core)
+val a = lanes(0).child
+val b = lanes(1).child
+a(_.input) := first
+b(_.input) := second
+left := a(_.output)
+right := b(_.output)
+```
+
+Actual output excerpts from
+`.work/f58-selected-input-contexts/test-output/native/domain-matching.mlir`
+(SHA-256 `dd28eb2075f44856fad63788eb2b5db092dd128d95263de3a45ba71149ce2b02`):
+
+```mlir
+%4 = comb.concat %second, %first : i8, i8
+sv.generate.for %__nodal_lane_0 : i32 = 0 : i32 to 2 : i32 step 1 : i32 name "lanes" {
+  %11 = sv.verbatim.expr "{{0}}[{{1}} * {{2}} +: {{2}}]"(%4, %__nodal_lane_0, %3) : (i16, i32, i32) -> i8 {nodal.source_path = "Increment58SelectedInputDomainTwo.generate_0"}
+```
+
+These noncontiguous surrounding-body excerpts show actual packing and indexed
+lane extraction: lane zero receives `first`, lane one receives `second`. The
+reusable family helper's child input receives that extracted value. This is CIRCT
+HW/SV IR, not Verilog or SystemVerilog text; no exporter or simulation result is
+inferred from it. The independent neutral actual-source IR output hash is
+`9b12879edb8aed7f69af4e595b22a8da1db80f15536665df70c647830f561c1f`.
+
+### Remaining boundary
+
+Symbolic/nested selected writes, Interface writes, and state/aggregate/crossing
+source profiles are not admitted by this slice. Broader Area implementation,
+public default/Extended policy, generated target/exporter and downstream behavior
+remain their existing open work. No CI, full qualification, firtool/Verilog
+exporter, held comparator/installation work, simulator or formal lane was run.
+No new generated Verilog-* witness or universal parameter/scale claim is made.

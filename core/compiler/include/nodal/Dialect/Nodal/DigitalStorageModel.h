@@ -192,6 +192,34 @@ inspectGeneratedTemplateAssignments(mlir::Operation *module,
                                     llvm::ArrayRef<std::pair<mlir::Value, mlir::Operation *>> seeds,
                                     DigitalAssignmentProofLimits limits = {});
 
+/// One checked authored write, not an enumerated or synthesized family lane.
+/// Ordinal is the zero-based lane index; proof retains lower/step coordinates.
+struct DigitalSelectedInputLane {
+  int64_t ordinal = 0;
+  mlir::Operation *assignment = nullptr;
+  mlir::Value source;
+  GeneratedSelectionProof proof;
+};
+struct DigitalSelectedInputAssignment {
+  mlir::Operation *instance = nullptr;
+  mlir::Operation *port = nullptr;
+  mlir::Operation *family = nullptr;
+  llvm::SmallVector<DigitalSelectedInputLane, 4> lanes;
+};
+/// Complete canonical writer inventory for original (InstanceOp, input PortOp)
+/// keys, independent of proxy aliases or observed reads. Returns one result per
+/// distinct key in first-seed order, with checked lanes sorted by ordinal. Only
+/// direct fixed nonempty Module-owned families and whole ordinary scalar writes
+/// from the parent Module are admitted. Lexical guards, nested/symbolic families,
+/// partial writes and template/selected mixtures refuse. The actual sources and
+/// selection proofs remain borrowed IR facts, not hierarchy dependency cuts;
+/// callers must preserve normal closed-hierarchy dependency verification.
+mlir::FailureOr<llvm::SmallVector<DigitalSelectedInputAssignment, 4>>
+inspectGeneratedSelectedInputAssignments(
+    mlir::Operation *module,
+    llvm::ArrayRef<std::pair<mlir::Operation *, mlir::Operation *>> seeds,
+    DigitalAssignmentProofLimits limits = {});
+
 /// Immutable successful split facts from the existing occurrence/component proof.
 /// Values stay in their original definition and occurrence; they are not parent SSA.
 /// A null data value is permitted only with the verified low/high level attribute.

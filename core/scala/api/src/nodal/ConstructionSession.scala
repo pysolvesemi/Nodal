@@ -3795,6 +3795,7 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       declarationIds.get(process.definition.trigger)
     ).toSet
     val continuousWriteCounts = mutable.HashMap.empty[DeclarationRef, Int]
+    val selectedInputInstances = mutable.HashSet.empty[InstanceRecord]
     val continuousDrivers = mutable.HashMap.empty[DeclarationRef, Vector[Any]]
     publicationElements(operations.iterator).filter(operation =>
       Set("assignment", "value-connect").contains(operation.kind) && operation.values.size == 2
@@ -3811,6 +3812,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       then
         boundDomainCharge(3L) // count lookup/update and canonical declaration lookup
         continuousWriteCounts.update(target, continuousWriteCounts.getOrElse(target, 0) + 1)
+        instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+          boundDomainCharge(2L)
+          selectedInputInstances += binding.instance
         val declaration = records(target.module).declarations(target.index)
         // A projected target carries its actual selectors; revisiting the root is cut by the
         // shared sampler's identity worklist, not by an annotation or a synthetic source.
@@ -3847,6 +3851,59 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
           "child digital input requires exactly one parent driver",
           Some(declarationPath(reference))
         )
+    def selectedInputDriver(
+        port: DeclarationRef,
+        selection: GeneratedSymbolSelectionRecord
+    ): DeclarationRef =
+      val family = selection.reference.family.generatedRegion
+      val member = generatedAreaPath(family, selection.reference.members).members.getOrElse(
+        selection.member, crossingFailure("selected input export is absent")
+      )
+      val instance = generatedInstanceExportTarget(family, member)._2
+      val candidates = publicationElements(instanceDigitalPorts.iterator).filter:
+        (_, binding) => (binding.instance eq instance) && binding.port == port &&
+          binding.generated.exists(sameSelectedInputLane(_, selection))
+      val matching = candidates.toVector
+      val bodyWriter = publicationElements(instanceDigitalPorts.iterator).exists:
+        (proxy, binding) => (binding.instance eq instance) && binding.port == port &&
+          binding.generated.isEmpty && continuousWriteCounts.getOrElse(proxy, 0) != 0
+      publicationCharge(matching.size.toLong * 3L)
+      val count = matching.map((proxy, _) => continuousWriteCounts.getOrElse(proxy, 0)).sum
+      if bodyWriter || count != 1 then
+        crossingFailure("selected child input requires exactly one lane writer and no template writer")
+      val (proxy, binding) = matching.find((proxy, _) =>
+        continuousWriteCounts.getOrElse(proxy, 0) == 1
+      ).getOrElse(crossingFailure("selected input driver is absent"))
+      requireSelectedInputTarget(proxy, binding, proxy.module)
+      proxy
+    // Query-local grouping of existing authored boundaries; no second occurrence registry.
+    // With no selected writers, preserve the old observation path without inventory scans.
+    val selectedObservationContexts =
+      mutable.HashMap.empty[Long, mutable.ArrayBuffer[Vector[GeneratedSymbolSelectionRecord]]]
+    if selectedInputInstances.nonEmpty then
+      val contexts = mutable.HashMap.empty[
+        InstanceRecord, mutable.ArrayBuffer[GeneratedSymbolSelectionRecord]
+      ]
+      publicationElements(instanceDigitalPorts.iterator).foreach: (proxy, binding) =>
+        if selectedInputInstances(binding.instance) then
+          binding.generated.foreach: selection =>
+            publicationCharge(3L)
+            contexts.getOrElseUpdate(binding.instance, mutable.ArrayBuffer.empty) += selection
+            if continuousWriteCounts.getOrElse(proxy, 0) != 0 then
+              val _ = selectedInputDriver(binding.port, selection)
+      val children = publicationElements(selectedInputInstances).map(_.child).toSet
+      publicationElements(records.valuesIterator).foreach: module =>
+        publicationElements(module.instances).foreach: instance =>
+          if children(instance.child) then
+            val actual = contexts.get(instance) match
+              case Some(values) =>
+                publicationCharge(values.size.toLong * 3L)
+                values.toVector.distinct.map(selection => Vector(selection))
+              case None => Vector(Vector.empty[GeneratedSymbolSelectionRecord])
+            publicationCharge(actual.size.toLong + 2L)
+            selectedObservationContexts.getOrElseUpdate(
+              instance.child, mutable.ArrayBuffer.empty
+            ) ++= actual
     // Interface capture is the owner of resolved connectivity and member/driver rules.
     // Feed its actual edges into this same sampler rather than constructing a CDC-only net graph.
     val declarationsByPath = publicationElements(records.valuesIterator).flatMap(module =>
@@ -3916,7 +3973,8 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
     )
     val sampleCache =
       mutable.HashMap.empty[
-        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord]),
+        (Long, Boolean, Boolean, Boolean, Option[DigitalEventProcessRecord],
+          Vector[GeneratedSymbolSelectionRecord]),
         IdentityHashMap[AnyRef, SampleFacts]
       ]
     var cachedFacts = 0L
@@ -3969,20 +4027,21 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         strict: Boolean,
         inferSourceOwnership: Boolean = false,
         allowExternalControl: Boolean = false,
-        eventSampling: Option[DigitalEventProcessRecord] = None
+        eventSampling: Option[DigitalEventProcessRecord] = None,
+        initialSelections: Vector[GeneratedSymbolSelectionRecord] = Vector.empty
     ): SampleFacts =
       val cache = sampleCache.getOrElseUpdate(
-        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling),
+        (owner, strict, inferSourceOwnership, allowExternalControl, eventSampling, initialSelections),
         new IdentityHashMap[AnyRef, SampleFacts]()
       )
       val root = value.asInstanceOf[AnyRef]
       Option(cache.get(root)).getOrElse:
         val pending =
-          mutable.ArrayDeque((value, owner, true, Vector.empty[GeneratedSymbolSelectionRecord]))
+          mutable.ArrayDeque((value, owner, true, initialSelections))
         var activeOwner = owner
         var activeDomainVisible = true
-        var activeSelections = Vector.empty[GeneratedSymbolSelectionRecord]
-        var selectedOccurrenceSeen = false
+        var activeSelections = initialSelections
+        var selectedOccurrenceSeen = initialSelections.nonEmpty
         val sampledMembers =
           mutable.HashSet.empty[(DeclarationRef, String, Vector[GeneratedSymbolSelectionRecord])]
         var edges = 0
@@ -4095,6 +4154,15 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                         binding.port.module,
                         selections = selected
                       )
+                    else if publicationElements(instanceDigitalPorts.iterator).exists(
+                        (proxy, candidate) => (candidate.instance eq binding.instance) &&
+                          candidate.port == binding.port &&
+                          candidate.generated.exists(sameSelectedInputLane(_, selection)) &&
+                          continuousWriteCounts.getOrElse(proxy, 0) != 0
+                      )
+                    then
+                      val proxy = selectedInputDriver(binding.port, selection)
+                      enqueue(continuousDrivers(proxy), proxy.module)
                     else
                       val proxy = parentInputReferences.getOrElse(
                         binding.port,
@@ -4116,6 +4184,18 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
                       binding.port.module
                     )
                   case Some(_) => enqueue(drivers)
+                  case None if declaration.kind == KernelSignalKind.Input &&
+                      activeSelections.nonEmpty && publicationElements(instanceDigitalPorts.iterator).exists(
+                        (proxy, binding) => binding.port == declarationRef &&
+                          binding.generated.exists(sameSelectedInputLane(_, activeSelections.last)) &&
+                          continuousWriteCounts.getOrElse(proxy, 0) != 0
+                      ) =>
+                    retainDeclarationEndpoint(declaration)
+                    val proxy = selectedInputDriver(declarationRef, activeSelections.last)
+                    enqueue(
+                      continuousDrivers(proxy), proxy.module,
+                      selections = activeSelections.dropRight(1)
+                    )
                   case None if parentInputReferences.contains(declarationRef) =>
                     retainDeclarationEndpoint(declaration)
                     val proxy = parentInputReferences(declarationRef)
@@ -4691,11 +4771,19 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       declaration.kind == KernelSignalKind.Output &&
         continuousWriteCounts.getOrElse(declaration.reference, 0) > 0
     ).foreach: declaration =>
-      verifyReconvergence(sampleFacts(
-        declaration.value,
-        declaration.reference.module,
-        strict = false
-      ))
+      def observe(selections: Vector[GeneratedSymbolSelectionRecord]): Unit =
+        verifyReconvergence(sampleFacts(
+          declaration.value,
+          declaration.reference.module,
+          strict = false,
+          initialSelections = selections
+        ))
+      if selectedInputInstances.isEmpty then observe(Vector.empty)
+      else
+        publicationCharge(1L)
+        selectedObservationContexts.get(declaration.reference.module) match
+          case None => observe(Vector.empty)
+          case Some(contexts) => publicationElements(contexts).foreach(observe)
     publicationElements(expressionValues.iterator).filter(_._2.interfaceMember.nonEmpty).foreach:
       (reference, value) =>
         verifyReconvergence(sampleFacts(value, reference.module, strict = false))
@@ -4723,6 +4811,16 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         boundDomainCharge() // exact empty private-state lookup
         if privateFsmStorage(target) then
           FlatFsmRuntime.fail("private machine state cannot have external updates")
+        instanceDigitalPorts.get(target).filter(_.generated.nonEmpty).foreach: binding =>
+          val childPort = records(binding.port.module).declarations(binding.port.index)
+          val domain = declarationDomain(childPort, resolved)
+          val facts = sampleFacts(operation.values(1), operation.owner, strict = false)
+          val wrongDomain = domain match
+            case Some(actual) => facts.domains.exists(_ != actual)
+            case None => facts.domains.nonEmpty
+          if wrongDomain || facts.crossings.nonEmpty ||
+            facts.waivers.nonEmpty || facts.events.nonEmpty
+          then crossingFailure("selected input driver requires its exact ordinary occurrence domain")
         if declaration.kind == KernelSignalKind.Register then
           val root = behavioralRoot(operation.digitalRegion).map(Left(_)).getOrElse(Right(index))
           val update = UpdateRoot(root, structuralGuards(operation.digitalRegion))
@@ -14577,6 +14675,69 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         )
     case _ => fail("NODAL-DIGITAL-054-010", "digital assignment requires an actual typed value")
 
+  /** Admission only: writer coverage remains owned by the existing assignment proof. */
+  private def requireSelectedInputTarget(
+      root: DeclarationRef,
+      binding: InstancePortBoundaryRecord,
+      owner: Long
+  ): Unit =
+    def invalid(): Nothing = fail(
+      "NODAL-HIERARCHY-058-001",
+      "selected input requires a whole scalar port of a direct fixed generated Instance",
+      Some(declarationPath(root))
+    )
+    val selection = binding.generated.getOrElse(invalid())
+    val reference = selection.reference
+    val family = reference.family.generatedRegion
+    val original = records(binding.port.module).declarations(binding.port.index)
+    val proxy = records(root.module).declarations(root.index)
+    val scalar = original.dataType.exists(value =>
+      val dataType = CandidateRuntime.typeDescriptor(value)
+      dataType.kind == "Bool" || Set("UInt", "Bits")(dataType.kind) &&
+        dataType.arguments.size == 1 &&
+        conservativeIntegerLiteral(dataType.arguments.head).exists(_ > 0L)
+    )
+    boundDomainCharge(records(owner).generatedRegions.size.toLong + records(owner).instances.size.toLong)
+    if root.module != owner || family.owner != owner || !family.areaFamily ||
+      !records(owner).generatedRegions.exists(_ eq family) ||
+      !family.familyHandle.exists(_ eq reference.family) ||
+      family.parentOrdinal.nonEmpty || family.digitalRegion.isEmpty ||
+      family.digitalRegion.exists(_.parent.nonEmpty) || reference.family.selectionPrefix.nonEmpty ||
+      reference.members.nonEmpty || binding.scope.nonEmpty ||
+      !Vector(family.lower, family.upperExclusive, family.step).forall(value =>
+        conservativeIntegerLiteral(value).nonEmpty
+      ) || family.maximumTripCount <= 0 ||
+      !conservativeIntegerLiteral(reference.ordinal).exists(value =>
+        value >= 0L && value < family.maximumTripCount.toLong
+      ) || !binding.instance.generatedScope.contains(family) ||
+      !records(owner).instances.exists(_ eq binding.instance) ||
+      binding.port.module != binding.instance.child || original.kind != KernelSignalKind.Input ||
+      proxy.kind != KernelSignalKind.InstanceInput || !scalar ||
+      !family.yieldedArea.flatMap(_.members.get(selection.member)).exists(member =>
+        generatedInstanceExportTarget(family, member)._2 eq binding.instance
+      )
+    then invalid()
+    val exact = for
+      left <- proxy.dataType
+      right <- original.dataType
+    yield DigitalEnumContract.sameType(
+      CandidateRuntime.typeDescriptor(left), CandidateRuntime.typeDescriptor(right)
+    )
+    if !exact.contains(true) then invalid()
+
+  private def sameSelectedInputLane(
+      left: GeneratedSymbolSelectionRecord,
+      right: GeneratedSymbolSelectionRecord
+  ): Boolean =
+    val a = left.reference
+    val b = right.reference
+    (a.family.generatedRegion eq b.family.generatedRegion) &&
+      a.family.selectionPrefix.isEmpty && b.family.selectionPrefix.isEmpty &&
+      a.members == b.members && left.member == right.member &&
+      conservativeIntegerLiteral(a.ordinal).exists(value =>
+        conservativeIntegerLiteral(b.ordinal).contains(value)
+      )
+
   /** Resolve only actual canonical shape edges, never an operation spelling or materialized alias.
     */
   private def digitalAssignmentRoot(
@@ -14636,12 +14797,10 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
       current = input
     val root = current.asInstanceOf[DeclarationRef]
     val declaration = records(root.module).declarations(root.index)
-    if instanceDigitalPorts.get(root).exists(_.generated.nonEmpty) then
-      fail(
-        "NODAL-HIERARCHY-058-001",
-        "selected generated Instance writes require selection-qualified assignment proof",
-        Some(declarationPath(root))
-      )
+    instanceDigitalPorts.get(root).filter(_.generated.nonEmpty).foreach: binding =>
+      if selected != root || generatedScope.nonEmpty then
+        fail("NODAL-HIERARCHY-058-001", "selected input assignment must be whole and Module-local")
+      requireSelectedInputTarget(root, binding, owner)
     val rootScope = records(root.module).generatedRegions.find(_.declarations.contains(root))
     val ownedScope = rootScope.isEmpty || rootScope.exists(region =>
       region.areaFamily && generatedScope.contains(region)
@@ -14708,6 +14867,9 @@ private final class ConstructionSession(val options: EmitOptions, stimulusOnly: 
         allowRootRegister = true,
         generatedScope = assignmentGeneratedScope(operation)
       )
+      if instanceDigitalPorts.get(target).exists(_.generated.nonEmpty) &&
+        (operation.digitalRegion.nonEmpty || operation.eventProcess.nonEmpty)
+      then fail("NODAL-HIERARCHY-058-001", "selected input requires a continuous Module-local writer")
       boundDomainCharge(2L) // ordinal map read and write
       val ordinal = ordinals.getOrElse(operation.owner, 0)
       ordinals.update(operation.owner, ordinal + 1)

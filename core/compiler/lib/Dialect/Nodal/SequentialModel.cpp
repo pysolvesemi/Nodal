@@ -514,10 +514,13 @@ SampleSource sampleSource(Operation *module, const DigitalDependencyNode &node) 
     return {{}, true, node.value.getDefiningOp(), true};
   return {};
 }
+using ReceiverGroupKey =
+    std::pair<std::pair<unsigned, unsigned>, std::pair<Operation *, Attribute>>;
 LogicalResult verifyDirectCrossingReconvergence(Operation *module,
                                                 const DigitalDependencyGraph &graph,
                                                 ArrayRef<SequentialSample> samples,
-                                                ArrayRef<unsigned> roots, unsigned &work,
+                                                ArrayRef<unsigned> roots,
+                                                ArrayRef<unsigned> receiverContexts, unsigned &work,
                                                 unsigned maximumWork) {
   if (graph.crossings.size() < 2)
     return success();
@@ -526,17 +529,19 @@ LogicalResult verifyDirectCrossingReconvergence(Operation *module,
     SmallVector<unsigned, 4> roots;
   };
   SmallVector<Group, 8> groups;
-  llvm::DenseMap<std::pair<std::pair<unsigned, Operation *>, Attribute>, unsigned> ownersByDomain;
-  llvm::DenseSet<std::pair<unsigned, Attribute>> standaloneRoots;
+  llvm::DenseMap<ReceiverGroupKey, unsigned> ownersByDomain;
+  llvm::DenseSet<std::pair<std::pair<unsigned, unsigned>, Attribute>> standaloneRoots;
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
+    unsigned receiver = receiverContexts.empty() ? 0 : receiverContexts[i];
     if (sample.group) {
-      auto entry = ownersByDomain.try_emplace({{sample.occurrence, sample.group}, sample.domain},
+      auto entry = ownersByDomain.try_emplace({{sample.occurrence, receiver},
+                                               {sample.group, sample.domain}},
                                               groups.size());
       if (entry.second)
         groups.push_back({sample.use, {}});
       groups[entry.first->second].roots.push_back(roots[i]);
-    } else if (standaloneRoots.insert({roots[i], sample.domain}).second) {
+    } else if (standaloneRoots.insert({{roots[i], receiver}, sample.domain}).second) {
       groups.push_back({sample.use, {roots[i]}});
     }
   }
@@ -664,20 +669,84 @@ LogicalResult
 verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample> samples,
                                    const DigitalDependencyGraph &graph, ArrayRef<unsigned> roots,
                                    SequentialModelLimits limits, unsigned alreadyCharged) {
+  return verifySequentialSampleDependencies(module, samples, graph, roots, {}, limits,
+                                             alreadyCharged);
+}
+LogicalResult
+verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample> samples,
+                                   const DigitalDependencyGraph &graph, ArrayRef<unsigned> roots,
+                                   ArrayRef<unsigned> receiverContexts,
+                                   SequentialModelLimits limits, unsigned alreadyCharged) {
   if (samples.size() != roots.size())
     return reject(module, "sampling roots must exactly match their physical dependency graph");
+  if (!receiverContexts.empty() && receiverContexts.size() != samples.size())
+    return reject(module, "sampling receiver contexts must exactly match their original owners");
   unsigned work = alreadyCharged;
+  if (work > limits.maximumOperations)
+    return reject(module, "sampling proof exceeds its aggregate operation budget");
   bool hasEventState =
       llvm::any_of(graph.nodes, [](const auto &node) { return node.eventProcess != nullptr; });
   const DomainModel domains(module);
   using SampleKey = std::pair<unsigned, std::pair<unsigned, Attribute>>;
   llvm::DenseSet<SampleKey> visited;
   llvm::DenseSet<SampleKey> strictChecked[2];
-  llvm::DenseMap<std::pair<std::pair<unsigned, Operation *>, Attribute>, bool> attributedGroups;
+  llvm::DenseMap<ReceiverGroupKey, bool> attributedGroups;
   for (unsigned i = 0; i < samples.size(); ++i) {
     auto sample = samples[i];
+    unsigned receiver = receiverContexts.empty() ? 0 : receiverContexts[i];
     if (roots[i] >= graph.nodes.size())
       return reject(sample.use, "sampling root is outside the physical dependency graph");
+    if (receiver) {
+      if (!graph.hierarchy || receiver >= graph.selectionContexts.size() ||
+          sample.occurrence >= graph.hierarchy->occurrences().size() || !sample.use)
+        return reject(module, "sampling receiver lacks its checked hierarchy context");
+      const auto &occurrence = graph.hierarchy->occurrences()[sample.occurrence];
+      const auto &context = graph.selectionContexts[receiver];
+      if (context.selections.empty() || sample.use->getParentOfType<ModuleOp>() != occurrence.module)
+        return reject(sample.use, "sampling receiver context lost its original Module owner");
+      for (const auto &selection : context.selections) {
+        if (++work > limits.maximumOperations)
+          return reject(sample.use, "sampling receiver proof exceeds finite operation budget");
+        if (!isa_and_nonnull<GenerateOp>(selection.selection.family) ||
+            selection.occurrence >= graph.hierarchy->occurrences().size())
+          return reject(sample.use, "sampling receiver context lost its original family");
+        bool inherited = false;
+        for (const auto &scope : occurrence.generatedScopes) {
+          if (++work > limits.maximumOperations)
+            return reject(sample.use, "sampling receiver proof exceeds finite operation budget");
+          inherited |= scope.occurrence == selection.occurrence &&
+                       scope.family == selection.selection.family;
+        }
+        bool lexical = selection.occurrence == sample.occurrence &&
+                       selection.selection.family->isProperAncestor(sample.use);
+        if (!inherited && !lexical)
+          return reject(sample.use, "sampling receiver context contains an unrelated source selection");
+      }
+      auto contains = [&](unsigned at, Operation *family) -> FailureOr<bool> {
+        bool found = false;
+        for (const auto &selection : context.selections) {
+          if (++work > limits.maximumOperations)
+            return failure();
+          found |= selection.occurrence == at && selection.selection.family == family;
+        }
+        return found;
+      };
+      for (const auto &scope : occurrence.generatedScopes) {
+        auto found = contains(scope.occurrence, scope.family);
+        if (failed(found) || !*found)
+          return reject(sample.use, "sampling receiver context omits an inherited family");
+      }
+      for (Operation *scope = sample.use->getParentOp(); scope && scope != occurrence.module;
+           scope = scope->getParentOp()) {
+        if (++work > limits.maximumOperations)
+          return reject(sample.use, "sampling receiver proof exceeds finite operation budget");
+        if (!isa<GenerateOp>(scope))
+          continue;
+        auto found = contains(sample.occurrence, scope);
+        if (failed(found) || !*found)
+          return reject(sample.use, "sampling receiver context omits a lexical family");
+      }
+    }
     if (sample.requireAttributedSource && !sample.allowDomainlessSource &&
         !sample.requireAttributedGroup &&
         !strictChecked[sample.rejectPulseSources]
@@ -792,7 +861,7 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
     if (sample.requireAttributedGroup) {
       if (!sample.group || !sample.requireAttributedSource)
         return reject(sample.use, "attributed sample group requires an actual strict owner");
-      attributedGroups[{{sample.occurrence, sample.group}, sample.domain}] |=
+      attributedGroups[{{sample.occurrence, receiver}, {sample.group, sample.domain}}] |=
           attributed || unresolved;
     }
     if (sample.requireAttributedSource && !sample.allowDomainlessSource && !attributed &&
@@ -802,9 +871,9 @@ verifySequentialSampleDependencies(Operation *module, ArrayRef<SequentialSample>
   }
   for (auto entry : attributedGroups)
     if (!entry.second)
-      return entry.first.first.second->emitOpError(
+      return entry.first.second.first->emitOpError(
           "NODAL-CDC-001: crossing source group requires actual attributed dependency evidence");
-  return verifyDirectCrossingReconvergence(module, graph, samples, roots, work,
+  return verifyDirectCrossingReconvergence(module, graph, samples, roots, receiverContexts, work,
                                            limits.maximumOperations);
 }
 LogicalResult verifySequentialSamples(Operation *module, ArrayRef<SequentialSample> samples,

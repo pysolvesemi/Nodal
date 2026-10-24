@@ -413,7 +413,7 @@ private:
         Endpoint entry{endpoint, {}};
         if (!endpoint.dimensions.empty()) {
           unsigned remaining = unsigned(kOperations - work), before = remaining;
-          auto status = checkFixedConservativeInterfaceArrayProfile(endpoint, remaining);
+          auto status = checkConservativeInterfaceArrayForwardingProfile(endpoint, remaining);
           work += before - remaining;
           if (failed(status)) return failure();
           auto dimensions = endpoint.operation->getAttrOfType<DictionaryAttr>("metadata")

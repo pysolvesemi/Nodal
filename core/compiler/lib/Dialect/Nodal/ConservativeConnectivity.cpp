@@ -1903,7 +1903,7 @@ FailureOr<nodal::ConservativeEndpoint> logicalArrayEndpoint(
       access.projection != facts.operation || access.identity.endpoint != facts.declaration ||
       access.identity.instance != facts.instance || access.identity.selection ||
       access.leaf.access.getValue() != "connect" ||
-      failed(nodal::checkFixedConservativeInterfaceArrayProfile(facts, remaining)))
+      failed(nodal::checkConservativeInterfaceArrayForwardingProfile(facts, remaining)))
     return failure();
   auto projection = nodal::resolveStaticShapeProjection(access.canonicalValue, use);
   if (failed(projection) || !projection->wholeRoot || !projection->projections.empty())
@@ -3463,7 +3463,7 @@ LogicalResult nodal::verifyConservativeArrayBindings(Operation *scope) {
               return leaf.protocol.getValue() == "conservative";
             }))
           continue;
-        if (failed(checkFixedConservativeInterfaceArrayProfile(endpoint, remaining)))
+        if (failed(checkConservativeInterfaceArrayForwardingProfile(endpoint, remaining)))
           return failure();
         for (const auto &leaf : endpoint.leaves) {
           if (!remaining)

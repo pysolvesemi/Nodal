@@ -4016,3 +4016,149 @@ No ShapeRegionTest run, full qualification, CI, held exporter or firtool is
 credited. The default construction budget of 65536 and independent proof limits remain unchanged;
 the earlier whole-model construction gap is not repaired. F-159.B.4.2,
 F-058.B.2.2, F-159.C.3.2 and Foundation58 remain open.
+
+## Checkpoint 84: bounded symbolic conservative InterfaceArray forwarding
+
+**Status:** Focused prototype acceptance for the selected existing-API slice.
+Foundation 58, F-058.B.1 and F-058.B.2 remain open; no checkbox closes here.
+The canonical source baseline is checkpoint 83,
+`39cfc09cac234ba8437e543c331a2bd8a2d069ec`.
+
+### Scope and canonical ownership
+
+The checkpoint-75 whole rank-one Electrical Connect profile now also admits
+direct bounded positive Integer `Param` counts on both ordinary parent and
+immediate-child declarations. Exact finalized child substitution must identify
+the parent's canonical parameter, not merely the same default, range or rendered
+name. Early and late bindings and neutral actual aliases `p + 0.integer` and
+`p * 1.integer` reuse the existing parameter/shape normalization. The endpoint
+declarations themselves remain direct parameters; expression endpoints, mixed
+literal/parameter count kinds, generated arrays, rank-two/partial forwarding,
+mixed or signal-flow inventories and unresolved actual expressions stay closed.
+Literal forwarding retains its existing profile.
+
+`ConstructionSession` retains declaration, instance and finalized-substitution
+ownership. `DigitalInterfaceContract` narrows the source forwarding profile;
+`InterfaceMlir` independently checks the represented direct parameter and unique
+Integer constraint attributes through its existing shape query and declaration
+inventory. The renamed native
+`checkConservativeInterfaceArrayForwardingProfile` consumes already verified,
+borrowed endpoint facts, including prior exact finalized child substitution.
+It is not an ingress verifier or a second equality engine. `DigitalInterfaceModel`,
+`ConservativeConnectivity` and `ScalarHierarchyMaterialization` keep independent
+boundary, actual incidence, complete ordered leaf and once-only routing checks.
+No `ParameterModel` duplicate proof, public API spelling, schema, persistent
+registry or capacity change is introduced.
+
+The implementation touches those five production owners plus the native helper
+header. Existing canonical shape/parameter proofs were preferred to a new
+symbolic-array engine. The fact-only classifier still charges inspected axes
+and leaves against the caller's structural budget. Target vectors and named
+child actuals remain symbolic; no lane/default cloning is introduced. This is a
+bounded reuse decision, not a measured performance improvement or a claim that
+the earlier default-policy whole-model construction gap is repaired.
+
+### Executed evidence and preserved failures
+
+The changed API and bridge owners compiled over pinned retained support layers;
+all three changed native compilation units and their matched probe link passed.
+This is not a fresh frontend/plugin build, whole-compiler build or native unit
+suite. Actual composed Scala replay covers 11 positives: early/late binding,
+two neutral actual aliases, reverse forwarding, two instances, default one, and
+four literal predecessors. It also covers 14 causal source refusals and eight
+forged-snapshot bridge refusals, including foreign/runtime actuals, formal-range
+escape, missing/duplicate leaves, identity substitution and malformed parameter
+constraints. Acceptance composes the unchanged v3 positive/negative prefix and
+executed v5 negative tail; no original whole-replay pass is claimed.
+
+All earlier fixture failures remain unchanged: v1 used an inaccessible private
+instance member; v2 expected a nonexistent raw child shaped SSA result instead
+of declaration metadata before adaptation; v3 expected the wrong exception type
+for the canonical formal-range refusal; v4 expected a later diagnostic instead
+of the actual foreign-operand identity refusal. Versioned fixture-only repairs
+preserve each failed receipt and accepted positive artifact. These corrections
+did not rebuild or relax production checks.
+
+All 42 frozen native operations passed their exact expected exits and causal
+checks: 11 positive verification/emission pairs, one late-binding adaptation,
+one byte-identical repeated emission, 14 derivative-input verifications and
+four transactional backend refusals. The 14 controls comprise six symbolic and
+eight literal derivatives, not 14 verification refusals: ten reject verification;
+four verify successfully and then reject backend emission with empty target and
+unchanged input. Those four are symbolic/literal absent parent projections,
+signed32 layout overflow and an unused rank-two local declaration. The symbolic
+identity and authoritative-constraint forgeries reject at their exact canonical
+diagnostics without changing the checks to fit the outcome.
+
+The actual-output checker passes all seven symbolic and four literal witnesses.
+It checks preserved `p`/`n` vectors, named child actuals, exact nested leaf and
+correspondence identity, early/late/reverse code parity, repeated output bytes,
+and bounded adapted operations without logical/per-lane residue. Two authored
+instances share one child definition. These are composed focused outcomes, not a
+whole-unit-suite or full qualification result.
+
+### Actual source and Verilog-A witness
+
+The maintained source and replay are
+`core/scala/testkit/test/src/nodal_external/Increment58SymbolicConservativeArraySource.scala`
+and
+`core/scala/testkit/test/src/nodal/internal/testkit/Increment58SymbolicConservativeArrayReplay.scala`.
+The source declares `p` and the child's `n` with default 65536 and legal range
+1 through 131072, exports nested `pair.p`/`pair.n` Electrical leaves and forwards
+the whole array. The actual parent source includes:
+
+```scala
+val p = param(defaultCount.integer, range = 1 to 131072)
+// Equal default and domain do not confer the identity of p.
+val other = param(defaultCount.integer, range = 1 to 131072)
+val pins = interfaceArray(outer, connected, p, "pins", core)
+```
+
+The late mode obtains `child(_.pins)` before binding the child's `n` to `p`, then
+calls `pins.forwardExact(projected)`. Its actual Verilog-A contains these excerpts
+from the parent and child, respectively:
+
+```verilog
+  parameter integer p = 65536 from [1:131072];
+  inout [0:(p - 1)] nodal_i70696e73_706169722e70;
+  electrical [0:(p - 1)] nodal_i70696e73_706169722e70;
+  child #(.n(p)) child_instance(.nodal_i70696e73_706169722e6e(nodal_i70696e73_706169722e6e), .nodal_i70696e73_706169722e70(nodal_i70696e73_706169722e70));
+```
+
+```verilog
+  parameter integer n = 65536 from [1:131072];
+  inout [0:(n - 1)] nodal_i70696e73_706169722e70;
+  electrical [0:(n - 1)] nodal_i70696e73_706169722e70;
+```
+
+The unabridged output retains both nested leaves and correspondence metadata.
+It demonstrates symbolic vectors and an actual symbolic named-child override,
+not sampled-default elaboration or simulator acceptance. Raw child declarations
+carry shape metadata before adaptation; physical shaped carriers arise only in
+the adapted representation.
+
+Matched commands, source/dependency freezes and per-case receipts are retained in
+ignored `.work/f58-symbolic-conservative-array-forwarding`. With that admitted
+matched build, the late witness command is:
+
+```sh
+.work/f58-symbolic-conservative-array-forwarding/bin/symbolic-array-probe .work/f58-symbolic-conservative-array-forwarding/test-output/fixture-v3/source/late.mlir emit
+```
+
+Its output is `test-output/native/late-emit.stdout` within that stage. The input
+SHA256 is `98926c766709b1cafc3eab3b90ac3deab0dc695920bb351923b4a909cba824b5`;
+the matched executable SHA256 is
+`956c07d274a6acbeeb391854fc2932f443b27e01a3c70f5c384451118d7a4615`.
+The actual Verilog-A SHA256 is
+`cb92aa4a4847338000b4d8b68b4b5ac0c1d21eb934229b209f7984b3976e9985`.
+The maintained target checker is
+`tests/compiler/fixtures/increment58/conservative-interface-array/check_symbolic_outputs.py`;
+it takes the stage's `test-output/native` directory. Its exact command and result
+are retained in `test-output/symbolic-output-check.result.json`.
+The composed source command and classpath are recorded in
+`fixture-v3-replay.result.json` and `fixture-v5-replay.result.json`.
+
+No full unit suite, CI, held CIRCT/comparator/firtool pipeline, external exporter,
+installation or capacity promotion ran. Construction and native proof limits
+remain unchanged. Broader hierarchy and downstream consumer acceptance, along
+with Foundation 58 and F-058.B.1/B.2, remain open.

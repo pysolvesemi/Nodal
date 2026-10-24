@@ -210,6 +210,11 @@ private[nodal] object DigitalInterfaceContract:
         array.origin.isEmpty && electricalDefinition(array.definition, 0) &&
           (array.formalCount match
             case count: Int => count > 0
+            // Declaration ownership and finalized actual identity stay with the session's
+            // existing shape checks; this profile admits only a direct bounded formal.
+            case count: Param[?] => count.integerRange.exists((lower, upper) =>
+                lower > 0 && lower <= upper
+              )
             case _ => false) && leaves.nonEmpty && leaves.forall(leaf =>
             charge(1L)
             leaf.protocol == "conservative" && leaf.access == "connect" && leaf.mode.isEmpty &&
@@ -819,15 +824,23 @@ private[nodal] object DigitalInterfaceContract:
           if conservative then
             val local = if a.boundary.isEmpty then a else b
             val child = if a.boundary.nonEmpty then a else b
-            if !conservativeArrayProfile(left, leftLeaves) ||
-              !conservativeArrayProfile(right, rightLeaves) ||
-              (a.boundary.isEmpty == b.boundary.isEmpty) ||
+            val sameCountKind = conservativeArrayProfile(left, leftLeaves) &&
+              conservativeArrayProfile(right, rightLeaves) && ((left, right) match
+                case (first: InterfaceArray[?, ?], second: InterfaceArray[?, ?]) =>
+                  first.formalCount.isInstanceOf[Param[?]] ==
+                    second.formalCount.isInstanceOf[Param[?]]
+                case _ => false)
+            if !sameCountKind || (a.boundary.isEmpty == b.boundary.isEmpty) ||
               !child.boundary.exists(value => value.instance.nonEmpty &&
                 value.selection.isEmpty && value.region.isEmpty) ||
               left.role.name != right.role.name || a.domain.isEmpty || a.domain != b.domain ||
               operation.region.nonEmpty || operation.sourceOrdinal.nonEmpty ||
               !conservativePairs.add(local.path -> child.path)
-            then fail(3, "conservative forwarding requires one exact ordinary fixed array pair once")
+            then fail(
+              3,
+              "conservative forwarding requires one exact ordinary array pair once, " +
+                "with positive literal or bounded parameter counts"
+            )
           if leftLeaves.size != rightLeaves.size then
             fail(5, "exact interface connection changed members")
           leftLeaves.zip(rightLeaves).map: (first, second) =>

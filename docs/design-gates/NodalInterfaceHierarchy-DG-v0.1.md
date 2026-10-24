@@ -481,6 +481,35 @@ records composed source checks, actual compact Verilog-A, transactional refusals
 and directly affected predecessor parity. This does not close F-058.B.1,
 F-058.B.2 or Foundation 58.
 
+## F58 bounded symbolic conservative InterfaceArray forwarding amendment
+
+**Status:** Focused prototype acceptance, checkpoint 84
+**Scope:** Existing API and compiler boundary
+
+Checkpoint 84 extends the checkpoint-75 ordinary whole rank-one Electrical
+Connect profile to direct bounded positive Integer parameters on both endpoint
+declarations. Exact finalized child substitution must retain the parent's
+canonical parameter identity; equal defaults or bounds do not prove equality.
+Neutral child actuals `p + 0.integer` and `p * 1.integer` reuse existing canonical
+normalization. Direct expression endpoints, unresolved actual expressions, mixed
+literal/parameter kinds, generated arrays, rank-two/partial maps and mixed or
+signal-flow inventories remain rejected. Literal predecessors remain supported.
+
+ConstructionSession owns source identity and finalized substitution; source and
+immutable bridge admission preserve direct declarations, exact domain/role/member
+ABI and complete once-only routing. The shared native fact-only classifier
+requires already verified endpoint facts and exact finalized child substitution;
+it is not an ingress verifier. DigitalInterfaceModel, ConservativeConnectivity
+and the adapter independently retain their boundary and incidence checks. No
+new parameter evaluator, duplicate ParameterModel proof, public API, schema,
+registry, lane expansion or proof-limit change is authorized by this amendment.
+Existing symbolic electrical vectors and named child actuals carry the target.
+
+[Checkpoint 84](../implementation/increment58-readiness.md#checkpoint-84-bounded-symbolic-conservative-interfacearray-forwarding)
+records composed source/bridge evidence, 42 focused native operations and actual
+symbolic/literal Verilog-A checks, with failed fixture versions preserved. This amendment does not close F-058.B.1, F-058.B.2 or
+Foundation 58, or widen the distinct generated-family contract below.
+
 ## F58 bounded symbolic conservative family amendment
 
 **Status:** Narrow prototype accepted in checkpoint 70; broader family work remains open

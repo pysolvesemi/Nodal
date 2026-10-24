@@ -96,7 +96,7 @@ assert len(parent) == 1
 rank2 = replace(zero, parent[0],
                 replace(parent[0], 'dimensions = ["3"]', 'dimensions = ["3", "2"]'))
 add("unused-local-rank2", rank2, 0,
-    "conservative Interface array requires direct fixed rank-one Electrical connect leaves", 0)
+    "conservative Interface array requires direct rank-one Electrical connect leaves with positive literal or bounded parameter counts", 0)
 manifest = {"source": str(source),
             "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "note": "Expected outcomes only. Transaction mode must prove rejection leaves input unchanged; verify separately.",

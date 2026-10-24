@@ -486,6 +486,35 @@ private[nodal] object InterfaceMlir:
         snapshot.areas.iterator.flatMap(_.declarations).toSet
     private val externalInterfaceDeclarations = ExternalModuleContract.externalInterfacePaths(snapshot)
 
+    /** Count syntax remains a direct declaration; canonical Integer facts authenticate its atom. */
+    private def conservativeArrayCount(endpoint: KernelInterfaceSnapshot): Boolean =
+      if endpoint.dimensions.size != 1 then false
+      else
+        val token = endpoint.dimensions.head
+        if token.toIntOption.exists(count => count > 0 && count.toString == token) then true
+        else
+          try
+            val dimension = shapeQuery.resolve(endpoint.owner, token)
+            val graph = shapeQuery.exportValues(Vector(dimension))
+            val root = graph.nodes(graph.dimensions.head)
+            root.parameter.exists: path =>
+              selectedDeclarationInventory.get(path) match
+                case Some(Vector((owner, parameter))) if owner.path == endpoint.owner =>
+                  val attributes = parameter.attributes
+                  val values = attributes.toMap
+                  val bounds = shapeQuery.bounds(dimension)
+                  (token == parameter.path || token == parameter.name) &&
+                    parameter.kind == "parameter" && parameter.dataType.contains("Integer") &&
+                    parameter.generatedScope.isEmpty && !nonModuleInterfaceDeclarations(path) &&
+                    attributes.size == values.size && bounds.lower > 0 &&
+                    values.get("integer_range_lower").flatMap(_.toIntOption).exists(value =>
+                      value.toLong == bounds.lower
+                    ) && values.get("integer_range_upper").flatMap(_.toIntOption).exists(value =>
+                      value.toLong == bounds.upper
+                    )
+                case _ => false
+          catch case _: IllegalArgumentException => false
+
     /** Independent snapshot admission; ordinary declarations outside forwarding stay unchanged. */
     private def classifyConservativeArray(endpoint: KernelInterfaceSnapshot): Boolean =
       declarations.get(endpoint.path).exists: (_, declaration) =>
@@ -493,9 +522,7 @@ private[nodal] object InterfaceMlir:
           !nonModuleInterfaceDeclarations(endpoint.path) &&
           endpoint.definitionContexts.isEmpty && endpoint.domain.nonEmpty &&
           !externalInterfaceDeclarations(endpoint.path) &&
-          endpoint.dimensions.size == 1 && endpoint.dimensions.head.toIntOption.exists(count =>
-            count > 0 && count.toString == endpoint.dimensions.head
-          ) && endpoint.members.nonEmpty && endpoint.members.forall(member =>
+          conservativeArrayCount(endpoint) && endpoint.members.nonEmpty && endpoint.members.forall(member =>
             member.protocol == "conservative" && member.access == "connect" && member.mode.isEmpty &&
               member.dataType == "Terminal(electrical)" &&
               actualType(endpoint, member) == member.dataType &&
@@ -770,7 +797,9 @@ private[nodal] object InterfaceMlir:
                 (value.protocol == "resolved" && instance.forall(_.generatedScope.isEmpty) ||
                   value.protocol == "conservative" &&
                   (endpoint.dimensions.isEmpty ||
-                    conservativeArrayProfile(endpoint) && conservativeArrayProfile(child)) &&
+                    conservativeArrayProfile(endpoint) && conservativeArrayProfile(child) &&
+                      (endpoint.dimensions.head.toIntOption.nonEmpty ==
+                        child.dimensions.head.toIntOption.nonEmpty)) &&
                   instance.forall(instance =>
                     instance.generatedScope.forall(scope =>
                       declaration.generatedScope.contains(scope) && boundary.region.contains(

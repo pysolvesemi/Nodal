@@ -257,15 +257,18 @@ DigitalInterfaceLeaf leafFacts(const Member &member, const Entry &entry) {
   return leaf;
 }
 
-// Fact-only admission: callers authenticate the declaration/role first. In
-// particular this must never call the full Interface or connectivity models.
-LogicalResult fixedConservativeArrayProfile(const DigitalInterfaceEndpoint &endpoint,
-                                           unsigned &remaining) {
+// Fact-only admission: callers authenticate the declaration/role and prove exact
+// finalized child shape substitution first. This classifies direct positive
+// literal or bounded parameter axes, never equality from defaults or bounds.
+// In particular this must never call the full Interface or connectivity models.
+LogicalResult conservativeArrayForwardingProfile(const DigitalInterfaceEndpoint &endpoint,
+                                                unsigned &remaining) {
   auto charge = [&]() { if (!remaining) return false; --remaining; return true; };
   auto invalid = [&]() {
     if (!endpoint.operation) return failure();
     return reject(endpoint.operation,
-                  "conservative Interface array requires direct fixed rank-one Electrical connect leaves");
+                  "conservative Interface array requires direct rank-one Electrical connect leaves "
+                  "with positive literal or bounded parameter counts");
   };
   if (!charge() || !endpoint.operation || !endpoint.declaration || !endpoint.domainOwner ||
       !endpoint.declarationOwner || !endpoint.selectedRole || !endpoint.domain ||
@@ -284,6 +287,7 @@ LogicalResult fixedConservativeArrayProfile(const DigitalInterfaceEndpoint &endp
       !actualDimensions || actualDimensions.size() != 1)
     return invalid();
   int64_t extent = 0;
+  bool parameterExtent = false;
   for (auto [owner, dimensions] :
        {std::make_pair(endpoint.domainOwner, actualDimensions),
         std::make_pair(endpoint.declarationOwner, formalDimensions)}) {
@@ -291,10 +295,17 @@ LogicalResult fixedConservativeArrayProfile(const DigitalInterfaceEndpoint &endp
     auto token = llvm::dyn_cast<StringAttr>(dimensions[0]);
     if (!token) return invalid();
     auto axis = resolveStaticShapeDimension(owner, token.getValue(), "shape", remaining);
-    if (failed(axis) || axis->parameter || axis->expression || axis->literal <= 0 ||
-        (extent && extent != axis->literal))
+    if (failed(axis) || axis->expression || axis->bounds.lower <= 0 ||
+        axis->bounds.upper < axis->bounds.lower)
       return invalid();
-    extent = axis->literal;
+    if (axis->parameter) {
+      if (extent) return invalid();
+      parameterExtent = true;
+    } else {
+      if (axis->literal <= 0 || parameterExtent || (extent && extent != axis->literal))
+        return invalid();
+      extent = axis->literal;
+    }
   }
   for (const auto &leaf : endpoint.leaves) {
     if (!charge()) return invalid();
@@ -1052,7 +1063,7 @@ LogicalResult Model::boundary(Operation *operation) {
     }
   const bool selectedConservativeEndpoint = scalarConservativeInventory && shape.empty() &&
       succeeded(resolveConservativeGeneratedSelection(operation));
-  bool fixedConservativeArray = false;
+  bool conservativeArrayForwarding = false;
   if (!shape.empty() && llvm::any_of(original.definition->members, [](const auto &entry) {
         return entry.second.protocol == "conservative";
       })) {
@@ -1075,10 +1086,10 @@ LogicalResult Model::boundary(Operation *operation) {
           original.role->entries.find(found->getKey())->second));
     }
     unsigned remaining = digitalTypeMaximumNodes - work;
-    auto status = fixedConservativeArrayProfile(facts, remaining);
+    auto status = conservativeArrayForwardingProfile(facts, remaining);
     work = digitalTypeMaximumNodes - remaining;
     if (failed(status)) return failure();
-    fixedConservativeArray = true;
+    conservativeArrayForwarding = true;
   }
   llvm::StringMap<Type> actualTypes;
   unsigned memberIndex = 0;
@@ -1097,7 +1108,8 @@ LogicalResult Model::boundary(Operation *operation) {
     if ((boundary->selection &&
          ((analog(member.protocol) && !selectedConservative) || resolved ||
           isDigitalControlBoundaryType(member.type))) ||
-        (conservative && !shape.empty() && !fixedConservativeArray) || member.protocol == "signal_flow" ||
+        (conservative && !shape.empty() && !conservativeArrayForwarding) ||
+        member.protocol == "signal_flow" ||
         isDigitalControlBoundaryType(member.type) ||
         (!conservative &&
          failed(inferDigitalBitPatternMaximumBits(payload, original.definition->operation))))
@@ -2577,9 +2589,9 @@ LogicalResult Model::dependencies(SmallVectorImpl<DigitalInterfaceValueDependenc
 
 } // namespace
 
-LogicalResult checkFixedConservativeInterfaceArrayProfile(
+LogicalResult checkConservativeInterfaceArrayForwardingProfile(
     const DigitalInterfaceEndpoint &endpoint, unsigned &remainingWork) {
-  return fixedConservativeArrayProfile(endpoint, remainingWork);
+  return conservativeArrayForwardingProfile(endpoint, remainingWork);
 }
 
 FailureOr<DigitalInterfaceBoundary> inspectDigitalInterfaceBoundary(Operation *operation) {

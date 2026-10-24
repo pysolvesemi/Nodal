@@ -10,6 +10,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <string>
 #include <utility>
+#include <vector>
 using namespace mlir;
 namespace {
 using S = nodal::ShapeRegionProofStatus;
@@ -398,7 +399,8 @@ void positive(MLIRContext &context, bool symbolic, bool anchor, const std::strin
     alias(*module, "p00", "p01", A::Distinct, label + "/same-outer-different-inner");
     alias(*module, "p00", "p11", A::Distinct, label + "/both-axes-different");
     alias(*module, "n01", "n11", A::Distinct, label + "/other-root-different-outer");
-    alias(*module, "p01", "n11", A::Unknown, label + "/cross-root-different-tuple-pending");
+    alias(*module, "p01", "n11", symbolic ? A::Unknown : A::Distinct,
+          label + "/cross-root-different-tuple");
   }
   alias(*module, "p01", "p01again", A::Equal, label + "/independent-repeated-tuple");
   auto foreign = parseSourceString<mlir::ModuleOp>(model(symbolic, anchor, variant, rows, cols),
@@ -560,6 +562,196 @@ void contextFreshness(MLIRContext &context) {
   check(originalIR == print(*module), "context-freshness/fixture-restored-exactly");
 }
 
+// Closed-tree controls are real native topology, including actual child
+// terminal incidences. Refusal cases must authenticate before alias queries;
+// malformed input is not evidence for cycle/child-uncertainty conservatism.
+std::string closedPathModel(const std::string &kind) {
+  const unsigned count = kind == "budget" ? 8 : kind == "chain" || kind == "cycle" ? 3 : 2;
+  std::vector<std::string> names{"p", "n"};
+  for (unsigned i = 2; i < count; ++i) names.push_back("q" + std::to_string(i));
+  std::string body = literal("zero", 0) + literal("one", 1) + literal("R", 3) + literal("C", 4);
+  auto width = [&](const std::string &root) { return kind == "shift" && root == "n" ? "5" : "4"; };
+  for (const auto &root : names) body += array(root, "3," + std::string(width(root)));
+  if (kind == "anchor")
+    body += "%anchor = \"nodal.node\"() <{name = \"anchor\", source_path = \"Fixture.anchor\", "
+        "metadata = {test_name = \"anchor\", semantic_path = \"Fixture.anchor\", "
+        "allow_floating = true}}> : () -> " + terminal() + "\n";
+  auto family = [&](const std::string &outer, const std::string &inner, const std::string &suffix) {
+    std::string result = begin(outer, "i" + suffix, "R", 3);
+    for (const auto &root : names)
+      result += index(root + "row" + suffix, root, "%i" + suffix, 1, shaped("3," + std::string(width(root))), shaped(width(root)),
+                      "Fixture." + root, "induction:Fixture." + outer + ".index", outer);
+    result += begin(inner, "j" + suffix, "C", 4);
+    if (kind == "shift") result += expr("shifted", "j", "one");
+    for (const auto &root : names)
+      result += index(root + "lane" + suffix, root + "row" + suffix,
+                      kind == "shift" && root == "n" ? "%shifted" : "%j" + suffix, 1,
+                      shaped(width(root)), terminal(), "Fixture." + root + ".at(induction:Fixture." +
+                      outer + ".index).in(Fixture." + outer + ")",
+                      kind == "shift" && root == "n" ? "expression:Fixture.shifted" :
+                      "induction:Fixture." + inner + ".index", inner);
+    // A chain has a genuinely nonadjacent target; no tuple-only root rebasing.
+    for (unsigned i = 1; i < names.size(); ++i)
+      result += connection(names[i - 1] + "lane" + suffix, names[i] + "lane" + suffix,
+                           "path" + suffix + std::to_string(i), inner);
+    if (kind == "parallel") result += connection("plane", "nlane", "parallel", inner);
+    if (kind == "cycle") result += connection(names.back() + "lane", "plane", "cycle", inner);
+    if (kind == "anchor") result += connection("plane", "anchor", "anchor_join", inner);
+    if (kind == "fresh-array") {
+      result += array("fresh_array", "1", inner);
+      result += index("fresh_element", "fresh_array", "%zero", 1, shaped("1"), terminal(),
+                      "Fixture.fresh_array", "literal:0", inner);
+      result += connection("plane", "fresh_element", "fresh_array_join", inner);
+    }
+    if (kind == "pendant" || kind == "child" || kind == "uncertain-child") {
+      if (kind == "pendant") {
+        result += "%fresh = \"nodal.node\"() <{" + owner(inner) +
+            "name = \"fresh\", source_path = \"Fixture.fresh\", metadata = {test_name = \"fresh\", "
+            "semantic_path = \"Fixture.fresh\", allow_floating = true}}> : () -> " + terminal() + "\n";
+        result += connection("plane", "fresh", "pendant_join", inner);
+      } else {
+        result += "\"nodal.instance\"() <{" + owner(inner) +
+            "sym_name = \"leaf\", module = @Child, parameter_bindings = {}, domain_bindings = {}, "
+            "metadata = {test_name = \"child_instance\", semantic_path = \"Fixture.leaf\"}}> : () -> ()\n";
+        for (auto port : {"a", "b"}) {
+          std::string id = std::string("child_") + port;
+          result += "%" + id + " = \"nodal.instance_terminal\"() <{" + owner(inner) +
+              "instance = @leaf, port = \"" + port + "\", name = \"" + id +
+              "\", direction = \"inout\", flow_orientation = \"out_of_component\", source_path = \"Child." +
+              port + "\", metadata = {test_name = \"" + id + "\", semantic_path = \"Fixture." +
+              id + "\", allow_floating = true}}> : () -> " + terminal() + "\n";
+        }
+        result += connection("plane", "child_a", "child_a_join", inner);
+        result += connection("nlane", "child_b", "child_b_join", inner);
+      }
+    }
+    return result + end() + end();
+  };
+  body += family("outer", "outer.inner", "");
+  if (kind == "foreign-scope") body += family("other", "other.inner", "Other");
+  for (const auto &root : names)
+    for (auto tuple : {"00", "01", "11"}) {
+      std::string pair = tuple;
+      body += index(root + pair, root, pair == "00" ? "%zero, %zero" :
+                    pair == "01" ? "%zero, %one" : "%one, %one", 2, shaped("3," + std::string(width(root))), terminal(),
+                    "Fixture." + root, pair == "00" ? "literal:0,literal:0" :
+                    pair == "01" ? "literal:0,literal:1" : "literal:1,literal:1");
+    }
+  std::string text = wrap(body);
+  if (kind == "child" || kind == "uncertain-child") {
+    std::string child = "\"nodal.module\"() <{sym_name = \"Child\", metadata = {semantic_path = \"Child\"}}> ({\n";
+    for (auto port : {"a", "b"})
+      child += "%" + std::string(port) + " = \"nodal.terminal\"() <{name = \"" + port +
+          "\", direction = \"inout\", flow_orientation = \"into_component\", source_path = \"Child." +
+          port + "\", metadata = {semantic_path = \"Child." + port +
+          "\", allow_floating = true}}> : () -> " + terminal() + "\n";
+    if (kind == "uncertain-child")
+      child += "\"nodal.connect\"(%a, %b) <{connection_id = \"Child.short\", source_path = \"Child.short\", "
+               "metadata = {}}> : (" + terminal() + ", " + terminal() + ") -> ()\n";
+    child += "}) : () -> ()\n";
+    const std::string marker = "\"nodal.module\"() <{sym_name = \"Fixture\"";
+    text.insert(text.find(marker), child);
+  }
+  return text;
+}
+// The Module/Generate verifier also requires every selected pair to have a
+// proved topology result. Unknown/resource controls intentionally cannot pass
+// that global gate; do not confuse its refusal with malformed original IR.
+bool authenticateClosedPath(mlir::ModuleOp module, const std::string &label,
+                            bool expectWholeModule) {
+  auto verifyGate = [&](Operation *op, bool recursive, bool requireSuccess) {
+    unsigned diagnostics = 0;
+    bool topologyOnly = true;
+    ScopedDiagnosticHandler capture(op->getContext(), [&](Diagnostic &diagnostic) {
+      ++diagnostics;
+      std::string message = diagnostic.str();
+      topologyOnly &= diagnostic.getSeverity() == DiagnosticSeverity::Error &&
+          (StringRef(message).ends_with("NODAL-SHAPE-043-009: scalar endpoint relation has unproved physical alias identity") ||
+           StringRef(message).ends_with("NODAL-SHAPE-043-009: scalar endpoint relation proof resource limit exceeded"));
+      return success();
+    });
+    bool valid = succeeded(verify(op, recursive));
+    return requireSuccess ? valid && diagnostics == 0 :
+                            !valid && diagnostics != 0 && topologyOnly;
+  };
+  bool gate = verifyGate(module, true, expectWholeModule);
+  check(gate, label + (expectWholeModule ? "/whole-module-verified" :
+                                          "/whole-module-topology-refusal"));
+  bool authentic = true;
+  module.walk([&](Operation *op) {
+    bool topologyOwner = llvm::isa<nodal::ModuleOp, nodal::GenerateOp>(op);
+    // Independently visit every original operation. A Module's early global
+    // refusal must not conceal malformed operations later in its body.
+    bool local = verifyGate(op, false, true);
+    if (!local && topologyOwner && !expectWholeModule)
+      local = verifyGate(op, false, false);
+    authentic &= local;
+    if (topologyOwner)
+      authentic &= succeeded(nodal::resolveConservativeStructuralScope(op));
+    if (llvm::isa<nodal::GenerateOp>(op))
+      authentic &= succeeded(nodal::resolveGeneratedDomain(op));
+    if (llvm::isa<nodal::ShapeIndexOp>(op)) {
+      authentic &= succeeded(nodal::resolveStaticShapeProjection(op->getResult(0), op));
+      if (llvm::isa<nodal::TerminalType>(op->getResult(0).getType()))
+        authentic &= succeeded(nodal::resolveConservativeEndpoint(op->getResult(0), op));
+    }
+    if (llvm::isa<nodal::ConnectOp>(op))
+      for (Value operand : op->getOperands())
+        authentic &= succeeded(nodal::resolveConservativeEndpoint(operand, op));
+  });
+  check(authentic, label + "/authenticated-original-operations-and-endpoints");
+  return gate && authentic;
+}
+void closedPathControls(MLIRContext &context) {
+  ScopedDiagnosticHandler silence(&context, [](Diagnostic &) { return success(); });
+  for (const auto &kind : {"direct", "chain", "pendant", "child", "parallel", "cycle",
+                           "foreign-scope", "anchor", "uncertain-child", "shift", "fresh-array", "budget"}) {
+    auto module = parseSourceString<mlir::ModuleOp>(closedPathModel(kind), ParserConfig(&context, false));
+    std::string label = std::string("closed-path/") + kind;
+    check(bool(module), label + "/parse");
+    if (!module) continue;
+    std::string before = print(*module);
+    bool accepted = StringRef(kind) == "direct" || StringRef(kind) == "chain" ||
+                    StringRef(kind) == "pendant" || StringRef(kind) == "child";
+    if (!authenticateClosedPath(*module, label, accepted || StringRef(kind) == "anchor")) continue;
+    if (StringRef(kind) == "child" || StringRef(kind) == "uncertain-child") {
+      auto childA = operation(*module, "child_a"), childB = operation(*module, "child_b");
+      auto a = nodal::resolveConservativeEndpoint(childA->getResult(0), childA);
+      auto b = nodal::resolveConservativeEndpoint(childB->getResult(0), childB);
+      check(succeeded(a) && succeeded(b) && a->instance == b->instance && a->port != b->port,
+            label + "/authentic-independent-port-identities");
+      if (failed(a) || failed(b)) continue;
+      ++topologyCalls;
+      auto group = nodal::compareConservativeEndpoints(a->port->getResult(0), b->port->getResult(0),
+                                                     &a->port->getBlock()->back());
+      check(group == (StringRef(kind) == "child" ? A::Distinct : A::Equal),
+            label + "/actual-child-boundary-groups");
+    }
+    std::string destination = StringRef(kind) == "chain" ? "q2" : StringRef(kind) == "budget" ? "q7" : "n";
+    A expected = accepted ? A::Distinct : StringRef(kind) == "anchor" ? A::Equal :
+                 StringRef(kind) == "budget" ? A::ResourceLimit : A::Unknown;
+    for (auto tuples : {std::pair{"00", "01"}, std::pair{"01", "11"}, std::pair{"00", "11"}}) {
+      std::string from = "p" + std::string(tuples.first), to = destination + tuples.second;
+      alias(*module, from, to, expected, label + "/" + from + "-" + to);
+      alias(*module, to, from, expected, label + "/reverse-" + to + "-" + from);
+    }
+    if (accepted || StringRef(kind) == "anchor")
+      alias(*module, "p01", destination + "01", A::Equal, label + "/same-tuple-equality-preserved");
+    check(before == print(*module), label + "/transactional-query-IR");
+  }
+  for (auto fault : {"repeat-index", "swap-indices", "destination-missing-axis"}) {
+    auto module = parseSourceString<mlir::ModuleOp>(model(false, false, fault), ParserConfig(&context, false));
+    std::string label = std::string("closed-path/") + fault;
+    check(bool(module), label + "/parse");
+    if (!module) continue;
+    std::string before = print(*module);
+    if (!authenticateClosedPath(*module, label, false)) continue;
+    alias(*module, "p00", "n11", A::Unknown, label + "/no-false-cross-root-distinct");
+    alias(*module, "n11", "p00", A::Unknown, label + "/reverse-no-false-cross-root-distinct");
+    check(before == print(*module), label + "/transactional-query-IR");
+  }
+}
+
 void literalGroundwork(MLIRContext &context) {
   llvm::outs() << "LITERAL_GROUNDWORK_SCOPE symbolic_two_axis=blocked target_handoff=pending "
                   "cache_identity=source-reviewed freshness=public-boundary-controls\n";
@@ -572,6 +764,7 @@ void literalGroundwork(MLIRContext &context) {
     negative(context, fault, false);
   predecessors(context);
   contextFreshness(context);
+  closedPathControls(context);
 }
 
 } // namespace

@@ -2846,6 +2846,180 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     if (injectiveTree)
       return Alias::Distinct;
   }
+  // A closed literal two-axis tree may also prove separation across roots.
+  // The certificate proves occurrence injectivity; only an actual edge path
+  // supplies the root-to-root map. Fresh scalar pendant leaves are allowed,
+  // but never supply a path between shared carriers.
+  uint64_t pathStates = 0;
+  bool pathResourceLimit = false;
+  auto closedLiteralPath = [&]() -> bool {
+    auto charge = [&](uint64_t amount = 1) {
+      if (amount > maximumWork - std::min(work, maximumWork)) {
+        pathResourceLimit = true;
+        return false;
+      }
+      work += amount;
+      return true;
+    };
+    auto literal = [](Value value) -> std::optional<int64_t> {
+      auto op = value.getDefiningOp<ConstLiteralOp>();
+      auto attr = op ? op->getAttrOfType<IntegerAttr>("value") : IntegerAttr();
+      if (!attr || !value.getType().isInteger(64) || !attr.getValue().isSignedIntN(64))
+        return std::nullopt;
+      return attr.getValue().getSExtValue();
+    };
+    auto literalPoint = [](const StaticShapePoint &point) {
+      return point.coordinates.size() == 2 &&
+          llvm::all_of(point.coordinates, [](const InstantiatedIntegerExpression &coordinate) {
+            return coordinate.root &&
+                   coordinate.root->kind == InstantiatedIntegerNode::Kind::Literal;
+          });
+    };
+    if (start.root == target.root || lhs->useScope != module || rhs->useScope != module ||
+        !literalPoint(start) || !literalPoint(target))
+      return false;
+    if (roots.size() > maximumStates) {
+      pathResourceLimit = true;
+      return false;
+    }
+    llvm::DenseMap<Value, unsigned> indices;
+    for (auto [index, root] : llvm::enumerate(roots)) {
+      if (!charge()) return false;
+      indices.try_emplace(root, index);
+    }
+    // Every possible connection in the reachable component must be covered
+    // by this one certificate. In particular, child summaries and selected
+    // member uncertainty links cannot be treated as mapped edges.
+    for (const auto &edge : edges) {
+      if (!charge()) return false;
+      if (indices.count(edge.left.shape.projection.root) ||
+          indices.count(edge.right.shape.projection.root))
+        return false;
+    }
+    Operation *scope = nullptr;
+    for (auto [index, family] : llvm::enumerate(families)) {
+      if (!charge()) return false;
+      if (!indices.count(family.first) && !indices.count(family.second))
+        continue;
+      if (index >= generatedFamilyCount || !certifiedFamilies[index] ||
+          (scope && scope != familyScopes[index]))
+        return false;
+      scope = familyScopes[index];
+    }
+    Operation *outer = scope ? scope->getParentOp() : nullptr;
+    if (!llvm::isa_and_nonnull<GenerateOp>(scope) ||
+        !llvm::isa_and_nonnull<GenerateOp>(outer) || outer->getParentOp() != module)
+      return false;
+    std::string dimensions;
+    for (Operation *axis : {outer, scope}) {
+      if (!charge()) return false;
+      if (axis->getNumOperands() != 3 || literal(axis->getOperand(0)) != 0 ||
+          literal(axis->getOperand(2)) != 1)
+        return false;
+      auto extent = literal(axis->getOperand(1));
+      if (!extent || *extent <= 0)
+        return false;
+      if (!dimensions.empty()) dimensions += ',';
+      dimensions += std::to_string(*extent);
+    }
+    auto carrier = [&](Value root) {
+      auto declaration = root.getDefiningOp<NodeArrayOp>();
+      auto shaped = llvm::dyn_cast<ShapedType>(root.getType());
+      return declaration && declaration->getParentOp() == module && shaped &&
+             shaped.getDimensions() == dimensions;
+    };
+    if (!carrier(start.root) || !carrier(target.root))
+      return false;
+    auto found = hiddenEdges.find(scope);
+    if (found == hiddenEdges.end() || !charge(2) ||
+        !certifiedOccurrenceTree(scope, start.root, found->second) ||
+        !certifiedOccurrenceTree(scope, target.root, found->second))
+      return false;
+    struct Link { unsigned a, b; const Edge *edge; };
+    llvm::SmallVector<Link, 8> links;
+    llvm::SmallVector<llvm::SmallVector<unsigned, 2>, 8> adjacency(roots.size());
+    UnionFind tree(roots.size());
+    for (const auto &edge : found->second) {
+      if (!charge()) return false;
+      Value a = edge.left.shape.projection.root, b = edge.right.shape.projection.root;
+      if (!indices.count(a) && !indices.count(b)) continue;
+      if (!indices.count(a) || !indices.count(b) || edge.site->getParentOp() != scope)
+        return false;
+      unsigned x = indices.lookup(a), y = indices.lookup(b);
+      if (x == y || tree.find(x) == tree.find(y))
+        return false; // Self, parallel or cyclic paths are not this proof.
+      tree.unite(x, y);
+      unsigned link = links.size();
+      links.push_back({x, y, &edge});
+      adjacency[x].push_back(link);
+      adjacency[y].push_back(link);
+    }
+    for (auto [index, root] : llvm::enumerate(roots)) {
+      if (!charge()) return false;
+      if (carrier(root)) continue;
+      Operation *declaration = root.getDefiningOp();
+      if (!llvm::isa_and_nonnull<NodeOp, InstanceTerminalOp>(declaration) ||
+          declaration->getParentOp() != scope || !llvm::isa<TerminalType>(root.getType()) ||
+          adjacency[index].size() != 1)
+        return false; // No shared scalar anchor, fresh array, or fresh bridge.
+    }
+    const unsigned source = indices.lookup(start.root), destination = indices.lookup(target.root);
+    llvm::SmallVector<unsigned, 8> previous(roots.size(), roots.size());
+    llvm::SmallVector<unsigned, 8> previousLink(roots.size(), links.size());
+    llvm::SmallVector<unsigned, 8> pending{source};
+    pathStates = 1;
+    previous[source] = source;
+    for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
+      if (!charge()) return false;
+      unsigned here = pending[cursor];
+      if (here == destination) break;
+      for (unsigned index : adjacency[here]) {
+        if (!charge()) return false;
+        const auto &link = links[index];
+        unsigned next = link.a == here ? link.b : link.a;
+        if (previous[next] != roots.size()) continue;
+        previous[next] = here;
+        previousLink[next] = index;
+        if (++pathStates > maximumStates) {
+          pathResourceLimit = true;
+          return false;
+        }
+        pending.push_back(next);
+      }
+    }
+    if (previous[destination] == roots.size()) return false;
+    llvm::SmallVector<unsigned, 8> path;
+    for (unsigned cursor = destination; cursor != source; cursor = previous[cursor]) {
+      if (!charge() || !carrier(roots[cursor]) || !carrier(roots[previous[cursor]]))
+        return false;
+      path.push_back(previousLink[cursor]);
+    }
+    StaticShapePoint point = start;
+    for (unsigned index : llvm::reverse(path)) {
+      if (!charge()) return false;
+      const auto &edge = *links[index].edge;
+      bool forward = point.root == edge.left.shape.projection.root;
+      const auto &from = forward ? edge.left : edge.right;
+      const auto &to = forward ? edge.right : edge.left;
+      if (point.root != from.shape.projection.root || !carrier(from.shape.projection.root) ||
+          !carrier(to.shape.projection.root))
+        return false;
+      constexpr uint64_t allowance = 512;
+      if (!charge(allowance)) return false;
+      StaticShapePoint mapped;
+      auto status = mapStaticShapeSameOccurrencePoint(from.shape.projection, point,
+          to.shape.projection, edge.site, mapped, {allowance, 64});
+      if (status == ShapeRegionProofStatus::ResourceLimit) pathResourceLimit = true;
+      if (status != ShapeRegionProofStatus::Proved || mapped.root != to.shape.projection.root)
+        return false;
+      point = std::move(mapped);
+    }
+    return point.root == target.root && comparePoints(point, target) == Alias::Distinct;
+  };
+  if (closedLiteralPath())
+    return Alias::Distinct;
+  if (pathResourceLimit || certificateResourceLimit)
+    return Alias::ResourceLimit;
   // One traversal preserves the legacy edge order and allowances. The
   // optional continuation spends only the original query's remaining budget.
   // Its total state ceiling includes the completed legacy traversal.
@@ -2866,7 +3040,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
     };
     bool uncertain = false;
     for (unsigned cursor = 0; cursor < pending.size(); ++cursor) {
-      if (++work > maximumWork || pending.size() > maximumStates)
+      if (++work > maximumWork || pending.size() + (!enhanced ? pathStates : 0) > maximumStates)
         return Alias::ResourceLimit;
       if (!enhanced) {
         auto relation = comparePoints(pending[cursor], target);
@@ -2972,7 +3146,7 @@ nodal::ConservativeAlias nodal::compareConservativeEndpointOccurrences(Value lef
   Alias original = traverse(legacy, false, {});
   if (original != Alias::Unknown)
     return original;
-  totalStates = legacy.size();
+  totalStates = pathStates + legacy.size();
   legacy.clear();
   if (++totalStates > maximumStates)
     return Alias::ResourceLimit;

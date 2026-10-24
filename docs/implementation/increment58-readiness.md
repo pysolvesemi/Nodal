@@ -2956,3 +2956,67 @@ frontend replay, adapter/Verilog-A run, CMake/CTest run, full suite, qualificati
 CI, held CIRCT consumer/comparator/firtool pipeline or installation ran here.
 The default construction-work gap and diagnostic-only larger construction profile
 are unchanged. F-058.B.1/B.2, their parents and Foundation 58 remain open.
+
+## Checkpoint 73 — closed literal occurrence-path distinctness
+
+This native-only prerequisite closes the checkpoint 72 cross-root `Unknown` gap
+for one narrow topology, not Foundation 58 or nested Interface/Verilog-A integration.
+`ConservativeConnectivity` admits two Module-owned literal rank-two carrier roots
+in one fully certified, closed two-axis generated-family tree. Both original
+ordered images must retain the existing exact-map certificate. It recovers the
+unique path through actual relation edges, maps the original point along that
+path, and compares coordinates only after reaching the actual target root. There
+is no root rebasing or tuple-only electrical inference. Fresh scalar Node and
+InstanceTerminal vertices may be degree-one pendants in the exact inner scope;
+they cannot carry the path. Scalar anchors, child uncertainty, foreign scopes,
+cycles/parallel paths, shifted/permuted/repeated maps and fresh arrays do not gain
+this certificate. Mapping failure never becomes `Distinct`; the general traversal
+remains conservative. Work and every discovered/enqueued path state carry through
+fallback without reset.
+
+### Focused result and authentication boundary
+
+The manually compiled/linked exact native probe passed **732 checks, zero failures**
+(exit zero, empty stderr):
+
+```sh
+.work/f58-nested-distinct-proof/proof-probe --literal-groundwork
+```
+
+Direct and genuine two-edge carrier paths, both directions and either/both tuple
+coordinates differing, pass `Distinct`. Actual independently classified child
+boundary pendants and ordinary scalar pendants pass. These positive fixtures also
+pass whole-module verification. Same-tuple `Equal`, shared-anchor `Equal`, and
+existing nonunit/fresh-tree predecessors remain covered.
+
+Unsupported negative/budget fixtures explicitly fail the whole-module selected-pair
+topology gate with only its exact `NODAL-SHAPE-043-009` unproved-identity or
+resource-limit diagnostic. Original operation, scope, projection and endpoint
+contracts are independently authenticated before direct queries assert `Unknown`
+or `ResourceLimit`, never `Invalid`. These are not fully verified accepted modules.
+IR transactionality and existing tiny-budget checks remain. Authentication calls
+are separate from each bounded query, not a whole-route work measurement. Mapper
+limits **512/64** and caller limits **16384/1024** are unchanged; no ShapeModel,
+header, API or capacity changes are included.
+
+### Exact provenance and open scope
+
+The base is HEAD72 `9e9b522388fd31a0c9f0f422a93fd15bddd0f9b7`.
+Accepted SHA-256 inputs are `ConservativeConnectivity.cpp`
+`85b1e6af394fd420ce7f30114e586dcef912bc30485ee59403275d7a0447889b`
+and the maintained `NestedConservativeProofTest.cpp`
+`39daea9eba4ad512e08f6f4b7dd72fea2c2885198b29fd5719cbf322ec80c7b6`.
+The retained `.work/f58-nested-distinct-proof/runtime.result.json` receipt is
+`9ab21b2101140d77af27d5ec613617412bfd525d58f1256fdad692685b4f34f8`,
+pinning executable
+`1e0b1773c26604dcae2f8fe8deed977056959119fa0470db6d311159c414f5f6`
+and its exact source/link/output chain. Independent source and outcome review
+accepted this scope. Checkpoint 72's historical 585/0 and original 512/80 failure
+with diagnostic parity remain preserved, not overwritten by this result.
+
+Symbolic parameter-only and static-certificate proposals stopped at source-derived
+whole-route lower bounds of 710 and 542 respectively; neither is a runtime pass
+or authorization to enlarge native capacity. The CMake/CTest route and broader
+no-argument suite were not run. Frontend/adapter/Verilog-A integration, signed-32
+target handoff, full suites, CI, held CIRCT/comparator/firtool pipeline and
+installation remain unrun. Foundation 58 and its open parents/children remain open.

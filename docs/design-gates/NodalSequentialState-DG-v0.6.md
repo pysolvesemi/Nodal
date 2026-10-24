@@ -1,8 +1,14 @@
 # NodalSequentialState-DG v0.6 — explicit lifecycle and contextual reset intent
 
-**Status:** Approved implementation contract; implementation and focused validation pending
+**Status:** Implemented; focused prototype acceptance reconciled in F58 checkpoint 71
 **Scope:** public-api and compiler-boundary; next F-058.B.3 slices, not completion of B.3
 **Baseline:** first immutable-definition checkpoint `bcb20291f06f4d86044157deb3d753fd6d1207e4`
+
+Current acceptance reconciliation: the bounded contract below is implemented by
+the accepted lifecycle, composition and timing checkpoints. See the
+[F58 B.3 crosswalk](../implementation/increment58-readiness.md#checkpoint-71--statechart-implementation-reconciliation)
+for exact historical source/native/target boundaries and retained limitations.
+This status update adds no API, production change or fresh execution claim.
 
 ## Authority, compatibility and owners
 

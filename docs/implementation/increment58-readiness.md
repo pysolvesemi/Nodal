@@ -2760,3 +2760,108 @@ The separate ordinary construction-work gap remains open at the unchanged
 No Extended public policy API is introduced. Preserve historical results above.
 Foundation 58 and its required unfinished children remain open; no CI, full qualification or held downstream
 consumer/comparator/firtool pipeline is authorized by this continuation.
+
+## Checkpoint 71 — statechart implementation reconciliation
+
+This documentation-only reconciliation closes **F-058.B.3**, not its B parent,
+B.1/B.2, A, C–G (including F), or Foundation 58. The original baseline statements
+and historical checkpoint results above retain their original time and scope.
+No production file, API, proof budget or construction capacity changes here.
+
+### Required clause crosswalk
+
+- **Immutable definitions/fragments and explicit bindings:** `FsmDefinitionApi`
+  and `FsmDefinitionRuntime` retain immutable graph identity, exact slots and
+  separately supplied runtime bindings. Checkpoint 1 includes separate compilation,
+  accidental-capture negatives and actual independent two-instance execution.
+- **Nested/parallel machines and typed completion/cancellation:** the existing
+  `FsmChild`, composition owner and lifecycle executor retain independent storage,
+  All/Any/ordered Priority joins and exact child/state ownership. Checkpoints 5, 7,
+  12 and 13 establish lifecycle, reset/domain and actual nested composition output.
+  Impossible joins reject; structural completion possibility is not a proof of
+  arbitrary protocol liveness.
+- **Timed/protocol-aware states:** the shared timing owner implements `after` and
+  `awaitTransfer` with actual valid/ready observations, not ready-drive authority.
+  Checkpoint 17 records five target simulations covering exact elapsed edges, stalls, pause,
+  composition and mixed-reset occurrences.
+- **Finite elaboration recursion:** `FsmDef.unroll` admits checked immutable
+  expansion for 0–127 steps with bounded graph depth/occurrences/records. Checkpoint
+  20 covers separate compilation, effect/capture/recursive-helper negatives and
+  actual target execution. Arbitrary Scala recursion and nested unroll remain
+  deliberately rejected; finite expansion is not a runtime call stack.
+- **Explicit bounded runtime calls/returns and faults:** `FsmStackApi`, the graph
+  contract and bridge/native FlatFSM owners implement capacity 1–128, exact resume
+  states, pointer/frame ownership and overflow/underflow/invalid-frame policies.
+  Checkpoint 24 records 43 source groups, 17 frontend checks, 164 native cases and
+  three actual target profiles. Faults, reset, cancellation, recovery, domain
+  ownership and causal malformed-storage negatives are implemented, not metadata
+  placeholders.
+- **Reports and proof facts:** `ReproducibilityContract` retains definition hashes,
+  occurrence topology, structural completion, stack resources/policies and timing
+  facts. Bridge/native owners independently verify actual ownership, bounded
+  structure, storage and timing contracts. Definition hashes remain correlation
+  metadata, not an independently recomputed native proof.
+
+### Historical evidence and current owner review
+
+Direct FSM API/graph/bridge/native files and `FlatFsmCapture` are unchanged from
+stack checkpoint 24 (`6eff031`) through checkpoint 70. That statement does **not**
+cover every frontend/shared owner. The historical stack source manifest includes
+`DigitalCollectionCallbackPhase` hash `37202a65…`, matching checkpoint 25
+(`44e21f9`), rather than checkpoint 24's older frontend blob. Its accepted source
+span already includes `Trap`, `call` and `returnOn` frontend support.
+
+Later shared callback reindexing/summary republication revalidates lowered bodies,
+retains the distinct immutable profile and exact imported-summary compatibility.
+ConstructionSession's changed reference allocation preserves canonical identities;
+ordinary eager FSM profiles do not activate the pending-construction budget route.
+SequentialModel's later external/generated-storage changes retain the existing
+FSM verification/expansion chain. Independent source review found no concrete B.3
+semantic gap. These facts and retained acceptance justify this child-only closure;
+they are **not** a fresh checkpoint-70 frontend/native/target pass. Checkpoint 67
+adds only its stated eager capture/storage/determinism evidence, not completion
+of the broader scale requirement.
+
+### Existing execution demonstration (not rerun)
+
+The current increment does not affect generated Verilog-*: it reconciles accepted
+implementation evidence and current checklist/gate status only. The maintained
+source is `core/scala/testkit/test/src/nodal_external/Increment58StackFsmSource.scala`;
+its existing graph includes:
+
+```scala
+FsmState(StackFsmMode.Main).active(active).exit(exit)
+  .returnOn(emptyReturn, TransitionMode.Priority)
+  .call(call, TransitionMode.Priority)(StackFsmMode.Sub, StackFsmMode.Resume)
+```
+
+The retained output is
+`.work/f58-statecharts/stack/shared-accept/target/trap/stack.sv`, with its adjacent
+`manifest.json` and `simulate.log`. This historical checkpoint-24 trap-profile
+SystemVerilog contains separate two-bit
+stack depth and three-bit frame registers. Actual generated frame updates below
+omit only source-location comments:
+
+```verilog
+register_increment58_stack_fsm_sourc_874448ec <=
+  _GEN_10 & register_increment58_stack_fsm_sourc_f63817c8 == 2'h0
+    ? _GEN_11
+    : register_increment58_stack_fsm_sourc_874448ec;
+register_increment58_stack_fsm_sourc_f168dd0b <=
+  _GEN_10 & register_increment58_stack_fsm_sourc_f63817c8 == 2'h1
+    ? _GEN_11
+    : register_increment58_stack_fsm_sourc_f168dd0b;
+```
+
+The retained trap simulation reports `STACK_TARGET_PASS` for nested continuation,
+overflow/underflow, invalid pointer/frame, actions, pause, cancel/restart, recovery
+and reset. Checkpoint 24 names the actual compiler and maintained
+`tests/scala/reusable-fsm/run_stack_target.py` demonstration. Those historical
+commands were not executed for this reconciliation. Stack Gray remains unsupported;
+AssertHold exports its assertion intact, but the pinned Icarus cannot parse it,
+so there is no AssertHold simulation-pass claim.
+
+Only document/link/checklist consistency and independent evidence/source review
+apply to this commit. No CI, full qualification, held CIRCT consumer, comparator,
+firtool, installation or target replay ran. The default 65,536 construction gap,
+diagnostic-only 131,072 profile and pending Extended API choice remain unchanged.

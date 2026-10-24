@@ -1,10 +1,16 @@
 # NodalSequentialState-DG v0.7 — bounded reusable child composition
 
-**Status:** Approved implementation contract; implementation and focused validation pending
+**Status:** Implemented; focused prototype acceptance reconciled in F58 checkpoint 71
 **Scope:** public-api and compiler-boundary; nested/parallel F-058.B.3 slice, not completion of B.3
 **Baseline:** canonical native checkpoint `8753d4c1b5e717a4a0621f59e6e8647ae87326e0` and source checkpoint `d5dc7e84b672a15d1ce95e9f20fa4e89d5ec316c`; publication mapping in [increment 58 readiness](../implementation/increment58-readiness.md)
 
 The standing Foundation implementation authority and prototype process in the readiness record, [ADR0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md), and [v0.6](NodalSequentialState-DG-v0.6.md) authorize these necessary additive contracts. This is an implementation selection, not a claim that the owner individually chose these spellings. Existing approved gates remain historical contracts. Implementation and acceptance remain open until the real source/native/target paths pass focused checks.
+
+Current acceptance reconciliation: the bounded contract below is implemented by
+the accepted lifecycle, composition and timing checkpoints. See the
+[F58 B.3 crosswalk](../implementation/increment58-readiness.md#checkpoint-71--statechart-implementation-reconciliation)
+for exact historical source/native/target boundaries and retained limitations.
+This status update adds no API, production change or fresh execution claim.
 
 ## Selected ownership
 

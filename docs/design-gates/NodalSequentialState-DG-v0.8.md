@@ -1,6 +1,6 @@
 # NodalSequentialState-DG v0.8 — bounded timers and transfer waits
 
-**Status:** Approved implementation contract; implementation and focused validation pending
+**Status:** Implemented; focused prototype acceptance reconciled in F58 checkpoint 71
 **Scope:** public-api and compiler-boundary; next F-058.B.3 slice, not completion of B.3
 **Baseline:** composed source and native checkpoints in [increment 58 readiness](../implementation/increment58-readiness.md); [v0.7](NodalSequentialState-DG-v0.7.md) remains unchanged except its recorded resource clarification
 
@@ -9,6 +9,12 @@ this necessary additive selection. This does not claim that the owner individual
 chose its spellings. [ADR0015](../architecture/0015-native-scala-enum-and-hierarchical-fsm.md)
 and v0.5–v0.7 remain the semantic foundation. Acceptance requires real source,
 native, target and focused predecessor checks.
+
+Current acceptance reconciliation: the bounded contract below is implemented by
+the accepted lifecycle, composition and timing checkpoints. See the
+[F58 B.3 crosswalk](../implementation/increment58-readiness.md#checkpoint-71--statechart-implementation-reconciliation)
+for exact historical source/native/target boundaries and retained limitations.
+This status update adds no API, production change or fresh execution claim.
 
 ## Selected source and ownership
 
